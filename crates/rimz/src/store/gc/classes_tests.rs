@@ -741,7 +741,7 @@ fn finished_workflow_homes_expire_by_age_whatever_wrote_them_and_live_homes_stay
     ] {
         let mut record: RunRecord = serde_json::from_value(serde_json::json!({
             "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"review",
-            "spec_dir":"/definitions/review", "spec_digest":"abc", "prompt":null,
+            "spec_dir":"/definitions/review", "prompt":null,
             "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
             "created_at":"2026-01-01T00:00:00Z", "state":state, "park":null, "node":"pr",
             "entered_at":"2026-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
@@ -782,7 +782,7 @@ fn finished_workflow_homes_expire_by_age_whatever_wrote_them_and_live_homes_stay
                 paths.workflow(&id)
             };
             fs::create_dir_all(&home.work).unwrap();
-            fs::write(&home.spec, "spec").unwrap();
+            fs::write(home.home.join("workflow.toml"), "spec").unwrap();
             if let Some(record) = record {
                 fs::write(&home.record, record).unwrap();
             }

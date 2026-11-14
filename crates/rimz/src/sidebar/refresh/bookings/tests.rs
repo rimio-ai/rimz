@@ -624,8 +624,8 @@ fn fire_run(
 ) -> crate::store::workflow::RunRecord {
     let mut record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
         "version": crate::store::workflow::VERSION, "id": WorkflowRunId::new(),
-        "workflow": task, "origin": "inline", "task": task, "spec_dir": "/spec",
-        "spec_digest": "abc", "scope": {"kind": "worktree", "path": scope},
+        "workflow": task, "origin": "inline", "task": task,
+        "scope": {"kind": "worktree", "path": scope},
         "fire_tree": fire_tree, "project_root": root,
         "created_at": "2026-11-13T10:00:00Z",
         "state": if terminal_at.is_some() { "done" } else { "active" }, "node": "agent",
@@ -1286,7 +1286,7 @@ fn only_a_scheduled_launch_command_is_rebuilt() {
     let state = StatePaths::for_project_root_under(&root, &dir.path().join("home")).unwrap();
     // The staying run has ended and its home sits in the finished directory: the lane finds it
     // by id there.
-    let seal = |run: &crate::store::workflow::RunRecord, text: &str| {
+    let write_run = |run: &crate::store::workflow::RunRecord, text: &str| {
         let paths = if run.task.as_deref() == Some("staying") {
             state.finished_workflow(&run.id)
         } else {
@@ -1294,7 +1294,9 @@ fn only_a_scheduled_launch_command_is_rebuilt() {
         };
         std::fs::create_dir_all(&paths.home).unwrap();
         std::fs::write(&paths.record, serde_json::to_vec(run).unwrap()).unwrap();
-        std::fs::write(crate::disk::paths::workflow_spec_file(&paths.home), text).unwrap();
+        let definition = run.definition_dir(&paths);
+        std::fs::create_dir_all(&definition).unwrap();
+        std::fs::write(crate::disk::paths::workflow_spec_file(&definition), text).unwrap();
     };
     let sealed = |name: &str, words: &[&str]| {
         let entry = launching(words, &root);
@@ -1309,7 +1311,7 @@ fn only_a_scheduled_launch_command_is_rebuilt() {
         false,
         Some("2026-11-13T11:00:00Z".parse().unwrap()),
     );
-    seal(
+    write_run(
         &staying,
         &sealed(
             "staying",
@@ -1317,7 +1319,7 @@ fn only_a_scheduled_launch_command_is_rebuilt() {
         ),
     );
     let team = fire_run("team", &root, &root, false, None);
-    seal(
+    write_run(
         &team,
         &sealed(
             "team",
@@ -1325,13 +1327,13 @@ fn only_a_scheduled_launch_command_is_rebuilt() {
         ),
     );
     let shell = fire_run("shell", &root, &root, false, None);
-    seal(
+    write_run(
         &shell,
         &sealed("shell", &["sh", "-c", "rimz agents coder go"]),
     );
     let mut deployed = fire_run("deployed", &root, &root, false, None);
     deployed.origin = crate::store::workflow::RunOrigin::Deployed;
-    seal(
+    write_run(
         &deployed,
         &sealed("deployed", &["rimz", "agents", "coder", "go"]),
     );

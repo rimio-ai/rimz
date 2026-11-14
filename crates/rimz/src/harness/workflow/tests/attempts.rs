@@ -33,15 +33,20 @@ pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     let record: RunRecord = serde_json::from_value(json!({
         "version":crate::store::workflow::VERSION,
         "id":WorkflowRunId::new(),
-        "workflow":"test", "spec_dir":dir.path(),
-        "spec_digest":"test", "prompt":"Run request", "project_root":dir.path(),
+        "workflow":"test", "spec_dir":dir.path(), "prompt":"Run request", "project_root":dir.path(),
         "scope":{"kind":"worktree","path":dir.path()},
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":spec.authored().workflow.start,
         "entered_at":jiff::Timestamp::now(), "deadline_fired":false, "next_seq":1, "visits":{}, "visit_grant":0
     })).unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    records::initialize(&state, &record, text.as_bytes(), &guard).unwrap();
+    records::initialize(&state, &record, &guard).unwrap();
+    fs::write(definition_file(&record), text).unwrap();
     (dir, state, record)
+}
+
+/// The deployed definition file a `setup` run reads live.
+pub(super) fn definition_file(record: &RunRecord) -> std::path::PathBuf {
+    crate::disk::paths::workflow_spec_file(record.spec_dir.as_deref().unwrap())
 }
 
 pub(super) fn update(state: &StatePaths, record: &RunRecord) {
@@ -57,7 +62,7 @@ fn advance_ok(state: &StatePaths, id: &WorkflowRunId, host: &FakeHost) -> RunRec
 
 fn answer(state: &StatePaths, record: &RunRecord, host: &FakeHost, object: Value) -> RunRecord {
     fs::write(
-        record.spec_dir.join("answer.json"),
+        record.spec_dir.as_deref().unwrap().join("answer.json"),
         serde_json::to_vec(&object).unwrap(),
     )
     .unwrap();
@@ -296,9 +301,8 @@ fn cancel_helper_names_the_machine_wide_id_and_reason() {
 #[test]
 fn reread_prompt_file_type_error_refuses_without_panicking() {
     let (_dir, state, record) = setup(STEP);
-    let paths = state.workflow(&record.id);
     fs::write(
-        &paths.spec,
+        definition_file(&record),
         STEP.replace("prompt-file='prompt.md'", "prompt-file=5"),
     )
     .unwrap();
@@ -1487,7 +1491,7 @@ fn judge_fixture() -> (Definition, crate::disk::paths::WorkflowPaths, RunRecord)
     )
     .unwrap();
     let record: RunRecord = serde_json::from_value(json!({
-        "version":crate::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"test","spec_dir":"/spec","spec_digest":"test",
+        "version":crate::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"test","spec_dir":"/spec",
         "scope":{"kind":"worktree","path":"/project"},"project_root":"/project",
         "created_at":"2026-01-01T00:00:00Z","state":"active","node":"judge","entered_at":"2026-01-01T00:00:00Z",
         "deadline_fired":false,"next_seq":2,"visits":{},"visit_grant":0,
@@ -1507,6 +1511,7 @@ fn evaluation(
         limited: None,
         cost_usd: Some(0.1),
         detail: serde_json::json!({}),
+        interrupt: None,
     }
 }
 

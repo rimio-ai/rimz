@@ -195,152 +195,26 @@ pub fn create(
     )?;
     let prompt = prompt().map_err(WorkflowErr::Refused)?;
     let id = WorkflowRunId::new();
-    // Every run seals its whole definition into its own root and reads only that copy, so an
-    // edit to a deployed directory after the start changes nothing the run does.
-    let tree = match source {
-        DefinitionSource::Deployed { .. } => read_definition_dir(&start.spec_dir)?,
-        DefinitionSource::Inline { definition, .. } => DeployedTree {
-            definition,
-            modes: BTreeMap::new(),
-            dirs: Vec::new(),
-            links: BTreeMap::new(),
-        },
-    };
     let paths = state.workflow(&id);
-    let published = workflow::seal_definition(
-        &paths.definition,
-        &tree.definition.text,
-        &tree.definition.assets,
-        &tree.modes,
-        &tree.dirs,
-        &tree.links,
-    )
-    .map_err(WorkflowErr::from)
-    .and_then(|()| Ok(paths.definition.canonicalize()?))
-    .and_then(|spec_dir| {
-        publish(
-            state,
-            id,
-            RunStart { spec_dir, ..start },
-            roots,
-            prompt,
-            manual,
-            args,
-        )
-    });
+    // A deployed run reads its directory live, so nothing is copied; an inline run's generated
+    // text exists nowhere else, so its own root keeps it.
+    let sealed = match source {
+        DefinitionSource::Deployed { .. } => Ok(start),
+        DefinitionSource::Inline { definition, .. } => {
+            workflow::seal_definition(&paths.definition, &definition.text, &definition.assets)
+                .map_err(WorkflowErr::from)
+                .and_then(|()| Ok(paths.definition.canonicalize()?))
+                .map(|spec_dir| RunStart { spec_dir, ..start })
+        }
+    };
+    let published = sealed.and_then(|start| publish(state, id, start, roots, prompt, manual, args));
     if published.is_err() {
-        // Nothing was published, so the sealed root has no record to keep it.
+        // Nothing was published, so the run's root has no record to keep it.
         let _ = std::fs::remove_dir_all(&paths.home);
     }
     let record = published?;
     let advance = spawn(&record)?;
     Ok((record, advance))
-}
-
-/// A deployed definition directory as its run seals it: the definition, each asset's
-/// permission bits, every directory, and every internal symlink with its sealed target.
-struct DeployedTree {
-    definition: InlineDefinition,
-    modes: BTreeMap<String, u32>,
-    dirs: Vec<String>,
-    links: BTreeMap<String, std::path::PathBuf>,
-}
-
-/// Read a deployed definition directory whole: a script may import a sibling the TOML never
-/// names, and shell text names files nothing can discover. Every directory comes back, empty
-/// ones included. A symlink that resolves inside the directory comes back as a link, to a
-/// directory as well as a file and without walking through it, its target written relative to
-/// the link's own directory so it resolves to the same entry in the sealed copy. An entry that
-/// resolves outside the directory, or that is not a regular file or directory, refuses the
-/// start with its path. Each asset's permission bits come back beside it, so a sealed script
-/// stays executable.
-fn read_definition_dir(dir: &Path) -> Result<DeployedTree> {
-    use std::os::unix::fs::PermissionsExt;
-    let spec_file = crate::disk::paths::workflow_spec_file(dir);
-    let mut text = None;
-    let mut tree = DeployedTree {
-        definition: InlineDefinition {
-            text: String::new(),
-            assets: BTreeMap::new(),
-        },
-        modes: BTreeMap::new(),
-        dirs: Vec::new(),
-        links: BTreeMap::new(),
-    };
-    let mut pending = vec![dir.to_path_buf()];
-    let unsealable = |path: &Path, reason: &dyn std::fmt::Display| {
-        WorkflowErr::Refused(format!(
-            "{}: cannot seal it into the run: {reason}",
-            path.display()
-        ))
-    };
-    while let Some(at) = pending.pop() {
-        for entry in std::fs::read_dir(&at).map_err(|e| unsealable(&at, &e))? {
-            let path = entry.map_err(|e| unsealable(&at, &e))?.path();
-            let unsealable = |reason: &dyn std::fmt::Display| unsealable(&path, reason);
-            let real = path.canonicalize().map_err(|e| unsealable(&e))?;
-            if !real.starts_with(dir) {
-                return Err(unsealable(&"it resolves outside the workflow directory"));
-            }
-            let meta = std::fs::metadata(&real).map_err(|e| unsealable(&e))?;
-            if !meta.is_dir() && !meta.is_file() {
-                return Err(unsealable(&"it is not a regular file"));
-            }
-            let is_link = std::fs::symlink_metadata(&path)
-                .map_err(|e| unsealable(&e))?
-                .is_symlink();
-            if meta.is_file() && path == spec_file {
-                let bytes = std::fs::read(&real).map_err(|e| unsealable(&e))?;
-                text = Some(String::from_utf8(bytes).map_err(|e| unsealable(&e))?);
-                continue;
-            }
-            let name = path
-                .strip_prefix(dir)
-                .ok()
-                .and_then(Path::to_str)
-                .ok_or_else(|| unsealable(&"its name is not UTF-8"))?
-                .to_owned();
-            if is_link {
-                let target = relative_target(Path::new(&name), &real, dir);
-                tree.links.insert(name, target);
-            } else if meta.is_dir() {
-                tree.dirs.push(name);
-                pending.push(path);
-            } else {
-                let bytes = std::fs::read(&real).map_err(|e| unsealable(&e))?;
-                tree.modes
-                    .insert(name.clone(), meta.permissions().mode() & 0o777);
-                tree.definition.assets.insert(name, bytes);
-            }
-        }
-    }
-    tree.definition.text =
-        text.ok_or_else(|| WorkflowErr::Refused(format!("{}: no such file", spec_file.display())))?;
-    Ok(tree)
-}
-
-/// The path from link `name`'s own directory to `real`, both inside `dir`.
-fn relative_target(name: &Path, real: &Path, dir: &Path) -> std::path::PathBuf {
-    let from = name
-        .parent()
-        .unwrap_or(Path::new(""))
-        .components()
-        .collect::<Vec<_>>();
-    // `real` resolved inside `dir`, the walk's own canonical root.
-    let to = real
-        .strip_prefix(dir)
-        .unwrap_or(real)
-        .components()
-        .collect::<Vec<_>>();
-    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
-    let target = std::iter::repeat_n(std::path::Component::ParentDir, from.len() - common)
-        .chain(to[common..].iter().copied())
-        .collect::<std::path::PathBuf>();
-    if target.as_os_str().is_empty() {
-        ".".into()
-    } else {
-        target
-    }
 }
 
 /// A run's identity before its record exists.
@@ -408,8 +282,7 @@ fn publish(
         },
         task: start.task,
         manual,
-        spec_dir: start.spec_dir,
-        spec_digest: script::digest(&bytes),
+        spec_dir: (start.origin == RunOrigin::Deployed).then_some(start.spec_dir),
         prompt,
         scope,
         fire_tree: start.fire_tree,
@@ -473,7 +346,7 @@ fn publish(
             record.created_at,
         )?);
     }
-    workflow::initialize(state, &record, &bytes, &guard)?;
+    workflow::initialize(state, &record, &guard)?;
     Ok(record)
 }
 
@@ -592,7 +465,7 @@ fn persist(t: &mut Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
                 Vec::new()
             }
         };
-        let acted = entered_act(t.spec, &t.record);
+        let acted = entered_act(readable(t.spec), &t.record);
         let mut ended = outcome(&t.record, &journal, acted);
         ended.quiet = t.record.state == RunState::Done && t.record.engaged == Some(false);
         t.record.outcome = Some(ended);
@@ -707,16 +580,24 @@ fn failure(journal: &[JournalEntry]) -> workflow::RunEnding {
 /// Whether the run entered an agent or message step, read against its definition; a
 /// definition that no longer reads counts any visited step.
 fn acted(paths: &WorkflowPaths, record: &RunRecord) -> bool {
-    let spec = spec::load(&paths.home).unwrap_or_else(|_| Definition::empty());
-    entered_act(&spec, record)
+    entered_act(
+        spec::load(&record.definition_dir(paths)).ok().as_ref(),
+        record,
+    )
 }
 
-/// Whether the run entered an agent or message step of `spec`; a definition without steps,
-/// as an ending that reads only the record has, counts any visited step.
-pub(super) fn entered_act(spec: &Definition, record: &RunRecord) -> bool {
-    if spec.steps().next().is_none() {
+/// `spec`, unless it is the empty definition an ending that reads only the record stands in
+/// for one that cannot be read: a definition that reads has at least its start node.
+fn readable(spec: &Definition) -> Option<&Definition> {
+    (spec.steps().next().is_some() || spec.checks().next().is_some()).then_some(spec)
+}
+
+/// Whether the run entered an agent or message step of `spec`; with no definition to read it
+/// by, whether it visited any step.
+pub(super) fn entered_act(spec: Option<&Definition>, record: &RunRecord) -> bool {
+    let Some(spec) = spec else {
         return !record.visits.is_empty();
-    }
+    };
     record.visits.keys().any(|step| {
         matches!(
             spec.step_kind(step),
@@ -901,7 +782,8 @@ impl Reader {
     /// deployed one that does not read, is an error: the advance writes nothing, and the run
     /// waits for the file to be fixed.
     fn read(&self, paths: &WorkflowPaths, record: &RunRecord) -> Result<Read> {
-        let spec = match spec::load(&paths.home) {
+        let dir = record.definition_dir(paths);
+        let spec = match spec::load(&dir) {
             Ok(spec) => spec,
             Err(error) if record.origin == RunOrigin::Inline => {
                 return Ok(Read::Unparsable(format!(
@@ -911,7 +793,7 @@ impl Reader {
             Err(error) => return Err(error.into()),
         };
         Ok(Read::Admitted(Box::new(super::validate::admit_parsed(
-            &record.spec_dir,
+            &dir,
             &record.workflow,
             spec,
             &self.definitions,
@@ -1041,7 +923,8 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             }
             return Ok(());
         }
-        let result = script::evaluate(state, &paths, &spec, &record);
+        let reread = || reader.reread(&paths, &record);
+        let result = script::evaluate(state, &paths, &script::Live::new(&spec, &reread), &record);
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
         let fresh = reader.reread(&paths, &record);
@@ -1065,7 +948,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             return fit::close(state, &paths, t, guard, host, closing);
         }
         let mut recheck_woken = false;
-        if !t.bound()? {
+        if !t.bound_after(result.interrupt == Some(script::Interrupt::Timeout))? {
             let woken = t
                 .record
                 .attempt
@@ -1123,9 +1006,14 @@ fn command_step(
     reader: &Reader,
     host: &dyn AttemptHost,
 ) -> Result<bool> {
-    let result = script::execute_step(state, paths, spec, record, || {
-        accounting::step(record, None)
-    });
+    let reread = || reader.reread(paths, record);
+    let (result, interrupt) = script::execute_step(
+        state,
+        paths,
+        &script::Live::new(spec, &reread),
+        record,
+        || accounting::step(record, None),
+    );
     let head_end = super::head(&record.scope.path);
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
@@ -1175,11 +1063,12 @@ fn command_step(
             (AttemptOutcome::Died, None, Some(reason), false)
         }
     };
+    // A timeout is the one the poll that killed the child read; the deadline is the record's now.
     let cause = if !interrupted {
         EndCause::Lifecycle
     } else if !t.record.deadline_fired && t.record.deadline.is_some_and(|at| at <= t.now) {
         EndCause::Deadline
-    } else if t.timeout_at()?.is_some_and(|at| at <= t.now) {
+    } else if interrupt == Some(script::Interrupt::Timeout) {
         outcome = AttemptOutcome::Timeout;
         EndCause::Timeout
     } else {
@@ -1919,7 +1808,7 @@ pub fn cancel(
     }
     // Cancel reads only the record; the definition, when it still parses, classifies only the
     // outcome's `acted`.
-    let spec = spec::load(&paths.home).unwrap_or_else(|_| Definition::empty());
+    let spec = spec::load(&record.definition_dir(&paths)).unwrap_or_else(|_| Definition::empty());
     let t = Transition {
         record,
         spec: &spec,
@@ -1938,10 +1827,11 @@ pub fn restart(
     host: &dyn AttemptHost,
 ) -> Result<(RunRecord, Option<Advance>)> {
     let paths = state.workflow(id);
-    let spec = spec::load(&paths.home)?;
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let record = workflow::load(&paths)?;
+    let spec = spec::load(&record.definition_dir(&paths))?;
     let mut t = Transition {
-        record: workflow::load(&paths)?,
+        record,
         spec: &spec,
         paths: &paths,
         now: Timestamp::now(),
@@ -2110,10 +2000,10 @@ pub fn resume(
     extend: &[String],
 ) -> Result<RunRecord> {
     let paths = state.workflow(id);
-    let spec = spec::load(&paths.home)?;
     let record = {
         let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
         let record = workflow::load(&paths)?;
+        let spec = spec::load(&record.definition_dir(&paths))?;
         if record.state.is_terminal() {
             return Err(WorkflowErr::Refused(
                 "terminal workflow runs cannot resume".into(),
@@ -2476,7 +2366,7 @@ pub(crate) fn hears_lifecycle(
             continue;
         }
         // A definition that no longer reads hears nothing; the other runs still do.
-        let Ok(spec) = spec::load(&state.workflow(&record.id).home) else {
+        let Ok(spec) = spec::load(&record.definition_dir(&state.workflow(&record.id))) else {
             continue;
         };
         let Some(Ok(subscriptions)) = spec.step(&attempt.node).map(Node::subscriptions) else {
@@ -2501,7 +2391,7 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
             if current.state != RunState::Active {
                 return Ok(());
             }
-            let spec = spec::load(&paths.home)?;
+            let spec = spec::load(&current.definition_dir(&paths))?;
             let woken = match spec.check(&current.node) {
                 Some(check) => check.subscriptions()?.into_iter().any(|subscription| {
                     delivers(

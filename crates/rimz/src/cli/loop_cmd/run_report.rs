@@ -786,7 +786,12 @@ fn write_evaluation(
     else {
         return Ok(());
     };
-    let judge = match evidence.spec.check(&entry.node).and_then(Node::kind) {
+    // A definition that no longer reads names the judge by its node.
+    let check = evidence
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.check(&entry.node));
+    let judge = match check.and_then(Node::kind) {
         Some(Kind::Judge(agent)) => Some(agent),
         _ => None,
     };

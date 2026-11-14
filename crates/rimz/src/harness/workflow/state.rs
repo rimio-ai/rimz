@@ -1078,6 +1078,13 @@ impl Transition<'_> {
     }
 
     pub(super) fn bound(&mut self) -> Result<bool, TimeInputErr> {
+        self.bound_after(false)
+    }
+
+    /// End the live check or command step at the bound that has passed, or at its timeout
+    /// when `timed_out`: the poll that killed its child found the timeout passed, against the
+    /// definition it read then.
+    pub(super) fn bound_after(&mut self, timed_out: bool) -> Result<bool, TimeInputErr> {
         if self.record.state != RunState::Active {
             return Ok(false);
         }
@@ -1114,7 +1121,7 @@ impl Transition<'_> {
             self.deadline_failure(&node)?;
             return Ok(true);
         }
-        if !self.timeout_at()?.is_some_and(|at| at <= self.now) {
+        if !timed_out && !self.timeout_at()?.is_some_and(|at| at <= self.now) {
             return Ok(false);
         }
         if self.finish_script(

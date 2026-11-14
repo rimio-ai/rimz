@@ -531,7 +531,7 @@ fn redefinition_forgets_only_checkouts_whose_runs_have_not_reached_an_agent() {
             let record: crate::store::workflow::RunRecord =
                 serde_json::from_value(serde_json::json!({
                     "version":crate::store::workflow::VERSION, "id":id, "workflow":"redefined", "task":"redefined",
-                    "spec_dir":home.path(), "spec_digest":"abc", "prompt":null,
+                    "spec_dir":home.path(), "prompt":null,
                     "scope":{"kind":"worktree","path":checkout},
                     "project_root":home.path(), "created_at":"2000-01-01T00:00:00Z",
                     "state":"active", "park":null, "node":visited[visited.len() - 1],
@@ -543,7 +543,8 @@ fn redefinition_forgets_only_checkouts_whose_runs_have_not_reached_an_agent() {
                 }))
                 .unwrap();
             let guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
-            crate::store::workflow::initialize(&paths, &record, spec.as_bytes(), &guard).unwrap();
+            crate::store::workflow::initialize(&paths, &record, &guard).unwrap();
+            std::fs::write(crate::disk::paths::workflow_spec_file(home.path()), spec).unwrap();
             launches.insert(
                 checkout,
                 launch_ledger::WorkflowLaunchRecord {

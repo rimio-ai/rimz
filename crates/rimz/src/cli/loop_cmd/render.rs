@@ -1494,7 +1494,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         let capacity = list::capacity_waits(&records, &args.name, &root)
             .map(|(checkout, wait)| (checkout.to_path_buf(), wait))
             .collect();
-        let specs = crate::cli::workflow_view::sealed_specs(&paths, &records);
+        let specs = crate::cli::workflow_view::live_specs(&paths, &records);
         let mut rows = list::WorkflowRunRow::for_show(
             &records,
             &ended,
@@ -2431,7 +2431,7 @@ fn workflow_log_runs(
             _ => None,
         })
         .collect::<Vec<_>>();
-    let specs = crate::cli::workflow_view::sealed_specs(paths, &records);
+    let specs = crate::cli::workflow_view::live_specs(paths, &records);
     let mut rows = records
         .iter()
         .map(|record| {

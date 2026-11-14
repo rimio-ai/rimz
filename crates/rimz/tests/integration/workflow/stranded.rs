@@ -85,7 +85,7 @@ fn the_pass_ends_stranded_runs_moves_ended_ones_and_tells_once() {
         (
             "undecodable",
             Some(variant(&|r| {
-                r.as_object_mut().unwrap().remove("spec_digest");
+                r.as_object_mut().unwrap().remove("scope");
             })),
         ),
         ("not-object", Some(b"corrupt".to_vec())),

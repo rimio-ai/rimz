@@ -1722,7 +1722,7 @@ fn a_booked_one_off_launch_command_remembers_its_run() {
         // A live run, so the launcher's recheck finds nothing collected to forget.
         let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
             "version":crate::store::workflow::VERSION, "id":run, "workflow":name,
-            "origin":"inline", "task":name, "spec_dir":"/spec", "spec_digest":"abc",
+            "origin":"inline", "task":name,
             "scope":{"kind":"worktree","path":root}, "project_root":root,
             "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"command",
             "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,

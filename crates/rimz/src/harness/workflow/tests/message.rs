@@ -102,7 +102,7 @@ fn an_undelivered_message_follows_on_undelivered_never_then() {
         );
         let (_dir, state, record) = super::attempts::setup(&text);
         let paths = state.workflow(&record.id);
-        let spec = spec::load(&paths.home).unwrap();
+        let spec = spec::load(&record.definition_dir(&paths)).unwrap();
         assert_eq!(
             (spec.target("tell", "ended"), spec.target("tell", "died")),
             (
@@ -172,7 +172,11 @@ fn a_lost_message_host_retries_the_same_notice_id() {
     let mut lost = published.clone();
     lost.attempt.as_mut().unwrap().host.pid = u32::MAX;
     super::attempts::update(&state, &lost);
-    fs::write(record.spec_dir.join("prompt.md"), "Build it again").unwrap();
+    fs::write(
+        record.spec_dir.as_deref().unwrap().join("prompt.md"),
+        "Build it again",
+    )
+    .unwrap();
     *host.message_answer.borrow_mut() = Ok(Ok("@planner".into()));
     let retry = std::rc::Rc::new(FakeHost::new());
     *host.on_message.borrow_mut() = Some(Box::new({

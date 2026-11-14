@@ -615,7 +615,7 @@ mod tests {
         let at = jiff::Timestamp::from_second(second).unwrap();
         let record: RunRecord = serde_json::from_value(serde_json::json!({
             "version": rimz::store::workflow::VERSION, "id": WorkflowRunId::new(), "workflow": "review", "task": "sweep",
-            "spec_dir": "/spec", "spec_digest": "digest",
+            "spec_dir": "/spec",
             "scope": { "kind": "worktree", "path": format!("{root}/{lane}") },
             "project_root": root, "created_at": at, "state": state, "node": "gate",
             "entered_at": at, "terminal_at": (state != "active").then_some(at),

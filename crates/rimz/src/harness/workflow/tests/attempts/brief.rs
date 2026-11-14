@@ -377,7 +377,11 @@ fn engine_invalid_routes_and_previous_deaths_use_plain_words() {
     ) + "on.died='watch'\n";
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
-    fs::write(record.spec_dir.join("answer.json"), "not json").unwrap();
+    fs::write(
+        record.spec_dir.as_deref().unwrap().join("answer.json"),
+        "not json",
+    )
+    .unwrap();
     advance_ok(&state, &record.id, &host);
     let text = note(&host);
     assert!(
@@ -386,7 +390,11 @@ fn engine_invalid_routes_and_previous_deaths_use_plain_words() {
     );
     assert!(!text.contains("answered `invalid`"));
     host.observed.borrow_mut().status = RunStatus::Failed;
-    fs::write(record.spec_dir.join("answer.json"), r#"{"outcome":"red"}"#).unwrap();
+    fs::write(
+        record.spec_dir.as_deref().unwrap().join("answer.json"),
+        r#"{"outcome":"red"}"#,
+    )
+    .unwrap();
     advance_ok(&state, &record.id, &host);
     assert!(note(&host).contains("The previous attempt, @builder in `build`, died."));
 }

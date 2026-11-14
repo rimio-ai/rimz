@@ -739,9 +739,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                         .params
                         .record
                         .get_or_insert_with(Default::default)
-                        .notes = record.notes;
+                        .notes = record.notes.clone();
                 }
-                reminders.workflow_definition = Some(record.spec_dir);
+                reminders.workflow_definition =
+                    Some(record.definition_dir(&inputs.state.workflow(&record.id)));
             }
             Err(error) => warnings.push(LaunchPlanWarning::LaunchEnv(format!(
                 "workflow definition folder unavailable: {error}"

@@ -39,7 +39,7 @@ pub(super) fn render(
         }
         None => run,
     };
-    let spec = workflow::load(&run.paths.home);
+    let spec = workflow::load(&run.record.definition_dir(&run.paths));
     let notes = run
         .record
         .notes
@@ -55,7 +55,25 @@ pub(super) fn render(
         }
         return render::json_pretty(&value);
     }
-    let spec = spec?;
+    let refusal = (!run.record.state.is_terminal())
+        .then(|| {
+            let dir = run.record.definition_dir(&run.paths);
+            workflow_view::definition_refusal(&run.record, &dir, &workflow_view::definitions())
+                .map(|error| (dir, error))
+        })
+        .flatten();
+    let spec = match (spec, &refusal) {
+        (Ok(spec), None) => spec,
+        (Err(error), None) => return Err(error.into()),
+        (spec, Some((dir, error))) => {
+            let heading = match spec {
+                Ok(_) => "its definition is refused",
+                Err(workflow::SpecErr::Io { .. }) => "its definition cannot be read",
+                Err(_) => "its definition does not parse",
+            };
+            return unreadable(run, heading, dir, error, globals);
+        }
+    };
     if history && run.record.state.is_terminal() {
         return workflow_view::history::terminal(
             &run.record,
@@ -123,6 +141,43 @@ pub(super) fn render(
         out,
         "all of it: {}",
         view.command("show", None, &[], &["--history"])
+    )?;
+    Ok(())
+}
+
+/// `workflow show` of a live run whose definition admission refuses: the run from its record
+/// under `heading`, why it waits, and the command that checks the definition.
+fn unreadable(
+    run: &resolve::Located,
+    heading: &str,
+    dir: &std::path::Path,
+    error: &str,
+    globals: &super::super::GlobalFlags,
+) -> Result<()> {
+    let mut out = render::out();
+    out.write_all(&workflow_view::history::header_only(
+        &run.record.id,
+        Some(&run.record.header()),
+        heading,
+    ))?;
+    waits_on_definition(&mut out, dir, error)?;
+    writeln!(
+        out,
+        "or end it: {}",
+        resolve::RunCommands::new(&run.record, globals).command("cancel", None, &[], &[])
+    )?;
+    Ok(())
+}
+
+/// The first error admission reports for a live run's definition, which the run waits on until it
+/// is fixed, and the command that checks the definition.
+fn waits_on_definition(out: &mut impl Write, dir: &std::path::Path, error: &str) -> Result<()> {
+    writeln!(out, "waits on its definition: {error}")?;
+    let target = dir.to_string_lossy();
+    writeln!(
+        out,
+        "check with {}",
+        resolve::command("validate", &[&target], None, None, &[], &[])
     )?;
     Ok(())
 }
@@ -698,7 +753,7 @@ mod tests {
         let state = paths::StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
         let record: RunRecord = serde_json::from_value(serde_json::json!({
             "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
-            "spec_dir":dir.path(),"spec_digest":"digest","project_root":dir.path(),
+            "spec_dir":dir.path(),"project_root":dir.path(),
             "scope":{"kind":"worktree","path":dir.path()},"state":"parked","node":"gate",
             "created_at":now,"entered_at":now,"visits":{},"visit_grant":0,
             "deadline_fired":false,"next_seq":1,
@@ -745,7 +800,7 @@ mod tests {
         let first = now - jiff::SignedDuration::from_mins(3);
         let mut record: RunRecord = serde_json::from_value(serde_json::json!({
             "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
-            "spec_dir":dir.path(),"spec_digest":"digest","project_root":dir.path(),
+            "spec_dir":dir.path(),"project_root":dir.path(),
             "scope":{"kind":"worktree","path":dir.path()},"state":"active","node":"gate",
             "created_at":first,"entered_at":first,"visits":{},"visit_grant":0,
             "deadline_fired":false,"next_seq":1,
@@ -797,7 +852,7 @@ mod tests {
         let state = paths::StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
         let record: RunRecord = serde_json::from_value(serde_json::json!({
             "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
-            "spec_dir":dir.path(),"spec_digest":"digest","project_root":dir.path(),
+            "spec_dir":dir.path(),"project_root":dir.path(),
             "scope":{"kind":"worktree","path":dir.path()},"state":"active","node":"build",
             "created_at":now,"entered_at":now-jiff::SignedDuration::from_mins(10),"visits":{},
             "visit_grant":0,"deadline_fired":false,"next_seq":1,
@@ -847,7 +902,7 @@ mod tests {
         let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(2);
         let record: RunRecord = serde_json::from_value(serde_json::json!({
             "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
-            "spec_dir":"/spec","spec_digest":"digest","project_root":"/repo",
+            "spec_dir":"/spec","project_root":"/repo",
             "scope":{"kind":"worktree","path":"/repo/lane"},
             "created_at":Timestamp::UNIX_EPOCH,"entered_at":Timestamp::UNIX_EPOCH,
             "state":"active","node":"gate","visits":{"build":1},
@@ -913,7 +968,7 @@ mod tests {
         for (state, paused) in [("active", false), ("active", true), ("failed", true)] {
             let record: RunRecord = serde_json::from_value(serde_json::json!({
                 "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),
-                "workflow":"review","spec_dir":"/spec","spec_digest":"digest",
+                "workflow":"review",
                 "project_root":"/repo","scope":{"kind":"worktree","path":"/repo"},
                 "created_at":Timestamp::UNIX_EPOCH,"entered_at":Timestamp::UNIX_EPOCH,
                 "state":state,"node":"pr","visits":{},"visit_grant":0,

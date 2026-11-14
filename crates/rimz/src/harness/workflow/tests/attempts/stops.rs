@@ -31,9 +31,12 @@ fn step_timeout_holds_for_limits_errors_and_budgets() {
             }
             assert_eq!(attempt.asked_ms, 0);
             assert!(
-                timeout_at(&load(&state.workflow(&record.id).home).unwrap(), &held)
-                    .unwrap()
-                    .is_none()
+                timeout_at(
+                    &load(&record.definition_dir(&state.workflow(&record.id))).unwrap(),
+                    &held
+                )
+                .unwrap()
+                .is_none()
             );
             host.observed.borrow_mut().stopped = None;
             let earliest = Timestamp::now();

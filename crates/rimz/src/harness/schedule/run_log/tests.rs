@@ -1105,7 +1105,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     let run = |state: &str, visits: serde_json::Value| -> crate::store::workflow::RunRecord {
         serde_json::from_value(serde_json::json!({
             "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"nightly",
-            "origin":"inline", "task":"nightly", "spec_dir":"/spec", "spec_digest":"abc",
+            "origin":"inline", "task":"nightly", "spec_dir":"/spec",
             "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
             "created_at":"2026-01-01T00:00:00Z", "state":state, "node":"agent",
             "entered_at":"2026-01-01T00:00:00Z", "visits":visits, "visit_grant":0,
@@ -1269,7 +1269,7 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
     let key = catalog.for_run("nightly").unwrap().key("nightly");
     let failed: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
         "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"nightly",
-        "origin":"inline", "task":"nightly", "spec_dir":"/spec", "spec_digest":"abc",
+        "origin":"inline", "task":"nightly", "spec_dir":"/spec",
         "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
         "created_at":"2026-01-01T00:00:00Z", "state":"failed", "node":"@failed",
         "entered_at":"2026-01-01T00:59:59Z", "visits":{}, "visit_grant":0,
@@ -1319,7 +1319,7 @@ fn only_a_done_run_keeps_its_checkout_in_launch_memory() {
     ] {
         let run: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
             "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"resident",
-            "origin":"inline", "task":"resident", "spec_dir":"/spec", "spec_digest":"abc",
+            "origin":"inline", "task":"resident", "spec_dir":"/spec",
             "scope":{"kind":"worktree","path":checkout}, "project_root":root.path(),
             "created_at":"2026-01-01T00:00:00Z", "state":run_state, "node":"agent",
             "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,

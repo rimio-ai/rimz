@@ -21,7 +21,10 @@ shell='printf "%s|%s" "$RIMZ_WORKFLOW_DEFINITION" "$RIMZ_LOOP_TASK" > "$RIMZ_WOR
 on={pass='@done',fail='@failed'}
 "#;
     let (dir, state, mut record) = super::attempts::setup(text);
-    record.spec_dir = dir.path().join("workflow definitions");
+    let deployed = dir.path().join("workflow definitions");
+    fs::create_dir_all(deployed.join("checks")).unwrap();
+    fs::write(crate::disk::paths::workflow_spec_file(&deployed), text).unwrap();
+    record.spec_dir = Some(deployed.clone());
     record.task = Some("nightly".into());
     let booker = crate::agents::LaunchedBy {
         kind: crate::ids::AgentKind::new_unchecked("claude"),
@@ -32,9 +35,8 @@ on={pass='@done',fail='@failed'}
         trigger: None,
         booked_by: vec![booker],
     });
-    fs::create_dir_all(record.spec_dir.join("checks")).unwrap();
     fs::write(
-        record.spec_dir.join("checks/env.sh"),
+        deployed.join("checks/env.sh"),
         "printf '{\"outcome\":\"ok\",\"definition\":\"%s\",\"task\":\"%s\",\"booked_by\":%s}' \"$RIMZ_WORKFLOW_DEFINITION\" \"$RIMZ_LOOP_TASK\" \"${RIMZ_LOOP_BOOKED_BY:-null}\"\n",
     )
     .unwrap();
@@ -43,7 +45,7 @@ on={pass='@done',fail='@failed'}
     records::write(&paths, &record, &guard).unwrap();
     drop(guard);
     advance(&state, &record.id, &FakeHost::new()).unwrap();
-    let definition = record.spec_dir.display().to_string();
+    let definition = deployed.display().to_string();
     let seen = format!("{definition}|nightly");
     assert_eq!(fs::read_to_string(paths.step_log(1)).unwrap(), seen);
     assert_eq!(
@@ -155,4 +157,51 @@ fn command_step_cycles_stop_at_the_cap_without_consuming_a_sequence() {
         results.push((max, valid, format!("{result:?}; {ended:?}")));
     }
     assert!(results.iter().all(|(_, valid, _)| *valid), "{results:#?}");
+}
+
+/// A hosted child's timeout is the definition's as it is now: one extended while the child
+/// runs does not kill it at the old value, and one shortened ends it timed out.
+#[test]
+fn a_running_childs_timeout_follows_the_definition_as_it_is_now() {
+    let command = |timeout: &str, sleep: u32| {
+        format!(
+            "[workflow]\nscope='worktree'\nstart='work'\n[command.work]\ntimeout='{timeout}'\nshell='cp edited.toml workflow.toml; sleep {sleep}'\nthen='after'\n[test.after]\ntimeout='365d'\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
+        )
+    };
+    let check = |timeout: &str, sleep: u32| {
+        format!(
+            "[workflow]\nscope='worktree'\nstart='work'\n[script.work]\ntimeout='{timeout}'\nshell='cp edited.toml workflow.toml; sleep {sleep}; printf %s {{\\\"outcome\\\":\\\"ok\\\"}}'\non.ok='@done'\n"
+        )
+    };
+    for (kind, text) in [
+        ("command", &command as &dyn Fn(&str, u32) -> String),
+        ("check", &check),
+    ] {
+        for (from, to, sleep, ended) in [("1s", "1h", 3, true), ("1h", "1s", 30, false)] {
+            let case = (kind, from, to);
+            let (dir, state, record) = super::attempts::setup(&text(from, sleep));
+            fs::write(dir.path().join("edited.toml"), text(to, sleep)).unwrap();
+            let started = std::time::Instant::now();
+            advance(&state, &record.id, &FakeHost::new()).unwrap();
+            let settled = records::load(&state.workflow(&record.id)).unwrap();
+            let journal = records::journal(&state.workflow(&record.id)).unwrap();
+            if ended {
+                assert_eq!(settled.state, RunState::Done, "{case:?} {journal:#?}");
+            } else {
+                assert_eq!(settled.state, RunState::Failed, "{case:?} {journal:#?}");
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(20),
+                    "{case:?}"
+                );
+                let timed_out = journal.iter().any(|row| match &row.event {
+                    records::JournalEvent::Attempt { outcome, .. } => {
+                        *outcome == AttemptOutcome::Timeout
+                    }
+                    records::JournalEvent::Evaluation { outcome, .. } => outcome == "timeout",
+                    _ => false,
+                });
+                assert!(timed_out, "{case:?} {journal:#?}");
+            }
+        }
+    }
 }

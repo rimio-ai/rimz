@@ -16,7 +16,7 @@ fn workflow_wait(state: &StatePaths, suffix: u32, status: &str, outcome: &str) -
     let at = "2026-01-01T00:00:00Z";
     let record = serde_json::json!({
         "version": crate::store::workflow::VERSION, "id": id, "workflow": "review",
-        "spec_dir": "/definitions/review", "spec_digest": "abc",
+        "spec_dir": "/definitions/review",
         "scope": {"kind": "worktree", "path": "/repo"}, "project_root": "/repo",
         "created_at": at, "state": status, "node": "triage", "entered_at": at,
         "visits": {}, "visit_grant": 0, "deadline_fired": false, "next_seq": 1,

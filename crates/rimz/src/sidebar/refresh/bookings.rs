@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentState, LaunchedBy};
 use crate::config::{MachineConfig, TeamsConfig, WorktreeConfig};
+use crate::disk::paths::WorkflowPaths;
 use crate::harness::cache_keepalive::SeatPolicy;
 use crate::harness::loop_task::{FireLaunch, LaunchTree, read_fire_launch};
 use crate::harness::schedule::attention::{self, ReadContext, TaskReading};
@@ -285,7 +286,7 @@ impl Lane<'_> {
 fn run_homes<'a>(
     state: &StatePaths,
     runs: impl Iterator<Item = &'a WorkflowRunId>,
-) -> BTreeMap<WorkflowRunId, (crate::store::workflow::RunRecord, PathBuf)> {
+) -> BTreeMap<WorkflowRunId, (crate::store::workflow::RunRecord, WorkflowPaths)> {
     let mut homes = BTreeMap::new();
     for run in runs {
         if homes.contains_key(run) {
@@ -295,7 +296,7 @@ fn run_homes<'a>(
             continue;
         };
         if let crate::store::workflow::RunClass::Current(record) = found.class {
-            homes.insert(run.clone(), (*record, found.paths.home));
+            homes.insert(run.clone(), (*record, found.paths));
         }
     }
     homes
@@ -305,7 +306,7 @@ fn run_homes<'a>(
 /// candidates whose run is a scheduled fire an agent booked of a loop row's command; and the
 /// candidates found to be no booking.
 fn booked_commands(
-    homes: &BTreeMap<WorkflowRunId, (crate::store::workflow::RunRecord, PathBuf)>,
+    homes: &BTreeMap<WorkflowRunId, (crate::store::workflow::RunRecord, WorkflowPaths)>,
     candidates: &[(String, WorkflowRunId)],
 ) -> (
     BTreeMap<WorkflowRunId, FireLaunch>,
@@ -314,7 +315,7 @@ fn booked_commands(
     let mut booked = BTreeMap::new();
     let mut rejected = Vec::new();
     for (task, run) in candidates {
-        let Some((record, home)) = homes.get(run) else {
+        let Some((record, paths)) = homes.get(run) else {
             continue;
         };
         let scheduled = matches!(
@@ -325,7 +326,7 @@ fn booked_commands(
             rejected.push((task.clone(), run.clone()));
             continue;
         }
-        let Ok(spec) = crate::harness::workflow::load(home) else {
+        let Ok(spec) = crate::harness::workflow::load(&record.definition_dir(paths)) else {
             continue;
         };
         // The runner seals the command as `exec <argv as one shell line>`, whose words read

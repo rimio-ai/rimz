@@ -34,14 +34,14 @@ fn workflow_record(
     .unwrap();
     let record = serde_json::from_value(json!({
         "version":crate::store::workflow::VERSION,"id":id,"workflow":"test","spec_dir":home,
-        "spec_digest":"test","project_root":home,"notes":relative,
+        "project_root":home,"notes":relative,
         "scope":{"kind":"worktree","path":home},"state":state,"node":"build",
         "created_at":at,"entered_at":at,"terminal_at":at,
         "deadline_fired":false,"next_seq":1,"visits":{},"visit_grant":0,
     }))
     .unwrap();
     let guard = WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
-    workflow::initialize(paths, &record, b"spec", &guard).unwrap();
+    workflow::initialize(paths, &record, &guard).unwrap();
     (record, relative)
 }
 
@@ -193,12 +193,12 @@ fn automation_notes_sweep_reads_workflow_ownership_and_live_launch_records() {
         .unwrap();
         let record = serde_json::from_value(json!({
             "version":crate::store::workflow::VERSION,"id":id,"workflow":"test","spec_dir":home.path(),
-            "spec_digest":"test","project_root":home.path(),"notes":relative,
+            "project_root":home.path(),"notes":relative,
             "scope":{"kind":"worktree","path":home.path()},"state":state,"node":"build",
             "created_at":at,"entered_at":at,"deadline_fired":false,"next_seq":1,"visits":{},"visit_grant":0,
         })).unwrap();
         let guard = WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
-        workflow::initialize(&paths, &record, b"spec", &guard).unwrap();
+        workflow::initialize(&paths, &record, &guard).unwrap();
         drop(guard);
         let run = paths.notes_run(Class::AutomationNotes, &relative);
         expire(&run);

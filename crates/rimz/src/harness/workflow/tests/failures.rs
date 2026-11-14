@@ -388,6 +388,7 @@ fn a_handled_limited_then_a_death_reports_the_run_failed_not_budget() {
             limited: None,
             cost_usd: None,
             detail: json!({}),
+            interrupt: None,
         };
         t.finish_judge(1, refusal).unwrap();
         if route {
@@ -500,6 +501,7 @@ fn a_handled_limited_then_a_spent_visit_cap_reports_the_run_failed_not_budget() 
         limited: None,
         cost_usd: None,
         detail: json!({}),
+        interrupt: None,
     };
     t.finish_judge(1, refusal).unwrap();
     assert_eq!(t.record.node, "fix");

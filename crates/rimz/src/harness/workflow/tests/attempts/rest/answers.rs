@@ -69,7 +69,7 @@ fn shell_and_judge_pushbacks_name_the_answering_check_and_its_output() {
         "{text}"
     );
     assert!(!text.contains("private-shell-evidence"), "{text}");
-    let mut spec = load(&paths.home).unwrap();
+    let mut spec = load(&record.definition_dir(&paths)).unwrap();
     spec.edit(|spec| {
         let check = spec.checks.get_mut("review").unwrap();
         check.table = crate::harness::workflow::spec::CheckTable::Judge;

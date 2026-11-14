@@ -119,18 +119,18 @@ pub(crate) fn probe_demand(
         .filter(|record| record.state == crate::store::workflow::RunState::Active)
     {
         let paths = state.workflow(&record.id);
-        let branches = match crate::harness::workflow::load(&paths.home)
-            .and_then(|spec| spec.forge_branches())
-        {
-            Ok(Some(branches)) => branches,
-            Ok(None) => continue,
-            Err(error) => {
-                tracing::warn!(
-                    path = %paths.spec.display(), %error, "workflow probe spec unavailable"
-                );
-                continue;
-            }
-        };
+        let dir = record.definition_dir(&paths);
+        let branches =
+            match crate::harness::workflow::load(&dir).and_then(|spec| spec.forge_branches()) {
+                Ok(Some(branches)) => branches,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %dir.display(), %error, "workflow probe spec unavailable"
+                    );
+                    continue;
+                }
+            };
         demand
             .entry(record.scope.path.to_string_lossy().into_owned())
             .or_default()

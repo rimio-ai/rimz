@@ -7,7 +7,13 @@ use crate::store::workflow::{EndCause, Ending, RunOrigin};
 
 /// Replace the definition the run reads at its next engine read.
 fn edit(state: &StatePaths, record: &RunRecord, text: &str) {
-    fs::write(state.workflow(&record.id).spec, text).unwrap();
+    let paths = state.workflow(&record.id);
+    let current = records::load(&paths).unwrap();
+    fs::write(
+        crate::disk::paths::workflow_spec_file(&current.definition_dir(&paths)),
+        text,
+    )
+    .unwrap();
 }
 
 /// The run ended failed, its reason naming `node` and what no longer fits.
@@ -211,8 +217,13 @@ fn a_broken_deployed_definition_never_moves_the_run_and_a_fix_resumes_it() {
 #[test]
 fn an_unparsable_inline_definition_fails_the_run_and_a_refused_one_waits() {
     let inline = |state: &StatePaths, record: &RunRecord| {
-        let mut record = records::load(&state.workflow(&record.id)).unwrap();
+        let paths = state.workflow(&record.id);
+        let mut record = records::load(&paths).unwrap();
         record.origin = RunOrigin::Inline;
+        record.spec_dir = None;
+        let prompt =
+            std::collections::BTreeMap::from([("prompt.md".to_owned(), b"Build it".to_vec())]);
+        records::seal_definition(&paths.definition, STEP, &prompt).unwrap();
         update(state, &record);
     };
     let (_dir, state, record) = setup(STEP);
@@ -248,7 +259,7 @@ fn cancel_needs_no_readable_definition() {
         let (_dir, state, record) = setup(STEP);
         let host = FakeHost::new();
         advance_ok(&state, &record.id, &host);
-        let spec = state.workflow(&record.id).spec;
+        let spec = definition_file(&record);
         match broken {
             Some(text) => fs::write(&spec, text).unwrap(),
             None => fs::remove_file(&spec).unwrap(),
@@ -409,4 +420,23 @@ fn a_misfit_after_a_capacity_route_fails_the_run_with_its_own_reason() {
         ended.outcome.as_ref().unwrap().ending,
         records::RunEnding::Failed
     );
+}
+
+/// A run whose definition is edited down to checks before it ends classifies `acted` by that
+/// definition, where one that cannot be read counts any visit
+/// (`cancel_needs_no_readable_definition`).
+#[test]
+fn acted_reads_a_checks_only_definition_by_its_steps() {
+    let (_dir, state, record) = setup(STEP);
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    edit(
+        &state,
+        &record,
+        &format!("[workflow]\nscope='worktree'\nstart='after'\n{AFTER}"),
+    );
+    cancel(&state, &record.id, &host, Some("stop")).unwrap();
+    let ended = records::load(&state.workflow(&record.id)).unwrap();
+    assert_eq!(ended.state, RunState::Canceled, "{ended:#?}");
+    assert!(!ended.outcome.as_ref().unwrap().acted, "{ended:#?}");
 }

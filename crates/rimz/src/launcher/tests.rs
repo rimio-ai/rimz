@@ -54,7 +54,7 @@ fn worktree_recreation_refuses_an_unfinished_workflow_run() {
     .unwrap();
     let run: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
         "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"land",
-        "spec_dir":dir.path(), "spec_digest":"test", "project_root":repo,
+        "spec_dir":dir.path(), "project_root":repo,
         "scope":{"kind":"worktree","path":created.marker.worktree_path},
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"check",
         "entered_at":"2026-01-01T00:00:00Z", "deadline_fired":false,
@@ -62,7 +62,7 @@ fn worktree_recreation_refuses_an_unfinished_workflow_run() {
     }))
     .unwrap();
     let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    crate::store::workflow::initialize(&state, &run, b"[workflow]", &guard).unwrap();
+    crate::store::workflow::initialize(&state, &run, &guard).unwrap();
     drop(guard);
     let result = worktree_entry::remove(
         &workspace,

@@ -117,14 +117,19 @@ fn cancellation_history_prints_the_recorded_reason() {
         root: None,
         color: crate::cli::ColorWhen::Never,
     };
-    let spec = b"[workflow]\nscope='worktree'\nstart='pr'\n\
-        [test.pr]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='@failed'}\n";
+    std::fs::write(
+        paths::workflow_spec_file(dir.path()),
+        "[workflow]\nscope='worktree'\nstart='pr'\n\
+        [test.pr]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='@failed'}\n",
+    )
+    .unwrap();
     let mut actual = Vec::new();
     for reason in [None, Some("worktree removed")] {
         let mut record = waiting_record(0, 0, 1);
         record.id = WorkflowRunId::new();
         let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-        records::initialize(&state, &record, spec, &guard).unwrap();
+        record.spec_dir = Some(dir.path().to_path_buf());
+        records::initialize(&state, &record, &guard).unwrap();
         drop(guard);
         workflow::cancel(
             &state,
@@ -375,7 +380,7 @@ fn wait_rows_match_the_nodes_outcome_and_inclusive_span() {
 fn waiting_record(first: i64, last: i64, count: u64) -> RunRecord {
     serde_json::from_value(json!({
         "version":rimz::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review",
-        "spec_dir":"/spec", "spec_digest":"digest",
+        "spec_dir":"/spec",
         "scope":{"kind":"worktree", "path":"/checkout"}, "project_root":"/checkout",
         "created_at":at(0), "state":"active", "node":"build", "entered_at":at(0),
         "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":4,

@@ -538,8 +538,10 @@ when = ["{condition}"]
 outcome = "ready"
 "#
         );
+        let deployed = root.path().join("definitions").join(id.as_str());
+        std::fs::create_dir_all(&deployed).unwrap();
         std::fs::write(
-            paths.spec,
+            crate::disk::paths::workflow_spec_file(&deployed),
             if condition == "unloadable" {
                 "["
             } else {
@@ -549,7 +551,7 @@ outcome = "ready"
         .unwrap();
         let record = serde_json::json!({
             "version": crate::store::workflow::VERSION, "id": id, "workflow": "review",
-            "spec_dir": root.path().join("unsealed-definition"), "spec_digest": "abc",
+            "spec_dir": deployed,
             "scope": {"kind": "worktree", "path": scope.canonicalize().unwrap()},
             "project_root": root.path(), "created_at": now, "state": status,
             "node": "work", "entered_at": now, "visits": {}, "visit_grant": 0,

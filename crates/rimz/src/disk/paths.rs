@@ -250,9 +250,8 @@ pub struct WorkflowPaths {
     pub home: PathBuf,
     pub record: PathBuf,
     pub journal: PathBuf,
-    pub spec: PathBuf,
-    /// A run's sealed definition root: its source text and every file beside it, copied at
-    /// the start and read in place of the source for the rest of the run.
+    /// An inline run's definition root: the text its loop fire generated and every file beside
+    /// it, written at the start. A deployed run has none and reads its deployed directory.
     pub definition: PathBuf,
     pub work: PathBuf,
     pub context: PathBuf,
@@ -313,7 +312,6 @@ impl WorkflowPaths {
         Self {
             record: home.join("record.json"),
             journal: home.join("journal.jsonl"),
-            spec: workflow_spec_file(&home),
             definition: home.join("definition"),
             context: work.join("context.json"),
             home,

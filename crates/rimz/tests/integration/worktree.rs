@@ -582,8 +582,6 @@ fn waiting_workflow(
     tree: &str,
     workflow: &str,
 ) -> (rimz::ids::WorkflowRunId, rimz::disk::paths::WorkflowPaths) {
-    use sha2::Digest as _;
-
     let dir = env.rimz_home().join("workflows").join(workflow);
     std::fs::create_dir_all(&dir).unwrap();
     let spec = "[workflow]\nscope='worktree'\nstart='check'\n\
@@ -602,7 +600,7 @@ fn waiting_workflow(
     let now = jiff::Timestamp::now();
     let value = serde_json::json!({
         "version":rimz::store::workflow::VERSION, "id":id, "workflow":workflow, "spec_dir":dir,
-        "spec_digest":hex::encode(sha2::Sha256::digest(spec.as_bytes())),
+
         "project_root":env.project_root, "scope":{"kind":"worktree", "path":checkout},
         "created_at":now, "entered_at":now, "state":"active", "node":"check",
         "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
@@ -614,7 +612,6 @@ fn waiting_workflow(
         rimz::store::workflow::initialize(
             &state,
             &serde_json::from_value(value.clone()).unwrap(),
-            spec.as_bytes(),
             &guard,
         )
         .unwrap();

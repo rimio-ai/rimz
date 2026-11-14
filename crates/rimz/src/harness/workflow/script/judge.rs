@@ -7,11 +7,11 @@ use crate::harness::launch::ExecIdentity;
 pub(super) fn evaluate(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &Definition,
+    live: &Live<'_>,
     record: &RunRecord,
 ) -> Evaluation {
     let mut result = Evaluation::failed("died", "judge interrupted");
-    if let Err(error) = run(state, paths, spec, record, &mut result) {
+    if let Err(error) = run(state, paths, live, record, &mut result) {
         result.object = Err(error);
     }
     result
@@ -20,17 +20,19 @@ pub(super) fn evaluate(
 fn run(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &Definition,
+    live: &Live<'_>,
     record: &RunRecord,
     result: &mut Evaluation,
 ) -> Result<(), String> {
+    let spec = live.started;
     let check = spec.check(&record.node).expect("a judge runs at its check");
     // Agent checks were validated with a profile and a confined prompt file.
     let file = check.prompt_file().ok_or("judge needs a prompt-file")?;
     let Some(Kind::Judge(agent)) = check.kind() else {
         return Err("judge needs an agent".into());
     };
-    let prompt_file = spec::confined_file(&record.spec_dir, file).map_err(|e| e.to_string())?;
+    let prompt_file =
+        spec::confined_file(&record.definition_dir(paths), file).map_err(|e| e.to_string())?;
     let prompt = std::fs::read_to_string(prompt_file).map_err(|e| e.to_string())?;
     let digests = BTreeMap::from([(file.to_owned(), digest(prompt.as_bytes()))]);
     let attempt = record.attempt.as_ref().expect("prepared judge attempt");
@@ -121,10 +123,10 @@ fn run(
     let attempt = prepared
         .attempt(|adapter, plan, _| {
             let admitted = crate::harness::headless::admit(adapter, plan)?;
-            with_child(
+            let (output, interrupt) = with_child(
                 state,
                 paths,
-                spec,
+                live,
                 record,
                 digests,
                 |interrupted, spawned| {
@@ -132,8 +134,9 @@ fn run(
                         .execute_hosted(timeout, interrupted, spawned)
                         .map_err(|e| e.to_string())
                 },
-            )
-            .map_err(|error| ProcessErr::Io(std::io::Error::other(error.to_string())))
+            );
+            result.interrupt = interrupt;
+            output.map_err(|error| ProcessErr::Io(std::io::Error::other(error.to_string())))
         })
         .map_err(|e| e.to_string())?;
     if let Some(output) = &attempt.output {

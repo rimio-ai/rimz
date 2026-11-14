@@ -11,10 +11,10 @@ use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId, WorkflowRunId};
 
-/// The workflow language version, which is also the run record's: a sealed definition means
-/// what the binary of this version reads it to mean, so a change to what one means raises it,
-/// and `load` refuses a record of any other version before decoding it.
-pub const VERSION: u32 = 10;
+/// The run record's own shape version, raised when a binary on either side of a change would
+/// misread the other's record; `load` refuses a record of any other version before decoding it.
+/// A change to what a definition means raises nothing: every run reads its definition as it is.
+pub const VERSION: u32 = 11;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -613,8 +613,10 @@ pub struct RunRecord {
     pub manual: bool,
     #[serde(default)]
     pub loop_report: LoopReport,
-    pub spec_dir: PathBuf,
-    pub spec_digest: String,
+    /// A deployed run's definition directory, canonical at the start and read live; an inline
+    /// run has none and reads its own `definition/`, through [`RunRecord::definition_dir`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_dir: Option<PathBuf>,
     pub prompt: Option<String>,
     pub scope: Scope,
     /// A loop fire cut `scope` as its own fresh worktree, so loop keys the run on
@@ -705,6 +707,15 @@ pub struct RunRecord {
 }
 
 impl RunRecord {
+    /// The directory holding the run's definition: a deployed run's recorded directory, as it is
+    /// now, or an inline run's own `definition/` under `paths`, the home the caller was handed,
+    /// live or finished.
+    pub fn definition_dir(&self, paths: &WorkflowPaths) -> PathBuf {
+        self.spec_dir
+            .clone()
+            .unwrap_or_else(|| paths.definition.clone())
+    }
+
     /// The agent session still owned by this run, including a session held under its rest check.
     pub fn session_attempt(&self) -> Option<&LiveAttempt> {
         self.held
@@ -1016,50 +1027,22 @@ pub fn load(paths: &WorkflowPaths) -> Result<RunRecord> {
     Ok(record)
 }
 
-/// Write a definition's text and assets into a definition root: a run's own, sealed before
-/// `initialize` publishes the record, or an ejected task's staging directory. Each asset,
-/// directory and link name is a relative path inside that root. An asset named in `modes` is
-/// written with those permission bits, as a deployed directory's scripts keep their executable
-/// bit; the rest take the default mode. Each of `dirs` is created even when no asset sits under
-/// it, and each of `links` is written as a symlink to its target as given, which a deployed
-/// directory's caller makes relative to the link's own directory so the link resolves inside
-/// the root.
-pub fn seal_definition(
-    root: &Path,
-    text: &str,
-    assets: &BTreeMap<String, Vec<u8>>,
-    modes: &BTreeMap<String, u32>,
-    dirs: &[String],
-    links: &BTreeMap<String, PathBuf>,
-) -> Result<()> {
+/// Write a definition's text and assets into a definition root: an inline run's own, sealed
+/// before `initialize` publishes the record, or an ejected task's staging directory. Each asset
+/// name is a relative path inside that root.
+pub fn seal_definition(root: &Path, text: &str, assets: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     std::fs::create_dir_all(root).map_err(WorkflowStoreErr::io(root))?;
     crate::disk::atomic::write_bytes_atomically(
         &crate::disk::paths::workflow_spec_file(root),
         text.as_bytes(),
     )?;
-    for name in dirs {
-        let dir = sealed_entry(root, name)?;
-        std::fs::create_dir_all(&dir).map_err(WorkflowStoreErr::io(&dir))?;
-        sync_up(root, dir.parent())?;
-    }
     for (name, bytes) in assets {
         let file = sealed_entry(root, name)?;
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent).map_err(WorkflowStoreErr::io(parent))?;
         }
-        match modes.get(name) {
-            Some(&mode) => crate::disk::atomic::write_bytes_atomically_mode(&file, bytes, mode)?,
-            None => crate::disk::atomic::write_bytes_atomically(&file, bytes)?,
-        }
+        crate::disk::atomic::write_bytes_atomically(&file, bytes)?;
         sync_up(root, file.parent().and_then(Path::parent))?;
-    }
-    for (name, target) in links {
-        let link = sealed_entry(root, name)?;
-        if let Some(parent) = link.parent() {
-            std::fs::create_dir_all(parent).map_err(WorkflowStoreErr::io(parent))?;
-        }
-        crate::disk::atomic::symlink_atomically(target, &link)?;
-        sync_up(root, link.parent().and_then(Path::parent))?;
     }
     Ok(())
 }
@@ -1095,12 +1078,7 @@ fn sync_up(root: &Path, from: Option<&Path>) -> Result<()> {
 }
 
 #[must_use = "durability barrier; check the result"]
-pub fn initialize(
-    state: &StatePaths,
-    record: &RunRecord,
-    spec: &[u8],
-    guard: &WorkspaceLock,
-) -> Result<()> {
+pub fn initialize(state: &StatePaths, record: &RunRecord, guard: &WorkspaceLock) -> Result<()> {
     let paths = state.workflow(&record.id);
     std::fs::create_dir_all(&paths.work).map_err(WorkflowStoreErr::io(&paths.work))?;
     match &record.notes {
@@ -1119,7 +1097,6 @@ pub fn initialize(
         crate::disk::atomic::sync_dir(dir)?;
     }
     crate::disk::atomic::sync_dir(&state.root)?;
-    crate::disk::atomic::write_bytes_atomically(&paths.spec, spec)?;
     write(&paths, record, guard)
 }
 
