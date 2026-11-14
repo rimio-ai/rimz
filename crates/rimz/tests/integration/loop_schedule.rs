@@ -6240,6 +6240,61 @@ fn loop_check_outcomes_report_once_and_render_from_their_runs() {
     );
 }
 
+/// A fired run whose generated definition stops parsing while its command runs ends failed,
+/// and its saved history keeps the command's row with one line naming the unreadable definition.
+#[test]
+fn a_fired_run_ended_by_its_unparsable_definition_saves_its_rows() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let go = env.home_root.join("go");
+    let script = format!(
+        "while [ ! -e {} ]; do sleep 0.05; done; printf boom; exit 1",
+        go.display()
+    );
+    loop_ok(
+        &env,
+        &[
+            "loop", "add", "unread", "--every", "1h", "--", "sh", "-c", &script,
+        ],
+    );
+    let mut fire = env.rimz().args(["loop", "run", "unread"]).spawn().unwrap();
+    let state = env.state_path_for(&env.project_root);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let run = loop {
+        let live = rimz::store::workflow::live_runs(&state).unwrap_or_default();
+        // The command has started under the definition as it read then.
+        if let Some(run) = live.into_iter().find(|run| {
+            run.task.as_deref() == Some("unread")
+                && run
+                    .attempt
+                    .as_ref()
+                    .is_some_and(|attempt| attempt.child.is_some())
+        }) {
+            break run;
+        }
+        assert!(Instant::now() < deadline, "the fire started no command");
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    let paths = state.workflow(&run.id);
+    std::fs::write(
+        run.definition_dir(&paths).join("workflow.toml"),
+        "[workflow",
+    )
+    .unwrap();
+    std::fs::write(&go, "").unwrap();
+    assert!(fire.wait().unwrap().success());
+    let report = wait_for_loop_report(&env, "unread");
+    assert_eq!(report.result, LoopRunResult::Failed, "{report:?}");
+    wait_until_finished(&env, &report);
+    let saved = std::fs::read_to_string(state.finished_workflow(&run.id).history()).unwrap();
+    assert!(saved.contains(" command said fail"), "{saved}");
+    assert!(
+        saved.contains("its definition could not be read"),
+        "{saved}"
+    );
+    assert_eq!(saved.matches("TOML parse error").count(), 1, "{saved}");
+}
+
 #[cfg(unix)]
 #[test]
 fn loop_scheduled_one_shot_consumption_follows_preflight_boundary() {

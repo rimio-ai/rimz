@@ -1228,6 +1228,29 @@ fn source_edits_reach_the_run_after_the_hot_loop_guard_and_a_broken_one_waits() 
     assert_eq!(saved.matches("TOML parse error").count(), 1, "{saved}");
 }
 
+/// A deployed run canceled after its directory is removed saves its journal's rows, with one
+/// line naming the definition it could not read.
+#[test]
+fn a_run_canceled_without_its_directory_saves_its_rows() {
+    let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let id = start(&env);
+    until(&env, &id, |v| v["record"]["wait"].is_object());
+    fs::remove_dir_all(&dir).unwrap();
+    success(command(&env, &["workflow", "cancel", &id]));
+    settled(&env, &id, "canceled");
+    let saved = fs::read_to_string(run_home(&env, &id).history()).unwrap();
+    assert!(saved.contains(" pr said pending"), "{saved}");
+    assert!(
+        saved.contains("its definition could not be read"),
+        "{saved}"
+    );
+    assert_eq!(
+        saved.matches("No such file or directory").count(),
+        1,
+        "{saved}"
+    );
+}
+
 #[test]
 fn malformed_and_unrouted_objects_are_invalid_and_a_failed_exit_dies() {
     let bodies = [
