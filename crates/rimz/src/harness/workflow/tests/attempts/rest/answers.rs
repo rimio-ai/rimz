@@ -47,7 +47,7 @@ fn shell_and_judge_pushbacks_name_the_answering_check_and_its_output() {
     let text = SESSION
         .replace("rest-check=['pr']", "rest-check=['pr','review']")
         .replace("on.done='@done'", "on.done='review'")
-        + "[test.review]\nshell='echo private-shell-evidence; exit 1'\non={pass='@done',fail='build'}\n";
+        + "[test.review]\ntimeout='365d'\nshell='echo private-shell-evidence; exit 1'\non={pass='@done',fail='build'}\n";
     let (dir, state, record) = setup(&text);
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
@@ -103,7 +103,7 @@ fn shell_and_judge_pushbacks_name_the_answering_check_and_its_output() {
 #[test]
 fn condition_pushback_explains_false_or_leaves_and_unread_terms() {
     let definition = SESSION.split("[script.pr]").next().unwrap().to_owned()
-        + "[condition.pr]\nelse='pending'\non={done='@done',pending='build',unknown='build'}\n[[condition.pr.cases]]\nwhen=['team.stage=Done || team.stage=Review']\noutcome='done'\n[[condition.pr.cases]]\nwhen=['team.stage=Done && pr=merged']\noutcome='done'\n";
+        + "[condition.pr]\ntimeout='365d'\nelse='pending'\non={done='@done',pending='build',unknown='build'}\n[[condition.pr.cases]]\nwhen=['team.stage=Done || team.stage=Review']\noutcome='done'\n[[condition.pr.cases]]\nwhen=['team.stage=Done && pr=merged']\noutcome='done'\n";
     let (dir, state, record) = setup(&definition);
     fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
     fs::write(

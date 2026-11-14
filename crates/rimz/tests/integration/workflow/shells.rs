@@ -65,7 +65,7 @@ fn shell_exit_codes_log_both_streams_and_inherit_the_key() {
             "pwd; printf '%s\\n' \"$RIMZ_WORKFLOW_DIR\" \"$RIMZ_WORKFLOW_RUN\"; printf stderr >&2; {ending}"
         );
         let spec = format!(
-            "{}[script.seed]\nrun='sh checks/pr.sh'\non.go='pr'\n[test.pr]\nshell={}\non={{pass='@done',fail='@done'}}\n",
+            "{}[script.seed]\ntimeout='365d'\nrun='sh checks/pr.sh'\non.go='pr'\n[test.pr]\ntimeout='365d'\nshell={}\non={{pass='@done',fail='@done'}}\n",
             HEADER.replace("start = 'pr'", "start = 'seed'"),
             toml::Value::String(shell)
         );
@@ -110,7 +110,7 @@ fn shell_exit_codes_log_both_streams_and_inherit_the_key() {
 #[test]
 fn a_test_killed_by_a_signal_dies_and_never_answers_fail() {
     let spec = format!(
-        "{}[script.seed]\nrun='sh checks/pr.sh'\non.go='pr'\n[test.pr]\nshell='printf stderr >&2; kill -TERM $$'\non={{pass='@done',fail='@done'}}\n",
+        "{}[script.seed]\ntimeout='365d'\nrun='sh checks/pr.sh'\non.go='pr'\n[test.pr]\ntimeout='365d'\nshell='printf stderr >&2; kill -TERM $$'\non={{pass='@done',fail='@done'}}\n",
         HEADER.replace("start = 'pr'", "start = 'seed'"),
     );
     let (env, _) = fixture(&spec, "printf '%s\\n' '{\"outcome\":\"go\",\"key\":7}'\n");
@@ -232,7 +232,7 @@ fn shell_timeout_kills_the_group_and_routes_or_fails() {
         let (env, _) = shell_fixture(
             LIVE,
             &format!(
-                "timeout='1h'\n{edge}\n[test.report]\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
+                "timeout='1h'\n{edge}\n[test.report]\ntimeout='365d'\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
             ),
         );
         let id = start(&env);
@@ -262,7 +262,7 @@ fn shell_timeout_kills_the_group_and_routes_or_fails() {
 
 #[test]
 fn shell_deadline_interrupts_the_group_and_uses_the_workflow_edge() {
-    let (env, _) = shell_fixture(LIVE, "");
+    let (env, _) = shell_fixture(LIVE, "timeout='365d'\n");
     let id = start(&env);
     let (_, child, descendant) = live_group(&env, &id, "pr");
     let deadline = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1);
@@ -283,7 +283,7 @@ fn shell_deadline_interrupts_the_group_and_uses_the_workflow_edge() {
 
 #[test]
 fn shell_cancel_interrupts_the_group_and_first_terminal_wins() {
-    let (env, _) = shell_fixture(LIVE, "");
+    let (env, _) = shell_fixture(LIVE, "timeout='365d'\n");
     let id = start(&env);
     let (_, child, descendant) = live_group(&env, &id, "pr");
     success(command(&env, &["workflow", "cancel", &id]));
@@ -352,10 +352,12 @@ fn dead_host_check_group(action: &str, marker: GroupMarker) {
              sleep 600 & echo $! > \"$RIMZ_WORKFLOW_DIR/descendant.pid\"; exit 0\n"
         );
         let (env, _) = if shell {
-            shell_fixture(&script, "")
+            shell_fixture(&script, "timeout='365d'\n")
         } else {
             fixture(
-                &format!("{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.done='@done'\n"),
+                &format!(
+                    "{HEADER}[script.pr]\ntimeout='365d'\nrun='sh checks/pr.sh'\non.done='@done'\n"
+                ),
                 &script,
             )
         };

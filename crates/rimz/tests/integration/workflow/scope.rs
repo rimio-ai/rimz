@@ -83,7 +83,7 @@ fn project_scope_is_unique_across_checkouts_and_refuses_a_named_worktree() {
 fn a_script_canceled_outcome_is_a_route_not_an_engine_diagnostic() {
     let (env, _) = fixture(
         &format!(
-            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.canceled='next'\n[script.next]\nrun='sh checks/pr.sh'\non.ready='@done'\n"
+            "{HEADER}[script.pr]\ntimeout='365d'\nrun='sh checks/pr.sh'\non.canceled='next'\n[script.next]\ntimeout='365d'\nrun='sh checks/pr.sh'\non.ready='@done'\n"
         ),
         "if test -f \"$RIMZ_WORKFLOW_DIR/called\"; then printf '{\"outcome\":\"ready\"}'; else touch \"$RIMZ_WORKFLOW_DIR/called\"; printf '{\"outcome\":\"canceled\"}'; fi",
     );

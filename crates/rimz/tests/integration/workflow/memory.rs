@@ -146,7 +146,7 @@ fn gc_backfills_history_before_removing_a_finished_home_and_keeps_it_on_failure(
     let mut actual = Vec::new();
     for fail in [false, true] {
         let (env, _) = fixture(
-            &format!("{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.ok='@done'\n"),
+            &format!("{HEADER}[script.pr]\ntimeout='365d'\nrun='sh checks/pr.sh'\non.ok='@done'\n"),
             "printf '%s\\n' '{\"outcome\":\"ok\"}'\n",
         );
         let id = start(&env);

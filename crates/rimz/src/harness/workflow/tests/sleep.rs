@@ -278,7 +278,7 @@ fn sleep_validation_accepts_plain_conditional_and_polling_cycles_with_explicit_t
         format!("{SLEEP}when=['!pr.queue=queued']\n"),
         SLEEP.replace(
             "then='@done'",
-            "then='poll'\n[script.poll]\nrun='true'\non.done='@done'\non.pending='cooldown'",
+            "then='poll'\n[script.poll]\ntimeout='365d'\nrun='true'\non.done='@done'\non.pending='cooldown'",
         ),
     ]
     .iter()
@@ -392,7 +392,7 @@ fn sleep_derives_the_same_subscriptions_and_forge_demand_as_a_condition() {
         let sleep: Definition = toml::from_str(&format!("{SLEEP}when=['{term}']\n")).unwrap();
         let condition: Definition = toml::from_str(&format!(
             "[workflow]\nscope='worktree'\nstart='cooldown'\n\
-             [condition.cooldown]\ncases=[{{when=['{term}'],outcome='then'}}]\nelse='sleeping'\n"
+             [condition.cooldown]\ntimeout='365d'\ncases=[{{when=['{term}'],outcome='then'}}]\nelse='sleeping'\n"
         ))
         .unwrap();
         [sleep, condition].map(|spec| {

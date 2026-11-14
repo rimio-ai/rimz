@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn inspection_hold_uses_the_matching_cases_first_settlement() {
     let spec: Definition = toml::from_str(concat!(
-        "[workflow]\nscope='worktree'\nstart='pr'\n[condition.pr]\n",
+        "[workflow]\nscope='worktree'\nstart='pr'\n[condition.pr]\ntimeout='365d'\n",
         "cases=[{when=['ci=passed'],outcome='ready',for='2m'},",
         "{when=['pr.merged'],outcome='ready',for='2m'},",
         "{when=['team.stage=Done'],outcome='done'}]\n",
@@ -56,7 +56,7 @@ fn inspection_hold_uses_the_matching_cases_first_settlement() {
 
 #[test]
 fn a_hold_preserves_routed_context_and_counts_until_the_case_fires() {
-    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[condition.pr]\nelse='pending'\non={ready='next', pending='next', unknown='next'}\ntimeout='1h'\n[[condition.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n[script.next]\nrun='true'\non.ok='@done'\n[command.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=6\n").unwrap();
+    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[condition.pr]\nelse='pending'\non={ready='next', pending='next', unknown='next'}\ntimeout='1h'\n[[condition.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n[script.next]\ntimeout='365d'\nrun='true'\non.ok='@done'\n[command.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=6\n").unwrap();
     let paths = paths();
     for completes in [false, true] {
         let mut record = record();

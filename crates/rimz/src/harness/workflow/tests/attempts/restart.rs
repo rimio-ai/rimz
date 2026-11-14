@@ -234,7 +234,7 @@ fn restart_refusals_and_stale_continue_stop_nothing() {
     let mut actual = Vec::new();
     for definition in [
         "[workflow]\nscope='worktree'\nstart='check'\n[script.check]\nrun='true'\ntimeout='1m'\non.done='@done'\n",
-        "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\nthen='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\ntimeout='365d'\nrun='true'\nthen='@done'\n",
         STEP,
     ] {
         let (_dir, state, mut record) = setup(definition);

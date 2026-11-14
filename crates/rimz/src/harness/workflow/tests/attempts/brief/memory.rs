@@ -58,7 +58,7 @@ fn command_notes_refuse_whatever_their_type() {
     let mut actual = Vec::new();
     for value in ["false", "'wrong'"] {
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nshell='true'\nthen='@done'\nnotes={value}\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\ntimeout='365d'\nshell='true'\nthen='@done'\nnotes={value}\n"
         );
         match crate::harness::workflow::spec::parse(&text) {
             Err(crate::harness::workflow::SpecErr::Toml { path, source }) => {

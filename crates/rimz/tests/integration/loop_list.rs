@@ -2001,7 +2001,7 @@ fn stop_cancels_every_live_run_before_failing_on_one_that_would_not_cancel() {
     for home in &runs {
         std::fs::write(
             home.with_file_name("workflow.toml"),
-            "[workflow]\nscope='worktree'\nstart='agent'\n[test.agent]\nshell='true'\non={pass='@done',fail='@failed'}\n",
+            "[workflow]\nscope='worktree'\nstart='agent'\n[test.agent]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='@failed'}\n",
         )
         .unwrap();
     }

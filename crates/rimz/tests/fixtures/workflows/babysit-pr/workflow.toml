@@ -11,6 +11,7 @@ wake = ["ci.*", "pr.*"]
 [script.notes]
 run = "uv run checks/notes.py"
 on = { none = "@done", needed = "triage", unsure = "judge" }
+timeout = "5m"
 
 [judge.judge]
 summary = "Decide whether the PR needs triage"

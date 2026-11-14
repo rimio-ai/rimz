@@ -188,7 +188,7 @@ fn cancel_reason_survives_agent_settlement() {
 
 #[test]
 fn cancel_reason_is_recorded_for_script_attempts() {
-    let text = "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nshell='true'\nthen='@done'\n";
+    let text = "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\ntimeout='365d'\nshell='true'\nthen='@done'\n";
     let (_dir, state, mut record) = setup(text);
     record.attempt = Some(
         serde_json::from_value(json!({
@@ -232,8 +232,8 @@ fn cancel_preserves_the_stopping_node_in_the_record_and_terminal_journal() {
         };
         let text = format!(
             "[workflow]\nscope='worktree'\nstart='begin'\n\
-             [test.begin]\nshell='true'\non.pass='work'\non.fail='@failed'\n\
-             {runner}[test.after]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
+             [test.begin]\ntimeout='365d'\nshell='true'\non.pass='work'\non.fail='@failed'\n\
+             {runner}[test.after]\ntimeout='365d'\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
         );
         let (_dir, state, record) = setup(&text);
         let paths = state.workflow(&record.id);
@@ -544,7 +544,7 @@ fn a_session_survives_live_asks_and_limits_and_records_only_session_end() {
 
 #[test]
 fn a_session_lifecycle_is_persisted_and_a_turn_omits_it() {
-    let pick = "[test.pick]\nshell='true'\non={pass='@done',fail='@failed'}\n";
+    let pick = "[test.pick]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='@failed'}\n";
     for (lifecycle, rest) in [
         ("turn", ""),
         ("session", ""),
@@ -1483,7 +1483,7 @@ fn live_stopper_is_left_alone_and_dead_stopper_is_retaken() {
 }
 
 fn judge_fixture() -> (Definition, crate::disk::paths::WorkflowPaths, RunRecord) {
-    let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='judge'\n[judge.judge]\nagent='claude'\nsummary='Review the work'\nprompt-file='judge.md'\non.ok='@done'\n").unwrap();
+    let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='judge'\n[judge.judge]\ntimeout='365d'\nagent='claude'\nsummary='Review the work'\nprompt-file='judge.md'\non.ok='@done'\n").unwrap();
     let state = StatePaths::for_project_root_under(
         std::path::Path::new("/scratch"),
         std::path::Path::new("/project"),

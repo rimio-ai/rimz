@@ -700,7 +700,7 @@ mod tests {
                 "first":now-jiff::SignedDuration::from_mins(1),"last":now,"count":1},
         }))
         .unwrap();
-        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\nelse='pending'\non={ready='@done',pending='@wait',unknown='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
+        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\ntimeout='365d'\nelse='pending'\non={ready='@done',pending='@wait',unknown='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
         std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
         std::fs::write(dir.path().join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
         let paths = state.workflow(&record.id);
@@ -747,7 +747,7 @@ mod tests {
                 "unknown":"team.stage (no board)","first":first,"last":now,"count":2},
         }))
         .unwrap();
-        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\nelse='pending'\non={ready='@done',pending='@wait',unknown='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
+        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\ntimeout='365d'\nelse='pending'\non={ready='@done',pending='@wait',unknown='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
         let paths = state.workflow(&record.id);
         let globals = crate::cli::GlobalFlags {
             mux: None,
@@ -772,7 +772,7 @@ mod tests {
         assert!(
             state_line.contains("unknown: team.stage (no board)")
                 && !state_line.contains("holding")
-                && !forecast.contains("then"),
+                && !forecast.contains("then @done"),
             "{state_line}{forecast}"
         );
         record.wait.as_mut().unwrap().unknown = None;
@@ -831,7 +831,7 @@ mod tests {
         );
     }
 
-    const GATE: &str = "[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\ntimeout='1h'\ncases=[{when=['ci=pending'],outcome='pending'}]\non={pending='@wait',pass='future',fail='build'}\n[test.future]\nshell='true'\non={pass='@done',fail='@failed'}\n[command.build]\nshell='true'\nthen='gate'\n";
+    const GATE: &str = "[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\ntimeout='1h'\ncases=[{when=['ci=pending'],outcome='pending'}]\non={pending='@wait',pass='future',fail='build'}\n[test.future]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='@failed'}\n[command.build]\ntimeout='365d'\nshell='true'\nthen='gate'\n";
 
     fn output(with_you: bool) -> (String, String) {
         output_of(GATE, with_you)

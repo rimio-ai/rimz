@@ -171,7 +171,7 @@ fn the_deadline_fails_the_node_the_run_is_at_once() {
 #[test]
 fn a_command_that_exits_nonzero_dies_rather_than_following_then() {
     let text = "[workflow]\nscope='worktree'\nstart='build'\n\
-        [command.build]\nrun='false'\nthen='by_then'\n";
+        [command.build]\ntimeout='365d'\nrun='false'\nthen='by_then'\n";
     for levels in [3, 0] {
         let (_dir, state, record) = keyed(&chained(text, "build", "died", levels));
         let host = FakeHost::new();
@@ -237,12 +237,12 @@ fn unknown_failure_fields_and_reserved_outcomes_refuse() {
             "agent.build.on.died",
         ),
         (
-            format!("{head}{agent}[script.pick]\nrun='checks/pick.py'\non={{unknown='@done'}}\n")
+            format!("{head}{agent}[script.pick]\ntimeout='365d'\nrun='checks/pick.py'\non={{unknown='@done'}}\n")
                 .replace("then='gate'", "then='pick'"),
             "script.pick.on.unknown",
         ),
         (
-            format!("{head}{agent}[script.pick]\nrun='checks/pick.py'\non={{limited='@done'}}\n")
+            format!("{head}{agent}[script.pick]\ntimeout='365d'\nrun='checks/pick.py'\non={{limited='@done'}}\n")
                 .replace("then='gate'", "then='pick'"),
             "script.pick.on.limited",
         ),
@@ -359,8 +359,8 @@ fn resume_at_moves_an_active_run() {
 #[test]
 fn a_handled_limited_then_a_death_reports_the_run_failed_not_budget() {
     let text = "[workflow]\nscope='worktree'\nstart='gate'\n\
-        [judge.gate]\nagent='codex'\nprompt-file='prompt.md'\non={ok='@done',limited='report'}\n\
-        [script.report]\nshell='exit 1'\non.ok='@done'\n";
+        [judge.gate]\ntimeout='365d'\nagent='codex'\nprompt-file='prompt.md'\non={ok='@done',limited='report'}\n\
+        [script.report]\ntimeout='365d'\nshell='exit 1'\non.ok='@done'\n";
     let (_dir, state, record) = setup(text);
     let routed: Definition = toml::from_str(text).unwrap();
     let unrouted: Definition = toml::from_str(&text.replace(",limited='report'", "")).unwrap();
@@ -474,7 +474,7 @@ fn a_start_that_can_never_fit_fails_the_run_where_an_expired_wait_gave_up() {
 #[test]
 fn a_handled_limited_then_a_spent_visit_cap_reports_the_run_failed_not_budget() {
     let text = "[workflow]\nscope='worktree'\nstart='gate'\n\
-        [judge.gate]\nagent='codex'\nprompt-file='prompt.md'\non={ok='@done',limited='fix'}\n\
+        [judge.gate]\ntimeout='365d'\nagent='codex'\nprompt-file='prompt.md'\non={ok='@done',limited='fix'}\n\
         [agent.fix]\nagent='codex'\nprompt-file='prompt.md'\nlifecycle='turn'\nmax-visits=1\n\
         then='@done'\n";
     let (_dir, state, record) = setup(text);

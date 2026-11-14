@@ -223,6 +223,7 @@ mod tests {
             lifecycle = "turn"
             then = "watch"
             [condition.watch]
+            timeout = '365d'
             else = "queued"
             [condition.watch.on]
             queued = "@wait"
@@ -239,6 +240,7 @@ mod tests {
             max-visits = 2
             then = "watch"
             [command.clean]
+            timeout = '365d'
             run = "clean"
             then = "triage"
             [agent.triage]

@@ -10,9 +10,9 @@ fn loaded(text: &str) -> Definition {
 #[test]
 fn values_admission_refuses_load_with_their_text_and_failure() {
     let spec = loaded(
-        "[workflow]\nscope='worktree'\nstart='pick'\n[condition.pick]\nelse='no'\n\
+        "[workflow]\nscope='worktree'\nstart='pick'\n[condition.pick]\ntimeout='365d'\nelse='no'\n\
          cases=[{when=['pr=merged and'],outcome='yes'}]\non={yes='@done',no='run'}\n\
-         [script.run]\nrun=\"echo 'open\"\non.ok='@done'\n",
+         [script.run]\ntimeout='365d'\nrun=\"echo 'open\"\non.ok='@done'\n",
     );
     let Some(Kind::Condition(cases)) = spec.check("pick").unwrap().kind() else {
         panic!("pick is a condition");
@@ -29,7 +29,7 @@ fn values_admission_refuses_load_with_their_text_and_failure() {
         "[workflow]\nscope='worktree'\nstart='build'\nlimit={stagger='soon'}\n\
          [agent.build]\nlifecycle='turn'\nagent='claude'\nprompt-file='p.md'\ntimeout='soon'\n\
          admission.window='window.5h.bogus>=x'\nbudget='lots'\nsubscribe=['agent.stop']\nthen='pick'\n\
-         [script.pick]\nrun='true'\nwake=['agent.stop']\non.ok='@done'\n",
+         [script.pick]\ntimeout='365d'\nrun='true'\nwake=['agent.stop']\non.ok='@done'\n",
     )
     .unwrap();
     let build = spec.step("build").unwrap();
@@ -81,7 +81,7 @@ fn values_admission_refuses_load_with_their_text_and_failure() {
 #[test]
 fn a_route_to_a_name_that_is_no_node_compiles_as_a_node_target() {
     let spec: Definition = toml::from_str(
-        "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.ok='nowhere'\n",
+        "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\ntimeout='365d'\nrun='true'\non.ok='nowhere'\n",
     )
     .unwrap();
     assert_eq!(

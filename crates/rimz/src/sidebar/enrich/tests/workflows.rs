@@ -162,7 +162,7 @@ fn live_run(
         "[workflow]\n\
          scope='worktree'\n\
          start='watch'\n\
-         [script.watch]\n\
+         [script.watch]\ntimeout='365d'\n\
          shell='true'\n\
          on.queued='@wait'\n",
     )

@@ -30,8 +30,8 @@ fn reached_counts_entries_not_repeated_wait_answers() {
 fn spec() -> Definition {
     toml::from_str(
         "[workflow]\nscope='worktree'\nstart='pr'\n\
-         [script.pr]\nrun='true'\non.pass='build'\non.fail='@wait'\n\
-         [command.build]\nrun='true'\nthen='pr'\nmax-visits=4\n",
+         [script.pr]\ntimeout='365d'\nrun='true'\non.pass='build'\non.fail='@wait'\n\
+         [command.build]\ntimeout='365d'\nrun='true'\nthen='pr'\nmax-visits=4\n",
     )
     .unwrap()
 }
@@ -174,7 +174,7 @@ fn visit_caps_add_the_grant_and_trip_at_the_cap() {
     assert_eq!(step.visit_cap(1), Some(5));
     assert_eq!(step.visit_cap(u64::MAX), Some(u64::MAX));
     let (_dir, _state, mut record) = super::attempts::setup(
-        "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\nthen='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\ntimeout='365d'\nrun='true'\nthen='@done'\n",
     );
     record.visits.insert("build".into(), 4);
     assert_eq!(step.tripped_visit_bound(&record), Some((4, 4)));
@@ -320,7 +320,7 @@ fn hops_use_a_held_turn_verdict_instead_of_then_across_visit_resets() {
     let text = "[workflow]\nscope='worktree'\nstart='build'\n\
         [agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='session'\nrest-check=['pr']\nthen='pr'\n\
         max-visits=6\n\
-        [script.pr]\nrun='true'\non.pending='build'\non.done='@done'\n";
+        [script.pr]\ntimeout='365d'\nrun='true'\non.pending='build'\non.done='@done'\n";
     let (_dir, state, record) = super::attempts::setup(text);
     let host = FakeHost::new();
     advance(&state, &record.id, &host).unwrap();

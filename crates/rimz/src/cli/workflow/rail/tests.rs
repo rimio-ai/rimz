@@ -7,6 +7,7 @@ const LAND: &str = r#"
 scope = 'worktree'
 start = 'begin'
 [test.begin]
+timeout = '365d'
 shell = 'true'
 on.pass = 'sweep'
 on.fail = '@failed'
@@ -27,6 +28,7 @@ timeout = '1h'
 then = 'watch'
 max-visits = 4
 [test.notes]
+timeout = '365d'
 shell = 'true'
 on.pass = 'triage'
 on.fail = '@done'
@@ -36,6 +38,7 @@ timeout = '1h'
 then = 'ruled'
 max-visits = 2
 [test.ruled]
+timeout = '365d'
 shell = 'true'
 on.pass = 'triage'
 on.fail = '@done'
@@ -54,7 +57,7 @@ fn turn_end_footer_only_describes_turn_agent_steps() {
     ] {
         let spec: Definition = toml::from_str(&format!(
             "[workflow]\nscope='worktree'\nstart='gate'\n\
-             [test.gate]\nshell='true'\non.pass='work'\n\
+             [test.gate]\ntimeout='365d'\nshell='true'\non.pass='work'\n\
              [{}.work]\nthen='gate'\n{runner}\n",
             if runner.starts_with("agent") {
                 "agent"
@@ -291,12 +294,12 @@ fn horizontal_detours_hang_under_their_parent_and_follow_width_elision() {
 fn horizontal_elides_unreached_left_and_reached_right_branches() {
     let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='choose'\n\
-         [script.choose]\nshell='true'\non.a='unit_tests'\n\
+         [script.choose]\ntimeout='365d'\nshell='true'\non.a='unit_tests'\n\
          on.b='integration_tests'\non.c='used'\n\
-         [command.unit_tests]\nshell='true'\nthen='used'\n\
-         [command.integration_tests]\nshell='true'\nthen='used'\n\
-         [test.used]\nshell='true'\non.pass='final'\n\
-         [script.final]\nshell='true'\non.pass='@done'\non.retry='choose'\n",
+         [command.unit_tests]\ntimeout='365d'\nshell='true'\nthen='used'\n\
+         [command.integration_tests]\ntimeout='365d'\nshell='true'\nthen='used'\n\
+         [test.used]\ntimeout='365d'\nshell='true'\non.pass='final'\n\
+         [script.final]\ntimeout='365d'\nshell='true'\non.pass='@done'\non.retry='choose'\n",
     )
     .unwrap();
     let mut hops = vec![route("choose", "c", "used"), route("used", "pass", "final")];
@@ -366,8 +369,8 @@ fn horizontal_keeps_a_terminal_detour_and_its_parent_even_without_visits() {
 #[test]
 fn horizontal_appends_resumed_and_reached_unreachable_nodes() {
     let spec: Definition = toml::from_str(&format!(
-        "{LAND}\n[command.resumed]\nshell='true'\nthen='watch'\n\
-         [command.never_used]\nshell='true'\nthen='watch'\n"
+        "{LAND}\n[command.resumed]\ntimeout='365d'\nshell='true'\nthen='watch'\n\
+         [command.never_used]\ntimeout='365d'\nshell='true'\nthen='watch'\n"
     ))
     .unwrap();
     let machine = super::super::super::machine_config();
@@ -447,8 +450,8 @@ fn horizontal_terminal_marks_only_the_failed_ending_node_alarm() {
 fn canceled_horizontal(runner: &str, stopping: &str, journal: &str) -> String {
     let spec: Definition = toml::from_str(&format!(
         "[workflow]\nscope='worktree'\nstart='begin'\n\
-         [test.begin]\nshell='true'\non.pass='work'\non.fail='@failed'\n\
-         {runner}[test.after]\nshell='touch \"$RIMZ_WORKFLOW_DIR/ready\"; sleep 30'\n\
+         [test.begin]\ntimeout='365d'\nshell='true'\non.pass='work'\non.fail='@failed'\n\
+         {runner}[test.after]\ntimeout='365d'\nshell='touch \"$RIMZ_WORKFLOW_DIR/ready\"; sleep 30'\n\
          on.pass='@done'\non.fail='@failed'\n"
     ))
     .unwrap();
@@ -638,6 +641,7 @@ fn horizontal_canceled_live_check_marks_the_stopping_node() {
     // Cancel a shell check while its command is still running.
     canceled_horizontal(
         r#"[test.work]
+timeout = '365d'
 shell='touch "$RIMZ_WORKFLOW_DIR/ready"; sleep 30'
 on.pass='@done'
 on.fail='@failed'
@@ -1000,6 +1004,7 @@ fn horizontal_canceled_parked_run_keeps_the_stopping_node_ending() {
     // Cancel a run already parked by a check routing to @user.
     canceled_horizontal(
         r#"[test.work]
+timeout = '365d'
 shell='true'
 on.pass='@user'
 on.fail='@failed'
@@ -1121,8 +1126,8 @@ fn multiline_commands_stay_on_one_rail_line() {
     let headings = ["run", "shell"].map(|runner| {
         let spec: Definition = toml::from_str(&format!(
             "[workflow]\nscope='worktree'\nstart='gate'\n\
-             [test.gate]\n{runner}=\"\"\"echo first\necho second\"\"\"\non.pass='work'\n\
-             [command.work]\n{runner}=\"\"\"echo first\necho second\"\"\"\nthen='gate'\n"
+             [test.gate]\ntimeout='365d'\n{runner}=\"\"\"echo first\necho second\"\"\"\non.pass='work'\n\
+             [command.work]\ntimeout='365d'\n{runner}=\"\"\"echo first\necho second\"\"\"\nthen='gate'\n"
         ))
         .unwrap();
         Rail::definition(&spec)
@@ -1239,30 +1244,30 @@ mod horizontal_sweep {
             (
                 "branch",
                 "[workflow]\nscope='worktree'\nstart='choose'\n\
-                 [script.choose]\nshell='true'\non.a='unit_tests'\n\
+                 [script.choose]\ntimeout='365d'\nshell='true'\non.a='unit_tests'\n\
                  on.b='integration_tests'\non.c='used'\n\
-                 [command.unit_tests]\nshell='true'\nthen='used'\n\
-                 [command.integration_tests]\nshell='true'\nthen='used'\n\
-                 [test.used]\nshell='true'\non.pass='final'\n\
-                 [script.final]\nshell='true'\non.pass='@done'\non.retry='choose'\n"
+                 [command.unit_tests]\ntimeout='365d'\nshell='true'\nthen='used'\n\
+                 [command.integration_tests]\ntimeout='365d'\nshell='true'\nthen='used'\n\
+                 [test.used]\ntimeout='365d'\nshell='true'\non.pass='final'\n\
+                 [script.final]\ntimeout='365d'\nshell='true'\non.pass='@done'\non.retry='choose'\n"
                     .into(),
             ),
             (
                 "detours",
                 "[workflow]\nscope='worktree'\nstart='build'\n\
-                 [command.build]\nshell='true'\nthen='review'\n\
-                 [script.review]\nshell='true'\non.pass='merge'\n\
+                 [command.build]\ntimeout='365d'\nshell='true'\nthen='review'\n\
+                 [script.review]\ntimeout='365d'\nshell='true'\non.pass='merge'\n\
                  on.fail='address_review_comments'\non.flaky='rerun_flaky_suite'\n\
-                 [command.address_review_comments]\nshell='true'\nthen='review'\nmax-visits=9\n\
-                 [command.rerun_flaky_suite]\nshell='true'\nthen='review'\nmax-visits=9\n\
-                 [test.merge]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
+                 [command.address_review_comments]\ntimeout='365d'\nshell='true'\nthen='review'\nmax-visits=9\n\
+                 [command.rerun_flaky_suite]\ntimeout='365d'\nshell='true'\nthen='review'\nmax-visits=9\n\
+                 [test.merge]\ntimeout='365d'\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
                     .into(),
             ),
             (
                 "unreachable",
                 format!(
-                    "{LAND}\n[command.resumed]\nshell='true'\nthen='watch'\n\
-                     [command.never_used]\nshell='true'\nthen='watch'\n"
+                    "{LAND}\n[command.resumed]\ntimeout='365d'\nshell='true'\nthen='watch'\n\
+                     [command.never_used]\ntimeout='365d'\nshell='true'\nthen='watch'\n"
                 ),
             ),
             (
@@ -1270,31 +1275,31 @@ mod horizontal_sweep {
                 LAND.replace(
                     "start = 'begin'",
                     "start = 'begin'\ndeadline = '1d'\non.failed = 'cleanup'",
-                ) + "\n[command.cleanup]\nshell='true'\nthen='@done'\n",
+                ) + "\n[command.cleanup]\ntimeout='365d'\nshell='true'\nthen='@done'\n",
             ),
             (
                 "rest-check",
                 "[workflow]\nscope='worktree'\nstart='plan'\n\
                  [agent.plan]\nagent='claude'\nlifecycle='turn'\nthen='planned'\n\
-                 [test.planned]\nshell='true'\non.pass='work'\n\
+                 [test.planned]\ntimeout='365d'\nshell='true'\non.pass='work'\n\
                  [agent.work]\nagent='claude'\nlifecycle='session'\nrest-check=['gate']\nthen='gate'\n\
                  max-visits=3\non.visits='escalate_to_release_manager'\n\
-                 [command.escalate_to_release_manager]\nshell='true'\nthen='gate'\n\
-                 [test.gate]\nshell='true'\non.pass='@done'\non.fail='work'\n"
+                 [command.escalate_to_release_manager]\ntimeout='365d'\nshell='true'\nthen='gate'\n\
+                 [test.gate]\ntimeout='365d'\nshell='true'\non.pass='@done'\non.fail='work'\n"
                     .into(),
             ),
             (
                 "long",
                 "[workflow]\nscope='worktree'\nstart='collect_release_candidates'\n\
-                 [test.collect_release_candidates]\nshell='true'\n\
+                 [test.collect_release_candidates]\ntimeout='365d'\nshell='true'\n\
                  on.pass='build_signed_release_artifacts'\non.fail='repair_release_candidate_set'\n\
-                 [command.repair_release_candidate_set]\nshell='true'\n\
+                 [command.repair_release_candidate_set]\ntimeout='365d'\nshell='true'\n\
                  then='collect_release_candidates'\nmax-visits=3\n\
-                 [command.build_signed_release_artifacts]\nshell='true'\n\
+                 [command.build_signed_release_artifacts]\ntimeout='365d'\nshell='true'\n\
                  then='verify_signed_artifacts_match'\n\
-                 [test.verify_signed_artifacts_match]\nshell='true'\n\
+                 [test.verify_signed_artifacts_match]\ntimeout='365d'\nshell='true'\n\
                  on.pass='publish_release_to_registry'\non.fail='@failed'\n\
-                 [command.publish_release_to_registry]\nshell='true'\nthen='@done'\n"
+                 [command.publish_release_to_registry]\ntimeout='365d'\nshell='true'\nthen='@done'\n"
                     .into(),
             ),
         ]
@@ -1639,7 +1644,7 @@ mod horizontal_sweep {
 fn a_sleep_rail_prints_its_spelling_and_points_then_along_the_walk() {
     let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='poll'\n\
-         [test.poll]\nshell='true'\non={pass='@done',fail='cooldown'}\n\
+         [test.poll]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='cooldown'}\n\
          [sleep.cooldown]\nsleep='30m'\nwhen=['ci=passed']\nfor='2m'\nthen='poll'\n",
     )
     .unwrap();
