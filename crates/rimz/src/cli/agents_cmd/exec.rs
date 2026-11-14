@@ -1441,6 +1441,7 @@ fn exec_launch_identity(
             Ok(Some(LaunchIdentity {
                 kind: request.kind.clone(),
                 agent_id: AgentSessionId::from(launch_id),
+                launch_id: None,
                 name: name.to_owned(),
                 name_explicit: request.identity.name_explicit,
                 launch: request.identity.params.clone(),

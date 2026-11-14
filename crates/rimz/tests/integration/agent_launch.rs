@@ -1997,6 +1997,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
     store
         .bind_agent_launch(
             &rimz::store::writer::AgentLaunchIdentity {
+                launch_id: None,
                 kind: first.kind.clone(),
                 agent_id: launch_id.clone(),
                 name: "peer".into(),

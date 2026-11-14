@@ -111,11 +111,32 @@ The inherited identity excludes the card `name`, `name_explicit`, `kind_ordinal`
 
 The ownership rule also selects one un-ended row per launch as its current occupant. Only that row renders and resolves launch-derived handles such as the role. Other conversations stay audit records, and a snapshot with a live pane never offers them as message targets. When every row has ended, the most recently active row keeps the launch handle as the audit and resume representative.
 
+## Agents, sessions, and epochs
+
+An agent is a launch id plus a handle. A row without a `launch_id` uses its session id as its launch id (`AgentState::launch_key`). A swap replaces the agent's session while keeping both: its reservation is a fresh provisional row under the same launch id and handle at epoch `n + 1`, where `n` is the highest epoch over every row of the launch, failed reservations included. `Store::begin_agent_swap` takes that epoch under the workspace lock. It refuses with `StoreErr::SwapNotHolder` when the source row is not a live holder, and with `StoreErr::SwapInFlight` when the launch already has an open reservation (provisional, unbound, not over). `Store::abort_agent_swap` fails a reservation only while it is unbound. A wrapper whose reservation failed is refused its bind ([`crates/rimz/src/store/writer.rs`](../../../crates/rimz/src/store/writer.rs)).
+
+The predicates over these rows live in [`crates/rimz/src/agents/state.rs`](../../../crates/rimz/src/agents/state.rs) and are the only definition:
+
+- `launch_members`: the same-kind rows that answer to the id, plus rows of any kind whose `launch_id` is the id. Launch ids are unique across kinds; session ids are kind-scoped. `AgentState::parent_is`, `AgentState::launcher_is`, `harness::fleet::LaunchRows` and the Runtime projection's visible parents follow the same rule.
+- `AgentState::stands`: a registered session row, or a provisional row whose wrapper recorded its pane bind (`launch_bound`, set by a `Bound` launch event or an `agent.attached` bind, and kept through a later failure).
+- `launch_holder`: the standing members at the launch's highest standing epoch. A launch with no standing row keeps every row. `LaunchHolders::replaced` marks every other row, and `address::launch_row` picks only among holders.
+- `agent_end`: `Unknown` when no row answers, `Live` while a holder row runs, `Ended` once every holder row is ended or is a failed provisional. It reads Audit rows: absence from a Runtime projection is no evidence of an end.
+
+The Runtime projection drops replaced rows and expels live ones from rediscovery; the Audit projection keeps them with `replaced` set. GC reads the holder, not the newest row, when it decides whether a handle's directories are owned ([`crates/rimz/src/store/gc/classes.rs::collect_units`](../../../crates/rimz/src/store/gc/classes.rs)).
+
+The fold fences a replaced process's late events off the agent by the stamp each lifecycle event carries: the launch id and epoch its process ran under (`AgentLifecycleObservation::launch_id`, `LaunchParams::epoch`). The stamp never assigns a row's launch id. [`crates/rimz/src/store/snapshot/project.rs`](../../../crates/rimz/src/store/snapshot/project.rs) applies three fences:
+
+- Stale: an event whose launch matches its row's and whose epoch is lower than the row's is kept without effect. Attach events carry the same fence.
+- Exact take: a stamped event adopts only its own launch's provisional at its own epoch. An unstamped event, written before the stamp existed, adopts only an epoch-0 provisional.
+- Continuation: a stamped event on an existing row of its launch at a lower epoch (a swap that resumed the same session) releases the matching reservation into that row and raises the row's epoch. A resume wrapper's attach at the swap's epoch takes the reservation the same way, before the session's first stamped hook, so the row never stands beside its own reservation.
+
+The handle follows the agent. Only a swap's reservation, the one launch event that carries an epoch, claims its agent's handle through the launch. A session at the owner's epoch or later takes the claim; an older one keeps using the name without taking it back. Any other provisional launch under a handle another row owns is consumed. A carryover boundary inside a swap keeps the holder: the fold hydrates a carried reservation for the stamped event that names its launch, and hides a carried reservation a session already took over (`AgentIdentityState::consumed_launches`, which the rollup cache keeps until rotation clears it). A later catch-up never hydrates a consumed reservation again, by launch, by its own key, or at a rebirth.
+
 ## Instance exit
 
 The in-pane agent process is the liveness truth, read through the pane. The CLI is the pane's foreground process or the single hosted descendant under the pane root, so when it exits the pane returns to a shell and stops reading as an agent. The instance leaves the sidebar on the next snapshot with no exit hook. There is no `offline` status: a dead agent is a shell row or no row, never a retracted store fact.
 
-The recorded owner process narrows visibility from the other side. The runtime projection hides a row whose owner is known dead before any reap ends it ([`crates/rimz/src/store/runtime.rs::agent_is_runtime_visible`](../../../crates/rimz/src/store/runtime.rs)). Liveness only suppresses: an unknown owner abstains, and a live owner never admits a row that no pane binds.
+The recorded owner process narrows visibility from the other side. The runtime projection hides a row whose owner is known dead before any reap ends it ([`crates/rimz/src/store/runtime.rs::agent_is_runtime_visible`](../../../crates/rimz/src/store/runtime.rs)). Liveness only suppresses: an unknown owner abstains, and a live owner never admits a row that no pane binds. A swap's bound replacement that failed, with no successor, is the one row a dead owner does not hide, since it holds the agent's handle (`crates/rimz/src/store/runtime.rs::failed_swap_holder`).
 
 The session ends separately. A Claude `SessionEnd` hook stamps the session ended and removes its context sidecar at once. Runtime views hide the row, and audit views keep its provider identity for explicit resume within retention. Codex leaves its `SessionEnd` hook unwired ([adapter_codex.md](./adapter_codex.md#hooks-and-lifecycle)), so the [reaper](#session-death) stamps the same state once the process is gone.
 

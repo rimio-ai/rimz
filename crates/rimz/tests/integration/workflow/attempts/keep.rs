@@ -21,6 +21,7 @@ fn kept_companions_late_pane_bind_cannot_restore_the_workflow_pin() {
         .find(|agent| agent.kind.as_str() == "claude")
         .unwrap();
     let identity = rimz::store::writer::AgentLaunchIdentity {
+        launch_id: None,
         kind: companion.kind.clone(),
         agent_id: companion.agent_id.clone(),
         name: companion.name.clone().unwrap(),

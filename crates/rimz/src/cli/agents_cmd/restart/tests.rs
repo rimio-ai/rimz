@@ -697,6 +697,7 @@ fn fresh_relaunch_exec_uses_the_allocated_login() {
     let agent = rimz::testkit::agent_state("claude", "old", jiff::Timestamp::UNIX_EPOCH);
     for allocated in [Some("team".parse().unwrap()), None] {
         let identity = AgentLaunchIdentity {
+            launch_id: None,
             kind: agent.kind.clone(),
             agent_id: "new".into(),
             name: "otter".to_owned(),
@@ -951,4 +952,26 @@ fn a_relaunch_pane_states_the_carried_lanes_name_and_none_for_trunk() {
         None,
         "a foreign checkout's own lane pins no channel"
     );
+}
+
+#[test]
+fn an_in_place_relaunch_carries_the_rows_epoch() {
+    let mut agent = rimz::testkit::agent_state("claude", "a1", jiff::Timestamp::UNIX_EPOCH);
+    let posture = ResumePosture {
+        launch: Default::default(),
+        degraded: None,
+    };
+    let epoch = |agent: &AgentState| {
+        let action = ExecAction::Resume {
+            session_id: "a1".into(),
+            extra_args: Vec::new(),
+        };
+        relaunch_request(agent, &posture, action, None, None)
+            .identity
+            .params
+            .epoch
+    };
+    assert_eq!(epoch(&agent), None);
+    agent.epoch = 2;
+    assert_eq!(epoch(&agent), Some(2));
 }

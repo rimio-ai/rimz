@@ -69,6 +69,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
         }],
     };
     let identities = [crate::store::writer::AgentLaunchIdentity {
+        launch_id: None,
         kind: crate::ids::AgentKind::new_unchecked("codex"),
         agent_id: launch_id,
         name: "child".into(),

@@ -466,6 +466,7 @@ fn launch_event_uses_flat_compact_wire_shape() {
 fn attach_event_uses_typed_compact_wire_shape() {
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%4");
     let payload = AgentAttachPayload {
+        epoch: None,
         login: None,
         record: None,
         tier: None,

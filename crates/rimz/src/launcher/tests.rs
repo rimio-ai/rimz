@@ -827,6 +827,7 @@ fn test_agent(id: &str) -> AgentState {
 }
 fn launch_identity(kind: &str, name: &str) -> AgentLaunchIdentity {
     AgentLaunchIdentity {
+        launch_id: None,
         kind: AgentKind::new_unchecked(kind),
         agent_id: AgentSessionId::from(format!("launch-{name}")),
         name: name.to_owned(),

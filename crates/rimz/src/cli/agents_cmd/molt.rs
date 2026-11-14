@@ -584,6 +584,7 @@ mod tests {
             let launch = AgentLaunchIdentity {
                 kind: agent.kind.clone(),
                 agent_id: "successor".into(),
+                launch_id: None,
                 name: "bright-river".into(),
                 name_explicit: false,
                 launch: rimz::agents::LaunchParams {

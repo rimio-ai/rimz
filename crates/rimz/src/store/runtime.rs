@@ -4,7 +4,8 @@
 //! recorded owner process is still the same live process. Audit views bypass
 //! this filter and read durable history as written.
 
-use crate::agents::{AgentState, state::standing_successor};
+use crate::agents::state::{LaunchHolders, standing_successor};
+use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use std::collections::{BTreeSet, HashSet};
@@ -24,6 +25,7 @@ pub enum RuntimeScope {
 pub struct AuditRows {
     agents: super::snapshot::AgentRollup,
     superseded: Arc<OnceLock<HashSet<AgentSessionId>>>,
+    replaced: Arc<OnceLock<HashSet<(AgentKind, AgentSessionId)>>>,
 }
 
 impl AuditRows {
@@ -31,6 +33,7 @@ impl AuditRows {
         Self {
             agents,
             superseded: Arc::default(),
+            replaced: Arc::default(),
         }
     }
 
@@ -42,7 +45,8 @@ impl AuditRows {
         self.agents.find(kind, agent_id)
     }
 
-    /// Copy one row with the same molt mark as the full Audit projection.
+    /// Copy one row with the same molt and replaced marks as the full Audit
+    /// projection.
     pub(crate) fn marked_copy(&self, agent: &AgentState) -> AgentState {
         let superseded = self.superseded.get_or_init(|| {
             superseded_molt_ids(self.iter())
@@ -50,9 +54,17 @@ impl AuditRows {
                 .cloned()
                 .collect()
         });
+        let replaced = self.replaced.get_or_init(|| {
+            let holders = LaunchHolders::new(self.iter());
+            self.iter()
+                .filter(|row| holders.replaced(row))
+                .map(|row| (row.kind.clone(), row.agent_id.clone()))
+                .collect()
+        });
         let mut projected = agent.clone();
         projected.molt_superseded =
             superseded.contains(agent.launch_id.as_ref().unwrap_or(&agent.agent_id));
+        projected.replaced = replaced.contains(&(agent.kind.clone(), agent.agent_id.clone()));
         super::snapshot::count_rows_materialized(1);
         projected
     }
@@ -106,10 +118,12 @@ impl RuntimeProjection {
         match scope {
             RuntimeScope::Audit => {
                 let superseded = superseded_molt_ids(agents.iter());
+                let holders = LaunchHolders::new(agents.iter());
                 let mut projected = agents.to_vec();
                 for agent in &mut projected {
                     agent.molt_superseded =
                         superseded.contains(agent.launch_id.as_ref().unwrap_or(&agent.agent_id));
+                    agent.replaced = holders.replaced(agent);
                 }
                 Self {
                     ended: ended_keys(agents.iter()),
@@ -125,32 +139,51 @@ impl RuntimeProjection {
     /// The runtime-scoped projection over borrowed rows, cloning only the
     /// rows it keeps — a long-lived reader's rollup stays shared. A launched
     /// child that is not visible on its own stays while its parent is visible
-    /// and has no parent of its own; an ended grandchild drops out.
+    /// and has no parent of its own; an ended grandchild drops out. A row a
+    /// swap replaced drops out whatever its liveness, and a live one is
+    /// expelled so provider rediscovery cannot graft it back. A bound
+    /// replacement that failed stays under the handle when its owner is dead.
     pub(crate) fn runtime_from_refs<'a>(
         agents: impl IntoIterator<Item = &'a AgentState>,
         resume_outcomes: Vec<super::snapshot::ResumeOutcome>,
     ) -> Self {
+        let agents = agents.into_iter().collect::<Vec<_>>();
+        let holders = LaunchHolders::new(agents.iter().copied());
         let agents = agents
             .into_iter()
-            .map(|agent| (agent, agent_is_runtime_visible(agent)))
+            .map(|agent| {
+                let replaced = holders.replaced(agent);
+                (
+                    agent,
+                    replaced,
+                    !replaced && (agent_is_runtime_visible(agent) || failed_swap_holder(agent)),
+                )
+            })
             .collect::<Vec<_>>();
-        let superseded = superseded_molt_ids(agents.iter().map(|(agent, _)| *agent));
+        let superseded = superseded_molt_ids(agents.iter().map(|(agent, ..)| *agent));
         let visible_parents = agents
             .iter()
-            .filter(|(agent, visible)| agent.parent_agent_id.is_none() && *visible)
-            .flat_map(|(agent, _)| agent.identity_ids().map(move |id| (&agent.kind, id)))
+            .filter(|(agent, _, visible)| agent.parent_agent_id.is_none() && *visible)
+            .flat_map(|(agent, ..)| agent.identity_ids().map(move |id| (&agent.kind, id)))
+            .collect::<HashSet<_>>();
+        let visible_parent_launches = agents
+            .iter()
+            .filter(|(agent, _, visible)| agent.parent_agent_id.is_none() && *visible)
+            .filter_map(|(agent, ..)| agent.launch_id.as_ref())
             .collect::<HashSet<_>>();
         let mut expelled = BTreeSet::new();
         let kept = agents
             .iter()
-            .filter_map(|(agent, independently_visible)| {
+            .filter_map(|(agent, replaced, independently_visible)| {
                 let visible = *independently_visible
-                    || (agent.is_launched_child()
+                    || (!*replaced
+                        && agent.is_launched_child()
                         && agent.parent_agent_id.as_ref().is_some_and(|id| {
-                            visible_parents.contains(&(
-                                agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind),
-                                id,
-                            ))
+                            visible_parent_launches.contains(id)
+                                || visible_parents.contains(&(
+                                    agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind),
+                                    id,
+                                ))
                         }));
                 if !visible && agent.ended_at.is_none() {
                     expelled.insert((agent.kind.clone(), agent.agent_id.clone()));
@@ -165,7 +198,7 @@ impl RuntimeProjection {
             .collect::<Vec<_>>();
         super::snapshot::count_rows_materialized(kept.len() as u64);
         Self {
-            ended: ended_keys(agents.iter().map(|(agent, _)| *agent)),
+            ended: ended_keys(agents.iter().map(|(agent, ..)| *agent)),
             expelled,
             agents: kept,
             resume_outcomes,
@@ -217,6 +250,17 @@ fn ended_keys<'a>(
 /// both.
 fn agent_is_runtime_visible(agent: &AgentState) -> bool {
     agent.ended_at.is_none() && agent.runtime_owner.as_ref().is_none_or(owner_is_live)
+}
+
+/// A swap's bound replacement that failed while it held its agent: its card
+/// stays under the handle after the wrapper that owned it exits, since no
+/// other session of the agent remains to show. The caller has ruled the row
+/// is not replaced.
+fn failed_swap_holder(agent: &AgentState) -> bool {
+    agent.epoch > 0
+        && agent.agent_id.is_provisional()
+        && agent.launch_bound
+        && agent.status == AgentStatus::Failed
 }
 
 pub fn current_process_owner(
@@ -553,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_projection_parent_aliases_are_kind_scoped() {
+    fn runtime_projection_parent_session_aliases_are_kind_scoped() {
         let mut parent = agent(None);
         parent.launch_id = Some("launch".into());
         parent.prior_launch_ids = vec!["prior".into()];
@@ -567,7 +611,7 @@ mod tests {
                 child.ended_at = Some(Timestamp::UNIX_EPOCH);
                 let projection =
                     RuntimeProjection::runtime_from_refs([&child, &parent], Vec::new());
-                let expected = if kind == "claude" {
+                let expected = if kind == "claude" || id == "launch" {
                     vec![child.clone(), parent.clone()]
                 } else {
                     vec![parent.clone()]

@@ -27,6 +27,41 @@ pub(crate) use identity::AgentIdentityState;
 pub(super) use identity::backfill_agent_identities;
 use identity::{CardIdentity, CardIdentityAllocator};
 
+/// The launch and epoch a lifecycle event's process ran under, from the
+/// observation's captured launch id. The fold's fences read it alone: it
+/// never assigns a row's launch identity.
+#[derive(Clone, Copy)]
+struct EventStamp<'a> {
+    launch: &'a AgentSessionId,
+    epoch: u32,
+}
+
+impl<'a> EventStamp<'a> {
+    fn of(observation: &'a AgentLifecycleObservation) -> Option<Self> {
+        observation.launch_id.as_ref().map(|launch| Self {
+            launch,
+            epoch: observation.launch.epoch.unwrap_or(0),
+        })
+    }
+
+    /// A row of this launch that a later swap moved past: the event is stale.
+    fn stale_on(self, row: &AgentState) -> bool {
+        row.launch_id.as_ref() == Some(self.launch) && row.epoch > self.epoch
+    }
+}
+
+/// Whether an event may adopt or release `provisional`: a stamped event only
+/// the reservation of its own launch and epoch, an unstamped one only an
+/// epoch-0 launch.
+fn stamp_takes(stamp: Option<EventStamp<'_>>, provisional: &AgentState) -> bool {
+    match stamp {
+        Some(stamp) => {
+            provisional.launch_id.as_ref() == Some(stamp.launch) && provisional.epoch == stamp.epoch
+        }
+        None => provisional.epoch == 0,
+    }
+}
+
 type AgentKey = (AgentKind, AgentSessionId);
 type LaunchInstanceKey = (AgentKind, crate::ids::PaneId, u32);
 
@@ -383,10 +418,23 @@ impl ReducerState {
             );
             return;
         }
+        if let (Some(epoch), Some(row)) = (payload.epoch, self.map.get(&key))
+            && row.launch_id == payload.launch_id
+            && row.epoch > epoch
+        {
+            debug!(
+                target: "rimz::agent::binding",
+                kind = %kind,
+                agent_id = %payload.agent_id,
+                epoch,
+                "stale agent.attached event from a replaced wrapper ignored",
+            );
+            return;
+        }
         // A discovered provider session may have no prior RimZ event. The resume
         // wrapper knows enough durable identity to seed it before the provider
         // process starts, so the process can launch children immediately.
-        let state = self.map.entry(key.clone()).or_insert_with(|| {
+        self.map.entry(key.clone()).or_insert_with(|| {
             Arc::new(AgentState::seed(
                 kind.clone(),
                 payload.agent_id.clone(),
@@ -394,9 +442,26 @@ impl ReducerState {
                 event.timestamp,
             ))
         });
+        // A resume wrapper's attach at a swap's epoch makes this session the
+        // reservation's: the session row takes it here, before its stamped
+        // hooks arrive at an epoch the row already holds.
+        if !payload.agent_id.is_provisional()
+            && let (Some(launch), Some(epoch)) = (&payload.launch_id, payload.epoch)
+            && let Some(provisional_key) =
+                self.stamped_provisional(kind, EventStamp { launch, epoch })
+        {
+            self.absorb_provisional(&key, &provisional_key);
+        }
+        let Some(state) = self.map.get_mut(&key) else {
+            return;
+        };
         let state = agent_mut(state);
+        state.launch_bound |= state.agent_id.is_provisional();
         if let Some(launch_id) = &payload.launch_id {
             state.set_launch_id(launch_id.clone());
+        }
+        if let Some(epoch) = payload.epoch {
+            state.epoch = state.epoch.max(epoch);
         }
         if let Some(login) = &payload.login {
             state.login = (!login.is_default()).then(|| login.clone());
@@ -473,16 +538,32 @@ impl ReducerState {
             return;
         }
         let event_is_child = observation.parent_agent_id.is_some();
+        let stamp = (!event_is_child)
+            .then(|| EventStamp::of(observation))
+            .flatten();
+        if let Some(stamp) = stamp
+            && self.map.get(&key).is_some_and(|row| stamp.stale_on(row))
+        {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                event_id = %event.event_id,
+                kind = %kind,
+                agent_id = %agent_id,
+                epoch = stamp.epoch,
+                "stale agent.lifecycle event from a replaced process kept without effect",
+            );
+            return;
+        }
         let provisional_prior = if event_is_child {
             // Exact child IDs are authoritative. A child may share its type label
             // and pane with siblings or its parent, so neither is an adoption or
             // provisional-release key.
             None
         } else if self.map.contains_key(&key) {
-            self.release_stamped_provisional_for_existing(&kind, &key, observation);
+            self.release_stamped_provisional_for_existing(&kind, &key, observation, stamp);
             None
         } else {
-            self.adopt_provisional(&kind, &key, observation)
+            self.adopt_provisional(&kind, &key, observation, stamp)
         };
         let event_name = payload.event_name.as_deref();
         let event_parent_agent_id =
@@ -522,7 +603,9 @@ impl ReducerState {
                 "non-start lifecycle event created an unseen session in the reducer",
             );
         }
-        let card_identity = self.identity.assign(&kind, &agent_id, observation, prior);
+        let card_identity = self
+            .identity
+            .assign(&kind, &agent_id, observation, prior, &self.map);
         let mut state = assemble_agent_state(AgentStateInput {
             kind: &kind,
             agent_id: &agent_id,
@@ -571,51 +654,92 @@ impl ReducerState {
         kind: &AgentKind,
         key: &(AgentKind, AgentSessionId),
         observation: &AgentLifecycleObservation,
+        stamp: Option<EventStamp<'_>>,
     ) -> Option<Arc<AgentState>> {
+        if let Some(stamp) = stamp {
+            let provisional_key = self.stamped_provisional(kind, stamp)?;
+            return self.retire_provisional(&provisional_key);
+        }
         if let Some(provisional_key) = observation.agent_name.as_deref().and_then(|name| {
             self.identity
                 .adoptable_owner_for_name(&self.map, kind, name, key)
-        }) && let Some(prior) = self.retire_provisional(&provisional_key)
+        }) && self
+            .map
+            .get(&provisional_key)
+            .is_none_or(|provisional| stamp_takes(None, provisional))
+            && let Some(prior) = self.retire_provisional(&provisional_key)
         {
             return Some(prior);
         }
         let provisional_key = observation.pane_id.as_ref().and_then(|pane_id| {
             self.identity
-                .adoptable_owner_for_pane(&self.map, kind, pane_id, key)
+                .adoptable_owner_for_pane(&self.map, kind, pane_id, key, |provisional| {
+                    stamp_takes(None, provisional)
+                })
         })?;
         self.retire_provisional(&provisional_key)
     }
 
+    /// The reservation a stamped event speaks for: the provisional row of its
+    /// kind, launch, and epoch.
+    fn stamped_provisional(&self, kind: &AgentKind, stamp: EventStamp<'_>) -> Option<AgentKey> {
+        self.map
+            .iter()
+            .find(|(owner, state)| {
+                owner.0 == *kind && owner.1.is_provisional() && stamp_takes(Some(stamp), state)
+            })
+            .map(|(owner, _)| owner.clone())
+    }
+
+    /// Give a provisional launch to the existing session row it registers as.
+    /// A stamped event of the row's own launch at a later epoch (a resumed
+    /// swap) releases its reservation whatever the row's pane or end; any
+    /// other event releases only into a paneless or ended row, by pane, and
+    /// only a provisional its stamp may take.
     fn release_stamped_provisional_for_existing(
         &mut self,
         kind: &AgentKind,
         key: &(AgentKind, AgentSessionId),
         observation: &AgentLifecycleObservation,
+        stamp: Option<EventStamp<'_>>,
     ) {
-        if self
-            .map
-            .get(key)
-            .is_some_and(|state| state.is_provider_subagent())
-        {
-            return;
-        }
-        if self
-            .map
-            .get(key)
-            .is_none_or(|state| state.pane.is_some() && state.ended_at.is_none())
-        {
-            return;
-        }
-        let Some(provisional_key) = observation.pane_id.as_ref().and_then(|pane_id| {
-            self.identity
-                .adoptable_owner_for_pane(&self.map, kind, pane_id, key)
-        }) else {
+        let Some(row) = self.map.get(key) else {
             return;
         };
-        if let Some(provisional) = self.retire_provisional(&provisional_key)
+        if row.is_provider_subagent() {
+            return;
+        }
+        let continuation = stamp.filter(|stamp| {
+            row.launch_id.as_ref() == Some(stamp.launch) && row.epoch < stamp.epoch
+        });
+        let provisional_key = if let Some(stamp) = continuation {
+            self.stamped_provisional(kind, stamp)
+        } else if row.pane.is_some() && row.ended_at.is_none() {
+            None
+        } else {
+            observation.pane_id.as_ref().and_then(|pane_id| {
+                self.identity.adoptable_owner_for_pane(
+                    &self.map,
+                    kind,
+                    pane_id,
+                    key,
+                    |provisional| stamp_takes(stamp, provisional),
+                )
+            })
+        };
+        if let Some(provisional_key) = provisional_key {
+            self.absorb_provisional(key, &provisional_key);
+        }
+    }
+
+    /// Retire `provisional_key` into the existing row `key`, which takes its
+    /// epoch, launch, and launch settings.
+    fn absorb_provisional(&mut self, key: &AgentKey, provisional_key: &AgentKey) {
+        if let Some(provisional) = self.retire_provisional(provisional_key)
             && let Some(existing) = self.map.get_mut(key)
         {
             let existing = agent_mut(existing);
+            existing.epoch = existing.epoch.max(provisional.epoch);
             if let Some(launch_id) = &provisional.launch_id {
                 existing.set_launch_id(launch_id.clone());
             }
@@ -659,11 +783,19 @@ impl ReducerState {
         if self.identity.launch_consumed(&payload.agent_id) {
             return;
         }
+        // A swap's reservation keeps its agent's handle: it is the owner's
+        // launch at a later epoch. Any other launch under an owned handle is
+        // consumed.
+        let launch = payload.launch_id.as_ref().unwrap_or(&payload.agent_id);
+        let epoch = payload.launch.epoch.unwrap_or(0);
         if payload.agent_id.is_provisional()
             && let Some(owner) = self.identity.owner_for_name(&payload.agent_name)
             && owner.0 == *kind
             && owner != key
-            && self.map.contains_key(&owner)
+            && self
+                .map
+                .get(&owner)
+                .is_some_and(|row| row.launch_key() != launch || row.epoch >= epoch)
         {
             self.identity.consume_launch_key(&key);
             return;
@@ -675,9 +807,9 @@ impl ReducerState {
             return;
         }
         let prior = self.map.get(&key).map(Arc::as_ref);
-        let card_identity = self
-            .identity
-            .assign_launch(kind, &payload.agent_id, payload, prior);
+        let card_identity =
+            self.identity
+                .assign_launch(kind, &payload.agent_id, payload, prior, &self.map);
         let state = assemble_launch_state(kind, event, payload, prior, card_identity);
         self.insert(key, state);
     }
@@ -821,6 +953,8 @@ fn carried_base(
     if let Some(prior) = prior {
         state.launch_id = prior.launch_id.clone();
         state.prior_launch_ids.clone_from(&prior.prior_launch_ids);
+        state.epoch = prior.epoch;
+        state.launch_bound = prior.launch_bound;
         state
             .system_prompt_digest
             .clone_from(&prior.system_prompt_digest);
@@ -1181,6 +1315,7 @@ fn inherit_launch_identity(
     successor
         .prior_launch_ids
         .clone_from(&predecessor.prior_launch_ids);
+    successor.epoch = predecessor.epoch;
     successor
         .launch_warnings
         .clone_from(&predecessor.launch_warnings);
@@ -1254,6 +1389,10 @@ fn assemble_launch_state(
     if let Some(launch_id) = &payload.launch_id {
         state.set_launch_id(launch_id.clone());
     }
+    if let Some(epoch) = payload.launch.epoch {
+        state.epoch = epoch;
+    }
+    state.launch_bound |= payload.state == AgentLaunchState::Bound;
     fold_launch_params(&mut state, &payload.launch, false);
     if payload.state == AgentLaunchState::Bound
         && let Some(prior) = prior

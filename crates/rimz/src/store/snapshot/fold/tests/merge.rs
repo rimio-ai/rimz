@@ -106,8 +106,12 @@ fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
         live.worktree_branch = Some("feature".into());
         let live = Arc::new(live);
 
-        let merged =
-            AgentRollup::layered(fold_ready(vec![carried]), std::slice::from_ref(&live)).to_vec();
+        let merged = AgentRollup::layered(
+            fold_ready(vec![carried]),
+            std::slice::from_ref(&live),
+            &AgentIdentityState::default(),
+        )
+        .to_vec();
         assert_eq!(merged.len(), 1, "{label}");
         assert_eq!(merged[0].status, AgentStatus::Running, "{label}");
         assert_eq!(
@@ -122,6 +126,7 @@ fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
     let merged = AgentRollup::layered(
         fold_ready(vec![only_in_carryover]),
         std::slice::from_ref(&only_live),
+        &AgentIdentityState::default(),
     );
     assert_eq!(merged.len(), 2);
 
@@ -131,6 +136,7 @@ fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
     let merged = AgentRollup::layered(
         fold_ready(vec![newer_carried]),
         std::slice::from_ref(&older_live),
+        &AgentIdentityState::default(),
     )
     .to_vec();
     assert_eq!(merged.len(), 1, "a newer carried observation keeps its row");
@@ -524,6 +530,7 @@ fn launch_and_attach_first_events_reduce_against_the_carried_agent() {
         "session",
         &kind,
         AgentAttachPayload {
+            epoch: None,
             login: None,
             record: Some(
                 serde_json::from_value(serde_json::json!({

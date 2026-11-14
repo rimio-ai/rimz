@@ -158,14 +158,70 @@ fn catch_up_rollup_rejects_a_zeroed_middle_frame() {
     );
 }
 
+/// One generated event. Actions 12-14 are a swap of `agent_id`'s launch at
+/// `epoch` (its reservation starting, bound, failed) and 15 its session's
+/// registration stamped at `epoch`; a lifecycle action is stamped one epoch
+/// lower when `epoch` is above 0, and unstamped at 0.
 fn sequence_event(
     workspace: &WorkspaceId,
     kind: &str,
     agent_id: &str,
     action: usize,
+    epoch: u32,
     timestamp: Timestamp,
 ) -> EventEnvelope {
-    let mut event = if action >= 10 {
+    let launch = format!("launch_{agent_id}");
+    let mut event = if (12..15).contains(&action) {
+        let key = if epoch == 0 {
+            launch.clone()
+        } else {
+            format!("{launch}_{epoch}")
+        };
+        EventEnvelope::agent_launched(
+            workspace.clone(),
+            "session",
+            &AgentKind::new_unchecked(kind),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: key.into(),
+                launch_id: Some(launch.into()),
+                agent_name: format!("swap-{agent_id}"),
+                agent_name_explicit: false,
+                launch: LaunchParams {
+                    epoch: (epoch > 0).then_some(epoch),
+                    ..LaunchParams::default()
+                },
+                state: match action {
+                    12 => AgentLaunchState::Starting,
+                    13 => AgentLaunchState::Bound,
+                    _ => AgentLaunchState::Failed,
+                },
+                run_id: None,
+                pane_id: (action == 13).then(|| PaneId::parse(&format!("tmux:%{epoch}")).unwrap()),
+                runtime_owner: None,
+                worktree_path: None,
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        )
+    } else if action == 15 {
+        let mut event = lifecycle_at(
+            workspace,
+            kind,
+            "SessionStart",
+            agent_id,
+            lifecycle::LifecycleSignal::Registered,
+        );
+        let mut params = event.params_value();
+        params["launch_id"] = serde_json::json!(launch);
+        params["pane_id"] = serde_json::json!(format!("tmux:%{epoch}"));
+        if epoch > 0 {
+            params["epoch"] = serde_json::json!(epoch);
+        }
+        event.params = serde_json::value::to_raw_value(&params).unwrap();
+        event
+    } else if action >= 10 {
         let mut params = serde_json::json!({"agent_id": agent_id, "setting": "keep-warm"});
         if action == 10 {
             params["value"] = serde_json::json!("2h");
@@ -237,7 +293,16 @@ fn sequence_event(
             ),
             _ => ("SessionStart", lifecycle::LifecycleSignal::Registered),
         };
-        lifecycle_at(workspace, kind, name, agent_id, signal)
+        let mut event = lifecycle_at(workspace, kind, name, agent_id, signal);
+        if epoch > 0 {
+            let mut params = event.params_value();
+            params["launch_id"] = serde_json::json!(launch);
+            if epoch > 1 {
+                params["epoch"] = serde_json::json!(epoch - 1);
+            }
+            event.params = serde_json::value::to_raw_value(&params).unwrap();
+        }
+        event
     };
     event.timestamp = timestamp;
     event
@@ -247,10 +312,11 @@ proptest::proptest! {
     /// The keystone fold invariant, generalized from the hand-built case
     /// above: over arbitrary lifecycle sequences and an arbitrary
     /// prefix/delta split, resuming from a persisted base equals folding
-    /// the whole log cold — agents and extent alike.
+    /// the whole log cold — agents and extent alike, swaps and their stamped
+    /// events included.
     #[test]
     fn fold_seed_delta_equals_fold_empty_all_over_arbitrary_sequences(
-        seq in proptest::collection::vec((0usize..2, 0usize..12, 0usize..3), 1..12),
+        seq in proptest::collection::vec((0usize..2, 0usize..16, 0usize..3, 0u32..3), 1..12),
         split in proptest::prelude::any::<proptest::sample::Index>(),
     ) {
         use proptest::prelude::prop_assert_eq;
@@ -266,8 +332,8 @@ proptest::proptest! {
         let events: Vec<_> = seq
             .iter()
             .enumerate()
-            .map(|(index, &(kind, action, agent_id))| sequence_event(
-                &workspace, KINDS[kind], AGENTS[agent_id], action,
+            .map(|(index, &(kind, action, agent_id, swap_epoch))| sequence_event(
+                &workspace, KINDS[kind], AGENTS[agent_id], action, swap_epoch,
                 epoch() + Duration::from_secs(index as u64),
             ))
             .collect();
@@ -347,4 +413,254 @@ fn rebirth_boundary_unstamps_carryover_agents() {
         untouched[0].pane.is_some(),
         "no boundary in the window keeps the carryover stamp"
     );
+}
+
+/// A launch event of the agent `launch_a` under row key `key` at `epoch`.
+fn swap_launch(
+    state: AgentLaunchState,
+    key: &str,
+    epoch: u32,
+    pane: Option<&str>,
+) -> EventEnvelope {
+    let mut payload = AgentLaunchPayload {
+        system_prompt_digest: None,
+        agent_id: key.into(),
+        launch_id: Some("launch_a".into()),
+        agent_name: "coder".to_owned(),
+        agent_name_explicit: false,
+        launch: LaunchParams::default(),
+        state,
+        run_id: None,
+        pane_id: pane.map(|raw| PaneId::parse(raw).unwrap()),
+        runtime_owner: None,
+        worktree_path: None,
+        worktree_branch: None,
+        prompt: None,
+        description: None,
+    };
+    payload.launch.epoch = (epoch > 0).then_some(epoch);
+    EventEnvelope::agent_launched(
+        WorkspaceId::from_project_root(Path::new("/tmp/x")),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        payload,
+    )
+}
+
+/// A hook of `session` on `pane`, stamped with `launch_a` at `epoch`.
+fn swap_hook(
+    workspace: &WorkspaceId,
+    session: &str,
+    epoch: u32,
+    signal: lifecycle::LifecycleSignal,
+    name: &str,
+    pane: &str,
+) -> EventEnvelope {
+    let mut event = lifecycle_at(workspace, "codex", name, session, signal);
+    let mut params = event.params_value();
+    params["launch_id"] = serde_json::json!("launch_a");
+    params["pane_id"] = serde_json::json!(pane);
+    if epoch > 0 {
+        params["epoch"] = serde_json::json!(epoch);
+    }
+    event.params = serde_json::value::to_raw_value(&params).unwrap();
+    event
+}
+
+fn swap_holder(agents: &[AgentState]) -> Vec<AgentState> {
+    use crate::agents::state::{launch_holder, launch_members};
+
+    let members = launch_members(
+        agents,
+        &AgentKind::new_unchecked("codex"),
+        &"launch_a".into(),
+    );
+    launch_holder(&members).into_iter().cloned().collect()
+}
+
+#[test]
+fn a_carryover_boundary_inside_a_swap_keeps_the_holder() {
+    for boundary in [3, 4] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        let registered = lifecycle::LifecycleSignal::Registered;
+        let mut events = [
+            swap_launch(AgentLaunchState::Bound, "launch_a", 0, Some("tmux:%1")),
+            swap_hook(
+                &workspace,
+                "s1",
+                0,
+                registered.clone(),
+                "SessionStart",
+                "tmux:%1",
+            ),
+            swap_launch(AgentLaunchState::Starting, "launch_b", 1, None),
+            swap_launch(AgentLaunchState::Bound, "launch_b", 1, Some("tmux:%1")),
+            swap_hook(
+                &workspace,
+                "s1",
+                0,
+                lifecycle::LifecycleSignal::Ended,
+                "SessionEnd",
+                "tmux:%1",
+            ),
+            swap_hook(&workspace, "s2", 1, registered, "SessionStart", "tmux:%1"),
+        ];
+        for (index, event) in events.iter_mut().enumerate() {
+            event.workspace_id = workspace.clone();
+            event.timestamp = recent(100 - index as u64);
+        }
+        for event in &events[..boundary] {
+            event_log::append(&paths.events_log, event).unwrap();
+        }
+        let (cache, _, _) = catch_up_rollup(&paths).unwrap();
+        write_rollup_cache(&paths, &cache).unwrap();
+        stage_carryover_for_rotation(&paths, 1).unwrap();
+        assert!(rotate(&paths).rotation.is_rotated());
+        for event in &events[boundary..] {
+            event_log::append(&paths.events_log, event).unwrap();
+        }
+        let (_, warm, _) = catch_up_rollup(&paths).unwrap();
+        let (_, cursor, _) = RollupCursor::new().fold(&paths).unwrap();
+        for agents in [warm.to_vec(), cursor.to_vec()] {
+            let holder = swap_holder(&agents);
+            assert_eq!(holder.len(), 1, "boundary {boundary}: {agents:#?}");
+            assert_eq!(holder[0].agent_id, "s2");
+            assert_eq!(holder[0].epoch, 1);
+            assert_eq!(holder[0].name.as_deref(), Some("coder"));
+            assert!(
+                agents.iter().all(|agent| agent.agent_id != "launch_b"),
+                "boundary {boundary}: the carried reservation was taken: {agents:#?}"
+            );
+        }
+    }
+}
+
+/// A bound reservation carried over a rotation, taken by its session in one
+/// catch-up, stays taken in every later one: through a direct-key event, a
+/// rebirth, and its session's stamped end, a warm fold equals a cold one.
+#[test]
+fn a_carried_reservation_once_taken_never_returns_to_a_later_catch_up() {
+    use crate::agents::state::{AgentEnd, agent_end};
+
+    for (resumed, rebirth) in [(false, false), (true, false), (false, true)] {
+        let case = format!("resumed {resumed}, rebirth {rebirth}");
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        let session = if resumed { "s1" } else { "s2" };
+        let mut events = vec![
+            swap_launch(AgentLaunchState::Bound, "launch_a", 0, Some("tmux:%1")),
+            swap_hook(
+                &workspace,
+                "s1",
+                0,
+                lifecycle::LifecycleSignal::Registered,
+                "SessionStart",
+                "tmux:%1",
+            ),
+            swap_launch(AgentLaunchState::Starting, "launch_b", 1, None),
+            swap_launch(AgentLaunchState::Bound, "launch_b", 1, Some("tmux:%2")),
+        ];
+        let boundary = events.len();
+        if resumed {
+            events.push(EventEnvelope::agent_attached(
+                workspace.clone(),
+                "session",
+                &AgentKind::new_unchecked("codex"),
+                AgentAttachPayload {
+                    epoch: Some(1),
+                    login: None,
+                    record: None,
+                    tier: None,
+                    mode: None,
+                    effective_isolation: None,
+                    agent_id: "s1".into(),
+                    isolation: None,
+                    launch_id: Some("launch_a".into()),
+                    pane_id: PaneId::parse("tmux:%2").unwrap(),
+                    pane_pid: None,
+                    runtime_owner: RuntimeOwner::new(
+                        RuntimeOwnerKind::Agent,
+                        "s1",
+                        9,
+                        Some("start-9".into()),
+                    ),
+                },
+            ));
+        }
+        events.push(swap_hook(
+            &workspace,
+            session,
+            1,
+            lifecycle::LifecycleSignal::Registered,
+            "SessionStart",
+            "tmux:%2",
+        ));
+        // A direct-key event of the taken reservation, as a late launch
+        // write of it would be.
+        events.push(swap_launch(AgentLaunchState::Failed, "launch_b", 1, None));
+        if rebirth {
+            events.push(EventEnvelope::session_rebirth(workspace.clone(), "session"));
+        }
+        events.push(swap_hook(
+            &workspace,
+            session,
+            1,
+            lifecycle::LifecycleSignal::Ended,
+            "SessionEnd",
+            "tmux:%2",
+        ));
+        for (index, event) in events.iter_mut().enumerate() {
+            event.workspace_id = workspace.clone();
+            event.timestamp = recent(100 - index as u64);
+        }
+        for event in &events[..boundary] {
+            event_log::append(&paths.events_log, event).unwrap();
+        }
+        let (cache, _, _) = catch_up_rollup(&paths).unwrap();
+        write_rollup_cache(&paths, &cache).unwrap();
+        stage_carryover_for_rotation(&paths, 1).unwrap();
+        assert!(rotate(&paths).rotation.is_rotated());
+        let mut cursor = RollupCursor::new();
+        cursor.fold(&paths).unwrap();
+        for event in &events[boundary..] {
+            event_log::append(&paths.events_log, event).unwrap();
+            let (warm_cache, warm, _) = catch_up_rollup(&paths).unwrap();
+            let (_, cursor_rows, _) = cursor.fold(&paths).unwrap();
+            // A fresh cursor with no `rollup.json` folds the log and the
+            // carryover from scratch; the thread's held fold would serve
+            // the warm rows again.
+            fs::remove_file(paths.rollup_cache().unwrap()).unwrap();
+            let cold = RollupCursor::new().fold(&paths).unwrap().1.to_vec();
+            assert_eq!(
+                sorted_value(warm.clone()),
+                sorted_value(cold.clone()),
+                "{case}"
+            );
+            assert_eq!(
+                sorted_value(cursor_rows.to_vec()),
+                sorted_value(cold),
+                "{case}"
+            );
+            assert!(
+                warm.iter().all(|agent| agent.agent_id != "launch_b"),
+                "{case}: the taken reservation came back: {warm:#?}"
+            );
+            write_rollup_cache(&paths, &warm_cache).unwrap();
+        }
+        let (_, agents, _) = catch_up_rollup(&paths).unwrap();
+        assert_eq!(
+            agent_end(
+                &agents,
+                &AgentKind::new_unchecked("codex"),
+                &"launch_a".into()
+            ),
+            AgentEnd::Ended,
+            "{case}: {agents:#?}"
+        );
+    }
 }

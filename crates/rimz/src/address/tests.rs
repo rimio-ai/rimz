@@ -2603,6 +2603,7 @@ fn parent_launch_selects_the_live_occupant_and_keeps_legacy_children() {
     let mut wrong_kind = child.clone();
     wrong_kind.agent_id = "wrong-kind".into();
     wrong_kind.parent_agent_kind = None;
+    wrong_kind.parent_agent_id = Some(old.agent_id.clone());
     let mut agents = [old, new, child, legacy, native, wrong_kind];
 
     for id in ["launch-parent", "a-old", "z-new"] {

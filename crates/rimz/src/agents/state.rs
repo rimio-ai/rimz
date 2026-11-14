@@ -1185,15 +1185,36 @@ pub struct AgentState {
     /// row in both scopes; the fold never sets it, and projection overwrites it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub molt_superseded: bool,
+    /// Another session of this row's launch holds the agent now: the launch
+    /// has a standing row at a higher epoch, or this row never stood beside
+    /// one at its own. Derived by the runtime projection from every retained
+    /// row, as [`launch_holder`] decides; the fold never sets it. Runtime
+    /// scope drops such rows and Audit keeps them with the mark.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replaced: bool,
     pub agent_id: AgentSessionId,
     /// Current RimZ launch identity. Unlike `agent_id`, this survives adoption
     /// of the provider's native session id and remains equal to the id exported
     /// to the launched process. Rebinding keeps earlier ids in `prior_launch_ids`.
+    /// Every session of one agent shares it across swaps; a lifecycle event's
+    /// own launch stamp fences the event and never assigns it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_id: Option<AgentSessionId>,
     /// Earlier launch ids, oldest first, without duplicates or the current id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prior_launch_ids: Vec<AgentSessionId>,
+    /// The RimZ swap of its agent this row belongs to: 0 for a fresh launch,
+    /// one more for each restart or molt reservation. Set by the launch event
+    /// that reserved it, carried by every later event, raised by a stamped
+    /// continuation on a shared session row, and never lowered.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub epoch: u32,
+    /// A provisional row's wrapper recorded its pane bind, so the launch
+    /// stood: set by the `Bound` launch event or an `agent.attached` bind and
+    /// kept through a later failure or pane close. Registered session rows
+    /// stand without it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub launch_bound: bool,
     /// The fresh launch's configured system-prompt baseline, unchanged by resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt_digest: Option<String>,
@@ -1646,6 +1667,119 @@ pub(crate) enum TransitionMode {
     Snapshot,
 }
 
+/// Rows of the launch that `id` names: same-kind rows that answer to it as a
+/// session or launch id, plus rows of any kind whose current launch is it or
+/// is the launch of the same-kind session `id` names. Launch ids are unique
+/// across kinds; session ids are kind-scoped. Provider-native children are
+/// never members. `address::launch_members` and `harness::fleet::LaunchRows`
+/// read this rule.
+pub fn launch_members<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    kind: &AgentKind,
+    id: &AgentSessionId,
+) -> Vec<&'a AgentState> {
+    let alias = agents
+        .clone()
+        .into_iter()
+        .find(|agent| &agent.kind == kind && &agent.agent_id == id && !agent.is_provider_subagent())
+        .and_then(|agent| agent.launch_id.as_ref());
+    agents
+        .into_iter()
+        .filter(|agent| {
+            !agent.is_provider_subagent()
+                && ((&agent.kind == kind && agent.answers_to(id))
+                    || agent
+                        .launch_id
+                        .as_ref()
+                        .is_some_and(|launch| launch == id || alias == Some(launch)))
+        })
+        .collect()
+}
+
+/// The rows of `members` that hold their agent: within each launch, the
+/// standing rows at its highest standing epoch. A launch with no standing
+/// row (a launch still starting, a lone failed launch) keeps every row.
+pub fn launch_holder<'a>(members: &[&'a AgentState]) -> Vec<&'a AgentState> {
+    let holders = LaunchHolders::new(members.iter().copied());
+    members
+        .iter()
+        .copied()
+        .filter(|agent| !holders.replaced(agent))
+        .collect()
+}
+
+/// Whether the agent a launch or session id names has ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentEnd {
+    /// No retained row answers to the id.
+    Unknown,
+    /// A holder row is still running or starting.
+    Live,
+    /// Every holder row is over: ended, or a provisional launch that failed.
+    Ended,
+}
+
+/// Whether the agent `id` names has ended, read over every retained row. Pass
+/// Audit rows: a Runtime projection drops ended and replaced rows, so absence
+/// there says nothing about the agent.
+pub fn agent_end<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    kind: &AgentKind,
+    id: &AgentSessionId,
+) -> AgentEnd {
+    let members = launch_members(agents, kind, id);
+    if members.is_empty() {
+        return AgentEnd::Unknown;
+    }
+    if launch_holder(&members)
+        .iter()
+        .all(|agent| agent.session_over())
+    {
+        AgentEnd::Ended
+    } else {
+        AgentEnd::Live
+    }
+}
+
+/// Whether a row of `launch` at `epoch` has stood: the question a swap's
+/// bind wait asks of its reservation, before and after the new session
+/// adopts the provisional row.
+pub fn epoch_stood<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState>,
+    launch: &AgentSessionId,
+    epoch: u32,
+) -> bool {
+    agents.into_iter().any(|agent| {
+        agent.launch_id.as_ref() == Some(launch) && agent.epoch == epoch && agent.stands()
+    })
+}
+
+/// Highest standing epoch per launch over a set of rows, which answers
+/// [`AgentState::replaced`] for each of them in one pass.
+pub struct LaunchHolders<'a> {
+    standing: std::collections::HashMap<&'a AgentSessionId, u32>,
+}
+
+impl<'a> LaunchHolders<'a> {
+    pub fn new(agents: impl IntoIterator<Item = &'a AgentState>) -> Self {
+        let mut standing = std::collections::HashMap::new();
+        for agent in agents.into_iter().filter(|agent| agent.stands()) {
+            standing
+                .entry(agent.launch_key())
+                .and_modify(|epoch: &mut u32| *epoch = (*epoch).max(agent.epoch))
+                .or_insert(agent.epoch);
+        }
+        Self { standing }
+    }
+
+    /// Whether another session of `agent`'s launch holds the agent.
+    pub fn replaced(&self, agent: &AgentState) -> bool {
+        self.standing
+            .get(agent.launch_key())
+            .is_some_and(|&epoch| !(agent.stands() && agent.epoch == epoch))
+    }
+}
+
 impl AgentState {
     /// Prefer the provider's live fast-mode reading over the launch setting.
     pub fn fast_mode(&self) -> bool {
@@ -1904,8 +2038,11 @@ impl AgentState {
             agent_id,
             molted_from: None,
             molt_superseded: false,
+            replaced: false,
             launch_id: None,
             prior_launch_ids: Vec::new(),
+            epoch: 0,
+            launch_bound: false,
             system_prompt_digest: None,
             launch_warnings: Vec::new(),
             kind,
@@ -2052,6 +2189,24 @@ impl AgentState {
             .map(|launcher| (&launcher.kind, &launcher.agent_id))
     }
 
+    /// Whether this row stood as its launch's agent: a registered session
+    /// row, or a provisional row whose wrapper bound its pane.
+    pub fn stands(&self) -> bool {
+        !self.agent_id.is_provisional() || self.launch_bound
+    }
+
+    /// Whether this session row is over: ended, or a provisional launch that
+    /// failed, which stamps no end.
+    pub fn session_over(&self) -> bool {
+        self.ended_at.is_some()
+            || (self.agent_id.is_provisional() && self.status == AgentStatus::Failed)
+    }
+
+    /// The launch this row belongs to: its launch id, else its session id.
+    pub fn launch_key(&self) -> &AgentSessionId {
+        self.launch_id.as_ref().unwrap_or(&self.agent_id)
+    }
+
     /// Session identity followed by current and prior launch identities.
     pub(crate) fn identity_ids(&self) -> impl Iterator<Item = &AgentSessionId> {
         std::iter::once(&self.agent_id)
@@ -2076,9 +2231,12 @@ impl AgentState {
     }
 
     /// Match [`launcher`](Self::launcher) to a candidate session or launch.
+    /// A launch id matches across kinds; a session id only within its kind.
     pub fn launcher_is(&self, candidate: &AgentState) -> bool {
-        self.launcher()
-            .is_some_and(|(kind, id)| kind == &candidate.kind && candidate.answers_to(id))
+        self.launcher().is_some_and(|(kind, id)| {
+            candidate.launch_id.as_ref() == Some(id)
+                || (kind == &candidate.kind && candidate.answers_to(id))
+        })
     }
 
     /// Whether this row is a seat of a team cohort. An agent-launched team
@@ -2088,12 +2246,14 @@ impl AgentState {
         self.team.as_deref().is_some_and(|team| !team.is_empty()) && !self.is_launched_child()
     }
 
-    /// Match the parent link to a candidate session or launch of the right kind.
+    /// Match the parent link to the candidate's current launch, of any kind,
+    /// or to its session or earlier launch within the parent's kind.
     pub fn parent_is(&self, candidate: &AgentState) -> bool {
-        self.parent_agent_id
-            .as_ref()
-            .is_some_and(|id| candidate.answers_to(id))
-            && self.parent_agent_kind.as_ref().unwrap_or(&self.kind) == &candidate.kind
+        self.parent_agent_id.as_ref().is_some_and(|id| {
+            candidate.launch_id.as_ref() == Some(id)
+                || (candidate.answers_to(id)
+                    && self.parent_agent_kind.as_ref().unwrap_or(&self.kind) == &candidate.kind)
+        })
     }
 
     /// Whether this agent is inside the bounded compaction window used by

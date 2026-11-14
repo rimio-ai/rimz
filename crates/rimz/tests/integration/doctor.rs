@@ -596,6 +596,7 @@ fn inject_lifecycle_with_launch(
     launch: LaunchParams,
 ) {
     let mut obs = AgentLifecycleObservation {
+        launch_id: None,
         on_screen: None,
         state_snapshot: None,
         ask_queue: None,

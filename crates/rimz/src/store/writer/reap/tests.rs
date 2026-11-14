@@ -1153,3 +1153,58 @@ fn reap_claim_tracks_missing_fresh_and_aged_stamp() {
         .expect("age stamp");
     assert!(debounce::claim(&stamp, REAP_INTERVAL), "aged stamp claims");
 }
+
+#[test]
+fn a_derived_end_carries_the_launch_and_epoch_observed_on_its_row() {
+    let (_dir, store, workspace_id) = store();
+    let reservation = EventEnvelope::agent_launched(
+        workspace_id.clone(),
+        "rimz-test",
+        &AgentKind::new_unchecked("codex"),
+        crate::store::event::AgentLaunchPayload {
+            system_prompt_digest: None,
+            agent_id: "launch_b".into(),
+            launch_id: Some("launch_a".into()),
+            agent_name: "coder".to_owned(),
+            agent_name_explicit: false,
+            launch: LaunchParams {
+                epoch: Some(2),
+                ..LaunchParams::default()
+            },
+            state: crate::store::event::AgentLaunchState::Bound,
+            run_id: None,
+            pane_id: None,
+            runtime_owner: None,
+            worktree_path: None,
+            worktree_branch: None,
+            prompt: None,
+            description: None,
+        },
+    );
+    let mut registered = lifecycle(&workspace_id, "s2", Some(u32::MAX), None);
+    let mut params = registered.params_value();
+    params["launch_id"] = json!("launch_a");
+    params["epoch"] = json!(2);
+    registered.params = serde_json::value::to_raw_value(&params).unwrap();
+    for event in [reservation, registered] {
+        event_log::append(&store.paths().events_log, &event).expect("append event");
+    }
+
+    assert_eq!(store.reap_dead_sessions().expect("reap dead sessions"), 1);
+
+    let events = store.read_events().expect("read events");
+    let end = events
+        .iter()
+        .rev()
+        .find_map(|event| match event.kind() {
+            EventKind::AgentLifecycle(payload)
+                if payload.event_name.as_deref() == Some("ReapedDead") =>
+            {
+                Some(payload)
+            }
+            _ => None,
+        })
+        .expect("derived end");
+    assert_eq!(end.observation.launch_id.as_deref(), Some("launch_a"));
+    assert_eq!(end.observation.launch.epoch, Some(2));
+}

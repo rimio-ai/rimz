@@ -102,7 +102,13 @@ pub struct AgentLaunchRequest {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentLaunchIdentity {
     pub kind: AgentKind,
+    /// The provisional row key this launch binds, fails, and registers under.
     pub agent_id: AgentSessionId,
+    /// The agent's stable launch id when it differs from the row key: a swap
+    /// keeps its agent's launch id under a fresh provisional key. Absent for
+    /// an ordinary launch, whose row key is its launch id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<AgentSessionId>,
     pub name: String,
     pub name_explicit: bool,
     pub launch: LaunchParams,
@@ -122,6 +128,24 @@ pub struct AgentLaunchScope {
 pub struct AgentLaunchBatch {
     identities: Vec<AgentLaunchIdentity>,
     scope: AgentLaunchScope,
+}
+
+impl AgentLaunchIdentity {
+    /// The agent's stable launch id: the row key unless a swap kept another.
+    pub fn launch_id(&self) -> &AgentSessionId {
+        self.launch_id.as_ref().unwrap_or(&self.agent_id)
+    }
+}
+
+/// What [`Store::abort_agent_swap`] found under the workspace lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwapAbort {
+    /// The reservation had not stood and is now failed; the replaced session
+    /// still holds the agent.
+    Aborted,
+    /// The reservation's row has stood, so it holds the agent and the abort
+    /// wrote nothing.
+    Bound,
 }
 
 impl AgentLaunchBatch {
@@ -683,6 +707,77 @@ impl Store {
         self.reserve_agent_launch_batch(std::slice::from_ref(request), scope, Some(replaced))
     }
 
+    /// Reserve a RimZ swap of `source`'s agent: one Starting launch event
+    /// under a fresh provisional key (`request.agent_id`) that keeps the
+    /// agent's launch id and handle at one epoch past the highest on its
+    /// launch, failed reservations included. Refused under the lock unless
+    /// `source` is a live holder row and the launch has no reservation that
+    /// is still starting. The handle's temp and out dirs stay.
+    #[must_use = "durability barrier; check the result"]
+    pub fn begin_agent_swap(
+        &self,
+        source: &AgentState,
+        request: &AgentLaunchRequest,
+        scope: AgentLaunchScope,
+    ) -> Result<AgentLaunchBatch> {
+        self.commit(|txn| {
+            let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
+            let identity = swap_identity(&base_agents, source, request, || {
+                crate::agents::room_accounts(
+                    &txn.paths.workspace_record,
+                    None,
+                    &crate::config::MachineConfig::load_lenient(),
+                )
+                .map_err(Box::new)
+                .map_err(StoreErr::from)
+            })?;
+            let mut event = self.agent_launch_event(
+                &identity,
+                AgentLaunchState::Starting,
+                &scope.session_name,
+                &scope.cwd,
+                scope.branch.as_deref(),
+                scope.description.as_deref(),
+                None,
+                None,
+            );
+            event.timestamp = jiff::Timestamp::now();
+            txn.append(&event)?;
+            Ok(AgentLaunchBatch {
+                identities: vec![identity],
+                scope,
+            })
+        })
+    }
+
+    /// Fail a swap reservation that has not stood. Once its row has stood the
+    /// write is refused under the same lock: the replacement holds the agent.
+    #[must_use = "durability barrier; check the result"]
+    pub fn abort_agent_swap(
+        &self,
+        identity: &AgentLaunchIdentity,
+        scope: &AgentLaunchScope,
+    ) -> Result<SwapAbort> {
+        self.commit(|txn| {
+            let (_cache, agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
+            let epoch = identity.launch.epoch.unwrap_or(0);
+            if crate::agents::state::epoch_stood(agents.iter(), identity.launch_id(), epoch) {
+                return Ok(SwapAbort::Bound);
+            }
+            txn.append(&self.agent_launch_event(
+                identity,
+                AgentLaunchState::Failed,
+                &scope.session_name,
+                &scope.cwd,
+                scope.branch.as_deref(),
+                None,
+                None,
+                None,
+            ))?;
+            Ok(SwapAbort::Aborted)
+        })
+    }
+
     fn reserve_agent_launch_batch(
         &self,
         requests: &[AgentLaunchRequest],
@@ -869,6 +964,7 @@ impl Store {
                     molted_from: agent.molted_from.clone(),
                     ..Default::default()
                 },
+                launch_id: None,
                 run_id: None,
                 prompt: None,
             };
@@ -898,15 +994,15 @@ impl Store {
         system_prompt_digest: Option<&str>,
     ) -> Result<()> {
         self.commit(|txn| {
-            if identity.launch.molted_from.is_some() {
+            if identity.launch.molted_from.is_some() || identity.launch.epoch.is_some_and(|e| e > 0)
+            {
                 let (_cache, agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
-                let message =
-                    "molt launch was cancelled or failed before binding; do not retry this command";
+                let message = "restart or molt launch was cancelled or failed before binding; do not retry this command";
                 if agents.iter().any(|agent| {
                     agent.kind == identity.kind
                         && agent.agent_id == identity.agent_id
                         && agent.agent_id.is_provisional()
-                        && !crate::agents::state::molt_stands(agent)
+                        && agent.session_over()
                 }) {
                     return Err(StoreErr::AgentLaunchIdentity(message.into()));
                 }
@@ -974,6 +1070,7 @@ impl Store {
                     isolation,
                     effective_isolation,
                     launch_id: launch_id.cloned(),
+                    epoch: None,
                     login: Some(login.clone()),
                     pane_id: pane.pane_id,
                     pane_pid: pane.pane_pid,
@@ -1060,7 +1157,7 @@ impl Store {
             AgentLaunchPayload {
                 system_prompt_digest: system_prompt_digest.map(ToOwned::to_owned),
                 agent_id: identity.agent_id.clone(),
-                launch_id: Some(identity.agent_id.clone()),
+                launch_id: Some(identity.launch_id().clone()),
                 agent_name: identity.name.clone(),
                 agent_name_explicit: identity.name_explicit,
                 launch: identity.launch.clone(),
@@ -1276,11 +1373,69 @@ fn allocate_agent_launch_identities(
             name,
             name_explicit,
             launch,
+            launch_id: None,
             run_id: request.run_id.clone(),
             prompt: request.prompt.clone(),
         });
     }
     Ok(identities)
+}
+
+/// The identity of a swap of `source`'s agent, decided over every retained
+/// row: the source must be a live holder row of a launch with no reservation
+/// still starting, and the new epoch is one past the highest on the launch.
+fn swap_identity(
+    agents: &snapshot::AgentRollup,
+    source: &AgentState,
+    request: &AgentLaunchRequest,
+    accounts: impl FnOnce() -> Result<crate::agents::RoomAccounts>,
+) -> Result<AgentLaunchIdentity> {
+    let handle = source
+        .name
+        .clone()
+        .unwrap_or_else(|| source.agent_id.to_string());
+    let launch = source.launch_key();
+    let members = crate::agents::state::launch_members(agents.iter(), &source.kind, launch);
+    let holds = crate::agents::state::launch_holder(&members)
+        .into_iter()
+        .any(|row| {
+            row.kind == source.kind && row.agent_id == source.agent_id && !row.session_over()
+        });
+    if !holds {
+        return Err(StoreErr::SwapNotHolder { agent: handle });
+    }
+    if members
+        .iter()
+        .any(|row| row.agent_id.is_provisional() && !row.launch_bound && !row.session_over())
+    {
+        return Err(StoreErr::SwapInFlight { agent: handle });
+    }
+    let epoch = members
+        .iter()
+        .map(|row| row.epoch)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| StoreErr::SwapEpochOverflow {
+            agent: handle.clone(),
+        })?;
+    let login = match &request.login {
+        LaunchLogin::RoomDefault => accounts()?.name(&request.kind).map_err(Box::new)?,
+        LaunchLogin::Pinned(name) => name.clone(),
+    };
+    let mut params = request.launch.clone();
+    params.login = (!login.is_default()).then_some(login);
+    params.epoch = Some(epoch);
+    Ok(AgentLaunchIdentity {
+        kind: request.kind.clone(),
+        agent_id: request.agent_id.clone(),
+        launch_id: Some(launch.clone()),
+        name: handle,
+        name_explicit: source.name_explicit,
+        launch: params,
+        run_id: request.run_id.clone(),
+        prompt: request.prompt.clone(),
+    })
 }
 
 fn validate_agent_launch_name(name: &str) -> Result<()> {

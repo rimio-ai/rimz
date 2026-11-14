@@ -422,7 +422,8 @@ fn owned_expired(
 }
 
 /// Remove each per-handle directory under `dir` by [`owned_expired`] against
-/// the newest row holding that handle.
+/// the newest row holding that handle that a swap has not replaced, so a late
+/// end of a replaced session leaves its agent's directory alone.
 fn collect_units(
     dir: &Path,
     agents: &crate::store::snapshot::AgentRollup,
@@ -430,6 +431,7 @@ fn collect_units(
     report: &mut GcReport,
 ) -> Result<()> {
     let now = SystemTime::now();
+    let holders = crate::agents::state::LaunchHolders::new(agents.iter());
     for entry in read_dir_if_exists(dir)?.into_iter().flatten() {
         let entry = entry.map_err(|source| GcErr::ReadDir {
             path: dir.to_owned(),
@@ -447,6 +449,7 @@ fn collect_units(
         let agent = agents
             .iter()
             .filter(|agent| agent.name.as_deref().is_some_and(|handle| name == handle))
+            .filter(|agent| !holders.replaced(agent))
             .max_by_key(|agent| agent.last_seen);
         let mut modified = metadata.modified().map_err(|source| GcErr::Io {
             path: path.clone(),

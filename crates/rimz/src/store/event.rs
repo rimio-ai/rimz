@@ -255,6 +255,11 @@ pub struct AgentAttachPayload {
     /// wrappers that predate launch identity leave this unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_id: Option<AgentSessionId>,
+    /// The swap epoch the attaching wrapper runs under. An attach below the
+    /// row's epoch is stale and folds to nothing; older events leave it unset
+    /// and keep the row's epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<u32>,
     /// The account this launch runs under, `default` spelled out. Events
     /// written before the field leave it unset, and the stamp stays.
     #[serde(default, skip_serializing_if = "Option::is_none")]

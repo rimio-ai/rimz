@@ -118,6 +118,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         agent_id: AgentSessionId::from("launch_follow_up"),
         name: AgentLaunchName::Explicit("writer".to_owned()),
         launch: LaunchParams {
+            epoch: None,
             automation: None,
             checkout: None,
             add_dirs: Vec::new(),
@@ -1862,4 +1863,142 @@ fn agent_state(kind: &str, id: &str, name: Option<&str>) -> AgentState {
         kind_ordinal: Some(1),
         ..crate::testkit::agent_state(kind, id, now)
     }
+}
+
+#[test]
+fn swap_reservations_keep_the_agent_and_refuse_what_cannot_stand() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let store = Store::open(
+        StatePaths::under(id.clone(), dir.path()).unwrap(),
+        RuntimePaths::under(id, dir.path()).unwrap(),
+    )
+    .unwrap();
+    let scope = AgentLaunchScope {
+        session_name: "session".into(),
+        cwd: dir.path().into(),
+        branch: None,
+        description: None,
+    };
+    let pane = |raw| crate::ids::PaneId::parse(raw).unwrap();
+    let audit_row = |key: &str| {
+        store
+            .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id == key)
+            .unwrap_or_else(|| panic!("row {key}"))
+    };
+    let first = store
+        .begin_agent_launch_batch(
+            &[launch_request(
+                "launch_a",
+                AgentLaunchName::Explicit("coder".into()),
+            )],
+            scope.clone(),
+        )
+        .unwrap();
+    store
+        .bind_agent_launch(
+            first.single_identity().unwrap(),
+            "session",
+            dir.path(),
+            &pane("tmux:%1"),
+            None,
+        )
+        .unwrap();
+    let out_dir = store.inner.paths.out_reader_dir(Some("coder"));
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let source = audit_row("launch_a");
+
+    let swap = store
+        .begin_agent_swap(
+            &source,
+            &launch_request("launch_b", AgentLaunchName::Mint),
+            scope.clone(),
+        )
+        .unwrap();
+    let reserved = swap.single_identity().unwrap();
+    assert_eq!(reserved.agent_id, "launch_b");
+    assert_eq!(reserved.launch_id(), "launch_a");
+    assert_eq!(reserved.name, "coder");
+    assert!(reserved.name_explicit);
+    assert_eq!(reserved.launch.epoch, Some(1));
+    assert!(
+        out_dir.is_dir(),
+        "a same-agent swap keeps the handle's dirs"
+    );
+    assert_eq!(audit_row("launch_b").name.as_deref(), Some("coder"));
+
+    let before = store.read_events().unwrap().len();
+    let in_flight = store
+        .begin_agent_swap(
+            &source,
+            &launch_request("launch_c", AgentLaunchName::Mint),
+            scope.clone(),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&in_flight, StoreErr::SwapInFlight { agent } if agent == "coder"),
+        "{in_flight}"
+    );
+    assert_eq!(store.read_events().unwrap().len(), before);
+
+    assert_eq!(
+        store.abort_agent_swap(reserved, &scope).unwrap(),
+        SwapAbort::Aborted
+    );
+    let late = store
+        .bind_agent_launch(reserved, "session", dir.path(), &pane("tmux:%2"), None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        late.contains("restart or molt launch was cancelled or failed before binding"),
+        "{late}"
+    );
+
+    let swap = store
+        .begin_agent_swap(
+            &source,
+            &launch_request("launch_c", AgentLaunchName::Mint),
+            scope.clone(),
+        )
+        .unwrap();
+    let reserved = swap.single_identity().unwrap();
+    assert_eq!(
+        reserved.launch.epoch,
+        Some(2),
+        "a failed reservation still counts"
+    );
+    store
+        .bind_agent_launch(reserved, "session", dir.path(), &pane("tmux:%3"), None)
+        .unwrap();
+    let before = store.read_events().unwrap().len();
+    assert_eq!(
+        store.abort_agent_swap(reserved, &scope).unwrap(),
+        SwapAbort::Bound
+    );
+    assert_eq!(store.read_events().unwrap().len(), before);
+
+    let replaced = store
+        .begin_agent_swap(
+            &source,
+            &launch_request("launch_d", AgentLaunchName::Mint),
+            scope.clone(),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&replaced, StoreErr::SwapNotHolder { agent } if agent == "coder"),
+        "{replaced}"
+    );
+    let holder = audit_row("launch_c");
+    let next = store
+        .begin_agent_swap(
+            &holder,
+            &launch_request("launch_d", AgentLaunchName::Mint),
+            scope,
+        )
+        .unwrap();
+    assert_eq!(next.single_identity().unwrap().launch.epoch, Some(3));
 }

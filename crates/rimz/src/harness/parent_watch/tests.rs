@@ -297,6 +297,7 @@ fn attach_adds_the_parent_member_before_its_end_counts() {
         isolation: None,
         effective_isolation: None,
         launch_id: Some("L".into()),
+        epoch: None,
         login: None,
         pane_id: pane.clone(),
         pane_pid: None,
@@ -533,6 +534,7 @@ fn an_attach_does_not_revive_an_ended_parent_member() {
             "room",
             &AgentKind::new_unchecked("codex"),
             AgentAttachPayload {
+                epoch: None,
                 agent_id: "OLD".into(),
                 launch_id: Some("L".into()),
                 pane_id: PaneId::parse("tmux:%77").unwrap(),

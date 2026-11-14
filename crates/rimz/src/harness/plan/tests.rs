@@ -4114,6 +4114,7 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
         ],
     };
     let identity = |kind: &str, name: &str| AgentLaunchIdentity {
+        launch_id: None,
         kind: AgentKind::new_unchecked(kind),
         agent_id: AgentSessionId::from(format!("launch_{name}")),
         name: name.to_owned(),
@@ -4360,6 +4361,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     resumed.channel = None;
     let seeds = vec![CohortSeed::Resume(Box::new(resumed)), CohortSeed::Fresh];
     let fresh = AgentLaunchIdentity {
+        launch_id: None,
         kind: AgentKind::new_unchecked("codex"),
         agent_id: AgentSessionId::from("launch_fresh"),
         name: "bright-river".to_owned(),
@@ -4498,6 +4500,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         launch: LaunchParams::default(),
     });
     let launch = AgentLaunchIdentity {
+        launch_id: None,
         kind: AgentKind::new_unchecked("claude"),
         agent_id: AgentSessionId::from("launch_0123456789abcdef0123456789abcdef"),
         name: "swift-otter".to_owned(),

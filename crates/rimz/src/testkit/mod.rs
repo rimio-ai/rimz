@@ -737,6 +737,7 @@ pub mod fleet {
             ask_queue: None,
             agent_id: Some(AgentSessionId::from(format!("agent-{slot}"))),
             agent_name: None,
+            launch_id: None,
             launch: LaunchParams::default(),
             signal: LifecycleSignal::Registered,
             agent_pid: None,

@@ -732,6 +732,7 @@ fn resume_command_replays_launch_identity() {
         launch_group: Some("launch_group_1".to_owned()),
         launch_ordinal: Some(2),
         isolation: Some(crate::config::Isolation::Host),
+        epoch: 3,
         ..agent("claude", "a1", "/code/qe", 1)
     };
     let argv = crate::harness::plan::resume_command(
@@ -773,6 +774,11 @@ fn resume_command_replays_launch_identity() {
     assert_eq!(
         request.identity.params.isolation,
         Some(crate::config::Isolation::Host)
+    );
+    assert_eq!(
+        request.identity.params.epoch,
+        Some(3),
+        "a resume outside the swap routine keeps its row's epoch"
     );
 }
 

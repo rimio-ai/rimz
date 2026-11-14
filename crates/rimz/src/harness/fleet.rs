@@ -40,10 +40,13 @@ struct SelectedRuns<'a> {
     peers: Vec<(usize, &'a RunRecord)>,
 }
 
+/// `agents::state::launch_members` as hash keys: same-kind rows answering to
+/// an id, plus rows of any kind whose current launch is it or is the launch
+/// of the same-kind session it names.
 #[derive(Default)]
 pub(super) struct LaunchRows {
     answers: HashMap<AgentKey, Vec<usize>>,
-    launches: HashMap<AgentKey, Vec<usize>>,
+    launches: HashMap<AgentSessionId, Vec<usize>>,
     aliases: HashMap<AgentKey, Option<AgentSessionId>>,
 }
 
@@ -66,10 +69,7 @@ impl LaunchRows {
                     .push(index);
             }
             if let Some(id) = &agent.launch_id {
-                rows.launches
-                    .entry((agent.kind.clone(), id.clone()))
-                    .or_default()
-                    .push(index);
+                rows.launches.entry(id.clone()).or_default().push(index);
             }
         }
         rows
@@ -78,13 +78,16 @@ impl LaunchRows {
     pub(super) fn members(&self, kind: &AgentKind, id: &AgentSessionId) -> Vec<usize> {
         let key = (kind.clone(), id.clone());
         let mut members = self.answers.get(&key).cloned().unwrap_or_default();
+        if let Some(launch) = self.launches.get(id) {
+            members.extend(launch);
+        }
         if let Some(Some(alias)) = self.aliases.get(&key)
-            && let Some(siblings) = self.launches.get(&(kind.clone(), alias.clone()))
+            && let Some(siblings) = self.launches.get(alias)
         {
             members.extend(siblings);
-            members.sort_unstable();
-            members.dedup();
         }
+        members.sort_unstable();
+        members.dedup();
         members
     }
 }
@@ -101,6 +104,7 @@ impl<'a> FleetRunIndex<'a> {
     pub(super) fn new(agents: &'a [AgentState], runs: &'a [RunRecord]) -> Self {
         let launch_rows = LaunchRows::new(agents);
         let mut children: HashMap<AgentKey, Vec<usize>> = HashMap::new();
+        let mut children_by_id: HashMap<&AgentSessionId, Vec<usize>> = HashMap::new();
         let mut launchers: HashMap<AgentKey, Vec<usize>> = HashMap::new();
         for (index, agent) in agents.iter().enumerate() {
             if !agent.is_team_seat()
@@ -110,6 +114,7 @@ impl<'a> FleetRunIndex<'a> {
                     .entry((kind.clone(), id.clone()))
                     .or_default()
                     .push(index);
+                children_by_id.entry(id).or_default().push(index);
             }
             let ids: HashSet<_> = agent.identity_ids().collect();
             for id in ids {
@@ -139,9 +144,17 @@ impl<'a> FleetRunIndex<'a> {
                             keys.insert((member.kind.clone(), id.clone()));
                         }
                     }
+                    // `AgentState::launcher_is` matches a current launch id
+                    // across kinds.
                     let mut members: Vec<_> = keys
                         .iter()
                         .filter_map(|key| children.get(key))
+                        .chain(
+                            group
+                                .iter()
+                                .filter_map(|index| agents[*index].launch_id.as_ref())
+                                .filter_map(|id| children_by_id.get(id)),
+                        )
                         .flatten()
                         .copied()
                         .collect();
