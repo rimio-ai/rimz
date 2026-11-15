@@ -30,15 +30,10 @@ pub(super) fn render(
     history: bool,
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
-    let mut journal = records::journal(&run.paths)?;
-    let refound = moved_home(run)?;
-    let run = match &refound {
-        Some(refound) => {
-            journal = records::journal(&refound.paths)?;
-            refound
-        }
-        None => run,
-    };
+    let journal = records::journal(&run.paths)?;
+    if let Some(finished) = moved_to_finished(run)? {
+        return render_other(&finished, json, history);
+    }
     let spec = workflow::load(&run.record.definition_dir(&run.paths));
     let notes = run
         .record
@@ -182,20 +177,21 @@ fn waits_on_definition(out: &mut impl Write, dir: &std::path::Path, error: &str)
     Ok(())
 }
 
-/// The run in its finished home when the live home its record was read from moved there before
-/// its journal was read, so the view takes record and journal from one home.
-fn moved_home(run: &resolve::Located) -> Result<Option<resolve::Located>> {
-    let finished = run.state.finished_workflow(&run.record.id);
-    if run.paths.home.exists() || run.paths.home == finished.home {
+/// The run as a finished run when the live home its record was read from moved to the finished
+/// directory before its journal was read: a moved home is a finished run, so `show` prints it as
+/// it prints a finished run found by id, whatever its record now classifies as.
+fn moved_to_finished(run: &resolve::Located) -> Result<Option<resolve::Other>> {
+    if run.paths.home.exists() {
         return Ok(None);
     }
-    let records::RunClass::Current(record) = records::classify(&finished)? else {
-        return Ok(None);
-    };
-    Ok(Some(resolve::Located {
+    let id = &run.record.id;
+    let found = records::find(&run.state, id)?.with_context(|| {
+        format!("workflow run {id} is gone: neither its live nor its finished home holds it")
+    })?;
+    Ok(Some(resolve::Other {
         state: run.state.clone(),
-        paths: finished,
-        record: *record,
+        id: id.clone(),
+        found,
     }))
 }
 
@@ -745,6 +741,54 @@ fn takeover(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_whose_home_moved_after_it_was_located_shows_as_its_id_finds_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Timestamp::now();
+        let state = paths::StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
+        let record: RunRecord = serde_json::from_value(serde_json::json!({
+            "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
+            "spec_dir":dir.path(),"project_root":dir.path(),
+            "scope":{"kind":"worktree","path":dir.path()},"state":"done","node":"@done",
+            "created_at":now,"entered_at":now,"terminal_at":now,"visits":{},"visit_grant":0,
+            "deadline_fired":false,"next_seq":1,
+        }))
+        .unwrap();
+        let id = record.id.clone();
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        records::initialize(&state, &record, &guard).unwrap();
+        let located = resolve::Located {
+            state: state.clone(),
+            paths: state.workflow(&id),
+            record,
+        };
+        assert!(moved_to_finished(&located).unwrap().is_none());
+
+        let moved = records::finish(&state, &id, Some(b"review done\n"), &guard).unwrap();
+        assert_eq!(moved, records::Finished::Moved);
+        let other = moved_to_finished(&located).unwrap().expect("moved home");
+        let by_id = records::find(&state, &id).unwrap().unwrap();
+        assert!(other.found.finished && by_id.finished);
+        assert_eq!(other.found.paths.home, by_id.paths.home);
+        assert_eq!(other.found.paths.home, state.finished_workflow(&id).home);
+        assert_eq!(other.found.class, by_id.class);
+        assert!(matches!(other.found.class, records::RunClass::Current(_)));
+
+        // A moved record that does not decode still shows as a finished run.
+        std::fs::write(&other.found.paths.record, "[]").unwrap();
+        let other = moved_to_finished(&located).unwrap().expect("moved home");
+        assert!(other.found.finished);
+        assert_eq!(other.found.class, records::RunClass::NotObject);
+
+        // A home in neither directory is an error, not the live shape.
+        std::fs::remove_dir_all(&other.found.paths.home).unwrap();
+        let error = moved_to_finished(&located).err().expect("gone run");
+        assert_eq!(
+            error.to_string(),
+            format!("workflow run {id} is gone: neither its live nor its finished home holds it")
+        );
+    }
 
     #[test]
     fn now_line_uses_the_open_case_hold_instead_of_restarting_it() {
