@@ -244,7 +244,7 @@ An agent step's launch settings apply to each fresh launch as the matching `rimz
 | `system-prompt-file` | A file confined to the definition directory, refused at `agent.<step>.system-prompt-file` otherwise. |
 | `worktree` | A worktree name the launch creates or reuses, empty for a generated name. The agent starts there instead of the run's checkout. |
 
-A restart that resumes a session keeps its account, system prompt, and checkout, and applies the rest.
+A restart that resumes a session ignores `account`, `system-prompt-file`, and `worktree`, and applies the rest. It runs in the run's checkout, on the room's current account for the agent's kind when that account shares the session's history, and refuses otherwise.
 
 #### How an attempt ends
 
@@ -612,7 +612,7 @@ An edge's `source` is `explicit`, `on.failed` (the node's catch-all), `workflow.
 | Mark | Meaning |
 | --- | --- |
 | `never: no timeout` | The agent step sets no `timeout`. |
-| `never: no max-visits` | The step sets no `max-visits`, and no workflow limit bounds it. |
+| `never: no max-visits` | The step sets no `max-visits`. |
 | `only with a deadline` | No deadline is sealed: a run needs a deadline grant. |
 
 Rows follow the graph from `start`, with a returning step immediately below the earlier check that sends it. Unreachable nodes come last in name order. A check's edges follow case order without repeats, then `else`, then other explicit outcomes in name order. A step's edges start with `then`, then `asked`. One edge per cause the node's kind raises follows, in the order of the [cause table](#failures), each with the target its chain resolves to. A session's `rest-check` edges come last, in list order. Command rows list `then`, `died`, `timeout`, `visits`, and `deadline`. Message rows list `then`, `undelivered`, `visits`, and `deadline`. An agent step's `capacity` edge always fires: a start wider than a machine cap raises `capacity` on any run, a `--skip-capacity` run included. A sleep's edges are explicit `then → <then>`, default `sleeping → @wait`, default `unknown → @wait` only with `when`, and `deadline`, in that order, with no timeout edge.
