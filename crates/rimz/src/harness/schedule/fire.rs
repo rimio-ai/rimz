@@ -18,6 +18,7 @@ use super::{
     arming::{self, ArmState, Arming},
     catalog::{LoadedTask, TaskCatalog},
     run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult},
+    task_record::{self, TaskRecords},
 };
 use crate::RuntimePaths;
 use crate::disk::atomic::write_temp_then_rename_cache;
@@ -69,12 +70,39 @@ fn tick_backlog_with(
             return;
         }
     };
-    for (name, waiting) in record.tasks {
-        if !waiting.triggers.is_empty()
-            && let Err(error) = spawn(&name)
-        {
+    let records = match task_record::load() {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::warn!(%error, "loop backlog tick held: the task record is unreadable");
+            return;
+        }
+    };
+    for (key, waiting) in record.tasks {
+        if waiting.triggers.is_empty() {
+            continue;
+        }
+        let Some(name) = backlog_task_name(&records, &key) else {
+            tracing::debug!(
+                task = key,
+                "loop backlog tick skipped a retired task's triggers"
+            );
+            continue;
+        };
+        if let Err(error) = spawn(&name) {
             tracing::warn!(task = name, %error, "loop backlog tick could not start a drain");
         }
+    }
+}
+
+/// The task name a backlog key stands for: the name its live record is bound to for a task id,
+/// the key itself for an older RimZ's name key, and `None` for a task no longer live.
+fn backlog_task_name(records: &TaskRecords, key: &str) -> Option<String> {
+    match key.parse::<crate::ids::TaskId>() {
+        Ok(id) => records
+            .get(&id)
+            .filter(|record| record.is_live())
+            .map(|record| record.binding.name.clone()),
+        Err(_) => Some(key.to_owned()),
     }
 }
 
@@ -89,39 +117,65 @@ pub(super) fn scope_key(name: &str, checkout: &Path) -> String {
     serde_json::to_string(&(name, checkout.to_string_lossy())).expect("string tuple serializes")
 }
 
+/// The key a task's runtime stamps (`loop-fire.json`, `loop-when.json`) sit under: its task id
+/// once its record is bound, else its name, joined with the firing checkout of an
+/// `each_worktree` fire.
+pub(super) fn stamp_key(
+    records: &TaskRecords,
+    task: &LoadedTask,
+    name: &str,
+    checkout: Option<&Path>,
+) -> String {
+    let base = records
+        .live(&task.key(name))
+        .map_or_else(|| name.to_owned(), |(id, _)| id.to_string());
+    checkout.map_or_else(|| base.clone(), |checkout| scope_key(&base, checkout))
+}
+
+/// A task's stamp under its [`stamp_key`], else under its name: what an older RimZ, or this one
+/// before the task was bound, wrote.
+pub(super) fn stamped<'a, T>(
+    stamps: &'a BTreeMap<String, T>,
+    records: &TaskRecords,
+    task: &LoadedTask,
+    name: &str,
+    checkout: Option<&Path>,
+) -> Option<&'a T> {
+    stamps
+        .get(&stamp_key(records, task, name, checkout))
+        .or_else(|| match checkout {
+            Some(checkout) => stamps.get(&scope_key(name, checkout)),
+            None => stamps.get(name),
+        })
+}
+
 fn scoped_tasks(
     tasks: &BTreeMap<String, LoadedTask>,
-    workflows: &super::launch_ledger::WorkflowLedger,
+    records: &TaskRecords,
     owned: &[PathBuf],
 ) -> BTreeMap<String, ScopedTask> {
     let mut scoped = BTreeMap::new();
     for (name, task) in tasks {
         let entry = task.entry();
-        if !entry.each_worktree {
-            if super::launch_ledger::launched(entry, name, &entry.run_dir(), workflows).is_some() {
+        let key = task.key(name);
+        let checkouts = if entry.each_worktree {
+            owned
+                .iter()
+                .map(|checkout| Some(crate::utils::path::normalize_path_lexical(checkout)))
+                .collect()
+        } else {
+            vec![None]
+        };
+        for checkout in checkouts {
+            let launched_in = checkout.clone().unwrap_or_else(|| entry.run_dir());
+            if records.launched(entry, &key, &launched_in).is_some() {
                 continue;
             }
             scoped.insert(
-                name.clone(),
+                stamp_key(records, task, name, checkout.as_deref()),
                 ScopedTask {
                     name: name.clone(),
-                    checkout: None,
-                    task: task.clone(),
-                },
-            );
-            continue;
-        }
-        for checkout in owned {
-            let checkout = crate::utils::path::normalize_path_lexical(checkout);
-            if super::launch_ledger::launched(entry, name, &checkout, workflows).is_some() {
-                continue;
-            }
-            let key = scope_key(name, &checkout);
-            scoped.insert(
-                key,
-                ScopedTask {
-                    name: name.clone(),
-                    checkout: Some(checkout),
+                    checkout,
                     task: task.clone(),
                 },
             );
@@ -330,25 +384,18 @@ fn spawn_workflow_advance(
 fn fire_tasks(
     runtime: &RuntimePaths,
     project_root: Option<&Path>,
-    mut tasks: BTreeMap<String, LoadedTask>,
+    tasks: BTreeMap<String, LoadedTask>,
     now: &Zoned,
     host: LoopRunHost,
     ci_source: Option<&CiSource>,
 ) -> Vec<String> {
     let path = state_path(runtime);
-    let state = read_state(&path);
-    let mut arming = arming::load();
-    let workflows = if tasks.values().any(|task| task.entry().dedupes_checkout()) {
-        match super::launch_ledger::load_workflows_room(runtime, project_root) {
-            Ok(ledger) => ledger,
-            Err(error) => {
-                tracing::warn!(%error, "workflow loop ledger unavailable");
-                tasks.retain(|_, task| !task.entry().dedupes_checkout());
-                Default::default()
-            }
+    let records = match task_record::load() {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::warn!(%error, "loop tasks held: the task record is unreadable");
+            return Vec::new();
         }
-    } else {
-        Default::default()
     };
     let owned = tasks
         .values()
@@ -367,17 +414,30 @@ fn fire_tasks(
         .into_iter()
         .map(|worktree| worktree.marker.worktree_path)
         .collect::<Vec<_>>();
-    let scoped = scoped_tasks(&tasks, &workflows, &owned);
+    let scoped = scoped_tasks(&tasks, &records, &owned);
+    let stamps = read_state(&path);
+    let stored_when = last_when_states(runtime);
+    let mut state = BTreeMap::new();
+    let mut when_states = BTreeMap::new();
+    let mut arming = BTreeMap::new();
     for (key, scope) in &scoped {
-        if let Some(record) = arming.get(&scope.task.key(&scope.name)).copied() {
-            arming.insert(scope.task.key(key), record);
+        let (task, name, checkout) = (&scope.task, &scope.name, scope.checkout.as_deref());
+        if let Some(stamp) = stamped(&stamps, &records, task, name, checkout) {
+            state.insert(key.clone(), *stamp);
+        }
+        if let Some(when) = stamped(&stored_when, &records, task, name, checkout) {
+            when_states.insert(key.clone(), when.clone());
+        }
+        if let Some((_, record)) = records.live(&task.key(name))
+            && let Some(entry) = record.arming
+        {
+            arming.insert(task.key(key), entry);
         }
     }
     let tasks: BTreeMap<_, _> = scoped
         .iter()
         .map(|(key, scope)| (key.clone(), scope.task.clone()))
         .collect();
-    let when_states = last_when_states(runtime);
     let windows = when::WindowReadings::new(Some(runtime), now.timestamp());
     let lost_runners: BTreeSet<String> = tasks
         .iter()
@@ -391,7 +451,7 @@ fn fire_tasks(
                         task.source(),
                         now.timestamp(),
                     ) == ArmState::Live
-                    && runner_lost(runtime, name, task, *stamp)
+                    && runner_lost(runtime, &records, &scoped[*name].name, task, *stamp)
             })
         })
         .map(|(name, _)| name.clone())
@@ -448,7 +508,8 @@ fn fire_tasks(
         &verdicts,
         &lost_runners,
     );
-    if next_state != state
+    // Against the stored maps, so a dropped or respelled stamp is written too.
+    if next_state != stamps
         && let Err(err) = write_temp_then_rename_cache(&path, &next_state)
     {
         tracing::warn!(
@@ -459,7 +520,7 @@ fn fire_tasks(
         );
         return Vec::new();
     }
-    if next_when != when_states
+    if next_when != stored_when
         && let Err(err) = write_temp_then_rename_cache(&when_state_path(runtime), &next_when)
     {
         tracing::warn!(workspace = %runtime.workspace_id, error = %err, "sidebar: failed to record loop condition state");
@@ -512,6 +573,8 @@ fn fire_tasks(
                 }
             }
             Action::WatchLost => {
+                let key = name;
+                let name = scoped[&key].name.clone();
                 let signal_name = match format!("wait.{name}").parse() {
                     Ok(signal_name) => signal_name,
                     Err(err) => {
@@ -524,9 +587,9 @@ fn fire_tasks(
                     }
                 };
                 let watch = match lost_watch_outcome(
-                    &tasks[&name],
+                    &tasks[&key],
                     &name,
-                    state[&name],
+                    state[&key],
                     now.timestamp(),
                 ) {
                     Ok(outcome) => outcome,
@@ -543,7 +606,7 @@ fn fire_tasks(
                 };
                 if spawn_loop_run(
                     runtime,
-                    &tasks[&name],
+                    &tasks[&key],
                     project_root,
                     &name,
                     Some((&signal, Timestamp::now())),
@@ -798,11 +861,18 @@ fn latched(task: &LoadedTask, state: Option<&WhenState>) -> bool {
 /// holds the task's run lock and no attempt was recorded since. Neither a
 /// `fire-at` row nor a retried one-shot condition fans out, so its runner locks
 /// under the bare name.
-fn runner_lost(runtime: &RuntimePaths, name: &str, task: &LoadedTask, stamp: Timestamp) -> bool {
+fn runner_lost(
+    runtime: &RuntimePaths,
+    records: &TaskRecords,
+    name: &str,
+    task: &LoadedTask,
+    stamp: Timestamp,
+) -> bool {
     let root = task.entry().resolved_root();
-    super::run_lock::held(runtime, name).is_ok_and(|held| !held)
+    let ids = records.ids_named(name);
+    super::run_lock::held(runtime, name, &ids).is_ok_and(|held| !held)
         && !attempt_recorded_since((root.clone(), name.to_owned(), stamp), || {
-            run_log::has_recorded_attempt_since(&logs_dir(), &task.key(name), name, &root, stamp)
+            run_log::has_recorded_attempt_since(&logs_dir(), &task.key(name), &root, stamp)
         })
 }
 
@@ -954,12 +1024,11 @@ pub(super) fn spawn_loop_run(
                 && !run_log::has_scheduled_row_since(
                     &logs_dir(),
                     &task.key(name),
-                    name,
                     &task.entry().resolved_root(),
                     checkout,
                     before,
                 )
-                && !recorded_launch(runtime, project_root, name, task.entry(), checkout)
+                && !recorded_launch(task, name, checkout)
             {
                 return record_start_failed(
                     task,
@@ -985,19 +1054,16 @@ pub(super) fn spawn_loop_run(
     LaunchOutcome::Started
 }
 
-fn recorded_launch(
-    runtime: &RuntimePaths,
-    project_root: Option<&Path>,
-    name: &str,
-    entry: &crate::config::TaskEntry,
-    checkout: Option<&Path>,
-) -> bool {
+fn recorded_launch(task: &LoadedTask, name: &str, checkout: Option<&Path>) -> bool {
+    let entry = task.entry();
     let checkout = checkout
         .map(Path::to_path_buf)
         .unwrap_or_else(|| entry.run_dir());
     entry.dedupes_checkout()
-        && super::launch_ledger::load_workflows_room(runtime, project_root).is_ok_and(|ledger| {
-            super::launch_ledger::launched(entry, name, &checkout, &ledger).is_some()
+        && task_record::load().is_ok_and(|records| {
+            records
+                .launched(entry, &task.key(name), &checkout)
+                .is_some()
         })
 }
 

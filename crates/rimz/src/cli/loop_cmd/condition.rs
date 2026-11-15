@@ -70,8 +70,9 @@ pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
     Ok(reading.verdict.truth == Some(true))
 }
 
+/// Task `name`'s timing, its record bound to `key`, with a condition trigger's reading folded in.
 pub(super) fn observe(
-    name: &str,
+    (key, name): (&str, &str),
     entry: &TaskEntry,
     timing: schedule::TaskTiming,
     now: Timestamp,
@@ -86,7 +87,7 @@ pub(super) fn observe(
     let runtime = runtime_for_root(&root);
     let open = runtime.as_ref().is_some_and(fresh_sidebar_present);
     schedule::attention::RoomReadings::new(runtime.as_ref(), open, Timestamp::now()).observe(
-        name,
+        (key, name),
         entry,
         &entry.run_dir(),
         timing,

@@ -6,7 +6,8 @@ use std::time::Duration;
 use anyhow::Result;
 use jiff::Timestamp;
 
-use super::{ParsedTrigger, Trigger, catalog::LoadedTask, fire, launch_ledger};
+use super::task_record::TaskRecords;
+use super::{ParsedTrigger, Trigger, catalog::LoadedTask, fire};
 use crate::RuntimePaths;
 use crate::harness::when::{self, CiSource, Verdict, WindowReadings};
 
@@ -19,8 +20,8 @@ pub struct CheckoutCondition {
 
 #[derive(Clone, Debug)]
 pub enum CheckoutState {
+    /// A fire holds the checkout but has published no run.
     Launched {
-        leader: String,
         at: Timestamp,
     },
     Workflow {
@@ -48,7 +49,7 @@ pub fn inspect(
     name: &str,
     task: &LoadedTask,
     runtime: &RuntimePaths,
-    workflows: &launch_ledger::WorkflowLedger,
+    records: &TaskRecords,
     ci_source: Option<&CiSource>,
     now: Timestamp,
 ) -> Result<Vec<CheckoutCondition>> {
@@ -67,19 +68,15 @@ pub fn inspect(
     let mut rows = Vec::new();
     for worktree in crate::worktree::discover_owned(&root)? {
         let checkout = crate::utils::path::normalize_path_lexical(&worktree.marker.worktree_path);
-        let state = match launch_ledger::launched(entry, name, &checkout, workflows) {
+        let state = match records.launched(entry, &task.key(name), &checkout) {
             Some(launch) => match &launch.run {
                 Some(run) => CheckoutState::Workflow {
                     run: run.clone(),
                     at: launch.at,
                 },
-                None => CheckoutState::Launched {
-                    leader: launch.leader.clone().unwrap_or_default(),
-                    at: launch.at,
-                },
+                None => CheckoutState::Launched { at: launch.at },
             },
             None => {
-                let key = fire::scope_key(name, &checkout);
                 let verdict = when::evaluate(
                     expr,
                     &checkout,
@@ -92,12 +89,11 @@ pub fn inspect(
                     expr,
                     &checkout,
                     ci_source,
-                    stamps.get(&key).copied(),
+                    fire::stamped(&stamps, records, task, name, Some(&checkout)).copied(),
                     Some(now),
                     true,
                 );
-                let clock = clocks
-                    .get(&key)
+                let clock = fire::stamped(&clocks, records, task, name, Some(&checkout))
                     .filter(|clock| clock.matches_condition(expr, *hold, &entry.run_dir()));
                 let since = clock.map_or(now, |clock| clock.since);
                 if verdict.truth == Some(false) {

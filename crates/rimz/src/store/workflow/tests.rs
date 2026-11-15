@@ -814,6 +814,14 @@ fn durable_record_round_trip_and_json_shape() {
     next.next_seq = 3;
     write(&paths, &next, &guard).unwrap();
     assert_eq!(load(&paths).unwrap().next_seq, 3);
+    // Set, so the snapshot pins the key a task's fire writes.
+    let mut record = record;
+    record.loop_fire = Some(
+        crate::ids::FireId::parse(
+            "fire_0190b8172c0070008000000000000002_0190b8172c0070008000000000000003",
+        )
+        .unwrap(),
+    );
     let value = serde_json::to_value(record).unwrap();
     insta::assert_json_snapshot!("record", value);
 }

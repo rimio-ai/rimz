@@ -635,7 +635,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         "schedule/fire.rs",
         "schedule/run_lock.rs",
         "schedule/probe.rs",
-        "schedule/launch_ledger.rs",
+        "schedule/task_record.rs",
         "schedule/backlog.rs",
         "schedule/pending.rs",
         "schedule.rs",

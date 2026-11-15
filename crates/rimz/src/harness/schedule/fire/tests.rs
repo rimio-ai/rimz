@@ -1,8 +1,11 @@
 use super::super::catalog::TaskSource;
+use super::super::task_record::{FireMark, TaskRecord, TaskRecords};
 use super::super::tests::{seconds_before, zdt};
 use super::*;
 
 use crate::config::TaskEntry;
+use crate::ids::{FireId, TaskId};
+use crate::store::workflow::ScopeKind;
 
 mod holds;
 
@@ -244,49 +247,44 @@ fn worktree_scopes_normalize_marker_components() {
     );
 }
 
-/// A launch the resident path remembered before every fire became a workflow run.
-fn resident(at: Timestamp) -> super::super::launch_ledger::WorkflowLaunchRecord {
-    super::super::launch_ledger::WorkflowLaunchRecord {
-        at,
-        run: None,
-        scope: crate::store::workflow::ScopeKind::Worktree,
-        leader: Some("otter".into()),
-        destination: None,
-    }
+/// The record set holding `checkout` for `task`'s live record (bound as `NAME`) with one open
+/// fire mark of `scope`.
+fn holding(task: &LoadedTask, checkout: &Path, scope: ScopeKind) -> TaskRecords {
+    let id = TaskId::new();
+    let mut record = TaskRecord::new(task.binding(NAME));
+    record.marks.insert(
+        checkout.to_owned(),
+        FireMark {
+            fire: FireId::new(&id),
+            at: Timestamp::now(),
+            booked_by: Vec::new(),
+            once: true,
+            run: None,
+            scope,
+            result: None,
+        },
+    );
+    let mut records = TaskRecords::empty();
+    records.tasks.insert(id, record);
+    records
 }
 
 #[test]
-fn resident_memory_holds_a_checkout_only_for_a_remembering_task() {
+fn an_open_fire_holds_a_checkout_only_for_a_remembering_task() {
     let (_root, tasks, owned) = worktree_tasks(None);
-    let now = Timestamp::from_second(1000).unwrap();
-    let mut workflows = super::super::launch_ledger::WorkflowLedger::default();
-    workflows.tasks.insert(
-        NAME.into(),
-        BTreeMap::from([(owned[0].clone(), resident(now))]),
-    );
+    let records = holding(&tasks[NAME], &owned[0], ScopeKind::Worktree);
     let mut entry = tasks[NAME].entry().clone();
-    let stay = scoped_tasks(&one(loaded(entry.clone())), &workflows, &owned).len();
+    let stay = scoped_tasks(&one(loaded(entry.clone())), &records, &owned).len();
     entry.once_per_checkout = None;
     entry.when = None;
     entry.every = Some("1h".into());
-    let scheduled = scoped_tasks(&one(loaded(entry)), &workflows, &owned).len();
+    let scheduled = scoped_tasks(&one(loaded(entry)), &records, &owned).len();
     assert_eq!((stay, scheduled), (1, 2));
 }
 
 #[test]
-fn condition_workflow_scopes_use_only_workflow_memory_and_project_entries_cover_all() {
-    use super::super::launch_ledger::{WorkflowLaunchRecord, WorkflowLedger};
-    use crate::store::workflow::ScopeKind;
+fn condition_workflow_scopes_use_only_fire_marks_and_project_marks_cover_all() {
     let (root, tasks, owned) = worktree_tasks(None);
-    let now = Timestamp::now();
-    let mut workflows = WorkflowLedger::default();
-    let record = WorkflowLaunchRecord {
-        at: now,
-        run: Some(crate::ids::WorkflowRunId::new()),
-        scope: ScopeKind::Worktree,
-        leader: None,
-        destination: None,
-    };
     let mut results = Vec::new();
     for (remember, condition, each_worktree, project) in [
         (true, true, true, false),
@@ -307,45 +305,40 @@ fn condition_workflow_scopes_use_only_workflow_memory_and_project_entries_cover_
         } else {
             owned[0].clone()
         };
-        workflows.tasks.insert(
-            NAME.into(),
-            BTreeMap::from([(
-                key,
-                WorkflowLaunchRecord {
-                    scope: if project {
-                        ScopeKind::Project
-                    } else {
-                        ScopeKind::Worktree
-                    },
-                    ..record.clone()
-                },
-            )]),
-        );
-        results.push(scoped_tasks(&one(loaded(entry)), &workflows, &owned).len());
+        let scope = if project {
+            ScopeKind::Project
+        } else {
+            ScopeKind::Worktree
+        };
+        let records = holding(&tasks[NAME], &key, scope);
+        results.push(scoped_tasks(&one(loaded(entry)), &records, &owned).len());
     }
-    // Only a `once-per-checkout` row reads launch memory, whatever its trigger.
+    // Only a `once-per-checkout` row reads its fire marks, whatever its trigger.
     assert_eq!(results, vec![1, 0, 0, 2, 1]);
 }
 
+/// An unreadable task record holds every task, remembering or not: the record carries every
+/// task's arming and strikes, so no fire is read against an empty one.
 #[test]
-fn malformed_launch_memory_suppresses_every_remembering_task() {
+fn an_unreadable_task_record_holds_every_task() {
+    if super::super::test_homes::reexec_with_private_homes(
+        "harness::schedule::fire::tests::an_unreadable_task_record_holds_every_task",
+    ) {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let paths = StatePaths::for_project_root(root.path()).unwrap();
     let runtime = RuntimePaths::for_state(&paths).unwrap();
     let now = zdt(2026, 6, 24, 8, 5, 0);
     let mut tasks: BTreeMap<String, LoadedTask> = BTreeMap::new();
-    for (name, stay, workflow) in [
-        ("workflow", false, true),
-        ("resident", true, false),
-        ("ordinary", false, false),
-    ] {
+    for (name, stay) in [("remembering", true), ("ordinary", false)] {
         tasks.insert(
             name.into(),
             loaded(TaskEntry {
                 root: root.path().to_owned(),
                 command: vec!["true".to_owned()],
                 timeout: Some("1m".to_owned()),
-                once_per_checkout: (stay || workflow).then_some(true),
+                once_per_checkout: stay.then_some(true),
                 when: Some(vec!["team.stage=Done".into()]),
                 ..Default::default()
             }),
@@ -357,17 +350,6 @@ fn malformed_launch_memory_suppresses_every_remembering_task() {
         "Stage: Done\n",
     )
     .unwrap();
-    std::fs::create_dir_all(
-        super::super::launch_ledger::workflow_path(&paths)
-            .parent()
-            .unwrap(),
-    )
-    .unwrap();
-    std::fs::write(
-        super::super::launch_ledger::workflow_path(&paths),
-        "malformed",
-    )
-    .unwrap();
     write_temp_then_rename_cache(
         &state_path(&runtime),
         &tasks
@@ -376,47 +358,22 @@ fn malformed_launch_memory_suppresses_every_remembering_task() {
             .collect::<BTreeMap<_, _>>(),
     )
     .unwrap();
-    assert_eq!(
+    let pass = || {
         fire_tasks(
             &runtime,
             Some(root.path()),
-            tasks,
+            tasks.clone(),
             &now,
             LoopRunHost::Detached,
-            None
-        ),
-        // A resident task records its runs there too, so it fails closed beside the workflow.
-        vec!["ordinary"]
-    );
-}
-
-#[test]
-fn workflow_launch_memory_accepts_a_silent_scope_handoff() {
-    let root = tempfile::tempdir().unwrap();
-    let paths = StatePaths::for_project_root(root.path()).unwrap();
-    let runtime = RuntimePaths::for_state(&paths).unwrap();
-    crate::disk::atomic::write_temp_then_rename(
-        &super::super::launch_ledger::workflow_path(&paths),
-        &serde_json::json!({"version":1,"tasks":{"land":{root.path().to_str().unwrap():{
-            "at":Timestamp::now(),"run":crate::ids::WorkflowRunId::new(),"scope":"project"
-        }}}}),
-    )
-    .unwrap();
-    let entry = TaskEntry {
-        root: root.path().to_owned(),
-        command: vec!["true".to_owned()],
-        timeout: Some("1m".to_owned()),
-        once_per_checkout: Some(true),
-        when: Some(vec!["pr=open".into()]),
-        ..Default::default()
+            None,
+        )
     };
-    assert!(recorded_launch(
-        &runtime,
-        Some(root.path()),
-        "land",
-        &entry,
-        Some(&root.path().join("later"))
-    ));
+    let record = super::super::task_record::path();
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(&record, "malformed").unwrap();
+    assert!(pass().is_empty());
+    std::fs::remove_file(&record).unwrap();
+    assert_eq!(pass(), vec!["ordinary", "remembering"]);
 }
 
 #[test]
@@ -428,7 +385,7 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
     }
     std::fs::write(owned[0].join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
     std::fs::write(owned[1].join(".rimz/team/blackboard.md"), "Stage: Review\n").unwrap();
-    let mut ledger = super::super::launch_ledger::WorkflowLedger::default();
+    let mut records = TaskRecords::empty();
     for stage in [None, Some("Review"), Some("Done")] {
         if let Some(stage) = stage {
             std::fs::write(
@@ -437,8 +394,8 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
             )
             .unwrap();
         }
-        let scoped = scoped_tasks(&tasks, &ledger, &owned);
-        assert_eq!(scoped.len(), if ledger.tasks.is_empty() { 2 } else { 1 });
+        let scoped = scoped_tasks(&tasks, &records, &owned);
+        assert_eq!(scoped.len(), if records.tasks.is_empty() { 2 } else { 1 });
         let planned: BTreeMap<_, _> = scoped
             .iter()
             .map(|(key, scoped)| (key.clone(), scoped.task.clone()))
@@ -479,14 +436,11 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
             &verdicts,
             &BTreeSet::new(),
         );
-        if ledger.tasks.is_empty() {
+        if records.tasks.is_empty() {
             assert_eq!(actions.len(), 1);
             assert_eq!(actions[0].1, Action::Fire);
             assert_eq!(scoped[&actions[0].0].checkout.as_ref(), Some(&owned[0]));
-            ledger.tasks.insert(
-                NAME.into(),
-                BTreeMap::from([(owned[0].clone(), resident(now.timestamp()))]),
-            );
+            records = holding(&tasks[NAME], &owned[0], ScopeKind::Worktree);
         } else {
             assert!(actions.is_empty());
             assert!(
@@ -928,7 +882,12 @@ fn condition_tick(
 }
 
 #[test]
-fn resident_conditions_retry_at_five_minutes_until_ledgered() {
+fn conditions_retry_at_five_minutes_until_a_fire_holds_the_checkout() {
+    if super::super::test_homes::reexec_with_private_homes(
+        "harness::schedule::fire::tests::conditions_retry_at_five_minutes_until_a_fire_holds_the_checkout",
+    ) {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let now = zdt(2026, 6, 24, 8, 0, 0);
     for stay in [true, false] {
@@ -964,7 +923,7 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
             (10, 0, stay),
         ] {
             let tick = zdt(2026, 6, 24, 8, minute, second);
-            // Named lost, a resident row keeps its own retry timing.
+            // Named lost, a row keeps its own retry timing.
             let (actions, next_stamps, next_states) = plan(
                 &tasks,
                 &stamps,
@@ -994,11 +953,8 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
         let paths = StatePaths::for_project_root(root.path()).unwrap();
         let runtime = RuntimePaths::for_state(&paths).unwrap();
         crate::disk::atomic::write_temp_then_rename(
-            &super::super::launch_ledger::resident_path(&paths),
-            &one(BTreeMap::from([(
-                root.path().to_owned(),
-                serde_json::json!({"at": now.timestamp(), "leader": "otter"}),
-            )])),
+            &super::super::task_record::path(),
+            &holding(&tasks[NAME], root.path(), ScopeKind::Worktree),
         )
         .unwrap();
         write_temp_then_rename_cache(&state_path(&runtime), &stamps).unwrap();
@@ -1425,6 +1381,12 @@ fn worktree_inspection_holds_a_forge_condition_probed_before_its_fire_stamp() {
 
 #[test]
 fn a_task_fired_on_a_true_reading_skips_the_commit_fence_git_reads() {
+    // Its row binds `task`, so in the shared home every other test's `task` would key by id.
+    if super::super::test_homes::reexec_with_private_homes(
+        "harness::schedule::fire::tests::a_task_fired_on_a_true_reading_skips_the_commit_fence_git_reads",
+    ) {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
@@ -1478,7 +1440,9 @@ fn a_task_fired_on_a_true_reading_skips_the_commit_fence_git_reads() {
         );
         let spawned = crate::proc::testkit::spawn_count() - before;
         assert!(fires.is_empty(), "fired={fired}");
-        assert_eq!(last_when_states(&runtime), one(state), "fired={fired}");
+        // Under the task's id once its row has bound it, under its name before.
+        let states = last_when_states(&runtime).into_values().collect::<Vec<_>>();
+        assert_eq!(states, vec![state], "fired={fired}");
         spawned
     };
     assert_eq!(
@@ -2200,11 +2164,17 @@ fn stranded_fire_at_retries_only_when_its_runner_is_lost() {
         },
         TaskSource::Config,
     );
+    // The task as `loop add` leaves it: bound, so its stamps and rows are keyed by its id.
+    let id = super::super::task_record_store::mutate(|records| {
+        records.mint(&task.binding(STRANDED), Timestamp::now())
+    })
+    .unwrap();
+    let key = id.to_string();
     let tasks = BTreeMap::from([(STRANDED.to_owned(), task.clone())]);
     let pass = || {
         write_temp_then_rename_cache(
             &state_path(&runtime),
-            &BTreeMap::from([(STRANDED.to_owned(), stamp)]),
+            &BTreeMap::from([(key.clone(), stamp)]),
         )
         .unwrap();
         let fired = fire_tasks(
@@ -2215,16 +2185,15 @@ fn stranded_fire_at_retries_only_when_its_runner_is_lost() {
             LoopRunHost::Detached,
             None,
         );
-        (fired, last_stamps(&runtime)[STRANDED])
+        (fired, last_stamps(&runtime)[&key])
     };
     let record = |result| {
-        let _ = run_log::record_transition(
-            &task,
-            &LoopRunRecord::new(STRANDED, result, LoopRunMode::Scheduled, 0),
-        );
+        let mut row = LoopRunRecord::new(STRANDED, result, LoopRunMode::Scheduled, 0);
+        row.task_id = Some(id.clone());
+        let _ = run_log::record_transition(&task, &row);
     };
 
-    let lock = runtime.lock_path(super::super::run_lock::file_name(STRANDED, None));
+    let lock = runtime.lock_path(super::super::run_lock::file_name(&key, None));
     let crate::disk::lease::LeaseAttempt::Acquired(held) =
         crate::disk::lease::claim(&lock, |_| Ok(())).unwrap()
     else {
@@ -2273,20 +2242,25 @@ fn stranded_once_condition_retries_only_when_its_runner_is_lost() {
         when: Some(vec!["team.stage=Done".to_owned()]),
         ..TaskEntry::default()
     };
+    let task = LoadedTask::new(STRANDED, entry.clone(), TaskSource::Config);
+    let id = super::super::task_record_store::mutate(|records| {
+        records.mint(&task.binding(STRANDED), Timestamp::now())
+    })
+    .unwrap();
+    let key = id.to_string();
     let latch = BTreeMap::from([(
-        STRANDED.to_owned(),
+        key.clone(),
         WhenState {
             fingerprint: Some(("team.stage=Done".to_owned(), None, entry.run_dir())),
             since: seconds_before(stamp, 60),
             fired: true,
         },
     )]);
-    let task = LoadedTask::new(STRANDED, entry, TaskSource::Config);
     let tasks = BTreeMap::from([(STRANDED.to_owned(), task.clone())]);
     let pass = || {
         write_temp_then_rename_cache(
             &state_path(&runtime),
-            &BTreeMap::from([(STRANDED.to_owned(), stamp)]),
+            &BTreeMap::from([(key.clone(), stamp)]),
         )
         .unwrap();
         write_temp_then_rename_cache(&when_state_path(&runtime), &latch).unwrap();
@@ -2299,16 +2273,15 @@ fn stranded_once_condition_retries_only_when_its_runner_is_lost() {
             None,
         );
         assert_eq!(last_when_states(&runtime), latch, "the latch is kept");
-        (fired, last_stamps(&runtime)[STRANDED])
+        (fired, last_stamps(&runtime)[&key])
     };
     let record = |result| {
-        let _ = run_log::record_transition(
-            &task,
-            &LoopRunRecord::new(STRANDED, result, LoopRunMode::Scheduled, 0),
-        );
+        let mut row = LoopRunRecord::new(STRANDED, result, LoopRunMode::Scheduled, 0);
+        row.task_id = Some(id.clone());
+        let _ = run_log::record_transition(&task, &row);
     };
 
-    let lock = runtime.lock_path(super::super::run_lock::file_name(STRANDED, None));
+    let lock = runtime.lock_path(super::super::run_lock::file_name(&key, None));
     let crate::disk::lease::LeaseAttempt::Acquired(held) =
         crate::disk::lease::claim(&lock, |_| Ok(())).unwrap()
     else {
@@ -2358,10 +2331,15 @@ fn a_recorded_attempt_is_remembered_per_stamp() {
     assert_eq!(scans.get(), 3);
 }
 
-/// A resident `fire-at` row whose launch is ledgered is left out of the pass,
-/// stamp and all, and fires on its first live sight once the ledger clears.
+/// A `fire-at` row whose checkout an open fire holds is left out of the pass, stamp and all,
+/// and fires on its first live sight once the record clears.
 #[test]
-fn ledgered_resident_fire_at_waits_unstamped_and_fires_once_cleared() {
+fn a_held_fire_at_waits_unstamped_and_fires_once_cleared() {
+    if super::super::test_homes::reexec_with_private_homes(
+        "harness::schedule::fire::tests::a_held_fire_at_waits_unstamped_and_fires_once_cleared",
+    ) {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let paths = StatePaths::for_project_root(root.path()).unwrap();
     let runtime = RuntimePaths::for_state(&paths).unwrap();
@@ -2375,13 +2353,10 @@ fn ledgered_resident_fire_at_waits_unstamped_and_fires_once_cleared() {
         fire_at: Some(seconds_before(stamp, 60)),
         ..TaskEntry::default()
     }));
-    let ledger = super::super::launch_ledger::resident_path(&paths);
+    let ledger = super::super::task_record::path();
     crate::disk::atomic::write_temp_then_rename(
         &ledger,
-        &one(BTreeMap::from([(
-            root.path().to_owned(),
-            serde_json::json!({"at": stamp, "leader": "otter"}),
-        )])),
+        &holding(&tasks[NAME], root.path(), ScopeKind::Worktree),
     )
     .unwrap();
     write_temp_then_rename_cache(&state_path(&runtime), &one(stamp)).unwrap();
@@ -2398,7 +2373,7 @@ fn ledgered_resident_fire_at_waits_unstamped_and_fires_once_cleared() {
 
     assert!(
         pass().is_empty(),
-        "a launched resident row is not dispatched"
+        "a row whose checkout a fire holds is not dispatched"
     );
     assert!(
         !last_stamps(&runtime).contains_key(NAME),

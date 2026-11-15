@@ -14,7 +14,7 @@ use crate::disk::{atomic, paths};
 use crate::harness::launch::{
     ENV_AGENT_MODEL, ENV_AGENT_NAME, ENV_AGENT_PROFILE, ENV_AGENT_ROLE, ENV_TEAM,
 };
-use crate::harness::loop_task::LOOP_TASK_ENV;
+use crate::harness::loop_task::{LOOP_FIRE_ENV, LOOP_TASK_ENV};
 use crate::utils::filter::{self, Op, TermError, Word, glob};
 use crate::utils::time::parse_compact_duration;
 use crate::workspace::{
@@ -33,7 +33,7 @@ type MetaEntries = Vec<(String, String)>;
 
 /// Every header key RimZ owns, in the order a note writes them. A caller's
 /// `--meta` key never takes one of these names; `list`'s filter names each.
-pub const RIMZ_KEYS: [&str; 13] = [
+pub const RIMZ_KEYS: [&str; 14] = [
     "kind",
     "title",
     "written",
@@ -46,11 +46,12 @@ pub const RIMZ_KEYS: [&str; 13] = [
     "worktree",
     "channel",
     "loop-task",
+    "loop-fire",
     "workflow-run",
 ];
 
 /// The caller facts read from the launch environment, by header key.
-const ENV_KEYS: [(&str, &str); 8] = [
+const ENV_KEYS: [(&str, &str); 9] = [
     ("author", ENV_AGENT_NAME),
     ("profile", ENV_AGENT_PROFILE),
     ("team", ENV_TEAM),
@@ -58,6 +59,7 @@ const ENV_KEYS: [(&str, &str); 8] = [
     ("model", ENV_AGENT_MODEL),
     ("channel", ENV_CHANNEL),
     ("loop-task", LOOP_TASK_ENV),
+    ("loop-fire", LOOP_FIRE_ENV),
     ("workflow-run", WORKFLOW_RUN_ENV),
 ];
 

@@ -52,24 +52,6 @@ fn show_view(each_worktree: bool) -> ShowView {
         records: vec![failed],
         quiet: None,
         heard: None,
-        launches: BTreeMap::from([
-            (
-                PathBuf::from("/repo/older"),
-                ResidentLaunch {
-                    destination: None,
-                    at: Timestamp::from_second(10).unwrap(),
-                    leader: "old-leader".into(),
-                },
-            ),
-            (
-                PathBuf::from("/repo/newer"),
-                ResidentLaunch {
-                    destination: None,
-                    at: Timestamp::from_second(90).unwrap(),
-                    leader: "new-leader".into(),
-                },
-            ),
-        ]),
         in_progress: None,
         backlog: None,
         condition: "  pr=open   ✓ open\n  ci=passed   ? not checked yet\n".into(),
@@ -83,20 +65,16 @@ fn show_view(each_worktree: bool) -> ShowView {
         }],
         room_is_open: false,
         strike_count: 0,
-        leader_statuses: BTreeMap::new(),
         you: false,
         booker: None,
-        worktrees: [("older", "old-leader", 10), ("newer", "new-leader", 90)]
-            .map(
-                |(name, leader, second)| schedule::fanout::CheckoutCondition {
-                    checkout: PathBuf::from(format!("/repo/{name}")),
-                    name: name.into(),
-                    state: schedule::fanout::CheckoutState::Launched {
-                        leader: leader.into(),
-                        at: Timestamp::from_second(second).unwrap(),
-                    },
+        worktrees: [("older", 10), ("newer", 90)]
+            .map(|(name, second)| schedule::fanout::CheckoutCondition {
+                checkout: PathBuf::from(format!("/repo/{name}")),
+                name: name.into(),
+                state: schedule::fanout::CheckoutState::Launched {
+                    at: Timestamp::from_second(second).unwrap(),
                 },
-            )
+            })
             .into(),
         worktrees_error: None,
         workflow_runs: Vec::new(),
@@ -116,23 +94,37 @@ fn workflow_view() -> ShowView {
     let mut view = show_view(true);
     view.runs_workflows = true;
     view.entry.once_per_checkout = None;
-    view.launches.clear();
     view.records.clear();
     view.subscriptions.clear();
     view.worktrees.clear();
-    let mut records = Vec::new();
-    let mut launches = BTreeMap::new();
-    for (index, state) in ["active", "parked", "failed", "done", "canceled", "gone"]
+    let runs = ["active", "parked", "failed", "done", "canceled", "gone"]
         .into_iter()
         .enumerate()
-    {
+        .map(|(index, state)| (state, state, 10 + index as i64))
+        .collect::<Vec<_>>();
+    with_runs(&mut view, &runs);
+    view
+}
+
+/// Each `(checkout, state, second)` as a fire of the task into `/repo/<checkout>` whose
+/// workflow run is in `state` (`gone`: its record is no longer on disk), entered 30 s after
+/// its fire; a `Workflow` worktree row each, and the run rows `loop show` projects from the
+/// task record's marks.
+fn with_runs(view: &mut ShowView, runs: &[(&str, &str, i64)]) {
+    use rimz::harness::schedule::task_record::FireMark;
+    let task = sweep_id();
+    let mut record = sweep_record();
+    let mut records = Vec::new();
+    for &(name, state, second) in runs {
         let id = rimz::ids::WorkflowRunId::new();
-        let at = Timestamp::from_second(10 + index as i64).unwrap();
-        let checkout = PathBuf::from(format!("/repo/{state}"));
+        let at = Timestamp::from_second(second).unwrap();
+        let checkout = PathBuf::from(format!("/repo/{name}"));
+        let fire = rimz::ids::FireId::new(task);
         if state != "gone" {
             records.push(
                 serde_json::from_value(serde_json::json!({
                     "version": rimz::store::workflow::VERSION, "id": id, "workflow": "review", "task": "sweep",
+                    "loop_fire": fire,
                     "spec_dir": "/spec", "scope": {
                         "kind": "worktree", "path": checkout,
                     },
@@ -147,32 +139,32 @@ fn workflow_view() -> ShowView {
                 .unwrap(),
             );
         }
-        launches.insert(
+        record.marks.insert(
             checkout.clone(),
-            schedule::launch_ledger::WorkflowLaunchRecord {
+            FireMark {
+                fire,
                 at,
+                booked_by: Vec::new(),
+                once: false,
                 run: Some(id.clone()),
                 scope: rimz::store::workflow::ScopeKind::Worktree,
-                leader: None,
-                destination: None,
+                result: None,
             },
         );
         view.worktrees.push(CheckoutCondition {
             checkout,
-            name: state.into(),
+            name: name.into(),
             state: CheckoutState::Workflow { run: id, at },
         });
     }
     view.workflow_runs = list::WorkflowRunRow::for_show(
         &records,
         &[],
-        "sweep",
+        Some((task, &record)),
         Path::new("/repo"),
-        &launches,
         &BTreeMap::new(),
         view.now_zoned.timestamp(),
     );
-    view
 }
 
 #[test]
@@ -298,21 +290,6 @@ fn workflow_runs_table_omits_worktree_runs_including_folded_rows() {
         assert_eq!(text.matches(&subject).count(), 1, "{text}");
     }
     assert!(text.contains("gone"), "{text}");
-}
-
-#[test]
-fn named_launch_rows_and_failed_attention_show_destination_not_scope() {
-    let mut view = show_view(false);
-    let launch = view.launches.get_mut(Path::new("/repo/newer")).unwrap();
-    let mut value = serde_json::to_value(&launch).unwrap();
-    value["destination"] = serde_json::json!("/worktrees/landing");
-    *launch = serde_json::from_value(value).unwrap();
-    view.leader_statuses
-        .insert("new-leader".into(), rimz::agents::AgentStatus::Failed);
-    let text = show_text(&view);
-    assert!(text.contains("landing  @new-leader"), "{text}");
-    assert!(text.contains("@new-leader in landing"), "{text}");
-    assert!(!text.contains("@new-leader in newer"), "{text}");
 }
 
 #[test]
@@ -482,6 +459,9 @@ fn show_header_leads_with_the_finished_verdict_before_waiting_fires() {
             "  ✓ healthy · last finished run 1m ago, completed in 10ms".to_owned(),
             waiting.to_owned(),
             "  stop with `rimz loop stop sweep`".to_owned(),
+            "  when pr=open && ci=passed".to_owned(),
+            "  pr=open   ✓ open".to_owned(),
+            "  ci=passed   ? not checked yet".to_owned(),
         ]
     });
     assert_eq!(actual, expected);
@@ -607,7 +587,7 @@ fn show_fanout_verdict_precedes_worktrees_and_has_no_subscriptions_section() {
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
     assert!(!text.contains("SUBSCRIPTIONS"), "{text}");
     assert!(!text.contains("AGENT RUNS"), "{text}");
-    assert!(text.contains("… 2 launched: 2 ended"), "{text}");
+    assert_eq!(text.matches("fired · no run yet").count(), 2, "{text}");
     assert!(
         !text.contains("LAUNCHES") && !text.contains("condition:"),
         "{text}"
@@ -642,42 +622,13 @@ fn worktree_view() -> ShowView {
         (
             "running",
             CheckoutState::Launched {
-                leader: "running-leader".into(),
                 at: Timestamp::from_second(3599).unwrap(),
-            },
-        ),
-        (
-            "paused",
-            CheckoutState::Launched {
-                leader: "paused-leader".into(),
-                at: since,
-            },
-        ),
-        (
-            "success",
-            CheckoutState::Launched {
-                leader: "success-leader".into(),
-                at: Timestamp::from_second(3500).unwrap(),
-            },
-        ),
-        (
-            "ended",
-            CheckoutState::Launched {
-                leader: "ended-leader".into(),
-                at: since,
             },
         ),
         (
             "waiting-many",
             CheckoutState::Waiting {
                 verdict: verdict(None, Some("failed")),
-            },
-        ),
-        (
-            "older",
-            CheckoutState::Launched {
-                leader: "old-leader".into(),
-                at: Timestamp::from_second(10).unwrap(),
             },
         ),
         (
@@ -692,13 +643,6 @@ fn worktree_view() -> ShowView {
                 since,
                 hold: Duration::from_secs(180),
                 verdict: verdict(Some("open"), Some("passed")),
-            },
-        ),
-        (
-            "newer",
-            CheckoutState::Launched {
-                leader: "new-leader".into(),
-                at: since,
             },
         ),
         (
@@ -726,13 +670,16 @@ fn worktree_view() -> ShowView {
     refusal.checkout = Some("/repo/blocked".into());
     refusal.error = Some("@busy is working".into());
     view.records = vec![refusal];
-    view.leader_statuses = BTreeMap::from([
-        ("old-leader".into(), rimz::agents::AgentStatus::Success),
-        ("new-leader".into(), rimz::agents::AgentStatus::Failed),
-        ("running-leader".into(), rimz::agents::AgentStatus::Running),
-        ("paused-leader".into(), rimz::agents::AgentStatus::Paused),
-        ("success-leader".into(), rimz::agents::AgentStatus::Success),
-    ]);
+    with_runs(
+        &mut view,
+        &[
+            ("newer", "failed", 3480),
+            ("paused", "done", 3480),
+            ("success", "done", 3500),
+            ("ended", "canceled", 3480),
+            ("older", "gone", 10),
+        ],
+    );
     view
 }
 
@@ -742,7 +689,6 @@ fn worktree_rows_sharing_a_rank_sort_by_name_from_every_input_order() {
         checkout: format!("/repo/{name}").into(),
         name: name.into(),
         state: CheckoutState::Launched {
-            leader: format!("{name}-leader"),
             at: Timestamp::from_second(second).unwrap(),
         },
     };
@@ -775,7 +721,6 @@ fn worktree_rows_sharing_a_rank_sort_by_name_from_every_input_order() {
                 active_since: None,
             },
         )),
-        leader_status: None,
         run: None,
         armed: 0,
         short: Vec::new(),
@@ -996,21 +941,26 @@ fn worktrees_order_counts_terms_and_fold_lines() {
         .find(|line| line.starts_with("  newer "))
         .unwrap();
     assert!(
-        launched.contains("@new-leader  failed") && !launched.contains("✓"),
+        launched.contains("review#newer  failed · gate") && !launched.contains("✓"),
         "{text}"
     );
+    let fired = table
+        .lines()
+        .find(|line| line.starts_with("  running "))
+        .unwrap();
+    assert!(fired.contains("fired · no run yet"), "{text}");
     assert!(
         table.contains(
-            "… 4 launched: 2 success · 1 ended · 1 paused · newest success @success-leader 1m ago"
+            "… 4 launched: 2 done · 1 canceled · 1 gone · newest success review#success 1m ago"
         ),
         "{text}"
     );
     assert!(
-        table.contains("→ reasons and leaders: rimz loop show sweep --all"),
+        table.contains("→ reasons and runs: rimz loop show sweep --all"),
         "{text}"
     );
     assert!(
-        header.find("LEADER").unwrap() < header.find("REASON").unwrap(),
+        header.find("RUN").unwrap() < header.find("REASON").unwrap(),
         "{text}"
     );
     assert!(
@@ -1043,7 +993,7 @@ fn worktrees_all_unfolds_launched_rows() {
         .unwrap();
     assert!(
         !table.lines().any(|line| line.trim_start().starts_with('…'))
-            && !table.contains("→ reasons and leaders:"),
+            && !table.contains("→ reasons and runs:"),
         "{text}"
     );
     let many = table
@@ -1065,24 +1015,28 @@ fn worktrees_all_unfolds_launched_rows() {
             && table.find("  paused ").unwrap() < table.find("  older ").unwrap(),
         "{text}"
     );
-    assert!(table.contains("@ended-leader ended"), "{text}");
+    assert!(table.contains("review#ended  canceled"), "{text}");
     for row in &view.worktrees {
         assert!(table.contains(&format!("  {} ", row.name)), "{text}");
     }
     assert!(
         table
             .lines()
-            .any(|line| line.contains("LEADER") && line.ends_with("REASON")),
+            .any(|line| line.contains("RUN") && line.ends_with("REASON")),
         "{text}"
     );
-    assert!(table.contains("@busy is work"), "{text}");
+    assert!(
+        table
+            .lines()
+            .any(|line| line.starts_with("  blocked ") && line.contains("@busy")),
+        "{text}"
+    );
     assert!(!table.contains("ci and pr readings come"), "{text}");
 }
 
 #[test]
 fn show_single_checkout_condition_follows_verdict_and_keeps_subscriptions() {
-    let mut view = show_view(false);
-    view.launches.clear();
+    let view = show_view(false);
     let text = show_text(&view);
     assert!(
         text.lines()
@@ -1107,12 +1061,12 @@ fn show_single_checkout_condition_follows_verdict_and_keeps_subscriptions() {
 }
 
 #[test]
-fn worktrees_launched_fold_counts_only_folded_leaders() {
+fn worktrees_launched_fold_counts_only_folded_runs() {
     let view = worktree_view();
     let text = show_text(&view);
     assert!(
         text.contains(
-            "… 4 launched: 2 success · 1 ended · 1 paused · newest success @success-leader 1m ago"
+            "… 4 launched: 2 done · 1 canceled · 1 gone · newest success review#success 1m ago"
         ),
         "{text}"
     );
@@ -1145,7 +1099,7 @@ fn worktrees_columns_follow_rendered_rows() {
         .find(|line| line.starts_with("  newer "))
         .unwrap();
     assert!(
-        launched.contains("@new-leader  failed") && !launched.contains("armed"),
+        launched.contains("review#newer  failed") && !launched.contains("armed"),
         "{text}"
     );
     view.worktrees.retain(|row| row.name == "ready");
@@ -1155,34 +1109,10 @@ fn worktrees_columns_follow_rendered_rows() {
         .find(|line| line.contains("WORKTREE "))
         .unwrap();
     assert!(
-        !header.contains("LEADER") && !header.contains("REASON"),
+        !header.contains("RUN") && !header.contains("REASON"),
         "{text}"
     );
-    assert!(!text.contains("→ reasons and leaders:"), "{text}");
-}
-
-#[test]
-fn worktrees_keeps_waiting_leaders_and_folds_idle_and_sleeping() {
-    let mut view = worktree_view();
-    view.worktrees.retain(|row| row.name == "running");
-    for status in [
-        rimz::agents::AgentStatus::Waiting,
-        rimz::agents::AgentStatus::Idle,
-        rimz::agents::AgentStatus::Sleeping,
-    ] {
-        view.leader_statuses.insert("running-leader".into(), status);
-        let text = show_text(&view);
-        assert_eq!(
-            text.contains("  running "),
-            status == rimz::agents::AgentStatus::Waiting,
-            "{text}"
-        );
-        assert_eq!(
-            text.contains("… 1 launched:"),
-            status != rimz::agents::AgentStatus::Waiting,
-            "{text}"
-        );
-    }
+    assert!(!text.contains("→ reasons and runs:"), "{text}");
 }
 
 #[test]
@@ -1551,27 +1481,12 @@ fn show_fanout_refusals_on_unowned_checkouts_do_not_warn() {
 }
 
 #[test]
-fn show_attention_names_failed_live_leaders_but_not_ended_leaders() {
+fn show_attention_names_a_checkout_ready_but_blocked() {
     let mut view = show_view(true);
-    view.records = vec![scheduled(20, LoopRunResult::Launched)];
-    let mut failed = rimz::testkit::agent_state("codex", "live", view.now_zoned.timestamp());
-    failed.name = Some("new-leader".into());
-    failed.status = rimz::agents::AgentStatus::Failed;
-    view.leader_statuses = leader_statuses(&view.launches, &[failed], view.now_zoned.timestamp());
-    let text = show_text(&view);
-    assert_eq!(
-        text.lines().nth(2),
-        Some("  ! 1 failed leader: @new-leader in newer"),
-        "{text}"
-    );
-    assert!(
-        text.lines().nth(1).unwrap().starts_with("  ✓ healthy"),
-        "{text}"
-    );
-    view.leader_statuses
-        .insert("old-leader".into(), rimz::agents::AgentStatus::Failed);
-    view.records
-        .insert(0, refusal(-1800, "/repo/blocked", "@busy is working"));
+    view.records = vec![
+        refusal(-1800, "/repo/blocked", "@busy is working"),
+        scheduled(20, LoopRunResult::Launched),
+    ];
     view.worktrees.push(CheckoutCondition {
         checkout: "/repo/blocked".into(),
         name: "blocked".into(),
@@ -1585,41 +1500,16 @@ fn show_attention_names_failed_live_leaders_but_not_ended_leaders() {
         },
     });
     let text = show_text(&view);
+    assert!(
+        text.lines().nth(1).unwrap().starts_with("  ✓ healthy"),
+        "{text}"
+    );
     assert_eq!(
         text.lines().nth(2),
         Some("  ! 1 ready but blocked over 30m: blocked"),
         "{text}"
     );
-    assert_eq!(
-        text.lines().nth(3),
-        Some("  ! 2 failed leaders: @new-leader in newer, @old-leader in older"),
-        "{text}"
-    );
-    view.leader_statuses.clear();
-    let text = show_text(&view);
     assert!(!text.contains("failed leader"), "{text}");
-}
-
-#[test]
-fn leader_lookup_uses_ledger_petnames_and_effective_status() {
-    let view = show_view(true);
-    let mut live = rimz::testkit::agent_state("codex", "live", view.now_zoned.timestamp());
-    live.name = Some("new-leader".into());
-    live.profile = Some("sweeper".into());
-    live.status = rimz::agents::AgentStatus::Running;
-    live.phase = rimz::agents::TurnPhase::Parked;
-    let mut unrelated = live.clone();
-    unrelated.name = Some("sweeper".into());
-    unrelated.status = rimz::agents::AgentStatus::Failed;
-    let statuses = leader_statuses(
-        &view.launches,
-        &[live, unrelated],
-        view.now_zoned.timestamp(),
-    );
-    assert_eq!(
-        statuses,
-        BTreeMap::from([("new-leader".into(), rimz::agents::AgentStatus::Success)])
-    );
 }
 
 #[test]
@@ -1650,7 +1540,7 @@ fn true_condition_without_hold_renders_due() {
         None,
         &now.to_zoned(jiff::tz::TimeZone::UTC),
     );
-    let timing = super::super::condition::observe("ready", &entry, timing, now);
+    let timing = super::super::condition::observe(("machine::ready", "ready"), &entry, timing, now);
     let mut out = Vec::new();
     super::super::condition::write_show(&mut out, "ready", &entry, &timing).unwrap();
     assert!(
@@ -1679,7 +1569,7 @@ fn closed_room_forge_condition_shows_unknown_on_unread_keys() {
         None,
         &now.to_zoned(jiff::tz::TimeZone::UTC),
     );
-    let timing = super::super::condition::observe("forge", &entry, timing, now);
+    let timing = super::super::condition::observe(("machine::forge", "forge"), &entry, timing, now);
     assert_eq!(
         timing.state().condition_label().as_deref(),
         Some("unknown · ci: unknown")
@@ -1695,6 +1585,8 @@ fn closed_room_forge_condition_shows_unknown_on_unread_keys() {
 
 fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
     LoopRunRecord {
+        task_id: None,
+        fire: None,
         kind: None,
         judge: Vec::new(),
         checkout: None,
@@ -4362,12 +4254,35 @@ fn throttle_skipped_notes_use_the_warning_tone() {
     );
 }
 
+/// The id of the `sweep` task the run fixtures fire, the same for every fixture in the process.
+fn sweep_id() -> &'static rimz::ids::TaskId {
+    static ID: std::sync::OnceLock<rimz::ids::TaskId> = std::sync::OnceLock::new();
+    ID.get_or_init(rimz::ids::TaskId::new)
+}
+
+fn sweep_record() -> rimz::harness::schedule::task_record::TaskRecord {
+    use rimz::harness::schedule::task_record::{Binding, Scope, TaskRecord};
+    TaskRecord {
+        binding: Binding {
+            scope: Scope::Machine,
+            name: "sweep".into(),
+        },
+        retired_at: None,
+        arming: None,
+        strikes: 0,
+        counted: Vec::new(),
+        scheduled: BTreeMap::new(),
+        quiet: None,
+        marks: BTreeMap::new(),
+    }
+}
+
 fn task_run(state: &str, lane: &str, node: &str, second: i64) -> rimz::store::workflow::RunRecord {
     let at = Timestamp::from_second(second).unwrap();
     let terminal = !matches!(state, "active" | "parked");
     serde_json::from_value(serde_json::json!({
         "version": rimz::store::workflow::VERSION, "id": rimz::ids::WorkflowRunId::new(), "workflow": "review",
-        "task": "sweep", "spec_dir": "/spec",
+        "task": "sweep", "loop_fire": rimz::ids::FireId::new(sweep_id()), "spec_dir": "/spec",
         "scope": { "kind": "worktree", "path": format!("/repo/{lane}") },
         "project_root": "/repo", "created_at": at, "state": state, "node": node,
         "entered_at": at, "terminal_at": terminal.then_some(at),
@@ -4380,9 +4295,8 @@ fn task_rows(records: &[rimz::store::workflow::RunRecord]) -> Vec<list::Workflow
     let mut rows = list::WorkflowRunRow::for_show(
         records,
         &[],
-        "sweep",
+        Some((sweep_id(), &sweep_record())),
         Path::new("/repo"),
-        &BTreeMap::new(),
         &BTreeMap::new(),
         Timestamp::from_second(100).unwrap(),
     );
@@ -4400,6 +4314,7 @@ fn workflow_run_projection_lists_finished_runs_without_a_ledger_entry() {
     let failed = task_run("failed", "c", "gate", 40);
     let mut other = task_run("done", "d", "gate", 50);
     other.task = Some("other".into());
+    other.loop_fire = Some(rimz::ids::FireId::new(&rimz::ids::TaskId::new()));
     let rows = task_rows(&[done.clone(), live.clone(), failed.clone(), other]);
     let json = serde_json::to_value(&rows).unwrap();
     let ids = json

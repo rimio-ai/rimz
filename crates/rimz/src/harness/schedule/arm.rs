@@ -323,7 +323,7 @@ fn retire_session_in(
         if entry.team.is_none() && entry.loop_task.is_none() {
             dropped += 1;
         }
-        let key = super::arming::TaskKey::for_task(
+        let binding = super::task_record::Binding::for_task(
             name,
             super::catalog::TaskSource::Instance,
             project_root,
@@ -331,11 +331,8 @@ fn retire_session_in(
         if let Err(err) = super::signal::stop_watcher(runtime, name) {
             tracing::warn!(task = name, error = %err, "retire: stopping the watcher");
         }
-        if let Err(err) = super::arming::remove(&key) {
-            tracing::warn!(task = name, error = %err, "retire: clearing the arming overlay");
-        }
-        if let Err(err) = super::strikes::remove(&key) {
-            tracing::warn!(task = name, error = %err, "retire: clearing the strike overlay");
+        if let Err(err) = super::catalog::retire(&binding, false) {
+            tracing::warn!(task = name, error = %format!("{err:#}"), "retire: retiring the task record");
         }
     }
     release_session(paths, runtime, kind, session, true)

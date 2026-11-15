@@ -496,11 +496,10 @@ fn done_rows(
                             .as_ref()
                             .map(|action| action.subject.as_str())
                             .unwrap_or_default(),
-                        match (&launch.leader, &launch.run) {
-                            (Some(leader), _) => format!("@{}", leader.trim_start_matches('@')),
-                            (None, Some(run)) => format!("run {run}"),
-                            (None, None) => String::new(),
-                        }
+                        launch
+                            .run
+                            .as_ref()
+                            .map_or_else(String::new, |run| format!("run {run}"))
                     )
                 } else {
                     row.last_text(now)

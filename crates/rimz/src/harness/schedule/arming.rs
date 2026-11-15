@@ -5,35 +5,18 @@
 //! enable. An ended pause and a fresh enable remain effective last-fire edges
 //! so schedules do not replay occurrences missed while held.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::catalog::TaskSource;
-use super::overlay_store::{OverlayError, OverlayStore};
-use crate::disk::paths::loops_dir;
-use crate::ids::WorkspaceId;
-
-const STORE: OverlayStore = OverlayStore::new("loop-arming.json", "loop-arming.lock");
-const MACHINE_SCOPE: &str = "machine::";
+use super::task_record::{self, Binding, TaskRecordErr};
+use super::task_record_store::{self, TaskStoreErr};
 
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
-pub struct ArmingError(ArmingErrorKind);
-
-#[derive(Debug, thiserror::Error)]
-enum ArmingErrorKind {
-    #[error(transparent)]
-    Overlay(OverlayError),
-}
-
-impl From<OverlayError> for ArmingError {
-    fn from(value: OverlayError) -> Self {
-        Self(ArmingErrorKind::Overlay(value))
-    }
-}
+pub struct ArmingError(#[from] TaskStoreErr);
 
 type Result<T> = std::result::Result<T, ArmingError>;
 
@@ -76,34 +59,6 @@ pub enum DisabledReason {
     Strikes(u32),
 }
 
-/// Scoped overlay key construction for task definitions.
-pub(super) struct TaskKey;
-
-impl TaskKey {
-    pub(super) fn for_task(name: &str, source: TaskSource, root: &Path) -> String {
-        format!("{}{name}", Self::scope(source, root))
-    }
-
-    pub(super) fn known_scopes(project_root: Option<&Path>) -> BTreeSet<String> {
-        let mut scopes = BTreeSet::from([MACHINE_SCOPE.to_owned()]);
-        if let Some(root) = project_root {
-            scopes.insert(Self::project_scope(root));
-        }
-        scopes
-    }
-
-    fn scope(source: TaskSource, root: &Path) -> String {
-        match source {
-            TaskSource::Config => MACHINE_SCOPE.to_owned(),
-            TaskSource::Instance | TaskSource::Project { .. } => Self::project_scope(root),
-        }
-    }
-
-    fn project_scope(root: &Path) -> String {
-        format!("{}::", WorkspaceId::from_project_root(root))
-    }
-}
-
 impl ArmState {
     pub fn resolve(record: Option<&Arming>, source: TaskSource, now: Timestamp) -> Self {
         let Some(record) = record else {
@@ -127,44 +82,84 @@ impl ArmState {
     }
 }
 
-pub fn load() -> BTreeMap<String, Arming> {
-    load_from(&loops_dir())
+/// Every bound task's arming, by binding key; an unreadable task record is an error, never an
+/// empty map.
+pub fn load() -> std::result::Result<BTreeMap<String, Arming>, TaskRecordErr> {
+    Ok(task_record::load()?
+        .by_key()
+        .into_iter()
+        .filter_map(|(key, (_, record))| record.arming.map(|arming| (key, arming)))
+        .collect())
 }
 
-pub(super) fn enable(key: &str) -> Result<Arming> {
-    enable_in(&loops_dir(), key, Timestamp::now())
+pub(super) fn enable(binding: &Binding) -> Result<Arming> {
+    let entry = Arming {
+        enabled: true,
+        at: Some(Timestamp::now()),
+        pause_until: None,
+        strikes: None,
+    };
+    edit(binding, |arming| *arming = Some(entry))?;
+    Ok(entry)
 }
 
-pub fn disable(key: &str, strikes: Option<u32>) -> Result<()> {
-    disable_in(&loops_dir(), key, strikes, Timestamp::now())
+pub fn disable(binding: &Binding, strikes: Option<u32>) -> Result<()> {
+    let entry = Arming {
+        enabled: false,
+        at: Some(Timestamp::now()),
+        pause_until: None,
+        strikes,
+    };
+    edit(binding, |arming| *arming = Some(entry))
 }
 
 /// Pause a task without changing its effective enablement.
 ///
 /// A missing record inherits its source default before the pause is written.
-pub fn pause(key: &str, source: TaskSource, until: Timestamp) -> Result<()> {
-    pause_in(&loops_dir(), key, source, until)
+pub fn pause(binding: &Binding, source: TaskSource, until: Timestamp) -> Result<()> {
+    edit(binding, |arming| paused(arming, source, until))
 }
 
+/// Disable a live task, as a strike-out does; a disabled or paused task is left as it is.
 pub(super) fn disable_if_live(
-    key: &str,
+    binding: &Binding,
     source: TaskSource,
     strikes: Option<u32>,
     now: Timestamp,
 ) -> Result<bool> {
-    disable_if_live_in(&loops_dir(), key, source, strikes, now)
+    edit(binding, |arming| {
+        disabled_if_live(arming, source, strikes, now)
+    })
 }
 
-pub(super) fn remove(key: &str) -> Result<bool> {
-    remove_from(&loops_dir(), key)
+fn edit<T>(binding: &Binding, change: impl FnOnce(&mut Option<Arming>) -> T) -> Result<T> {
+    Ok(task_record_store::mutate(|records| {
+        change(&mut records.bind(binding).1.arming)
+    })?)
 }
 
-pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
-    rename_in(&loops_dir(), old, new)
+fn paused(arming: &mut Option<Arming>, source: TaskSource, until: Timestamp) {
+    arming
+        .get_or_insert_with(|| Arming::default_for(source))
+        .pause_until = Some(until);
 }
 
-pub(super) fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
-    prune_orphans_in(&loops_dir(), known, scopes)
+pub(super) fn disabled_if_live(
+    arming: &mut Option<Arming>,
+    source: TaskSource,
+    strikes: Option<u32>,
+    now: Timestamp,
+) -> bool {
+    if ArmState::resolve(arming.as_ref(), source, now) != ArmState::Live {
+        return false;
+    }
+    *arming = Some(Arming {
+        enabled: false,
+        at: Some(now),
+        pause_until: None,
+        strikes,
+    });
+    true
 }
 
 pub(super) fn effective_last_fire(
@@ -181,102 +176,6 @@ pub(super) fn effective_last_fire(
         .into_iter()
         .chain(ended_pause)
         .fold(stamp, Timestamp::max)
-}
-
-fn load_from(state_root: &Path) -> BTreeMap<String, Arming> {
-    STORE.load(state_root)
-}
-
-fn enable_in(state_root: &Path, key: &str, now: Timestamp) -> Result<Arming> {
-    let entry = Arming {
-        enabled: true,
-        at: Some(now),
-        pause_until: None,
-        strikes: None,
-    };
-    set_in(state_root, key, entry)?;
-    Ok(entry)
-}
-
-fn disable_in(state_root: &Path, key: &str, strikes: Option<u32>, now: Timestamp) -> Result<()> {
-    set_in(
-        state_root,
-        key,
-        Arming {
-            enabled: false,
-            at: Some(now),
-            pause_until: None,
-            strikes,
-        },
-    )
-}
-
-fn pause_in(state_root: &Path, key: &str, source: TaskSource, until: Timestamp) -> Result<()> {
-    STORE
-        .mutate(state_root, |entries: &mut BTreeMap<String, Arming>| {
-            let entry = entries
-                .entry(key.to_owned())
-                .or_insert_with(|| Arming::default_for(source));
-            let changed = entry.pause_until != Some(until);
-            entry.pause_until = Some(until);
-            ((), changed)
-        })
-        .map_err(Into::into)
-}
-
-fn disable_if_live_in(
-    state_root: &Path,
-    key: &str,
-    source: TaskSource,
-    strikes: Option<u32>,
-    now: Timestamp,
-) -> Result<bool> {
-    STORE
-        .mutate(state_root, |entries: &mut BTreeMap<String, Arming>| {
-            if ArmState::resolve(entries.get(key), source, now) != ArmState::Live {
-                return (false, false);
-            }
-            let entry = Arming {
-                enabled: false,
-                at: Some(now),
-                pause_until: None,
-                strikes,
-            };
-            let changed = entries.get(key) != Some(&entry);
-            entries.insert(key.to_owned(), entry);
-            (true, changed)
-        })
-        .map_err(Into::into)
-}
-
-fn set_in(state_root: &Path, key: &str, entry: Arming) -> Result<()> {
-    STORE
-        .mutate(state_root, |entries| {
-            let changed = entries.get(key) != Some(&entry);
-            entries.insert(key.to_owned(), entry);
-            ((), changed)
-        })
-        .map_err(Into::into)
-}
-
-fn remove_from(state_root: &Path, key: &str) -> Result<bool> {
-    STORE.remove::<Arming>(state_root, key).map_err(Into::into)
-}
-
-fn rename_in(state_root: &Path, old: &str, new: &str) -> Result<bool> {
-    STORE
-        .rename::<Arming>(state_root, old, new)
-        .map_err(Into::into)
-}
-
-fn prune_orphans_in(
-    state_root: &Path,
-    known: &BTreeSet<String>,
-    scopes: &BTreeSet<String>,
-) -> Result<usize> {
-    STORE
-        .prune_orphans_in_scopes::<Arming>(state_root, known, scopes)
-        .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -360,20 +259,14 @@ mod tests {
 
     #[test]
     fn pause_preserves_each_source_default() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        pause_in(dir.path(), "machine::nightly", TaskSource::Config, ts(30))
-            .expect("machine pause");
-        pause_in(
-            dir.path(),
-            "ws_0123456789abcdef01234567::nightly",
-            project(),
-            ts(30),
-        )
-        .expect("project pause");
-        let entries = load_from(dir.path());
-        assert!(entries["machine::nightly"].enabled);
-        assert_eq!(entries["machine::nightly"].at, None);
-        assert!(!entries["ws_0123456789abcdef01234567::nightly"].enabled);
+        let mut machine = None;
+        paused(&mut machine, TaskSource::Config, ts(30));
+        let mut project_task = None;
+        paused(&mut project_task, project(), ts(30));
+        let machine = machine.expect("machine pause");
+        assert!(machine.enabled);
+        assert_eq!(machine.at, None);
+        assert!(!project_task.expect("project pause").enabled);
     }
 
     #[test]
@@ -397,60 +290,30 @@ mod tests {
 
     #[test]
     fn automatic_disable_preserves_an_active_pause() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        pause_in(dir.path(), "machine::nightly", TaskSource::Config, ts(30)).expect("pause");
+        let mut arming = None;
+        paused(&mut arming, TaskSource::Config, ts(30));
         assert!(
-            !disable_if_live_in(
-                dir.path(),
-                "machine::nightly",
-                TaskSource::Config,
-                Some(3),
-                ts(20)
-            )
-            .expect("active pause")
+            !disabled_if_live(&mut arming, TaskSource::Config, Some(3), ts(20)),
+            "an active pause"
         );
         assert!(
-            disable_if_live_in(
-                dir.path(),
-                "machine::nightly",
-                TaskSource::Config,
-                Some(3),
-                ts(30)
-            )
-            .expect("ended pause")
+            disabled_if_live(&mut arming, TaskSource::Config, Some(3), ts(30)),
+            "an ended pause"
         );
         assert_eq!(
-            ArmState::resolve(
-                load_from(dir.path()).get("machine::nightly"),
-                TaskSource::Config,
-                ts(30)
-            ),
+            ArmState::resolve(arming.as_ref(), TaskSource::Config, ts(30)),
             ArmState::Disabled(DisabledReason::Strikes(3))
         );
     }
 
     #[test]
     fn automatic_disable_respects_missing_record_source_defaults() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert!(
-            !disable_if_live_in(
-                dir.path(),
-                "ws_0123456789abcdef01234567::nightly",
-                project(),
-                Some(3),
-                ts(20),
-            )
-            .expect("project default")
-        );
-        assert!(
-            disable_if_live_in(
-                dir.path(),
-                "machine::nightly",
-                TaskSource::Config,
-                Some(3),
-                ts(20),
-            )
-            .expect("machine default")
-        );
+        assert!(!disabled_if_live(&mut None, project(), Some(3), ts(20)));
+        assert!(disabled_if_live(
+            &mut None,
+            TaskSource::Config,
+            Some(3),
+            ts(20)
+        ));
     }
 }

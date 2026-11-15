@@ -28,6 +28,7 @@ expression: value
   "input": null,
   "key": null,
   "launch_retry": false,
+  "loop_fire": "fire_0190b8172c0070008000000000000002_0190b8172c0070008000000000000003",
   "loop_report": "none",
   "next_seq": 2,
   "node": "pr",
@@ -66,7 +67,7 @@ expression: value
   "state": "active",
   "task": null,
   "terminal_at": null,
-  "version": 11,
+  "version": 12,
   "visit_grant": 0,
   "visits": {
     "build": 2

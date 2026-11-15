@@ -424,7 +424,16 @@ fn collect_loop() -> model::LoopTasks {
             error: error.to_string(),
         },
     };
-    let arming = arming::load();
+    let (arming, record_error) = match arming::load() {
+        Ok(arming) => (arming, None),
+        Err(error) => (
+            Default::default(),
+            Some(model::RecordError {
+                error: error.to_string(),
+                fix: error.fix(),
+            }),
+        ),
+    };
     let now = jiff::Timestamp::now();
     let mut rooms = std::collections::BTreeMap::new();
     let mut markers = std::collections::BTreeMap::new();
@@ -561,6 +570,7 @@ fn collect_loop() -> model::LoopTasks {
         tasks: rows,
         timer,
         unscheduled,
+        record_error,
     }
 }
 

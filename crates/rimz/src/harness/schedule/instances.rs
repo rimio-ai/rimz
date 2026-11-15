@@ -32,10 +32,10 @@ pub(super) enum InstanceErr {
         path: PathBuf,
         source: serde_json::Error,
     },
-    #[error("clearing instance arming state: {0}")]
-    Arming(#[from] super::arming::ArmingError),
-    #[error("clearing instance strike state: {0}")]
-    Strikes(#[from] super::strikes::StrikesError),
+    #[error(transparent)]
+    TaskRecord(#[from] super::task_record::TaskRecordErr),
+    #[error("clearing the instance's task record: {0}")]
+    Retire(#[from] super::task_record_store::TaskStoreErr),
 }
 
 type Result<T> = std::result::Result<T, InstanceErr>;
@@ -133,7 +133,7 @@ pub(super) fn insert_delivery(
     }
     let _guard = WorkspaceLock::acquire(&paths.lock_path("loop-instances.lock"))?;
     let mut tasks = load_strict_from(&paths.root)?.0;
-    let arming = super::arming::load();
+    let arming = super::arming::load()?;
     let now = Timestamp::now();
     // Rows place an older target under the launch its session belongs to; a
     // room whose rows cannot be read compares targets as written.
@@ -147,11 +147,12 @@ pub(super) fn insert_delivery(
     };
     if (entry.signal.is_some() || entry.when.is_some())
         && let Some((name, _)) = tasks.iter().find(|(name, current)| {
-            let key = super::arming::TaskKey::for_task(
+            let key = super::task_record::Binding::for_task(
                 name,
                 super::catalog::TaskSource::Instance,
                 &current.resolved_root(),
-            );
+            )
+            .key();
             // A self wait and a delivery subscription never stand in for each other.
             !taken.contains(*name)
                 && current.wait_meta.is_some() == entry.wait_meta.is_some()
@@ -215,13 +216,14 @@ pub(super) fn insert_delivery(
             ordinal += 1;
         }
     }
-    let key = super::arming::TaskKey::for_task(
-        &name,
-        super::catalog::TaskSource::Instance,
-        &entry.resolved_root(),
-    );
-    super::arming::remove(&key)?;
-    super::strikes::remove(&key)?;
+    super::catalog::retire(
+        &super::task_record::Binding::for_task(
+            &name,
+            super::catalog::TaskSource::Instance,
+            &entry.resolved_root(),
+        ),
+        true,
+    )?;
     tasks.insert(name.clone(), entry.clone());
     write_temp_then_rename(&path(&paths.root), &tasks)?;
     Ok((name, false))
@@ -321,13 +323,13 @@ mod tests {
     }
 
     #[test]
-    fn failed_overlay_clear_writes_no_delivery() {
+    fn failed_record_clear_writes_no_delivery() {
         if std::env::var_os("RIMZ_TEST_DELIVERY_OVERLAY_HOME").is_none() {
             let home = tempfile::tempdir().unwrap();
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "harness::schedule::instances::tests::failed_overlay_clear_writes_no_delivery",
+                    "harness::schedule::instances::tests::failed_record_clear_writes_no_delivery",
                     "--nocapture",
                 ])
                 .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path())
@@ -345,11 +347,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = StatePaths::for_project_root(dir.path()).unwrap();
         record_room(&paths, dir.path());
-        let lock = crate::disk::paths::loops_dir().join("loop-arming.lock");
+        // A record of an earlier `probe` the insert must delete, behind a lock it cannot take.
+        let binding = super::super::task_record::Binding::for_task(
+            "probe",
+            super::super::catalog::TaskSource::Instance,
+            &task().resolved_root(),
+        );
+        super::super::task_record_store::mutate(|records| {
+            records.bind(&binding);
+        })
+        .unwrap();
+        let lock = crate::disk::paths::loops_dir().join("tasks.lock");
+        std::fs::remove_file(&lock).unwrap();
         std::fs::create_dir_all(&lock).unwrap();
         let result = insert_delivery(&paths, Some("probe"), &task(), &BTreeSet::new());
         std::fs::remove_dir(&lock).unwrap();
-        assert!(matches!(result, Err(InstanceErr::Arming(_))), "{result:?}");
+        assert!(matches!(result, Err(InstanceErr::Retire(_))), "{result:?}");
         assert!(load_strict_from(&paths.root).unwrap().0.is_empty());
         assert!(!path(&paths.root).exists());
     }

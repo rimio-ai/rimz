@@ -4,7 +4,9 @@ use super::*;
 use crate::cli::wake_view::checkout_name;
 use rimz::config::WatchSpec;
 use rimz::harness::schedule::attention::{self, Attention, InProgress};
-use rimz::harness::schedule::{TaskKind, Trigger, launch_ledger, signal::watcher_info};
+use rimz::harness::schedule::task_record::{self, FireMark, TaskRecords};
+use rimz::harness::schedule::{TaskKind, Trigger, signal::watcher_info};
+use rimz::ids::TaskId;
 use serde::Serialize;
 
 #[path = "list_render.rs"]
@@ -406,7 +408,7 @@ pub(super) struct TaskRow {
     #[serde(skip)]
     launched_count: usize,
     #[serde(skip)]
-    launch: Option<launch_ledger::WorkflowLaunchRecord>,
+    launch: Option<FireMark>,
     #[serde(skip)]
     exit: Option<String>,
 }
@@ -416,12 +418,14 @@ struct RowContext<'a> {
     /// The room's project root and its workflow runs.
     root: &'a Path,
     runs: &'a [rimz::store::workflow::RunRecord],
+    /// The task's id, while a record is bound to its row.
+    id: Option<&'a TaskId>,
     /// The room is open, or the loop timer fires its clocks while it is closed.
     clocks_kept: bool,
     stats: Option<&'a run_log::LoopRunStats>,
     count: u32,
     watcher_pid: Option<u32>,
-    launch: Option<&'a launch_ledger::WorkflowLaunchRecord>,
+    launch: Option<&'a FireMark>,
     now: Timestamp,
 }
 
@@ -478,7 +482,7 @@ fn capacity_wait_json<S: serde::Serializer>(
 /// The capacity waits of a task's active runs, by the checkout each run is scoped to.
 pub(super) fn capacity_waits<'a>(
     runs: &'a [rimz::store::workflow::RunRecord],
-    task: &'a str,
+    task: Option<&'a TaskId>,
     root: &'a Path,
 ) -> impl Iterator<Item = (&'a Path, CapacityWaitView)> + 'a {
     attention::capacity_waits(runs, task, root)
@@ -515,8 +519,6 @@ fn load(
         (LoadScope::CallerRoom, Some(root)) => std::collections::BTreeSet::from([root.clone()]),
         _ => room_roots(caller_root.as_deref())?,
     };
-    let arming = arming::load();
-    let strikes = strikes::load();
     let now = Timestamp::now();
     let config = MachineConfig::load_lenient();
     let now_zoned = now.to_zoned(config.time_zone());
@@ -528,6 +530,10 @@ fn load(
         .values()
         .cloned()
         .collect::<Vec<_>>();
+    let records = task_record::load().unwrap_or_else(|error| {
+        warnings.push(error.to_string());
+        TaskRecords::default()
+    });
     for root in roots {
         let here = caller_root.as_ref() == Some(&root);
         let catalog = match TaskCatalog::load_room(&root) {
@@ -560,17 +566,6 @@ fn load(
             .map(schedule::last_stamps)
             .unwrap_or_default();
         let stats = held_stats.stats(&root, &now_zoned);
-        let entries = catalog
-            .visible()
-            .values()
-            .map(LoadedTask::entry)
-            .filter(|entry| entry.resolved_root() == root)
-            .collect::<Vec<_>>();
-        let workflow_ledger = if entries.iter().any(|entry| entry.dedupes_checkout()) {
-            load_launch_memory(&root, launch_ledger::load_workflows, &mut warnings)
-        } else {
-            Default::default()
-        };
         let workflows = StatePaths::for_project_root(&root)
             .ok()
             .and_then(|paths| rimz::store::workflow::live_runs(&paths).ok())
@@ -591,6 +586,8 @@ fn load(
                 .map(|_| entry.run_dir())
                 .unwrap_or_else(|| task_root.clone());
             let key = task.key_for_root(name, &task_root);
+            let record = records.live(&key);
+            let id = record.map(|(id, _)| id);
             let running = locks.as_ref().and_then(|locks| match locks.state(name) {
                 Ok(RunLockState::Held(holder)) => Some(holder),
                 Ok(RunLockState::Available) => None,
@@ -602,8 +599,8 @@ fn load(
             let timing = schedule::TaskTiming::evaluate(
                 task.trigger(),
                 task.source(),
-                stamps.get(name).copied(),
-                arming.get(&key),
+                attention::stamp(&stamps, &records, &key, name).copied(),
+                record.and_then(|(_, record)| record.arming.as_ref()),
                 &now_zoned,
             );
             let timing = if timing
@@ -612,11 +609,11 @@ fn load(
             {
                 conditions
                     .get_or_init(|| attention::RoomReadings::new(runtime.as_ref(), open, now))
-                    .observe(name, entry, &run_dir, timing, now)
+                    .observe((&key, name), entry, &run_dir, timing, now)
             } else {
                 timing
             };
-            let count = strikes.get(&key).copied().unwrap_or_default();
+            let count = record.map_or(0, |(_, record)| record.strikes);
             let mut row = TaskRow::new(
                 name,
                 task,
@@ -626,6 +623,7 @@ fn load(
                     run_dir: &run_dir,
                     root: &root,
                     runs: &workflows,
+                    id,
                     clocks_kept,
                     stats: stats.get(name),
                     count,
@@ -633,12 +631,12 @@ fn load(
                         .as_ref()
                         .and_then(|runtime| watcher_info(runtime, name).ok().flatten())
                         .map(|info| info.pid),
-                    launch: launch_ledger::launched(task.entry(), name, &run_dir, &workflow_ledger),
+                    launch: records.launched(entry, &key, &run_dir),
                     now,
                 },
             );
             row.capacity.extend(
-                capacity_waits(&workflows, name, &root).map(|(checkout, wait)| CapacityStart {
+                capacity_waits(&workflows, id, &root).map(|(checkout, wait)| CapacityStart {
                     checkout: checkout.to_path_buf(),
                     wait,
                 }),
@@ -646,9 +644,9 @@ fn load(
             row.refresh_attention(count, now);
             row.worktree_here =
                 here && workspace.is_some_and(|workspace| run_dir == workspace.worktree_root);
-            row.launched_count = launched_count(task.entry(), name, &workflow_ledger);
+            row.launched_count = launched_count(entry, record.map(|(_, record)| record));
             row.attach_workflow_runs(
-                WorkflowRunRow::of_task(&workflows, name, &root, &workflow_specs, now),
+                WorkflowRunRow::of_task(&workflows, id, &root, &workflow_specs, now),
                 now,
             );
             tasks.push(row);
@@ -683,7 +681,8 @@ fn load(
             let acting_at = stats.acting.as_ref().map(|acting| acting.record.at);
             // A consumed one-shot whose run still executes is a run in progress, as under its
             // lock.
-            if let Some(run) = attention::run_in_progress(None, &workflows, name, &root, acting_at)
+            let id = records.named_in(&root, name).map(|(id, _)| id);
+            if let Some(run) = attention::run_in_progress(None, &workflows, id, &root, acting_at)
                 .filter(InProgress::executing)
             {
                 tasks.push(TaskRow::rowless(name.clone(), run, Some(stats)));
@@ -721,21 +720,6 @@ fn load(
     })
 }
 
-fn load_launch_memory<T: Default>(
-    root: &Path,
-    read: impl FnOnce(&StatePaths) -> Result<T, launch_ledger::LedgerErr>,
-    warnings: &mut Vec<String>,
-) -> T {
-    let load = || -> Result<_> { Ok(read(&StatePaths::for_project_root(root)?)?) };
-    load().unwrap_or_else(|error| {
-        warnings.push(format!(
-            "cannot load loop launch memory in {}: {error:#}",
-            root.display()
-        ));
-        T::default()
-    })
-}
-
 impl TaskRow {
     fn owner_class(&self) -> schedule::DeliveryOwner<'_> {
         self.task
@@ -756,6 +740,7 @@ impl TaskRow {
             run_dir,
             root,
             runs,
+            id,
             clocks_kept,
             stats,
             count,
@@ -768,7 +753,7 @@ impl TaskRow {
             .and_then(|stats| stats.acting.as_ref())
             .map(|acting| acting.record.at)
             .filter(|at| since_wait_armed(Some(task), *at));
-        let in_progress = attention::run_in_progress(running, runs, name, root, acting_at);
+        let in_progress = attention::run_in_progress(running, runs, id, root, acting_at);
         let state = TaskState::observe(
             &timing,
             in_progress.as_ref().is_some_and(InProgress::executing),
@@ -1151,15 +1136,18 @@ fn acting_run_text(last: &LastRun, exit: Option<&str>, now: Timestamp) -> String
     }
 }
 
-fn launched_count(
-    entry: &TaskEntry,
-    task: &str,
-    workflows: &launch_ledger::WorkflowLedger,
-) -> usize {
+/// How many checkouts a `once-per-checkout` task's fires hold.
+fn launched_count(entry: &TaskEntry, record: Option<&task_record::TaskRecord>) -> usize {
     if !entry.dedupes_checkout() {
         return 0;
     }
-    workflows.tasks.get(task).map_or(0, BTreeMap::len)
+    record.map_or(0, |record| {
+        record
+            .marks
+            .values()
+            .filter(|mark| mark.holds_checkout())
+            .count()
+    })
 }
 
 /// One ledgered or live workflow run, shared by list, show, and checkout joins.
@@ -1204,17 +1192,15 @@ impl WorkflowRunRow {
     pub(super) fn for_show(
         records: &[rimz::store::workflow::RunRecord],
         ended: &[(rimz::ids::WorkflowRunId, rimz::store::workflow::RunHeader)],
-        task: &str,
+        task: Option<(&TaskId, &task_record::TaskRecord)>,
         root: &Path,
-        launches: &BTreeMap<PathBuf, launch_ledger::WorkflowLaunchRecord>,
         specs: &BTreeMap<rimz::ids::WorkflowRunId, rimz::harness::workflow::Definition>,
         now: Timestamp,
     ) -> Vec<Self> {
         let mut runs = Vec::new();
-        // A resident launch remembered before the cutover names a leader, not a run.
-        for (checkout, launch, run) in launches
-            .iter()
-            .filter_map(|(checkout, launch)| Some((checkout, launch, launch.run.as_ref()?)))
+        let marks = task.into_iter().flat_map(|(_, record)| record.marks.iter());
+        for (checkout, launch, run) in
+            marks.filter_map(|(checkout, launch)| Some((checkout, launch, launch.run.as_ref()?)))
         {
             if runs.iter().any(|listed: &Self| listed.id == *run) {
                 continue;
@@ -1251,14 +1237,16 @@ impl WorkflowRunRow {
         }
         let mut others = records
             .iter()
-            .filter(|record| record.ran_for(task) && record.project_root == root)
+            .filter(|record| {
+                task.is_some_and(|(id, _)| record.ran_for(id)) && record.project_root == root
+            })
             .filter(|record| !runs.iter().any(|listed| listed.id == record.id))
             .map(|record| Self::of_record(record, specs.get(&record.id), now))
             .chain(
                 ended
                     .iter()
                     .filter(|(_, header)| {
-                        header.task.as_deref() == Some(task)
+                        task.is_some_and(|(id, _)| header.ran_for(id))
                             && header.project_root.as_deref() == Some(root)
                     })
                     .filter(|(id, _)| !runs.iter().any(|listed| &listed.id == id))
@@ -1277,14 +1265,16 @@ impl WorkflowRunRow {
 
     pub(super) fn of_task(
         records: &[rimz::store::workflow::RunRecord],
-        task: &str,
+        task: Option<&TaskId>,
         root: &Path,
         specs: &BTreeMap<rimz::ids::WorkflowRunId, rimz::harness::workflow::Definition>,
         now: Timestamp,
     ) -> Vec<Self> {
         records
             .iter()
-            .filter(|record| record.started_by(task) && record.project_root == root)
+            .filter(|record| {
+                task.is_some_and(|task| record.started_by(task)) && record.project_root == root
+            })
             .map(|record| Self::of_record(record, specs.get(&record.id), now))
             .collect()
     }

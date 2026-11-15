@@ -57,22 +57,6 @@ pub(super) fn remove(paths: &crate::StatePaths, task: &str) -> Result<(), Backlo
     Ok(())
 }
 
-pub(super) fn rename(
-    paths: &crate::StatePaths,
-    task: &str,
-    name: &str,
-) -> Result<(), BacklogWriteErr> {
-    if !backlog::load(paths)?.tasks.contains_key(task) {
-        return Ok(());
-    }
-    let mut backlog = LockedBacklog::acquire(paths)?;
-    if let Some(waiting) = backlog.record.tasks.remove(task) {
-        backlog.record.tasks.insert(name.to_owned(), waiting);
-        backlog.save()?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -189,6 +189,13 @@ impl Host for SystemHost {
             ),
             ("RIMZ_START_KIND".to_owned(), group.kind.to_string()),
             (
+                crate::harness::loop_task::LOOP_FIRE_ENV.to_owned(),
+                run.fire
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+            ),
+            (
                 "RIMZ_START_ACCOUNT".to_owned(),
                 group
                     .account
@@ -305,6 +312,8 @@ impl Host for SystemHost {
 #[derive(Clone, Debug)]
 pub(in crate::harness) struct Run {
     pub(in crate::harness) task: String,
+    /// The fire that started the run, when a loop fire did.
+    pub(in crate::harness) fire: Option<crate::ids::FireId>,
     pub(in crate::harness) root: PathBuf,
     pub(in crate::harness) checkout: PathBuf,
     /// Where the launch writes, read for the free-disk floor.
@@ -1301,6 +1310,7 @@ pub fn readings(
         machine_gated: true,
         limits: None,
         task: name.to_owned(),
+        fire: None,
         root,
         disk: disk_at(entry, &config.agents.worktree, checkout.clone()),
         checkout,

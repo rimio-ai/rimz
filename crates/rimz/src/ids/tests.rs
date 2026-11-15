@@ -45,11 +45,6 @@ fn durable_waits_ignore_unknown_hold_kinds() {
                 ..
             }
         ));
-        let record = serde_json::from_value::<
-            crate::harness::schedule::launch_ledger::CapacityRecord,
-        >(value);
-        assert!(record.is_ok(), "{wire}: {record:?}");
-        assert_eq!(record.unwrap().hold, None);
     }
 }
 #[test]
@@ -320,6 +315,26 @@ fn uuid_prefixed_ids_reject_non_canonical_input() {
     assert!(RunId::parse("run_0123456789abcdef0123456789ABCDEF").is_err());
     assert!(EventId::parse("evt_0123456789abcdef0123456789abcdef").is_ok());
     assert!(SidebarInstanceId::parse("sb_0123456789abcdef0123456789abcdef").is_ok());
+}
+
+#[test]
+fn a_fire_id_names_its_task_and_parses_only_its_own_shape() {
+    let task = TaskId::new();
+    let fire = FireId::new(&task);
+    assert_eq!(fire.task(), task);
+    assert_eq!(FireId::parse(fire.as_str()), Ok(fire.clone()));
+    let json = serde_json::to_string(&fire).unwrap();
+    assert_eq!(serde_json::from_str::<FireId>(&json).unwrap(), fire);
+    assert_ne!(FireId::new(&task), fire, "each fire mints its own id");
+    for bad in [
+        task.as_str(),
+        "fire_0123456789abcdef0123456789abcdef",
+        "fire_0123456789abcdef0123456789abcdef_short",
+        "fire_0123456789abcdef0123456789abcdeg_0123456789abcdef0123456789abcdef",
+        "run_0123456789abcdef0123456789abcdef_0123456789abcdef0123456789abcdef",
+    ] {
+        assert!(FireId::parse(bad).is_err(), "{bad}");
+    }
 }
 
 #[test]

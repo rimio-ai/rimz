@@ -281,10 +281,12 @@ impl RoomContext {
             RoomSizing::OrdinaryTab => None,
         };
         let mut extra_env = crate::agents::registry::room_env(&runtime);
-        extra_env.insert(
-            crate::harness::loop_task::LOOP_TASK_ENV.to_owned(),
-            String::new(),
-        );
+        for key in [
+            crate::harness::loop_task::LOOP_TASK_ENV,
+            crate::harness::loop_task::LOOP_FIRE_ENV,
+        ] {
+            extra_env.insert(key.to_owned(), String::new());
+        }
         Ok(Self {
             workspace,
             backend: crate::mux::backend_for(mux),

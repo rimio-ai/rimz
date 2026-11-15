@@ -520,6 +520,7 @@ fn start(
         workflow::DefinitionSource::Deployed {
             dir: &dir,
             task: None,
+            loop_fire: None,
             surplus: None,
             surplus_after: None,
             fire: None,

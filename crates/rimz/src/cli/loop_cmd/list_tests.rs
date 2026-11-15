@@ -135,33 +135,55 @@ fn capacity_json_retains_the_typed_hold_and_omits_unknown() {
     );
 }
 
+/// Every mark that holds its checkout counts, an open fire with no run yet included; a fire
+/// that failed releases its checkout and is not counted.
 #[test]
-fn launched_counts_cover_runs_and_resident_launches_of_remembering_tasks() {
-    use launch_ledger::{WorkflowLaunchRecord, WorkflowLedger};
+fn launched_counts_cover_the_marks_holding_a_checkout() {
+    use rimz::harness::schedule::task_record::{Binding, FireMark, Scope, TaskRecord};
+    use rimz::ids::{FireId, TaskId};
     let at = Timestamp::from_second(100).unwrap();
-    let mut workflows = WorkflowLedger::default();
-    let launch =
-        |run: Option<rimz::ids::WorkflowRunId>, leader: Option<&str>| WorkflowLaunchRecord {
-            at,
-            run,
-            scope: rimz::store::workflow::ScopeKind::Worktree,
-            leader: leader.map(str::to_owned),
-            destination: None,
-        };
-    workflows.tasks.insert(
-        "review".into(),
-        BTreeMap::from([
-            (PathBuf::from("/repo/stale"), launch(None, Some("fox"))),
+    let mark = |run: Option<rimz::ids::WorkflowRunId>, result: Option<LoopRunResult>| FireMark {
+        fire: FireId::new(&TaskId::new()),
+        at,
+        booked_by: Vec::new(),
+        once: true,
+        run,
+        scope: rimz::store::workflow::ScopeKind::Worktree,
+        result,
+    };
+    let record = TaskRecord {
+        binding: Binding {
+            scope: Scope::Machine,
+            name: "review".into(),
+        },
+        retired_at: None,
+        arming: None,
+        strikes: 0,
+        counted: Vec::new(),
+        scheduled: BTreeMap::new(),
+        quiet: None,
+        marks: BTreeMap::from([
+            (PathBuf::from("/repo/open"), mark(None, None)),
             (
                 PathBuf::from("/repo/one"),
-                launch(Some(rimz::ids::WorkflowRunId::new()), None),
+                mark(
+                    Some(rimz::ids::WorkflowRunId::new()),
+                    Some(LoopRunResult::Completed),
+                ),
             ),
             (
                 PathBuf::from("/repo/two"),
-                launch(Some(rimz::ids::WorkflowRunId::new()), None),
+                mark(Some(rimz::ids::WorkflowRunId::new()), None),
+            ),
+            (
+                PathBuf::from("/repo/failed"),
+                mark(
+                    Some(rimz::ids::WorkflowRunId::new()),
+                    Some(LoopRunResult::Failed),
+                ),
             ),
         ]),
-    );
+    };
     let mut entry = TaskEntry {
         command: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
@@ -170,9 +192,10 @@ fn launched_counts_cover_runs_and_resident_launches_of_remembering_tasks() {
         each_worktree: true,
         ..TaskEntry::default()
     };
-    assert_eq!(launched_count(&entry, "review", &workflows), 3);
+    assert_eq!(launched_count(&entry, Some(&record)), 3);
+    assert_eq!(launched_count(&entry, None), 0);
     entry.once_per_checkout = None;
-    assert_eq!(launched_count(&entry, "review", &workflows), 0);
+    assert_eq!(launched_count(&entry, Some(&record)), 0);
 }
 
 #[test]
@@ -441,6 +464,7 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
 #[test]
 fn needs_you_prints_each_of_two_parked_summaries_once_with_park_age() {
     let now = Timestamp::from_second(1_000).unwrap();
+    let task = rimz::ids::TaskId::new();
     let records = ["first", "second"].map(|lane| {
         serde_json::from_value(serde_json::json!({
             "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
@@ -448,6 +472,7 @@ fn needs_you_prints_each_of_two_parked_summaries_once_with_park_age() {
             "scope":{"kind":"worktree", "path":format!("/repo/{lane}")},
             "created_at":now, "entered_at":Timestamp::from_second(100).unwrap(),
             "state":"parked", "node":"gate", "task":"babysit",
+            "loop_fire":rimz::ids::FireId::new(&task),
             "park":{
                 "reason":"user", "text":"review this 界 ".repeat(8),
                 "at":Timestamp::from_second(880).unwrap(),
@@ -460,7 +485,7 @@ fn needs_you_prints_each_of_two_parked_summaries_once_with_park_age() {
     row.attach_workflow_runs(
         WorkflowRunRow::of_task(
             &records,
-            "babysit",
+            Some(&task),
             Path::new("/repo"),
             &BTreeMap::new(),
             now,

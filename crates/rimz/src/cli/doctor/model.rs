@@ -767,6 +767,15 @@ pub(super) struct LoopTasks {
     pub(super) tasks: Vec<LoopTaskRow>,
     pub(super) timer: LoopTimer,
     pub(super) unscheduled: Vec<String>,
+    /// Why the machine's loop task record does not read: no task fires until it does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) record_error: Option<RecordError>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct RecordError {
+    pub(super) error: String,
+    pub(super) fix: String,
 }
 
 #[derive(Debug, Serialize)]

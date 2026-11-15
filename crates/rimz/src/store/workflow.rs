@@ -14,7 +14,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The run record's own shape version, raised when a binary on either side of a change would
 /// misread the other's record; `load` refuses a record of any other version before decoding it.
 /// A change to what a definition means raises nothing: every run reads its definition as it is.
-pub const VERSION: u32 = 11;
+pub const VERSION: u32 = 12;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -607,8 +607,15 @@ pub struct RunRecord {
     #[serde(default)]
     pub origin: RunOrigin,
     pub workflow: String,
+    /// The loop task's name frozen at the fire, for briefs and display; identity is
+    /// `loop_fire`.
     #[serde(default)]
     pub task: Option<String>,
+    /// The loop fire whose environment or runner started the run. With `task` set the run is
+    /// that task's own ([`RunRecord::ran_for`]); without, a fire's script started it and it
+    /// reports to nobody.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_fire: Option<crate::ids::FireId>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub manual: bool,
     #[serde(default)]
@@ -778,7 +785,7 @@ impl RunRecord {
     }
 
     /// The shared predicate for a live run of a loop task.
-    pub fn started_by(&self, task: &str) -> bool {
+    pub fn started_by(&self, task: &crate::ids::TaskId) -> bool {
         !self.state.is_terminal() && self.ran_for(task)
     }
 
@@ -792,9 +799,14 @@ impl RunRecord {
         }
     }
 
-    /// Whether loop task `task` started this run, live or finished.
-    pub fn ran_for(&self, task: &str) -> bool {
-        self.task.as_deref() == Some(task)
+    /// Whether this run is loop task `task`'s own, live or finished: a fire of the task started
+    /// it as the task's run, so a rename leaves it the task's.
+    pub fn ran_for(&self, task: &crate::ids::TaskId) -> bool {
+        self.task.is_some()
+            && self
+                .loop_fire
+                .as_ref()
+                .is_some_and(|fire| fire.task() == *task)
     }
 
     /// A finished run whose loop task has not yet heard how it ended.
@@ -1208,6 +1220,7 @@ pub struct RunHeader {
     pub version: Option<u64>,
     pub workflow: Option<String>,
     pub task: Option<String>,
+    pub loop_fire: Option<crate::ids::FireId>,
     pub manual: bool,
     pub project_root: Option<PathBuf>,
     pub scope_kind: Option<ScopeKind>,
@@ -1238,6 +1251,7 @@ impl RunHeader {
             version: field(record.get("version")),
             workflow: field(record.get("workflow")),
             task: field(record.get("task")),
+            loop_fire: field(record.get("loop_fire")),
             manual: field(record.get("manual")).unwrap_or(false),
             project_root: field(record.get("project_root")),
             scope_kind: field(record.get("scope").and_then(|scope| scope.get("kind"))),
@@ -1274,6 +1288,15 @@ impl RunHeader {
             self.scope_path.as_deref()?,
             self.project_root.as_deref(),
         ))
+    }
+
+    /// Whether this run is loop task `task`'s own, as [`RunRecord::ran_for`] reads it.
+    pub fn ran_for(&self, task: &crate::ids::TaskId) -> bool {
+        self.task.is_some()
+            && self
+                .loop_fire
+                .as_ref()
+                .is_some_and(|fire| fire.task() == *task)
     }
 
     /// A finished run whose loop task has not yet heard how it ended.
@@ -1397,6 +1420,7 @@ impl RunRecord {
             version: Some(self.version.into()),
             workflow: Some(self.workflow.clone()),
             task: self.task.clone(),
+            loop_fire: self.loop_fire.clone(),
             manual: self.manual,
             project_root: Some(self.project_root.clone()),
             scope_kind: Some(self.scope.kind),

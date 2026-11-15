@@ -286,6 +286,7 @@ fn run(task: &str) -> Run {
         machine_gated: true,
         limits: None,
         task: task.to_owned(),
+        fire: None,
         root: PathBuf::from("/repo"),
         checkout: PathBuf::from("/repo"),
         disk: PathBuf::from("/repo"),

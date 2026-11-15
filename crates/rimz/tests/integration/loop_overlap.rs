@@ -25,7 +25,7 @@ fn fixture(policy: &str, limit: Option<usize>) -> Env {
 
 fn holder(env: &Env) -> std::fs::File {
     hold_loop_run_lock(
-        &loop_run_lock_path(env, "busy"),
+        &task_run_lock_path(env, "busy"),
         &RunLockInfo {
             pid: 42_424,
             started_at: Timestamp::now(),
@@ -221,7 +221,7 @@ fn replace_cancels_and_starts_only_once_the_blocker_is_terminal() {
         "the replacement started before its blocker ended: {old:?} {replacement:?}"
     );
     assert!(
-        !loop_strikes_path(&env).exists(),
+        read_loop_strikes(&env).is_empty(),
         "a replaced run is canceled, which never strikes, even at max-strikes=1"
     );
 }
@@ -376,7 +376,7 @@ fn one_signal_firing_stamps_all_waiting_subscribers_identically() {
     );
     let _busy = holder(&env);
     let _other = hold_loop_run_lock(
-        &loop_run_lock_path(&env, "other"),
+        &task_run_lock_path(&env, "other"),
         &RunLockInfo {
             pid: 42_424,
             started_at: Timestamp::now(),
@@ -802,6 +802,25 @@ fn drain_rechecks_project_trust_and_records_its_refusal() {
     )
     .unwrap();
     loop_ok(&env, &["loop", "enable", "busy"]);
+    // The project row is a task of its own: its waiting trigger is the one the machine row left.
+    let machine = task_records(&env)
+        .named(&machine_task_key("busy"))
+        .unwrap()
+        .0
+        .clone();
+    let backlog = env
+        .state_path_for(&env.project_root)
+        .root
+        .join("records/loop-backlog.json");
+    let mut waiting: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&backlog).unwrap()).unwrap();
+    let triggers = waiting["tasks"]
+        .as_object_mut()
+        .unwrap()
+        .remove(machine.as_str())
+        .unwrap();
+    waiting["tasks"][task_id(&env, "busy").as_str()] = triggers;
+    std::fs::write(&backlog, serde_json::to_vec(&waiting).unwrap()).unwrap();
     lock.unlock().unwrap();
     let output = env
         .rimz()

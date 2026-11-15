@@ -39,6 +39,7 @@ use rimz::harness::schedule::{
     arming::{self, ArmState, Arming, DisabledReason},
     catalog::{LoadedTask, TaskCatalog, TaskSource},
     strikes,
+    task_record::{self, TaskRecords},
 };
 use rimz::harness::task_login::task_login;
 use rimz::sidebar::fresh_sidebar_present;
@@ -546,17 +547,34 @@ fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<LoadedTask>> {
     Ok(task_catalog(globals)?.visible().get(name).cloned())
 }
 
-fn observe_task_timing(
+/// The id of the record task `name` is bound to: its row's (live, else the newest retired one),
+/// or, with no row, the room at `root`'s; `None` with no record, or while the record does not
+/// read.
+fn task_id(
     name: &str,
+    task: Option<&LoadedTask>,
+    root: Option<&Path>,
+) -> Option<rimz::ids::TaskId> {
+    let records = task_record::load().ok()?;
+    match task {
+        Some(task) => records.named(&task.key(name)),
+        None => records.named_in(root?, name),
+    }
+    .map(|(id, _)| id.clone())
+}
+
+/// Task `name`'s timing, its record bound to `key`, read from the room's stamps.
+fn observe_task_timing(
+    (key, name): (&str, &str),
     task: &LoadedTask,
-    stamps: &BTreeMap<String, Timestamp>,
+    (stamps, records): (&BTreeMap<String, Timestamp>, &TaskRecords),
     arming: Option<&Arming>,
     now_zoned: &jiff::Zoned,
 ) -> schedule::TaskTiming {
-    let last_fire = stamps.get(name).copied();
+    let last_fire = schedule::attention::stamp(stamps, records, key, name).copied();
     let timing =
         schedule::TaskTiming::evaluate(task.trigger(), task.source(), last_fire, arming, now_zoned);
-    condition::observe(name, task.entry(), timing, now_zoned.timestamp())
+    condition::observe((key, name), task.entry(), timing, now_zoned.timestamp())
 }
 
 fn task_next_fire_text(
@@ -567,9 +585,16 @@ fn task_next_fire_text(
 ) -> Option<String> {
     let runtime = runtime_for_root(&task.entry().resolved_root())?;
     let stamps = schedule::last_stamps(&runtime);
-    observe_task_timing(name, task, &stamps, arming, now)
-        .next_timestamp()
-        .map(|next| ui::rel_until(next, now.timestamp()))
+    let records = task_record::load().unwrap_or_default();
+    observe_task_timing(
+        (&task.key(name), name),
+        task,
+        (&stamps, &records),
+        arming,
+        now,
+    )
+    .next_timestamp()
+    .map(|next| ui::rel_until(next, now.timestamp()))
 }
 
 fn finish_project_mutation(

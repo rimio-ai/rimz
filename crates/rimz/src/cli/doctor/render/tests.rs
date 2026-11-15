@@ -863,6 +863,7 @@ fn report_fixture() -> DoctorReport {
             tasks: Vec::new(),
             timer: LoopTimer::NotInstalled,
             unscheduled: Vec::new(),
+            record_error: None,
             throttle_errors: Vec::new(),
             throttle_holds: Vec::new(),
         },
@@ -1684,6 +1685,7 @@ fn loop_worktree_holders_render_without_audit_and_do_not_raise_tally() {
         }],
         timer: LoopTimer::NotInstalled,
         unscheduled: Vec::new(),
+        record_error: None,
         throttle_errors: Vec::new(),
         throttle_holds: Vec::new(),
     };
@@ -1706,6 +1708,7 @@ fn capacity_check_errors_render_without_tasks_and_name_the_fix() {
         tasks: Vec::new(),
         timer: LoopTimer::NotInstalled,
         unscheduled: Vec::new(),
+        record_error: None,
         throttle_errors: vec![
             "capacity check failing: claude/work exit 2: broken credentials".into(),
         ],
@@ -1751,6 +1754,7 @@ fn throttle_holds_name_the_problem_and_put_repairs_in_the_closing_fixes() {
             tasks: Vec::new(),
             timer: LoopTimer::NotInstalled,
             unscheduled: Vec::new(),
+            record_error: None,
             throttle_errors: Vec::new(),
             throttle_holds: holds[..count].to_vec(),
         };
@@ -1815,6 +1819,7 @@ fn loop_section_lists_tasks_and_flags_invalid_ones() {
         ],
         timer: LoopTimer::NotInstalled,
         unscheduled: Vec::new(),
+        record_error: None,
         throttle_errors: Vec::new(),
         throttle_holds: Vec::new(),
     };
@@ -2687,6 +2692,7 @@ fn loop_section_reads_empty_when_unconfigured() {
                 tasks: Vec::new(),
                 timer: LoopTimer::NotInstalled,
                 unscheduled: Vec::new(),
+                record_error: None,
                 throttle_errors: Vec::new(),
                 throttle_holds: Vec::new(),
             },
@@ -2745,6 +2751,7 @@ fn loop_section_reports_scheduler_coverage() {
             }],
             timer,
             unscheduled,
+            record_error: None,
             throttle_errors: Vec::new(),
             throttle_holds: Vec::new(),
         };

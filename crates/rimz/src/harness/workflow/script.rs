@@ -546,6 +546,12 @@ fn loop_task_env(record: &RunRecord) -> Vec<(String, String)> {
             record.scope.path.display().to_string(),
         ),
     ];
+    if let Some(fire) = &record.loop_fire {
+        env.push((
+            crate::harness::loop_task::LOOP_FIRE_ENV.to_owned(),
+            fire.to_string(),
+        ));
+    }
     if let Some(trigger) = record.prompt.clone().filter(|text| !text.is_empty()) {
         env.push((
             crate::harness::loop_task::LOOP_TRIGGER_ENV.to_owned(),

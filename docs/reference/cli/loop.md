@@ -44,7 +44,7 @@ Each fire starts a workflow run of one `test` check named `command` whose script
 
 `--timeout <DUR>` caps the command: `s`, `m`, `h`, or `d`, greater than zero. Without it, add writes `loop.default-timeout` (default `2h`, set with `rimz config set loop.default-timeout 3h`) to the row, so the stored row always carries the cap its fires run under. A command still running at the cap is killed, and the fire fails.
 
-The command runs with the room identity pin, `RIMZ_LOOP_TASK` (the task name), `RIMZ_WORKTREE_PATH` (its checkout), and, when the trigger carried evidence, `RIMZ_LOOP_TRIGGER`: one line naming what fired it, such as ``Rule `smoke` fired here. deploy.finished · env: prod`` for a signal or the readings of a condition. A clock fire and a manual `loop fire` carry no evidence, so the variable is absent. Nested `rimz` commands stay in the task's room.
+The command runs with the room identity pin, `RIMZ_LOOP_TASK` (the task name), `RIMZ_LOOP_FIRE` (the fire's id), `RIMZ_WORKTREE_PATH` (its checkout), and, when the trigger carried evidence, `RIMZ_LOOP_TRIGGER`: one line naming what fired it, such as ``Rule `smoke` fired here. deploy.finished · env: prod`` for a signal or the readings of a condition. A clock fire and a manual `loop fire` carry no evidence, so the variable is absent. Nested `rimz` commands stay in the task's room.
 
 A `rimz agents` or `rimz teams launch` in the command reads the loop marker and launches as follows:
 
@@ -428,7 +428,7 @@ Every attempted fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`, e
 
 ### Quiet fires
 
-A quiet fire is a task's run that ended done: a command fire whose command exited `0`. An agent or team its command launches is the command's own launch, so it does not make the fire's run loud. Its collection forgets it: no history row, no `workflow_start` assist, and no run home, so `rimz workflow show <its id>` answers as for an unknown id. The task keeps one quiet summary instead, in `~/.rimz/loops/loop-fires.json`: how many quiet fires there were, how many in a row since the task's last failure, and the stored `completed` row of the last one, with the exit code and output tail of its command. A failure row resets the streak and keeps the count and the last output; the summary moves with a renamed task and goes with a removed or replaced one, while `loop enable`, which clears strikes, keeps it. A one-shot's quiet run keeps its one `completed` row and its run home, since its task row is gone by then.
+A quiet fire is a task's run that ended done: a command fire whose command exited `0`. An agent or team its command launches is the command's own launch, so it does not make the fire's run loud. Its collection forgets it: no history row, no `workflow_start` assist, and no run home, so `rimz workflow show <its id>` answers as for an unknown id. The task keeps one quiet summary instead, in `~/.rimz/loops/tasks.json`: how many quiet fires there were, how many in a row since the task's last failure, and the stored `completed` row of the last one, with the exit code and output tail of its command. A failure row resets the streak and keeps the count and the last output; the summary moves with a renamed task and goes with a removed or replaced one, while `loop enable`, which clears strikes, keeps it. A one-shot's quiet run keeps its one `completed` row and its run home, since its task row is gone by then.
 
 ### `loop list`
 

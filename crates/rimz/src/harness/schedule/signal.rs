@@ -440,8 +440,14 @@ fn fire_signal_with_wait(
         tracing::warn!(error = %err, "loop: failed to retire ended sessions before firing");
     }
     let tasks = super::fire::workspace_runnable_tasks(runtime, Some(project_root));
-    let arming_entries = arming::load();
     let mut fired = SignalFire::default();
+    let arming_entries = match arming::load() {
+        Ok(arming) => arming,
+        Err(error) => {
+            tracing::warn!(%error, "loop: the task record is unreadable; no task fires");
+            return Ok(fired);
+        }
+    };
     for (name, task) in &tasks {
         let Ok(parsed) = task.trigger() else { continue };
         let resolution = parsed.trigger.resolve(name, signal);

@@ -17,8 +17,8 @@ use crate::harness::cache_keepalive::SeatPolicy;
 use crate::harness::loop_task::{FireLaunch, LaunchTree, read_fire_launch};
 use crate::harness::schedule::attention::{self, ReadContext, TaskReading};
 use crate::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
-use crate::harness::schedule::launch_ledger::{self, WorkflowLaunchRecord, WorkflowLedger};
 use crate::harness::schedule::run_log::HeldStats;
+use crate::harness::schedule::task_record::{self, FireMark};
 use crate::harness::schedule::{TaskKind, Trigger};
 use crate::harness::when::CiSource;
 use crate::ids::WorkflowRunId;
@@ -82,7 +82,7 @@ pub(in crate::sidebar) struct BlockingFacts {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::sidebar) struct FireFacts {
-    /// The launch ledger's fire time.
+    /// The fire mark's time.
     pub at: Timestamp,
     /// The workflow run the fire created.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,7 +189,7 @@ struct Lane<'a> {
 
 impl Lane<'_> {
     /// The room's bookings; `teams` loads the seat tables only when the room holds one. The
-    /// gate is the catalog and the launch ledger: with no booking row and no ledger task
+    /// gate is the catalog and the task record: with no booking row and no consumed task
     /// missing from the catalog outside `expired`, nothing more is read.
     fn read(
         self,
@@ -204,17 +204,21 @@ impl Lane<'_> {
             ..
         } = self;
         let catalog = TaskCatalog::load_room_lenient(root, state);
-        let mut ledger = launch_ledger::load_workflows(state).unwrap_or_default();
-        ledger.tasks.retain(|task, launches| {
-            catalog.visible().contains_key(task)
-                || launches
-                    .values()
-                    .max_by_key(|launch| launch.at)
-                    .and_then(|launch| launch.run.clone())
-                    .is_some_and(|run| !lane.expired.contains(&(task.clone(), run)))
-        });
-        let candidates: Vec<(String, WorkflowRunId)> = orphans(&ledger, catalog.visible())
-            .filter_map(|(task, launch)| Some((task.to_owned(), launch.run.clone()?)))
+        let task_records = task_record::load().unwrap_or_default();
+        let ledger: BTreeMap<String, FireMark> = task_records
+            .consumed(root)
+            .into_iter()
+            .filter(|(task, _)| !catalog.visible().contains_key(*task))
+            .filter(|(task, mark)| {
+                mark.run
+                    .clone()
+                    .is_some_and(|run| !lane.expired.contains(&((*task).to_owned(), run)))
+            })
+            .map(|(task, mark)| (task.to_owned(), mark.clone()))
+            .collect();
+        let candidates: Vec<(String, WorkflowRunId)> = ledger
+            .iter()
+            .filter_map(|(task, launch)| Some((task.clone(), launch.run.clone()?)))
             .collect();
         let booked = catalog.visible().values().any(is_booking);
         if !booked && candidates.is_empty() {
@@ -265,7 +269,6 @@ impl Lane<'_> {
         }
         let (kept, gone) = consumed(
             &ledger,
-            catalog.visible(),
             &teams,
             &records,
             prior,
@@ -472,14 +475,13 @@ pub(super) fn branch_pr(source: &CiSource, branch: &str, root: &Path) -> Booking
     }
 }
 
-/// A consumed one-shot's fired entry: each ledger task with no catalog row whose newest
-/// launch is a scheduled fire an agent booked, rebuilt from that run's record and the launch
-/// its generated definition's command types, while it is in its lifetime (`in_lifetime`); and the fires
-/// found past it.
+/// A consumed one-shot's fired entry: each consumed task's newest fire mark (`ledger`, by name,
+/// none with a catalog row) whose run is a scheduled fire an agent booked, rebuilt from that
+/// run's record and the launch its generated definition's command types, while it is in its
+/// lifetime (`in_lifetime`); and the fires found past it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn consumed(
-    ledger: &WorkflowLedger,
-    tasks: &BTreeMap<String, LoadedTask>,
+    ledger: &BTreeMap<String, FireMark>,
     teams: &TeamsConfig,
     records: &RoomRecords,
     prior: &BookingsCache,
@@ -487,7 +489,8 @@ pub(super) fn consumed(
     now: Timestamp,
     window_secs: u64,
 ) -> (Vec<BookingFacts>, Vec<(String, WorkflowRunId)>) {
-    let (mut facts, checkouts): (Vec<BookingFacts>, Vec<Option<PathBuf>>) = orphans(ledger, tasks)
+    let (mut facts, checkouts): (Vec<BookingFacts>, Vec<Option<PathBuf>>) = ledger
+        .iter()
         .filter_map(|(task, launch)| {
             let run = launch.run.as_ref()?;
             let record = records.workflows.iter().find(|record| &record.id == run)?;
@@ -542,24 +545,6 @@ pub(super) fn consumed(
         .filter_map(|(facts, _)| Some((facts.task, facts.fire?.run?)))
         .collect();
     (kept, gone)
-}
-
-/// Each ledger task with no catalog row, with its newest launch: the launches a scheduled
-/// fire consumed its row at. `loop remove` clears a task's ledger entry with its row.
-fn orphans<'l>(
-    ledger: &'l WorkflowLedger,
-    tasks: &'l BTreeMap<String, LoadedTask>,
-) -> impl Iterator<Item = (&'l str, &'l WorkflowLaunchRecord)> {
-    ledger
-        .tasks
-        .iter()
-        .filter(|(task, _)| !tasks.contains_key(*task))
-        .filter_map(|(task, launches)| {
-            Some((
-                task.as_str(),
-                launches.values().max_by_key(|launch| launch.at)?,
-            ))
-        })
 }
 
 /// A consumed entry's lifetime: while its run is not terminal or a row it launched lives;

@@ -359,7 +359,7 @@ pub(super) fn pause(args: PauseArgs, globals: &GlobalFlags) -> Result<()> {
     })?;
     let now = Timestamp::now();
     let key = task.key(&args.name);
-    let entries = arming::load();
+    let entries = arming::load()?;
     if matches!(
         ArmState::resolve(entries.get(&key), task.source(), now),
         ArmState::Disabled(_)
@@ -376,7 +376,7 @@ pub(super) fn pause(args: PauseArgs, globals: &GlobalFlags) -> Result<()> {
     let until = now
         .checked_add(duration)
         .context("resolving --for against the current clock")?;
-    arming::pause(&key, task.source(), until)?;
+    arming::pause(&task.binding(&args.name), task.source(), until)?;
 
     let mut out = ui::out();
     writeln!(
@@ -392,7 +392,7 @@ pub(super) fn enable(args: ScopeArgs, globals: &GlobalFlags) -> Result<()> {
     let tasks = scoped_tasks(args, globals)?;
     let now = Timestamp::now();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    let entries = arming::load();
+    let entries = arming::load()?;
     let mut out = ui::out();
     for (name, task) in tasks {
         let key = task.key(&name);
@@ -413,7 +413,7 @@ pub(super) fn disable(args: ScopeArgs, globals: &GlobalFlags) -> Result<()> {
     let tasks = scoped_tasks(args, globals)?;
     let mut out = ui::out();
     for (name, task) in tasks {
-        arming::disable(&task.key(&name), None)?;
+        arming::disable(&task.binding(&name), None)?;
         writeln!(out, "loop `{name}`: disabled")?;
     }
     Ok(())

@@ -279,6 +279,7 @@ fn fixture(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord, Definition)
 
 #[test]
 fn detaching_a_task_preserves_foreign_and_finished_runs() {
+    let (review, other) = (crate::ids::TaskId::new(), crate::ids::TaskId::new());
     for (run_state, live) in [
         (RunState::Active, true),
         (RunState::Parked, true),
@@ -286,11 +287,12 @@ fn detaching_a_task_preserves_foreign_and_finished_runs() {
         (RunState::Failed, false),
         (RunState::Canceled, false),
     ] {
-        for task in ["review", "other"] {
+        for (task, id) in [("review", &review), ("other", &other)] {
             let (_home, state, mut record, _) = fixture(
                 "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\ntimeout='365d'\nrun='true'\non.pending='@wait'\n",
             );
             record.task = Some(task.into());
+            record.loop_fire = Some(crate::ids::FireId::new(id));
             record.state = run_state;
             let paths = state.workflow(&record.id);
             {
@@ -303,7 +305,7 @@ fn detaching_a_task_preserves_foreign_and_finished_runs() {
             } else {
                 Vec::new()
             };
-            assert_eq!(reassign_task(&state, "review", None).unwrap(), expected);
+            assert_eq!(reassign_task(&state, &review).unwrap(), expected);
             assert_eq!(workflow::load(&paths).unwrap(), record);
         }
     }
@@ -312,6 +314,7 @@ fn detaching_a_task_preserves_foreign_and_finished_runs() {
 #[test]
 fn a_task_cancels_only_its_live_runs_that_have_not_reached_an_agent() {
     let mut selected = Vec::new();
+    let (review, other) = (crate::ids::TaskId::new(), crate::ids::TaskId::new());
     for (task, run_state, visited) in [
         ("review", RunState::Active, &[][..]),
         ("review", RunState::Active, &["pick"][..]),
@@ -324,6 +327,8 @@ fn a_task_cancels_only_its_live_runs_that_have_not_reached_an_agent() {
             "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\ntimeout='365d'\nrun='true'\non.go='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
         );
         record.task = Some(task.into());
+        let id = if task == "review" { &review } else { &other };
+        record.loop_fire = Some(crate::ids::FireId::new(id));
         record.state = run_state;
         for step in visited {
             record.visits.insert(
@@ -335,7 +340,7 @@ fn a_task_cancels_only_its_live_runs_that_have_not_reached_an_agent() {
             let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
             workflow::write(&state.workflow(&record.id), &record, &guard).unwrap();
         }
-        selected.push(unacted_task_runs(&state, "review").unwrap() == vec![record.id]);
+        selected.push(unacted_task_runs(&state, &review).unwrap() == vec![record.id]);
     }
     assert_eq!(selected, [true, true, true, false, false, false]);
 }
@@ -382,6 +387,7 @@ fn create_validates_the_spec_it_reads_before_publication() {
     let error = create(
         &state,
         DefinitionSource::Deployed {
+            loop_fire: None,
             dir: &dir,
             task: None,
             surplus: None,
@@ -478,6 +484,7 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
         let error = create(
             &state,
             DefinitionSource::Deployed {
+                loop_fire: None,
                 dir: &dir,
                 task: None,
                 surplus: None,
@@ -535,6 +542,7 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
         let error = create(
             &state,
             DefinitionSource::Deployed {
+                loop_fire: None,
                 dir: &dir,
                 task: None,
                 surplus: None,
@@ -1514,6 +1522,7 @@ fn open_room(state: &StatePaths, root: &Path) {
 
 fn inline(task: &str, text: &str, assets: &[(&str, &str)]) -> DefinitionSource<'static> {
     DefinitionSource::Inline {
+        loop_fire: crate::ids::FireId::new(&crate::ids::TaskId::new()),
         task: task.into(),
         definition: InlineDefinition {
             text: text.into(),
@@ -1593,6 +1602,7 @@ fn an_inline_run_seals_its_assets_and_reads_prompts_from_its_own_root() {
 
 fn deployed(dir: &Path) -> DefinitionSource<'_> {
     DefinitionSource::Deployed {
+        loop_fire: None,
         dir,
         task: None,
         surplus: None,
@@ -1652,6 +1662,7 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
         &state,
         home.path(),
         DefinitionSource::Deployed {
+            loop_fire: None,
             dir: &dir,
             task: None,
             surplus: None,
@@ -1670,6 +1681,10 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
     assert_eq!(blocker(inline("nightly", CHECK_ONLY, &[])), task.id);
     assert_eq!(
         blocker(DefinitionSource::Deployed {
+            loop_fire: task
+                .loop_fire
+                .as_ref()
+                .map(|fire| crate::ids::FireId::new(&fire.task())),
             dir: &other,
             task: Some("nightly".into()),
             surplus: None,
@@ -1682,6 +1697,7 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
     );
     assert_eq!(
         blocker(DefinitionSource::Deployed {
+            loop_fire: None,
             dir: &dir,
             task: None,
             surplus: None,
@@ -1721,6 +1737,7 @@ fn a_task_started_run_needs_a_room_even_with_only_checks() {
     fs::create_dir(&dir).unwrap();
     fs::write(crate::disk::paths::workflow_spec_file(&dir), CHECK_ONLY).unwrap();
     let deployed = DefinitionSource::Deployed {
+        loop_fire: None,
         dir: &dir,
         task: None,
         surplus: None,

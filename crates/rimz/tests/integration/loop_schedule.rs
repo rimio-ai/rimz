@@ -42,6 +42,8 @@ fn loop_views_keep_finished_headers_without_a_current_record() {
             env.project_root
         ),
     );
+    let task = seed_task(&env, &machine_task_key("old"));
+    let fire = rimz::ids::FireId::new(&task);
     let state = env.state_path_for(&env.project_root);
     let id = rimz::ids::WorkflowRunId::new();
     let home = state.finished_workflow(&id);
@@ -49,7 +51,7 @@ fn loop_views_keep_finished_headers_without_a_current_record() {
     let ended = Timestamp::now() - SignedDuration::from_mins(2);
     let header = json!({
         "version": rimz::store::workflow::VERSION - 1,
-        "workflow": "review", "task": "old", "state": "failed",
+        "workflow": "review", "task": "old", "loop_fire": fire, "state": "failed",
         "project_root": env.project_root, "scope": {"path": env.project_root},
         "node": "hold", "terminal_at": ended,
         "outcome": {"reason": "cannot continue this run"}
@@ -60,6 +62,8 @@ fn loop_views_keep_finished_headers_without_a_current_record() {
     report.root = Some(env.project_root.clone());
     report.checkout = Some(env.project_root.clone());
     report.run_id = Some(id.to_string());
+    report.task_id = Some(task.clone());
+    report.fire = Some(fire.clone());
     write_loop_run_records(&env, &[report]);
     let show_command = format!("rimz workflow show {id}");
     for text in [
@@ -88,27 +92,21 @@ fn loop_views_keep_finished_headers_without_a_current_record() {
     assert_eq!(row["state"], "failed");
     assert_eq!(row["node"], "hold");
     assert_eq!(row["terminal_at"], json!(ended));
-    // Remembering the same run must join its header, not add a second or gone row.
-    let ledger = state.root.join("records/loop-workflow-launches.json");
-    std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
-    std::fs::write(
-        &ledger,
-        serde_json::to_vec(&json!({
-            "version": 2, "tasks": {"old": {env.project_root.to_str().unwrap(): {
-                "at": ended, "run": id, "scope": "project"
-            }}}
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    // A fire mark naming the same run must join its header, not add a second or gone row.
+    edit_task_records(&env, |tasks| {
+        tasks[task.as_str()]["marks"] = json!({env.project_root.to_str().unwrap(): {
+            "fire": fire, "at": ended, "run": id, "scope": "project"
+        }});
+    });
     let json: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "show", "old", "--json"])).unwrap();
     assert_eq!(json["workflow_runs"].as_array().unwrap().len(), 1, "{json}");
     assert_eq!(json["workflow_runs"][0]["state"], "failed", "{json}");
-    // A ledger join is by id even when the header has lost its task or node.
+    // A mark's join is by run id even when the header has lost its task, fire or node.
     let mut incomplete = header.clone();
-    incomplete.as_object_mut().unwrap().remove("task");
-    incomplete.as_object_mut().unwrap().remove("node");
+    for key in ["task", "loop_fire", "node"] {
+        incomplete.as_object_mut().unwrap().remove(key);
+    }
     std::fs::write(&home.record, serde_json::to_vec(&incomplete).unwrap()).unwrap();
     for text in [
         loop_ok(&env, &["loop", "show", "old"]),
@@ -283,20 +281,11 @@ fn adding_machine_refuses_foreign_root_without_mutation() {
             })
             .collect(),
     );
-    std::fs::write(
-        loop_strikes_path(&env),
-        serde_json::to_vec(&BTreeMap::from([
-            (keys[0].clone(), 2),
-            (keys[1].clone(), 3),
-        ]))
-        .unwrap(),
-    )
-    .unwrap();
-    let mut paths = vec![
-        loop_config_path(&env),
-        loop_arming_path(&env),
-        loop_strikes_path(&env),
-    ];
+    write_loop_strikes(
+        &env,
+        &BTreeMap::from([(keys[0].clone(), 2), (keys[1].clone(), 3)]),
+    );
+    let mut paths = vec![loop_config_path(&env), task_records_path(&env)];
     for root in [&env.project_root, &other] {
         let path = env
             .state_path_for(root)
@@ -676,7 +665,7 @@ fn condition_tick_observes_board_and_records_evidence() {
     assert!(!instances.0["ready"].repeat);
     loop_ok(&env, &["loop", "tick"]);
     let armed = rimz::harness::schedule::last_stamps(&env.runtime_paths());
-    assert!(armed.contains_key("ready"));
+    assert!(armed.contains_key(task_id(&env, "ready").as_str()));
     loop_ok(&env, &["loop", "tick"]);
     assert_eq!(
         rimz::harness::schedule::last_stamps(&env.runtime_paths()),
@@ -861,6 +850,8 @@ fn paused_fanout_keeps_hold_and_fired_state() {
             env.project_root.to_str().unwrap()
         ),
     );
+    // Bound before the first tick, as the pause below would bind it, so its stamps keep their key.
+    seed_task(&env, &machine_task_key("resident"));
     loop_ok(&env, &["loop", "tick"]);
     loop_ok(&env, &["loop", "tick"]);
     let runtime = env.runtime_paths();
@@ -1151,7 +1142,7 @@ fn resident_show_json_adds_unfolded_worktrees_and_keeps_existing_keys() {
     );
     let raw = loop_ok(&env, &["loop", "show", "resident", "--json"]);
     let shown: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    for key in ["task", "entry", "launches", "runs", "running"] {
+    for key in ["task", "entry", "runs", "running"] {
         assert!(shown.get(key).is_some(), "existing key {key} must remain");
     }
     assert_eq!(
@@ -2379,15 +2370,13 @@ fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
     sibling.wait.as_mut().unwrap().session = AgentSessionId::from("sess-retire-sibling");
     instances.0.insert("sibling".to_owned(), sibling.clone());
     write_loop_instances(&env, instances);
-    std::fs::write(
-        loop_strikes_path(&env),
-        serde_json::to_vec(&BTreeMap::from([
+    write_loop_strikes(
+        &env,
+        &BTreeMap::from([
             (project_task_key(&env.project_root, "clock"), 2_u32),
             (project_task_key(&env.project_root, "signal"), 1),
-        ]))
-        .unwrap(),
-    )
-    .unwrap();
+        ]),
+    );
     run_hook(
         &env,
         json!({"hook_event_name": "SessionEnd", "session_id": "sess-retire"}),
@@ -2430,11 +2419,7 @@ fn non_hook_end_retires_matching_subscription_before_delivery() {
     write_loop_instances(&env, instances);
     loop_ok(&env, &["loop", "enable", "ended"]);
     let key = project_task_key(&env.project_root, "ended");
-    std::fs::write(
-        loop_strikes_path(&env),
-        serde_json::to_vec(&BTreeMap::from([(key.clone(), 1_u32)])).unwrap(),
-    )
-    .unwrap();
+    write_loop_strikes(&env, &BTreeMap::from([(key.clone(), 1_u32)]));
     stamp_session_ended(&env, "sess-ended");
     loop_ok(
         &env,
@@ -2495,11 +2480,7 @@ fn sibling_fire_retires_only_the_durably_ended_subscription() {
     write_loop_instances(&env, instances.clone());
     loop_ok(&env, &["loop", "enable", "ended"]);
     let key = project_task_key(&env.project_root, "ended");
-    std::fs::write(
-        loop_strikes_path(&env),
-        serde_json::to_vec(&BTreeMap::from([(key.clone(), 2_u32)])).unwrap(),
-    )
-    .unwrap();
+    write_loop_strikes(&env, &BTreeMap::from([(key.clone(), 2_u32)]));
     stamp_session_ended(&env, "sess-ended");
 
     // Same family, different exact name: the skip branch, which returns before
@@ -3061,6 +3042,62 @@ fn external_tick_yields_a_root_with_a_fresh_sidebar() {
     assert_eq!(std::fs::read(&record_path).unwrap(), record);
 }
 
+/// A shell fire's command carries its fire id, which names the task that fired.
+#[test]
+fn a_shell_fire_carries_a_fire_id_that_names_its_task() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let runtime = env.runtime_paths();
+    crate::common::room::seed_sidebar_heartbeat(&runtime, MuxName::Tmux, "rimz-test", "sidebar");
+    let seen = env.project_root.join("fire-id");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.fire-env]\ncommand = [\"sh\", \"-c\", \"printf %s \\\"$RIMZ_LOOP_FIRE\\\" > {0}.tmp && mv {0}.tmp {0}\"]\ntimeout = \"1m\"\nroot = \"{1}\"\nevery = \"1h\"\n",
+            seen.display(),
+            env.project_root.display(),
+        ),
+    );
+
+    loop_ok(&env, &["loop", "run", "fire-env"]);
+    wait_for_path(&seen);
+    let fire = rimz::ids::FireId::parse(&std::fs::read_to_string(&seen).unwrap()).unwrap();
+    assert_eq!(fire.task(), task_id(&env, "fire-env"));
+}
+
+/// An unreadable task record stops a fire with its path and fix, and `rimz doctor` reports
+/// it; neither reads it as empty, so the file stays as it was.
+#[test]
+fn an_unreadable_task_record_stops_a_fire_and_shows_in_doctor() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let ran = env.project_root.join("ran");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.held]\ncommand = [\"touch\", \"{}\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\n",
+            ran.display(),
+            env.project_root.display(),
+        ),
+    );
+    let path = task_records_path(&env);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "not json").unwrap();
+    let fix = format!(
+        "move {} aside (every task then starts armed with no strikes)",
+        path.display()
+    );
+
+    let (_, error) = loop_fail(&env, &["loop", "run", "held"]);
+    assert!(error.contains(&path.display().to_string()), "{error}");
+    assert!(!ran.exists());
+    let doctor = env.rimz().args(["doctor"]).output().unwrap();
+    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(doctor.contains("task record"), "{doctor}");
+    assert!(doctor.contains(&fix), "{doctor}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json");
+}
+
 #[cfg(unix)]
 #[test]
 fn external_tick_refuses_when_the_systemd_user_manager_is_unreachable() {
@@ -3153,8 +3190,8 @@ fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
         serde_json::from_slice(&std::fs::read(&fire_path).expect("fire state"))
             .expect("fire state json");
     assert!(stamps["missing-runner"] > prior);
-    assert!(!loop_strikes_path(&env).exists());
-    assert!(!loop_arming_path(&env).exists());
+    assert!(read_loop_strikes(&env).is_empty());
+    assert!(read_loop_arming(&env).is_empty());
 
     let output = tick.output().expect("second rimz loop tick");
     assert!(
@@ -3166,9 +3203,16 @@ fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
     let after: BTreeMap<String, Timestamp> =
         serde_json::from_slice(&std::fs::read(&fire_path).expect("fire state"))
             .expect("fire state json");
-    assert_eq!(after, stamps);
-    assert!(!loop_strikes_path(&env).exists());
-    assert!(!loop_arming_path(&env).exists());
+    // The failed start's row bound the task, so the next pass keys the same stamp by its id.
+    assert_eq!(
+        after,
+        BTreeMap::from([(
+            task_id(&env, "missing-runner").to_string(),
+            stamps["missing-runner"]
+        )])
+    );
+    assert!(read_loop_strikes(&env).is_empty());
+    assert!(read_loop_arming(&env).is_empty());
 }
 
 fn write_fire_at_row(env: &Env, name: &str) {
@@ -3232,8 +3276,8 @@ fn external_tick_retries_a_fire_at_start_failure_after_the_grace() {
         "retried past the grace"
     );
     assert!(read_loop_instances(&env).0.contains_key("stranded"));
-    assert!(!loop_strikes_path(&env).exists());
-    assert!(!loop_arming_path(&env).exists());
+    assert!(read_loop_strikes(&env).is_empty());
+    assert!(read_loop_arming(&env).is_empty());
 }
 
 /// A scheduled runner that finds its `fire-at` row paused exits without a
@@ -4818,17 +4862,8 @@ fn loop_enable_disable_pause_workflow() {
             strikes: None,
         },
     )]);
-    std::fs::write(
-        loop_arming_path(&env),
-        serde_json::to_vec(&expired).expect("serialize expired pause"),
-    )
-    .expect("write expired pause");
-    std::fs::write(
-        loop_strikes_path(&env),
-        serde_json::to_vec(&BTreeMap::from([(key.clone(), 2_u32)]))
-            .expect("serialize loop strikes"),
-    )
-    .expect("write loop strikes");
+    write_loop_arming(&env, &expired);
+    write_loop_strikes(&env, &BTreeMap::from([(key.clone(), 2_u32)]));
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("already enabled"));
     let enabled = read_loop_arming(&env)[&key];
     assert_eq!(enabled.at, Some(prior_enable));
@@ -4950,7 +4985,7 @@ fn loop_task_mutations_move_and_clear_overlays() {
         ),
     );
     loop_ok(&env, &["loop", "pause", "old", "--for", "2h"]);
-    std::fs::write(loop_strikes_path(&env), r#"{"machine::old":2}"#).expect("write loop strikes");
+    write_loop_strikes(&env, &BTreeMap::from([(machine_task_key("old"), 2)]));
     loop_ok(&env, &["loop", "rename", "old", "new"]);
     let text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
@@ -5001,35 +5036,38 @@ fn loop_task_mutations_move_and_clear_overlays() {
     );
 }
 
+/// A rename moves the task's binding, not its runs: a run is the task's own by the fire id it
+/// carries, so every run record stays as written and the renamed task still shows its own.
 #[test]
-fn loop_rename_moves_live_workflow_runs() {
+fn loop_rename_keeps_the_tasks_runs_by_their_fire_id() {
     let env = Env::new();
     env.record(&env.project_root);
-    write_loop_config(
+    loop_ok(
         &env,
-        &format!(
-            "[tasks.old]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = {:?}\nevery = \"15m\"\n",
-            env.project_root
-        ),
+        &["loop", "add", "old", "--every", "15m", "--", "true"],
     );
+    let own = task_id(&env, "old");
+    let other = rimz::ids::TaskId::new();
     let paths = env.state_path_for(&env.project_root);
     let records: Vec<(rimz::store::workflow::RunRecord, Vec<u8>)> = {
         let guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
         [
-            ("parked", Some("old")),
-            ("active", Some("old")),
-            ("done", Some("old")),
-            ("failed", Some("old")),
-            ("canceled", Some("old")),
-            ("active", Some("other")),
-            ("active", None),
+            ("parked", Some("old"), Some(&own)),
+            ("active", Some("old"), Some(&own)),
+            ("done", Some("old"), Some(&own)),
+            ("failed", Some("old"), Some(&own)),
+            ("canceled", Some("old"), Some(&own)),
+            ("active", Some("other"), Some(&other)),
+            // An older RimZ's run of a task named `old`, which names no fire.
+            ("active", Some("old"), None),
+            ("active", None, None),
         ]
         .into_iter()
         .enumerate()
-        .map(|(index, (state, task))| {
+        .map(|(index, (state, task, fire))| {
             let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
                 "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
-                "task":task, "spec_dir":"/definitions/review",
+                "task":task, "loop_fire":fire.map(rimz::ids::FireId::new), "spec_dir":"/definitions/review",
                 "prompt":null, "scope":{"kind":"worktree","path":env.project_root.join(index.to_string())},
                 "project_root":env.project_root, "created_at":"2026-01-01T00:00:00Z",
                 "state":state, "park":if state == "parked" {
@@ -5051,14 +5089,13 @@ fn loop_rename_moves_live_workflow_runs() {
 
     let receipt = loop_ok(&env, &["loop", "rename", "old", "new"]);
     assert_eq!(receipt.trim(), "renamed loop task `old` to `new`");
-    for (mut expected, bytes) in records.clone() {
-        let run_paths = paths.workflow(&expected.id);
-        if expected.task.as_deref() == Some("old") && !expected.state.is_terminal() {
-            expected.task = Some("new".into());
-        } else {
-            assert_eq!(std::fs::read(&run_paths.record).unwrap(), bytes);
-        }
-        assert_eq!(rimz::store::workflow::load(&run_paths).unwrap(), expected);
+    assert_eq!(task_id(&env, "new"), own, "the rename keeps the task's id");
+    for (_, bytes) in &records {
+        let record: rimz::store::workflow::RunRecord = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(
+            &std::fs::read(paths.workflow(&record.id).record).unwrap(),
+            bytes
+        );
     }
     let shown = loop_ok(&env, &["loop", "show", "new"]);
     assert!(shown.contains("RUNS"), "{shown}");
@@ -5076,6 +5113,15 @@ fn loop_rename_moves_live_workflow_runs() {
             "{json:#}"
         );
     }
+    let ids: Vec<_> = json["workflow_runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].clone())
+        .collect();
+    for (record, _) in &records[5..] {
+        assert!(!ids.contains(&json!(record.id)), "{json:#}");
+    }
     let listed = loop_ok(&env, &["loop", "list"]);
     assert!(listed.contains("NEEDS YOU"), "{listed}");
     assert!(
@@ -5088,6 +5134,55 @@ fn loop_rename_moves_live_workflow_runs() {
     );
     let (_, error) = loop_fail(&env, &["loop", "show", "old"]);
     assert!(error.contains("no loop task named `old`"), "{error}");
+}
+
+/// Strikes, arming and history follow the task's id through a rename; a task removed and added
+/// again under the same name is a new task and inherits none of them.
+#[test]
+fn a_renamed_task_keeps_its_state_and_a_re_added_name_inherits_none() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    loop_ok(
+        &env,
+        &["loop", "add", "old", "--every", "15m", "--", "true"],
+    );
+    let id = task_id(&env, "old");
+    loop_ok(&env, &["loop", "disable", "old"]);
+    write_loop_strikes(
+        &env,
+        &BTreeMap::from([(task_key(&env, &env.project_root, "old"), 2)]),
+    );
+    let mut failed = LoopRunRecord::new("old", LoopRunResult::Failed, LoopRunMode::Manual, 0);
+    failed.root = Some(env.project_root.clone());
+    write_loop_run_records(&env, &[failed]);
+
+    loop_ok(&env, &["loop", "rename", "old", "new"]);
+    let key = task_key(&env, &env.project_root, "new");
+    assert_eq!(task_id(&env, "new"), id);
+    assert_eq!(read_loop_strikes(&env).get(&key), Some(&2));
+    assert_eq!(
+        read_loop_arming(&env)
+            .get(&key)
+            .map(|arming| arming.enabled),
+        Some(false)
+    );
+    let logs = loop_ok(&env, &["loop", "logs", "new", "--failed"]);
+    assert!(!logs.contains("no failed runs recorded"), "{logs}");
+
+    loop_ok(&env, &["loop", "remove", "new"]);
+    loop_ok(
+        &env,
+        &["loop", "add", "new", "--every", "15m", "--", "true"],
+    );
+    assert_ne!(task_id(&env, "new"), id);
+    assert_eq!(read_loop_strikes(&env).get(&key), None);
+    assert!(
+        read_loop_arming(&env)
+            .get(&key)
+            .is_none_or(|arming| arming.enabled)
+    );
+    let logs = loop_ok(&env, &["loop", "logs", "new", "--failed"]);
+    assert_eq!(logs.trim(), "no failed runs recorded");
 }
 
 #[test]
@@ -5543,16 +5638,14 @@ fn a_fresh_task_fired_while_its_run_lives_overlaps_without_cutting_a_tree() {
     assert_eq!(night_leftovers(&env), Vec::<String>::new());
 }
 
-/// The stored quiet streak of `task`, read from the machine fire record.
+/// The stored quiet streak of `task`, read from its task record.
 fn quiet_streak(env: &Env, task: &str) -> u64 {
-    let text = std::fs::read_to_string(env.rimz_home().join("loops/loop-fires.json")).unwrap();
-    let fires: BTreeMap<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
-    fires
-        .into_values()
-        .filter_map(|fires| fires.get("quiet").cloned())
-        .find(|quiet| quiet["last"]["task"] == task)
-        .and_then(|quiet| quiet["streak"].as_u64())
-        .unwrap_or_else(|| panic!("{task} has no quiet summary: {text}"))
+    let records = task_records(env);
+    records
+        .named_in(&env.project_root, task)
+        .and_then(|(_, record)| record.quiet.as_ref())
+        .map(|quiet| quiet.streak)
+        .unwrap_or_else(|| panic!("{task} has no quiet summary: {records:?}"))
 }
 
 fn workflow_assists(env: &Env) -> Vec<serde_json::Value> {
@@ -5819,13 +5912,7 @@ fn a_run_collected_before_its_launch_memory_is_remembered_only_when_it_succeeded
                 read_loop_run_records(&env).len() as u64
             }
         };
-        let remembered = || {
-            rimz::harness::schedule::launch_ledger::load_workflows(env.store().paths())
-                .unwrap()
-                .tasks
-                .get("quick")
-                .is_some_and(|checkouts| !checkouts.is_empty())
-        };
+        let remembered = || holds_a_checkout(&env, "quick");
 
         // Hold the launcher before it writes launch memory until the run's collection is done.
         let hold = crate::common::DeliveryRendezvous::new(&env, "launch-memory");
@@ -5906,13 +5993,7 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
-    let remembered = || {
-        rimz::harness::schedule::launch_ledger::load_workflows(env.store().paths())
-            .unwrap()
-            .tasks
-            .get("strand")
-            .is_some_and(|checkouts| !checkouts.is_empty())
-    };
+    let remembered = || holds_a_checkout(&env, "strand");
     let id: rimz::ids::WorkflowRunId = fired_record(&env, "strand")
         .run_id
         .expect("in-flight run id")
@@ -6341,7 +6422,7 @@ fn loop_scheduled_one_shot_consumption_follows_preflight_boundary() {
     assert!(
         runs.iter().any(|run| matches!(
             rimz::store::workflow::load(&run.paths),
-            Ok(record) if record.started_by("dispatch-fails")
+            Ok(record) if record.started_by(&task_id(&dispatch, "dispatch-fails"))
         )) || read_loop_run_records(&dispatch)
             .iter()
             .any(|row| row.task == "dispatch-fails" && row.run_id.is_some()),
@@ -6614,7 +6695,7 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
         pid: 42_424,
         started_at: Timestamp::now() - SignedDuration::from_secs(25 * 60),
     };
-    let lock_file = hold_loop_run_lock(&loop_run_lock_path(&env, "busy"), &holder);
+    let lock_file = hold_loop_run_lock(&task_run_lock_path(&env, "busy"), &holder);
 
     let run = loop_ok(&env, &["loop", "run", "busy"]);
     assert!(
@@ -6711,7 +6792,7 @@ fn loop_list_shows_a_running_task_beside_its_last_result() {
         pid: 42_424,
         started_at: Timestamp::now() - SignedDuration::from_secs(3 * 60),
     };
-    let lock_file = hold_loop_run_lock(&loop_run_lock_path(&env, "busy"), &holder);
+    let lock_file = hold_loop_run_lock(&task_run_lock_path(&env, "busy"), &holder);
     let list = loop_ok(&env, &["loop", "list"]);
     let running = row(&list, "busy");
     assert!(
@@ -7711,16 +7792,34 @@ fn run_mark(env: &Env, task: &str) -> RunMark {
 /// The quiet summary of `task` in the fixture's machine fire record: how many of its fires'
 /// commands exited 0, and the newest one's row.
 fn quiet_fires(env: &Env, task: &str) -> Option<(u64, LoopRunRecord)> {
-    let text = std::fs::read_to_string(env.rimz_home().join("loops/loop-fires.json")).ok()?;
-    let fires: BTreeMap<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
-    fires
-        .into_values()
-        .filter_map(|fires| {
-            let quiet = fires.get("quiet")?;
-            let last: LoopRunRecord = serde_json::from_value(quiet["last"].clone()).unwrap();
-            (last.task == task).then(|| (quiet["count"].as_u64().unwrap(), last))
-        })
-        .max_by_key(|(_, last)| last.at)
+    let records = task_records(env);
+    let (_, record) = records.named_in(&env.project_root, task)?;
+    let quiet = record.quiet.clone()?;
+    Some((quiet.count, quiet.last))
+}
+
+/// The task records `env`'s home holds: none before the first task is added.
+fn task_records(env: &Env) -> rimz::harness::schedule::task_record::TaskRecords {
+    std::fs::read(env.rimz_home().join("loops/tasks.json")).map_or_else(
+        |_| Default::default(),
+        |bytes| serde_json::from_slice(&bytes).unwrap(),
+    )
+}
+
+/// The id of the record `task` of `env`'s project is bound to, or was last.
+fn task_id(env: &Env, task: &str) -> rimz::ids::TaskId {
+    task_records(env)
+        .named_in(&env.project_root, task)
+        .unwrap_or_else(|| panic!("{task} has no task record"))
+        .0
+        .clone()
+}
+
+/// Whether a fire of `task` holds a checkout for `once-per-checkout`.
+fn holds_a_checkout(env: &Env, task: &str) -> bool {
+    task_records(env)
+        .named_in(&env.project_root, task)
+        .is_some_and(|(_, record)| record.marks.values().any(|mark| mark.holds_checkout()))
 }
 
 /// Wait for a terminal run report of `task` past `mark`: a history row, or a quiet fire, whose
@@ -7783,6 +7882,7 @@ fn fired_record(env: &Env, task: &str) -> LoopRunRecord {
 /// notice, so the row alone can be read before the state that follows it.
 fn wait_for_loop_reports_sent(env: &Env, task: &str, runs: usize) {
     use rimz::store::workflow::LoopReport;
+    let task = &task_id(env, task);
     let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     loop {
         let store = env.store();
@@ -8065,12 +8165,67 @@ fn write_project_config_at(project_root: &Path, text: &str) {
     std::fs::write(path, text).expect("write project config");
 }
 
-fn loop_arming_path(env: &Env) -> std::path::PathBuf {
-    env.rimz_home().join("loops/loop-arming.json")
+fn task_records_path(env: &Env) -> std::path::PathBuf {
+    env.rimz_home().join("loops/tasks.json")
 }
 
-fn loop_strikes_path(env: &Env) -> std::path::PathBuf {
-    env.rimz_home().join("loops/loop-strikes.json")
+/// Edits the task record file as a hand edit would: `edit` gets its records by task id.
+fn edit_task_records(
+    env: &Env,
+    edit: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+) {
+    let path = task_records_path(env);
+    let mut file: serde_json::Value = std::fs::read(&path).map_or_else(
+        |_| json!({"version": 1, "tasks": {}}),
+        |bytes| serde_json::from_slice(&bytes).expect("task records"),
+    );
+    edit(file["tasks"].as_object_mut().expect("tasks map"));
+    std::fs::create_dir_all(path.parent().expect("loops dir")).expect("mkdir loops");
+    std::fs::write(path, serde_json::to_vec_pretty(&file).expect("json")).expect("write records");
+}
+
+/// The id of the live record bound to `key` (a `machine_task_key` or a `project_task_key`),
+/// bound now when none is, as the task's first state write would bind it.
+fn seed_task(env: &Env, key: &str) -> rimz::ids::TaskId {
+    if let Some((id, _)) = task_records(env).live(key) {
+        return id.clone();
+    }
+    let (scope, name) = key.split_once("::").expect("task key");
+    let scope = if scope == "machine" {
+        json!("machine")
+    } else {
+        json!({ "workspace": scope })
+    };
+    let id = rimz::ids::TaskId::new();
+    edit_task_records(env, |tasks| {
+        tasks.insert(
+            id.to_string(),
+            json!({"binding": {"scope": scope, "name": name}}),
+        );
+    });
+    id
+}
+
+/// Sets `field` of each live record whose key `values` names, binding the missing ones, and
+/// clears it on every other live record.
+fn write_live_field<T: serde::Serialize>(env: &Env, field: &str, values: &BTreeMap<String, T>) {
+    for key in values.keys() {
+        seed_task(env, key);
+    }
+    edit_task_records(env, |tasks| {
+        for record in tasks.values_mut() {
+            let task: rimz::harness::schedule::task_record::TaskRecord =
+                serde_json::from_value(record.clone()).expect("task record");
+            if !task.is_live() {
+                continue;
+            }
+            let fields = record.as_object_mut().expect("record object");
+            match values.get(&task.binding.key()) {
+                Some(value) => fields.insert(field.to_owned(), json!(value)),
+                None => fields.remove(field),
+            };
+        }
+    });
 }
 
 fn loop_instances_path(env: &Env) -> std::path::PathBuf {
@@ -8116,7 +8271,47 @@ fn wait_for_loop_run_records(
     }
 }
 
+/// Writes `records` as history, each row without a task id stamped with the id of the task it
+/// names in its root, bound now when it is not yet: a row with no id belongs to no task.
 fn write_loop_run_records(env: &Env, records: &[LoopRunRecord]) {
+    let records: Vec<_> = records
+        .iter()
+        .cloned()
+        .map(|mut record| {
+            if record.task_id.is_none() {
+                let root = record
+                    .root
+                    .clone()
+                    .unwrap_or_else(|| env.project_root.clone());
+                record.task_id = Some(seed_task(env, &task_key(env, &root, &record.task)));
+            }
+            record
+        })
+        .collect();
+    write_unbound_loop_run_records(env, &records);
+}
+
+/// The binding key of task `name` as a catalog of the room at `root` loads it: the machine
+/// config's row when it has one, else the workspace's.
+fn task_key(env: &Env, root: &Path, name: &str) -> String {
+    let machine = std::fs::read_to_string(loop_config_path(env))
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .is_some_and(|config| {
+            config
+                .get("tasks")
+                .and_then(|tasks| tasks.get(name))
+                .is_some()
+        });
+    if machine {
+        machine_task_key(name)
+    } else {
+        project_task_key(root, name)
+    }
+}
+
+/// Writes `records` as history as they are: a row with no task id belongs to no task.
+fn write_unbound_loop_run_records(env: &Env, records: &[LoopRunRecord]) {
     let path = loop_runs_path(env);
     std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
     let mut text = String::new();
@@ -8136,21 +8331,15 @@ fn read_loop_instances(env: &Env) -> Tasks {
 }
 
 fn read_loop_arming(env: &Env) -> BTreeMap<String, Arming> {
-    let path = loop_arming_path(env);
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return BTreeMap::new();
-    };
-    serde_json::from_str(&text).expect("loop arming")
+    task_records(env)
+        .by_key()
+        .into_iter()
+        .filter_map(|(key, (_, record))| Some((key, record.arming?)))
+        .collect()
 }
 
 fn write_loop_arming(env: &Env, entries: &BTreeMap<String, Arming>) {
-    let path = loop_arming_path(env);
-    std::fs::create_dir_all(path.parent().expect("arming parent")).expect("mkdir arming parent");
-    std::fs::write(
-        path,
-        serde_json::to_vec_pretty(entries).expect("arming json"),
-    )
-    .expect("write loop arming");
+    write_live_field(env, "arming", entries);
 }
 
 fn machine_task_key(name: &str) -> String {
@@ -8165,11 +8354,16 @@ fn project_task_key(project_root: &Path, name: &str) -> String {
 }
 
 fn read_loop_strikes(env: &Env) -> BTreeMap<String, u32> {
-    let path = loop_strikes_path(env);
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return BTreeMap::new();
-    };
-    serde_json::from_str(&text).expect("loop strikes")
+    task_records(env)
+        .by_key()
+        .into_iter()
+        .filter(|(_, (_, record))| record.strikes > 0)
+        .map(|(key, (_, record))| (key, record.strikes))
+        .collect()
+}
+
+fn write_loop_strikes(env: &Env, strikes: &BTreeMap<String, u32>) {
+    write_live_field(env, "strikes", strikes);
 }
 
 /// Stores the delivery row a standing wait for `session` keeps on `entry`'s trigger, at the
@@ -8414,6 +8608,16 @@ fn loop_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {
         .lock_path(format!("loop-run-{name}.lock"))
 }
 
+/// The bare run lock of task `name` under its task id, as a runner takes it; a task not bound
+/// yet is bound now as a machine row.
+fn task_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {
+    let id = task_records(env)
+        .named_in(&env.project_root, name)
+        .map(|(id, _)| id.clone())
+        .unwrap_or_else(|| seed_task(env, &machine_task_key(name)));
+    loop_run_lock_path(env, id.as_str())
+}
+
 /// Hold a run lock as a runner would, with `holder` as its payload.
 fn hold_loop_run_lock(path: &Path, holder: &RunLockInfo) -> std::fs::File {
     std::fs::create_dir_all(path.parent().expect("lock parent")).expect("mkdir runtime");
@@ -8427,12 +8631,16 @@ fn hold_loop_run_lock(path: &Path, holder: &RunLockInfo) -> std::fs::File {
     lock_file
 }
 
+/// A row with only the fields the oldest rows carry, plus the task id that ties it to the
+/// machine task `task`: a row with no id belongs to no task.
 fn append_legacy_loop_record(env: &Env, task: &str, result: LoopRunResult) {
+    let id = seed_task(env, &machine_task_key(task));
     let path = loop_runs_path(env);
     std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
     let result = serde_json::to_string(&result).expect("result json");
-    let line =
-        format!("{{\"task\":\"{task}\",\"at\":\"1970-01-01T00:00:10Z\",\"result\":{result}}}\n");
+    let line = format!(
+        "{{\"task\":\"{task}\",\"task_id\":\"{id}\",\"at\":\"1970-01-01T00:00:10Z\",\"result\":{result}}}\n"
+    );
     std::fs::write(path, line).expect("write legacy loop run record");
 }
 

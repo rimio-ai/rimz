@@ -23,7 +23,10 @@ use super::{
     backlog::{self, StopCause, StopMark, WaitingTrigger},
     backlog_store::{self, LockedBacklog},
     fire::deadline_expired_at,
-    run_lock::{file_name as run_lock_file_name, is_run_lock_of},
+    fires,
+    run_lock::{self, file_name as run_lock_file_name},
+    task_record::{self, FireMark, TaskRecords},
+    task_record_store,
 };
 use crate::agents::PermissionMode;
 use crate::agents::{
@@ -34,7 +37,7 @@ use crate::config::{CheckOn, MachineConfig, OverlapPolicy, TaskEntry, TaskTarget
 use crate::disk::lease::{Lease, LeaseAttempt, LeaseState, claim, probe};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::check_run::{CheckOutcome, CheckSignalGuard};
-use crate::harness::loop_task::{LOOP_BOOKED_BY_ENV, LOOP_TASK_ENV, read_fire_launch};
+use crate::harness::loop_task::{LOOP_BOOKED_BY_ENV, LOOP_TASK_ENV};
 use crate::harness::run::SupervisedRunRequest;
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
 use crate::harness::schedule::run_log::{
@@ -45,6 +48,7 @@ use crate::harness::schedule::{TaskAction, TaskActionKind, TaskKind, Trigger};
 use crate::harness::signal::{Signal as TriggerSignal, WatchOutcome};
 use crate::harness::task_login::task_login;
 use crate::ids::AgentKind;
+use crate::ids::{FireId, TaskId};
 use crate::ids::{MessageId, RunId, WorkspaceId};
 use crate::store::run::RunRecord;
 use crate::store::workflow::RunFire;
@@ -237,7 +241,11 @@ impl FireContext {
 
 /// Discard waiting triggers and stop marks when a drain cannot compile its task.
 pub fn discard_backlog(name: &str, root: &Path) -> Result<()> {
-    super::backlog_store::remove(&StatePaths::for_project_root(root)?, name)?;
+    let paths = StatePaths::for_project_root(root)?;
+    let ids = task_record::load()?.ids_named(name);
+    for key in ids.iter().map(TaskId::as_str).chain([name]) {
+        super::backlog_store::remove(&paths, key)?;
+    }
     Ok(())
 }
 
@@ -346,6 +354,8 @@ pub(super) fn settle_fire_tree(run: &crate::store::workflow::RunRecord) {
 /// One loop fire from ordered gates through one history transition, unless a drain finds no work.
 pub struct TaskFire<'a> {
     name: String,
+    /// The task's id, bound at construction: the key of its backlog entry and run lock.
+    task_id: TaskId,
     task: LoadedTask,
     entry: TaskEntry,
     catalog: &'a TaskCatalog,
@@ -402,6 +412,8 @@ impl<'a> TaskFire<'a> {
     ) -> Result<Self> {
         let name = name.into();
         let action = task.action().cloned().map_err(Clone::clone)?;
+        let binding = task.binding(&name);
+        let task_id = task_record_store::mutate(|records| records.bind(&binding).0)?;
         let entry = task.entry().clone();
         let ephemeral = task.is_ephemeral();
         let late_ms = entry
@@ -411,6 +423,7 @@ impl<'a> TaskFire<'a> {
             .filter(|late| *late >= LATE_FIRE_MS);
         Ok(Self {
             name,
+            task_id,
             task,
             entry,
             catalog,
@@ -457,7 +470,18 @@ impl<'a> TaskFire<'a> {
     pub fn take_backlog(&mut self) -> Result<bool> {
         let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
         let mut backlog = LockedBacklog::acquire(&paths)?;
-        let Some(waiting) = backlog.record.tasks.get_mut(&self.name) else {
+        if let Some(legacy) = backlog.record.tasks.remove(&self.name) {
+            // An older RimZ keyed waiting triggers by name; they move to the task's id.
+            backlog
+                .record
+                .tasks
+                .entry(self.task_id.to_string())
+                .or_default()
+                .triggers
+                .extend(legacy.triggers);
+            backlog.save()?;
+        }
+        let Some(waiting) = backlog.record.tasks.get_mut(self.task_id.as_str()) else {
             return Ok(false);
         };
         if waiting.triggers.is_empty() {
@@ -511,7 +535,7 @@ impl<'a> TaskFire<'a> {
             let backlog = backlog::load(paths)?;
             if backlog
                 .tasks
-                .get(&self.name)
+                .get(self.task_id.as_str())
                 .is_some_and(|task| !task.triggers.is_empty())
             {
                 spawn(
@@ -568,7 +592,7 @@ impl<'a> TaskFire<'a> {
             }
             Err(error) => return Err(error.into()),
         };
-        let Some(waiting) = backlog.record.tasks.get_mut(&self.name) else {
+        let Some(waiting) = backlog.record.tasks.get_mut(self.task_id.as_str()) else {
             return Ok(None);
         };
         if waiting
@@ -799,7 +823,7 @@ impl<'a> TaskFire<'a> {
         }
         let fresh = self.entry.fresh_worktree.is_some();
         if fresh && let Some(blocker) = self.live_task_run(&state)? {
-            return self.prepare_overlap(&blocker.id, None);
+            return self.prepare_overlap(&blocker.id);
         }
         // The last rung: a fresh task's run works in a tree cut for this fire alone.
         self.prepare_fire_tree()?;
@@ -807,8 +831,10 @@ impl<'a> TaskFire<'a> {
         // run's prompt, which its command reads as `RIMZ_LOOP_TRIGGER`, names the one served.
         let trigger = self.effect_prompt(String::new());
         let prompt = || Ok((!trigger.is_empty()).then(|| trigger.clone()));
+        let (fire, displaced) = self.open_fire()?;
         let definition = crate::harness::workflow::DefinitionSource::Inline {
             task: self.name.clone(),
+            loop_fire: fire.clone(),
             definition,
             fire_tree: fresh,
             surplus: None,
@@ -835,24 +861,13 @@ impl<'a> TaskFire<'a> {
                 self.advance = Some(advance);
                 run
             }
-            Err(crate::harness::workflow::WorkflowErr::Exists {
-                run, task, kind, ..
-            }) => {
-                let repair = (task.as_deref() == Some(self.name.as_str()))
-                    .then(|| self.record_workflow_launch(&state, &run, kind, self.now, false))
-                    .flatten();
-                return self.prepare_overlap(&run, repair);
+            Err(error) => {
+                // A fire that published no run leaves the checkout's mark as it found it.
+                if let Err(withdraw) = fires::withdraw(&fire, displaced) {
+                    tracing::warn!(task = %self.name, %fire, error = %withdraw, "an unlaunched fire's mark stays open");
+                }
+                return self.refused_launch(error);
             }
-            Err(crate::harness::workflow::WorkflowErr::NoRoom(root)) => {
-                return Ok(TaskFirePlan::Done(self.record_gate(
-                    LoopRunResult::StartFailed,
-                    format!(
-                        "no room at {}; run `rimz start` there first",
-                        root.display()
-                    ),
-                )));
-            }
-            Err(error) => return Err(error.into()),
         };
         self.saw_run = true;
         // The run owns its tree now; its report removes it, or keeps it while it holds work.
@@ -861,13 +876,7 @@ impl<'a> TaskFire<'a> {
             path: tree.path.clone(),
             base_fallback: tree.base_fallback.clone(),
         });
-        let error = self.record_workflow_launch(
-            &state,
-            &run.id,
-            run.scope.kind,
-            run.created_at,
-            self.mode == LoopRunMode::Manual,
-        );
+        let error = self.note_launched(&fire, &run);
         // A poll-until row lives until a run acts, which the run's report decides.
         if self.entry.deadline.is_none() {
             self.consume_ephemeral()?;
@@ -880,10 +889,32 @@ impl<'a> TaskFire<'a> {
             None,
             |record| {
                 record.run_id = Some(run.id.to_string());
+                record.fire = Some(fire);
                 record.worktree = worktree;
                 record.error = error;
             },
         )))
+    }
+
+    /// The plan for a run `create` refused: an overlap with the live run it names, or a
+    /// failed start.
+    fn refused_launch(
+        &mut self,
+        error: crate::harness::workflow::WorkflowErr,
+    ) -> Result<TaskFirePlan> {
+        match error {
+            crate::harness::workflow::WorkflowErr::Exists { run, .. } => self.prepare_overlap(&run),
+            crate::harness::workflow::WorkflowErr::NoRoom(root) => {
+                Ok(TaskFirePlan::Done(self.record_gate(
+                    LoopRunResult::StartFailed,
+                    format!(
+                        "no room at {}; run `rimz start` there first",
+                        root.display()
+                    ),
+                )))
+            }
+            error => Err(error.into()),
+        }
     }
 
     /// What this fire would log at its launch, sealed into its run for the run's one report row:
@@ -923,31 +954,28 @@ impl<'a> TaskFire<'a> {
         let checkout = self.launch_checkout().canonicalize()?;
         Ok(crate::store::workflow::live_runs(state)?
             .into_iter()
-            .find(|run| run.started_by(&self.name) && run.firing_checkout() == checkout))
+            .find(|run| run.started_by(&self.task_id) && run.firing_checkout() == checkout))
     }
 
     /// The live run `create` refused on: `skip` records an overlap naming it; `coalesce`,
     /// `queue` and `replace` keep the trigger waiting for its report, and `replace` cancels it.
     /// A drained trigger whose blocker still runs goes back to the head of its queue.
-    fn prepare_overlap(
-        &mut self,
-        run: &crate::ids::WorkflowRunId,
-        repair: Option<String>,
-    ) -> Result<TaskFirePlan> {
+    fn prepare_overlap(&mut self, run: &crate::ids::WorkflowRunId) -> Result<TaskFirePlan> {
         self.saw_run = true;
         let policy = self.entry.overlap.unwrap_or_default();
         let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
         if self.draining {
             let mut backlog = LockedBacklog::acquire(&paths)?;
-            let waiting = backlog.record.tasks.entry(self.name.clone()).or_default();
+            let waiting = backlog
+                .record
+                .tasks
+                .entry(self.task_id.to_string())
+                .or_default();
             waiting.triggers.push_front(self.waiting_trigger());
             backlog.save()?;
             self.finished = true;
             return Ok(TaskFirePlan::Waiting);
         }
-        let repair = repair
-            .map(|repair| format!("; {repair}"))
-            .unwrap_or_default();
         if self.mode != LoopRunMode::Scheduled || policy == OverlapPolicy::Skip {
             let detail = format!("run {run} still active — skipped");
             return Ok(TaskFirePlan::Done(self.record_terminal_with(
@@ -959,13 +987,17 @@ impl<'a> TaskFire<'a> {
                 None,
                 |record| {
                     record.blocking_run = Some(run.clone());
-                    record.error = Some(format!("{detail}{repair}"));
+                    record.error = Some(detail);
                 },
             )));
         }
         let limit = self.entry.overlap_limit.unwrap_or(10);
         let mut backlog = LockedBacklog::acquire(&paths)?;
-        let waiting = backlog.record.tasks.entry(self.name.clone()).or_default();
+        let waiting = backlog
+            .record
+            .tasks
+            .entry(self.task_id.to_string())
+            .or_default();
         // The head this arrival served waits again first, and the arrival queues behind it.
         if let Some(arrival) = self.queued_arrival.take() {
             waiting.triggers.retain(|trigger| *trigger != arrival);
@@ -999,7 +1031,7 @@ impl<'a> TaskFire<'a> {
             None,
             |record| {
                 record.blocking_run = Some(run.clone());
-                record.error = Some(format!("{detail}{repair}"));
+                record.error = Some(detail);
             },
         );
         // The deferred row and this fire's lock release come first: the canceled run's report
@@ -1047,67 +1079,44 @@ impl<'a> TaskFire<'a> {
         if self.mode != LoopRunMode::Scheduled || !self.entry.dedupes_checkout() {
             return Ok(false);
         }
-        let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
-        let workflows = super::launch_ledger::load_workflows(&paths)?;
-        Ok(super::launch_ledger::launched(
-            &self.entry,
-            &self.name,
-            &self.launch_checkout(),
-            &workflows,
-        )
-        .is_some())
+        Ok(task_record::load()?
+            .launched(
+                &self.entry,
+                &self.task.key(&self.name),
+                &self.launch_checkout(),
+            )
+            .is_some())
     }
 
-    /// A booked one-off agent or team launch, whose consumed sidebar entry the bookings lane
-    /// rebuilds from this launch memory once its row is gone.
-    fn is_booked_launch(&self) -> bool {
-        self.mode == LoopRunMode::Scheduled
-            && self.task.kind() == TaskKind::OneOff
-            && self.entry.wait.is_none()
-            && !self.entry.booked_by.is_empty()
-            && read_fire_launch(&self.entry.command).is_some()
+    /// Mint this fire's id and write its open mark for the launch checkout, before the run
+    /// exists, with the mark it displaced.
+    fn open_fire(&self) -> Result<(FireId, Option<FireMark>)> {
+        Ok(fires::open(
+            &self.task.binding(&self.name),
+            fires::Opening {
+                checkout: &self.launch_checkout(),
+                booked_by: self.entry.booked_by.clone(),
+                once: self.entry.dedupes_checkout(),
+                scope: crate::store::workflow::ScopeKind::Worktree,
+                at: self.now,
+            },
+        )?)
     }
 
-    fn record_workflow_launch(
+    /// Note the run this fire published and, for a scheduled fire, stamp the task's launch
+    /// proof. A failed write is the launch row's error: the run stands, and its report closes
+    /// the mark.
+    fn note_launched(
         &self,
-        paths: &StatePaths,
-        run: &crate::ids::WorkflowRunId,
-        scope: crate::store::workflow::ScopeKind,
-        at: Timestamp,
-        replace_project: bool,
+        fire: &FireId,
+        run: &crate::store::workflow::RunRecord,
     ) -> Option<String> {
-        if !self.entry.dedupes_checkout() && !self.is_booked_launch() {
-            return None;
-        }
-        let checkout = match scope {
-            crate::store::workflow::ScopeKind::Project => self.entry.resolved_root(),
-            crate::store::workflow::ScopeKind::Worktree => self.launch_checkout(),
-        };
-        let record = super::launch_ledger::WorkflowLaunchRecord {
-            at,
-            run: Some(run.clone()),
-            scope,
-            leader: None,
-            destination: None,
-        };
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_LOOP_BEFORE_LAUNCH_MEMORY");
-        let Err(error) = super::launch_ledger_store::record_workflow(
-            paths,
-            &self.name,
-            &checkout,
-            record,
-            replace_project,
-        ) else {
-            // The run advances before this write, so its collection may already have forgotten it.
-            if let Err(error) = run_log::forget_collected_launch(paths, &self.name, run) {
-                tracing::warn!(task = %self.name, %run, %error, "launch memory kept");
-            }
-            return None;
-        };
-        tracing::warn!(
-            task = %self.name, %run, %error, "recording workflow loop launch failed"
-        );
+        let scheduled = (self.mode == LoopRunMode::Scheduled)
+            .then_some((self.checkout.as_deref(), run.created_at));
+        let error = fires::launched(fire, &run.id, scheduled).err()?;
+        tracing::warn!(task = %self.name, run = %run.id, %error, "recording the fire's launch failed");
         Some(error.to_string())
     }
 
@@ -1189,7 +1198,11 @@ impl<'a> TaskFire<'a> {
             )? {
                 RunLockAttempt::Acquired(guard) => {
                     if self.mode == LoopRunMode::Scheduled {
-                        let waiting = backlog.record.tasks.entry(self.name.clone()).or_default();
+                        let waiting = backlog
+                            .record
+                            .tasks
+                            .entry(self.task_id.to_string())
+                            .or_default();
                         let arrival = self.waiting_trigger();
                         waiting.enqueue(policy, usize::MAX, arrival.clone());
                         // The fresh arrival was just enqueued while the queue was locked.
@@ -1206,7 +1219,11 @@ impl<'a> TaskFire<'a> {
                 }
                 RunLockAttempt::Held(info) if self.mode == LoopRunMode::Scheduled => {
                     let limit = self.entry.overlap_limit.unwrap_or(10);
-                    let waiting = backlog.record.tasks.entry(self.name.clone()).or_default();
+                    let waiting = backlog
+                        .record
+                        .tasks
+                        .entry(self.task_id.to_string())
+                        .or_default();
                     let enqueued = waiting.enqueue(policy, limit, self.waiting_trigger());
                     let count = waiting.triggers.len();
                     backlog.save()?;
@@ -1256,7 +1273,7 @@ impl<'a> TaskFire<'a> {
             .entry
             .each_worktree
             .then(|| WorkspaceId::from_project_root(&self.launch_checkout()));
-        let file = run_lock_file_name(&self.name, checkout.as_ref());
+        let file = run_lock_file_name(self.task_id.as_str(), checkout.as_ref());
         match (self.run_lock_path)(&file, &self.entry) {
             Ok(path) => Ok(path),
             Err(err)
@@ -1429,18 +1446,22 @@ impl<'a> TaskFire<'a> {
             return Vec::new();
         }
         let armed_at = self.entry.wait_meta.as_ref().map(|meta| meta.armed_at);
-        run_log::task_records(&logs_dir(), &self.name, Some(&self.entry.resolved_root()))
-            .into_iter()
-            .filter(|record| {
-                record.result == LoopRunResult::Delivered
-                    && record
-                        .watch
-                        .as_ref()
-                        .is_some_and(|watch| !watch.is_terminal())
-                    && armed_at.is_none_or(|armed_at| record.at >= armed_at)
-            })
-            .filter_map(|record| record.message_id)
-            .collect()
+        run_log::task_records(
+            &logs_dir(),
+            &self.task_id,
+            Some(&self.entry.resolved_root()),
+        )
+        .into_iter()
+        .filter(|record| {
+            record.result == LoopRunResult::Delivered
+                && record
+                    .watch
+                    .as_ref()
+                    .is_some_and(|watch| !watch.is_terminal())
+                && armed_at.is_none_or(|armed_at| record.at >= armed_at)
+        })
+        .filter_map(|record| record.message_id)
+        .collect()
     }
 
     fn context_root(&self) -> Result<PathBuf> {
@@ -1489,6 +1510,7 @@ impl<'a> TaskFire<'a> {
     fn terminal_record(&self, result: LoopRunResult) -> LoopRunRecord {
         let mut record =
             LoopRunRecord::new(&self.name, result, self.mode, elapsed_millis(self.started));
+        record.task_id = Some(self.task_id.clone());
         record.kind = Some(self.task.kind());
         record.watch = self.watch_outcome().map(|watch| watch.verdict.clone());
         record.signal = self.signal.as_ref().map(|signal| SignalRecord {
@@ -1587,7 +1609,7 @@ impl<'a> TaskFire<'a> {
             let stopping = backlog
                 .record
                 .tasks
-                .get_mut(&self.name)
+                .get_mut(self.task_id.as_str())
                 .and_then(|task| task.stopping.take_if(|mark| holder.matches_stop(mark)));
             if let Some(mark) = &stopping {
                 if record.result == LoopRunResult::Canceled {
@@ -1607,7 +1629,13 @@ impl<'a> TaskFire<'a> {
             let release = if self.saw_run {
                 Ok(())
             } else {
-                spawn_backlog_drain(&paths, &root, &self.name, &backlog.record)
+                spawn_backlog_drain(
+                    &paths,
+                    &root,
+                    self.task_id.as_str(),
+                    &self.name,
+                    &backlog.record,
+                )
             };
             // Keep the terminal row and release in one critical section: a stop
             // must not install a new mark after this row has already been written.
@@ -1899,17 +1927,20 @@ pub fn stop_task(
     let backlog_paths = StatePaths::for_project_root(root)?;
     let mut backlog = LockedBacklog::acquire(&backlog_paths)?;
     let Some((lock, holder)) = held_run_lock(name, root)? else {
+        let key = stop_key(name, None);
         let transition = match expected {
-            Some(info) => append_stopped_record(name, root, info, None, None, &mut backlog)?,
+            Some(info) => append_stopped_record(&key, name, root, info, None, None, &mut backlog)?,
             None => RunTransition::Recorded,
         };
         return Ok((StopOutcome::NoActiveRun, transition));
     };
+    let key = stop_key(name, Some(&lock));
     if let Some(expected) = expected
         && Some(expected) != holder
     {
         // The original holder released and a drainer may already own this file.
-        let transition = append_stopped_record(name, root, expected, None, None, &mut backlog)?;
+        let transition =
+            append_stopped_record(&key, name, root, expected, None, None, &mut backlog)?;
         return Ok((StopOutcome::NoActiveRun, transition));
     }
     let info = holder
@@ -1920,7 +1951,7 @@ pub fn stop_task(
         .filter(|metadata| Some(metadata.holder) == holder);
     let kind = metadata.as_ref().and_then(|metadata| metadata.kind);
 
-    let waiting = backlog.record.tasks.entry(name.to_owned()).or_default();
+    let waiting = backlog.record.tasks.entry(key.clone()).or_default();
     if expected.is_none()
         || !waiting
             .stopping
@@ -1946,7 +1977,8 @@ pub fn stop_task(
 
     if wait_for_run_lock_release_path(&lock, holder, STOP_GRACE)? {
         let mut backlog = LockedBacklog::acquire(&backlog_paths)?;
-        let transition = append_stopped_record(name, root, info, run.as_ref(), kind, &mut backlog)?;
+        let transition =
+            append_stopped_record(&key, name, root, info, run.as_ref(), kind, &mut backlog)?;
         return Ok((
             StopOutcome::Stopped {
                 run_id: run.map(|record| record.run_id),
@@ -1968,7 +2000,8 @@ pub fn stop_task(
 
     if signal_error.is_none() && wait_for_run_lock_release_path(&lock, holder, STOP_GRACE)? {
         let mut backlog = LockedBacklog::acquire(&backlog_paths)?;
-        let transition = append_stopped_record(name, root, info, run.as_ref(), kind, &mut backlog)?;
+        let transition =
+            append_stopped_record(&key, name, root, info, run.as_ref(), kind, &mut backlog)?;
         drop(backlog);
         // A run stopped while it holds its admitted ticket dies with it. The
         // kernel frees the lock before `/proc` reports the holder dead, and the
@@ -2017,7 +2050,26 @@ fn stop_workspace(root: &Path) -> Result<(Option<ResolvedWorkspace>, PathBuf)> {
     Ok((workspace, project_root))
 }
 
+/// The backlog key a stop of task `name` marks: the task id its held run lock is spelled with
+/// (or, with no lock, its live record's), else the name an older RimZ's runner keys by.
+fn stop_key(name: &str, lock: Option<&Path>) -> String {
+    let ids = task_record::load()
+        .map(|records| records.ids_named(name))
+        .unwrap_or_default();
+    let file = lock
+        .and_then(Path::file_name)
+        .and_then(std::ffi::OsStr::to_str);
+    let id = match file {
+        Some(file) => ids
+            .into_iter()
+            .find(|id| run_lock::is_run_lock_of(file, id.as_str())),
+        None => ids.into_iter().next(),
+    };
+    id.map_or_else(|| name.to_owned(), |id| id.to_string())
+}
+
 fn append_stopped_record(
+    key: &str,
     name: &str,
     root: &Path,
     info: RunLockInfo,
@@ -2028,7 +2080,7 @@ fn append_stopped_record(
     let Some(mark) = backlog
         .record
         .tasks
-        .get_mut(name)
+        .get_mut(key)
         .and_then(|task| task.stopping.take_if(|mark| info.matches_stop(mark)))
     else {
         return Ok(RunTransition::Recorded);
@@ -2050,7 +2102,7 @@ fn append_stopped_record(
     record.run_id = run.map(|record| record.run_id.to_string());
     backlog.save()?;
     run_log::record_stopped(root, &record, kind);
-    if let Err(error) = spawn_backlog_drain(&paths, root, name, &backlog.record) {
+    if let Err(error) = spawn_backlog_drain(&paths, root, key, name, &backlog.record) {
         tracing::warn!(task = name, %error, "failed to start loop backlog drain");
     }
     Ok(RunTransition::Recorded)
@@ -2072,12 +2124,13 @@ fn set_stopped_result(record: &mut LoopRunRecord, cause: StopCause) {
 fn spawn_backlog_drain(
     paths: &StatePaths,
     root: &Path,
+    key: &str,
     name: &str,
     backlog: &backlog::Backlog,
 ) -> Result<()> {
     if backlog
         .tasks
-        .get(name)
+        .get(key)
         .is_some_and(|task| !task.triggers.is_empty())
     {
         super::fire::spawn_loop_drain(
@@ -2130,6 +2183,8 @@ pub enum RunLockState {
 /// One listing of a root's `locks/`, with every run lock in it probed once.
 pub struct RunLocks {
     files: Vec<RunLockFile>,
+    /// The task records, which name the id each task's runner claims its lock under.
+    records: TaskRecords,
 }
 
 struct RunLockFile {
@@ -2147,7 +2202,10 @@ impl RunLocks {
         let entries = match std::fs::read_dir(&locks) {
             Ok(entries) => entries,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self { files: Vec::new() });
+                return Ok(Self {
+                    files: Vec::new(),
+                    records: TaskRecords::default(),
+                });
             }
             Err(err) => return Err(err).with_context(listing),
         };
@@ -2164,7 +2222,10 @@ impl RunLocks {
             let state = probe_run_lock_path(&path);
             files.push(RunLockFile { name, path, state });
         }
-        Ok(Self { files })
+        // An unreadable record leaves only the name spelling, an older RimZ's; `loop list` and
+        // `rimz doctor` report the record itself.
+        let records = task_record::load().unwrap_or_default();
+        Ok(Self { files, records })
     }
 
     /// Whether task `name` is running: held when any lock file it claims is.
@@ -2184,7 +2245,10 @@ impl RunLocks {
             let Ok(RunLockState::Held(holder)) = &file.state else {
                 continue;
             };
-            if rows.iter().any(|row| is_run_lock_of(&file.name, row)) {
+            if rows
+                .iter()
+                .any(|row| run_lock::claims(&file.name, row, &self.records.ids_named(row)))
+            {
                 continue;
             }
             if let Some(stem) = run_lock_stem(&file.name) {
@@ -2199,9 +2263,10 @@ impl RunLocks {
     /// one lock per checkout; the earliest-started holder is the one reported,
     /// a holderless lock last.
     fn held(&self, name: &str) -> Result<Option<(&Path, Option<RunLockInfo>)>> {
+        let ids = self.records.ids_named(name);
         let mut held = Vec::new();
         for file in &self.files {
-            if !is_run_lock_of(&file.name, name) {
+            if !run_lock::claims(&file.name, name, &ids) {
                 continue;
             }
             match &file.state {

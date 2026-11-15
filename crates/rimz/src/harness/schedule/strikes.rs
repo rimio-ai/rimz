@@ -1,21 +1,19 @@
 //! Machine-local consecutive failure counts for loop tasks.
 //!
 //! Counts survive process exits and reset independently of run-log rotation.
-//! An advisory lock serializes updates from different task runners sharing the
-//! user-global JSON file.
+//! They live on the task's record, so `task_record_store`'s lock serializes
+//! updates from different task runners.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::collections::BTreeMap;
 
-use super::overlay_store::{OverlayError, OverlayStore};
+use super::task_record::{self, Binding, TaskRecord, TaskRecordErr};
+use super::task_record_store::{self, TaskStoreErr};
 use crate::config::TaskEntry;
-use crate::disk::paths::loops_dir;
 use crate::harness::schedule::run_log::{LoopRunRecord, LoopRunResult};
+use crate::ids::{FireId, TaskId};
 
-const STORE: OverlayStore = OverlayStore::new("loop-strikes.json", "loop-strikes.lock");
-/// The workflow run ids each count has taken a signal from, newest last.
-const COUNTED: OverlayStore = OverlayStore::new("loop-strike-runs.json", "loop-strike-runs.lock");
-const COUNTED_RUNS: usize = 64;
+/// How many fire ids a count remembers having taken a signal from.
+const COUNTED_FIRES: usize = 64;
 pub(super) const DEFAULT_MAX_STRIKES: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,7 +25,7 @@ pub(super) enum Signal {
 
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
-pub(super) struct StrikesError(#[from] OverlayError);
+pub(super) struct StrikesError(#[from] TaskStoreErr);
 
 type Result<T> = std::result::Result<T, StrikesError>;
 
@@ -76,106 +74,68 @@ pub fn threshold(entry: &TaskEntry) -> Option<u32> {
     }
 }
 
-#[cfg(test)]
-fn path(state_root: &Path) -> std::path::PathBuf {
-    STORE.path(state_root)
+/// Every bound task's nonzero count, by binding key.
+pub fn load() -> std::result::Result<BTreeMap<String, u32>, TaskRecordErr> {
+    Ok(task_record::load()?
+        .by_key()
+        .into_iter()
+        .filter(|(_, (_, record))| record.strikes > 0)
+        .map(|(key, (_, record))| (key, record.strikes))
+        .collect())
 }
 
-pub fn load() -> BTreeMap<String, u32> {
-    load_from(&loops_dir())
-}
-
-pub(super) fn note(key: &str, signal: Signal) -> Result<u32> {
-    note_in(&loops_dir(), key, signal)
-}
-
-/// Note a workflow run's signal at most once per run id; the flag says whether it counted.
-pub(super) fn note_run(key: &str, run: &str, signal: Signal) -> Result<(u32, bool)> {
-    note_run_in(&loops_dir(), key, run, signal)
+/// Move the count of a row's signal that no fire id names (a skip, a start failure), on the
+/// record of the row's task id, retired or not, so a row written after its task retired
+/// binds no new record; a row with no id moves the record bound to `binding`.
+pub(super) fn note(binding: &Binding, task: Option<&TaskId>, signal: Signal) -> Result<u32> {
+    if signal == Signal::Neutral {
+        let records = task_record::load().map_err(TaskStoreErr::from)?;
+        let record = match task {
+            Some(task) => records.get(task),
+            None => records.live(&binding.key()).map(|(_, record)| record),
+        };
+        return Ok(record.map_or(0, |record| record.strikes));
+    }
+    Ok(task_record_store::mutate(|records| {
+        let record = match task {
+            Some(task) => records.get_mut(task),
+            None => Some(records.bind(binding).1),
+        };
+        record.map_or(0, |record| apply(record, None, signal).0)
+    })?)
 }
 
 /// Clear the count, as `loop enable` does; the task's fire record stays.
-pub(super) fn clear(key: &str) -> Result<bool> {
-    clear_from(&loops_dir(), key)
+pub(super) fn clear(binding: &Binding) -> Result<bool> {
+    Ok(task_record_store::mutate(|records| {
+        let Some(record) = records.live_mut(&binding.key()) else {
+            return false;
+        };
+        let cleared = record.strikes != 0 || !record.counted.is_empty();
+        record.strikes = 0;
+        record.counted.clear();
+        cleared
+    })?)
 }
 
-/// Clear the count and the task's fire record, for a task that is removed or replaced.
-pub(super) fn remove(key: &str) -> Result<bool> {
-    let fires = super::fires::clear(key)?;
-    Ok(clear(key)? || fires)
-}
-
-/// Move the count and the task's fire record to a renamed task.
-pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
-    let fires = super::fires::rename(old, new)?;
-    Ok(rename_in(&loops_dir(), old, new)? || fires)
-}
-
-pub(super) fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
-    let fires = super::fires::prune_orphans(known, scopes)?;
-    Ok(prune_orphans_in(&loops_dir(), known, scopes)? + fires)
-}
-
-fn load_from(state_root: &Path) -> BTreeMap<String, u32> {
-    STORE.load(state_root)
-}
-
-fn note_in(state_root: &Path, key: &str, signal: Signal) -> Result<u32> {
-    if signal == Signal::Neutral {
-        return Ok(load_from(state_root).get(key).copied().unwrap_or(0));
-    }
-    STORE
-        .mutate::<u32, _>(state_root, |strikes| match signal {
-            Signal::Strike => {
-                let previous = strikes.get(key).copied().unwrap_or(0);
-                let count = previous.saturating_add(1);
-                strikes.insert(key.to_owned(), count);
-                (count, count != previous)
-            }
-            Signal::Reset => (0, strikes.remove(key).is_some()),
-            Signal::Neutral => (strikes.get(key).copied().unwrap_or(0), false),
-        })
-        .map_err(Into::into)
-}
-
-/// The run id is recorded before the count moves, so a crash between the two loses the
-/// signal rather than counting it twice.
-fn note_run_in(state_root: &Path, key: &str, run: &str, signal: Signal) -> Result<(u32, bool)> {
-    let fresh = COUNTED.mutate::<Vec<String>, _>(state_root, |counted| {
-        let runs = counted.entry(key.to_owned()).or_default();
-        if runs.iter().any(|seen| seen == run) {
-            return (false, false);
+/// Move `record`'s count by `signal`, at most once per fire id; the flag says whether it
+/// counted. The fire id is kept even for a neutral signal, so a second report of the fire
+/// changes nothing.
+pub(super) fn apply(record: &mut TaskRecord, fire: Option<&FireId>, signal: Signal) -> (u32, bool) {
+    if let Some(fire) = fire {
+        if record.counted.contains(fire) {
+            return (record.strikes, false);
         }
-        runs.push(run.to_owned());
-        let excess = runs.len().saturating_sub(COUNTED_RUNS);
-        runs.drain(..excess);
-        (true, true)
-    })?;
-    let signal = if fresh { signal } else { Signal::Neutral };
-    Ok((note_in(state_root, key, signal)?, fresh))
-}
-
-fn clear_from(state_root: &Path, key: &str) -> Result<bool> {
-    COUNTED.remove::<Vec<String>>(state_root, key)?;
-    STORE.remove::<u32>(state_root, key).map_err(Into::into)
-}
-
-fn rename_in(state_root: &Path, old: &str, new: &str) -> Result<bool> {
-    COUNTED.rename::<Vec<String>>(state_root, old, new)?;
-    STORE
-        .rename::<u32>(state_root, old, new)
-        .map_err(Into::into)
-}
-
-fn prune_orphans_in(
-    state_root: &Path,
-    known: &BTreeSet<String>,
-    scopes: &BTreeSet<String>,
-) -> Result<usize> {
-    COUNTED.prune_orphans_in_scopes::<Vec<String>>(state_root, known, scopes)?;
-    STORE
-        .prune_orphans_in_scopes::<u32>(state_root, known, scopes)
-        .map_err(Into::into)
+        record.counted.push(fire.clone());
+        let excess = record.counted.len().saturating_sub(COUNTED_FIRES);
+        record.counted.drain(..excess);
+    }
+    match signal {
+        Signal::Strike => record.strikes = record.strikes.saturating_add(1),
+        Signal::Reset => record.strikes = 0,
+        Signal::Neutral => {}
+    }
+    (record.strikes, true)
 }
 
 #[cfg(test)]
@@ -187,6 +147,8 @@ mod tests {
 
     fn record(result: LoopRunResult, check: Option<CheckRecord>) -> LoopRunRecord {
         LoopRunRecord {
+            task_id: None,
+            fire: None,
             kind: None,
             judge: Vec::new(),
             checkout: None,
@@ -303,73 +265,50 @@ mod tests {
         assert_eq!(classify(&launch), Signal::Neutral);
     }
 
+    fn task() -> TaskRecord {
+        TaskRecord::new(Binding {
+            scope: super::super::task_record::Scope::Machine,
+            name: "nightly".to_owned(),
+        })
+    }
+
     #[test]
-    fn a_run_reported_twice_counts_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let key = "machine::nightly";
-        assert_eq!(
-            note_run_in(dir.path(), key, "wf_1", Signal::Strike).unwrap(),
-            (1, true)
-        );
-        assert_eq!(
-            note_run_in(dir.path(), key, "wf_1", Signal::Strike).unwrap(),
-            (1, false)
-        );
-        assert_eq!(
-            note_run_in(dir.path(), key, "wf_2", Signal::Strike).unwrap(),
-            (2, true)
-        );
-        assert_eq!(
-            note_run_in(dir.path(), key, "wf_2", Signal::Reset).unwrap(),
-            (2, false)
-        );
-        assert!(clear_from(dir.path(), key).unwrap());
-        assert_eq!(
-            note_run_in(dir.path(), key, "wf_1", Signal::Strike).unwrap(),
-            (1, true),
-            "clearing a count forgets the runs it took"
-        );
+    fn a_fire_reported_twice_counts_once() {
+        let id = crate::ids::TaskId::new();
+        let (first, second) = (FireId::new(&id), FireId::new(&id));
+        let mut record = task();
+        assert_eq!(apply(&mut record, Some(&first), Signal::Strike), (1, true));
+        assert_eq!(apply(&mut record, Some(&first), Signal::Strike), (1, false));
+        assert_eq!(apply(&mut record, Some(&second), Signal::Strike), (2, true));
+        assert_eq!(apply(&mut record, Some(&second), Signal::Reset), (2, false));
     }
 
     #[test]
     fn running_watch_notice_is_strike_neutral() {
-        let dir = tempfile::tempdir().unwrap();
-        let key = "instance::watch";
-        note_in(dir.path(), key, Signal::Strike).unwrap();
+        let mut record = task();
+        apply(&mut record, None, Signal::Strike);
         for result in [
             LoopRunResult::Delivered,
             LoopRunResult::Failed,
             LoopRunResult::CheckSkipped,
         ] {
-            let mut notice = record(result, check(None, false));
+            let mut notice = self::record(result, check(None, false));
             notice.watch =
                 Some(crate::harness::signal::WatchVerdict::Running { elapsed_ms: 1_000 });
             assert_eq!(classify(&notice), Signal::Neutral);
-            assert_eq!(note_in(dir.path(), key, classify(&notice)).unwrap(), 1);
+            assert_eq!(apply(&mut record, None, classify(&notice)).0, 1);
         }
     }
 
     #[test]
-    fn counter_round_trips_and_resets() {
-        const KEY: &str = "machine::nightly";
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert_eq!(note_in(dir.path(), KEY, Signal::Strike).expect("strike"), 1);
-        let encoded: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path(dir.path())).expect("serialized strikes"))
-                .expect("strikes json");
-        assert_eq!(encoded, serde_json::json!({"machine::nightly": 1}));
-        assert_eq!(note_in(dir.path(), KEY, Signal::Strike).expect("strike"), 2);
-        assert_eq!(load_from(dir.path()).get(KEY), Some(&2));
-        let signal = classify(&record(LoopRunResult::StartFailed, None));
+    fn counter_counts_and_resets() {
+        let mut record = task();
+        assert_eq!(apply(&mut record, None, Signal::Strike).0, 1);
+        assert_eq!(apply(&mut record, None, Signal::Strike).0, 2);
+        let signal = classify(&self::record(LoopRunResult::StartFailed, None));
         assert_eq!(signal, Signal::Neutral);
-        let before = std::fs::read(path(dir.path())).expect("strikes before failed start");
-        assert_eq!(note_in(dir.path(), KEY, signal).expect("neutral"), 2);
-        assert_eq!(
-            std::fs::read(path(dir.path())).expect("unchanged strikes"),
-            before
-        );
-        assert_eq!(note_in(dir.path(), KEY, Signal::Reset).expect("reset"), 0);
-        assert!(!load_from(dir.path()).contains_key(KEY));
+        assert_eq!(apply(&mut record, None, signal).0, 2);
+        assert_eq!(apply(&mut record, None, Signal::Reset).0, 0);
     }
 
     #[test]

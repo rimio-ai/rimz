@@ -46,12 +46,13 @@ fn seed_task_run(
     checkout: &Path,
     wait: Option<serde_json::Value>,
 ) -> PathBuf {
+    let fire = rimz::ids::FireId::new(&seed_task(env, &task_key(env, &env.project_root, task)));
     let paths = env.state_path_for(&env.project_root);
     let guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
     let now = Timestamp::now();
     let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
         "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
-        "task":task, "spec_dir":"/definitions/review",
+        "task":task, "loop_fire":fire, "spec_dir":"/definitions/review",
         "scope":{"kind":"worktree","path":checkout}, "project_root":env.project_root,
         "created_at":now, "entered_at":now, "state":"active", "node":"agent", "wait":wait,
         "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
@@ -1668,94 +1669,56 @@ fn remote_malformed_instances_warn_and_skip_only_remote_room() {
 }
 
 #[test]
-fn malformed_launch_memory_warns_without_hiding_local_or_remote_tasks() {
-    for workflow in [true, false] {
-        for remote in [false, true] {
-            let env = Env::new();
-            let other = env.home_root.join("other-room");
-            std::fs::create_dir(&other).unwrap();
-            let root = if remote { &other } else { &env.project_root };
-            let entry = TaskEntry {
-                root: root.clone(),
-                when: Some(vec!["pr=open".into()]),
-                repeat: true,
-                each_worktree: true,
-                once_per_checkout: Some(true),
-                command: vec!["true".to_owned()],
-                timeout: Some("1m".to_owned()),
-                ..TaskEntry::default()
-            };
-            let healthy = entry.clone();
-            config(
-                &env,
-                BTreeMap::from([
-                    ("review".into(), entry),
-                    ("healthy".into(), healthy),
-                    ("ordinary".into(), task(root)),
-                ]),
+fn malformed_task_record_warns_without_hiding_local_or_remote_tasks() {
+    for remote in [false, true] {
+        let env = Env::new();
+        let other = env.home_root.join("other-room");
+        std::fs::create_dir(&other).unwrap();
+        let root = if remote { &other } else { &env.project_root };
+        let entry = TaskEntry {
+            root: root.clone(),
+            when: Some(vec!["pr=open".into()]),
+            repeat: true,
+            each_worktree: true,
+            once_per_checkout: Some(true),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
+            ..TaskEntry::default()
+        };
+        config(
+            &env,
+            BTreeMap::from([("review".into(), entry), ("ordinary".into(), task(root))]),
+        );
+        let path = task_records_path(&env);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "not json").unwrap();
+        for flags in [vec!["--all"], vec!["--all", "--json"]] {
+            let output = env
+                .rimz()
+                .args(["loop", "list"])
+                .args(flags)
+                .output()
+                .unwrap();
+            let error = String::from_utf8_lossy(&output.stderr);
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(output.status.success(), "remote={remote}: {error}");
+            assert!(
+                text.contains("review") && text.contains("ordinary"),
+                "{text}"
             );
-            let file = if workflow {
-                "loop-workflow-launches.json"
-            } else {
-                "loop-launches.json"
-            };
-            let path = env.state_path_for(root).root.join("records").join(file);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, "not json").unwrap();
-            let launch = if workflow {
-                json!({"at": Timestamp::now(), "leader": "@coder"})
-            } else {
-                json!({
-                    "at": Timestamp::now(),
-                    "run": rimz::ids::WorkflowRunId::new(),
-                    "scope": "worktree"
-                })
-            };
-            let tasks = json!({"healthy": {root.to_str().unwrap(): launch}});
-            let (healthy_file, ledger) = if workflow {
-                ("loop-launches.json", tasks)
-            } else {
-                (
-                    "loop-workflow-launches.json",
-                    json!({"version": 1, "tasks": tasks}),
-                )
-            };
-            std::fs::write(
-                env.state_path_for(root)
-                    .root
-                    .join("records")
-                    .join(healthy_file),
-                serde_json::to_vec(&ledger).unwrap(),
-            )
-            .unwrap();
-            for flags in [vec!["--all"], vec!["--all", "--json"]] {
-                let output = env
-                    .rimz()
-                    .args(["loop", "list"])
-                    .args(flags)
-                    .output()
-                    .unwrap();
-                let error = String::from_utf8_lossy(&output.stderr);
-                let text = String::from_utf8_lossy(&output.stdout);
-                assert!(output.status.success(), "{file}, remote={remote}: {error}");
-                assert!(
-                    text.contains("review")
-                        && text.contains("ordinary")
-                        && text.contains("healthy"),
-                    "{text}"
-                );
-                assert!(
-                    !text.contains("1 worktrees"),
-                    "one memory serves both: {text}"
-                );
-                assert!(
-                    error.contains("warning:")
-                        && error.contains("cannot load loop launch memory")
-                        && error.contains(root.to_str().unwrap()),
-                    "{error}"
-                );
-            }
+            assert!(
+                error.contains("warning:")
+                    && error.contains("loop task record")
+                    && error.contains(path.to_str().unwrap())
+                    && error.contains("do not fire"),
+                "{error}"
+            );
         }
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"not json",
+            "never rewritten as empty"
+        );
     }
 }
 
@@ -1773,10 +1736,21 @@ fn each_worktree_uses_acting_history_and_launch_count() {
     let mut launched = record("sweep", &env.project_root, LoopRunResult::Launched, 30);
     launched.checkout = Some(env.home_root.join("one"));
     write_loop_run_records(&env, &[launched]);
-    let paths = env.state_path_for(&env.project_root);
-    let ledger_path = paths.root.join("records/loop-launches.json");
-    std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
-    std::fs::write(ledger_path, serde_json::to_vec(&json!({"sweep": {env.home_root.join("one").to_str().unwrap(): {"at": Timestamp::now(), "leader": "@coder"}, env.home_root.join("two").to_str().unwrap(): {"at": Timestamp::now(), "leader": "@other"}}})).unwrap()).unwrap();
+    let task = seed_task(&env, &machine_task_key("sweep"));
+    edit_task_records(&env, |tasks| {
+        tasks[task.as_str()]["marks"] = ["one", "two"]
+            .map(|checkout| {
+                (
+                    env.home_root.join(checkout).to_str().unwrap().to_owned(),
+                    json!({
+                        "fire": rimz::ids::FireId::new(&task), "at": Timestamp::now(),
+                        "once": true, "scope": "worktree",
+                    }),
+                )
+            })
+            .into_iter()
+            .collect();
+    });
     let text = loop_ok(&env, &["loop", "list"]);
     assert!(
         text.contains("✓ 30m ago · 2 worktrees") && !text.contains("never fired"),
@@ -2160,11 +2134,12 @@ fn seed_room_run_at(
     park: Option<Timestamp>,
     wait: Option<serde_json::Value>,
 ) -> PathBuf {
+    let fire = rimz::ids::FireId::new(&seed_task(env, &task_key(env, root, task)));
     let paths = env.state_path_for(root);
     let guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
     let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
         "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
-        "task":task, "spec_dir":"/definitions/review",
+        "task":task, "loop_fire":fire, "spec_dir":"/definitions/review",
         "scope":{"kind":"worktree","path":root}, "project_root":root,
         "created_at":created_at, "entered_at":created_at, "node":"agent", "wait":wait,
         "state":state,
@@ -2327,33 +2302,25 @@ fn every_cause_reads_alike_in_list_and_reader() {
     ));
     write_loop_run_records(&env, &runs);
     let key = |name: &str| project_task_key(&rooms[name], name);
-    std::fs::create_dir_all(loop_strikes_path(&env).parent().unwrap()).unwrap();
-    std::fs::write(
-        loop_strikes_path(&env),
-        serde_json::to_vec(&BTreeMap::from([
+    write_loop_strikes(
+        &env,
+        &BTreeMap::from([
             (key("failing-strikes"), 1_u32),
             (key("failing-exit"), 2),
             (key("retrying"), 1),
             (key("retried"), 2),
-        ]))
-        .unwrap(),
-    )
-    .unwrap();
+        ]),
+    );
     let struck = || Arming {
         enabled: false,
         at: Some(old),
         pause_until: None,
         strikes: Some(3),
     };
-    std::fs::write(
-        loop_arming_path(&env),
-        serde_json::to_vec(&BTreeMap::from([
-            (key("strikes"), struck()),
-            (key("retry-struck"), struck()),
-        ]))
-        .unwrap(),
-    )
-    .unwrap();
+    write_loop_arming(
+        &env,
+        &BTreeMap::from([(key("strikes"), struck()), (key("retry-struck"), struck())]),
+    );
     seed_room_run(
         &env,
         &rooms["held-wait"],
@@ -2935,12 +2902,19 @@ fn open_room_lists_clocks_without_reading_the_timer() {
     assert_eq!(reads, 0);
 }
 
+#[cfg(target_os = "linux")]
+const D9_READS: &str = "RIMZ_TEST_ATTENTION_D9_READS";
+
 /// D9's two rules, read by `loop list` and by the library reader on the same room: a
 /// booking waiting on a closed pull request needs you, and a fired booking whose checkout
-/// is gone is done.
+/// is gone is done. The reader runs in a re-exec of this test under the fixture's home, since
+/// the fire marks it reads resolve from the process's home.
 #[cfg(target_os = "linux")]
 #[test]
 fn closed_pull_requests_and_fired_gone_checkouts_read_alike_in_list_and_reader() {
+    if let Some(path) = std::env::var_os(D9_READS) {
+        return read_d9_in_child(Path::new(&path));
+    }
     let env = Env::new();
     env.record(&env.project_root);
     let state = env.state_path_for(&env.project_root);
@@ -2984,14 +2958,13 @@ fn closed_pull_requests_and_fired_gone_checkouts_read_alike_in_list_and_reader()
         serde_json::to_vec(&tasks).unwrap(),
     )
     .unwrap();
-    std::fs::write(
-        records.join("loop-workflow-launches.json"),
-        serde_json::to_vec(&json!({"version": 2, "tasks": {"fired-gone": {
-            fired_checkout.to_str().unwrap(): {"at": Timestamp::now(), "scope": "worktree"},
-        }}}))
-        .unwrap(),
-    )
-    .unwrap();
+    let fired = seed_task(&env, &project_task_key(&env.project_root, "fired-gone"));
+    edit_task_records(&env, |tasks| {
+        tasks[fired.as_str()]["marks"] = json!({fired_checkout.to_str().unwrap(): {
+            "fire": rimz::ids::FireId::new(&fired), "at": Timestamp::now(), "once": true,
+            "scope": "worktree",
+        }});
+    });
     let stamps = runtime.lane_path("loop-fire.json");
     std::fs::create_dir_all(stamps.parent().unwrap()).unwrap();
     std::fs::write(
@@ -3028,17 +3001,26 @@ fn closed_pull_requests_and_fired_gone_checkouts_read_alike_in_list_and_reader()
         ("fired-gone", None, "done"),
         ("unfired-gone", Some("checkout_gone"), "needs_you"),
     ];
-    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
-    let mut reads = rimz::harness::schedule::attention::read_room(
-        &env.project_root,
-        &state,
-        &runtime,
-        rimz::harness::schedule::attention::ReadContext {
-            open: true,
-            stats: &BTreeMap::new(),
-            now: &now,
-        },
+    let reads = env.home_root.join("d9-reads.json");
+    std::fs::write(&reads, serde_json::to_vec(&env.project_root).unwrap()).unwrap();
+    let output = env
+        .rimz_at(&std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "loop_schedule::list_tests::closed_pull_requests_and_fired_gone_checkouts_read_alike_in_list_and_reader",
+            "--nocapture",
+        ])
+        .env(D9_READS, &reads)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("test result: ok. 1 passed;"),
+        "the child must run exactly this test:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    let mut reads: BTreeMap<String, (Option<serde_json::Value>, bool)> =
+        serde_json::from_slice(&std::fs::read(&reads).unwrap()).unwrap();
     for (name, attention, section) in expected {
         let row = &listed[name];
         assert_eq!(
@@ -3046,14 +3028,13 @@ fn closed_pull_requests_and_fired_gone_checkouts_read_alike_in_list_and_reader()
             (attention, Some(section)),
             "{name}: {row}"
         );
-        let read = reads.remove(name).expect("the reader finds the task");
+        let (cause, fired) = reads.remove(name).expect("the reader finds the task");
         assert_eq!(
-            read.attention
-                .map(|(cause, _)| serde_json::to_value(cause).unwrap()),
+            cause,
             attention.map(|cause| json!(cause)),
             "{name}: the reader and the list agree"
         );
-        assert_eq!(read.fired, name == "fired-gone", "{name}");
+        assert_eq!(fired, name == "fired-gone", "{name}");
     }
     assert!(
         text.contains("pr[x] closed without merging")
@@ -3207,6 +3188,38 @@ fn forge_conditions_refuse_and_need_you_without_a_supported_forge() {
         listed["detached"]["unread"]["ci"],
         "the checkout's HEAD is detached, so it has no branch to read"
     );
+}
+
+/// The re-exec half: read the room's tasks through the library reader, each as its cause and
+/// whether it fired.
+#[cfg(target_os = "linux")]
+fn read_d9_in_child(path: &Path) {
+    use rimz::harness::schedule::attention;
+    let root: PathBuf = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let home = PathBuf::from(std::env::var_os("RIMZ_HOME").unwrap());
+    let runtime_root = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap());
+    let state = rimz::StatePaths::for_project_root_under(&root, &home).unwrap();
+    let runtime = rimz::RuntimePaths::for_state_under(&state, &runtime_root);
+    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let reads = attention::read_room(
+        &root,
+        &state,
+        &runtime,
+        attention::ReadContext {
+            open: true,
+            stats: &BTreeMap::new(),
+            now: &now,
+        },
+    )
+    .into_iter()
+    .map(|(name, read)| {
+        let cause = read
+            .attention
+            .map(|(cause, _)| serde_json::to_value(cause).unwrap());
+        (name, (cause, read.fired))
+    })
+    .collect::<BTreeMap<_, _>>();
+    std::fs::write(path, serde_json::to_vec(&reads).unwrap()).unwrap();
 }
 
 /// The booking chain `loop add` stored for `name`, or `None` with no row.
