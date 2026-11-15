@@ -6882,6 +6882,8 @@ fn loop_watch_picks_up_a_quiet_fire_that_appends_nothing_to_the_log() {
         // Any age: under load the watch may first repaint seconds after the fire.
         &["hushed", "✓ ", " ago"],
     );
+    let hushed = frame.lines().find(|line| line.contains("hushed")).unwrap();
+    assert!(hushed.contains('✓'), "{frame}");
     assert!(!frame.contains("never fired"), "{frame}");
     assert!(read_loop_run_records(&env).is_empty());
 }
