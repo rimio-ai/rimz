@@ -655,6 +655,38 @@ fn record_without_model_ignores_a_model_a_base_layer_gained() {
 }
 
 #[test]
+fn record_without_model_ignores_a_model_the_role_gained() {
+    let record = crate::agents::LaunchRecord::default();
+    let table = profiles("writer", definition_profile(None, None, None));
+    for (role, expected) in [
+        ("model = 'opus'", vec![]),
+        ("model = 'opus'\nargs = '--model sonnet'", vec!["sonnet"]),
+    ] {
+        let role: crate::config::RoleBinding =
+            toml::from_str(&format!("role = 'coder'\nprofile = 'writer'\n{role}")).unwrap();
+        let launch = resolve_posture_with_role(
+            PostureRequest {
+                record: Some(&record),
+                profile: Some("writer"),
+                kind: &AgentKind::new_unchecked("claude"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &table,
+            Some(&role),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            preset_values(&launch.args, crate::agents::PresetField::Model),
+            expected,
+            "role {role:?}"
+        );
+        assert!(launch.model.is_none());
+    }
+}
+
+#[test]
 fn recorded_mode_beats_the_profile_default() {
     let mut planner = profile("claude");
     planner.mode = Some(PermissionMode::Yolo);
