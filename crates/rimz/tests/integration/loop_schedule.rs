@@ -5922,23 +5922,20 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
         .unwrap();
     let paths = state.workflow(&id);
     let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    let mut record = loop {
+    loop {
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&paths.record).unwrap()).unwrap();
         // The host's last write before the check runs publishes its child.
         if record["node"] == "command" && record["attempt"]["child"]["pid"].is_u64() && remembered()
         {
-            break record;
+            break;
         }
         assert!(Instant::now() < deadline, "the run never held: {record}");
         std::thread::sleep(Duration::from_millis(25));
-    };
+    }
     // An older RimZ rewrote the run while its check ran.
     let older = rimz::store::workflow::VERSION - 1;
-    record["version"] = json!(older);
-    let staged = paths.home.join("record.json.test");
-    std::fs::write(&staged, serde_json::to_vec(&record).unwrap()).unwrap();
-    std::fs::rename(&staged, &paths.record).unwrap();
+    rewrite_live_record(&state, &id, |record| record["version"] = json!(older));
     let rows_before = read_loop_run_records(&env).len();
     // A record holding no JSON object, which owes no report, is set aside by the same pass.
     let aside = rimz::ids::WorkflowRunId::new();
@@ -6111,12 +6108,13 @@ fn a_run_whose_record_lost_engaged_continues_and_is_kept() {
             .parse()
             .unwrap();
         let paths = state.workflow(&id);
-        // Strip the fields while the hold check runs, as the older binary's write would.
+        // The host's last write before the check runs publishes its child: strip the fields
+        // after it, while the hold check runs, as the older binary's write would.
         let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        let mut record = loop {
+        let record = loop {
             let record: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&paths.record).unwrap()).unwrap();
-            if record["node"] == "command" && record["attempt"].is_object() {
+            if record["node"] == "command" && record["attempt"]["child"]["pid"].is_u64() {
                 break record;
             }
             assert!(Instant::now() < deadline, "{task} never held: {record}");
@@ -6138,12 +6136,11 @@ fn a_run_whose_record_lost_engaged_continues_and_is_kept() {
             loop_ok(&env, &["loop", "show", task]).contains("launched"),
             "{task}"
         );
-        for field in stripped {
-            record.as_object_mut().unwrap().remove(*field);
-        }
-        let staged = paths.home.join("record.json.test");
-        std::fs::write(&staged, serde_json::to_vec(&record).unwrap()).unwrap();
-        std::fs::rename(&staged, &paths.record).unwrap();
+        rewrite_live_record(&state, &id, |record| {
+            for field in stripped {
+                record.as_object_mut().unwrap().remove(*field);
+            }
+        });
         std::fs::write(&gate, "").unwrap();
 
         let report = wait_for_loop_report(&env, task);
@@ -6152,9 +6149,9 @@ fn a_run_whose_record_lost_engaged_continues_and_is_kept() {
             LoopRunResult::Completed,
             "{task}: {report:?}"
         );
+        assert!(quiet_fires(&env, task).is_none(), "{task}");
         wait_until_finished(&env, &report);
         assert_definition_in_home(&env, &report, true);
-        assert!(quiet_fires(&env, task).is_none(), "{task}");
         let rows = read_loop_run_records(&env)
             .into_iter()
             .filter(|row| row.task == task)
@@ -7872,6 +7869,21 @@ fn assert_definition_in_home(env: &Env, record: &LoopRunRecord, inline: bool) {
         "{}",
         home.home.display()
     );
+}
+
+/// Rewrite the live record of run `id` through `edit` as another RimZ would: read, edit and
+/// atomic publish under the workspace lock, so no engine load-modify-write straddles it.
+fn rewrite_live_record(
+    state: &rimz::StatePaths,
+    id: &rimz::ids::WorkflowRunId,
+    edit: impl FnOnce(&mut serde_json::Value),
+) {
+    let _guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    let record = state.workflow(id).record;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    edit(&mut value);
+    rimz::disk::atomic::write_temp_then_rename(&record, &value).unwrap();
 }
 
 /// Wait until the run a report names has moved to the finished directory: a view that reads its
