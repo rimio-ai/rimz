@@ -396,6 +396,39 @@ fn a_cancel_while_the_host_is_held_retires_the_queued_notice() {
     );
 }
 
+/// A history saved without its definition keeps a delivered message step's row in the message
+/// form: the journal's notice id tells it from an agent's attempt.
+#[test]
+fn a_history_saved_without_its_definition_keeps_a_message_row() {
+    let room = Room::new("lifecycle='session'\n");
+    leader(&room, true);
+    let dir = room.env.rimz_home().join("workflows/tell");
+    fs::create_dir_all(dir.join("checks")).unwrap();
+    fs::write(
+        dir.join("workflow.toml"),
+        "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@codex'\nthen='pr'\n[script.pr]\nrun='sh checks/pr.sh'\non={ pending='@wait', done='@done' }\ntimeout='1h'\n",
+    )
+    .unwrap();
+    fs::write(dir.join("checks/pr.sh"), PENDING).unwrap();
+    let receipt = success(
+        room.command(&["workflow", "run", "tell", "--prompt", "Ship it"])
+            .output()
+            .unwrap(),
+    );
+    let id = receipt.lines().next().unwrap().to_owned();
+    until(&room.env, &id, |v| v["record"]["wait"].is_object());
+    fs::remove_dir_all(&dir).unwrap();
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    settled(&room.env, &id, "canceled");
+    let saved = fs::read_to_string(run_home(&room.env, &id).history()).unwrap();
+    assert!(
+        saved.contains("its definition could not be read"),
+        "{saved}"
+    );
+    assert!(saved.contains("\n    to @codex#main · ended\n"), "{saved}");
+    assert!(!saved.contains("@codex#main HEAD"), "{saved}");
+}
+
 #[test]
 fn node_view_and_definition_rail_name_a_message_step_target() {
     let room = Room::new("lifecycle='session'\n");
