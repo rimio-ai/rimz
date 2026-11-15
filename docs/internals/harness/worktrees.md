@@ -23,10 +23,11 @@ The marker lives in the worktree's Git admin directory (`.git/worktrees/<name>/r
 | `repo_root`, `worktree_path` | The repository the tree was created from, and where the tree lives. |
 | `created_at` | Creation time. It bounds the lane's [attribution lifetime](../agents/attribution.md#selecting-records). |
 | `loop_task` | The loop task whose fire created a per-fire tree (`create_for_loop_fire`); omitted on every other tree. |
+| `loop_fire` | The loop fire the tree was made under: cut for the fire, or created by a launch's `-w` under it (`stamp_loop_fire`); omitted on every other tree. |
 
 Creation writes the marker through `write_marker`, a temp file renamed into place. One later write exists: reusing a same-repository PR head's tree fills a missing `from_pr` through the same writer and keeps every other field, `version` and `created_at` included. So `created_at` is the birth of the tree's current incarnation, and a tree removed and recreated under the same name gets a fresh one. The filled PR number makes the tree discoverable by PR resume and by the sidebar's PR matching.
 
-`base_branch`, `from_pr` and `loop_task` are `#[serde(default)]` options, so a marker that lacks them still deserializes and its tree still cleans up; the marker takes no `deny_unknown_fields`, so an older binary reads a marker that carries `loop_task`. Tests in [`worktree/tests.rs`](../../../crates/rimz/src/worktree/tests.rs) pin that. A new marker field needs the same treatment.
+`base_branch`, `from_pr`, `loop_task` and `loop_fire` are `#[serde(default)]` options, so a marker that lacks them still deserializes and its tree still cleans up; the marker takes no `deny_unknown_fields`, so an older binary reads a marker that carries `loop_task` or `loop_fire`. Tests in [`worktree/tests.rs`](../../../crates/rimz/src/worktree/tests.rs) pin that. A new marker field needs the same treatment.
 
 ### Two spellings of a tree's path
 

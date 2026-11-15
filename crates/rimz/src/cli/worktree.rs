@@ -1321,6 +1321,7 @@ mod tests {
 
     fn worktree_marker() -> rimz::worktree::WorktreeMarker {
         rimz::worktree::WorktreeMarker {
+            loop_fire: None,
             version: 4,
             name: "demo".to_owned(),
             branch: "recorded/demo".to_owned(),

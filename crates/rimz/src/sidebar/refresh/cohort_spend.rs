@@ -343,6 +343,7 @@ mod tests {
         let git_dir = checkout.join(".git");
         std::fs::create_dir_all(&git_dir).unwrap();
         let marker = crate::worktree::WorktreeMarker {
+            loop_fire: None,
             version: 1,
             name: "lane".to_owned(),
             branch: "lane".to_owned(),

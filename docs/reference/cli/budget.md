@@ -82,7 +82,7 @@ While a room or account cap has no headroom, automation does not launch:
 | --- | --- |
 | `rimz agents <SPEC> -p`, `rimz subagents <PROFILE>`, `rimz subagents fanout` | Refused with the cap's reason and exit `125`, before that attempt's run record or agent pane exists. |
 | A loop delivery row (a `rimz wait` or a team binding) | Recorded as `budget skipped`, with no strike. |
-| A launch in a loop task's command | Met as the same launch from your shell: a refused blocking launch exits `125`, so the fire fails and counts a strike. |
+| A launch in a loop task's command | Met as the same launch from your shell: a refused `-p` launch exits `125`, so the fire fails and counts a strike. |
 | An interactive launch | Allowed. |
 
 A fresh managed Qwen launch on an Alibaba account meets the same refusals when that account's `5h`, `7d`, or `mo` quota window is exhausted. That limit is the provider's quota, and neither command changes it; the loop side is in the [loop reference](./loop.md).

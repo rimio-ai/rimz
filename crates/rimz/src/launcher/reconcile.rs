@@ -31,7 +31,7 @@ pub(super) fn reconcile_cohort_launch(
     prompt: Option<&str>,
     fresh: bool,
     focus: LaunchFocus,
-    loop_fire: bool,
+    task_step: bool,
     interaction: &mut dyn Interaction,
 ) -> Result<Reconciled> {
     if !path.exists() {
@@ -57,7 +57,7 @@ pub(super) fn reconcile_cohort_launch(
             let leader = leader
                 .as_ref()
                 .and_then(|id| projection.agents.iter().find(|agent| &agent.agent_id == id));
-            if loop_fire {
+            if task_step {
                 let leader = leader
                     .map(|agent| {
                         format!(
@@ -170,9 +170,9 @@ pub(super) fn reconcile_cohort_launch(
                 prompt,
                 None,
             );
-            // A loop fire refuses with guidance even when fired from a terminal.
+            // A task-started workflow step refuses with guidance even when fired from a terminal.
             let mut unattended = Unattended;
-            let interaction: &mut dyn Interaction = if loop_fire {
+            let interaction: &mut dyn Interaction = if task_step {
                 &mut unattended
             } else {
                 interaction

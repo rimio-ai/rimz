@@ -1,6 +1,8 @@
-//! Stop an active loop runner through durable cancellation and a SIGTERM backstop.
+//! Stop an active loop runner through durable cancellation and a SIGTERM backstop, then
+//! forward a stop to everything alive the task's fires launched.
 
 use super::*;
+use rimz::harness::schedule::launches::Launch;
 use rimz::harness::schedule::runner::StopOutcome;
 
 pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
@@ -8,21 +10,22 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
         Some(task) => task.entry().resolved_root(),
         None => match in_flight_without_row(name, globals)? {
             Some((root, _)) => root,
-            // A removed task's live run is still the task's to stop.
+            // A removed task's live launch is still the task's to stop.
             None => project_root_for_globals(globals)
-                .filter(|root| live_workflow_runs(name, root).is_ok_and(|runs| !runs.is_empty()))
+                .filter(|root| {
+                    task_id(name, None, Some(root))
+                        .and_then(|id| alive_launches(&id, root).ok())
+                        .is_some_and(|(alive, _)| !alive.is_empty())
+                })
                 .ok_or_else(|| {
                     anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`")
                 })?,
         },
     };
     let (outcome, pane_open) = stop_active_run(name, &root, None, globals)?;
-    let (canceled, mut failures) = cancel_workflow_runs(name, &root)?;
-    if !canceled.is_empty() {
-        failures.extend(stop_owned_launches(name, &root, &canceled, globals)?);
-    }
+    let (stopped, mut failures) = stop_alive_launches(name, &root, globals)?;
     match outcome {
-        StopOutcome::NoActiveRun if !canceled.is_empty() || !failures.is_empty() => {}
+        StopOutcome::NoActiveRun if stopped > 0 || !failures.is_empty() => {}
         StopOutcome::NoActiveRun => writeln!(ui::out(), "loop `{name}`: no active run")?,
         StopOutcome::Stopped {
             run_id,
@@ -48,73 +51,87 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-/// Cancel each live workflow run the task started, as `rimz workflow cancel` does; the run's
-/// own report then records the end and starts the next waiting trigger. A run that fails to
-/// cancel leaves the others to try, and its error is returned beside the canceled ids.
-fn cancel_workflow_runs(
+/// Forward a stop to each launch alive under one of the task's fires, through its own public
+/// stop: `rimz workflow cancel` for a workflow run, the supervised stop for a `-p` run, and
+/// `rimz agents stop` for an agent (a team is its agents). A launch that fails to stop leaves
+/// the others to try, and its error is returned beside the count stopped.
+fn stop_alive_launches(
     name: &str,
     root: &Path,
-) -> Result<(Vec<rimz::ids::WorkflowRunId>, Vec<String>)> {
-    let mut canceled = Vec::new();
+    globals: &GlobalFlags,
+) -> Result<(usize, Vec<String>)> {
+    let Some(id) = task_id(name, None, Some(root)) else {
+        return Ok((0, Vec::new()));
+    };
+    let (alive, rows) = alive_launches(&id, root)?;
+    let mut stopped = 0;
     let mut failures = Vec::new();
-    for run in live_workflow_runs(name, root)? {
-        let output = std::process::Command::new(rimz::proc::rimz_exe())
-            .args(rimz::harness::workflow::cancel_args(&run.id, "loop stop"))
-            .current_dir(root)
-            .stdin(std::process::Stdio::null())
-            .output();
-        let failure = match output {
-            Err(error) => format!("canceling workflow run {}: {error}", run.id),
-            Ok(output) if !output.status.success() => format!(
-                "loop `{name}`: workflow run {} not canceled: {}",
-                run.id,
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-            Ok(_) => {
-                writeln!(ui::out(), "loop `{name}`: stopped · run {}", run.id)?;
-                canceled.push(run.id);
-                continue;
+    for launch in &alive {
+        let address = launch_address(&launch.launch, &rows);
+        let result = match &launch.launch {
+            Launch::Workflow(run) => forward_stop(
+                root,
+                globals,
+                rimz::harness::workflow::cancel_args(&run.id, "loop stop"),
+            )
+            .map(|()| None),
+            Launch::Supervised(run) => stop_supervised(name, root, run, globals),
+            Launch::Agent(_) => {
+                forward_stop(root, globals, ["agents", "stop", address.as_str()]).map(|()| None)
             }
         };
-        failures.push(failure);
+        match result {
+            Ok(pane_open) => {
+                stopped += 1;
+                let label = match &launch.launch {
+                    Launch::Agent(_) => address.clone(),
+                    Launch::Workflow(_) | Launch::Supervised(_) => format!("run {address}"),
+                };
+                writeln!(ui::out(), "loop `{name}`: stopped · {label}")?;
+                failures.extend(pane_open);
+            }
+            Err(err) => failures.push(match &launch.launch {
+                Launch::Workflow(_) => {
+                    format!("loop `{name}`: workflow run {address} not canceled: {err:#}")
+                }
+                Launch::Supervised(_) => format!("loop `{name}`: run {address}: {err:#}"),
+                Launch::Agent(_) => format!("loop `{name}`: {address} not stopped: {err:#}"),
+            }),
+        }
     }
-    Ok((canceled, failures))
+    Ok((stopped, failures))
 }
 
-/// Stop each live supervised run a canceled fire owns: a canceled fire ends its command, but a
-/// blocking launch the command made runs on in its pane until it is stopped itself. A launch
-/// of a fire that started after the cancel is that fire's own and is left alone.
-fn stop_owned_launches(
+fn stop_supervised(
     name: &str,
     root: &Path,
-    fires: &[rimz::ids::WorkflowRunId],
+    run: &rimz::store::run::RunRecord,
     globals: &GlobalFlags,
-) -> Result<Vec<String>> {
+) -> Result<Option<String>> {
     let workspace = rimz::WorkspaceResolver::resolve(root, None)
         .with_context(|| format!("resolving project root at {}", root.display()))?;
     let paths = StatePaths::for_project_root(&workspace.project_root)?;
-    let mut failures = Vec::new();
-    for run in rimz::harness::run::list(&paths)? {
-        if run.status.is_terminal() || !run.loop_fire.as_ref().is_some_and(|f| fires.contains(f)) {
-            continue;
-        }
-        match stop_owned_run(name, Some(&workspace), paths.clone(), &run, globals) {
-            Ok(pane_open) => failures.extend(pane_open),
-            Err(err) => failures.push(format!("loop `{name}`: run {}: {err:#}", run.run_id)),
-        }
-    }
-    Ok(failures)
+    stop_owned_run(name, Some(&workspace), paths, run, globals)
 }
 
-fn live_workflow_runs(name: &str, root: &Path) -> Result<Vec<rimz::store::workflow::RunRecord>> {
-    let state = StatePaths::for_project_root(root)?;
-    if !state.root.exists() {
-        return Ok(Vec::new());
+/// Run one child `rimz` stop command in the task's room, under this command's `--mux`, failing
+/// with its stderr.
+fn forward_stop<I, S>(root: &Path, globals: &GlobalFlags, args: I) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut command = std::process::Command::new(rimz::proc::rimz_exe());
+    if let Some(mux) = globals.mux {
+        command.args(["--mux", mux.as_str()]);
     }
-    let Some(id) = task_id(name, None, Some(root)) else {
-        return Ok(Vec::new());
-    };
-    let mut runs = rimz::store::workflow::live_runs(&state)?;
-    runs.retain(|run| run.started_by(&id));
-    Ok(runs)
+    let output = command
+        .args(args)
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
+    }
+    Ok(())
 }

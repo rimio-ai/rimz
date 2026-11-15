@@ -533,25 +533,25 @@ fn child_env(
     env
 }
 
-/// A task-started run's checks name their task and, as a loop guard's did, their directory,
-/// and carry the booking chain its fire froze, for an agent a check launches.
+/// A run carrying a loop fire hands its scripts the fire id, so a launch a script makes is the
+/// fire's. A task-started run's checks also name their task and, as a loop guard's did, their
+/// directory, and carry the booking chain its fire froze, for an agent a check launches.
 fn loop_task_env(record: &RunRecord) -> Vec<(String, String)> {
-    let Some(task) = record.task.clone() else {
-        return Vec::new();
-    };
-    let mut env = vec![
-        (crate::harness::loop_task::LOOP_TASK_ENV.to_owned(), task),
-        (
-            crate::workspace::ENV_WORKTREE_PATH.to_owned(),
-            record.scope.path.display().to_string(),
-        ),
-    ];
+    let mut env = Vec::new();
     if let Some(fire) = &record.loop_fire {
         env.push((
             crate::harness::loop_task::LOOP_FIRE_ENV.to_owned(),
             fire.to_string(),
         ));
     }
+    let Some(task) = record.task.clone() else {
+        return env;
+    };
+    env.push((crate::harness::loop_task::LOOP_TASK_ENV.to_owned(), task));
+    env.push((
+        crate::workspace::ENV_WORKTREE_PATH.to_owned(),
+        record.scope.path.display().to_string(),
+    ));
     if let Some(trigger) = record.prompt.clone().filter(|text| !text.is_empty()) {
         env.push((
             crate::harness::loop_task::LOOP_TRIGGER_ENV.to_owned(),

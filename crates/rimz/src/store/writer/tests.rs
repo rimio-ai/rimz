@@ -118,6 +118,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         agent_id: AgentSessionId::from("launch_follow_up"),
         name: AgentLaunchName::Explicit("writer".to_owned()),
         launch: LaunchParams {
+            loop_fire: None,
             epoch: None,
             automation: None,
             checkout: None,

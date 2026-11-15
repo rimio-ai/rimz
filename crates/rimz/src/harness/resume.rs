@@ -1216,6 +1216,8 @@ impl ResumeCandidate {
                 add_dirs: Vec::new(),
                 untrusted_checkout: false,
                 tier: None,
+                loop_fire: None,
+                loop_booked_by: Vec::new(),
             },
             stamped_mode: None,
             effective_isolation: None,

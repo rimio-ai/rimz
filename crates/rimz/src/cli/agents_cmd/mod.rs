@@ -1293,22 +1293,12 @@ fn dispatch_launch(
         all: false,
         json,
     };
-    let fire_task = rimz::harness::schedule::runner::loop_check_task();
-    let loop_task = fire_launch(
-        &mut args.launch,
-        fire_task.clone(),
-        rimz::harness::schedule::runner::loop_trigger(),
-    );
-    validate_detach(&args.launch, args.launch.print || loop_task.is_some())?;
-    if args.launch.print || loop_task.is_some() {
-        let (request, presentation) = if let Some(task) = loop_task {
-            into_loop_check_request(args, &task, &rimz::config::MachineConfig::load_lenient())?
-        } else {
-            let (mut request, presentation) = into_supervised_request(args)?;
-            // A detached `-p` run carries the chain only: its task field would make it the fire's.
-            request.loop_booked_by = rimz::harness::schedule::runner::loop_check_booked_by();
-            (request, presentation)
-        };
+    let fire = rimz::harness::loop_task::read_fire_env();
+    append_fire_trigger(&mut args.launch, fire.as_ref());
+    validate_detach(&args.launch)?;
+    if args.launch.print {
+        let (mut request, presentation) = into_supervised_request(args)?;
+        stamp_fire(&mut request, fire);
         return match run_print(request, presentation, globals) {
             Ok(Some(record)) => std::process::exit(record.status.exit_code()),
             Ok(None) => Ok(()),
@@ -1320,33 +1310,44 @@ fn dispatch_launch(
             "--json is only supported with `rimz agents list`; on `-p`, choose output with `--output-format json`"
         );
     }
-    launch_layout(args, globals, true, fire_task)
+    launch_layout(args, globals, true, fire)
         .map_err(|error| crate::cli::render::launch_suggestions::agents_error(error, bare))
 }
 
-/// Shape a launch made by a loop fire's command: a prompted launch gets what fired the run
-/// appended to its prompt, and the fire owns the launch (the task returned) unless it detaches,
-/// when it launches as it does from a shell.
-fn fire_launch(
+/// A launch made under a loop fire gets what fired it appended to a nonblank prompt; it
+/// launches as it does from a shell otherwise.
+fn append_fire_trigger(
     launch: &mut AgentLaunchArgs,
-    task: Option<String>,
-    trigger: Option<String>,
-) -> Option<String> {
-    let task = task?;
-    if let Some(trigger) = trigger
+    fire: Option<&rimz::harness::loop_task::FireEnv>,
+) {
+    if let Some(trigger) = fire.and_then(|fire| fire.trigger.as_deref())
         && let Some(prompt) = launch
             .prompt
             .as_mut()
             .filter(|prompt| !prompt.trim().is_empty())
     {
         prompt.push_str("\n\n");
-        prompt.push_str(&trigger);
+        prompt.push_str(trigger);
     }
-    (!launch.cohort.detach).then_some(task)
 }
 
-/// `--detach` drops the report a launch task owes; refuse it where no such report exists.
-fn validate_detach(launch: &AgentLaunchArgs, print: bool) -> Result<()> {
+/// Stamp a supervised launch made under a loop fire with that fire: its run and its agent
+/// carry the fire id, the task's name at the fire and the fire's booking chain.
+fn stamp_fire(
+    request: &mut rimz::harness::run::SupervisedRunRequest,
+    fire: Option<rimz::harness::loop_task::FireEnv>,
+) {
+    let Some(fire) = fire else {
+        return;
+    };
+    request.loop_fire = Some(fire.fire);
+    request.loop_task = Some(fire.task).filter(|task| !task.is_empty());
+    request.loop_booked_by = fire.booked_by;
+}
+
+/// `--detach` drops the report a launch task owes; refuse it where no such report exists. Only
+/// a written `-p` makes a print run: a launch under a loop fire is the launch it types.
+fn validate_detach(launch: &AgentLaunchArgs) -> Result<()> {
     if !launch.cohort.detach {
         return Ok(());
     }
@@ -1355,7 +1356,7 @@ fn validate_detach(launch: &AgentLaunchArgs, print: bool) -> Result<()> {
             "--detach cannot be combined with --continue: a resumed cohort has no launch task to detach; drop --detach"
         );
     }
-    if print {
+    if launch.print {
         if !launch.cohort.bg {
             bail!(
                 "--detach on `-p` requires --bg: a foreground run prints its answer inline; add --bg, or drop --detach"
@@ -1375,35 +1376,6 @@ fn validate_detach(launch: &AgentLaunchArgs, print: bool) -> Result<()> {
     Ok(())
 }
 
-fn into_loop_check_request(
-    mut args: AgentsArgs,
-    task: &str,
-    config: &rimz::config::MachineConfig,
-) -> Result<(
-    rimz::harness::run::SupervisedRunRequest,
-    supervised::SupervisedPresentation,
-)> {
-    if args.launch.prompt.is_none() {
-        bail!(
-            "a loop fire's command launches an agent with a prompt: `rimz agents <cell> \"<prompt>\"`"
-        );
-    }
-    if args.launch.cohort.bg {
-        bail!(
-            "a loop fire waits for the agent its command launches; remove `--bg`, or add `--detach` to launch it apart from the fire"
-        );
-    }
-    args.launch.print = true;
-    let (mut request, presentation) = into_supervised_request(args)?;
-    rimz::harness::schedule::runner::shape_loop_owned(
-        &mut request,
-        task,
-        config,
-        rimz::harness::schedule::run_log::LoopRunMode::Scheduled,
-    )?;
-    Ok((request, presentation))
-}
-
 pub(in crate::cli) struct BackgroundLaunch {
     pub name: String,
     pub run_id: rimz::RunId,
@@ -1421,7 +1393,8 @@ pub(in crate::cli) fn launch_supervised_background(
     globals: &GlobalFlags,
 ) -> Result<BackgroundLaunchOutcome> {
     let args = AgentsArgs::from_launch(launch);
-    let (request, presentation) = into_supervised_request(args)?;
+    let (mut request, presentation) = into_supervised_request(args)?;
+    stamp_fire(&mut request, rimz::harness::loop_task::read_fire_env());
     let Some(outcome) = run_supervised(request, presentation, globals, &mut None)? else {
         return Ok(BackgroundLaunchOutcome::Aborted);
     };

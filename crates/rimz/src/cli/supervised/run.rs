@@ -308,7 +308,7 @@ pub(in crate::cli) fn run_supervised(
                 cancellation.reset();
                 supervised::install_run_interrupt_handlers(cancellation)
             },
-            termination: request.loop_task.as_ref().map(|_| termination_slot.clone()),
+            termination: request.loop_fire.as_ref().map(|_| termination_slot.clone()),
         }
     };
     let preparation = rimz::launcher::prepare_supervised(

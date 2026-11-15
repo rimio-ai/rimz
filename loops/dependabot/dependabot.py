@@ -333,11 +333,11 @@ def launch(plan, timeout=300):
     # No shell: titles, prompts, paths, and PR metadata remain argv data.
     # --fresh: open_checkout just cut this tree, so there is no earlier work to ask about.
     argv = ["rimz", "teams", "launch", "spot", prompt, "-w", plan["branch"], "--fresh", "--bg"]
-    # Inside a loop check, RimZ turns a prompted launch into a blocking run and refuses --bg
-    # (docs/guide/loops.md). This coordinator owns the lane itself (occupied_repair_lane,
-    # stop_finished_lanes, reclaim_idle_checkouts), so it hands the team off: drop the loop
-    # marker and keep the workspace pin (RIMZ_WORKSPACE_ID, RIMZ_PROJECT_ROOT).
-    env = {key: value for key, value in os.environ.items() if key != "RIMZ_LOOP_TASK"}
+    # A launch under a fire carries the fire's id, so `rimz loop show` lists it and `rimz loop
+    # stop` stops it (docs/guide/loops.md). This coordinator owns the lane itself
+    # (occupied_repair_lane, stop_finished_lanes, reclaim_idle_checkouts), so it hands the team
+    # off: drop the fire's id and keep the workspace pin (RIMZ_WORKSPACE_ID, RIMZ_PROJECT_ROOT).
+    env = {key: value for key, value in os.environ.items() if key != "RIMZ_LOOP_FIRE"}
     what = f"rimz teams launch spot -w {plan['branch']}"
     try:
         result = subprocess.run(argv, cwd=ROOT, env=env, stdin=subprocess.DEVNULL, text=True,

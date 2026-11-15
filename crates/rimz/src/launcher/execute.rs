@@ -38,8 +38,8 @@ pub struct LeaderRun {
     pub warn: Vec<Duration>,
     pub grace: Option<Duration>,
     pub loop_task: Option<String>,
-    /// The workflow run of the loop fire that owns this blocking launch, stamped on its run.
-    pub loop_fire: Option<crate::ids::WorkflowRunId>,
+    /// The loop fire this launch was made under, stamped on its run and on every cell.
+    pub loop_fire: Option<crate::ids::FireId>,
     /// The booking chain of the loop fire behind a workflow step's launch, stamped on every
     /// cell.
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
@@ -89,6 +89,8 @@ pub(super) struct FreshLaunch {
     pub(super) loop_task: Option<String>,
     /// The booking chain of the loop fire behind a launch no run of the fire owns.
     pub(super) loop_booked_by: Vec<crate::agents::LaunchedBy>,
+    /// The loop fire a room launch was made under, stamped on every cell.
+    pub(super) loop_fire: Option<crate::ids::FireId>,
     pub(super) description: Option<String>,
     pub(super) report_to: ReportTo,
     pub(super) cleanup_worktree: bool,
@@ -318,6 +320,11 @@ fn open_fresh(
                 .as_ref()
                 .map_or(&fresh.loop_booked_by, |leader| &leader.loop_booked_by),
         );
+        request.launch.loop_fire.clone_from(
+            leader
+                .as_ref()
+                .map_or(&fresh.loop_fire, |leader| &leader.loop_fire),
+        );
         if let Some(leader) = &leader {
             request.launch.workflow.clone_from(&leader.workflow);
             if fresh.soft_name
@@ -331,8 +338,8 @@ fn open_fresh(
         }
     }
     if let Some(index) = fresh.prompt_index {
-        // A task's workflow step, and a blocking launch its fire's command makes, launch their
-        // leader as that task's agent; a taskless workflow step's leader carries none.
+        // A task's workflow step, and a launch made under a fire, launch their leader as that
+        // task's agent; a taskless workflow step's leader carries none.
         let task = match &leader {
             None => fresh.loop_task.clone(),
             Some(leader) => leader.loop_task.clone(),

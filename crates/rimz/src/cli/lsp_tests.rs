@@ -32,6 +32,7 @@ fn checkout_labels_use_room_identity_and_linked_metadata_only() {
     assert_eq!(checkout_label(&project, &project), "#main");
     assert_eq!(checkout_label(&linked, &project), "#check-kinds");
     let marker = rimz::worktree::WorktreeMarker {
+        loop_fire: None,
         version: 4,
         name: "check-kinds".into(),
         branch: "feat/kinds".into(),

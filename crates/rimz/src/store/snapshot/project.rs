@@ -1097,6 +1097,9 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams, registratio
     if !launch.loop_booked_by.is_empty() {
         state.loop_booked_by.clone_from(&launch.loop_booked_by);
     }
+    if let Some(fire) = &launch.loop_fire {
+        state.loop_fire = Some(fire.clone());
+    }
     if let Some(launch_group) = &launch.launch_group {
         state.launch_group = Some(launch_group.clone());
     }
@@ -1362,6 +1365,7 @@ fn inherit_launch_identity(
     successor
         .loop_booked_by
         .clone_from(&predecessor.loop_booked_by);
+    successor.loop_fire.clone_from(&predecessor.loop_fire);
     successor.workflow.clone_from(&predecessor.workflow);
     successor.tune.clone_from(&latest.tune);
     successor.automation.clone_from(&predecessor.automation);

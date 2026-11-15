@@ -1013,7 +1013,7 @@ Who collects: `rimz workflow advance`, `cancel`, and `restart` (which `rimz agen
 
 The mark waits for both the row and the strike. A failed append returns before the strike, and a failed strike leaves the row written, each with one warning naming the run, and the run stays owed. A record without an outcome, or a crash before the mark, leaves the run owed the same way. A failed collection never fails the command's transition, which is already durable. So the report can land twice, and its readers fold it by run id ([strikes](./loops.md#strikes)). A record without the mark reads `none` and never reports.
 
-Once the workspace lock is released, a collection that finds the run ended cancels each open supervised run stamped with its id as `loop_fire`: a blocking launch its fire's command made ([loops.md](./loops.md#stopping-a-run)). Until the outcome row is appended, `rimz loop show` and `loop logs` list a `launched` row read from the run's live record. The row is appended before the strike and the mark, so a run whose strike or mark failed is still owed but already shows its outcome.
+Collection stops nothing the fire's command launched: those launches carry the fire's id as `loop_fire` and end by their own rules or `rimz loop stop` ([loops.md](./loops.md#stopping-a-run)). Until the outcome row is appended, `rimz loop show` and `loop logs` list a `launched` row read from the run's live record. The row is appended before the strike and the mark, so a run whose strike or mark failed is still owed but already shows its outcome.
 
 ### Selection, rename, and removal
 

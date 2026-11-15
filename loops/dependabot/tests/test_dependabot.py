@@ -514,7 +514,8 @@ class LaunchTests(unittest.TestCase):
     """The team launch is a hand-off from inside a loop check, and its failures stay readable."""
 
     PLAN = dict(action="repair", branch="deps/repair-1", sources=[dict(number=1, head_sha="sha-1")])
-    LOOP_ENV = {"RIMZ_LOOP_TASK": "dependabot-repair", "RIMZ_WORKSPACE_ID": "ws-1", "RIMZ_PROJECT_ROOT": "/repo"}
+    LOOP_ENV = {"RIMZ_LOOP_TASK": "dependabot-repair", "RIMZ_LOOP_FIRE": "fire_0123456789abcdef0123456789abcdef_0123456789abcdef0123456789abcdef",
+                "RIMZ_WORKSPACE_ID": "ws-1", "RIMZ_PROJECT_ROOT": "/repo"}
 
     def launch(self, result=None, error=None):
         completed = subprocess.CompletedProcess([], 0, "", "") if result is None else result
@@ -526,11 +527,11 @@ class LaunchTests(unittest.TestCase):
             finally:
                 self.run_call = run.call_args
 
-    def test_launch_drops_the_loop_marker_and_keeps_the_workspace_pin(self):
+    def test_launch_drops_the_fire_id_and_keeps_the_workspace_pin(self):
         self.launch()
         argv, env = self.run_call.args[0], self.run_call.kwargs["env"]
         self.assertEqual(argv[:4] + argv[5:], ["rimz", "teams", "launch", "spot", "-w", "deps/repair-1", "--fresh", "--bg"])
-        self.assertNotIn("RIMZ_LOOP_TASK", env)
+        self.assertNotIn("RIMZ_LOOP_FIRE", env)
         self.assertEqual((env["RIMZ_WORKSPACE_ID"], env["RIMZ_PROJECT_ROOT"]), ("ws-1", "/repo"))
         self.assertEqual(self.run_call.kwargs["stdin"], subprocess.DEVNULL)
 

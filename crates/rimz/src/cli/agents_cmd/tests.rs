@@ -1462,7 +1462,7 @@ mod parse {
             ),
         ] {
             let args = parse_agents(argv);
-            let err = validate_detach(&args.launch, args.launch.print).expect_err("refuse detach");
+            let err = validate_detach(&args.launch).expect_err("refuse detach");
             assert_eq!(err.to_string(), error, "{argv:?}");
         }
         for argv in [
@@ -1472,39 +1472,46 @@ mod parse {
             &["rimz", "claude", "-p"],
         ] {
             let args = parse_agents(argv);
-            validate_detach(&args.launch, args.launch.print)
-                .unwrap_or_else(|err| panic!("{argv:?}: {err:#}"));
+            validate_detach(&args.launch).unwrap_or_else(|err| panic!("{argv:?}: {err:#}"));
+        }
+    }
+
+    pub(super) fn fire_env(trigger: Option<&str>) -> rimz::harness::loop_task::FireEnv {
+        rimz::harness::loop_task::FireEnv {
+            fire: rimz::ids::FireId::new(&rimz::ids::TaskId::new()),
+            task: "nightly".to_owned(),
+            trigger: trigger.map(str::to_owned),
+            booked_by: Vec::new(),
         }
     }
 
     #[test]
-    fn a_fire_owns_its_blocking_launch_and_a_detached_one_returns_with_the_trigger_in_its_prompt() {
-        let fire = |argv: &[&str], task: Option<&str>| {
+    fn a_fire_appends_its_trigger_to_any_written_prompt_and_leaves_the_launch_as_typed() {
+        let fire = fire_env(Some("Rule `ship` fired here. pr.state: merged"));
+        let launch = |argv: &[&str], fire: Option<&rimz::harness::loop_task::FireEnv>| {
             let mut args = parse_agents(argv);
-            let owner = fire_launch(
-                &mut args.launch,
-                task.map(str::to_owned),
-                Some("Rule `ship` fired here. pr.state: merged".to_owned()),
-            );
-            (owner, args.launch.prompt)
+            append_fire_trigger(&mut args.launch, fire);
+            validate_detach(&args.launch).unwrap();
+            (args.launch.prompt, args.launch.print)
         };
         let evidence = Some("fix\n\nRule `ship` fired here. pr.state: merged".to_owned());
+        for argv in [
+            &["rimz", "claude", "fix"][..],
+            &["rimz", "claude", "fix", "--detach"],
+            &["rimz", "claude", "fix", "--bg"],
+        ] {
+            assert_eq!(
+                launch(argv, Some(&fire)),
+                (evidence.clone(), false),
+                "{argv:?}: a fire's launch without -p stays a room launch"
+            );
+        }
         assert_eq!(
-            fire(&["rimz", "claude", "fix"], Some("ship")),
-            (Some("ship".to_owned()), evidence.clone()),
-            "a launch without --detach blocks as the fire's owned run"
+            launch(&["rimz", "claude", "fix"], None),
+            (Some("fix".to_owned()), false),
+            "outside a fire nothing is appended"
         );
-        assert_eq!(
-            fire(&["rimz", "claude", "fix", "--detach"], Some("ship")),
-            (None, evidence),
-            "a detached launch leaves its agent open, unowned by the fire"
-        );
-        assert_eq!(
-            fire(&["rimz", "claude", "fix"], None),
-            (None, Some("fix".to_owned())),
-            "outside a fire's command nothing is appended"
-        );
-        assert_eq!(fire(&["rimz", "claude"], Some("ship")).1, None);
+        assert_eq!(launch(&["rimz", "claude"], Some(&fire)).0, None);
     }
 
     #[test]
@@ -1713,45 +1720,26 @@ mod launch_options {
     }
 
     #[test]
-    fn loop_check_launch_is_blocking_bounded_and_owned() {
-        let mut config = MachineConfig::default();
-        config.r#loop.default_timeout = Some("17m".to_owned());
-        for (flags, keep, seconds) in [
-            (vec![], false, 17 * 60),
-            (vec!["-p", "--keep", "--timeout", "30s"], true, 30),
-        ] {
-            let mut argv = vec!["rimz", "claude", "check"];
+    fn a_print_run_under_a_fire_is_an_ordinary_run_with_the_fire_stamp() {
+        for (flags, background) in [(vec![], false), (vec!["--bg"], true)] {
+            let mut argv = vec!["rimz", "claude", "check", "-p"];
             argv.extend(flags);
-            let (request, _) =
-                into_loop_check_request(parse_agents(&argv), "nightly", &config).unwrap();
+            let (plain, _) = into_supervised_request(parse_agents(&argv)).unwrap();
+            let (mut request, _) = into_supervised_request(parse_agents(&argv)).unwrap();
+            let fire = parse::fire_env(None);
+            stamp_fire(&mut request, Some(fire.clone()));
+            assert_eq!(request.loop_fire.as_ref(), Some(&fire.fire));
             assert_eq!(request.loop_task.as_deref(), Some("nightly"));
-            // The check script wrote this prompt, not the rule.
-            assert_eq!(request.reminder_section, None);
-            assert!(!request.background);
-            assert_eq!(request.keep, keep);
-            assert_eq!(request.self_cleanup_on_completion, !keep);
+            // Nothing else changes: no scheduled timeout, own tab or cleanup.
+            assert_eq!(request.background, background);
+            assert_eq!(request.timeout, plain.timeout);
+            assert_eq!(request.keep, plain.keep);
             assert_eq!(
-                request.timeout,
-                Some(std::time::Duration::from_secs(seconds))
+                request.self_cleanup_on_completion,
+                plain.self_cleanup_on_completion
             );
-            assert!(request.force_new_tab);
-        }
-        // `--new-tab` stays accepted and changes nothing.
-        let (request, _) = into_loop_check_request(
-            parse_agents(&["rimz", "claude", "check", "--new-tab"]),
-            "nightly",
-            &config,
-        )
-        .unwrap();
-        assert!(request.force_new_tab);
-        for (argv, expected) in [
-            (vec!["rimz", "claude"], "with a prompt"),
-            (vec!["rimz", "claude", "check", "--bg"], "remove `--bg`"),
-        ] {
-            let error = into_loop_check_request(parse_agents(&argv), "nightly", &config)
-                .err()
-                .expect("refused loop launch");
-            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(request.force_new_tab, plain.force_new_tab);
+            assert_eq!(request.reminder_section, plain.reminder_section);
         }
     }
 

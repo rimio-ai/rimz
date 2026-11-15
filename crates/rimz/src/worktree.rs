@@ -223,6 +223,10 @@ pub struct WorktreeMarker {
     /// The loop task whose fire created this tree, for a per-fire tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_task: Option<String>,
+    /// The loop fire this tree was made under: cut for the fire, or created by a launch's `-w`
+    /// under it (`stamp_loop_fire`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_fire: Option<crate::ids::FireId>,
 }
 
 /// What a linked worktree's `.git` metadata records about where it came from.
@@ -2005,6 +2009,16 @@ pub fn parse_requested_name(raw: &str) -> Result<RequestedName> {
     })
 }
 
+/// Stamp the loop fire a tree was just made under on its RimZ marker; a tree without one is
+/// left alone.
+pub fn stamp_loop_fire(worktree: &Path, fire: &crate::ids::FireId) -> Result<()> {
+    let Some(mut marker) = read_marker_for_worktree(worktree)? else {
+        return Ok(());
+    };
+    marker.loop_fire = Some(fire.clone());
+    write_marker(worktree, &marker)
+}
+
 pub fn read_marker_for_worktree(path: &Path) -> Result<Option<WorktreeMarker>> {
     let marker = match marker_path(path) {
         Ok(path) => path,
@@ -2392,6 +2406,7 @@ fn finish_worktree(
         worktree_path: path.clone(),
         created_at: jiff::Timestamp::now(),
         loop_task,
+        loop_fire: None,
     };
     write_marker(&path, &marker)?;
     let included = include::copy_includes(repo_root, &path);

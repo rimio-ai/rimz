@@ -194,8 +194,8 @@ pub struct SupervisedRunRequest {
     pub verify: Option<String>,
     pub max_attempts: Option<u32>,
     pub loop_task: Option<String>,
-    /// The workflow run of the loop fire whose command made this blocking launch.
-    pub loop_fire: Option<crate::ids::WorkflowRunId>,
+    /// The loop fire this launch was made under, stamped on its run and its agent.
+    pub loop_fire: Option<crate::ids::FireId>,
     /// The booking chain of the loop task whose check launched this run, stamped on its agent.
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,

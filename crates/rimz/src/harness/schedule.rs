@@ -35,6 +35,7 @@ pub mod fanout;
 pub mod fire;
 mod fires;
 pub mod instances;
+pub mod launches;
 pub mod pending;
 pub(crate) mod probe;
 mod run_lock;

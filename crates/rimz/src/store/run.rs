@@ -339,10 +339,15 @@ pub struct RunRecord {
     pub retry_of: Option<RunId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_task: Option<String>,
-    /// The workflow run of the loop fire whose command made this blocking launch: the fire owns
-    /// the run, and collecting the fire's ended run stops it if it is still open.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub loop_fire: Option<crate::ids::WorkflowRunId>,
+    /// The loop fire this run was launched under (`harness::loop_task::read_fire_env`): it names
+    /// the fire's task, so `rimz loop show` lists the run and `rimz loop stop` stops it. A
+    /// record an older RimZ wrote holds a workflow run id here, which reads as no fire.
+    #[serde(
+        default,
+        deserialize_with = "lenient_fire",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub loop_fire: Option<crate::ids::FireId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -491,6 +496,18 @@ pub struct AnswerClaim<'a> {
     pub earlier: Option<&'a EarlierAnswer>,
 }
 
+/// A stored `loop_fire` that is no fire id (an older RimZ wrote the fire's workflow run id
+/// there) reads as no fire, so the record still decodes.
+fn lenient_fire<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<crate::ids::FireId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(raw.and_then(|raw| crate::ids::FireId::parse(&raw).ok()))
+}
+
 impl RunRecord {
     /// Whether a wrapper or hook in `pane` no longer speaks for this run: a restart
     /// handed the run over from `pane`, or, once any restart has, another pane
@@ -541,13 +558,14 @@ impl RunRecord {
     }
 
     pub fn prompt_origin(&self) -> RunPromptOrigin {
+        // A fire's stamp, or a task-started workflow step's task, makes the prompt harness's.
         match (
             self.subagent || self.peer.is_some() || self.team.is_some(),
-            self.loop_task.as_ref(),
+            self.loop_fire.is_some() || self.loop_task.is_some(),
         ) {
             (true, _) => RunPromptOrigin::Parent,
-            (false, Some(_)) => RunPromptOrigin::Harness,
-            (false, None) => RunPromptOrigin::Human,
+            (false, true) => RunPromptOrigin::Harness,
+            (false, false) => RunPromptOrigin::Human,
         }
     }
 

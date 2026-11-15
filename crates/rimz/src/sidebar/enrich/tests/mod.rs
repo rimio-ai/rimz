@@ -586,6 +586,7 @@ fn write_worktree_marker(path: &Path, name: &str) {
     let git_dir = path.join(".git");
     std::fs::create_dir_all(&git_dir).unwrap();
     let marker = crate::worktree::WorktreeMarker {
+        loop_fire: None,
         version: 1,
         name: name.to_owned(),
         branch: name.to_owned(),

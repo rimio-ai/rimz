@@ -7149,6 +7149,182 @@ fn loop_stop_reaches_a_run_holding_only_a_per_checkout_lock() {
     );
 }
 
+/// `rimz loop show` lists what the task's fires launched while it is alive, by the fire stamp
+/// alone: a room agent of one fire and each cell of a later fire's team. `rimz loop stop`
+/// forwards a stop to each. A launch handed off by dropping `RIMZ_LOOP_FIRE` carries no
+/// stamp, and another task's launch carries another task's fire: neither is listed or stopped.
+#[test]
+fn loop_stop_ends_and_loop_show_lists_each_alive_launch_of_the_tasks_fires() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "stamped",
+            "--every",
+            "1h",
+            "--timeout",
+            "1m",
+            "--",
+            "true",
+        ],
+    );
+    let task = task_id(&env, "stamped");
+    let (first, later) = (rimz::ids::FireId::new(&task), rimz::ids::FireId::new(&task));
+    let stamped = |fire: &rimz::ids::FireId, team: Option<&str>| rimz::agents::LaunchParams {
+        loop_fire: Some(fire.clone()),
+        team: team.map(str::to_owned),
+        ..Default::default()
+    };
+    // Each agent sits in its own listed pane with a live process, as `agents stop` needs.
+    let workspace = env.resolve_workspace(&env.project_root);
+    let mut processes = Vec::new();
+    let mut seed = |name: &str, pane: u64, launch: rimz::agents::LaunchParams| {
+        let process = Command::new("sleep").arg("347").spawn().unwrap();
+        let id = format!("launch_{name}");
+        let owner = rimz::store::runtime::process_owner(
+            rimz::pane::RuntimeOwnerKind::Agent,
+            &id,
+            process.id(),
+        );
+        processes.push(process);
+        env.store()
+            .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &AgentKind::new_unchecked("claude"),
+                rimz::store::event::AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: AgentSessionId::from(id.as_str()),
+                    launch_id: Some(AgentSessionId::from(id.as_str())),
+                    agent_name: name.to_owned(),
+                    agent_name_explicit: true,
+                    launch,
+                    state: rimz::store::event::AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: Some(rimz::ids::PaneId::from_parts(
+                        MuxName::Zellij,
+                        format!("terminal_{pane}"),
+                    )),
+                    runtime_owner: Some(owner),
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+    };
+    seed("solo", 3, stamped(&first, None));
+    seed("lead", 4, stamped(&later, Some("crew")));
+    seed("member", 5, stamped(&later, Some("crew")));
+    seed("handed", 6, Default::default());
+    let stranger = rimz::ids::FireId::new(&rimz::ids::TaskId::new());
+    seed("stranger", 7, stamped(&stranger, None));
+    let panes = env.project_root.join("stop-panes.json");
+    let rows = (3..=7)
+        .map(|id| json!({"id": id, "is_plugin": false, "tab_id": 1, "title": "sh"}))
+        .collect::<Vec<_>>();
+    std::fs::write(&panes, serde_json::to_vec(&rows).unwrap()).unwrap();
+    let trace = env.project_root.join("stop-trace.log");
+
+    let launches = |env: &Env| {
+        let show: serde_json::Value =
+            serde_json::from_str(&loop_ok(env, &["loop", "show", "stamped", "--json"])).unwrap();
+        show["launches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|launch| {
+                (
+                    launch["address"].as_str().unwrap().to_owned(),
+                    launch["what"].as_str().unwrap().to_owned(),
+                    launch["fire"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let listed = launches(&env);
+    let names = listed
+        .iter()
+        .map(|(address, what, fire)| {
+            assert_eq!(what, "agent", "{listed:?}");
+            let name = address.trim_start_matches('@').split('#').next().unwrap();
+            let expected = if name == "solo" { &first } else { &later };
+            assert_eq!(fire, expected.as_str(), "{listed:?}");
+            name.to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        names,
+        BTreeSet::from(["solo".to_owned(), "lead".to_owned(), "member".to_owned()]),
+        "{listed:?}"
+    );
+    let text = loop_ok(&env, &["loop", "show", "stamped"]);
+    assert!(text.contains("LAUNCHES"), "{text}");
+    for (address, ..) in &listed {
+        assert_eq!(text.matches(address.as_str()).count(), 1, "{text}");
+    }
+
+    let stop = env
+        .rimz()
+        .args(["--mux", "zellij", "loop", "stop", "stamped"])
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", &panes)
+        .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "2000")
+        .output()
+        .unwrap();
+    assert!(
+        stop.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stop.stderr)
+    );
+    let stopped = String::from_utf8_lossy(&stop.stdout);
+    let closed = std::fs::read_to_string(&trace)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("\tclose-pane\t"))
+        .filter_map(|line| {
+            line.split('\t')
+                .skip_while(|arg| *arg != "--pane-id")
+                .nth(1)
+        })
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        closed,
+        BTreeSet::from(["terminal_3", "terminal_4", "terminal_5"].map(str::to_owned)),
+        "only the task's launches are stopped"
+    );
+    for (address, ..) in &listed {
+        assert!(
+            stopped.contains(&format!("loop `stamped`: stopped · {address}")),
+            "{stopped}"
+        );
+    }
+    // The stop ends each stamped agent's process; its end is then the wrapper's to record.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let exited = |process: &mut std::process::Child| process.try_wait().unwrap().is_some();
+    while !processes[..3].iter_mut().all(exited) {
+        assert!(
+            Instant::now() < deadline,
+            "a stamped agent's process outlived the stop"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !processes[3..].iter_mut().any(exited),
+        "a handed-off or other task's agent was stopped"
+    );
+    for mut process in processes {
+        let _ = process.kill();
+        let _ = process.wait();
+    }
+}
+
 #[test]
 fn loop_stop_without_active_run_reports_no_active_run() {
     let env = Env::new();

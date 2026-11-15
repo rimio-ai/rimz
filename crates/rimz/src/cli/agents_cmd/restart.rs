@@ -1060,6 +1060,7 @@ pub(in crate::cli) fn relaunch_request(
         team: agent.team.clone(),
         loop_task: agent.loop_task.clone(),
         loop_booked_by: agent.loop_booked_by.clone(),
+        loop_fire: agent.loop_fire.clone(),
         workflow: None,
         launch_group: agent.launch_group.clone(),
         launch_ordinal: agent.launch_ordinal,
@@ -1246,6 +1247,7 @@ pub(super) fn fresh_launch_request(
     request.launch.team = agent.team.clone();
     request.launch.loop_task = agent.loop_task.clone();
     request.launch.loop_booked_by = agent.loop_booked_by.clone();
+    request.launch.loop_fire = agent.loop_fire.clone();
     request.launch.workflow = agent.workflow.clone();
     request.launch.launch_group = agent.launch_group.clone();
     request.launch.launch_ordinal = agent.launch_ordinal;

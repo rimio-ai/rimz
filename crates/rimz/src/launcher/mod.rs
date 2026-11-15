@@ -67,10 +67,11 @@ pub struct LayoutLaunch {
     pub max_turns: Option<u32>,
     pub teams_scene: bool,
     pub report_to: ReportTo,
-    /// The loop task whose fire made this launch without owning it: its prompt leader carries
-    /// the task as identity, and every cell carries the fire's booking chain.
+    /// The loop task whose fire made this launch, by its name at the fire: its prompt leader
+    /// carries it for display, and every cell carries the fire's booking chain and fire id.
     pub loop_task: Option<String>,
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
+    pub loop_fire: Option<crate::ids::FireId>,
 }
 
 #[derive(Default)]
@@ -369,7 +370,10 @@ pub fn prepare_layout(
     if fresh_launch {
         machine_config.agents.startup_relaunch_wait()?;
     }
-    let default_lane = if loop_task.is_some() {
+    // A launch under a loop fire resolves no caller: no launcher, no parent, lane from the
+    // directory, as a task's own agent launch.
+    let fire_stamped = args.launch.loop_fire.is_some();
+    let default_lane = if loop_task.is_some() || fire_stamped {
         context::directory_channel(
             workspace,
             cwd.as_deref().unwrap_or(&workspace.worktree_root),
@@ -483,7 +487,7 @@ pub fn prepare_layout(
         )?;
     }
     let projection = store.runtime_projection(crate::RuntimeScope::Audit)?;
-    let caller = if matches!(args.starter, Starter::Workflow) {
+    let caller = if matches!(args.starter, Starter::Workflow) || fire_stamped {
         None
     } else {
         ancestry::resolve_caller(&projection.agents)
@@ -493,8 +497,11 @@ pub fn prepare_layout(
         .as_ref()
         .map(|caller| ancestry::resolve_launch_caller(&projection.agents, caller))
         .transpose()?;
-    let caller_lane =
-        context::caller_lane(&workspace.project_root, launch_caller, loop_task.is_some());
+    let caller_lane = context::caller_lane(
+        &workspace.project_root,
+        launch_caller,
+        loop_task.is_some() || fire_stamped,
+    );
     let ancestry = ancestry::resolve_launch_ancestry(
         launch_caller,
         false,
@@ -1036,6 +1043,7 @@ fn settle_layout(
     let Some(mut launch) = launch else {
         return Ok(SettledLayout::Handled(LaunchOutcome::Declined));
     };
+    checkout::stamp_created_tree(&launch, args.launch.loop_fire.as_ref());
     let checkout = empty_dir.as_ref().map(|_| launch.cwd.display().to_string());
     if let Some(prepared) = &empty_dir {
         launch.cwd.clone_from(&prepared.cwd);
@@ -1085,6 +1093,7 @@ fn settle_layout(
         managed_launches: Vec::new(),
         loop_task: loop_task.clone().or_else(|| args.launch.loop_task.clone()),
         loop_booked_by: args.launch.loop_booked_by.clone(),
+        loop_fire: args.launch.loop_fire.clone(),
         cleanup_worktree: true,
         // A run-bearing leader opens its own tab, as a supervised launch does.
         force_new_tab: args.leader_run.is_some(),
@@ -1540,6 +1549,15 @@ fn launch_resume_layout(
             cohort_resume_error(err, spec, scope_label.as_deref(), &agents, teams)
         }
     })?;
+    // A loop fire's resume is that fire's launch, resumed seats and fresh ones alike.
+    if args.launch.loop_fire.is_some() {
+        for seed in &mut plan.seeds {
+            if let crate::harness::plan::CohortSeed::Resume(agent) = seed {
+                agent.loop_fire.clone_from(&args.launch.loop_fire);
+                agent.loop_booked_by.clone_from(&args.launch.loop_booked_by);
+            }
+        }
+    }
     let availability = crate::harness::plan::LaunchAvailability::read(
         store.runtime_paths(),
         store.paths(),
@@ -1714,6 +1732,15 @@ fn launch_resume_layout(
     )?;
     for (request, login) in launch_requests.iter_mut().zip(preflighted_logins) {
         request.login = crate::store::writer::LaunchLogin::Pinned(login);
+    }
+    if args.launch.loop_fire.is_some() {
+        for request in &mut launch_requests {
+            request.launch.loop_fire.clone_from(&args.launch.loop_fire);
+            request
+                .launch
+                .loop_booked_by
+                .clone_from(&args.launch.loop_booked_by);
+        }
     }
     let launch_batch = store.begin_agent_launch_batch(
         &launch_requests,

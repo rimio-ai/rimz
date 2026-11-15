@@ -2364,7 +2364,8 @@ path = "crates/rimz/src/harness"
 # run::fail_peer_turn lets a restart fail a peer's open turn without the team-run fallback (+1).
 # TaskTiming::{unread, condition_label}, TaskTimingState::condition_label_with, Verdict::unread_reasons and when::condition::ROOM_CLOSED give the CLI the reason an unread forge key shows in place of `unknown` (+5).
 # task_record (Scope, Binding, FireMark, TaskRecord, TaskRecords, TaskRecordErr, load), TaskStoreErr, attention::stamp, LoadedTask::binding and LOOP_FIRE_ENV replace launch memory and the overlay store with one task record by id (+10 net).
-surface-budget = 1252
+# loop_task::{FireEnv, read_fire_env}, the one reader of a fire's environment, and schedule::launches (the module, AliveLaunch, Launch, alive), what a task's fires launched that is alive, replace the four removed loop-check env readers and request shaper (+2 net).
+surface-budget = 1254
 
 [[verdict]]
 kind = "item"
@@ -4929,7 +4930,8 @@ path = "crates/rimz/src/worktree"
 # worktree_paths shares the lossless `git worktree list` decoder with the sidebar (+1).
 # admit_fresh_name gives the launcher, CLI and palette the create branch's `main` refusal (+1).
 # own_lane moves here from harness::lanes as the one checkout classifier, so the sidebar producer can fill its own-lane table (+1).
-surface-budget = 91
+# stamp_loop_fire stamps the fire on the marker of a tree a fire's launch created (+1).
+surface-budget = 92
 
 [[verdict]]
 kind = "item"
@@ -5809,13 +5811,18 @@ surface-budget = 1
 
 [[module]]
 path = "crates/rimz/src/harness/loop_task.rs"
-# Neutral leaf in the sidebar import graph holding the loop-task environment key.
+# Leaf in the sidebar import graph holding the loop fire's environment keys.
 # LOOP_BOOKED_BY_ENV carries the firing task's booking chain beside it (+1).
 # LOOP_TRIGGER_ENV carries what fired the run to its command and the launches under it (+1).
 # FireLaunch, LaunchTree and read_fire_launch read a booked row's command as the agent or team launch it types, for the sidebar's bookings lane (+3).
-allowed-dependencies = []
+allowed-dependencies = [
+    "agents",
+    "harness::launch",
+    "ids",
+]
 # LOOP_FIRE_ENV spells the fire id a shell command's environment carries (+1).
-surface-budget = 7
+# FireEnv and read_fire_env are the one reading of that environment a launch entry stamps from, guarded on no agent identity (+2).
+surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/harness/name.rs"

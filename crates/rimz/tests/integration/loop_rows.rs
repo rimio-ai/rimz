@@ -492,10 +492,10 @@ fn request_file_args(document: &kdl::KdlDocument) -> Option<Vec<String>> {
 }
 
 /// Agent `a` books `rimzd`, whose command launches a codex agent; a firer at the chain limit
-/// runs the fire. The launch carries `a`'s chain and none of the firer's ancestry, and a
-/// booking the launched agent makes carries `[launched, a]`.
+/// runs the fire with the launch `flags`. The launch carries `a`'s chain and none of the
+/// firer's ancestry, and a booking the launched agent makes carries `[launched, a]`.
 #[cfg(unix)]
-fn a_fired_launch_carries_the_booking_chain(detach: bool) -> rimz::harness::launch::ExecRequest {
+fn a_fired_launch_carries_the_booking_chain(flags: &[&str]) -> rimz::harness::launch::ExecRequest {
     use crate::common::CommandTimeoutExt;
 
     let env = live_room();
@@ -538,9 +538,7 @@ fn a_fired_launch_carries_the_booking_chain(detach: bool) -> rimz::harness::laun
         "agents",
         "codex",
     ]);
-    if detach {
-        book.push("--detach");
-    }
+    book.extend(flags);
     book.push("repair");
     let booked = calling_loop(&env, "launch_a").args(&book).output().unwrap();
     assert!(
@@ -614,19 +612,21 @@ fn a_fired_launch_carries_the_booking_chain(detach: bool) -> rimz::harness::laun
     request
 }
 
+/// A script's room launch under a fire launches and returns, as from a shell, stamped with the
+/// fire: a plain, a detached and a `--bg` launch alike, none a supervised run.
 #[cfg(unix)]
 #[test]
-fn a_detached_launch_under_a_fire_carries_the_booking_chain_and_task_without_a_run() {
-    let request = a_fired_launch_carries_the_booking_chain(true);
-    assert_eq!(request.identity.params.loop_task.as_deref(), Some("rimzd"));
-    assert!(request.run_id.is_none(), "the fire does not own the launch");
-}
-
-#[cfg(unix)]
-#[test]
-fn a_blocking_launch_a_fire_owns_carries_the_booking_chain() {
-    let request = a_fired_launch_carries_the_booking_chain(false);
-    assert!(request.run_id.is_some(), "the fire owns the launch's run");
+fn a_script_launch_under_a_fire_launches_and_returns_stamped_without_a_run() {
+    for flags in [&[][..], &["--detach"], &["--bg"]] {
+        let request = a_fired_launch_carries_the_booking_chain(flags);
+        let params = &request.identity.params;
+        assert_eq!(params.loop_task.as_deref(), Some("rimzd"), "{flags:?}");
+        assert!(
+            params.loop_fire.is_some(),
+            "{flags:?}: the launch carries its fire"
+        );
+        assert!(request.run_id.is_none(), "{flags:?}: no supervised run");
+    }
 }
 
 #[cfg(unix)]
@@ -683,23 +683,12 @@ fn loop_stop_ends_a_running_command_fire_and_records_it_canceled() {
     }
 }
 
-/// How a fire ends before its command's blocking launch does.
+/// A fire whose command made a foreground `-p` launch: the run carries the fire's id, and
+/// `rimz loop stop` cancels it with the fire. Any other end of the fire leaves the run to its
+/// own rules, as a run started from a shell.
 #[cfg(unix)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FireEnding {
-    LoopStop,
-    Timeout,
-    WorkflowCancel,
-    Remove,
-    Redefine,
-    Replace,
-}
-
-/// A fire whose command launched an agent blocking owns that launch's run: however the fire
-/// ends before the command does, the run it owns is canceled, so the agent's wrapper ends it,
-/// and the launch of a fire that replaced it stays open.
-#[cfg(unix)]
-fn a_blocking_launch_ends_with_its_fire(ending: FireEnding) {
+#[test]
+fn loop_stop_cancels_a_print_launch_a_fire_made() {
     let env = live_room();
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
@@ -733,36 +722,26 @@ fn a_blocking_launch_ends_with_its_fire(ending: FireEnding) {
         command
     };
     let rimz_bin = env.rimz_bin();
-    let timeout = if ending == FireEnding::Timeout {
-        "20s"
-    } else {
-        "10m"
-    };
-    let add = |prompt: &str| {
-        let mut args = vec![
+    loop_ok(
+        &env,
+        &[
             "loop",
             "add",
             "spawn",
             "--every",
             "15m",
             "--timeout",
-            timeout,
-        ];
-        if ending == FireEnding::Replace {
-            args.extend(["--overlap", "replace"]);
-        }
-        args.extend([
+            "10m",
             "--",
             rimz_bin.to_str().unwrap(),
             "--mux",
             "zellij",
             "agents",
             "codex",
-            prompt,
-        ]);
-        loop_ok(&env, &args);
-    };
-    add("fix it");
+            "-p",
+            "fix it",
+        ],
+    );
     let before = run_mark(&env, "spawn");
     let fired = command().args(["loop", "fire", "spawn"]).output().unwrap();
     assert!(fired.status.success(), "{fired:?}");
@@ -831,42 +810,17 @@ fn a_blocking_launch_ends_with_its_fire(ending: FireEnding) {
         Some("spawn"),
         "the blocking launch's agent row names its task"
     );
-    let expected = match ending {
-        FireEnding::LoopStop => {
-            let stopped = command().args(["loop", "stop", "spawn"]).output().unwrap();
-            assert!(
-                stopped.status.success(),
-                "{}",
-                String::from_utf8_lossy(&stopped.stderr)
-            );
-            Some(LoopRunResult::Canceled)
-        }
-        FireEnding::Timeout => Some(LoopRunResult::Failed),
-        FireEnding::WorkflowCancel => {
-            loop_ok(&env, &["workflow", "cancel", fire.as_str()]);
-            Some(LoopRunResult::Canceled)
-        }
-        FireEnding::Remove => {
-            loop_ok(&env, &["loop", "remove", "spawn"]);
-            None
-        }
-        FireEnding::Redefine => {
-            add("fix it again");
-            None
-        }
-        FireEnding::Replace => {
-            // A manual fire never replaces; a scheduled one does.
-            let fired = command().args(["loop", "run", "spawn"]).output().unwrap();
-            assert!(fired.status.success(), "{fired:?}");
-            Some(LoopRunResult::Canceled)
-        }
-    };
-    if let Some(expected) = expected {
-        assert_eq!(
-            wait_for_loop_report_after(&env, "spawn", before).result,
-            expected
-        );
-    }
+    assert_eq!(row.loop_fire.as_ref(), Some(&fire), "and carries its fire");
+    let stopped = command().args(["loop", "stop", "spawn"]).output().unwrap();
+    assert!(
+        stopped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    assert_eq!(
+        wait_for_loop_report_after(&env, "spawn", before).result,
+        LoopRunResult::Canceled
+    );
     let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     loop {
         let status = rimz::harness::run::load(&paths, &run.run_id)
@@ -877,67 +831,8 @@ fn a_blocking_launch_ends_with_its_fire(ending: FireEnding) {
         }
         assert!(
             Instant::now() < deadline,
-            "the launch the fire owns was not canceled after {ending:?}: {status:?}"
+            "the fire's launch was not canceled by loop stop: {status:?}"
         );
         std::thread::sleep(Duration::from_millis(25));
     }
-    if ending == FireEnding::Replace {
-        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        let successor = loop {
-            let records = rimz::harness::run::list(&paths).unwrap_or_default();
-            if let Some(record) = records
-                .into_iter()
-                .find(|record| record.run_id != run.run_id)
-            {
-                break record;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "the replacing fire launched nothing"
-            );
-            std::thread::sleep(Duration::from_millis(25));
-        };
-        assert_ne!(successor.loop_fire.as_ref(), Some(&fire));
-        let successor = rimz::harness::run::load(&paths, &successor.run_id).unwrap();
-        assert!(
-            !successor.status.is_terminal(),
-            "the replacing fire's launch is not the replaced fire's: {successor:?}"
-        );
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn loop_stop_cancels_a_blocking_launch_the_fire_owns() {
-    a_blocking_launch_ends_with_its_fire(FireEnding::LoopStop);
-}
-
-#[cfg(unix)]
-#[test]
-fn the_row_timeout_cancels_a_blocking_launch_the_fire_owns() {
-    a_blocking_launch_ends_with_its_fire(FireEnding::Timeout);
-}
-
-#[cfg(unix)]
-#[test]
-fn workflow_cancel_cancels_a_blocking_launch_the_fire_owns() {
-    a_blocking_launch_ends_with_its_fire(FireEnding::WorkflowCancel);
-}
-
-#[cfg(unix)]
-#[test]
-fn removing_the_task_cancels_a_blocking_launch_its_fire_owns() {
-    a_blocking_launch_ends_with_its_fire(FireEnding::Remove);
-}
-
-#[cfg(unix)]
-#[test]
-fn redefining_the_task_cancels_a_blocking_launch_its_fire_owns() {
-    a_blocking_launch_ends_with_its_fire(FireEnding::Redefine);
-}
-
-#[cfg(unix)]
-#[test]
-fn a_replacing_fire_cancels_the_replaced_fires_launch_and_keeps_its_own() {
-    a_blocking_launch_ends_with_its_fire(FireEnding::Replace);
 }
