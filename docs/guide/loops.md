@@ -47,14 +47,24 @@ A command that launches an agent is the launch you would type, so the [`rimz age
 - **A prompted launch without `--detach` is a run the fire owns.** It behaves as `rimz agents -p` does. The command waits for the agent's turn, captures its answer as the fire's output, and exits with the run's code, so the fire records the turn's success or failure. The pane opens in its own unfocused tab and closes when the turn ends. When the agent stops at a question, its tab and sidebar card show it waiting, as for any agent. If the fire ends first, for example at the task's timeout, the agent is stopped with it. Use this when the turn is the job: a nightly sweep, a report, a fix that should count as a [strike](#strikes) when it fails.
 - **`--detach` hands the agent off.** The launch returns at once, the fire ends, and the agent keeps running on its own, as it would from your shell. Use this when the agent should stay: a team that works a branch, an agent that waits for your review.
 
+An owned launch of an agent kind refuses in a project until that kind has a folder-trust decision there. `loop add` does not check this, so grant it once before the first fire:
+
+```sh
+rimz trust grant --agents claude
+```
+
+Then add the tasks:
+
 ```sh
 rimz loop add sweep --every day --at 02:00 --fresh-worktree sweep -- rimz agents claude -p --timeout 1h "Scan the repository for cheap improvements and open a PR for each one worth fixing."
 rimz loop add review-team --every weekday --at 09:00 --fresh-worktree review -- rimz teams launch recon --detach "Review yesterday's merges and propose focused follow-up."
 ```
 
-The second example launches `recon`, a [team](./teams.md) from your config, in a fresh worktree each weekday. An owned run is one agent, so a team of more than one role needs `--detach`. An owned launch also refuses `--bg`, since the fire must wait for the agent.
+To try one before its time, run `rimz loop fire sweep` ([See what a task did](#see-what-a-task-did) covers what it prints).
 
-The task's timeout bounds the whole command, so it also ends an owned agent. To give the agent its own shorter `--timeout`, or to hold its pane open after the turn with `--keep`, add `-p`, as in the `sweep` example: both flags parse only beside it. The first owned launch of each agent kind in a project refuses until that kind has a folder-trust decision there, and the error names the fix, `rimz trust grant --agents <kind>`.
+The second example launches `recon`, a team you have defined or installed ([Teams](./teams.md) shows both), in a fresh worktree each weekday. `loop add` does not load the team, so a missing one fails at the fire. An owned run is one agent, so a team of more than one role needs `--detach`. An owned launch also refuses `--bg`, since the fire must wait for the agent.
+
+The task's timeout bounds the whole command, so it also ends an owned agent. To give the agent its own shorter `--timeout`, or to hold its pane open after the turn with `--keep`, add `-p`, as in the `sweep` example: both flags parse only beside it.
 
 Either way, RimZ appends one line to the launched agent's prompt saying which task fired and why, such as ``Rule `ci-fix` fired here. ci.failed on feature #42 @88824c2``. An unattended agent then knows what happened without asking. A plain command reads the same line from the `RIMZ_LOOP_TRIGGER` environment variable, and `RIMZ_LOOP_TASK` holds the task's name. A clock fire or a manual fire carries no such line.
 
@@ -204,7 +214,7 @@ To test a task before its trigger comes, fire it by hand:
 rimz loop fire ci-fix
 ```
 
-`fire` starts a run now and leaves the schedule and the trigger as they were. For a condition that is not true yet, it says so and runs anyway. It prints `launched` and the `rimz workflow show` command that follows the run, since each fire runs its command as a one-step workflow run.
+`fire` starts a run now and leaves the schedule and the trigger as they were. For a condition that is not true yet, it says so and runs anyway. It prints `launched` and the `rimz workflow show` command that follows the run, since each fire runs its command as a one-step workflow run. `launched` means the run started, and a run that then fails still prints it: `rimz loop show` prints the failed step's error inline.
 
 Exact screen layouts, sections, and JSON fields are in the reference for [`loop list`](../reference/cli/loop.md#loop-list), [`loop show`](../reference/cli/loop.md#loop-show), and [`loop logs`](../reference/cli/loop.md#loop-logs).
 
