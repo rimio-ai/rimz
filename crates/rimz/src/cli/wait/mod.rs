@@ -21,7 +21,7 @@ mod watch;
 #[command(
     args_conflicts_with_subcommands = true,
     after_help = "Only an agent arms or cancels a wait, and the wake comes back to that agent. \
-With no trigger, `rimz wait` lists your waits."
+With no flag but `--json`, `rimz wait` lists your waits."
 )]
 pub struct WaitCommand {
     #[command(subcommand)]
@@ -101,7 +101,7 @@ struct WaitArgs {
     check_in: Option<Duration>,
     #[arg(long, hide = true, value_name = "DURATION")]
     timeout: Option<String>,
-    /// Print the receipt as JSON, or the list when no trigger is given.
+    /// Print the receipt as JSON, or the list when no other flag is given.
     #[arg(long)]
     json: bool,
 }

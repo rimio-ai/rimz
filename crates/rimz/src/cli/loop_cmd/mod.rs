@@ -134,7 +134,8 @@ struct ExplainArgs {
     /// Print structured readings and truth.
     #[arg(long)]
     json: bool,
-    /// Checkout whose board and forge readings to inspect.
+    /// A path in the project whose board and forge readings to inspect; the readings are the
+    /// project root's, even from a linked checkout.
     #[arg(long, default_value = ".")]
     root: PathBuf,
     /// Provider kind for window readings.
@@ -333,8 +334,7 @@ struct ShowArgs {
     /// Print the task, worktree conditions, launch memory and run history as JSON.
     #[arg(long)]
     json: bool,
-    /// Unfold the WORKTREES table: every declined checkout with its judge's reason, and every
-    /// launched checkout with its leader.
+    /// Unfold the WORKTREES table's folded finished and gone workflow runs, one row each.
     #[arg(long)]
     all: bool,
     /// Task name, as `rimz loop list` prints it.
