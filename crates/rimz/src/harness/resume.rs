@@ -359,11 +359,13 @@ pub struct ResumeSkip {
 ///
 /// A profile is durable, named configuration, so a session that launched as
 /// `@planner` comes back as a planner. A launch with a durable record replays
-/// the record's model and effort, and fast mode where supported. A record
-/// without effort takes the profile's declared effort and saves it on relaunch.
-/// A kind without an effort flag drops either effort on replay, without a
-/// warning, and saves none. Without a record, one-off `--model` / `--effort`
-/// flags typed at the original launch stay out. A resume may pass its own
+/// the record's model and effort, and fast mode where supported; a record
+/// with no model, no saved base, and no tier stamp relaunches with none, even
+/// over a profile, or a profile it builds on, that has since gained a model.
+/// A record without effort takes the profile's declared effort and saves it on
+/// relaunch. A kind without an effort flag drops either effort on replay,
+/// without a warning, and saves none. Without a record, one-off `--model` /
+/// `--effort` flags typed at the original launch stay out. A resume may pass its own
 /// `--model`, `--effort`, `--fast` / `--no-fast`, and `--ask` / `--yolo`; the
 /// exec wrapper records the model, effort, and fast mode it launched with, so a
 /// later resume replays them, and `--isolation` is recorded the same way.
@@ -547,7 +549,24 @@ fn resolve_posture_with_role(
                 profile
             })
         });
-        if let Some(rendered) = rendered {
+        // Without a stamp the record's model is the launch's, none included: a
+        // render's Intern model, or a model the profile or any layer it
+        // resolves onto gained since, would move the agent and the effort
+        // default derived from it. So no layer in this table keeps a model of
+        // its own, since the resolver fills an absent one from the layers
+        // below. A `--model` a layer writes in raw `args` stays, as on a fresh
+        // launch.
+        if request.stamped_tier.is_none()
+            && let Some(record) = request.record
+        {
+            let mut top = rendered.unwrap_or_else(|| profile.clone());
+            top.model.clone_from(&record.model);
+            let table = &mut profiles.to_mut().0;
+            for layer in table.values_mut() {
+                layer.model = None;
+            }
+            table.insert(name.to_owned(), top);
+        } else if let Some(rendered) = rendered {
             profiles.to_mut().0.insert(name.to_owned(), rendered);
         } else if request.stamped_tier.is_some() {
             let now = crate::harness::spec::profile_cell(name, &profiles)
