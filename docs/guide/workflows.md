@@ -145,7 +145,7 @@ fix-tests · 1 active · started by hand
       ╰─ ☾ fix ↑
 ```
 
-`☾` marks a node that waits, here for the checkout to be free ([Share the checkout](#share-the-checkout)). `show` on the run starts with where the run is and what it waits for. Below that it paints the graph from the run's own copy of the definition: filled glyphs (`●`, `◆`) for nodes the run reached, hollow ones for nodes it has not, and each reached node's last answer beside it. A trail of the last routing decisions follows, then the work directory. The output here stops at the work directory, after which `show` prints the notes path and the `--history` command:
+`☾` marks a node that waits, here for the checkout to be free ([Share the checkout](#share-the-checkout)). `show` on the run starts with where the run is and what it waits for. Below that it paints the graph from the run's definition as it is now: filled glyphs (`●`, `◆`) for nodes the run reached, hollow ones for nodes it has not, and each reached node's last answer beside it. A trail of the last routing decisions follows, then the work directory. The output here stops at the work directory, after which `show` prints the notes path and the `--history` command:
 
 ```console
 $ rimz workflow show 'fix-tests#probe'
@@ -174,13 +174,16 @@ Keep the room open while a run works. The room checks every unfinished run about
 
 - `record.json` holds the run's current position. It is the truth the engine reads.
 - `journal.jsonl` is the append-only history behind `show --history`.
-- `workflow.toml` and `definition/` are a sealed copy of the definition folder, made when the run starts. Every prompt and script path is read from this copy, so an edit under `~/.rimz/workflows/<name>/` changes later runs, never this one. Agent profiles are not part of the copy: each launch reads the profile as it is then.
 - `work/` is the work directory. It holds `context.json`, the logs of each check and command, judges' answers, `signs/`, and a `notes/` link to the run's kept notes.
 - `history.txt` appears when the run ends: the `--history` view, saved.
 
-Nothing writes to `~/.rimz/workflows/`. No daemon keeps the run. Each move is a short `rimz workflow advance <run-id>` process: it reads the record, decides the next node, writes the record again, and exits. `run`, `resume`, and `restart` start one, and so do a matching signal and the end of a step's turn. The room's minute check starts one for every run that is due. When an advance dies, the next one picks up from the record. An interrupted check runs again. A command step whose host died fails as `died`, so its action never runs twice by accident.
+The run keeps no copy of your definition. It reads `~/.rimz/workflows/<name>/` every time it moves, so an edit there reaches every live run of that workflow at its next step: a changed route is the one taken, and the next prompt, script, or command reads the files as they are then. Agent profiles are read at each launch too. What the run decided at its start stays decided: its scope, its deadline, and its visit grants. The one exception is the small run behind each [loop task](./loops.md) fire, which has no workflow folder: it holds a `definition/` folder, the definition the fire generated, and reads that instead.
 
-A test or script runs as a child process in the checkout, with no stdin and with `RIMZ_WORKFLOW_DIR` (the work directory), `RIMZ_WORKFLOW_RUN` (the run id), and `RIMZ_WORKFLOW_DEFINITION` (the sealed definition folder) set. Its output goes to a log in `work/`, and the log's path travels with its answer. A condition reads RimZ's own state in the advance and runs no process. A check's `timeout` counts from the moment the run enters it, across every evaluation and wait there. A timeout, the run's deadline, or a cancel stops the check's whole process group.
+An edit can stop a run in two ways. While the definition does not parse or `rimz workflow validate` refuses it, the run waits where it is: `rimz workflow list` and `show` print `waits on its definition:` with the first error, and the run moves on once you fix the file. An edit the run no longer fits, such as removing the step its agent works in or turning that step into another kind, ends the run `failed` with a reason naming the node, and stops its agent. `rimz workflow cancel` works whatever state the definition is in.
+
+Nothing writes to `~/.rimz/workflows/`. No daemon keeps the run. Each move is a short `rimz workflow advance <run-id>` process: it reads the record and the definition, decides the next node, writes the record again, and exits. `run`, `resume`, and `restart` start one, and so do a matching signal and the end of a step's turn. The room's minute check starts one for every run that is due. When an advance dies, the next one picks up from the record. An interrupted check runs again. A command step whose host died fails as `died`, so its action never runs twice by accident.
+
+A test or script runs as a child process in the checkout, with no stdin and with `RIMZ_WORKFLOW_DIR` (the work directory), `RIMZ_WORKFLOW_RUN` (the run id), and `RIMZ_WORKFLOW_DEFINITION` (the definition folder) set. Its output goes to a log in `work/`, and the log's path travels with its answer. A condition reads RimZ's own state in the advance and runs no process. A check's `timeout` counts from the moment the run enters it, across every evaluation and wait there. A timeout, the run's deadline, or a cancel stops the check's whole process group.
 
 An agent step launches its agent in a new, unfocused tab titled `run <kind>`, as `rimz agents -p` would. The agent's prompt is the prompt file, then the step's sign if one exists ([signs](#rules-for-writing-nodes)), then the run's `--prompt`. Its launch reminder's `### Workflow` section also names the visits used and what the check after its turn will run. A `turn` step that ends cleanly stops the agent and its subagents, records the commit before and after, and follows `then`. A failed or interrupted turn, a provider limit, or a budget park keeps the agent open, and a later clean turn completes the attempt. A provider that exits before a clean turn end fails the step with cause `died`. The room's [budgets](./budget.md) apply to the agent as to any other.
 
@@ -244,7 +247,7 @@ max-visits = 3
 
 Route the green outcome to `merge`, and let a `pr` check (a condition, as in the [next section](#wait-on-the-outside-world)) decide whether the PR merged or still needs to wait. `then` names the check that judges the command's effect. A command step takes exactly one of `run` or `shell`, and a `timeout`:
 
-- `run` is split into words and started with no shell. A path in it (a word holding `/`) must stay inside the workflow folder, so a script you ship beside `workflow.toml` runs from the sealed copy. Start the command with `sh`, `uv run`, or another interpreter when it needs a pipe or a variable.
+- `run` is split into words and started with no shell. A path in it (a word holding `/`) must stay inside the workflow folder, so a script you ship beside `workflow.toml` runs from there. Start the command with `sh`, `uv run`, or another interpreter when it needs a pipe or a variable.
 - `shell` runs through `sh -c`, with any path.
 
 Tests and scripts take the same two fields with the same rules, so `run = "sh checks/status.sh"` runs a script from the definition folder. The command runs in the checkout with no stdin, and its output goes to a numbered `.step.log` file in `work/`. Exit 0 follows `then`. Any other exit, or a signal, fails the step with cause `died`.
@@ -508,7 +511,7 @@ max-parallel = 3
 stagger = "10m"
 ```
 
-`[workflow.limit]` covers the open agent steps of every run of this workflow, across rooms. A step's `admission` limit covers that step alone. `max-parallel` caps how many such steps are open at once, and `stagger` sets the least time between two launches. A step counts from the moment its attempt starts until the attempt ends, whether its agent is working, idle, or waiting at a rest check. Its subagents and judges count for nothing. Each run obeys the limits sealed in its copy, so an edit changes new runs, not waiting ones. The [limits reference](../reference/cli/workflow.md#limits-and-capacity) gives the counting rules and the hold reasons.
+`[workflow.limit]` covers the open agent steps of every run of this workflow, across rooms. A step's `admission` limit covers that step alone. `max-parallel` caps how many such steps are open at once, and `stagger` sets the least time between two launches. A step counts from the moment its attempt starts until the attempt ends, whether its agent is working, idle, or waiting at a rest check. Its subagents and judges count for nothing. Each run obeys the limits its definition sets now, so an edit reaches waiting runs at their next retry. The [limits reference](../reference/cli/workflow.md#limits-and-capacity) gives the counting rules and the hold reasons.
 
 ## Stop a run and clean up
 
@@ -525,7 +528,7 @@ To undo everything a workflow set up:
 1. Cancel its unfinished runs: `rimz workflow cancel fix-tests#feat-x` for each row `rimz workflow list` shows.
 2. Disable or remove any loop task that starts it: `rimz loop disable <task>` or `rimz loop remove <task>`.
 3. Remove the worktrees you made for it: `rimz worktree remove feat-x`.
-4. Delete the definition: `rm -r ~/.rimz/workflows/fix-tests`. A run already started keeps its sealed copy.
+4. Delete the definition: `rm -r ~/.rimz/workflows/fix-tests`. A run you did not cancel in step 1 waits on the missing definition until you cancel it.
 5. Delete any profile you made for it, such as `~/.rimz/agents/reflector.md`.
 
 The list keeps the reporting hooks and the folder trust from the prerequisites, since every RimZ launch in the project uses them. `rimz hooks uninstall claude` removes the hooks, and the folder trust lives in the provider's own config.
