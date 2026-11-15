@@ -85,10 +85,16 @@ Then start the run:
    rimz worktree new feat-x
    ```
 
-3. Start the run in that worktree, and keep its id:
+3. Start the run in that worktree:
 
    ```sh
-   RUN=$(rimz workflow run fix-tests -w feat-x | sed -n 1p)
+   rimz workflow run fix-tests -w feat-x
+   ```
+
+4. Keep the run's address, the workflow and the checkout's name, for the commands that follow:
+
+   ```sh
+   RUN='fix-tests#feat-x'
    ```
 
 `run` validates again, prints any warnings to stderr, and prints three lines: the run id (`wf_` and 32 hexadecimal digits), the run's work directory, and a `rimz workflow show` command for the run. The first node starts in the background. When the first step cannot start yet (no capacity, a closed usage window, an agent already in the checkout), a fourth line says what it waits for. The work directory moves when the run ends ([Stop a run and clean up](#stop-a-run-and-clean-up)).
@@ -521,6 +527,8 @@ To undo everything a workflow set up:
 3. Remove the worktrees you made for it: `rimz worktree remove feat-x`.
 4. Delete the definition: `rm -r ~/.rimz/workflows/fix-tests`. A run already started keeps its sealed copy.
 5. Delete any profile you made for it, such as `~/.rimz/agents/reflector.md`.
+
+The list keeps the reporting hooks and the folder trust from the prerequisites, since every RimZ launch in the project uses them. `rimz hooks uninstall claude` removes the hooks, and the folder trust lives in the provider's own config.
 
 Finished run directories age out on their own. The notes folders stay after them, until [`gc.automation_notes_retention`](./configuration.md#garbage-collection) expires them or `rimz reset --hard` removes them.
 
