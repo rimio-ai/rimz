@@ -409,13 +409,13 @@ A remote room is plain SSH under a supervisor that reconnects itself when the li
 
 ### A loop keeps reporting "still active"
 
-The task's previous run is still live, or another fire still holds the task's admission lock. By default a later fire records `overlapped`, naming the blocking run, instead of starting another; a non-skip [overlap policy](../reference/cli/loop.md#overlapping-triggers) keeps triggers as `deferred` until that run ends, unless a queue is full. Run `rimz loop show <name>` to see the live run and the waiting fires, then stop it:
+The task's previous run is still live, or another fire of the task still holds its run lock while it starts a run. By default a later fire records `overlapped`, naming the blocking run, instead of starting another. A non-skip [overlap policy](../reference/cli/loop.md#overlapping-triggers) keeps triggers as `deferred` until that run ends. Run `rimz loop show <name>` to see the live run and the waiting fires, then stop it:
 
 ```sh
 rimz loop stop <name>
 ```
 
-Stop cancels each live run the task started, as `rimz workflow cancel <run>` does, and that run's own report then starts the next waiting trigger. A fire still holding the admission lock gets a grace period and then SIGTERM; a lock that survives both exits with status `1` and prints its path and holder PID, so inspect that process and terminate it yourself when safe. Stop never escalates to SIGKILL. Waiting triggers are kept; the receipt names `rimz loop pause <name>` to drop them instead.
+Stop cancels each live run the task started and keeps the waiting triggers, so the next one starts once the run ends. To drop them instead, run `rimz loop pause <name>`. When a lock holder survives the stop, the command exits `1` with the holder's PID. [Fire and stop a run](../reference/cli/loop.md#fire-and-stop-a-run) gives the exact sequence.
 
 ### A clock task never fired
 
@@ -423,7 +423,7 @@ Stop cancels each live run the task started, as `rimz workflow cancel <run>` doe
 
 A clock task whose room is closed says `waits for room` in `rimz loop list` when the loop timer is not active. With the timer active, its row reads as in an open room, and the heading says clocks use the active timer. If the timer is installed but its tick cannot reach your systemd user session, it refuses rather than firing and prints the fix. `rimz loop list` and `rimz loop timer status` report the timer unit's state, active or inactive, not whether its tick succeeds, so an active timer whose tick refuses still shows its clocks as live. [Who keeps time](./loops.md#who-keeps-time) covers both, along with what a timer fire does to your machine.
 
-Signal and watch tasks need no timekeeper: whatever emits the signal or runs the command fires them, room or no room.
+Signal tasks need no timekeeper: the process that emits the signal fires them. A signal from `rimz events emit` fires with no room open, but the built-in `ci`, `pr`, and `trunk` signals come from the sidebar and arrive only while the room is open ([Your own signals](./loops.md#your-own-signals)).
 
 ### A scripted run never finishes
 

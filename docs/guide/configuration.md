@@ -644,7 +644,7 @@ Edits reach a running room unevenly. A changed `command` or `cwd` reloads when y
 
 ### Agent start limits
 
-Scheduled work should not fill every session slot or start a burst of agents while the machine is busy. The machine-only `[throttle]` table in `~/.rimz/config.toml` controls those starts across rooms. These are example limits, not defaults:
+Scheduled work should not fill every session slot or start a burst of agents while the machine is busy. The machine-only `[throttle]` table in `~/.rimz/config.toml` is the start throttle: it holds [workflow](./workflows.md) agent steps across rooms until they fit. It holds no other launch. An agent you start, or one a loop task's command launches, counts toward the caps once it is open but never waits. These are example limits, not defaults:
 
 ```toml
 [throttle]
@@ -656,18 +656,18 @@ min-memory = "1GB"
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `max-parallel-agents` | unset | Positive integer. Caps all open agents on this machine, including yours. |
-| `max-parallel-automation` | unset | Positive integer. Caps open agents started by loop tasks or workflows, including their RimZ-launched children and peers. |
-| `stagger` | unset | Positive `s`/`m`/`h` duration. Minimum gap between machine-gated launches, measured from launch, not admission. |
+| `max-parallel-agents` | unset | Positive integer. Holds a step while this many agents are open on the machine, yours included. |
+| `max-parallel-automation` | unset | Positive integer. Holds a step while this many agents started by loop tasks or workflows are open, their RimZ-launched children and peers included. |
+| `stagger` | unset | Positive `s`/`m`/`h` duration. Minimum gap between machine-gated launches, measured from each launch. |
 | `cpu-pressure`, `io-pressure`, `memory-pressure` | unset | Percent from `1` to `100`. Holds when either the 10-second or 60-second Linux pressure-stall average reaches it. |
 | `min-memory` | unset | Positive size such as `8GB`. Holds while available memory is below it. |
 | `min-disk` | unset | Positive size such as `20GB`. Holds while free disk at the run's write path is below it. |
 | `check` | unset | Nonempty shell command for provider capacity: exit `0` allows a start, `75` holds, and other exits, signals, start failures, or timeouts hold as errors visible in `rimz doctor`. |
 | `check-timeout` | `30s` | Positive `s`/`m`/`h` duration bounding one capacity check. |
 
-Idle, waiting, paused, hibernated, compacting, and live agents whose last turn errored count as open; ended or dead agents, failed launches, and provider-built-in subagents do not. Headless workflow judges do not count: they run without a pane and publish no agent row. A start must fit its whole agent layout under every applicable cap, including starts already admitted but not yet launched. An automated start larger than a cap fails with the key and the fix instead of waiting forever. [Workflow and step limits](./workflows.md#limit-one-workflow-or-step) can only tighten these caps. Workflow starts wait for capacity whatever started them; a run started with `rimz workflow run --skip-capacity` launches past it, counts afterwards, and counts as automated.
+Idle, waiting, paused, hibernated, compacting, and live agents whose last turn errored count as open; ended or dead agents, failed launches, and provider-built-in subagents do not. Headless workflow judges do not count: they run without a pane and publish no agent row. A start must fit its whole agent layout under every applicable cap, including starts already admitted but not yet launched. A step whose layout is larger than a cap fails with the key and the fix instead of waiting forever. [Workflow and step limits](./workflows.md#limit-one-workflow-or-step) can only tighten these caps. Agent steps wait whether you or a loop task started the run. A run started with `rimz workflow run --skip-capacity` launches its agent steps past these holds, counts afterwards, and counts as automated.
 
-Automated starts with `throttle` on take one machine turn at a time, released on the provider's report or after `10s` (`2m` with `check`). This turn is independent of `stagger`. A step's `throttle = "off"` skips that turn, machine stagger, resource limits, and capacity check, never the caps or workflow and step limits. `off` starts neither wait for nor restart machine stagger; a `--skip-capacity` start passes it and restarts it. Set a key with `rimz config set throttle.stagger 30s`; remove it to disable that limit. A project `[throttle]` warns and is ignored, with the skipped setting retained for the sidebar and `rimz doctor`.
+Agent steps with `throttle` on take one machine turn at a time, released on the provider's report or after `10s` (`2m` with `check`). This turn is independent of `stagger`. A step's `throttle = "off"` skips that turn, machine stagger, resource limits, and capacity check, never the caps or workflow and step limits. `off` starts neither wait for nor restart machine stagger; a `--skip-capacity` start passes it and restarts it. Set a key with `rimz config set throttle.stagger 30s`; remove it to disable that limit. A project `[throttle]` warns and is ignored, with the skipped setting retained for the sidebar and `rimz doctor`.
 
 `check` runs through `sh -c` in the starting run's checkout, with the room pin, `RIMZ_WORKTREE_PATH`, `RIMZ_START_KIND`, `RIMZ_START_ACCOUNT` (empty if unresolved), `RIMZ_START_AGENTS`, and `RIMZ_START_TASK`. Each distinct kind and account group is checked once, with its agent count. Exit `0` allows the start, `75` means no capacity, and any other exit, signal, failure to start, or timeout holds the start as an error. A hold is reused for 60 seconds per kind and account; permission to start is always checked fresh. Held starts and their reasons show in `rimz workflow list` and `rimz workflow show` ([workflow limits](./workflows.md#limit-one-workflow-or-step)).
 
@@ -1062,14 +1062,14 @@ A task is one trigger and one command:
 
 A task takes no other key. A task holding one refuses alone, naming the key and the fix, which is to delete the task and add it again with `rimz loop add`; the other tasks in the file load and fire, and `rimz loop list` shows the refused one under NEEDS YOU.
 
-Four things are worth knowing before you edit the file by hand:
+Four rules apply when you edit the file by hand:
 
 - `at` and `cron` resolve in the top-level [`timezone`](#sidebar-rendering), falling back to the system zone when it is unset.
 - A machine task carries a `root` that must be absolute after expanding `~` or `~/` against `HOME`. `rimz loop add` writes an absolute path. A missing, empty, or relative root skips the task at load with a warning until you set an absolute root or remove the task with `rimz loop remove <NAME>`; a relative root is never resolved against the reading process's directory.
-- A project task runs at the project root implicitly. It rejects `root`, `dir`, `deadline`, `when`, and `for`, and requires `every`, `cron`, or `signal` with `repeat = true`, because a task that fires once is machine state and does not belong in a committed file.
-- A trusted project task outranks a machine task of the same name, but starts disabled until you enable it locally. An untrusted or stale project task stays visible and inert, so the machine task keeps running until you run `rimz trust grant`. `rimz loop add --project` writes `.rimz/config.toml` and enables the task for whoever added it; removing or renaming a project task means editing that file.
+- A project task runs at the project root implicitly, and requires `every`, `cron`, or `signal` with `repeat = true`. It rejects the keys that hold machine state: `root`, `dir`, `deadline`, `when`, `for`, `each-worktree`, and the keys only RimZ writes (`wait`, `wait-meta`, `watch`, `loop-task`, `booked-by`).
+- `rimz loop add --project` writes the task into `.rimz/config.toml`. To remove or rename a project task, edit that file. How trust and `rimz loop enable` gate a project task, and which task wins a name clash, are in [project tasks](../reference/cli/loop.md#project-tasks).
 
-Tasks that fire once live outside `loop.toml`. A task added with `--at`, `--in`, `--after-reset`, or a `--signal` or `--when` without `--repeat`, and the waits agents arm with `rimz wait` and team bindings, live in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`; machine-local enablement and bounded pauses live in `~/.rimz/loops/loop-arming.json`.
+Tasks that fire once, and the waits agents arm with `rimz wait`, never land in `loop.toml`. They belong to the room, and [where tasks are stored](../reference/cli/loop.md#where-tasks-are-stored) names their file.
 
 ## theme.toml: appearance and pets
 
