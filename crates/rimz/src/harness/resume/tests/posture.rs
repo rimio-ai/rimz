@@ -545,6 +545,115 @@ fn recorded_provider_survives_a_cleared_tier() {
     assert_eq!(posture.launch.model, record.model);
 }
 
+/// A record without a model, resolved over `profile` as `writer`.
+fn modelless_posture(profile: Profile, effort: Option<&str>) -> ResumeLaunchPosture {
+    modelless_posture_in(&profiles("writer", profile), effort)
+}
+
+/// A record without a model, resolved as `writer` over the whole table.
+fn modelless_posture_in(profiles: &ProfilesConfig, effort: Option<&str>) -> ResumeLaunchPosture {
+    let record = crate::agents::LaunchRecord {
+        effort: effort.map(str::to_owned),
+        ..Default::default()
+    };
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("writer"),
+            kind: &AgentKind::new_unchecked("claude"),
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        profiles,
+    );
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    posture.launch
+}
+
+#[test]
+fn record_without_model_relaunches_without_the_render_model() {
+    let launch = modelless_posture(definition_profile(None, Some("haiku"), None), Some("high"));
+    assert_eq!(
+        preset_values(&launch.args, crate::agents::PresetField::Model),
+        [] as [String; 0]
+    );
+    assert!(launch.model.is_none());
+}
+
+#[test]
+fn record_without_model_ignores_a_model_the_profile_gained() {
+    for render in [None, Some("haiku")] {
+        let launch = modelless_posture(definition_profile(Some("sonnet"), render, None), None);
+        assert_eq!(
+            preset_values(&launch.args, crate::agents::PresetField::Model),
+            [] as [String; 0],
+            "render {render:?}"
+        );
+        assert!(launch.model.is_none());
+    }
+}
+
+#[test]
+fn record_without_model_or_effort_takes_the_kind_default_effort() {
+    let launch = modelless_posture(definition_profile(None, Some("fable"), None), None);
+    assert_eq!(
+        preset_values(&launch.args, crate::agents::PresetField::Effort),
+        ["xhigh"]
+    );
+    assert_eq!(launch.effort.as_deref(), Some("xhigh"));
+    assert_eq!(launch.record.unwrap().effort.as_deref(), Some("xhigh"));
+}
+
+#[test]
+fn record_without_model_keeps_a_raw_profile_model_argument() {
+    let launch = modelless_posture(
+        definition_profile(None, Some("haiku"), Some("--model sonnet")),
+        None,
+    );
+    assert_eq!(
+        preset_values(&launch.args, crate::agents::PresetField::Model),
+        ["sonnet"]
+    );
+}
+
+#[test]
+fn record_without_model_ignores_a_model_a_base_layer_gained() {
+    let base = |args: Option<&str>| Profile {
+        model: Some("sonnet".into()),
+        args: args.map(str::to_owned),
+        ..profile("claude")
+    };
+    let chained = Profile {
+        kind_defaults: true,
+        ..profile("base")
+    };
+    for (writer, base_name, args, expected) in [
+        (
+            definition_profile(None, Some("haiku"), None),
+            "claude",
+            None,
+            vec![],
+        ),
+        (chained.clone(), "base", None, vec![]),
+        (
+            chained,
+            "base",
+            Some("--model opus"),
+            vec!["opus".to_owned()],
+        ),
+    ] {
+        let mut table = profiles("writer", writer);
+        table.0.insert(base_name.into(), base(args));
+        let launch = modelless_posture_in(&table, None);
+        assert_eq!(
+            preset_values(&launch.args, crate::agents::PresetField::Model),
+            expected,
+            "base {base_name:?} args {args:?}"
+        );
+        assert!(launch.model.is_none());
+    }
+}
+
 #[test]
 fn recorded_mode_beats_the_profile_default() {
     let mut planner = profile("claude");

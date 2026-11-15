@@ -435,6 +435,52 @@ fn routed_profile(effort: Option<&str>) -> Profile {
     }
 }
 
+/// A Claude definition as the loader builds it: `model` is its own, and a
+/// `render_model` adds the same-kind render the tier table's Intern row bakes.
+fn definition_profile(
+    model: Option<&str>,
+    render_model: Option<&str>,
+    args: Option<&str>,
+) -> Profile {
+    let base = Profile {
+        kind_defaults: true,
+        args: args.map(str::to_owned),
+        ..profile("claude")
+    };
+    Profile {
+        definition_renders: render_model.map(|render_model| {
+            crate::config::tiers::DefinitionRenders {
+                preference: Default::default(),
+                renders: BTreeMap::from([(
+                    "claude".to_owned(),
+                    Profile {
+                        model: Some(render_model.to_owned()),
+                        ..base.clone()
+                    },
+                )]),
+                exclusions: Default::default(),
+                effort: None,
+            }
+        }),
+        model: model.map(str::to_owned),
+        ..base
+    }
+}
+
+/// The values of every `field` argument in `args`.
+fn preset_values(args: &[String], field: crate::agents::PresetField) -> Vec<String> {
+    find_definition("claude")
+        .unwrap()
+        .spec()
+        .launch
+        .preset_arg_matcher(field)
+        .unwrap()
+        .occurrences(args)
+        .into_iter()
+        .map(|arg| arg.value)
+        .collect()
+}
+
 /// [`plan_resume`] for one candidate whose profile posture rides the argv.
 fn plan_profiled(agent: AgentState, profiles: &ProfilesConfig) -> ResumePlan {
     plan_resume(

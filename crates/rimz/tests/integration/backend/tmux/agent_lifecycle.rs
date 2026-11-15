@@ -1850,11 +1850,12 @@ const RESUMABLE_SESSION: &str = "restart-live-session";
 
 /// Replaces the stand-in `claude` in `agent_bin` with one a restart can
 /// resume. It takes its session from its `--resume <id>` argument, which it
-/// records as `<pane> --resume=<id>` (`-` for none) in `<dir>/launches`, or
-/// registers [`RESUMABLE_SESSION`], and saves that conversation where Claude
-/// does. A first launch ends its turn on an error, so a message sent to it
-/// parks. It writes its pid to `<ready>/<pane>` and appends every line its
-/// stdin reads to `<dir>/stdin-<pane>`.
+/// records with its `--model` argument as `<pane> --resume=<id> --model=<model>`
+/// (`-` for none) in `<dir>/launches`, or registers [`RESUMABLE_SESSION`], and
+/// saves that conversation where Claude does. A first launch ends its turn on
+/// an error, so a message sent to it parks. It writes its pid to
+/// `<ready>/<pane>` and appends every line its stdin reads to
+/// `<dir>/stdin-<pane>`.
 fn write_resumable_claude(env: &Env, agent_bin: &Path, ready: &Path, dir: &Path) {
     let script = r#"#!/bin/bash
 set -eu
@@ -1865,11 +1866,13 @@ esac
 session='@SESSION@'
 source=startup
 resumed=-
+model=-
 while [ "$#" -gt 0 ]; do
   if [ "$1" = --resume ] && [ "$#" -gt 1 ]; then session=$2; source=resume; resumed=$2; fi
+  if [ "$1" = --model ] && [ "$#" -gt 1 ]; then model=$2; fi
   shift
 done
-printf '%s --resume=%s\n' "$TMUX_PANE" "$resumed" >> '@DIR@/launches'
+printf '%s --resume=%s --model=%s\n' "$TMUX_PANE" "$resumed" "$model" >> '@DIR@/launches'
 bucket=$(printf '%s' "$PWD" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
 project="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$bucket"
 mkdir -p "$project"
@@ -2059,10 +2062,11 @@ fn default_restart_resumes_the_agent_through_the_real_wrapper() {
     assert_eq!(
         launches.lines().collect::<Vec<_>>(),
         [
-            format!("{} --resume=-", old_pane.raw()),
-            format!("{} --resume={RESUMABLE_SESSION}", new_pane.raw()),
+            format!("{} --resume=- --model=-", old_pane.raw()),
+            format!("{} --resume={RESUMABLE_SESSION} --model=-", new_pane.raw()),
         ],
-        "the wrapper in the new pane must resume the original session"
+        "the wrapper in the new pane must resume the original session, and a \
+         definition that names no model launches and relaunches with none"
     );
     poll_for(
         "the old wrapper did not exit",
