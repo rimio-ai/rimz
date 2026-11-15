@@ -200,7 +200,7 @@ A definition is `workflow.toml`: one `[workflow]` table and any number of nodes,
 
 Durations (`timeout`, `sleep`, `for`, `stagger`) take `s`, `m`, `h`, or `d`, at most `365d`. `admission.give-up` takes the same units with no maximum, or `forever`.
 
-A `summary` is one nonempty line, not instructions to the runner. A blank or multiline summary refuses at its path. A judge without one refuses at `judge.<name>.summary` with `add summary = "..."`. Admission checks this for manual and loop-started runs alike.
+A `summary` is one nonempty line, not instructions to the runner. A blank or multiline summary refuses at its path. A judge without one refuses at `judge.<name>.summary` with `add summary = "..."`. `workflow run` checks this whether you or a loop task starts the run.
 
 ### Routes
 
@@ -596,7 +596,7 @@ RimZ rewrites `$RIMZ_WORKFLOW_DIR/context.json` before every check and every att
 
 ## Validate and schema
 
-`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/` whose name does not start with `.`. A single normal path component names a workflow under that home, as in `run`. Any other path is checked where it is, inside that home or not, and its name must still be a valid workflow name. A name may instead select a loop task's one-check graph, as in `show`, with the same `workflow:` and `task:` selectors ([loop task graphs](#loop-task-graphs)). Profiles and teams resolve from the machine's definitions either way. Condition and sleep stage names use the caller's effective teams plus `Done`. Without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
+`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/` whose name does not start with `.`. A single normal path component names a workflow under that home, as in `run`. Any other path is checked where it is, inside that home or not, and its name must still be a valid workflow name. A name may instead select a loop task's one-check graph, as in `show`, with the same `workflow:` and `task:` selectors ([loop task graphs](#loop-task-graphs)). Profiles and teams resolve from the machine's definitions either way. Condition and sleep stage names use the caller's effective teams plus `Done`. Without a resolved workspace, a warning says stage names were not checked. Starting a run always checks against the run's project.
 
 The table has these columns:
 
