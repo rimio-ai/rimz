@@ -68,7 +68,7 @@ A definition is strict: an unknown field, a field the node's kind does not take,
 3. `WorkflowFile::lower` refuses a name used by two kinds (`SpecErr::DuplicateNode`), then lowers each kind table into a `Check` or a `Step` that records its table word. Validation paths and the `validate` KIND column print that word.
 4. The lowered spec compiles into the `crates/rimz/src/harness/workflow/definition.rs::Definition` that every reader consumes: the engine, the graph, inspection, scripts, the brief, throttle limits, the CLI views, the sidebar seeds, and schedule probe demand.
 
-Compiling never fails. It parses each node's kind, route targets and edges, conditions, durations, windows, budgets, stagger, wake selectors, subscriptions, and the `shlex` split of `run` once, and keeps each beside its authored text, error included. So a view prints what the author wrote. Every engine read validates the definition again ([Engine reads](#engine-reads)), so a value validation refuses makes a live run wait and never reaches its use site. A node with no single runner has no `Kind`, and a route to a name that is no node is still a node target. Values that read the clock, the filesystem, or live configuration stay at their use: the header deadline's timestamp, slash-word resolution of `run`, prompt and system-prompt files, judge profiles, and launch groups.
+Compiling never fails. It parses each node's kind, route targets and edges, conditions, durations, windows, budgets, stagger, wake selectors, subscriptions, and the `shlex` split of `run` once, and keeps each beside its authored text, error included. So a view prints what the author wrote. Every `advance` validates the definition again ([Engine reads](#engine-reads)), so a value validation refuses makes a live run wait instead of reaching its use site there. `resume`, `restart`, and the signal helper load it parse-only. A node with no single runner has no `Kind`, and a route to a name that is no node is still a node target. Values that read the clock, the filesystem, or live configuration stay at their use: the header deadline's timestamp, slash-word resolution of `run`, prompt and system-prompt files, judge profiles, and launch groups.
 
 `validate_spec` then applies the required-field, value, and graph rules: an invalid optional value (a zero `max-visits`, an overlong duration, `mode = "plan"`, an unparsable `budget`), a route for an outcome the check cannot answer, and each cross-field rule refuse with the path and the fix. It warns without refusing only on what the definition alone cannot settle:
 
@@ -78,7 +78,7 @@ Compiling never fails. It parses each node's kind, route targets and edges, cond
 
 `rimz workflow validate [dir] [--json]` loads agent profiles through the machine definition catalog and never creates a room. Its argument is a directory anywhere, a deployed workflow name, or a command loop task, whose one-check graph it writes to a scratch directory (`crates/rimz/src/cli/workflow/definition.rs::Definition::resolve`). A name that is both a deployed workflow and a task refuses until it is written `workflow:<name>` or `task:<name>`. Without an argument it validates every directory in the definitions home except dot directories. `rimz workflow run` (`crates/rimz/src/cli/workflow.rs::start`, through `crates/rimz/src/cli/workflow_view.rs::deployed_definition`) refuses a directory outside the definitions home.
 
-Workflow `timeout`, `sleep`, `for`, and workflow and step `stagger` use `harness::duration::duration`: `s`, `m`, `h`, or `d`, at most `365d` inclusive. An overlong value refuses validation, at the start and at every engine read of a live run, so a run whose definition carries one waits until it is fixed ([Engine reads](#engine-reads)). `admission.give-up` keeps the separate `config::CapacityWait` parser and is unbounded.
+Workflow `timeout`, `sleep`, `for`, and workflow and step `stagger` use `harness::duration::duration`: `s`, `m`, `h`, or `d`, at most `365d` inclusive. An overlong value refuses validation, at the start and at every `advance` of a live run, so a run whose definition carries one waits until it is fixed ([Engine reads](#engine-reads)). `admission.give-up` keeps the separate `config::CapacityWait` parser and is unbounded.
 
 ### The header
 
@@ -99,7 +99,7 @@ Each node is written as one of eight tables, and the table word is its kind, so 
 | `command` | `Step`, run or shell |
 | `message` | `Step`, `StepKind::Message` ([Command and message steps](#command-and-message-steps)) |
 
-A condition's `cases` are required by its type (`crates/rimz/src/harness/workflow/spec/kinds.rs::ConditionNode`), `else` and `on.unknown` by `crates/rimz/src/harness/workflow/validate.rs::Validation::condition_fields`, and its `timeout` by `Validation::requires_timeout`. A condition takes no `wake`, since its subscriptions come from its terms. Every engine read validates again, so a judge without a `summary` makes its run wait, and the launch note never describes a judge without one.
+A condition's `cases` are required by its type (`crates/rimz/src/harness/workflow/spec/kinds.rs::ConditionNode`), `else` and `on.unknown` by `crates/rimz/src/harness/workflow/validate.rs::Validation::condition_fields`, and its `timeout` by `Validation::requires_timeout`. A condition takes no `wake`, since its subscriptions come from its terms. Every `advance` validates again, so a judge without a `summary` makes its run wait, and the launch note never describes a judge without one.
 
 A condition's cases may be written inline or as `[[condition.<name>.cases]]` blocks, and the loader reads both into the same ordered array. A case's `when` terms may not match the value `unknown`: the shared `WhenExpr` parser refuses it in every condition reader, since a term over an unread key is already unknown by itself.
 
@@ -213,7 +213,7 @@ Validation enforces each of these, and the engine the last. Each row says why th
 | `give-up` and `--skip-capacity` cover the capacity wait only. | The window and occupancy waits have no bound of their own. A run that must not wait on them without end sets a `deadline`. |
 | The deadline fires once per grant, at the node the run is at. | The handler it routes to (often through `[workflow] on.failed`) must be able to run. Firing again at every later node would fail that handler too. `resume --extend deadline=<when>` re-arms it. |
 | A condition waits during a `for` hold without a route saying so. | `hold` is reserved, so no check answers it. Only the engine writes it, as the wait's outcome, and the held case's own outcome routes once the hold has run its length. |
-| A run reads its definition live and admits it again at every engine read ([Engine reads](#engine-reads)). A definition admission refuses leaves the run waiting, and one the run no longer fits ends it failed. No language version exists, and the record version tracks only the record's shape. | An edit reaches in-flight runs at their next step, so a fix to a prompt or a route needs no restart. A language version would rise with every change to what a field means, and each raise strands every unfinished run ([The workflow pass](#the-workflow-pass)). Waiting on a refused definition keeps a half-finished edit from failing the runs that read it. |
+| A run reads its definition live, and every `advance` admits it again ([Engine reads](#engine-reads)). A definition admission refuses leaves the run waiting, and one the run no longer fits ends it failed. No language version exists, and the record version tracks only the record's shape. | An edit reaches in-flight runs at their next step, so a fix to a prompt or a route needs no restart. A language version would rise with every change to what a field means, and each raise strands every unfinished run ([The workflow pass](#the-workflow-pass)). Waiting on a refused definition keeps a half-finished edit from failing the runs that read it. |
 
 ## Starting a run
 
@@ -307,7 +307,7 @@ Each room holds one home per run: `owned/workflows/<run-id>/` while the run is l
 record.json        current run, version 11 (reads only 11)
 journal.jsonl      append-only evidence: transitions, and a row per check evaluation, so a polling check grows it on every recheck
 definition/        an inline run's generated definition: its text and assets (no deployed run has one)
-history.txt        the history saved as the run left the live directory (finished homes only)
+history.txt        the history saved as the run leaves the live directory, written before the rename (a failed rename leaves it in the live home)
 work/              RIMZ_WORKFLOW_DIR, writable by nodes
   context.json     replaced before every evaluation or attempt
   notes/           link to kept automation notes (runs without notes: scratch directory)
@@ -327,7 +327,7 @@ Only the live directory answers "what is running". `crates/rimz/src/store/workfl
 
 `crates/rimz/src/harness/workflow/engine.rs::create` takes a `DefinitionSource`: a deployed directory, whose basename names the run, or an inline definition a loop task's fire builds, its text plus named asset files. An inline run's `workflow` is its task name.
 
-- A deployed run keeps no copy. `create` records the deployed directory, canonicalized, as `RunRecord.spec_dir`, and an edit there reaches every live run of that workflow at its next engine read ([Engine reads](#engine-reads)). A directory renamed or relinked after the start is a missing definition, and the run waits.
+- A deployed run keeps no copy. `create` records the deployed directory, canonicalized, as `RunRecord.spec_dir`, and an edit there reaches every live run of that workflow at its next engine read ([Engine reads](#engine-reads)). A directory moved or deleted after the start is a missing definition, and the run waits. Since the path is canonical, repointing a symlink to the directory after the start changes nothing for the run.
 - An inline run's text exists nowhere else, so `crates/rimz/src/store/workflow.rs::seal_definition` writes it and its assets into the run's own `definition/` before validation. Its record has no `spec_dir`.
 
 Every reader takes the directory from `crates/rimz/src/store/workflow.rs::RunRecord::definition_dir`, which returns `spec_dir` or else the `definition/` of the run home the caller holds, live or finished. Prompts, scripts, argv paths, and `RIMZ_WORKFLOW_DEFINITION` all read it. Values the record decided at the start stay decided: an edit to the header's `deadline` or `scope` reaches later runs only. Agent profiles and machine configuration are read at each launch. `RunRecord.origin` records which source started the run (`deployed` or `inline`, and absent decodes as `deployed`).
@@ -424,12 +424,12 @@ Each pass of `advance`'s loop reads the definition again and admits it before it
 - An inline definition that parses but is refused waits the same way. One that no longer parses ends the run failed with `this RimZ cannot read the definition generated at the fire: <error>`, since no later read can parse it either.
 - `restart` and `resume` keep a parse-only read.
 
-After each admitted read, and in `prepare` on the record read under the lock, `crates/rimz/src/harness/workflow/engine/fit.rs::misfit` asks whether the run still fits the definition:
+In `prepare`, on the record read under the lock, and when a hosted check or command step settles, `crates/rimz/src/harness/workflow/engine/fit.rs::misfit` asks whether the run still fits the definition. A hosted child's once-a-second timeout read ([Hosted children](#hosted-children)) runs no fit check. The run fits when:
 
 - its node is in the definition
 - each live or held attempt sits at a node of the class it was published as: an agent attempt at an agent step with the same `lifecycle`, a message attempt at a message step, a command attempt at a command step, a judge at a judge, and any other check attempt at a check that is not a judge
 - a held session, or a session with a push-back pending, sits at a step with rest checks, and a held session's judging check is still in its step's `rest-check` list
-- a staged `asked` ending sits at a step that routes `asked`, and a held wait verdict names a case its check still has
+- a staged `asked` ending sits at a step that routes `asked`, and a held session's saved verdict that waits in a `for` hold names a case its condition still has (no other saved verdict is checked against the cases)
 
 A run that no longer fits ends `failed` through `fit::close`, the operation cancel uses. It journals an engine `fault` evaluation naming the node and the reason, stops a live or held session as cancel does, and ends the run through no route, with the outcome reason `<node>: the workflow definition changed under the run: <what no longer fits>`.
 
