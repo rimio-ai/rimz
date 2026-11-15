@@ -71,9 +71,9 @@ pub struct LoopArgs {
 
 #[derive(Debug, Subcommand)]
 enum LoopSubcmd {
-    /// Add or replace a task in the per-machine config.
+    /// Add a task, or replace the task of the same name.
     Add(Box<AddArgs>),
-    /// Remove tasks from their stores.
+    /// Delete tasks by name; their run history stays.
     Remove(NamesArgs),
     /// Rename a task in the store that owns it.
     Rename(RenameArgs),
@@ -95,7 +95,7 @@ enum LoopSubcmd {
     Explain(ExplainArgs),
     /// Print full forensics for a task's recent runs.
     Logs(LogsArgs),
-    /// Fire one task now in the foreground for testing; one-shots and subscriptions stay put.
+    /// Fire one task now, outside its schedule; a one-shot or subscription stays in place.
     Fire(FireArgs),
     /// Run one task now. The sidebar host calls this; humans rarely do.
     #[command(hide = true)]
@@ -165,7 +165,7 @@ enum TimerSubcmd {
 struct AddArgs {
     /// Task name (letters, digits, `-`, `_`); generated as `loop-<petname>` when omitted.
     name: Option<String>,
-    /// Short description, one line of 1–60 characters after trimming.
+    /// Short description: one line of 1 to 60 characters after trimming.
     #[arg(long, value_name = "TEXT", allow_hyphen_values = true, value_parser = super::parse_task_label)]
     label: Option<String>,
     /// Evaluate the trigger in each RimZ-owned worktree and fire there.
@@ -252,6 +252,7 @@ struct AddArgs {
 
 #[derive(Debug, Args)]
 struct NameArgs {
+    /// Task name, as `rimz loop list` prints it.
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::loop_tasks
     ))]
@@ -260,6 +261,7 @@ struct NameArgs {
 
 #[derive(Debug, Args)]
 struct NamesArgs {
+    /// Task names, as `rimz loop list` prints them.
     #[arg(required = true, num_args = 1.., value_name = "NAME", add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::loop_tasks
     ))]
@@ -281,6 +283,7 @@ struct RunArgs {
 
 #[derive(Debug, Args)]
 struct ScopeArgs {
+    /// Task names, as `rimz loop list` prints them.
     #[arg(
         required_unless_present = "all",
         num_args = 1..,
@@ -295,6 +298,7 @@ struct ScopeArgs {
 
 #[derive(Debug, Args)]
 struct PauseArgs {
+    /// Task name, as `rimz loop list` prints it.
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::loop_tasks
     ))]
@@ -306,6 +310,7 @@ struct PauseArgs {
 
 #[derive(Debug, Args)]
 struct FireArgs {
+    /// Task name, as `rimz loop list` prints it.
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::loop_tasks
     ))]
@@ -314,10 +319,12 @@ struct FireArgs {
 
 #[derive(Debug, Args)]
 struct RenameArgs {
+    /// Task name, as `rimz loop list` prints it.
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::loop_tasks
     ))]
     name: String,
+    /// The new name: letters, digits, `-`, and `_`.
     new_name: String,
 }
 
@@ -326,23 +333,23 @@ struct ShowArgs {
     /// Print the task, worktree conditions, launch memory and run history as JSON.
     #[arg(long)]
     json: bool,
-    /// Unfold the WORKTREES table: every declined checkout with its judge's reason, and every launched checkout with its leader.
+    /// Unfold the WORKTREES table: every declined checkout with its judge's reason, and every
+    /// launched checkout with its leader.
     #[arg(long)]
     all: bool,
+    /// Task name, as `rimz loop list` prints it.
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::loop_tasks
     ))]
     name: String,
-    /// Number of recent run rows to show, newest first. Rows fold by mode, result, outcome,
-    /// exit, checkout, run id, target, and whether fires waited or were skipped. Refused fires
-    /// fold into their holder's run, or a `no record` row once a later lock tenure proves the
-    /// holder gone without a record.
+    /// Number of recent run rows to show, newest first, after repeats fold into one row.
     #[arg(short = 'n', long = "runs", default_value_t = 10)]
     runs: usize,
 }
 
 #[derive(Debug, Args)]
 struct LogsArgs {
+    /// Task name, as `rimz loop list` prints it.
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::loop_tasks
     ))]

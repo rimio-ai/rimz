@@ -53,7 +53,7 @@ enum EventsSubcmd {
         #[arg(long)]
         signal: Option<SignalSelector>,
     },
-    /// Emit a durable signal and fire matching loop tasks.
+    /// Emit a durable signal to the loop tasks and active workflow runs that subscribe to it.
     Emit {
         /// Lowercase dot-separated signal name.
         name: String,

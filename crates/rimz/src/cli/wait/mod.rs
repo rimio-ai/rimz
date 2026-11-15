@@ -18,7 +18,11 @@ mod list;
 mod watch;
 
 #[derive(Debug, Args)]
-#[command(args_conflicts_with_subcommands = true)]
+#[command(
+    args_conflicts_with_subcommands = true,
+    after_help = "Only an agent arms or cancels a wait, and the wake comes back to that agent. \
+With no trigger, `rimz wait` lists your waits."
+)]
 pub struct WaitCommand {
     #[command(subcommand)]
     command: Option<WaitSubcmd>,
@@ -31,16 +35,19 @@ enum WaitSubcmd {
     /// List your own waits, or the whole room from a user shell.
     #[command(alias = "ls")]
     List {
+        /// Print the rows as JSON, subscriptions included.
         #[arg(long)]
         json: bool,
     },
-    /// Cancel any of your waits or subscriptions by name, including its watched command.
+    /// Cancel one wait or subscription by name, or all your waits; stops a watched command.
     Cancel {
+        /// The wait or subscription name, as `rimz wait list` prints it.
         #[arg(required_unless_present = "all", conflicts_with = "all")]
         name: Option<TaskName>,
         /// Cancel only waits you armed with `rimz wait`, leaving subscriptions intact.
         #[arg(long)]
         all: bool,
+        /// Print what was canceled and what remains as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -51,10 +58,10 @@ enum WaitSubcmd {
 
 #[derive(Debug, Default, Args)]
 struct WaitArgs {
-    /// Short description, one line of 1–60 characters after trimming.
+    /// Short description: one line of 1 to 60 characters after trimming.
     #[arg(long, value_name = "TEXT", allow_hyphen_values = true, value_parser = super::parse_task_label)]
     label: Option<String>,
-    /// Wait out this duration once.
+    /// Wake once after this delay, rounded up to the next minute.
     #[arg(long = "in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     in_after: Option<Duration>,
     /// Wake once at this time: `HH:MM` (today, else tomorrow), `<weekday> HH:MM`, or
@@ -79,7 +86,7 @@ struct WaitArgs {
     /// Sleep this long between --check runs (default: 1s).
     #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     every: Option<Duration>,
-    /// Wait for this file to change: created, deleted, or written.
+    /// Wait for this file to change: created, deleted, written, or replaced.
     #[arg(long, value_name = "PATH")]
     file: Option<std::path::PathBuf>,
     /// With --file, wait for a new line containing this literal text.
@@ -88,11 +95,13 @@ struct WaitArgs {
     /// Deliver for a failed, successful, or any command outcome (default: any; --check: success).
     #[arg(long, value_name = "fail|success|any", value_parser = ["fail", "success", "any"])]
     on: Option<String>,
-    /// Send one still-running notice; default 30m only without cache keepalive. Never stop the command.
+    /// Send one still-running message after this long; never stops the watch. Default 30m, or
+    /// none while cache keepalive pings the agent.
     #[arg(long = "check-in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     check_in: Option<Duration>,
     #[arg(long, hide = true, value_name = "DURATION")]
     timeout: Option<String>,
+    /// Print the receipt as JSON, or the list when no trigger is given.
     #[arg(long)]
     json: bool,
 }

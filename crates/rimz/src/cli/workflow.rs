@@ -130,7 +130,7 @@ enum Command {
         #[arg(value_name = "NAME|DIR")]
         name: PathBuf,
         /// Run in this existing RimZ-owned worktree instead of the current checkout; never creates
-        /// one. A project-scoped workflow runs at the project root regardless.
+        /// one. A workflow with `scope = "project"` refuses it.
         #[arg(short = 'w', long, value_name = "WORKTREE")]
         worktree: Option<String>,
         /// Text appended to every agent step's prompt for this run, and exposed as `prompt` in
@@ -154,7 +154,7 @@ enum Command {
     },
     /// Show a definition, one node, or a run's progress and history.
     Show {
-        /// Run address `<workflow>#<lane>`, workflow name, or run id; defaults to the caller's run.
+        /// Run address `<workflow>#<checkout>`, workflow name, or run id; defaults to the caller's run.
         #[arg(value_name = "RUN")]
         id: Option<String>,
         /// Show this node in full; requires a workflow name, not a run.
@@ -169,7 +169,7 @@ enum Command {
     },
     /// Cancel a run and interrupt its live script.
     Cancel {
-        /// Run address `<workflow>#<lane>`, workflow name, or run id.
+        /// Run address `<workflow>#<checkout>`, workflow name, or run id.
         #[arg(value_name = "RUN")]
         id: String,
         #[arg(long, hide = true, allow_hyphen_values = true, value_name = "TEXT")]
@@ -177,20 +177,20 @@ enum Command {
     },
     /// Move a live run to a node, re-enter a parked one, or extend a run's bounds.
     Resume {
-        /// Run address `<workflow>#<lane>`, workflow name, or run id.
+        /// Run address `<workflow>#<checkout>`, workflow name, or run id.
         #[arg(value_name = "RUN")]
         id: String,
         /// Move the run to this node; a live attempt at its current node ends canceled.
         #[arg(long, value_name = "NODE")]
         at: Option<String>,
         /// Grant this run more bounds: `visits=+N` or `deadline=<WHEN>`. Repeatable; an active run
-        /// accepts it alone.
+        /// takes it without --at.
         #[arg(long, value_name = "GRANT")]
         extend: Vec<String>,
     },
     /// Replace the current agent step, resetting its visits.
     Restart {
-        /// Run address `<workflow>#<lane>`, workflow name, or run id.
+        /// Run address `<workflow>#<checkout>`, workflow name, or run id.
         #[arg(value_name = "RUN")]
         id: String,
         /// Resume the current conversation instead of starting fresh; refuses if unavailable.

@@ -739,7 +739,7 @@ enum Subcmd {
     Agents(Box<agents_cmd::AgentsArgs>),
     /// Launch and drive supervised child agents.
     Subagents(Box<subagents::SubagentsArgs>),
-    /// Wake yourself on a timer, a clock time, a condition, or a watch.
+    /// Wake yourself on a timer, clock, usage reset, condition, or watch.
     Wait(Box<wait::WaitCommand>),
     /// Discover, inspect, install, launch, and resume named teams.
     Teams(Box<teams::TeamsArgs>),
@@ -749,7 +749,8 @@ enum Subcmd {
     Answer(answer::AnswerArgs),
     /// Run commands on a schedule, a signal, or a condition.
     ///
-    /// Runs from the room's sidebar host.
+    /// A clock or condition task fires from its room's sidebar host, or from the loop timer when
+    /// no room is open. A signal task fires in the process that emits the signal.
     #[command(name = "loop")]
     Loop(loop_cmd::LoopArgs),
     /// Run, inspect, and validate durable workflows.
