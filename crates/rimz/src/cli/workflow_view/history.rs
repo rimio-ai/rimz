@@ -467,6 +467,7 @@ impl History<'_> {
                     limited,
                     asked,
                     digests,
+                    message: notice,
                     ..
                 } => {
                     writeln!(
@@ -478,8 +479,11 @@ impl History<'_> {
                         )
                     )?;
                     let step = self.spec.and_then(|spec| spec.step(&entry.node));
-                    let message =
-                        step.is_some_and(|step| matches!(step.kind(), Some(Kind::Message(_))));
+                    // Without the step, the notice id tells a message attempt from an agent's:
+                    // only a message step's launch mints one.
+                    let message = step.map_or(notice.is_some(), |step| {
+                        matches!(step.kind(), Some(Kind::Message(_)))
+                    });
                     if message {
                         match (handle, reason) {
                             (Some(handle), _) => {
