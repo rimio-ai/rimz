@@ -52,7 +52,7 @@ mod tests {
             ] {
                 let error = anyhow::Error::from(rimz::harness::schedule::arm::ArmFailure::State(
                     Box::new(rimz::disk::lock::LockErr::Open {
-                        path: "rimz-home/loops/loop-arming.lock".into(),
+                        path: "rimz-home/loops/tasks.lock".into(),
                         source: std::io::Error::from(kind),
                     }),
                 ))

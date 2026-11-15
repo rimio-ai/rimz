@@ -104,7 +104,7 @@ pub(super) fn run_one(args: RunArgs, mode: LoopRunMode, globals: &GlobalFlags) -
         gate_project_trust(name, &entry, source, mode)?;
     }
     let key = loaded.key(name);
-    let arm_state = ArmState::resolve(arming::load().get(&key), source, Timestamp::now());
+    let arm_state = ArmState::resolve(arming::load()?.get(&key), source, Timestamp::now());
     if !args.drain && mode == LoopRunMode::Scheduled && arm_state != ArmState::Live {
         return Ok(());
     }
@@ -140,7 +140,7 @@ pub(super) fn run_one(args: RunArgs, mode: LoopRunMode, globals: &GlobalFlags) -
             None,
             &now.to_zoned(config.time_zone()),
         );
-        let timing = condition::observe(name, &observed_entry, timing, now);
+        let timing = condition::observe((&loaded.key(name), name), &observed_entry, timing, now);
         write_condition_notice(&mut ui::out(), &timing)?;
     }
     let mut fire = rimz::harness::schedule::runner::TaskFire::new(
@@ -160,7 +160,8 @@ pub(super) fn run_one(args: RunArgs, mode: LoopRunMode, globals: &GlobalFlags) -
         if !fire.take_backlog()? {
             return Ok(());
         }
-        if ArmState::resolve(arming::load().get(&key), source, Timestamp::now()) != ArmState::Live {
+        if ArmState::resolve(arming::load()?.get(&key), source, Timestamp::now()) != ArmState::Live
+        {
             return Ok(());
         }
         if let Err(error) = gate_project_trust(name, &entry, source, mode) {

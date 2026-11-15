@@ -14,30 +14,25 @@ use rimz::store::message::{
 };
 use rimz::store::writer::AgentLifecycleIntent;
 
+/// A task record that does not read refuses the wait with its path, and leaves no row.
 #[test]
-fn overlay_failure_leaves_no_wait() {
-    use std::os::unix::fs::PermissionsExt;
-
+fn unreadable_task_record_leaves_no_wait() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
-    let loops = env.rimz_home().join("loops");
-    std::fs::create_dir_all(&loops).unwrap();
-    let permissions = std::fs::metadata(&loops).unwrap().permissions();
-    std::fs::set_permissions(&loops, std::fs::Permissions::from_mode(0o555)).unwrap();
-    if std::fs::write(loops.join("write-probe"), b"").is_ok() {
-        std::fs::set_permissions(&loops, permissions).unwrap();
-        crate::common::skip("this user bypasses directory write permissions");
-        return;
-    }
-    let output = agent_wait(&env).args(["wait", "--run", "true"]).output();
-    std::fs::set_permissions(&loops, permissions).unwrap();
-    let output = output.unwrap();
+    let record = env.rimz_home().join("loops/tasks.json");
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(&record, "not json").unwrap();
+    let output = agent_wait(&env)
+        .args(["wait", "--run", "true"])
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("loop-arming.lock"),
+        String::from_utf8_lossy(&output.stderr).contains(record.to_str().unwrap()),
         "{output:?}"
     );
+    std::fs::remove_file(&record).unwrap();
     let pending: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
     assert_eq!(pending, serde_json::json!([]));
@@ -367,10 +362,9 @@ fn watcher_spawn_failure_leaves_no_wait() {
     assert!(wait_instances(&env).0.is_empty());
 }
 
+/// A cancel whose task record does not read refuses with its path and keeps the wait.
 #[test]
-fn cancel_overlay_failure_keeps_wait_pending() {
-    use std::os::unix::fs::PermissionsExt;
-
+fn cancel_with_an_unreadable_task_record_keeps_wait_pending() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
@@ -378,39 +372,21 @@ fn cancel_overlay_failure_keeps_wait_pending() {
         serde_json::from_str(&wait_ok(&env, &["wait", "--in", "5m", "--json"])).unwrap();
     let name = receipt["name"].as_str().unwrap();
     let before = wait_instances(&env);
-    let loops = env.rimz_home().join("loops");
-    let mut paths = vec![loops.clone()];
-    paths.extend(
-        std::fs::read_dir(&loops)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "lock")),
-    );
-    let permissions: Vec<_> = paths
-        .iter()
-        .map(|path| std::fs::metadata(path).unwrap().permissions())
-        .collect();
-    for path in &paths {
-        let mode = if path == &loops { 0o555 } else { 0o444 };
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    let record = env.rimz_home().join("loops/tasks.json");
+    let kept = std::fs::read(&record).ok();
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(&record, "not json").unwrap();
+    let output = agent_wait(&env)
+        .args(["wait", "cancel", name])
+        .output()
+        .unwrap();
+    match &kept {
+        Some(bytes) => std::fs::write(&record, bytes).unwrap(),
+        None => std::fs::remove_file(&record).unwrap(),
     }
-    let bypasses_permissions = std::fs::OpenOptions::new()
-        .write(true)
-        .open(loops.join("loop-arming.lock"))
-        .is_ok();
-    let output =
-        (!bypasses_permissions).then(|| agent_wait(&env).args(["wait", "cancel", name]).output());
-    for (path, permissions) in paths.iter().zip(permissions) {
-        std::fs::set_permissions(path, permissions).unwrap();
-    }
-    if bypasses_permissions {
-        crate::common::skip("this user bypasses directory write permissions");
-        return;
-    }
-    let output = output.unwrap().unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("loop-arming.lock"),
+        String::from_utf8_lossy(&output.stderr).contains(record.to_str().unwrap()),
         "{output:?}"
     );
     assert_eq!(wait_instances(&env), before);

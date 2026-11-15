@@ -111,7 +111,10 @@ fn live_workflow_runs(name: &str, root: &Path) -> Result<Vec<rimz::store::workfl
     if !state.root.exists() {
         return Ok(Vec::new());
     }
+    let Some(id) = task_id(name, None, Some(root)) else {
+        return Ok(Vec::new());
+    };
     let mut runs = rimz::store::workflow::live_runs(&state)?;
-    runs.retain(|run| run.started_by(name));
+    runs.retain(|run| run.started_by(&id));
     Ok(runs)
 }

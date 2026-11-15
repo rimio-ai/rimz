@@ -347,14 +347,14 @@ fn sweep(
         match rimz::harness::schedule::catalog::TaskCatalog::load(Some(&workspace.project_root)) {
             Ok(catalog) => {
                 catalog
-                    .prune_orphan_overlays()
-                    .context("pruning orphan loop arming state")?;
+                    .prune_records()
+                    .context("pruning the loop task record")?;
             }
             Err(error) => {
                 if !rimz::harness::schedule::catalog::TaskCatalog::source_unavailable(&error) {
                     return Err(error);
                 }
-                tracing::debug!(%error, "loop tasks unavailable; orphan arming state kept");
+                tracing::debug!(%error, "loop tasks unavailable; the loop task record kept");
             }
         }
         (reaped, report.wait_outputs_removed)

@@ -2277,12 +2277,10 @@ path = "crates/rimz/src/harness"
 # AgentShellResolution::missing_saved_path explains the per-launch fallback in doctor (+1).
 # AgentShellPersistence carries the birth's shell-lookup save policy (+1).
 # ChildError, execute_step and finish_script share command-step policy.
-# WorkflowLaunchRecord, WorkflowLedger, load_workflows, and launched share typed launch memory with loop inspection.
 # LoadedTask::key_for_root reuses the loop list's resolved root across key and row reads (+1).
 # hibernation_entry shares the open-agent join with the transcript watcher (+1).
 # LeaderTurn shares locked workflow eligibility with the CLI attempt host.
 # Observation limits leader-turn reads to workflow decisions that consume them (+1).
-# CapacityRecord, CapacityWaits and load_capacity share read-only waits; removing the hold notice offsets one (+2 net).
 # spec::validate_team shares per-item team validation with pack loading (+1).
 # SeatPolicy::smart_compact shares the config resolver with agent-row consumers (+1).
 # LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
@@ -2365,7 +2363,8 @@ path = "crates/rimz/src/harness"
 # schedule::pending::holder_key files a wait under its holder's kind and launch, so a swap keeps the target (+1).
 # run::fail_peer_turn lets a restart fail a peer's open turn without the team-run fallback (+1).
 # TaskTiming::{unread, condition_label}, TaskTimingState::condition_label_with, Verdict::unread_reasons and when::condition::ROOM_CLOSED give the CLI the reason an unread forge key shows in place of `unknown` (+5).
-surface-budget = 1242
+# task_record (Scope, Binding, FireMark, TaskRecord, TaskRecords, TaskRecordErr, load), TaskStoreErr, attention::stamp, LoadedTask::binding and LOOP_FIRE_ENV replace launch memory and the overlay store with one task record by id (+10 net).
+surface-budget = 1252
 
 [[verdict]]
 kind = "item"
@@ -2459,21 +2458,6 @@ reason = "Pack teams use the same name, preparation and layout checks before joi
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::launch_ledger::CapacityRecord"
-reason = "Detached loop fires persist condition capacity waits for planner and renderers."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::launch_ledger::CapacityWaits"
-reason = "Read-only consumers share the per-task per-checkout wait map."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::launch_ledger::load_capacity"
-reason = "Catalog removal and rename read the strict capacity memory an older RimZ wrote, without locks or writes."
-
-[[verdict]]
-kind = "item"
 key = "harness::workflow::Observation"
 reason = "The engine explicitly requests locked leader-turn eligibility only for a session's rest-check decisions."
 
@@ -2516,26 +2500,6 @@ reason = "The lookup of a dead launcher's unpublished supervised run stays in th
 kind = "item"
 key = "harness::workflow::LeaderTurn"
 reason = "A rest-check observation carries the leader's fresh turn identity and rest decision, read by `observe`, to the workflow engine."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::launch_ledger::WorkflowLaunchRecord"
-reason = "Workflow launch ids, scope kinds and times, or a folded resident launch's leader and destination, feed the planner and CLI."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::launch_ledger::WorkflowLedger"
-reason = "Read-only task/checkout launch memory is shared with loop inspection."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::launch_ledger::load_workflows"
-reason = "Planner, runner and CLI share strict versioned workflow launch reads."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::launch_ledger::launched"
-reason = "One kind-aware checkout query shares the remembering task's workflow memory, project-covering entries included, across dedupe."
 
 [[verdict]]
 kind = "item"
@@ -2833,7 +2797,8 @@ path = "crates/rimz/src/ids.rs"
 # TeamInstanceId::new, team, lane and lane_text build and read team#lane as team plus lane name,
 # and serialize_lane, deserialize_lane and lenient_lane_name decode a record's stored lane
 # without failing it (+7).
-surface-budget = 97
+# TaskId and FireId (new, parse, task) name a loop task and its fires (+3).
+surface-budget = 100
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -4503,7 +4468,8 @@ path = "crates/rimz/src/store"
 # or molt (+1).
 # store::run::CancelReason and its label record and print why RimZ canceled a run (+1).
 # RunRecord::definition_dir resolves the directory every reader takes a run's definition from (+1).
-surface-budget = 649
+# RunRecord::ran_for on the finished-run header selects a task's runs by the fire's task id (+1).
+surface-budget = 650
 
 [[verdict]]
 kind = "item"
@@ -5848,7 +5814,8 @@ path = "crates/rimz/src/harness/loop_task.rs"
 # LOOP_TRIGGER_ENV carries what fired the run to its command and the launches under it (+1).
 # FireLaunch, LaunchTree and read_fire_launch read a booked row's command as the agent or team launch it types, for the sidebar's bookings lane (+3).
 allowed-dependencies = []
-surface-budget = 6
+# LOOP_FIRE_ENV spells the fire id a shell command's environment carries (+1).
+surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/harness/name.rs"
@@ -6529,6 +6496,71 @@ reason = "Strict readers surface I/O, malformed records and unsupported versions
 kind = "item"
 key = "harness::schedule::backlog::load"
 reason = "The sidebar-safe scheduler backstop and CLI inspection share strict durable backlog reads."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::task_record"
+reason = "The planner, probes, CLI views and sidebar share one strict read-only loop task record; its locked writer stays private to schedule."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::task_record::Scope"
+reason = "A task record's binding names the machine or one workspace catalog, which CLI fixtures and views build."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::task_record::Binding"
+reason = "The catalog row a record is bound to keys rename, removal and name lookup across the CLI and the planner."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::task_record::FireMark"
+reason = "Each checkout's last fire (id, run, scope, result) is launch memory the planner, loop views and the bookings lane read."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::task_record::TaskRecord"
+reason = "Arming, strikes, launch stamps, the quiet summary and fire marks of one task id cross the reader, CLI and sidebar boundaries."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::task_record::TaskRecords"
+reason = "The whole versioned record is read once per command or pass and queried by id, binding or name."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::task_record::TaskRecordErr"
+reason = "An unreadable or newer task record is an error with its path and fix that stops fires and shows in loop list and doctor, never an empty record."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::task_record::load"
+reason = "Strict sidebar-safe reads of the task record, shared by the planner, CLI views, doctor and the bookings lane."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::task_record_store::TaskStoreErr"
+reason = "Catalog, arming and fire writes surface a failed locked record write with the read error it wraps."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::stamp"
+reason = "The loop views read a task's fire stamp under its id once bound and under its name before, by the planner's rule."
+
+[[verdict]]
+kind = "item"
+key = "harness::loop_task::LOOP_FIRE_ENV"
+reason = "The fire id a shell command's environment carries is spelled once for the runner and the hook environment list."
+
+[[verdict]]
+kind = "item"
+key = "ids::TaskId"
+reason = "A loop task's identity, kept across rename, keys its record, history rows, run locks and runtime stamps."
+
+[[verdict]]
+kind = "item"
+key = "ids::FireId"
+reason = "One fire of a loop task names its task's id, so a run, a shell command and a report reach the task with no lookup."
 
 [[verdict]]
 kind = "item"
@@ -12378,7 +12410,7 @@ reason = "The detached advance a start spawned lets each start command's receipt
 [[verdict]]
 kind = "item"
 key = "harness::workflow::reassign_task"
-reason = "The loop catalog delegates live workflow provenance rewrites to the locked transition owner."
+reason = "The loop catalog's removal releases the removed task's live runs through the locked transition owner."
 
 [[verdict]]
 kind = "item"

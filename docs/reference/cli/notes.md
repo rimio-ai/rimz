@@ -69,6 +69,7 @@ Each note opens with a YAML header between `---` lines, then the body. RimZ writ
 | `worktree` | The checkout the writer runs in, from `RIMZ_WORKTREE_PATH`: the project's main checkout or a linked worktree, so it can equal `project`. | The writer runs in a room pane, or RimZ started it as a headless check, a start-throttle check, a loop task's workflow script, or a worktree hook. |
 | `channel` | The agent's channel, from `RIMZ_CHANNEL`. | The agent is on a named channel. |
 | `loop-task` | The loop task that started the writer, from `RIMZ_LOOP_TASK`. | A loop task started the writer as a headless check, a start-throttle check, or a workflow script. An agent a loop fire launches carries `workflow-run` instead. |
+| `loop-fire` | The fire that started the writer, from `RIMZ_LOOP_FIRE`. | A loop fire started the writer as a start-throttle check or a workflow script. |
 | `workflow-run` | The workflow run the writer belongs to, from `RIMZ_WORKFLOW_RUN`. | A workflow step launched it, including a headless check. |
 
 These facts come from the writer's environment alone; RimZ reads no room record to fill them. A variable set to the empty string counts as absent, and a plain shell writes `kind`, `title`, `written`, and usually `project`. When resolving the project fails (a broken RimZ home, a failing `git`), the note is still written without `project`, and one warning on stderr says why; stdout still holds the path alone.

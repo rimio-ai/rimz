@@ -9,6 +9,10 @@ use std::slice::Iter;
 
 pub(crate) const LOOP_TASK_ENV: &str = "RIMZ_LOOP_TASK";
 
+/// The environment key carrying the fire id (`ids::FireId`) of the fire that started the run,
+/// beside [`LOOP_TASK_ENV`]; the id names its task, so a reader never resolves it by name.
+pub(crate) const LOOP_FIRE_ENV: &str = "RIMZ_LOOP_FIRE";
+
 /// The environment key carrying, as a JSON list, the booking chain the firing task held when
 /// its run started (`RunFire::booked_by`), so an agent its check launches records it.
 pub(crate) const LOOP_BOOKED_BY_ENV: &str = "RIMZ_LOOP_BOOKED_BY";

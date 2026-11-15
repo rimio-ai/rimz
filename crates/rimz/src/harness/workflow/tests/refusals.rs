@@ -1061,6 +1061,7 @@ fn validate_and_create(
     let result = create(
         &state,
         DefinitionSource::Deployed {
+            loop_fire: None,
             dir: &dir,
             task: None,
             surplus: None,

@@ -1,13 +1,5 @@
 use super::*;
 
-fn capacity_path(state: &StatePaths) -> PathBuf {
-    StatePaths::class_path(
-        &state.root,
-        crate::disk::paths::Class::Records,
-        "loop-capacity-waits.json",
-    )
-}
-
 fn workflow_wait(state: &StatePaths, suffix: u32, status: &str, outcome: &str) -> PathBuf {
     let id = crate::ids::WorkflowRunId::parse(&format!("wf_0190b8172c00700080000000{suffix:08}"))
         .unwrap();
@@ -34,24 +26,6 @@ fn workflow_wait(state: &StatePaths, suffix: u32, status: &str, outcome: &str) -
 fn workflow_capacity_waits_fold_alike_on_producer_and_consumer_folds() {
     let (_dir, runtime, snapshot) = runtime();
     let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
-    let path = capacity_path(&state);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let mut waits = serde_json::json!({
-        "task": {
-            "/repo/a": {
-                "since": "2026-01-01T00:00:00Z", "first": "2026-01-01T00:02:00Z",
-                "last": "2026-01-01T00:03:00Z", "count": 4, "kinds": ["claude"],
-                "reason": "cannot count open agents: broken", "hold": "store", "gave_up": false
-            }
-        }
-    });
-    waits["task"]["/repo/b"] = waits["task"]["/repo/a"].clone();
-    waits["task"]["/repo/b"]["hold"] = "disk".into();
-    waits["task"]["/repo/b"]["reason"] = "oldest disk".into();
-    waits["task"]["/repo/b"]["first"] = "2025-12-30T00:00:00Z".into();
-    waits["task"]["/repo/c"] = waits["task"]["/repo/a"].clone();
-    waits["task"]["/repo/c"]["gave_up"] = true.into();
-    std::fs::write(&path, serde_json::to_vec(&waits).unwrap()).unwrap();
     let clocks: BTreeMap<_, _> = ["/repo/a", "/repo/b", "/repo/c"]
         .map(|checkout| {
             (
@@ -85,18 +59,14 @@ fn workflow_capacity_waits_fold_alike_on_producer_and_consumer_folds() {
     assert_eq!(
         actual,
         [expected.clone(), expected],
-        "count runs, not retry counts; ignore non-capacity and inactive runs and the loop \
-         capacity records only an older RimZ wrote"
+        "count runs, not retry counts; ignore non-capacity and inactive runs"
     );
 }
 
 #[test]
-fn unreadable_capacity_records_preserve_workflow_waits_and_removed_waits_clear() {
+fn removed_workflow_waits_clear() {
     let (_dir, runtime, snapshot) = runtime();
     let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
-    let path = capacity_path(&state);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, b"broken").unwrap();
     let record = workflow_wait(&state, 1, "active", "capacity");
     let projected = fold_cached(snapshot, None, &runtime);
     let before = serde_json::to_value(&projected).unwrap()["throttle_notices"].clone();
@@ -108,7 +78,7 @@ fn unreadable_capacity_records_preserve_workflow_waits_and_removed_waits_clear()
             serde_json::json!([{"kind": "disk", "reason": "free disk low", "count": 1}]),
             serde_json::json!([])
         ),
-        "an unreadable loop ledger cannot hide workflow waits or retain stale summaries"
+        "a removed workflow wait leaves no stale summary"
     );
 }
 
@@ -116,20 +86,7 @@ fn unreadable_capacity_records_preserve_workflow_waits_and_removed_waits_clear()
 fn self_clearing_and_legacy_holds_do_not_notify() {
     let (_dir, runtime, snapshot) = runtime();
     let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
-    let path = capacity_path(&state);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     for hold in [serde_json::json!("capacity"), serde_json::Value::Null] {
-        std::fs::write(
-            &path,
-            serde_json::to_vec(&serde_json::json!({"task": {"/repo": {
-                "since": "2026-01-01T00:00:00Z", "first": "2026-01-01T00:00:00Z",
-                "last": "2026-01-01T00:00:00Z", "count": 4, "kinds": [],
-                "reason": "capacity check failing: text is not classification", "hold": hold,
-                "gave_up": false
-            }}}))
-            .unwrap(),
-        )
-        .unwrap();
         let when = runtime.lane_path("loop-when.json");
         std::fs::create_dir_all(when.parent().unwrap()).unwrap();
         std::fs::write(

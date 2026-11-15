@@ -75,6 +75,7 @@ pub enum DefinitionSource<'a> {
     Deployed {
         dir: &'a Path,
         task: Option<String>,
+        loop_fire: Option<crate::ids::FireId>,
         surplus: Option<String>,
         surplus_after: Option<String>,
         fire: Option<RunFire>,
@@ -85,6 +86,7 @@ pub enum DefinitionSource<'a> {
     /// the project root, where the task fired.
     Inline {
         task: String,
+        loop_fire: crate::ids::FireId,
         definition: InlineDefinition,
         fire_tree: bool,
         surplus: Option<String>,
@@ -141,6 +143,7 @@ pub fn create(
         DefinitionSource::Deployed {
             dir,
             task,
+            loop_fire,
             surplus,
             surplus_after,
             fire,
@@ -155,6 +158,7 @@ pub fn create(
                     .ok_or_else(|| WorkflowErr::Refused("workflow directory needs a name".into()))?
                     .to_owned(),
                 task: task.clone(),
+                loop_fire: loop_fire.clone(),
                 spec_dir: dir,
                 fire_tree: false,
                 surplus: surplus.clone(),
@@ -165,6 +169,7 @@ pub fn create(
         }
         DefinitionSource::Inline {
             task,
+            loop_fire,
             fire_tree,
             surplus,
             surplus_after,
@@ -175,6 +180,7 @@ pub fn create(
             origin: RunOrigin::Inline,
             name: task.clone(),
             task: Some(task.clone()),
+            loop_fire: Some(loop_fire.clone()),
             spec_dir: std::path::PathBuf::new(),
             fire_tree: *fire_tree,
             surplus: surplus.clone(),
@@ -189,7 +195,12 @@ pub fn create(
         state,
         start.origin,
         &start.name,
-        start.task.as_deref(),
+        start
+            .loop_fire
+            .as_ref()
+            .filter(|_| start.task.is_some())
+            .map(crate::ids::FireId::task)
+            .as_ref(),
         start.fire_tree,
         &roots,
     )?;
@@ -222,6 +233,7 @@ struct RunStart {
     origin: RunOrigin,
     name: String,
     task: Option<String>,
+    loop_fire: Option<crate::ids::FireId>,
     spec_dir: std::path::PathBuf,
     fire_tree: bool,
     surplus: Option<String>,
@@ -281,6 +293,7 @@ fn publish(
             workflow::LoopReport::None
         },
         task: start.task,
+        loop_fire: start.loop_fire,
         manual,
         spec_dir: (start.origin == RunOrigin::Deployed).then_some(start.spec_dir),
         prompt,
@@ -327,11 +340,12 @@ fn publish(
         stranded: false,
     };
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let task = record.loop_fire.as_ref().map(crate::ids::FireId::task);
     refuse_existing(
         state,
         record.origin,
         &record.workflow,
-        record.task.as_deref(),
+        task.as_ref(),
         record.fire_tree,
         &roots,
     )?;
@@ -370,7 +384,7 @@ fn refuse_existing(
     state: &StatePaths,
     origin: RunOrigin,
     name: &str,
-    task: Option<&str>,
+    task: Option<&crate::ids::TaskId>,
     fire_tree: bool,
     roots: &ScopeRoots,
 ) -> Result<()> {
@@ -383,7 +397,7 @@ fn refuse_existing(
         !r.state.is_terminal()
             && r.firing_checkout() == checkout
             && ((r.origin == origin && r.workflow == name)
-                || task.is_some_and(|task| r.task.as_deref() == Some(task)))
+                || task.is_some_and(|task| r.ran_for(task)))
     }) {
         Some(existing) => Err(WorkflowErr::Exists {
             run: existing.id,
@@ -1613,6 +1627,7 @@ fn prepare_capacity(
                 machine_gated,
                 limits,
                 task: t.record.task.clone().unwrap_or_default(),
+                fire: t.record.loop_fire.clone(),
                 root: t.record.project_root.clone(),
                 checkout: t.record.scope.path.clone(),
                 // A worktree not made yet is measured where it will be made.
@@ -2152,7 +2167,10 @@ fn move_live_attempt(
 
 /// The task's live runs that have not entered an agent or message step: the runs a removal or
 /// redefinition of the task cancels, since nothing they started outlives them.
-pub(crate) fn unacted_task_runs(state: &StatePaths, task: &str) -> Result<Vec<WorkflowRunId>> {
+pub(crate) fn unacted_task_runs(
+    state: &StatePaths,
+    task: &crate::ids::TaskId,
+) -> Result<Vec<WorkflowRunId>> {
     if !state.root.exists() {
         return Ok(Vec::new());
     }
@@ -2163,10 +2181,11 @@ pub(crate) fn unacted_task_runs(state: &StatePaths, task: &str) -> Result<Vec<Wo
         .collect())
 }
 
+/// Release a removed task's live runs: each stops reporting to loop and names no task. A
+/// finished run still owed its collection keeps it, and reports under the task's id.
 pub(crate) fn reassign_task(
     state: &StatePaths,
-    old: &str,
-    new: Option<&str>,
+    task: &crate::ids::TaskId,
 ) -> Result<Vec<WorkflowRunId>> {
     if !state.root.exists() {
         return Ok(Vec::new());
@@ -2174,16 +2193,11 @@ pub(crate) fn reassign_task(
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let mut reassigned = Vec::new();
     for mut record in workflow::live_runs(state)? {
-        // A finished run still owed its collection reports and forgets launch memory under its
-        // task's name, so a rename moves it too; a removal leaves it to report under the old one.
-        let owed = new.is_some() && record.ran_for(old) && record.owes_loop_report();
-        if !record.started_by(old) && !owed {
+        if !record.started_by(task) {
             continue;
         }
-        record.task = new.map(str::to_owned);
-        if new.is_none() {
-            record.loop_report = workflow::LoopReport::None;
-        }
+        record.task = None;
+        record.loop_report = workflow::LoopReport::None;
         workflow::write(&state.workflow(&record.id), &record, &guard)?;
         reassigned.push(record.id);
     }

@@ -4,6 +4,7 @@ use super::*;
 use rimz::config::CheckOn;
 use rimz::harness::schedule::attention::{self, InProgress};
 use rimz::harness::when::{Verdict, WhenExpr};
+use rimz::ids::TaskId;
 use schedule::fanout::{CheckoutCondition, CheckoutState};
 
 const NOTE_MAX: usize = 60;
@@ -128,7 +129,6 @@ struct ShowView {
     heard: Option<run_log::HeardSummary>,
     /// The task's quiet fires, which leave no row in `records`.
     quiet: Option<run_log::QuietFires>,
-    launches: BTreeMap<PathBuf, ResidentLaunch>,
     capacity: BTreeMap<PathBuf, list::CapacityWaitView>,
     /// The task's run in progress: its held run lock, or an active workflow run of the task.
     in_progress: Option<InProgress<InFlightRun>>,
@@ -137,7 +137,6 @@ struct ShowView {
     subscriptions: Vec<SubscriptionView>,
     room_is_open: bool,
     strike_count: u32,
-    leader_statuses: BTreeMap<String, rimz::agents::AgentStatus>,
     you: bool,
     /// The agent that booked the task: its handle while the room's rows resolve it, else its id.
     booker: Option<String>,
@@ -154,37 +153,6 @@ struct ShowView {
 impl ShowView {
     fn takeover_refusals(&self) -> BTreeMap<&Path, CheckoutRefusals<'_>> {
         takeover_refusals(&self.records)
-    }
-}
-
-/// A launch the resident path remembered before every fire became a workflow run; the task's
-/// later launches are its workflow runs.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-struct ResidentLaunch {
-    at: Timestamp,
-    leader: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    destination: Option<PathBuf>,
-}
-
-impl ResidentLaunch {
-    fn of(
-        launches: &BTreeMap<PathBuf, schedule::launch_ledger::WorkflowLaunchRecord>,
-    ) -> BTreeMap<PathBuf, Self> {
-        launches
-            .iter()
-            .filter(|(_, launch)| launch.run.is_none())
-            .filter_map(|(checkout, launch)| {
-                Some((
-                    checkout.clone(),
-                    Self {
-                        at: launch.at,
-                        leader: launch.leader.clone()?,
-                        destination: launch.destination.clone(),
-                    },
-                ))
-            })
-            .collect()
     }
 }
 
@@ -225,22 +193,6 @@ struct SubscriptionView {
     last_style: anstyle::Style,
 }
 
-fn leader_statuses(
-    launches: &BTreeMap<PathBuf, ResidentLaunch>,
-    agents: &[rimz::agents::AgentState],
-    now: jiff::Timestamp,
-) -> BTreeMap<String, rimz::agents::AgentStatus> {
-    launches
-        .values()
-        .filter_map(|launch| {
-            let agent = agents
-                .iter()
-                .find(|agent| agent.name.as_deref() == Some(launch.leader.as_str()))?;
-            Some((launch.leader.clone(), agent.effective_status(now)))
-        })
-        .collect()
-}
-
 fn write_attention(
     out: &mut impl Write,
     view: &ShowView,
@@ -254,7 +206,6 @@ fn write_attention(
     } else {
         view.takeover_refusals()
             .into_iter()
-            .filter(|(checkout, _)| !view.launches.contains_key(*checkout))
             .filter_map(|(checkout, refusal)| {
                 Some((
                     checkout
@@ -286,48 +237,12 @@ fn write_attention(
             )
         )?;
     }
-    let failed = view
-        .launches
-        .iter()
-        .filter(|(_, launch)| {
-            view.leader_statuses.get(&launch.leader) == Some(&rimz::agents::AgentStatus::Failed)
-        })
-        .map(|(checkout, launch)| {
-            format!(
-                "@{} in {}",
-                launch.leader,
-                launch
-                    .destination
-                    .as_ref()
-                    .unwrap_or(checkout)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-            )
-        })
-        .collect::<Vec<_>>();
-    if !failed.is_empty() {
-        writeln!(
-            out,
-            "  {}",
-            ui::paint(
-                ui::palette::warn(),
-                &format!(
-                    "! {} failed leader{}: {}",
-                    failed.len(),
-                    if failed.len() == 1 { "" } else { "s" },
-                    failed.join(", ")
-                )
-            )
-        )?;
-    }
     Ok(())
 }
 
 struct WorktreeRow<'a> {
     condition: &'a CheckoutCondition,
     blocked: Option<(Timestamp, CheckoutRefusals<'a>)>,
-    leader_status: Option<rimz::agents::AgentStatus>,
     run: Option<&'a list::WorkflowRunRow>,
     armed: usize,
     short: Vec<&'a str>,
@@ -361,18 +276,7 @@ impl WorktreeRow<'_> {
         match self.condition.state {
             CheckoutState::Ready { .. } => 1,
             CheckoutState::Holding { .. } => 2,
-            CheckoutState::Launched { .. }
-                if matches!(
-                    self.leader_status,
-                    Some(
-                        rimz::agents::AgentStatus::Running
-                            | rimz::agents::AgentStatus::Waiting
-                            | rimz::agents::AgentStatus::Failed
-                    )
-                ) =>
-            {
-                3
-            }
+            CheckoutState::Launched { .. } => 3,
             CheckoutState::Workflow { .. }
                 if self
                     .run
@@ -381,7 +285,7 @@ impl WorktreeRow<'_> {
                 3
             }
             CheckoutState::Waiting { .. } | CheckoutState::Unknown { .. } => 4,
-            CheckoutState::Launched { .. } | CheckoutState::Workflow { .. } => 6,
+            CheckoutState::Workflow { .. } => 6,
         }
     }
 }
@@ -447,10 +351,6 @@ fn worktree_rows<'a>(view: &'a ShowView, expr: Option<&'a WhenExpr>) -> Vec<Work
                     }
                 }
             }
-            let leader_status = match &condition.state {
-                CheckoutState::Launched { leader, .. } => view.leader_statuses.get(leader).copied(),
-                _ => None,
-            };
             let run = match &condition.state {
                 CheckoutState::Workflow { run, .. } => {
                     view.workflow_runs.iter().find(|row| &row.id == run)
@@ -470,7 +370,6 @@ fn worktree_rows<'a>(view: &'a ShowView, expr: Option<&'a WhenExpr>) -> Vec<Work
                 capacity: view.capacity.get(&condition.checkout),
                 condition,
                 blocked,
-                leader_status,
                 run,
                 armed,
                 short,
@@ -552,7 +451,7 @@ fn write_worktrees(
         }
     }));
     if has_launch {
-        headers.push(if view.runs_workflows { "RUN" } else { "LEADER" }.to_owned());
+        headers.push("RUN".to_owned());
     }
     if has_reason {
         headers.push("REASON".to_owned());
@@ -636,11 +535,8 @@ fn write_worktrees(
                     text.push_str(&format!(" · {}", run.detail));
                 }
                 text
-            } else if let CheckoutState::Launched { leader, .. } = &row.condition.state {
-                row.leader_status.map_or_else(
-                    || format!("@{leader} ended"),
-                    |status| format!("@{leader}  {}", status.as_str()),
-                )
+            } else if matches!(row.condition.state, CheckoutState::Launched { .. }) {
+                "fired · no run yet".to_owned()
             } else {
                 String::new()
             };
@@ -686,15 +582,7 @@ fn write_worktree_folds(
             "  {}",
             ui::paint(
                 ui::palette::muted(),
-                &format!(
-                    "→ reasons and {}: rimz loop show {} --all",
-                    if view.runs_workflows {
-                        "runs"
-                    } else {
-                        "leaders"
-                    },
-                    view.name
-                )
+                &format!("→ reasons and runs: rimz loop show {} --all", view.name)
             )
         )?;
     }
@@ -706,11 +594,6 @@ fn fold_launched(rows: &[WorktreeRow<'_>], now: Timestamp) -> Option<String> {
     let mut newest = None;
     for row in rows.iter().filter(|row| row.rank() == 6) {
         let (at, subject, status) = match &row.condition.state {
-            CheckoutState::Launched { at, leader } => (
-                *at,
-                format!("@{leader}"),
-                row.leader_status.map_or("ended", |status| status.as_str()),
-            ),
             CheckoutState::Workflow { at, run } => (
                 *at,
                 row.run
@@ -775,10 +658,6 @@ struct WorktreeJson<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     short: Option<Vec<&'a str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    leader: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    leader_status: Option<Option<&'static str>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     armed: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     run: Option<&'a list::WorkflowRunRow>,
@@ -811,17 +690,13 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
                 held_ms: None,
                 short: readings.as_ref().map(|_| row.short),
                 readings,
-                leader: None,
-                leader_status: None,
                 armed: None,
                 run: row.run,
                 blocked: None,
             };
             match &row.condition.state {
-                CheckoutState::Launched { leader, at } => {
+                CheckoutState::Launched { at } => {
                     json.since = Some(*at);
-                    json.leader = Some(leader);
-                    json.leader_status = Some(row.leader_status.map(|status| status.as_str()));
                     json.armed = Some(row.armed);
                 }
                 CheckoutState::Holding { since, hold, .. } => {
@@ -967,26 +842,6 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     if view.in_progress.as_ref().is_some_and(InProgress::executing) {
         writeln!(out, "  stop with `rimz loop stop {}`", view.name)?;
     }
-    if !view.entry.each_worktree && !view.launches.is_empty() {
-        writeln!(out, "\nLAUNCHES")?;
-        let mut launches = view.launches.iter().collect::<Vec<_>>();
-        launches.sort_by(|a, b| b.1.at.cmp(&a.1.at).then(a.0.cmp(b.0)));
-        for (checkout, launch) in launches {
-            writeln!(
-                out,
-                "  {}  @{}  {}",
-                launch
-                    .destination
-                    .as_ref()
-                    .unwrap_or(checkout)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy(),
-                launch.leader,
-                ui::rel_age(launch.at, now)
-            )?;
-        }
-    }
     if let Ok(parsed) = view.timing.parsed()
         && matches!(parsed.trigger, schedule::Trigger::Condition { .. })
     {
@@ -1045,6 +900,8 @@ enum ShowTarget {
 
 struct RowlessShow {
     root: PathBuf,
+    /// The consumed task's id, while its retired record is kept.
+    id: Option<TaskId>,
     history: run_log::TaskHistory,
     in_flight: Option<InFlightRun>,
 }
@@ -1141,15 +998,19 @@ fn resolve_show(args: &mut ShowArgs, caller: Option<&Path>) -> Result<ShowTarget
     }
     let mut rowless = catalogs
         .iter()
-        .map(|(root, _)| RowlessShow {
-            root: root.clone(),
-            history: run_log::task_history(
-                &rimz::disk::paths::logs_dir(),
-                &args.name,
-                Some(root),
-                None,
-            ),
-            in_flight: displayed_in_flight(&args.name, in_flight_run(&args.name, root)),
+        .map(|(root, _)| {
+            let id = task_id(&args.name, None, Some(root));
+            RowlessShow {
+                root: root.clone(),
+                history: run_log::task_history(
+                    &rimz::disk::paths::logs_dir(),
+                    id.as_ref(),
+                    Some(root),
+                    None,
+                ),
+                id,
+                in_flight: displayed_in_flight(&args.name, in_flight_run(&args.name, root)),
+            }
         })
         .collect::<Vec<_>>();
     let roots = rowless
@@ -1307,7 +1168,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             let (paths, records) = workflow_records(&view.root)?;
             let acting_at = view.history.acting().map(|acting| acting.record.at);
             let running =
-                attention::run_in_progress(None, &records, &args.name, &view.root, acting_at)
+                attention::run_in_progress(None, &records, view.id.as_ref(), &view.root, acting_at)
                     .and_then(|run| in_progress_text(&run, Timestamp::now()));
             let runs = workflow_log_runs(&paths, &view.root, &view.history.fires, globals);
             let state = match &running {
@@ -1366,41 +1227,42 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .unwrap_or_default();
     let now = Timestamp::now();
     let key = task.key(&args.name);
-    let arming = arming::load().remove(&key);
+    let task_records = task_record::load()?;
+    let bound = task_records.named(&key);
+    let id = bound.map(|(id, _)| id);
+    let arming = task_records
+        .live(&key)
+        .and_then(|(_, record)| record.arming);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let timing = if entry.each_worktree {
         schedule::TaskTiming::evaluate(
             task.trigger(),
             task.source(),
-            stamps.get(&args.name).copied(),
+            attention::stamp(&stamps, &task_records, &key, &args.name).copied(),
             arming.as_ref(),
             &now_zoned,
         )
     } else {
-        observe_task_timing(&args.name, &task, &stamps, arming.as_ref(), &now_zoned)
+        observe_task_timing(
+            (&key, &args.name),
+            &task,
+            (&stamps, &task_records),
+            arming.as_ref(),
+            &now_zoned,
+        )
     };
     let history = run_log::task_history(
         &rimz::disk::paths::logs_dir(),
-        &args.name,
+        id,
         Some(&root),
         entry.wait_meta.as_ref().map(|meta| meta.armed_at),
     );
-    let workflow_ledger = if entry.dedupes_checkout() {
-        schedule::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?
-    } else {
-        Default::default()
-    };
-    let launches = workflow_ledger
-        .tasks
-        .get(&args.name)
-        .map(ResidentLaunch::of)
-        .unwrap_or_default();
     let in_flight = displayed_in_flight(&args.name, in_flight_run(&args.name, &root));
     let backlog = if entry.overlap.unwrap_or_default() != rimz::config::OverlapPolicy::Skip {
+        let mut backlog = schedule::backlog::load(&StatePaths::for_project_root(&root)?)?;
         Some(
-            schedule::backlog::load(&StatePaths::for_project_root(&root)?)?
-                .tasks
-                .remove(&args.name)
+            id.and_then(|id| backlog.tasks.remove(id.as_str()))
+                .or_else(|| backlog.tasks.remove(&args.name))
                 .unwrap_or_default(),
         )
     } else {
@@ -1417,7 +1279,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                     &args.name,
                     &task,
                     runtime,
-                    &workflow_ledger,
+                    &task_records,
                     ci_source.as_ref(),
                     now,
                 )
@@ -1444,7 +1306,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         Ok(rows) => (rows, None),
         Err(error) => (Vec::new(), Some(error)),
     };
-    let reads_rows = !launches.is_empty() || entry.wait.is_some() || !entry.booked_by.is_empty();
+    let reads_rows = entry.wait.is_some() || !entry.booked_by.is_empty();
     let workspace = if (!args.json || entry.each_worktree) && reads_rows {
         WorkspaceResolver::resolve(&root, Some(root.clone())).ok()
     } else {
@@ -1453,16 +1315,6 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let store = workspace
         .as_ref()
         .and_then(|workspace| super::super::open_existing_store(workspace).ok().flatten());
-    let snapshot = store
-        .as_ref()
-        .zip(workspace.as_ref())
-        .and_then(|(store, workspace)| {
-            super::super::alive_snapshot(store, &workspace.session_name).ok()
-        });
-    let leader_statuses = snapshot
-        .as_ref()
-        .map(|snapshot| leader_statuses(&launches, &snapshot.agents, snapshot.now))
-        .unwrap_or_default();
     let you = store
         .as_ref()
         .and_then(|store| {
@@ -1489,21 +1341,16 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     // compile to a workflow while the run it started still goes.
     let (workflow_runs, capacity, records) = if runs_workflows {
         let paths = StatePaths::for_project_root(&root)?;
-        let TaskRuns { records, ended } =
-            task_runs(&paths, &args.name, workflow_ledger.tasks.get(&args.name))?;
-        let capacity = list::capacity_waits(&records, &args.name, &root)
+        let TaskRuns { records, ended } = task_runs(&paths, bound)?;
+        let capacity = list::capacity_waits(&records, id, &root)
             .map(|(checkout, wait)| (checkout.to_path_buf(), wait))
             .collect();
         let specs = crate::cli::workflow_view::live_specs(&paths, &records);
         let mut rows = list::WorkflowRunRow::for_show(
             &records,
             &ended,
-            &args.name,
+            bound,
             &root,
-            workflow_ledger
-                .tasks
-                .get(&args.name)
-                .unwrap_or(&BTreeMap::new()),
             &specs,
             now_zoned.timestamp(),
         );
@@ -1525,7 +1372,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         (Vec::new(), BTreeMap::new(), records.unwrap_or_default())
     };
     let acting_at = history.acting().map(|acting| acting.record.at);
-    let in_progress = attention::run_in_progress(in_flight, &records, &args.name, &root, acting_at);
+    let in_progress = attention::run_in_progress(in_flight, &records, id, &root, acting_at);
     let view = ShowView {
         kept_worktrees: if entry.fresh_worktree.is_some() {
             kept_worktrees(&entry.resolved_root(), &args.name)
@@ -1533,7 +1380,9 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             Vec::new()
         },
         capacity,
-        strike_count: strikes::load().get(&key).copied().unwrap_or(0),
+        strike_count: task_records
+            .live(&key)
+            .map_or(0, |(_, record)| record.strikes),
         room_is_open,
         name: args.name,
         kind: task.kind(),
@@ -1544,12 +1393,10 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         records: history.fires,
         heard: history.heard,
         quiet: history.quiet,
-        launches,
         in_progress,
         backlog,
         condition: String::from_utf8(condition)?,
         subscriptions,
-        leader_statuses,
         you,
         booker,
         worktrees,
@@ -1600,7 +1447,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             booked_by: &'a [rimz::agents::LaunchedBy],
         }
         let json = ShowJson {
-            facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "launches": view.launches, "runs": view.records, "quiet": view.quiet, "heard": view.heard, "running": running, "workflow_runs": view.workflow_runs, "backlog": backlog }),
+            facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "runs": view.records, "quiet": view.quiet, "heard": view.heard, "running": running, "workflow_runs": view.workflow_runs, "backlog": backlog }),
             fresh_worktree: view.entry.fresh_worktree.as_deref(),
             kept_worktrees: view
                 .kept_worktrees
@@ -2190,8 +2037,14 @@ fn show_in_flight(args: &ShowArgs, root: &Path, in_flight: &InFlightRun) -> Resu
         kv.render(&mut out)?;
     }
     writeln!(out, "  stop with `rimz loop stop {}`", args.name)?;
-    let records =
-        run_log::task_history(&rimz::disk::paths::logs_dir(), &args.name, Some(root), None).fires;
+    let id = task_id(&args.name, None, Some(root));
+    let records = run_log::task_history(
+        &rimz::disk::paths::logs_dir(),
+        id.as_ref(),
+        Some(root),
+        None,
+    )
+    .fires;
     if !records.is_empty() && args.runs > 0 {
         writeln!(out)?;
         let attribution = refused_fire_attribution(&records);
@@ -2216,9 +2069,10 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     let root = entry
         .map(TaskEntry::resolved_root)
         .or_else(|| project_root_for_globals(globals));
+    let id = task_id(&args.name, task.as_ref(), root.as_deref());
     let history = run_log::task_history(
         &rimz::disk::paths::logs_dir(),
-        &args.name,
+        id.as_ref(),
         root.as_deref(),
         entry
             .and_then(|entry| entry.wait_meta.as_ref())
@@ -2245,7 +2099,7 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     let running = attention::run_in_progress(
         in_flight,
         records.as_ref().map_or(&[][..], |(_, records)| records),
-        &args.name,
+        id.as_ref(),
         root.as_deref().unwrap_or(Path::new("")),
         acting_at,
     )
@@ -2349,16 +2203,16 @@ struct TaskRuns {
 // release), and finished records or headers, without decoding another version's record.
 fn task_runs(
     paths: &StatePaths,
-    task: &str,
-    launches: Option<&BTreeMap<PathBuf, schedule::launch_ledger::WorkflowLaunchRecord>>,
+    task: Option<(&TaskId, &task_record::TaskRecord)>,
 ) -> Result<TaskRuns> {
     let mut records = Vec::new();
     let mut ended = Vec::new();
-    let remembered = launches
+    let remembered = task
         .into_iter()
-        .flat_map(|launches| launches.values())
-        .filter_map(|launch| launch.run.clone())
+        .flat_map(|(_, record)| record.marks.values())
+        .filter_map(|mark| mark.run.clone())
         .collect::<std::collections::BTreeSet<_>>();
+    let ran_for = |owner: &dyn Fn(&TaskId) -> bool| task.is_some_and(|(id, _)| owner(id));
     let live = rimz::store::workflow::live(paths)?
         .into_iter()
         .map(|run| (run.paths, Ok(run.class), true));
@@ -2369,7 +2223,7 @@ fn task_runs(
     for (home, class, live) in live.chain(finished) {
         match class {
             Ok(rimz::store::workflow::RunClass::Current(record))
-                if live || record.ran_for(task) || remembered.contains(&record.id) =>
+                if live || ran_for(&|id| record.ran_for(id)) || remembered.contains(&record.id) =>
             {
                 records.push(*record);
             }
@@ -2379,7 +2233,7 @@ fn task_runs(
                     .file_name()
                     .and_then(|name| name.to_str())
                     .and_then(|name| rimz::ids::WorkflowRunId::parse(name).ok())
-                    && (header.task.as_deref() == Some(task) || remembered.contains(&id))
+                    && (ran_for(&|task| header.ran_for(task)) || remembered.contains(&id))
                 {
                     ended.push((id, *header));
                 }

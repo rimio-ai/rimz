@@ -5,8 +5,8 @@ use crate::agents::{PermissionMode, WorkflowAttemptRef, WorkflowAttemptRole};
 use crate::config::WorktreeConfig;
 use crate::config::{TaskEntry, TaskTarget, Team};
 use crate::harness::schedule::attention::{Attention, BlockingTerm};
-use crate::harness::schedule::launch_ledger::WorkflowLaunchRecord;
-use crate::ids::{AgentKind, WorkspaceId};
+use crate::harness::schedule::task_record::FireMark;
+use crate::ids::{AgentKind, FireId, TaskId, WorkspaceId};
 
 fn link(id: &str) -> LaunchedBy {
     LaunchedBy {
@@ -283,12 +283,14 @@ fn facts_name_the_team_branch_fire_and_end() {
     )]);
     let run = WorkflowRunId::new();
     let at: Timestamp = "2026-11-13T10:00:00Z".parse().unwrap();
-    let ledger = WorkflowLaunchRecord {
+    let ledger = FireMark {
+        fire: FireId::new(&TaskId::new()),
         at,
+        booked_by: Vec::new(),
+        once: false,
         run: Some(run.clone()),
         scope: crate::store::workflow::ScopeKind::Project,
-        leader: None,
-        destination: None,
+        result: None,
     };
     let readings = BTreeMap::from([(
         "lang".to_owned(),
@@ -640,22 +642,19 @@ fn fire_run(
     record
 }
 
-fn ledger_of(task: &str, run: &crate::store::workflow::RunRecord) -> WorkflowLedger {
-    let mut ledger = WorkflowLedger::default();
-    ledger.tasks.insert(
+fn ledger_of(task: &str, run: &crate::store::workflow::RunRecord) -> BTreeMap<String, FireMark> {
+    BTreeMap::from([(
         task.to_owned(),
-        BTreeMap::from([(
-            run.scope.path.clone(),
-            WorkflowLaunchRecord {
-                at: run.created_at,
-                run: Some(run.id.clone()),
-                scope: crate::store::workflow::ScopeKind::Worktree,
-                leader: None,
-                destination: None,
-            },
-        )]),
-    );
-    ledger
+        FireMark {
+            fire: FireId::new(&TaskId::new()),
+            at: run.created_at,
+            booked_by: Vec::new(),
+            once: false,
+            run: Some(run.id.clone()),
+            scope: crate::store::workflow::ScopeKind::Worktree,
+            result: None,
+        },
+    )])
 }
 
 /// A linked checkout whose `.git` file leads to a RimZ marker naming `branch`.
@@ -727,7 +726,6 @@ fn a_consumed_one_shot_keeps_its_fired_entry_for_its_lifetime() {
         };
         consumed(
             &ledger,
-            &BTreeMap::new(),
             &TeamsConfig::default(),
             &records,
             &prior,
@@ -772,7 +770,6 @@ fn a_consumed_one_shot_keeps_its_fired_entry_for_its_lifetime() {
     );
 
     let removed = consumed(
-        &WorkflowLedger::default(),
         &BTreeMap::new(),
         &TeamsConfig::default(),
         &records(&runtime),
@@ -805,7 +802,7 @@ fn a_fresh_tree_fire_reads_its_branch_from_the_fire_checkout() {
     )]);
     let run = fire_run("spike", &root, &tree, true, None);
     let ledger = ledger_of("spike", &run);
-    let launch = ledger.tasks["spike"].values().next().cloned();
+    let launch = ledger.get("spike").cloned();
     let readings = BTreeMap::from([(
         "spike".to_owned(),
         TaskReading {
@@ -857,7 +854,7 @@ fn team_fire(
     entry: TaskEntry,
     run: &crate::store::workflow::RunRecord,
 ) -> (BTreeMap<String, LoadedTask>, BTreeMap<String, TaskReading>) {
-    let launch = ledger_of(task, run).tasks[task].values().next().cloned();
+    let launch = ledger_of(task, run).remove(task);
     (
         BTreeMap::from([(
             task.to_owned(),
@@ -1114,7 +1111,6 @@ fn a_consumed_named_worktree_fire_keeps_its_branch_and_worktree() {
     };
     let (kept, _) = consumed(
         &ledger,
-        &BTreeMap::new(),
         &TeamsConfig::default(),
         &records,
         &BookingsCache::default(),
@@ -1156,7 +1152,7 @@ fn a_consumed_entry_with_a_worktree_stays_until_merged_or_its_checkout_is_gone()
         ("treeless", None, None),
         ("fresh", None, Some(&fresh)),
     ];
-    let mut ledger = WorkflowLedger::default();
+    let mut ledger = BTreeMap::new();
     let mut workflows = Vec::new();
     let mut commands = BTreeMap::new();
     let mut prior = BookingsCache {
@@ -1168,7 +1164,7 @@ fn a_consumed_entry_with_a_worktree_stays_until_merged_or_its_checkout_is_gone()
             Some(tree) => fire_run(task, &root, tree, true, Some(past)),
             None => fire_run(task, &root, &root, false, Some(past)),
         };
-        ledger.tasks.extend(ledger_of(task, &run).tasks);
+        ledger.extend(ledger_of(task, &run));
         commands.insert(run.id.clone(), launch("coder", worktree));
         if task == "merged" {
             prior.bookings.push(BookingFacts {
@@ -1201,7 +1197,6 @@ fn a_consumed_entry_with_a_worktree_stays_until_merged_or_its_checkout_is_gone()
     };
     let (kept, gone) = consumed(
         &ledger,
-        &BTreeMap::new(),
         &TeamsConfig::default(),
         &records,
         &prior,
@@ -1470,7 +1465,7 @@ fn an_unnamed_tree_booking_reads_its_agents_tree_and_ends_once_it_is_gone() {
     let kept_tree = dir.path().join("generated-kept");
     std::fs::create_dir_all(&kept_tree).unwrap();
     let removed_tree = dir.path().join("generated-removed");
-    let mut ledger = WorkflowLedger::default();
+    let mut ledger = BTreeMap::new();
     let mut workflows = Vec::new();
     let mut commands = BTreeMap::new();
     let mut rows = Vec::new();
@@ -1480,7 +1475,7 @@ fn an_unnamed_tree_booking_reads_its_agents_tree_and_ends_once_it_is_gone() {
         ("no-agent", None),
     ] {
         let run = fire_run(task, &root, &root, false, Some(past));
-        ledger.tasks.extend(ledger_of(task, &run).tasks);
+        ledger.extend(ledger_of(task, &run));
         commands.insert(
             run.id.clone(),
             FireLaunch {
@@ -1508,7 +1503,6 @@ fn an_unnamed_tree_booking_reads_its_agents_tree_and_ends_once_it_is_gone() {
     };
     let (kept, gone) = consumed(
         &ledger,
-        &BTreeMap::new(),
         &TeamsConfig::default(),
         &records,
         &BookingsCache::default(),

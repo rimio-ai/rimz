@@ -35,9 +35,6 @@ pub mod fanout;
 pub mod fire;
 mod fires;
 pub mod instances;
-pub mod launch_ledger;
-mod launch_ledger_store;
-mod overlay_store;
 pub mod pending;
 pub(crate) mod probe;
 mod run_lock;
@@ -45,7 +42,11 @@ pub mod run_log;
 pub mod runner;
 pub mod signal;
 pub mod strikes;
+pub mod task_record;
+mod task_record_store;
 pub mod team;
+#[cfg(test)]
+mod test_homes;
 
 pub use fire::last_stamps;
 

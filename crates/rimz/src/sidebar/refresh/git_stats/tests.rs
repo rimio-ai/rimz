@@ -443,10 +443,10 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
     std::fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
     std::fs::write(&catalog_path, serde_json::to_vec(&tasks).unwrap()).unwrap();
     let catalog = crate::harness::schedule::catalog::TaskCatalog::load_lenient(Some(root.path()));
-    arming::disable(&catalog.visible()["disabled"].key("disabled"), None).unwrap();
+    arming::disable(&catalog.visible()["disabled"].binding("disabled"), None).unwrap();
     let paused = &catalog.visible()["paused"];
     arming::pause(
-        &paused.key("paused"),
+        &paused.binding("paused"),
         paused.source(),
         Timestamp::now()
             .checked_add(std::time::Duration::from_secs(3600))
@@ -536,10 +536,10 @@ fn live_forge_signal_tasks_hold_their_literal_branch_under_the_project_root() {
     std::fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
     std::fs::write(&catalog_path, serde_json::to_vec(&tasks).unwrap()).unwrap();
     let catalog = crate::harness::schedule::catalog::TaskCatalog::load_lenient(Some(root.path()));
-    arming::disable(&catalog.visible()["disabled"].key("disabled"), None).unwrap();
+    arming::disable(&catalog.visible()["disabled"].binding("disabled"), None).unwrap();
     let paused = &catalog.visible()["paused"];
     arming::pause(
-        &paused.key("paused"),
+        &paused.binding("paused"),
         paused.source(),
         Timestamp::now()
             .checked_add(std::time::Duration::from_secs(3600))

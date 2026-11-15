@@ -122,7 +122,7 @@ await test("inert gates", async () => {
   assert.equal(standalone.reads(), 0);
 });
 await test("arrival and identity", async () => {
-  for (const key of ["RIMZ_AGENT_ID", "RIMZ_AGENT_KIND", "RIMZ_AGENT_NAME", "RIMZ_AGENT_PROFILE", "RIMZ_AGENT_ROLE", "RIMZ_AGENT_MODEL", "RIMZ_AGENT_EFFORT", "RIMZ_AGENT_BUDGET", "RIMZ_AGENT_FUTURE", "RIMZ_HOOK_OWNER_KIND", "RIMZ_RUN_ID", "RIMZ_WORKFLOW_RUN", "RIMZ_TEAM", "RIMZ_LAUNCH_GROUP", "RIMZ_LAUNCH_ORDINAL", "RIMZ_RUNTIME_ENV", "RIMZ_LOOP_TASK"]) process.env[key] = "inherited";
+  for (const key of ["RIMZ_AGENT_ID", "RIMZ_AGENT_KIND", "RIMZ_AGENT_NAME", "RIMZ_AGENT_PROFILE", "RIMZ_AGENT_ROLE", "RIMZ_AGENT_MODEL", "RIMZ_AGENT_EFFORT", "RIMZ_AGENT_BUDGET", "RIMZ_AGENT_FUTURE", "RIMZ_HOOK_OWNER_KIND", "RIMZ_RUN_ID", "RIMZ_WORKFLOW_RUN", "RIMZ_TEAM", "RIMZ_LAUNCH_GROUP", "RIMZ_LAUNCH_ORDINAL", "RIMZ_RUNTIME_ENV", "RIMZ_LOOP_TASK", "RIMZ_LOOP_FIRE"]) process.env[key] = "inherited";
   process.env.RIMZ_CHANNEL = "#lane";
   process.env.TMUX_PANE = "%5";
   const f = fixture(); f.messages.set("A", [assistant(usage)]);

@@ -8,8 +8,10 @@ use jiff::Timestamp;
 
 use super::{
     ParsedTrigger, ScheduleErr, TaskAction, TaskActionErr, TaskShape,
-    arming::{self, ArmState, Arming, TaskKey},
+    arming::{self, ArmState, Arming},
     config_edit, instances, strikes,
+    task_record::{Binding, Scope},
+    task_record_store,
 };
 use crate::Store;
 use crate::config::{LoopConfig, MachineConfig, TaskEntry, Tasks};
@@ -86,7 +88,7 @@ pub fn load_worktree_pins() -> Result<Vec<WorktreePin>> {
     pins_from_sources(
         &workspaces_dir(),
         machine.tasks,
-        &arming::load(),
+        &arming::load()?,
         Timestamp::now(),
     )
 }
@@ -193,12 +195,17 @@ impl LoadedTask {
         self.shape.kind
     }
 
+    /// The binding key of this task's record: what arming, strike and fire views index by.
     pub fn key(&self, name: &str) -> String {
-        self.key_for_root(name, &self.entry().resolved_root())
+        self.binding(name).key()
     }
 
     pub fn key_for_root(&self, name: &str, root: &Path) -> String {
-        TaskKey::for_task(name, self.source(), root)
+        Binding::for_task(name, self.source(), root).key()
+    }
+
+    pub fn binding(&self, name: &str) -> Binding {
+        Binding::for_task(name, self.source(), &self.entry().resolved_root())
     }
 
     pub fn enable(
@@ -207,15 +214,15 @@ impl LoadedTask {
         observed: Option<&Arming>,
         now: Timestamp,
     ) -> Result<Option<Arming>> {
-        let key = self.key(name);
+        let binding = self.binding(name);
         let already = ArmState::resolve(observed, self.source(), now) == ArmState::Live
             && observed.is_none_or(|record| record.enabled && record.strikes.is_none());
         if already {
-            strikes::clear(&key)?;
+            strikes::clear(&binding)?;
             return Ok(None);
         }
-        let enabled = arming::enable(&key)?;
-        strikes::clear(&key)?;
+        let enabled = arming::enable(&binding)?;
+        strikes::clear(&binding)?;
         Ok(Some(enabled))
     }
 
@@ -241,7 +248,9 @@ pub struct TaskCatalog {
     visible: BTreeMap<String, LoadedTask>,
     runnable: BTreeMap<String, LoadedTask>,
     skipped_machine: Tasks,
-    overlay_keys: BTreeSet<String>,
+    /// The binding of every row the catalog read, skipped machine rows included: what gc
+    /// keeps a live task record for.
+    row_bindings: BTreeSet<Binding>,
     project_root: Option<PathBuf>,
 }
 
@@ -320,19 +329,19 @@ impl TaskCatalog {
         project: Option<(Tasks, TrustState)>,
         project_root: Option<&Path>,
     ) -> Self {
-        let mut overlay_keys = instances
+        let mut row_bindings = instances
             .0
             .iter()
             .map(|(name, entry)| {
-                TaskKey::for_task(name, TaskSource::Instance, &entry.resolved_root())
+                Binding::for_task(name, TaskSource::Instance, &entry.resolved_root())
             })
             .chain(machine.0.iter().map(|(name, entry)| {
-                TaskKey::for_task(name, TaskSource::Config, &entry.resolved_root())
+                Binding::for_task(name, TaskSource::Config, &entry.resolved_root())
             }))
             .collect::<BTreeSet<_>>();
         if let Some((tasks, state)) = &project {
-            overlay_keys.extend(tasks.0.iter().map(|(name, entry)| {
-                TaskKey::for_task(
+            row_bindings.extend(tasks.0.iter().map(|(name, entry)| {
+                Binding::for_task(
                     name,
                     TaskSource::Project { state: *state },
                     &entry.resolved_root(),
@@ -361,17 +370,17 @@ impl TaskCatalog {
             visible,
             runnable,
             skipped_machine: Tasks::default(),
-            overlay_keys,
+            row_bindings,
             project_root: project_root.map(Path::to_path_buf),
         }
     }
 
     fn with_skipped_machine(mut self, tasks: Tasks) -> Self {
-        self.overlay_keys.extend(
+        self.row_bindings.extend(
             tasks
                 .0
                 .iter()
-                .map(|(name, entry)| TaskKey::for_task(name, TaskSource::Config, &entry.root)),
+                .map(|(name, entry)| Binding::for_task(name, TaskSource::Config, &entry.root)),
         );
         self.skipped_machine = tasks;
         self
@@ -425,10 +434,10 @@ impl TaskCatalog {
         }
         let source = TaskSource::from_entry(entry);
         self.clear_task_state(name, &entry.resolved_root())?;
-        let key = TaskKey::for_task(name, source, &entry.resolved_root());
+        let binding = Binding::for_task(name, source, &entry.resolved_root());
         Ok(TaskMutation {
             changed: true,
-            cleared_overlays: clear_overlays(&key)?,
+            cleared_overlays: mint(&binding, None)?,
         })
     }
 
@@ -443,7 +452,19 @@ impl TaskCatalog {
         let source = TaskSource::Project {
             state: crate::trust::status(project_root)?.state,
         };
-        enable_project_overlays(name, source, project_root)
+        let enabled = Arming {
+            enabled: true,
+            at: Some(Timestamp::now()),
+            pause_until: None,
+            strikes: None,
+        };
+        Ok(TaskMutation {
+            changed: true,
+            cleared_overlays: mint(
+                &Binding::for_task(name, source, project_root),
+                Some(enabled),
+            )?,
+        })
     }
 
     pub fn remove(&self, name: &str) -> Result<TaskMutation> {
@@ -453,54 +474,32 @@ impl TaskCatalog {
             };
             return Ok(TaskMutation {
                 changed: config_edit::remove(config_edit::TaskStore::Machine, name)?,
-                cleared_overlays: clear_overlays(&TaskKey::for_task(
-                    name,
-                    TaskSource::Config,
-                    &entry.root,
-                ))?,
+                cleared_overlays: retire(
+                    &Binding::for_task(name, TaskSource::Config, &entry.root),
+                    false,
+                )?,
             });
         };
         let root = task.entry().resolved_root();
-        let records_workflows = task.entry().dedupes_checkout();
-        if records_workflows {
-            super::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?;
-        }
-        let key = task.key(name);
-        let cleared_overlays = match task.source() {
-            TaskSource::Instance => Some(clear_overlays(&key)?),
-            _ => None,
-        };
+        let binding = task.binding(name);
+        let id = super::task_record::load()?
+            .live(&binding.key())
+            .map(|(id, _)| id.clone());
         let changed = remove_definition(name, task)?;
-        if changed {
+        if changed && let Some(id) = &id {
             let paths = StatePaths::for_project_root(&root)?;
-            cancel_unacted_runs(&paths, &root, name, "loop task removed")?;
-            match super::launch_ledger_store::remove_workflows(&paths, name) {
-                Err(super::launch_ledger_store::LedgerWriteErr::Read(error))
-                    if !records_workflows =>
-                {
-                    tracing::warn!(
-                        task = name,
-                        root = %root.display(),
-                        %error,
-                        "cannot clear workflow launch memory for a task that records none"
-                    );
-                }
-                result => result?,
-            }
-            super::backlog_store::remove(&paths, name)?;
-            super::launch_ledger_store::remove_capacity(&paths, name)?;
-            crate::harness::workflow::reassign_task(&paths, name, None)?;
+            cancel_unacted_runs(&paths, &root, id, "loop task removed")?;
+            super::backlog_store::remove(&paths, id.as_str())?;
+            crate::harness::workflow::reassign_task(&paths, id)?;
         }
-        let cleared_overlays = match cleared_overlays {
-            Some(cleared) => cleared,
-            None => clear_overlays(&key)?,
-        };
         Ok(TaskMutation {
             changed,
-            cleared_overlays,
+            cleared_overlays: retire(&binding, false)?,
         })
     }
 
+    /// Rename a task's row and rebind its record; nothing else moves, since every other record
+    /// of the task is keyed by its id.
     pub fn rename(&self, name: &str, new_name: &str) -> Result<TaskMutation> {
         if self.visible.contains_key(new_name) || self.skipped_machine.0.contains_key(new_name) {
             bail!("loop task `{new_name}` already exists");
@@ -510,17 +509,15 @@ impl TaskCatalog {
                 return Ok(TaskMutation::default());
             };
             let changed = config_edit::rename(config_edit::TaskStore::Machine, name, new_name)?;
-            let old_key = TaskKey::for_task(name, TaskSource::Config, &entry.root);
-            let new_key = TaskKey::for_task(new_name, TaskSource::Config, &entry.root);
-            let cleared_arming = arming::rename(&old_key, &new_key)?;
-            let cleared_strikes = strikes::rename(&old_key, &new_key)?;
+            let rebound = rebind(
+                &Binding::for_task(name, TaskSource::Config, &entry.root),
+                Binding::for_task(new_name, TaskSource::Config, &entry.root),
+            )?;
             return Ok(TaskMutation {
                 changed,
-                cleared_overlays: cleared_arming || cleared_strikes,
+                cleared_overlays: rebound,
             });
         };
-        let root = task.entry().resolved_root();
-        let records_workflows = task.entry().dedupes_checkout();
         let changed = match task.source() {
             TaskSource::Config => {
                 config_edit::rename(config_edit::TaskStore::Machine, name, new_name)?
@@ -536,83 +533,85 @@ impl TaskCatalog {
                 new_name,
             )?,
         };
-        let old_key = task.key(name);
-        if changed {
-            match super::launch_ledger_store::rename_workflows(
-                &StatePaths::for_project_root(&root)?,
-                name,
-                new_name,
-            ) {
-                Err(super::launch_ledger_store::LedgerWriteErr::Read(error))
-                    if !records_workflows =>
-                {
-                    tracing::warn!(
-                        task = name,
-                        root = %root.display(),
-                        %error,
-                        "cannot move workflow launch memory for a task that records none"
-                    );
-                }
-                result => result?,
-            }
-            super::backlog_store::rename(&StatePaths::for_project_root(&root)?, name, new_name)?;
-            super::launch_ledger_store::rename_capacity(
-                &StatePaths::for_project_root(&root)?,
-                name,
-                new_name,
-            )?;
-            crate::harness::workflow::reassign_task(
-                &StatePaths::for_project_root(&root)?,
-                name,
-                Some(new_name),
-            )?;
-        }
-        let new_key = task.key(new_name);
-        let cleared_arming = arming::rename(&old_key, &new_key)?;
-        let cleared_strikes = strikes::rename(&old_key, &new_key)?;
         Ok(TaskMutation {
             changed,
-            cleared_overlays: cleared_arming || cleared_strikes,
+            cleared_overlays: rebind(&task.binding(name), task.binding(new_name))?,
         })
     }
 
-    /// Remove only the definition selected by catalog precedence. Arming and
-    /// strike overlays stay untouched because this is scheduled consumption,
-    /// not an interactive edit.
+    /// Remove only the definition selected by catalog precedence, and retire its record, a
+    /// delivery's too, so `loop logs <name>` still finds its history. Arming and strikes stay
+    /// with the retired record because this is scheduled consumption, not an interactive edit.
     pub(super) fn consume_scheduled(&self, name: &str) -> Result<TaskMutation> {
         let Some(task) = self.runnable.get(name) else {
             return Ok(TaskMutation::default());
         };
+        let changed = remove_definition(name, task)?;
+        retire(&task.binding(name), false)?;
         Ok(TaskMutation {
-            changed: remove_definition(name, task)?,
+            changed,
             cleared_overlays: false,
         })
     }
 
+    /// Before a task is replaced: cancel its live runs that have not acted and drop its
+    /// waiting triggers, at its new root and at the root it had.
     fn clear_task_state(&self, name: &str, root: &Path) -> Result<()> {
-        forget_unacted_runs(root, name)?;
-        super::backlog_store::remove(&StatePaths::for_project_root(root)?, name)?;
-        super::launch_ledger_store::remove_capacity(&StatePaths::for_project_root(root)?, name)?;
-        if let Some(task) = self.visible.get(name)
-            && task.entry().resolved_root() != root
-        {
-            forget_unacted_runs(&task.entry().resolved_root(), name)?;
-            super::backlog_store::remove(
-                &StatePaths::for_project_root(&task.entry().resolved_root())?,
-                name,
-            )?;
-            super::launch_ledger_store::remove_capacity(
-                &StatePaths::for_project_root(&task.entry().resolved_root())?,
-                name,
-            )?;
+        let Some(task) = self.visible.get(name) else {
+            return Ok(());
+        };
+        let records = super::task_record::load()?;
+        let Some((id, _)) = records.live(&task.key(name)) else {
+            return Ok(());
+        };
+        let old_root = task.entry().resolved_root();
+        let roots = if old_root == root {
+            vec![old_root]
+        } else {
+            vec![root.to_owned(), old_root]
+        };
+        for root in roots {
+            let paths = StatePaths::for_project_root(&root)?;
+            cancel_unacted_runs(&paths, &root, id, "loop task redefined")?;
+            super::backlog_store::remove(&paths, id.as_str())?;
         }
         Ok(())
     }
 
-    pub fn prune_orphan_overlays(&self) -> Result<usize> {
-        let scopes = TaskKey::known_scopes(self.project_root.as_deref());
-        Ok(arming::prune_orphans(&self.overlay_keys, &scopes)?
-            + strikes::prune_orphans(&self.overlay_keys, &scopes)?)
+    /// Prune the task record: retire a live record of the catalog's scopes whose row is gone,
+    /// drop a settled mark whose checkout is gone, and delete a retired record once every fire it
+    /// marked is recorded. Also removes the files the task record replaced.
+    pub fn prune_records(&self) -> Result<usize> {
+        let scopes = Scope::known(self.project_root.as_deref());
+        let now = Timestamp::now();
+        let pruned = task_record_store::mutate(|records| {
+            let before = records.clone();
+            for record in records.tasks.values_mut() {
+                if record.is_live()
+                    && scopes.contains(&record.binding.scope)
+                    && !self.row_bindings.contains(&record.binding)
+                {
+                    record.retired_at = Some(now);
+                }
+                record
+                    .marks
+                    .retain(|checkout, mark| mark.result.is_none() || checkout.is_dir());
+            }
+            records.tasks.retain(|_, record| {
+                record.is_live() || record.marks.values().any(|mark| mark.result.is_none())
+            });
+            before
+                .tasks
+                .iter()
+                .filter(|(id, record)| records.tasks.get(id) != Some(record))
+                .count()
+        })?;
+        let room = self
+            .project_root
+            .as_deref()
+            .map(StatePaths::for_project_root)
+            .transpose()?;
+        Ok(pruned + sweep_retired_files(room.as_ref()))
     }
 
     pub fn reap_dead_deliveries() -> Result<usize> {
@@ -696,13 +695,12 @@ impl TaskCatalog {
 fn cancel_unacted_runs(
     paths: &StatePaths,
     root: &Path,
-    name: &str,
+    task: &crate::ids::TaskId,
     reason: &str,
-) -> Result<Vec<crate::ids::WorkflowRunId>> {
-    let runs = crate::harness::workflow::unacted_task_runs(paths, name)?;
-    for run in &runs {
+) -> Result<()> {
+    for run in crate::harness::workflow::unacted_task_runs(paths, task)? {
         let mut args: Vec<std::ffi::OsString> = vec!["--root".into(), root.into()];
-        args.extend(crate::harness::workflow::cancel_args(run, reason));
+        args.extend(crate::harness::workflow::cancel_args(&run, reason));
         let spawned = RuntimePaths::for_state(paths)
             .map_err(anyhow::Error::from)
             .and_then(|runtime| {
@@ -711,25 +709,54 @@ fn cancel_unacted_runs(
             });
         if let Err(error) = spawned {
             tracing::warn!(
-                task = name,
+                %task,
                 %run,
                 error = %format!("{error:#}"),
                 "cannot cancel a run of a changed loop task"
             );
         }
     }
-    Ok(runs)
+    Ok(())
 }
 
-/// A redefinition cancels the runs that have not acted and forgets the checkouts they held, so
-/// the new definition starts there; a checkout whose run launched an agent stays remembered.
-fn forget_unacted_runs(root: &Path, name: &str) -> Result<()> {
-    let paths = StatePaths::for_project_root(root)?;
-    let runs = cancel_unacted_runs(&paths, root, name, "loop task redefined")?;
-    if !runs.is_empty() {
-        super::launch_ledger_store::forget_runs(&paths, name, &runs)?;
-    }
-    Ok(())
+/// The files the task record replaced: the machine's arming, strike and fire overlays, and a
+/// room's workflow launch memory and capacity waits, each with its lock.
+const RETIRED_MACHINE_FILES: [&str; 4] = [
+    "loop-arming",
+    "loop-strikes",
+    "loop-strike-runs",
+    "loop-fires",
+];
+const RETIRED_ROOM_FILES: [&str; 3] = [
+    "loop-workflow-launches",
+    "loop-capacity-waits",
+    "loop-launches",
+];
+
+fn sweep_retired_files(room: Option<&StatePaths>) -> usize {
+    let loops = crate::disk::paths::loops_dir();
+    let machine = RETIRED_MACHINE_FILES.iter().flat_map(|stem| {
+        [
+            loops.join(format!("{stem}.json")),
+            loops.join(format!("{stem}.lock")),
+        ]
+    });
+    let rooms = room.into_iter().flat_map(|paths| {
+        RETIRED_ROOM_FILES.iter().flat_map(move |stem| {
+            [
+                StatePaths::class_path(
+                    &paths.root,
+                    crate::disk::paths::Class::Records,
+                    format!("{stem}.json"),
+                ),
+                paths.lock_path(&format!("{stem}.lock")),
+            ]
+        })
+    });
+    machine
+        .chain(rooms)
+        .filter(|path| std::fs::remove_file(path).is_ok())
+        .count()
 }
 
 impl TaskSource {
@@ -780,25 +807,60 @@ fn merge_base(instances: Tasks, machine: Tasks) -> BTreeMap<String, LoadedTask> 
     tasks
 }
 
-fn clear_overlays(key: &str) -> Result<bool> {
-    let cleared_arming = arming::remove(key)?;
-    let cleared_strikes = strikes::remove(key)?;
-    Ok(cleared_arming || cleared_strikes)
+/// Mint a record for a task added over `binding`, retiring the one it replaces; whether that
+/// one held arming or strikes.
+fn mint(
+    binding: &Binding,
+    arming: Option<Arming>,
+) -> std::result::Result<bool, task_record_store::TaskStoreErr> {
+    task_record_store::mutate(|records| {
+        let cleared = records
+            .live(&binding.key())
+            .is_some_and(|(_, record)| record.arming.is_some() || record.strikes > 0);
+        let id = records.mint(binding, Timestamp::now());
+        if let Some(record) = records.get_mut(&id) {
+            record.arming = arming;
+        }
+        cleared
+    })
 }
 
-fn enable_project_overlays(
-    name: &str,
-    source: TaskSource,
-    project_root: &Path,
-) -> Result<TaskMutation> {
-    let key = TaskKey::for_task(name, source, project_root);
-    let cleared_arming = arming::load().contains_key(&key);
-    arming::enable(&key)?;
-    let cleared_strikes = strikes::clear(&key)?;
-    Ok(TaskMutation {
-        changed: true,
-        cleared_overlays: cleared_arming || cleared_strikes,
+/// Retire the record bound to `binding`, or delete it (a live record no row holds, under a
+/// name a new delivery takes); whether it held arming or strikes.
+pub(super) fn retire(
+    binding: &Binding,
+    delete: bool,
+) -> std::result::Result<bool, task_record_store::TaskStoreErr> {
+    let key = binding.key();
+    let holds = |records: &super::task_record::TaskRecords| {
+        records
+            .live(&key)
+            .is_some_and(|(_, record)| record.arming.is_some() || record.strikes > 0)
+    };
+    if super::task_record::load()?.live(&key).is_none() {
+        return Ok(false);
+    }
+    task_record_store::mutate(|records| {
+        let held = holds(records);
+        if delete {
+            records.delete(&key);
+        } else {
+            records.retire(&key, Timestamp::now());
+        }
+        held
     })
+}
+
+/// Move the record bound to `old` onto `new`; whether there was one.
+fn rebind(
+    old: &Binding,
+    new: Binding,
+) -> std::result::Result<bool, task_record_store::TaskStoreErr> {
+    let key = old.key();
+    if super::task_record::load()?.live(&key).is_none() {
+        return Ok(false);
+    }
+    task_record_store::mutate(|records| records.rebind(&key, new, Timestamp::now()))
 }
 
 fn remove_definition(name: &str, task: &LoadedTask) -> Result<bool> {
@@ -1040,7 +1102,7 @@ mod tests {
     }
 
     #[test]
-    fn foreign_machine_preserves_instance_and_both_overlay_keys() {
+    fn foreign_machine_preserves_instance_and_both_bindings() {
         let instance = task("instance");
         let mut machine = task("machine");
         machine.root = PathBuf::from("/other");
@@ -1059,7 +1121,7 @@ mod tests {
             (TaskSource::Instance, instance),
             (TaskSource::Config, machine),
         ] {
-            assert!(catalog.overlay_keys.contains(&TaskKey::for_task(
+            assert!(catalog.row_bindings.contains(&Binding::for_task(
                 "same",
                 source,
                 &entry.resolved_root(),
@@ -1068,7 +1130,7 @@ mod tests {
     }
 
     #[test]
-    fn skipped_machine_rows_keep_overlay_keys_for_gc() {
+    fn skipped_machine_rows_keep_their_bindings_for_gc() {
         let skipped = Tasks(BTreeMap::from([
             ("bare".to_owned(), TaskEntry::default()),
             (
@@ -1089,12 +1151,12 @@ mod tests {
 
         for name in ["bare", "relative"] {
             assert!(
-                catalog.overlay_keys.contains(&TaskKey::for_task(
+                catalog.row_bindings.contains(&Binding::for_task(
                     name,
                     TaskSource::Config,
                     Path::new("/repo"),
                 )),
-                "{name}: gc would prune the arming and strikes it keeps once its root is fixed"
+                "{name}: gc would prune the record it keeps once its root is fixed"
             );
         }
     }
@@ -1150,8 +1212,13 @@ mod tests {
             catalog.for_run("same").unwrap().entry.label.as_deref(),
             Some("project")
         );
-        assert!(catalog.overlay_keys.contains("machine::same"));
-        assert!(catalog.overlay_keys.contains(&TaskKey::for_task(
+        assert!(
+            catalog
+                .row_bindings
+                .iter()
+                .any(|binding| binding.key() == "machine::same")
+        );
+        assert!(catalog.row_bindings.contains(&Binding::for_task(
             "same",
             TaskSource::Project {
                 state: TrustState::Trusted,
@@ -1161,7 +1228,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_project_layer_keeps_its_overlay_scope() {
+    fn empty_project_layer_keeps_its_project_root() {
         let catalog = TaskCatalog::from_layers(
             Tasks::default(),
             Tasks::default(),

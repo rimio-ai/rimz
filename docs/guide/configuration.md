@@ -1157,7 +1157,7 @@ Earlier releases split RimZ across four XDG directories. RimZ reads only `~/.rim
 | `$XDG_RUNTIME_DIR/rimz/ws_<24hex>/` | `$XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/` |
 | `~/.local/state/rimz/shared/` | `~/.rimz/cache/providers/` |
 | `~/.local/state/rimz/*.log.jsonl` | `~/.rimz/logs/` |
-| `~/.local/state/rimz/loop-arming.json`, `loop-strikes.json` | `~/.rimz/loops/` |
+| the loop arming and strike files in `~/.local/state/rimz/` | not carried over: RimZ reads neither, so strike counts start at zero and a project task you had enabled needs `rimz loop enable <name>` again |
 | `~/.local/state/rimz/web-*.json` and the Zellij web config | `~/.rimz/web/` |
 | `~/.local/state/rimz/builds/` | `~/.rimz/builds/` |
 | `~/.local/share/rimz/accounts/` | `~/.rimz/accounts/` |

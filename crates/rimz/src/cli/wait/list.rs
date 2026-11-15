@@ -38,7 +38,7 @@ pub(super) fn pending_rows(
 ) -> Result<Vec<WakeRow>> {
     let root = &ctx.workspace.project_root;
     let catalog = TaskCatalog::load(Some(root))?;
-    let arming = arming::load();
+    let arming = arming::load()?;
     let now = jiff::Timestamp::now();
     let audit = ctx.store.audit_rows()?;
     let rows = audit.iter().collect::<Vec<_>>();
@@ -81,7 +81,7 @@ pub(super) fn pending_rows(
 fn room_rows(ctx: &Ctx, snapshot: &SidebarSnapshot) -> Result<Vec<WakeRow>> {
     let root = &ctx.workspace.project_root;
     let catalog = TaskCatalog::load_room(root)?;
-    let arming = arming::load();
+    let arming = arming::load()?;
     let now = jiff::Timestamp::now();
     let audit = ctx.store.audit_rows()?;
     let rows = audit.iter().collect::<Vec<_>>();

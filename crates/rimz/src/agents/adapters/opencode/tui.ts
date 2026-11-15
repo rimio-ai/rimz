@@ -107,7 +107,7 @@ function activate(ctx: Context, rimz: string): Cleanup {
       const env = { ...process.env };
       for (const key of Object.keys(env)) if (key.startsWith("RIMZ_AGENT_")) env[key] = "";
       for (const key of ["RIMZ_HOOK_OWNER_KIND", "RIMZ_RUN_ID", "RIMZ_WORKFLOW_RUN", "RIMZ_TEAM",
-        "RIMZ_LAUNCH_GROUP", "RIMZ_LAUNCH_ORDINAL", "RIMZ_RUNTIME_ENV", "RIMZ_LOOP_TASK"]) env[key] = "";
+        "RIMZ_LAUNCH_GROUP", "RIMZ_LAUNCH_ORDINAL", "RIMZ_RUNTIME_ENV", "RIMZ_LOOP_TASK", "RIMZ_LOOP_FIRE"]) env[key] = "";
       await new Promise<void>((finish) => {
         const child = spawn(rimz, ["hooks", "feed", "--source", "opencode"], {
           cwd: payload.cwd,

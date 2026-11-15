@@ -1,6 +1,36 @@
+use super::super::task_record::{Binding, FireMark, TaskRecord};
 use super::*;
+use crate::ids::{FireId, TaskId};
 use crate::store::workflow::RunEnding;
 use std::io::Write as _;
+
+/// Runs test `name` again in a private home where each of `tasks` is a machine task bound
+/// under its [`id`], since a view shows only the rows of a bound task: whether this is the
+/// parent, done.
+fn reexec_with_tasks(name: &str, tasks: &[&str]) -> bool {
+    if super::super::test_homes::reexec_with_private_homes(name) {
+        return true;
+    }
+    super::super::task_record_store::mutate(|records| {
+        for task in tasks {
+            let binding = Binding {
+                scope: super::super::task_record::Scope::Machine,
+                name: (*task).to_owned(),
+            };
+            records.tasks.insert(id(task), TaskRecord::new(binding));
+        }
+    })
+    .unwrap();
+    false
+}
+
+/// A fixed task id per name, so a row and the query that reads it agree.
+fn id(name: &str) -> TaskId {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut hasher);
+    TaskId::parse(&format!("task_{:032x}", u128::from(hasher.finish()))).unwrap()
+}
 
 #[test]
 fn holder_survives_the_codec_and_caps_without_changing_legacy_records() {
@@ -166,6 +196,12 @@ fn history_arming_cutoff_applies_to_fires_and_heard() {
 
 #[test]
 fn stats_counts_fires_not_heard_siblings() {
+    if reexec_with_tasks(
+        "harness::schedule::run_log::tests::stats_counts_fires_not_heard_siblings",
+        &["wait"],
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     append_to(dir.path(), &record("wait", 10, LoopRunResult::Completed));
     append_to(
@@ -235,13 +271,15 @@ fn skipped_check_cost_counts_and_old_check_rows_still_parse() {
         .unwrap()
         .to_zoned(jiff::tz::TimeZone::UTC);
     assert_eq!(
-        spend_on_local_day(&task_records(dir.path(), "guard", None), &now),
+        spend_on_local_day(&task_records(dir.path(), &id("guard"), None), &now),
         0.25
     );
 }
 
 fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
     LoopRunRecord {
+        task_id: Some(id(task)),
+        fire: None,
         kind: None,
         judge: Vec::new(),
         checkout: None,
@@ -336,6 +374,12 @@ fn acting_polarity_preserves_show_membership() {
 
 #[test]
 fn acting_and_heard_survive_skips_rotation_and_root_filtering() {
+    if reexec_with_tasks(
+        "harness::schedule::run_log::tests::acting_and_heard_survive_skips_rotation_and_root_filtering",
+        &["task", "only-heard"],
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let failed = record("task", 1, LoopRunResult::Failed);
     let completed = record("task", 2, LoopRunResult::Completed);
@@ -354,6 +398,7 @@ fn acting_and_heard_survive_skips_rotation_and_root_filtering() {
     let mut legacy_skip = record("task", 6, LoopRunResult::SignalSkipped);
     append_to(dir.path(), &legacy_skip);
     legacy_skip.task = "only-heard".into();
+    legacy_skip.task_id = Some(id("only-heard"));
     legacy_skip.signal = heard.signal.clone();
     append_to(dir.path(), &legacy_skip);
     let mut foreign = record("task", 7, LoopRunResult::Failed);
@@ -387,7 +432,7 @@ fn acting_and_heard_survive_skips_rotation_and_root_filtering() {
         task.acting,
         acting_run(&task_records(
             dir.path(),
-            "task",
+            &id("task"),
             Some(Path::new("/project"))
         ))
     );
@@ -395,22 +440,6 @@ fn acting_and_heard_survive_skips_rotation_and_root_filtering() {
     assert!(stats["only-heard"].heard.is_some());
     assert_eq!(stats["only-heard"].runs, 0);
     assert!(stats["only-heard"].last.is_none());
-}
-
-#[test]
-fn a_late_quiet_collection_counts_but_keeps_the_newer_last_fire() {
-    let fires = super::super::fires::load;
-    let key = format!("late-quiet-{}", crate::ids::WorkflowRunId::new());
-    for second in [20, 10] {
-        super::super::fires::note_quiet(&key, record("task", second, LoopRunResult::Completed))
-            .unwrap();
-    }
-    let quiet = fires()[&key].quiet.clone().unwrap();
-    assert_eq!(
-        (quiet.count, quiet.streak, quiet.last.at.as_second()),
-        (2, 2, 20)
-    );
-    super::super::fires::clear(&key).unwrap();
 }
 
 #[test]
@@ -496,7 +525,19 @@ fn start_failed_round_trips_and_has_no_spawn_exit_code() {
 
 #[test]
 fn scheduled_row_query_matches_task_root_mode_and_inclusive_time() {
+    if super::super::test_homes::reexec_with_private_homes(
+        "harness::schedule::run_log::tests::scheduled_row_query_matches_task_root_mode_and_inclusive_time",
+    ) {
+        return;
+    }
     let root = Path::new("/project");
+    let binding = Binding::for_task("task", super::super::catalog::TaskSource::Instance, root);
+    super::super::task_record_store::mutate(|records| {
+        records
+            .tasks
+            .insert(id("task"), TaskRecord::new(binding.clone()))
+    })
+    .unwrap();
     let since = Timestamp::from_second(10).expect("timestamp");
     for (task, recorded_root, second, mode, expected) in [
         ("task", root, 10, Some(LoopRunMode::Scheduled), true),
@@ -516,8 +557,7 @@ fn scheduled_row_query_matches_task_root_mode_and_inclusive_time() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(!has_scheduled_row_since(
             dir.path(),
-            "task",
-            "task",
+            &binding.key(),
             root,
             None,
             since
@@ -527,7 +567,7 @@ fn scheduled_row_query_matches_task_root_mode_and_inclusive_time() {
         row.mode = mode;
         append_to(dir.path(), &row);
         assert_eq!(
-            has_scheduled_row_since(dir.path(), "task", "task", root, None, since),
+            has_scheduled_row_since(dir.path(), &binding.key(), root, None, since),
             expected,
             "{row:?}"
         );
@@ -536,6 +576,12 @@ fn scheduled_row_query_matches_task_root_mode_and_inclusive_time() {
 
 #[test]
 fn append_then_stats_round_trips_records() {
+    if reexec_with_tasks(
+        "harness::schedule::run_log::tests::append_then_stats_round_trips_records",
+        &["wait"],
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
 
     append_to(dir.path(), &record("wait", 10, LoopRunResult::Delivered));
@@ -655,8 +701,8 @@ fn task_records_folds_log_generations() {
     crate::disk::rotating::append(&log_path(dir.path()), 1, &old);
     crate::disk::rotating::append(&log_path(dir.path()), 1, &new);
 
-    assert_eq!(task_records(dir.path(), "morning", None), vec![old]);
-    assert_eq!(task_records(dir.path(), "other", None), vec![new]);
+    assert_eq!(task_records(dir.path(), &id("morning"), None), vec![old]);
+    assert_eq!(task_records(dir.path(), &id("other"), None), vec![new]);
 }
 
 #[test]
@@ -701,6 +747,12 @@ fn cost_summary_uses_the_last_ten_costed_runs() {
 
 #[test]
 fn stats_accumulates_only_same_local_day_spend() {
+    if reexec_with_tasks(
+        "harness::schedule::run_log::tests::stats_accumulates_only_same_local_day_spend",
+        &["wait"],
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let now = "2026-06-02T12:00:00-04:00[America/New_York]"
         .parse::<Zoned>()
@@ -752,6 +804,12 @@ fn held_stats_match_fresh_across_appends_rotation_and_roots() {
 
 #[test]
 fn held_stats_reset_on_local_day_and_time_zone_change() {
+    if reexec_with_tasks(
+        "harness::schedule::run_log::tests::held_stats_reset_on_local_day_and_time_zone_change",
+        &["task"],
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let root = Path::new("/room");
     let mut row = record("task", 0, LoopRunResult::Completed);
@@ -779,6 +837,12 @@ fn held_stats_reset_on_local_day_and_time_zone_change() {
 
 #[test]
 fn stats_folds_rotated_sibling_and_keeps_newest_last() {
+    if reexec_with_tasks(
+        "harness::schedule::run_log::tests::stats_folds_rotated_sibling_and_keeps_newest_last",
+        &["wait"],
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     crate::disk::rotating::append(
         &log_path(dir.path()),
@@ -809,6 +873,12 @@ fn stats_folds_rotated_sibling_and_keeps_newest_last() {
 
 #[test]
 fn stats_tracks_matching_result_streak_across_rotated_and_current_files() {
+    if reexec_with_tasks(
+        "harness::schedule::run_log::tests::stats_tracks_matching_result_streak_across_rotated_and_current_files",
+        &["wait"],
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     crate::disk::rotating::append(
         &log_path(dir.path()),
@@ -868,7 +938,10 @@ fn new_fields_round_trip_and_task_records_filter() {
     append_to(dir.path(), &with_detail);
     append_to(dir.path(), &record("other", 11, LoopRunResult::Completed));
 
-    assert_eq!(task_records(dir.path(), "wait", None), vec![with_detail]);
+    assert_eq!(
+        task_records(dir.path(), &id("wait"), None),
+        vec![with_detail]
+    );
 }
 
 #[test]
@@ -963,7 +1036,7 @@ fn append_caps_forensic_fields() {
     });
 
     append_to(dir.path(), &record);
-    let stored = task_records(dir.path(), "wait", None)
+    let stored = task_records(dir.path(), &id("wait"), None)
         .pop()
         .expect("stored record");
     assert_eq!(stored.error.expect("error").len(), ERROR_CAP);
@@ -980,6 +1053,12 @@ fn append_caps_forensic_fields() {
 
 #[test]
 fn history_drops_named_launch_rows_and_keeps_each_runs_first_report() {
+    if reexec_with_tasks(
+        "harness::schedule::run_log::tests::history_drops_named_launch_rows_and_keeps_each_runs_first_report",
+        &["wf"],
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let run = |second, result, acted: Option<bool>| {
         let mut row = record("wf", second, result);
@@ -998,7 +1077,7 @@ fn history_drops_named_launch_rows_and_keeps_each_runs_first_report() {
         append_to(dir.path(), row);
     }
     assert_eq!(
-        task_records(dir.path(), "wf", None),
+        task_records(dir.path(), &id("wf"), None),
         vec![skipped, report],
         "a launch row naming a run is dropped, early or late, a skip naming the run is kept, \
          and the run's first report wins"
@@ -1033,8 +1112,10 @@ fn a_report_row_carries_the_facts_its_fire_sealed() {
     });
     let sealed = fire_facts(&launch);
     let run = crate::ids::WorkflowRunId::new();
+    let fire = FireId::new(&id("wf"));
     let facts = ReportFacts {
         task: "wf",
+        fire: Some(&fire),
         run: &run,
         manual: false,
         created_at: Timestamp::from_second(1).unwrap(),
@@ -1049,6 +1130,7 @@ fn a_report_row_carries_the_facts_its_fire_sealed() {
     assert_eq!(row.result, LoopRunResult::Failed);
     assert_eq!(row.at.as_second(), 3);
     assert_eq!(row.run_id, Some(run.to_string()));
+    assert_eq!((row.task_id, row.fire), (Some(id("wf")), Some(fire)));
     assert_eq!(
         (
             row.absorbed,
@@ -1082,6 +1164,24 @@ fn ended(
     }
 }
 
+/// Mint a live record for the catalog task `name` under `root`, as `loop add` does: its
+/// binding key and id.
+fn bind(root: &Path, name: &str) -> (String, TaskId) {
+    let catalog = super::super::catalog::TaskCatalog::load_lenient(Some(root));
+    let binding = catalog.for_run(name).unwrap().binding(name);
+    let id =
+        super::super::task_record_store::mutate(|records| records.mint(&binding, Timestamp::now()))
+            .unwrap();
+    (binding.key(), id)
+}
+
+fn quiet_of(key: &str) -> Option<QuietFires> {
+    super::super::task_record::load()
+        .unwrap()
+        .live(key)
+        .and_then(|(_, record)| record.quiet.clone())
+}
+
 #[test]
 fn a_workflow_report_strikes_or_resets_once_per_run() {
     let root = tempfile::tempdir().unwrap();
@@ -1100,12 +1200,11 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         ..crate::config::TaskEntry::default()
     };
     super::super::instances::insert(&state, "nightly", &entry).unwrap();
-    let catalog = super::super::catalog::TaskCatalog::load_lenient(Some(root.path()));
-    let key = catalog.for_run("nightly").unwrap().key("nightly");
+    let (key, nightly) = bind(root.path(), "nightly");
     let run = |state: &str, visits: serde_json::Value| -> crate::store::workflow::RunRecord {
         serde_json::from_value(serde_json::json!({
             "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"nightly",
-            "origin":"inline", "task":"nightly", "spec_dir":"/spec",
+            "origin":"inline", "task":"nightly", "loop_fire":FireId::new(&nightly), "spec_dir":"/spec",
             "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
             "created_at":"2026-01-01T00:00:00Z", "state":state, "node":"agent",
             "entered_at":"2026-01-01T00:00:00Z", "visits":visits, "visit_grant":0,
@@ -1118,16 +1217,12 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     for _ in 0..2 {
         report_run(&failed, &ended(RunEnding::Failed, Some(0.75), true), None).unwrap();
         assert_eq!(
-            super::super::strikes::load().get(&key),
+            super::super::strikes::load().unwrap().get(&key),
             Some(&1),
             "a re-reported run strikes once"
         );
     }
-    let rows = task_records(
-        &crate::disk::paths::logs_dir(),
-        "nightly",
-        Some(root.path()),
-    );
+    let rows = task_records(&crate::disk::paths::logs_dir(), &nightly, Some(root.path()));
     assert_eq!(rows.len(), 1, "{rows:?}");
     let row = &rows[0];
     assert_eq!(
@@ -1153,15 +1248,11 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     )
     .unwrap();
     assert_eq!(
-        super::super::strikes::load().get(&key),
+        super::super::strikes::load().unwrap().get(&key),
         None,
         "a done run resets"
     );
-    let rows = task_records(
-        &crate::disk::paths::logs_dir(),
-        "nightly",
-        Some(root.path()),
-    );
+    let rows = task_records(&crate::disk::paths::logs_dir(), &nightly, Some(root.path()));
     assert_eq!(rows.last().map(|row| row.acted), Some(Some(false)));
     report_run(
         &run("canceled", serde_json::json!({})),
@@ -1171,7 +1262,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     .unwrap();
     report_run(&failed, &ended(RunEnding::Failed, None, true), None).unwrap();
     assert_eq!(
-        super::super::strikes::load().get(&key),
+        super::super::strikes::load().unwrap().get(&key),
         None,
         "cancel is neutral"
     );
@@ -1179,18 +1270,12 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     // A quiet run collected again after a crash before its delete counts once, with another
     // task's quiet collection between the two.
     super::super::instances::insert(&state, "other", &entry).unwrap();
-    let catalog = super::super::catalog::TaskCatalog::load_lenient(Some(root.path()));
-    let other_key = catalog.for_run("other").unwrap().key("other");
+    let (other_key, other_id) = bind(root.path(), "other");
     let quiet = run("done", serde_json::json!({}));
     let mut other = run("done", serde_json::json!({}));
     other.task = Some("other".into());
-    let logged = || {
-        task_records(
-            &crate::disk::paths::logs_dir(),
-            "nightly",
-            Some(root.path()),
-        )
-    };
+    other.loop_fire = Some(FireId::new(&other_id));
+    let logged = || task_records(&crate::disk::paths::logs_dir(), &nightly, Some(root.path()));
     let before = logged().len();
     let outcome = crate::store::workflow::RunOutcome {
         quiet: true,
@@ -1202,29 +1287,14 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
             Ok(Collected::Forgotten)
         ));
     }
-    let fires = super::super::fires::load();
-    let count = |key: &str| {
-        fires
-            .get(key)
-            .and_then(|fires| fires.quiet.as_ref())
-            .map(|q| q.count)
-    };
-    assert_eq!(
-        (count(&key), count(&other_key)),
-        (Some(1), Some(1)),
-        "{fires:?}"
-    );
+    let count = |key: &str| quiet_of(key).map(|q| q.count);
+    assert_eq!((count(&key), count(&other_key)), (Some(1), Some(1)));
     assert_eq!(logged().len(), before, "a quiet run appends no row");
 
     // A run this RimZ ended as stranded, which decodes once ended, reports one row and moves
     // neither a strike nor the quiet streak, even with an outcome that says quiet.
-    let quiet_before = super::super::fires::load().get(&key).cloned();
-    assert!(
-        quiet_before
-            .as_ref()
-            .and_then(|fires| fires.quiet.as_ref())
-            .is_some_and(|q| q.streak > 0)
-    );
+    let quiet_before = quiet_of(&key);
+    assert!(quiet_before.as_ref().is_some_and(|q| q.streak > 0));
     for outcome in [ended(RunEnding::Failed, None, false), outcome] {
         let mut stranded = run("failed", serde_json::json!({}));
         stranded.stranded = true;
@@ -1240,11 +1310,11 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     }
     assert_eq!(logged().len(), before + 2);
     assert_eq!(
-        super::super::strikes::load().get(&key),
+        super::super::strikes::load().unwrap().get(&key),
         None,
         "a stranded run strikes no task"
     );
-    assert_eq!(super::super::fires::load().get(&key).cloned(), quiet_before);
+    assert_eq!(quiet_of(&key), quiet_before);
 }
 
 #[test]
@@ -1265,11 +1335,10 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
         ..crate::config::TaskEntry::default()
     };
     super::super::instances::insert(&state, "nightly", &entry).unwrap();
-    let catalog = super::super::catalog::TaskCatalog::load_lenient(Some(root.path()));
-    let key = catalog.for_run("nightly").unwrap().key("nightly");
+    let (key, nightly) = bind(root.path(), "nightly");
     let failed: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
         "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"nightly",
-        "origin":"inline", "task":"nightly", "spec_dir":"/spec",
+        "origin":"inline", "task":"nightly", "loop_fire":FireId::new(&nightly), "spec_dir":"/spec",
         "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
         "created_at":"2026-01-01T00:00:00Z", "state":"failed", "node":"@failed",
         "entered_at":"2026-01-01T00:59:59Z", "visits":{}, "visit_grant":0,
@@ -1282,11 +1351,7 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
         reason: Some("2 agents open".into()),
     };
     report_run(&failed, &ended(gave_up, None, false), None).unwrap();
-    let rows = task_records(
-        &crate::disk::paths::logs_dir(),
-        "nightly",
-        Some(root.path()),
-    );
+    let rows = task_records(&crate::disk::paths::logs_dir(), &nightly, Some(root.path()));
     assert_eq!(
         rows.iter()
             .map(|row| (row.result, row.error.as_deref()))
@@ -1297,16 +1362,23 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
         )]
     );
     assert_eq!(
-        super::super::strikes::load().get(&key),
+        super::super::strikes::load().unwrap().get(&key),
         None,
         "a capacity give-up never strikes"
     );
 }
 
 #[test]
-fn only_a_done_run_keeps_its_checkout_in_launch_memory() {
+fn only_a_done_run_keeps_its_checkout_held() {
     let root = tempfile::tempdir().unwrap();
-    let state = crate::StatePaths::for_project_root(root.path()).unwrap();
+    let binding = Binding::for_task(
+        "resident",
+        super::super::catalog::TaskSource::Instance,
+        root.path(),
+    );
+    let task =
+        super::super::task_record_store::mutate(|records| records.mint(&binding, Timestamp::now()))
+            .unwrap();
     let checkout = root.path().join("checkout");
     std::fs::create_dir_all(&checkout).unwrap();
     for (run_state, acted, kept) in [
@@ -1317,9 +1389,10 @@ fn only_a_done_run_keeps_its_checkout_in_launch_memory() {
         ("done", true, true),
         ("canceled", true, false),
     ] {
+        let mark = FireMark::open(&task, crate::store::workflow::ScopeKind::Worktree);
         let run: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
             "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"resident",
-            "origin":"inline", "task":"resident", "spec_dir":"/spec",
+            "origin":"inline", "task":"resident", "loop_fire":mark.fire, "spec_dir":"/spec",
             "scope":{"kind":"worktree","path":checkout}, "project_root":root.path(),
             "created_at":"2026-01-01T00:00:00Z", "state":run_state, "node":"agent",
             "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
@@ -1327,19 +1400,10 @@ fn only_a_done_run_keeps_its_checkout_in_launch_memory() {
             "loop_report":"owed"
         }))
         .unwrap();
-        super::super::launch_ledger_store::record_workflow(
-            &state,
-            "resident",
-            &checkout,
-            super::super::launch_ledger::WorkflowLaunchRecord {
-                at: jiff::Timestamp::now(),
-                run: Some(run.id.clone()),
-                scope: crate::store::workflow::ScopeKind::Worktree,
-                leader: None,
-                destination: None,
-            },
-            false,
-        )
+        super::super::task_record_store::mutate(|records| {
+            let record = records.get_mut(&task).unwrap();
+            record.marks.insert(checkout.clone(), mark.clone());
+        })
         .unwrap();
         let ending = match run_state {
             "done" => RunEnding::Done,
@@ -1347,12 +1411,9 @@ fn only_a_done_run_keeps_its_checkout_in_launch_memory() {
             _ => RunEnding::Canceled,
         };
         report_run(&run, &ended(ending, None, acted), None).unwrap();
-        let memory = super::super::launch_ledger::load_workflows(&state).unwrap();
+        let records = super::super::task_record::load().unwrap();
         assert_eq!(
-            memory
-                .tasks
-                .get("resident")
-                .is_some_and(|launches| launches.contains_key(&checkout)),
+            records.get(&task).unwrap().marks[&checkout].holds_checkout(),
             kept,
             "{run_state} acted={acted}"
         );

@@ -66,7 +66,7 @@ The second example launches `recon`, a team you have defined or installed ([Team
 
 The task's timeout bounds the whole command, so it also ends an owned agent. To give the agent its own shorter `--timeout`, or to hold its pane open after the turn with `--keep`, add `-p`, as in the `sweep` example: both flags parse only beside it.
 
-Either way, RimZ appends one line to the launched agent's prompt saying which task fired and why, such as ``Rule `ci-fix` fired here. ci.failed on feature #42 @88824c2``. An unattended agent then knows what happened without asking. A plain command reads the same line from the `RIMZ_LOOP_TRIGGER` environment variable, and `RIMZ_LOOP_TASK` holds the task's name. A clock fire or a manual fire carries no such line.
+Either way, RimZ appends one line to the launched agent's prompt saying which task fired and why, such as ``Rule `ci-fix` fired here. ci.failed on feature #42 @88824c2``. An unattended agent then knows what happened without asking. A plain command reads the same line from the `RIMZ_LOOP_TRIGGER` environment variable, `RIMZ_LOOP_TASK` holds the task's name, and `RIMZ_LOOP_FIRE` the id of this one fire. A clock fire or a manual fire carries no such line.
 
 A [workflow](./workflows.md) starts the same way, with `rimz workflow run` as the command. That command returns once the run starts, and the run continues on its own.
 
@@ -278,7 +278,7 @@ A `--fresh-worktree` task gets a new tree for each fire: the same `git worktree 
 
 ### What a fire leaves behind
 
-Each fire runs its command as one [workflow run](./workflows.md#start-runs-from-a-loop). A failed or canceled fire, and every one-shot fire, appends one line to `~/.rimz/logs/loop-runs.log.jsonl` when its command ends, and `rimz workflow show <run>` keeps its record. A repeating task's quiet fire leaves only the task's quiet summary in `~/.rimz/loops/loop-fires.json`.
+Each fire runs its command as one [workflow run](./workflows.md#start-runs-from-a-loop). A failed or canceled fire, and every one-shot fire, appends one line to `~/.rimz/logs/loop-runs.log.jsonl` when its command ends, and `rimz workflow show <run>` keeps its record. A repeating task's quiet fire leaves only the task's quiet summary in `~/.rimz/loops/tasks.json`.
 
 ## Wake a running agent
 

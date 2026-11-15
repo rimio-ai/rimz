@@ -3,10 +3,25 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::*;
+use crate::ids::{FireId, TaskId};
 
 thread_local! {
     /// How many times this thread's [`read_room`] calls listed the room's workflow runs.
     pub(super) static RUN_LISTINGS: Cell<usize> = const { Cell::new(0) };
+    static TASK_IDS: std::cell::RefCell<BTreeMap<String, TaskId>> = const {
+        std::cell::RefCell::new(BTreeMap::new())
+    };
+}
+
+/// This test's id for task `name`: one per name, fresh per test, so tests in other processes
+/// that share the unit-test home never bind the same record.
+fn id_of(name: &str) -> TaskId {
+    TASK_IDS.with(|ids| {
+        ids.borrow_mut()
+            .entry(name.to_owned())
+            .or_insert_with(TaskId::new)
+            .clone()
+    })
 }
 
 fn tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
@@ -168,6 +183,18 @@ fn seeded_room(
     )
     .unwrap();
     super::super::instances::insert(&state, name, &entry(&root)).unwrap();
+    let binding = super::super::task_record::Binding::for_task(
+        name,
+        super::super::catalog::TaskSource::Instance,
+        &root,
+    );
+    super::super::task_record_store::mutate(|records| {
+        records.tasks.insert(
+            id_of(name),
+            super::super::task_record::TaskRecord::new(binding),
+        )
+    })
+    .unwrap();
     // The clock pass's first sight, before the forge probe, so the readings count.
     let stamps = runtime.lane_path("loop-fire.json");
     std::fs::create_dir_all(stamps.parent().unwrap()).unwrap();
@@ -407,18 +434,11 @@ fn a_fired_booking_with_a_gone_checkout_is_finished() {
             false
         )
     );
-    let ledger = launch_ledger::workflow_path(&room.1);
-    std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
-    std::fs::write(
-        &ledger,
-        serde_json::to_vec(&serde_json::json!({
-            "version": 2,
-            "tasks": {name: {checkout.to_string_lossy().as_ref(): {
-                "at": Timestamp::now(), "scope": "worktree",
-            }}},
-        }))
-        .unwrap(),
-    )
+    super::super::task_record_store::mutate(|records| {
+        let task = id_of(name);
+        let mark = FireMark::open(&task, crate::store::workflow::ScopeKind::Worktree);
+        records.get_mut(&task).unwrap().marks.insert(checkout, mark);
+    })
     .unwrap();
     let fired = read_seeded(&room, name, true);
     assert_eq!((fired.attention, fired.fired), (None, true));
@@ -430,7 +450,8 @@ type Room = (PathBuf, StatePaths, RuntimePaths);
 fn run_record(task: &str, project_root: &Path, state: &str, created_at: Timestamp) -> RunRecord {
     serde_json::from_value(serde_json::json!({
         "version": crate::store::workflow::VERSION, "id": crate::ids::WorkflowRunId::new(),
-        "workflow": "review", "task": task, "spec_dir": "/definitions/review",
+        "workflow": "review", "task": task, "loop_fire": FireId::new(&id_of(task)),
+        "spec_dir": "/definitions/review",
         "scope": {"kind": "worktree", "path": project_root},
         "project_root": project_root, "created_at": created_at, "entered_at": created_at,
         "state": state, "node": "check", "visits": {}, "visit_grant": 0,
@@ -572,7 +593,7 @@ fn a_run_in_progress_is_the_lock_or_an_active_run_after_the_acting_result() {
         run_record("task", root, "active", after(2)),
     ];
     let read = |lock: Option<u32>, runs: &[RunRecord], acting_at| {
-        run_in_progress(lock, runs, "task", root, acting_at)
+        run_in_progress(lock, runs, Some(&id_of("task")), root, acting_at)
     };
     assert_eq!(
         read(None, std::slice::from_ref(&waiting), Some(acting_at)),

@@ -13,14 +13,14 @@ use serde::Serialize;
 use crate::config::TaskEntry;
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::harness::when::{self, CiSource, Verdict, WhenExpr, WindowReadings};
-use crate::ids::HoldKind;
+use crate::ids::{HoldKind, TaskId};
 use crate::store::workflow::{RunRecord, RunState, Wait};
 use crate::theme::fmt::{age_label, checkout_name, one_line};
 
-use super::arming::{self, ArmState, DisabledReason};
+use super::arming::{ArmState, DisabledReason};
 use super::catalog::{LoadedTask, TaskCatalog};
-use super::launch_ledger::{self, WorkflowLaunchRecord};
 use super::run_log::{LoopRunStats, RunPolarity};
+use super::task_record::{self, FireMark, TaskRecords};
 use super::{
     ParsedTrigger, TaskActionKind, TaskKind, TaskTiming, TaskTimingState, Trigger, fire, run_lock,
     signal, strikes,
@@ -244,19 +244,22 @@ pub fn since_wait_armed(entry: Option<&TaskEntry>, at: Timestamp) -> bool {
 }
 
 /// Whether a one-off has launched into its checkout: the rule that puts it under DONE.
-pub fn fired(task: &LoadedTask, launch: Option<&WorkflowLaunchRecord>) -> bool {
+pub fn fired(task: &LoadedTask, launch: Option<&FireMark>) -> bool {
     task.kind() == TaskKind::OneOff && launch.is_some()
 }
 
-/// The active runs of `task` in `root` waiting on capacity, by the checkout each is scoped to.
+/// The active runs of task `task` in `root` waiting on capacity, by the checkout each is scoped
+/// to; none for a task with no record.
 pub fn capacity_waits<'a>(
     runs: &'a [RunRecord],
-    task: &'a str,
+    task: Option<&'a TaskId>,
     root: &'a Path,
 ) -> impl Iterator<Item = (&'a Path, &'a Wait)> + 'a {
     runs.iter()
         .filter(move |run| {
-            run.started_by(task) && run.project_root == root && run.state == RunState::Active
+            task.is_some_and(|task| run.started_by(task))
+                && run.project_root == root
+                && run.state == RunState::Active
         })
         .filter_map(|run| {
             let wait = run
@@ -293,8 +296,8 @@ impl<H> InProgress<H> {
 }
 
 /// Whether task `task` has a run in progress in `root`: its held run lock, as the caller read
-/// it, or else an active workflow run of the task, since a fire's run outlives its runner and
-/// the lock. With an acting result since the row was armed (recorded at `acting_at`), only a
+/// it, or else an active workflow run of the task (none for a task with no record), since a
+/// fire's run outlives its runner and the lock. With an acting result since the row was armed (recorded at `acting_at`), only a
 /// run created after it counts: a run's report stamps its record at the run's end, so a run
 /// created at or before that instant (an `each_worktree` sibling) is not in progress. With
 /// none (a first fire, a history of skips or refusals), every active run counts. A parked
@@ -303,7 +306,7 @@ impl<H> InProgress<H> {
 pub fn run_in_progress<H>(
     lock: Option<H>,
     runs: &[RunRecord],
-    task: &str,
+    task: Option<&TaskId>,
     root: &Path,
     acting_at: Option<Timestamp>,
 ) -> Option<InProgress<H>> {
@@ -312,7 +315,7 @@ pub fn run_in_progress<H>(
     }
     runs.iter()
         .filter(|run| {
-            run.ran_for(task)
+            task.is_some_and(|task| run.ran_for(task))
                 && run.project_root == root
                 && run.state == RunState::Active
                 && acting_at.is_none_or(|at| run.created_at > at)
@@ -328,6 +331,22 @@ pub struct RoomReadings<'a> {
     windows: WindowReadings<'a>,
     states: BTreeMap<String, when::WhenState>,
     stamps: BTreeMap<String, Timestamp>,
+    records: TaskRecords,
+}
+
+/// A task's runtime stamp (`loop-fire.json`, `loop-when.json`) as the planner reads it: under the
+/// task id of the live record bound to `key` (a [`super::task_record::Binding::key`]), else under
+/// its name, what an older RimZ, or this one before the task was bound, wrote.
+pub fn stamp<'a, T>(
+    stamps: &'a BTreeMap<String, T>,
+    records: &TaskRecords,
+    key: &str,
+    name: &str,
+) -> Option<&'a T> {
+    records
+        .live(key)
+        .and_then(|(id, _)| stamps.get(id.as_str()))
+        .or_else(|| stamps.get(name))
 }
 
 impl<'a> RoomReadings<'a> {
@@ -338,13 +357,15 @@ impl<'a> RoomReadings<'a> {
             windows: WindowReadings::new(runtime, now),
             states: runtime.map(fire::last_when_states).unwrap_or_default(),
             stamps: runtime.map(fire::last_stamps).unwrap_or_default(),
+            records: task_record::load().unwrap_or_default(),
         }
     }
 
-    /// Task `name`'s condition read at `scope` under the freshness rule firing applies.
+    /// Task `name`'s condition, bound to `key`, read at `scope` under the freshness rule firing
+    /// applies.
     fn verdict(
         &self,
-        name: &str,
+        (key, name): (&str, &str),
         entry: &TaskEntry,
         scope: &Path,
         expr: &WhenExpr,
@@ -362,27 +383,29 @@ impl<'a> RoomReadings<'a> {
             expr,
             scope,
             self.source.as_ref(),
-            self.stamps.get(name).copied(),
+            stamp(&self.stamps, &self.records, key, name).copied(),
             Some(now),
             true,
         )
     }
 
-    /// `timing` with a condition trigger's reading folded in; any other trigger as given.
+    /// Task `name`'s `timing`, its record bound to `key`, with a condition trigger's reading
+    /// folded in; any other trigger as given.
     pub fn observe(
         &self,
-        name: &str,
+        (key, name): (&str, &str),
         entry: &TaskEntry,
         scope: &Path,
         timing: TaskTiming,
         now: Timestamp,
     ) -> TaskTiming {
-        self.observe_blocking(name, entry, scope, timing, now).0
+        self.observe_blocking((key, name), entry, scope, timing, now)
+            .0
     }
 
     fn observe_blocking(
         &self,
-        name: &str,
+        (key, name): (&str, &str),
         entry: &TaskEntry,
         scope: &Path,
         timing: TaskTiming,
@@ -395,7 +418,7 @@ impl<'a> RoomReadings<'a> {
         else {
             return (timing, None, Vec::new());
         };
-        let verdict = self.verdict(name, entry, scope, expr, now);
+        let verdict = self.verdict((key, name), entry, scope, expr, now);
         let blocking = (verdict.truth != Some(true))
             .then(|| BlockingTerm::of(expr, &verdict, self.source.as_ref(), scope));
         let mut unmet = Vec::new();
@@ -414,7 +437,7 @@ impl<'a> RoomReadings<'a> {
         };
         let no_forge = self.no_forge(expr, &unread, scope);
         let timing = timing
-            .with_condition(&verdict, self.states.get(name), now)
+            .with_condition(&verdict, stamp(&self.states, &self.records, key, name), now)
             .with_unread(unread, no_forge);
         (timing, blocking, unmet)
     }
@@ -499,8 +522,8 @@ pub struct TaskReading {
     /// The key of every unmet term of a waiting condition trigger, each once, in the
     /// condition's order; empty when nothing blocks.
     pub unmet: Vec<String>,
-    /// The launch the ledger records for a fired task.
-    pub launch: Option<WorkflowLaunchRecord>,
+    /// The fire mark that holds a fired task's checkout.
+    pub launch: Option<FireMark>,
 }
 
 /// The facts a reader cannot take from the room's paths.
@@ -513,10 +536,11 @@ pub struct ReadContext<'a> {
 }
 
 /// The verdict of every visible task of the room at `root`, whose state and runtime trees
-/// the caller names, by task name. Each input (the catalog, the workflow runs, the launch
-/// ledger, the condition readings, the run locks, arming, strikes) is read once per call,
-/// however many tasks the room holds. Machine-wide records (the catalog's machine rows,
-/// arming, strikes) are read where every loop reader reads them.
+/// the caller names, by task name. Each input (the catalog, the workflow runs, the task record,
+/// the condition readings, the run locks) is read once per call, however many tasks the room
+/// holds. Machine-wide records (the catalog's machine rows, the task record) are read where
+/// every loop reader reads them; an unreadable task record reads as empty here, and
+/// `loop list` and `rimz doctor` name it.
 pub fn read_room(
     root: &Path,
     state: &StatePaths,
@@ -549,19 +573,10 @@ pub fn read_catalog(
         .map(|(name, _)| name.as_str())
         .collect::<Vec<_>>();
     let stamps = fire::last_stamps(runtime);
-    let arming = arming::load();
-    let strikes = strikes::load();
+    let records = task_record::load().unwrap_or_default();
     let readings = RoomReadings::new(Some(runtime), open, now.timestamp());
     let workflows = list_runs(state);
-    let ledger = if tasks
-        .iter()
-        .any(|(_, task)| task.entry().dedupes_checkout())
-    {
-        launch_ledger::load_workflows(state).unwrap_or_default()
-    } else {
-        Default::default()
-    };
-    let running = run_lock::held_tasks(runtime, &names).unwrap_or_default();
+    let running = run_lock::held_tasks(runtime, &records, &names).unwrap_or_default();
     tasks
         .into_iter()
         .map(|(name, task)| {
@@ -572,24 +587,26 @@ pub fn read_catalog(
                 .map(|_| entry.run_dir())
                 .unwrap_or_else(|| root.to_path_buf());
             let key = task.key_for_root(name, root);
+            let record = records.live(&key);
+            let id = record.map(|(id, _)| id);
             let timing = TaskTiming::evaluate(
                 task.trigger(),
                 task.source(),
-                stamps.get(name).copied(),
-                arming.get(&key),
+                stamp(&stamps, &records, &key, name).copied(),
+                record.and_then(|(_, record)| record.arming.as_ref()),
                 now,
             );
             let (timing, blocking, unmet) =
-                readings.observe_blocking(name, entry, &run_dir, timing, now.timestamp());
+                readings.observe_blocking((&key, name), entry, &run_dir, timing, now.timestamp());
             let acting = stats
                 .get(name)
                 .and_then(|stats| stats.acting.as_ref())
                 .filter(|acting| since_wait_armed(Some(entry), acting.record.at));
             let exit = acting.and_then(|acting| acting.record.exit_label());
-            let launch = launch_ledger::launched(entry, name, &run_dir, &ledger);
+            let launch = records.launched(entry, &key, &run_dir);
             let fired = fired(task, launch);
             let facts = Facts {
-                holds: capacity_waits(&workflows, name, root)
+                holds: capacity_waits(&workflows, id, root)
                     .map(|(_, wait)| Hold::of_wait(wait))
                     .collect(),
                 task: Some(TaskFacts {
@@ -600,7 +617,7 @@ pub fn read_catalog(
                     in_progress: run_in_progress(
                         running.contains(name.as_str()).then_some(()),
                         &workflows,
-                        name,
+                        id,
                         root,
                         acting.map(|acting| acting.record.at),
                     )
@@ -608,7 +625,7 @@ pub fn read_catalog(
                     disabled: matches!(timing.arm_state(), ArmState::Disabled(_)),
                     last_failed: acting.is_some_and(|acting| acting.polarity != RunPolarity::Good),
                     exit: exit.as_deref(),
-                    strikes: strikes.get(&key).copied().unwrap_or_default(),
+                    strikes: record.map_or(0, |(_, record)| record.strikes),
                     watcher_alive: signal::watcher_info(runtime, name).ok().flatten().is_some(),
                     you: false,
                 }),
@@ -616,7 +633,9 @@ pub fn read_catalog(
             let mut attention = decide(&facts, now.timestamp());
             if parked_overrides(attention.as_ref().map(|(cause, _)| *cause)) {
                 let mut parked = workflows.iter().filter(|run| {
-                    run.started_by(name) && run.project_root == root && run.park.is_some()
+                    id.is_some_and(|id| run.started_by(id))
+                        && run.project_root == root
+                        && run.park.is_some()
                 });
                 if let Some(first) = parked.next() {
                     let (text, tail) =

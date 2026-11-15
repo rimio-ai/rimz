@@ -1,6 +1,5 @@
 use std::fs::File;
 use std::path::Path;
-use std::process::Command;
 
 use super::*;
 use crate::disk::lease::assert_waits_for_gate;
@@ -33,11 +32,11 @@ fn backlog_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
     .unwrap()
 }
 
-fn seed_backlog(root: &Path) {
+fn seed_backlog(root: &Path, task: &TaskId) {
     let paths = StatePaths::for_project_root(root).unwrap();
     crate::disk::atomic::write_temp_then_rename(
         &super::super::backlog::path(&paths),
-        &serde_json::json!({"version":1, "tasks":{"pending":{"triggers":[{"arrived_at":Timestamp::now(),"signal":null,"absorbed":0}]}}})
+        &serde_json::json!({"version":1, "tasks":{task.as_str():{"triggers":[{"arrived_at":Timestamp::now(),"signal":null,"absorbed":0}]}}})
     ).unwrap();
 }
 
@@ -78,7 +77,7 @@ fn terminal_records_name_the_lock_that_refused_other_fires() {
         assert_eq!(done.record.run_lock, Some(info));
         let recorded = run_log::task_records(
             &crate::disk::paths::logs_dir(),
-            "pending",
+            &fire.task_id,
             Some(root.path()),
         );
         assert_eq!(recorded.last().unwrap().run_lock, Some(info));
@@ -150,7 +149,11 @@ fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
                 );
                 assert_eq!(done.record.result, LoopRunResult::Completed);
                 assert_eq!(done.transition, RunTransition::Recorded);
-                assert!(!super::super::strikes::load().contains_key(&fire.task.key(name)));
+                assert!(
+                    !super::super::strikes::load()
+                        .unwrap()
+                        .contains_key(&fire.task.key(name))
+                );
             }
         }
     }
@@ -182,7 +185,7 @@ fn reconciliation_keeps_firing_order_on_acquisition_and_after_admission() {
             fire.prepare_run_lock().unwrap();
         }
         let mut locked = LockedBacklog::acquire(&paths).unwrap();
-        locked.record.tasks.insert("pending".into(), serde_json::from_value(serde_json::json!({
+        locked.record.tasks.insert(fire.task_id.to_string(), serde_json::from_value(serde_json::json!({
             "triggers": [{"arrived_at": Timestamp::from_second(waiting_time).unwrap(),
                 "signal": {"name": "trunk.moved", "payload": {"from": waiting_from, "to": waiting_to}},
                 "absorbed": 0}]
@@ -250,7 +253,7 @@ fn stop_marks_retype_the_holder_once_and_replacements_never_strike() {
             locked
                 .record
                 .tasks
-                .entry("pending".into())
+                .entry(fire.task_id.to_string())
                 .or_default()
                 .stopping = Some(backlog::StopMark {
                 pid: info.pid,
@@ -276,7 +279,10 @@ fn stop_marks_retype_the_holder_once_and_replacements_never_strike() {
                 })
             );
             assert!(
-                !backlog::load(&paths).unwrap().tasks.contains_key("pending"),
+                !backlog::load(&paths)
+                    .unwrap()
+                    .tasks
+                    .contains_key(fire.task_id.as_str()),
                 "the recording runner must clear its mark"
             );
             assert!(
@@ -292,8 +298,8 @@ fn arrival_reprobes_a_released_lock_and_absorbs_the_waiting_slot() {
     let root = tempfile::tempdir().unwrap();
     record_room(root.path()).unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    seed_backlog(root.path());
     let mut fire = backlog_fire(root.path(), &catalog);
+    seed_backlog(root.path(), &fire.task_id);
     assert!(fire.prepare_run_lock().unwrap().is_none());
     assert!(
         fire.run_lock.is_some(),
@@ -316,8 +322,9 @@ fn release_unlocks_under_the_backlog_lock_and_spawns_only_when_triggers_wait() {
         fire.mode = LoopRunMode::Manual;
         fire.prepare_run_lock().unwrap();
         if pending {
-            seed_backlog(root.path());
+            seed_backlog(root.path(), &fire.task_id);
         }
+        let lock_file = run_lock_file_name(fire.task_id.as_str(), None);
         let mut spawns = 0;
         fire.release_run_lock_with(|_, _, _| {
             spawns += 1;
@@ -329,10 +336,8 @@ fn release_unlocks_under_the_backlog_lock_and_spawns_only_when_triggers_wait() {
                 .is_none()
             );
             assert!(matches!(
-                probe_run_lock_path(
-                    &run_lock_path("loop-run-pending.lock", &fire_entry(root.path())).unwrap()
-                )
-                .unwrap(),
+                probe_run_lock_path(&run_lock_path(&lock_file, &fire_entry(root.path())).unwrap())
+                    .unwrap(),
                 RunLockState::Held(_)
             ));
             Ok(())
@@ -361,10 +366,11 @@ fn a_cold_check_observes_the_run_lock_before_it_can_execute() {
     let runtime = RuntimePaths::for_state(&paths).unwrap();
     let mut fire = backlog_fire(root.path(), &catalog);
     fire.entry.overlap = None;
+    let task = fire.task_id.clone();
     let mut checked = false;
     fire.prepare(&mut |_| {
         checked = true;
-        let path = runtime.lock_path(run_lock_file_name("pending", None));
+        let path = runtime.lock_path(run_lock_file_name(task.as_str(), None));
         assert!(
             matches!(probe_run_lock_path(&path).unwrap(), RunLockState::Held(_)),
             "a cold check must already own the run lock"
@@ -380,19 +386,24 @@ fn a_drainer_claims_nothing_while_held_then_pops_exactly_one_when_free() {
     let root = tempfile::tempdir().unwrap();
     record_room(root.path()).unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    seed_backlog(root.path());
-    let lock_path = run_lock_path("loop-run-pending.lock", &fire_entry(root.path())).unwrap();
+    let mut fire = backlog_fire(root.path(), &catalog);
+    seed_backlog(root.path(), &fire.task_id);
+    let lock_path = run_lock_path(
+        &run_lock_file_name(fire.task_id.as_str(), None),
+        &fire_entry(root.path()),
+    )
+    .unwrap();
     let RunLockAttempt::Acquired(held) =
         acquire_run_lock_file(&lock_path, Some(TaskKind::Routine), None).unwrap()
     else {
         panic!("fixture takes lock")
     };
-    let mut fire = backlog_fire(root.path(), &catalog);
     assert!(!fire.take_backlog().unwrap());
     assert!(!fire.finished, "held drainer writes no row");
     drop(held);
     let paths = StatePaths::for_project_root(root.path()).unwrap();
-    let arrived_at = backlog::load(&paths).unwrap().tasks["pending"].triggers[0].arrived_at;
+    let arrived_at =
+        backlog::load(&paths).unwrap().tasks[fire.task_id.as_str()].triggers[0].arrived_at;
     assert!(
         fire.take_backlog().unwrap(),
         "free drainer must claim waiting work"
@@ -411,18 +422,25 @@ fn record_room(root: &Path) -> Result<()> {
 
 #[test]
 fn scheduled_workflow_rechecks_launch_memory_under_early_and_late_run_locks() {
+    // A machine task's record is shared by every test process.
+    if super::super::test_homes::reexec_with_private_homes(
+        "harness::schedule::runner::tests::scheduled_workflow_rechecks_launch_memory_under_early_and_late_run_locks",
+    ) {
+        return;
+    }
     let mut outcomes = Vec::new();
     for late in [false, true] {
         let root = tempfile::tempdir().unwrap();
-        let paths = StatePaths::for_project_root(root.path()).unwrap();
         let seed = || {
-            crate::disk::atomic::write_temp_then_rename(
-                &super::super::launch_ledger::workflow_path(&paths),
-                &serde_json::json!({"version":1,"tasks":{"land":{root.path().to_str().unwrap():{
-                    "at":Timestamp::now(), "run":crate::ids::WorkflowRunId::new(),
-                    "scope":"worktree"
-                }}}}),
-            )
+            let binding =
+                task_record::Binding::for_task("land", catalog::TaskSource::Config, root.path());
+            task_record_store::mutate(|records| {
+                let (task, record) = records.bind(&binding);
+                record.marks.insert(
+                    root.path().to_owned(),
+                    FireMark::open(&task, crate::store::workflow::ScopeKind::Worktree),
+                );
+            })
             .unwrap();
         };
         if !late {
@@ -1471,56 +1489,11 @@ fn a_fresh_tree_no_run_took_over_is_removed_with_the_fire() {
     assert_eq!(marker.loop_task.as_deref(), Some("nightly"));
 }
 
-/// Takes a fire to a created run only in a re-exec of `name` with private homes: a created run
-/// writes the room and the machine's loop state, and every test process shares the unit-test
-/// home. Returns whether this is the parent, done.
-fn reexec_with_private_homes(name: &str) -> bool {
-    const CHILD: &str = "RIMZ_TEST_FIRE_PROMPT_CHILD";
-    if std::env::var_os(CHILD).is_some() {
-        return false;
-    }
-    // Under /tmp so the runtime root's socket paths stay short.
-    let home = tempfile::Builder::new()
-        .prefix("rimz-fire-prompt-")
-        .tempdir_in("/tmp")
-        .unwrap();
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args(["--exact", name, "--nocapture"])
-        .env(CHILD, "1")
-        .env("HOME", home.path())
-        .env("CLAUDE_CONFIG_DIR", home.path().join("claude"))
-        .env_remove("RIMZ_CLAUDE_SETTINGS");
-    for (key, leaf) in [
-        ("RIMZ_HOME", ".rimz"),
-        ("XDG_CONFIG_HOME", "config"),
-        ("XDG_DATA_HOME", "data"),
-        ("XDG_CACHE_HOME", "cache"),
-        ("XDG_STATE_HOME", "state"),
-        ("XDG_RUNTIME_DIR", "runtime"),
-    ] {
-        let path = home.path().join(leaf);
-        std::fs::create_dir_all(&path).unwrap();
-        command
-            .env(key, &path)
-            .env(format!("RIMZ_UNIT_TEST_{key}"), path);
-    }
-    let output = command.output().unwrap();
-    assert!(
-        output.status.success(),
-        "{name} failed in its re-exec: {}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-    true
-}
-
-fn seed_deploy_trigger(root: &Path, name: &str, env: &str, arrived_at: Timestamp) {
+fn seed_deploy_trigger(root: &Path, task: &TaskId, env: &str, arrived_at: Timestamp) {
     let paths = StatePaths::for_project_root(root).unwrap();
     crate::disk::atomic::write_temp_then_rename(
         &backlog::path(&paths),
-        &serde_json::json!({"version": 1, "tasks": {name: {"triggers": [{
+        &serde_json::json!({"version": 1, "tasks": {task.as_str(): {"triggers": [{
             "arrived_at": arrived_at,
             "signal": {"name": "deploy.done", "payload": {"env": env}},
             "absorbed": 0
@@ -1577,13 +1550,14 @@ fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwit
     )
     .unwrap();
     let at = |offset: i64| Timestamp::from_second(now.as_second() + offset).unwrap();
+    let task = fire.task_id.clone();
     if switch == TriggerSwitch::RunLock {
-        seed_deploy_trigger(root.path(), name, "a", at(-1));
+        seed_deploy_trigger(root.path(), &task, "a", at(-1));
     }
     let plan = fire
         .prepare(&mut |_| {
             if switch == TriggerSwitch::Reconcile {
-                seed_deploy_trigger(root.path(), name, "c", at(1));
+                seed_deploy_trigger(root.path(), &task, "c", at(1));
             }
             Ok(())
         })
@@ -1622,7 +1596,7 @@ fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwit
 #[test]
 fn a_queued_fire_seals_the_prompt_of_the_waiting_trigger_it_serves() {
     let name = "harness::schedule::runner::tests::a_queued_fire_seals_the_prompt_of_the_waiting_trigger_it_serves";
-    if reexec_with_private_homes(name) {
+    if super::super::test_homes::reexec_with_private_homes(name) {
         return;
     }
     assert_sealed_prompt_names_the_served_trigger("queued", TriggerSwitch::RunLock, "a");
@@ -1631,7 +1605,7 @@ fn a_queued_fire_seals_the_prompt_of_the_waiting_trigger_it_serves() {
 #[test]
 fn a_coalesced_fire_seals_the_prompt_of_the_newer_trigger_it_serves() {
     let name = "harness::schedule::runner::tests::a_coalesced_fire_seals_the_prompt_of_the_newer_trigger_it_serves";
-    if reexec_with_private_homes(name) {
+    if super::super::test_homes::reexec_with_private_homes(name) {
         return;
     }
     assert_sealed_prompt_names_the_served_trigger("coalesced", TriggerSwitch::Reconcile, "c");
@@ -1640,28 +1614,37 @@ fn a_coalesced_fire_seals_the_prompt_of_the_newer_trigger_it_serves() {
 #[test]
 fn a_fire_with_nothing_waiting_seals_the_prompt_of_its_arrival() {
     let name = "harness::schedule::runner::tests::a_fire_with_nothing_waiting_seals_the_prompt_of_its_arrival";
-    if reexec_with_private_homes(name) {
+    if super::super::test_homes::reexec_with_private_homes(name) {
         return;
     }
     assert_sealed_prompt_names_the_served_trigger("arrival", TriggerSwitch::None, "b");
 }
 
-/// A booked one-off launch command's fire is remembered, so the sidebar's bookings lane can
-/// rebuild its fired entry once the fire consumed the row; a row that is no booking, or one
-/// that repeats, remembers none unless it dedupes its checkout.
+/// Every fire's mark names its run and who booked the row, so the sidebar's bookings lane can
+/// rebuild a booked launch's fired entry once the fire consumed the row; only a row that dedupes
+/// its checkout marks it held.
 #[test]
-fn a_booked_one_off_launch_command_remembers_its_run() {
+fn a_fire_mark_names_its_run_and_its_booker() {
     let launch = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect();
     let booker = crate::agents::LaunchedBy {
         kind: crate::ids::AgentKind::new_unchecked("claude"),
         agent_id: "booker".into(),
     };
-    let cases: [(&str, TaskEntry, bool); 4] = [
+    let cases: [(&str, TaskEntry, bool); 5] = [
         (
             "booked",
             TaskEntry {
                 command: launch(&["rimz", "agents", "coder", "--detach"]),
                 booked_by: vec![booker.clone()],
+                ..TaskEntry::default()
+            },
+            false,
+        ),
+        (
+            "deduped",
+            TaskEntry {
+                command: launch(&["true"]),
+                once_per_checkout: Some(true),
                 ..TaskEntry::default()
             },
             true,
@@ -1695,7 +1678,7 @@ fn a_booked_one_off_launch_command_remembers_its_run() {
             false,
         ),
     ];
-    for (name, entry, remembered) in cases {
+    for (name, entry, dedupes) in cases {
         let root = tempfile::tempdir().unwrap();
         let root = root.path().canonicalize().unwrap();
         record_room(&root).unwrap();
@@ -1717,9 +1700,7 @@ fn a_booked_one_off_launch_command_remembers_its_run() {
             Instant::now(),
         )
         .unwrap();
-        let state = StatePaths::for_project_root(&root).unwrap();
         let run = crate::ids::WorkflowRunId::new();
-        // A live run, so the launcher's recheck finds nothing collected to forget.
         let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
             "version":crate::store::workflow::VERSION, "id":run, "workflow":name,
             "origin":"inline", "task":name,
@@ -1729,24 +1710,15 @@ fn a_booked_one_off_launch_command_remembers_its_run() {
             "deadline_fired":false, "next_seq":1, "loop_report":"owed"
         }))
         .unwrap();
-        let paths = state.workflow(&run);
-        std::fs::create_dir_all(paths.record.parent().unwrap()).unwrap();
-        let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-        crate::store::workflow::write(&paths, &record, &guard).unwrap();
-        drop(guard);
+        let (fire_id, _) = fire.open_fire().unwrap();
+        assert_eq!(fire.note_launched(&fire_id, &record), None, "{name}");
+        let records = task_record::load().unwrap();
+        let mark = &records.get(&fire.task_id).unwrap().marks[&fire.launch_checkout()];
         assert_eq!(
-            fire.record_workflow_launch(
-                &state,
-                &run,
-                crate::store::workflow::ScopeKind::Worktree,
-                Timestamp::now(),
-                false,
-            ),
-            None,
+            (&mark.fire, mark.run.as_ref(), &mark.booked_by, mark.once),
+            (&fire_id, Some(&run), &fire.entry.booked_by, dedupes),
             "{name}"
         );
-        let ledger = super::super::launch_ledger::load_workflows(&state).unwrap();
-        assert_eq!(ledger.tasks.contains_key(name), remembered, "{name}");
     }
 }
 

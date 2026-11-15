@@ -2591,6 +2591,12 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) ->
             unavailable(tally, Severity::Warning, &hold.text, &fix),
         );
     }
+    if let Some(record) = &loop_tasks.record_error {
+        checks.push(
+            "task record",
+            counted_verdict(tally, Severity::Problem, &record.error, &record.fix),
+        );
+    }
     checks.render(w)?;
     if loop_tasks.tasks.is_empty() {
         return writeln!(w, "  {}", paint(palette::faint(), "none configured"));

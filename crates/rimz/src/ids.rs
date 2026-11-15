@@ -147,7 +147,7 @@ impl fmt::Display for ViewId {
 }
 
 /// `ws_<24 hex chars>` — SHA-256-of-canonical-project-root.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct WorkspaceId(String);
 
@@ -788,6 +788,110 @@ impl PartialOrd for WorkflowRunId {
 impl Ord for WorkflowRunId {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.0.cmp(&other.0)
+    }
+}
+
+uuid_v7_id!(
+    TaskId,
+    "task",
+    "A loop task's identity, minted by `rimz loop add` and kept across a rename."
+);
+
+impl PartialOrd for TaskId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TaskId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+/// One fire of a loop task: `fire_<the task's 32 hex>_<32 hex>`, so the stamp names its task
+/// with no lookup.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FireId(String);
+
+impl FireId {
+    const PREFIX: &'static str = "fire";
+
+    pub fn new(task: &TaskId) -> Self {
+        Self(format!(
+            "{}_{}_{}",
+            Self::PREFIX,
+            task.short_hex(),
+            Uuid::now_v7().simple()
+        ))
+    }
+
+    pub fn parse(value: &str) -> Result<Self, InvalidUuidId> {
+        let invalid = || InvalidUuidId {
+            kind: "FireId",
+            prefix: Self::PREFIX,
+            value: value.to_owned(),
+        };
+        let rest = value
+            .strip_prefix(Self::PREFIX)
+            .and_then(|rest| rest.strip_prefix('_'))
+            .ok_or_else(invalid)?;
+        let (task, fire) = rest.split_once('_').ok_or_else(invalid)?;
+        validate_uuid_id(&format!("task_{task}"), "task", "TaskId").map_err(|_| invalid())?;
+        validate_uuid_id(&format!("fire_{fire}"), Self::PREFIX, "FireId").map_err(|_| invalid())?;
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The task this fire belongs to.
+    pub fn task(&self) -> TaskId {
+        // `new` and `parse` guarantee `fire_<32 hex>_<32 hex>`.
+        TaskId(format!(
+            "task_{}",
+            &self.0[Self::PREFIX.len() + 1..Self::PREFIX.len() + 33]
+        ))
+    }
+}
+
+impl TaskId {
+    fn short_hex(&self) -> &str {
+        &self.0["task_".len()..]
+    }
+}
+
+impl fmt::Display for FireId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for FireId {
+    type Err = InvalidUuidId;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+impl Serialize for FireId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for FireId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
     }
 }
 

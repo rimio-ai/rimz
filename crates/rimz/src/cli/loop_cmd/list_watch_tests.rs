@@ -373,26 +373,26 @@ fn order_is_attention_running_clocks_rest_then_held() {
     );
 }
 
+fn mark(at: Timestamp) -> rimz::harness::schedule::task_record::FireMark {
+    rimz::harness::schedule::task_record::FireMark {
+        fire: rimz::ids::FireId::new(&rimz::ids::TaskId::new()),
+        at,
+        booked_by: Vec::new(),
+        once: true,
+        run: None,
+        scope: rimz::store::workflow::ScopeKind::Worktree,
+        result: None,
+    }
+}
+
 #[test]
 fn done_fold_shares_retired_and_launched_history_not_running_rows() {
     let mut launched = row("launched");
     launched.section = Section::Done;
-    launched.launch = Some(launch_ledger::WorkflowLaunchRecord {
-        at: now() - SignedDuration::from_hours(1),
-        run: None,
-        scope: rimz::store::workflow::ScopeKind::Worktree,
-        leader: Some("dont-show-me".into()),
-        destination: None,
-    });
+    launched.launch = Some(mark(now() - SignedDuration::from_hours(1)));
     history(&mut launched, 7200, true);
     let mut active = running("active-resident");
-    active.launch = Some(launch_ledger::WorkflowLaunchRecord {
-        at: now(),
-        run: None,
-        scope: rimz::store::workflow::ScopeKind::Worktree,
-        leader: Some("dont-show-me".into()),
-        destination: None,
-    });
+    active.launch = Some(mark(now()));
     let mut room = room(vec![launched, active, running("rowless")]);
     room.retired.push(retired("retired", 2));
     let output = frame(&room, 100, 24, true);

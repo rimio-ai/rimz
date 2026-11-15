@@ -115,8 +115,6 @@ records/agents-carryover.json                 agent rollup carried across rotati
 records/log-generation.json                  durable active-log generation
 records/messages/messages.jsonl               live message queue
 records/loop-instances.json                   loop and wait rows
-records/loop-launches.json                    older resident launches, read until the workflow file is version 2
-records/loop-workflow-launches.json           remembering loop tasks' launches by task and checkout, version 2
 records/boot.json                             last host boot id
 records/live-roster.json                      producer's last pane-backed live agent set
 records/pending-recovery.json                 lost agents awaiting the user's recovery decision
@@ -172,7 +170,6 @@ This page owns the log, the caches derived from it, hook ingress, and the worksp
 | `owned/runs/` | [scripting.md](./harness/scripting.md#the-record) |
 | `owned/workflows/`, `owned/finished-workflows/` | [workflow.md](./harness/workflow.md#storage-and-isolation-boundary) |
 | `records/loop-instances.json`, `out/<reader>/wait-*.output` | [loops.md](./harness/loops.md#where-tasks-live) |
-| `records/loop-launches.json`, `records/loop-workflow-launches.json` | [loops.md](./harness/loops.md#launch-memory) |
 | `records/idle-stop.json` | [loops.md](./harness/loops.md#recovery-the-host-runs) |
 | `records/raised.json` | [Raised attention](#raised-attention) below |
 | `records/hibernation.json` | [hibernate.md](./harness/hibernate.md) |
@@ -282,9 +279,9 @@ The runtime root is private. `ensure_private_runtime_dir` refuses a symlink, a f
 
 Freshness here gates behaviour, so these files are scoped to one mux session incarnation. When a birth proves the previous session absent, it purges sidebar heartbeats before creating the replacement. A fresh-looking heartbeat from a dead renderer therefore cannot steer launch or reconcile decisions in the reborn room.
 
-### Machine-local loop overlays
+### The loop task record
 
-Loop task state that is not a task definition lives outside every room, under `~/.rimz/loops/`: `loop-arming.json`, `loop-strikes.json`, `loop-strike-runs.json` and `loop-fires.json`, each an `OverlayStore` file keyed by task scope behind its own advisory lock. `loop-fires.json` holds each task's scheduled-launch stamps and its quiet summary, the only trace a forgotten quiet run leaves, since its run home is removed at collection. Loop run history is `~/.rimz/logs/loop-runs.log.jsonl`. What each file holds, and when it is cleared, renamed and pruned, is [loops.md → History, strikes, and arming](./harness/loops.md#history-strikes-and-arming); GC prunes their orphaned keys ([Garbage collection](#garbage-collection)).
+Loop task state that is not a task definition lives outside every room, in `~/.rimz/loops/tasks.json`: one record per task id holding its binding, arming, strikes, scheduled-launch stamps, quiet summary (the only trace a forgotten quiet run leaves, since its run home is removed at collection) and fire marks, written only under `loops/tasks.lock`. Loop run history is `~/.rimz/logs/loop-runs.log.jsonl`. What the record holds, and when it is minted, rebound, retired and deleted, is [loops.md → The task record](./harness/loops.md#the-task-record); GC prunes it ([Garbage collection](#garbage-collection)).
 
 ### Account-global caches
 
@@ -635,7 +632,7 @@ The orphan empty-dir sweep scans `<home>/empty/` for valid room directory names 
 
 Both scopes write two shared paths outside the room:
 
-- Loop overlays. Both scopes run `TaskCatalog::load(Some(root)).prune_orphan_overlays()`, which prunes keys for the root's known scopes in the shared `loops_dir()` files, and overlay storage stays outside the room. When loading the catalog fails and loop-task sources are unreadable, GC keeps those overlays, skips its worktree step, and continues the other maintenance. Worktree protection reads every workspace's task sources strictly, and [worktree protection](./harness/worktrees.md#protection-facts) owns the holder rules.
+- The loop task record. Both scopes run `TaskCatalog::load(Some(root)).prune_records()`, which retires the live records of the root's known scopes whose row is gone, drops settled marks of vanished checkouts, deletes retired records whose every fire is settled, and removes the files the record replaced. When loading the catalog fails and loop-task sources are unreadable, GC keeps the record, skips its worktree step, and continues the other maintenance. Worktree protection reads every workspace's task sources strictly, and [worktree protection](./harness/worktrees.md#protection-facts) owns the holder rules.
 - Account budget ledgers. Both scopes call `harness::budget::sweep_orphan_account_ledgers`. It removes from `cache/providers/` each `budget.account.<component>.json` that no history pool reads: a kind-only name, or the own key of a declared account whose pool is another key. The matching lock in runtime `shared/` goes with it. An `@`-named ledger stays when the accounts config fails to load, and so does the ledger of an undeclared name or of a standalone account. The sweep never waits on a ledger lock: it try-locks, unlinks the ledger and then the lock while it holds it, and leaves both for the next run when another process holds the lock. The ledger is a cache-class write, so the unlink takes no fsync. An error on one ledger is a debug line and keeps that ledger. A dry run counts without locking.
 
 Four report rows follow their own retention settings:
