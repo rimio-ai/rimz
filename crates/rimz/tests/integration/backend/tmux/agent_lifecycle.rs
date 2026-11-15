@@ -1958,6 +1958,7 @@ fn default_restart_resumes_the_agent_through_the_real_wrapper() {
     let session = env.resolve_workspace(&env.project_root).session_name;
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     env.rimz()
+        .env("PATH", path_with_front(&agent_bin))
         .args(["--mux", "tmux", "start", "--no-attach"])
         .assert_success_within_timeout("start the room");
     let _client = AttachedTmuxClient::attach(&server.socket, &session, 160, 40);
