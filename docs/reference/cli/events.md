@@ -1,4 +1,4 @@
-# `rimz events`
+# Events CLI
 
 `rimz events` reads and writes the workspace's durable event log. `follow` prints each agent lifecycle transition and each signal as one JSON object per line, so a script can react to agent state without reading panes. `emit` appends a named signal of your own and fires the loop tasks and workflow runs subscribed to it.
 
@@ -94,7 +94,7 @@ A lifecycle line is one transition of one agent or provider-native subagent:
 | `parent_agent_id` | Session id of the root agent, on a subagent's line. Omitted for a root agent. |
 | `signal` | The lifecycle signal the agent reported, tagged by its `signal` field, with that signal's own fields. The signals are listed in [the agent model](../../internals/agents/model.md#the-state-machine). |
 | `prior_status` | Status before this transition. Omitted when the follower has no earlier state for the agent, including when the agent has fallen outside the 256 most recently ended agents. At the live edge that state comes from the workspace's current rollup. Under `--replay` it builds up from the replayed records, so an agent's first replayed line has none. |
-| `status` | Status after the transition, as the lifecycle records it (for example `running`, `waiting`, `success`). An end that a reaper or a worktree removal writes over a `running` or `waiting` row reads `idle`, matching the card. |
+| `status` | Status after the transition, as the lifecycle records it: one of the values in the [agent status table](./agents.md#list). An end that a reaper or a worktree removal writes over a `running` or `waiting` row reads `idle`, matching the card. |
 | `phase` | Turn phase after the transition: `idle`, `reasoning`, `acting`, or `parked`. |
 | `transition` | How the state machine classified the signal: `{"kind":"normal"}`, `{"kind":"reconciled","from":"…","reason":"…"}`, or `{"kind":"ignored","reason":"…"}`. |
 | `compaction_closed` | `true` when this signal closed an open context compaction. |
@@ -157,9 +157,9 @@ The part after `·` reads one of these:
 
 | Receipt | When |
 | --- | --- |
-| `fired 1 task`, `fired N tasks` | That many tasks started a run. Each is named on its own line. |
+| `fired 1 task`, `fired N tasks` | That many tasks were handed the signal and spawned a detached run. Each is named on its own line. A busy task can still skip the trigger under its [overlap policy](./loop.md#overlapping-triggers). |
 | `fired no task` | Tasks took the signal, and none started. |
-| `no task is subscribed to it` | No task took the signal: none subscribes to this name or its family, each subscriber names a sibling (a task on `deploy.failed` hears `deploy.finished` and records `skipped`), or each subscriber's `--match` rejected the payload. |
+| `no task is subscribed to it` | No task took the signal. Either no task subscribes to this name or its family, or every subscriber declined it: its `--match` rejected the payload, or it names a sibling in the family (a task on `deploy.failed` declines `deploy.finished` and records it as `skipped`). |
 
 A task that took the signal but did not start gets an indented `<task>: did not start` line after any started task. A task does not start when it is disabled, paused, or a project task whose project is not trusted, or when its run fails to launch.
 
@@ -168,7 +168,7 @@ A task that took the signal but did not start gets an indented `<task>: did not 
 | `<NAME>` | Dot-separated segments, at most 64 bytes in total. Each segment starts with a lowercase letter or digit and contains only lowercase letters, digits, `-`, and `_`. The first segment is the signal's family. |
 | `--json <OBJECT>` | One top-level JSON object, at most 64 KiB as typed (whitespace counts). Omitted, the payload is `{}`. |
 
-Firing happens inside the `emit` process, with no daemon. It needs an existing room but no running agent. It spawns one detached run for each live subscription that exists in this workspace at that moment, so a task added afterwards never sees the signal. A busy task can keep its trigger through its [overlap policy](./loop.md#overlapping-triggers). When the room has an active [workflow](./workflow.md) run, `emit` also starts one detached workflow advance, which hands the signal to the run's subscribed checks and steps. What a subscription matches, what it delivers, and when a delivery reaches its agent are in [`rimz loop` signals](./loop.md#signals).
+Firing happens inside the `emit` process, with no daemon. It needs an existing room but no running agent. It spawns one detached run for each live subscription that exists in this workspace at that moment, so a task added afterwards never sees the signal. A busy task can keep its trigger through its [overlap policy](./loop.md#overlapping-triggers). When the room has an active [workflow](./workflow.md) run, `emit` also starts one detached workflow advance, which hands the signal to the run's subscribed checks and steps. The receipt does not mention the advance. What a subscription matches, what it delivers, and when a delivery reaches its agent are in [`rimz loop` signals](./loop.md#signals).
 
 `emit` refuses these inputs with exit code 1, before it writes anything:
 
@@ -198,7 +198,6 @@ The producers follow these rules beyond the [built-in signal table](./loop.md#bu
 - `pr.opened` reports a newly observed open PR after a successful prior probe, not a PR already present when monitoring starts.
 - `trunk.moved` reports a changed commit on the same trunk ref.
 - Worktree signals follow successful managed operations, with creation after its hook succeeds. Reuse and failed-creation rollback are silent. [Trunk and worktree signals](../../internals/harness/loops.md#trunk-and-worktree-signals) has the producer contract.
-- `pr.conflicted` waits for GitHub's settled mergeability reading. `pr.behind` fires on a positive `behind_by` alone. Match either by `branch` or `path`, like `pr.merged`.
-- `pr.queued` fires when the PR enters the merge queue, and again only for a later entry. `pr.dequeued` fires when it leaves the queue while still open, again for a later removal, and when a re-arm is withdrawn, with the original `dequeued_at` in that last case. A removal already re-armed at first reading fires no `pr.dequeued`. A PR that merges out of the queue emits `pr.merged` and no `pr.dequeued`. The `queued_at` and `dequeued_at` payload timestamps are GitHub's.
-- Both queue signals also fire the first time a poll reads the standing state on a checkout the room was already watching. A room that opens on a PR already queued or dequeued hears nothing, since its first poll only sets the baseline: read the standing state with [`--when pr.queue=dequeued`](./loop.md#conditions) instead.
-- `agent.waiting` and `team.waiting` follow the raw hook-time transition, so they fire at once for a Codex permission request under automatic review, though attention surfaces show Running for its first 60 seconds. Promotion to visible waiting emits no second signal ([Codex asks](../../internals/agents/adapter_codex.md#asks-and-answers)).
+- `pr.queued` fires when the PR enters the merge queue, and again only for a later entry. `pr.dequeued` fires when it leaves the queue while still open, again for a later removal, and when a re-arm is withdrawn, with the original `dequeued_at` in that last case. A PR that merges out of the queue emits `pr.merged` and no `pr.dequeued`. The `queued_at` and `dequeued_at` payload timestamps are GitHub's.
+- The room's first poll of a checkout only records the queue state as a baseline and emits nothing. A room that opens on a PR already queued or dequeued therefore hears nothing: read that standing state with [`--when pr.queue=dequeued`](./loop.md#conditions) instead. A checkout the room already watched before the PR entered the queue emits on the first poll that reads the change, and a removal that GitHub had already re-armed by that poll emits no `pr.dequeued`.
+- `team.waiting` follows the same hook-time transition as `agent.waiting`, so a Codex permission request under automatic review fires it at once ([Codex asks](../../internals/agents/adapter_codex.md#asks-and-answers)).
