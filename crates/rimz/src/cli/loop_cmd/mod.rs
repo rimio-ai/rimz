@@ -95,7 +95,7 @@ enum LoopSubcmd {
     Explain(ExplainArgs),
     /// Print full forensics for a task's recent runs.
     Logs(LogsArgs),
-    /// Fire one task now for testing; one-shots and subscriptions stay put.
+    /// Fire one task now in the foreground for testing; one-shots and subscriptions stay put.
     Fire(FireArgs),
     /// Run one task now. The sidebar host calls this; humans rarely do.
     #[command(hide = true)]

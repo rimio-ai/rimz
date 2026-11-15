@@ -4,7 +4,7 @@ You already run things on a clock. Cron lines and systemd timers drive your main
 
 Cron and a `while` loop know only a clock. They cannot fire when a pull request merges, when CI goes red, or when a team's board reaches Done, so they poll, and a polled `claude -p` spends a whole agent turn checking a world that has not changed. What they start is also invisible: the scheduled `claude -p` hangs in silence the first time it stops at a permission prompt.
 
-`rimz loop` is the same clock with the room behind it. A task is a name, one trigger, and one command, written after `--` as you would type it in a shell. The trigger decides when the command runs, and the command decides what happens. To start an agent, the command is the `rimz agents` launch you already use:
+`rimz loop` is the same clock with the room behind it. A room is RimZ's multiplexer session for one project, which `rimz start` opens: the panes of its agents, and the sidebar column that shows what each one is doing. A task is a name, one trigger, and one command, written after `--` as you would type it in a shell. The trigger decides when the command runs, and the command decides what happens. To start an agent, the command is the `rimz agents` launch you already use:
 
 ```sh
 rimz loop add deps --every mon --at 09:00 --fresh-worktree deps -- rimz agents claude --detach "Check for outdated dependencies. Open a PR for the safe minor and patch bumps, and list any majors that need review."
@@ -34,25 +34,29 @@ live while a room for /home/you/code/app is open
 no room is open there; start one with `rimz start`, or use `rimz loop timer install` to fire without one
 ```
 
-The last two lines matter before your first task. A task belongs to the project you ran `add` in (`--root <path>` picks another). It fires only while a room for that project is open, or while the [loop timer](#who-keeps-time) keeps time for it. Its command runs at the project root, even when you add it from a linked worktree, unless `--fresh-worktree` gives each fire a new worktree. The name is optional: leave it out and the receipt prints the `loop-<petname>` name it chose.
+The last two lines matter before your first task. A task belongs to the project you ran `add` in (`--root <path>` picks another). A clock task fires only while a room for that project is open, or while the [loop timer](#who-keeps-time) keeps time for it.
+
+A task's command runs at the project root, even when you add it from a linked worktree, unless `--fresh-worktree` gives each fire a new worktree. The name is optional: leave it out and the receipt prints the `loop-<petname>` name it chose.
 
 A clock repeats only with `--every` or `--cron`. A bare time (`--at 07:00`, `--at 'fri 09:30'`, `--in 30m`) fires once, and then the task removes itself. [Every schedule shape](#every-schedule-shape) lists them all.
 
 ## Start an agent from a task
 
-A command that launches an agent is the launch you would type, so every [`rimz agents`](./fleet.md) flag works as usual: a [profile](./fleet.md#profiles-shape-an-agent-for-one-job), `--effort`, a [permission mode](./fleet.md#set-a-permission-mode), `--worktree`. The loop adds one choice, which is whether the fire owns the agent:
+A command that launches an agent is the launch you would type, so the [`rimz agents`](./fleet.md) flags work as usual: a [profile](./fleet.md#profiles-shape-an-agent-for-one-job), `--effort`, a [permission mode](./fleet.md#set-a-permission-mode), `--worktree`. The loop adds one choice, which is whether the fire owns the agent:
 
-- **A prompted launch without `--detach` is a run the fire owns.** It behaves as `rimz agents -p` does. The command waits for the agent's turn, captures its answer as the fire's output, and exits with the run's code, so the fire records the turn's success or failure. The pane opens in an unfocused tab beside the room's loop dashboard and closes when the turn ends (`--keep` holds it open). If the fire ends first, for example at its timeout, the agent is stopped with it. Use this when the turn is the job: a nightly sweep, a report, a fix that should count as a [strike](#strikes) when it fails.
+- **A prompted launch without `--detach` is a run the fire owns.** It behaves as `rimz agents -p` does. The command waits for the agent's turn, captures its answer as the fire's output, and exits with the run's code, so the fire records the turn's success or failure. The pane opens in its own unfocused tab and closes when the turn ends. When the agent stops at a question, its tab and sidebar card show it waiting, as for any agent. If the fire ends first, for example at the task's timeout, the agent is stopped with it. Use this when the turn is the job: a nightly sweep, a report, a fix that should count as a [strike](#strikes) when it fails.
 - **`--detach` hands the agent off.** The launch returns at once, the fire ends, and the agent keeps running on its own, as it would from your shell. Use this when the agent should stay: a team that works a branch, an agent that waits for your review.
 
 ```sh
-rimz loop add sweep --every day --at 02:00 --fresh-worktree sweep -- rimz agents claude --timeout 1h "Scan the repository for cheap improvements and open a PR for each one worth fixing."
-rimz loop add review-merge --when 'pr[topic]=merged' -- rimz teams launch recon -w review-merge --detach "Review the merged work and propose focused follow-up."
+rimz loop add sweep --every day --at 02:00 --fresh-worktree sweep -- rimz agents claude -p --timeout 1h "Scan the repository for cheap improvements and open a PR for each one worth fixing."
+rimz loop add review-team --every weekday --at 09:00 --fresh-worktree review -- rimz teams launch recon --detach "Review yesterday's merges and propose focused follow-up."
 ```
 
-An owned run is one agent. A team of more than one role needs `--detach`, and the launch tells you so when it is missing.
+The second example launches `recon`, a [team](./teams.md) from your config, in a fresh worktree each weekday. An owned run is one agent, so a team of more than one role needs `--detach`. An owned launch also refuses `--bg`, since the fire must wait for the agent.
 
-Either way, RimZ appends one line to the launched agent's prompt saying which task fired and why, such as ``Rule `smoke` fired here. deploy.finished · env: prod``. An unattended agent then knows what happened without asking. A plain command reads the same line from the `RIMZ_LOOP_TRIGGER` environment variable, and `RIMZ_LOOP_TASK` holds the task's name. A clock fire or a manual fire carries no such line.
+The task's timeout bounds the whole command, so it also ends an owned agent. To give the agent its own shorter `--timeout`, or to hold its pane open after the turn with `--keep`, add `-p`, as in the `sweep` example: both flags parse only beside it. The first owned launch of each agent kind in a project refuses until that kind has a folder-trust decision there, and the error names the fix, `rimz trust grant --agents <kind>`.
+
+Either way, RimZ appends one line to the launched agent's prompt saying which task fired and why, such as ``Rule `ci-fix` fired here. ci.failed on feature #42 @88824c2``. An unattended agent then knows what happened without asking. A plain command reads the same line from the `RIMZ_LOOP_TRIGGER` environment variable, and `RIMZ_LOOP_TASK` holds the task's name. A clock fire or a manual fire carries no such line.
 
 A [workflow](./workflows.md) starts the same way, with `rimz workflow run` as the command. That command returns once the run starts, and the run continues on its own.
 
@@ -68,18 +72,18 @@ rimz loop timer install
 
 That installs one systemd user timer on Linux, or one launchd agent on macOS. Once a minute it runs a RimZ tick that fires due clock tasks for every project without an open room. A project with an open room keeps its own time. Know one effect before you install it: a timer fire opens a room for the task's project before its command runs, and leaves that room open. A 02:00 task therefore means a multiplexer session running on the machine by morning. `rimz loop timer status` shows whether the timer is installed, and `rimz loop timer remove` stops it.
 
-Only clocks need a timekeeper. A signal task fires from the process that emits the signal, whether or not a room is open.
+Clock and condition tasks need a timekeeper, since both are checked on its tick. A signal task fires from the process that emits the signal, as the [next section](#fire-on-a-signal) explains.
 
 Missed time is not made up in bulk. A new repeating task arms without firing, so adding one sets nothing off. A task that came due while nothing kept time fires once when a clock next sees it, then resumes its schedule, so a week of missed 02:00 fires arrives as one fire. A one-shot fires on the first clock that sees it at or past its time, however late, and its run says how late (`fired 2h 5m late`).
 
 ## Fire on a signal
 
-A clock is a guess about when something will happen. A signal is the event itself, and most signals need no wiring. The sidebar already polls the forge for each [worktree](./worktrees.md) branch's pull request and CI result, and the reporting hooks already know when an agent or a team changes state. Each of those changes is a signal a task can fire on by name.
+A clock is a guess about when something will happen. A signal is the event itself, and most signals need no wiring. The sidebar already polls the forge (GitHub or Gitea) for the pull request and CI result of each [worktree](./worktrees.md) branch in the room, and the reporting hooks already know when an agent or a team changes state. Each of those changes is a signal a task can fire on by name.
 
 | Family | Signals | Fires when |
 | --- | --- | --- |
-| `ci` | `ci.passed`, `ci.failed` | The checks on a watched branch's commit settle. |
-| `pr` | `pr.opened`, `pr.merged`, `pr.closed` | A watched branch's pull request opens, merges, or closes. |
+| `ci` | `ci.passed`, `ci.failed` | The checks on a branch's commit settle. |
+| `pr` | `pr.opened`, `pr.merged`, `pr.closed` | A branch's pull request opens, merges, or closes. |
 | `pr` (GitHub only) | `pr.behind`, `pr.conflicted`, `pr.queued`, `pr.dequeued` | The PR falls behind its base, has conflicts, or enters or leaves the merge queue. |
 | `trunk` | `trunk.moved` | The trunk ref moves to another commit. |
 | `worktree` | `worktree.created`, `worktree.removed` | RimZ creates or removes a managed worktree. |
@@ -88,7 +92,7 @@ A clock is a guess about when something will happen. A signal is the event itsel
 
 The [loop reference](../reference/cli/loop.md#built-in-signals) gives the exact moment each one fires and the payload fields it carries.
 
-Subscribe to one name, or to a whole family with `'ci.*'`. A subscription to one name still sees the rest of its family and skips them: a task on `ci.failed` records a skip for `ci.passed` without running its command. A branch that goes green therefore never starts the fix that only red asked for. Narrow a subscription with `--match key=value` on a payload field. A signal that fails the match is ignored.
+Subscribe to one name, or to a whole family with `'ci.*'`. A task on `ci.failed` hears `ci.passed` too: it records the signal as heard, runs nothing, and stays armed, so `rimz loop show` can tell you the branch went green while the task waited for red. Narrow a subscription with `--match key=value` on a payload field. A signal that fails the match is ignored.
 
 ```sh
 rimz loop add ci-fix --signal ci.failed --match branch=feature --repeat -- rimz agents codex -w ci-fix "Fix the failing checks."
@@ -109,17 +113,21 @@ emitted deploy.finished (evt_01a07076a71c72e09f0461533909ceb1) · fired 1 task
   smoke
 ```
 
-A CI job's last step, a git hook, a deploy script, or another agent can each emit. The process that emits fires the subscribed tasks itself, so no daemon or running agent is needed, but a room must exist for the project. Names are lowercase words joined by dots, and the first word is the family. The families in the table above, and `wait`, belong to RimZ, and `emit` refuses names in them. The payload is one JSON object, whose top-level fields `--match` filters on and the trigger line prints as `key: value`.
+A CI job's last step, a git hook, a deploy script, or another agent can each emit. The process that emits fires the subscribed tasks itself, so no daemon or running agent is needed. `emit` needs a room that has been started once for the project, but the room does not have to be open: a fire opens it before its command runs. The built-in `ci`, `pr`, and `trunk` signals are different, since the sidebar produces them: they arrive only while the room is open. Names are lowercase words joined by dots, and the first word is the family. The families in the table above, and `wait`, belong to RimZ, and `emit` refuses names in them. The payload is one JSON object, whose top-level fields `--match` filters on and the trigger line prints as `key: value`.
 
-Your own families skip siblings the same way, so name them by outcome. A task added with `rimz loop add deploy-red --signal deploy.failed -- ./scripts/rollback.sh` fires on `deploy.failed` and stays armed through `deploy.finished`.
+A task subscribes to your own names as it does to RimZ's. The `smoke` task that `emit` fired above was added with:
 
-When a signal arrives while the task's previous run is still going, the default is to skip it, so two copies never run at once. `--overlap coalesce` keeps the newest waiting trigger, `--overlap queue` keeps each one, and `--overlap replace` cancels the live run for the newest. [Overlapping triggers](../reference/cli/loop.md#overlapping-triggers) gives the rules.
+```sh
+rimz loop add smoke --signal deploy.finished --match env=prod --repeat -- ./scripts/smoke-test.sh
+```
+
+When a signal arrives while the task's previous run is still going, the default drops the new trigger, so two copies never run at once. `--overlap coalesce` keeps the newest waiting trigger, `--overlap queue` keeps each one up to `--overlap-limit` (default 10), and `--overlap replace` cancels the live run for the newest. [Overlapping triggers](../reference/cli/loop.md#overlapping-triggers) gives the rules.
 
 ## Wait for Done and green
 
 A CI signal can arrive before your team finishes review, and a task that subscribes only to that signal misses the later moment when both are ready. A condition reads the current state on each tick instead, in whatever order things happen, and can require it to stay true for a while.
 
-A task reads conditions at the project root, so name the team's branch, here `feat-x`:
+A task reads conditions at the project root, where an unscoped key such as `ci` reads trunk. Name the team's branch in brackets instead, here `feat-x`:
 
 ```sh
 rimz loop add open-pr --when 'team.stage[feat-x]=Done && ci[feat-x]=passed' --for 30m -- rimz agents claude "Open the pull request for the feat-x branch."
@@ -128,7 +136,7 @@ rimz loop show open-pr
 
 `team.stage[feat-x]` reads the team board in the local checkout on `feat-x`, and `ci[feat-x]` reads that branch's CI. The sidebar checks both on each tick. Once both are true, the task holds for 30 minutes, and either reading turning false restarts the hold. When the hold completes, RimZ runs the command and removes the task. Add `--repeat` to fire again each time the condition turns true after being false.
 
-CI and PR readings come from the room's sidebar, which polls the forge. Without an open room, or until the sidebar has polled again after a fire, those readings are unknown. An unknown condition does not fire and does not restart its hold. It waits. A poll that finds no CI reads `none`, which `ci=passed` treats as false. [Conditions](../reference/cli/loop.md#conditions) lists every key, value, and rule.
+CI and PR readings come from the room's sidebar, which polls the forge, so they need an origin on GitHub or Gitea. Without an open room, or until the sidebar has polled again after a fire, those readings are unknown. An unknown condition does not fire and does not restart its hold. It waits. A poll that finds no CI reads `none`, which `ci=passed` treats as false. [Conditions](../reference/cli/loop.md#conditions) lists every key, value, and rule.
 
 A condition can name branches that have no local checkout:
 
@@ -154,7 +162,7 @@ When a team finishes the work on a branch, you may want a cleanup agent to revie
 rimz loop add yagni --when 'pr=merged' --each-worktree --repeat -- rimz agents yagni --detach "Review the merged work for unnecessary complexity and propose focused cleanup."
 ```
 
-Worktrees that already meet the condition when you add the task qualify too. The project root and worktrees RimZ does not own are left out. To run the command at most once per worktree, set `once-per-checkout = true` on the task in `loop.toml` ([launch memory](../reference/cli/loop.md#launch-memory)).
+A RimZ-owned worktree is one RimZ created, with `rimz worktree new` or a launch's `-w`. Worktrees that already meet the condition when you add the task qualify too. The project root and worktrees RimZ does not own are left out. To stop after one successful run per worktree, set `once-per-checkout = true` on the task in [`loop.toml`](#what-a-task-does-on-your-machine) ([launch memory](../reference/cli/loop.md#launch-memory)).
 
 ## Wait for room in a usage window
 
@@ -166,13 +174,13 @@ rimz loop add big-refactor --when 'window.5h.left>=60' --provider claude -- rimz
 
 `--provider` names the agent kind whose windows the condition reads. `--account` picks one of its [named accounts](./accounts.md). Neither picks the account the command's own launches use. `add` reads the window first and refuses when it cannot, and the [conditions reference](../reference/cli/loop.md#conditions) lists those cases.
 
-When the moment you want is the reset itself, `--after-reset 5h` (or `7d`) fires once when that window next resets, then removes the task:
+When the moment you want is the reset itself, `--after-reset 5h` (or `7d`) fires once when that window next resets, then removes the task. A window that has not started yet has no reset to wait for, so the task fires on the next tick:
 
 ```sh
 rimz loop add after-limit --after-reset 5h --provider claude -- rimz agents claude "The 5h window has reset. Pick the refactor back up."
 ```
 
-The receipt shows the window's current percent left and when it resets. [After a reset](../reference/cli/loop.md#after-a-reset) covers a reset that passes while nothing keeps time.
+The receipt shows the window's current percent left and when it resets, or that it has not started. [After a reset](../reference/cli/loop.md#after-a-reset) covers a reset that passes while nothing keeps time.
 
 ## See what a task did
 
@@ -188,7 +196,7 @@ rimz loop logs ci-fix     # the full record of recent runs, with each command's 
 
 `rimz loop show <name>` opens with a verdict on the latest finished run, then that run's evidence, then the recent runs and the task's settings. `rimz loop logs <name>` prints one block per run, oldest first, with the trigger, the exit code, and the command's output. A signal fire's block includes the signal's payload.
 
-A repeating task whose command exits `0` is a quiet fire. It keeps no history entry of its own, so a check that passes every five minutes does not bury the fires that failed. The task counts its quiet fires and keeps the last one's output. A fire that fails keeps its full record.
+A fired one-shot needs no teardown: it has removed itself, and DONE keeps its result. A repeating task whose command exits `0` is a quiet fire. It keeps no history entry of its own, so a check that passes every five minutes does not bury the fires that failed. The task counts its quiet fires and keeps the last one's output. A fire that fails keeps its full record.
 
 To test a task before its trigger comes, fire it by hand:
 
@@ -196,7 +204,7 @@ To test a task before its trigger comes, fire it by hand:
 rimz loop fire ci-fix
 ```
 
-`fire` starts a run now and leaves the schedule and the trigger as they were. For a condition that is not true yet, it says so and runs anyway. It prints `launched` and the `rimz workflow show` command that follows the run, because each fire runs its command as a one-step [workflow run](./workflows.md).
+`fire` starts a run now and leaves the schedule and the trigger as they were. For a condition that is not true yet, it says so and runs anyway. It prints `launched` and the `rimz workflow show` command that follows the run, since each fire runs its command as a one-step workflow run.
 
 Exact screen layouts, sections, and JSON fields are in the reference for [`loop list`](../reference/cli/loop.md#loop-list), [`loop show`](../reference/cli/loop.md#loop-show), and [`loop logs`](../reference/cli/loop.md#loop-logs).
 
@@ -204,11 +212,9 @@ Exact screen layouts, sections, and JSON fields are in the reference for [`loop 
 
 Three failed fires in a row disable a task. `rimz loop list` then shows `disabled after 3 strikes` under NEEDS YOU, and [notification handlers](./notifications.md) fire with kind `loop_disabled`. A strike is a fire whose command exited non-zero or ran past its timeout. A `completed` fire resets the count, so a watchdog whose suite passes again is back to zero.
 
-Some fires count for nothing: a canceled run, a fire a gate turned away, and a fire that could not start a run at all. A machine that cannot start runners therefore never disables your tasks.
+Some fires count for nothing: a canceled run, a fire turned away before it ran (by the overlap rule, for example), and a fire that could not start a run at all. A machine that cannot start runners therefore never disables your tasks.
 
 `rimz loop enable <name>` clears the strikes and re-arms the task. `--max-strikes <N>` on `add` changes the threshold, and `--max-strikes 0` turns it off. The [strikes table](../reference/cli/loop.md#strikes) lists how each result counts.
-
-What a launched agent spends is capped where it launches: `--budget` on the `rimz agents` command, and the room's and accounts' caps in the [budgets guide](./budget.md).
 
 ## Stop, pause, and remove a task
 
@@ -227,7 +233,7 @@ rimz loop timer remove           # stop the machine-wide timer
 
 Pause, disable, and enable belong to this machine and never edit the task's definition. When a hold lifts, the schedule starts fresh from that moment, so fires missed while held never replay.
 
-`remove` deletes the task from the file that holds it. `rimz loop logs <name>` still reads its history. A `--fresh-worktree` tree that held work when its run ended stays on disk: `rimz loop show <name>` lists it under `KEPT WORKTREES`, and you merge or remove it as any [worktree](./worktrees.md). `rimz loop timer remove` stops future ticks, but rooms the timer already opened stay open. `rimz uninstall` removes the timer too.
+`remove` deletes the task from the file that holds it. `rimz loop logs <name>` still reads its history. For a [project task](#what-a-task-does-on-your-machine), that file is the committed `.rimz/config.toml`, so the removal reaches everyone who pulls your commit, and RimZ prints the project's trust result. A `--fresh-worktree` tree that held work when its run ended stays on disk: `rimz loop show <name>` lists it under `KEPT WORKTREES`, and you merge or remove it as any [worktree](./worktrees.md). `rimz loop timer remove` stops future ticks, but rooms the timer already opened stay open. `rimz uninstall` removes the timer too.
 
 ## What a task does on your machine
 
@@ -245,18 +251,18 @@ at = "09:00"
 every = "mon"
 ```
 
-A task holds only the keys `rimz loop add` writes. A task with any other key does not fire, and `rimz loop list` shows it under NEEDS YOU as `invalid` with the reason. Delete it and add it again with `rimz loop add`. The other tasks in the file keep firing.
+A task holds the keys `rimz loop add` writes, plus a few you set by hand, such as `once-per-checkout`. A task with a key RimZ does not know does not fire, and `rimz loop list` shows it under NEEDS YOU as `invalid` with the reason. Delete it and add it again with `rimz loop add`. The other tasks in the file keep firing.
 
 A task that fires once (`--at`, `--in`, `--after-reset`, or a `--signal` or `--when` task without `--repeat`) belongs to the room. It lives in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`, beside the waits agents arm, so start the room with `rimz start` before you add one. It removes itself after its fire. [Where tasks are stored](../reference/cli/loop.md#where-tasks-are-stored) covers name clashes between the files.
 
-`--project` writes the task into the project config, `<root>/.rimz/config.toml`, so it travels with the repository. Such a task must repeat (`--every`, `--cron`, or `--signal` with `--repeat`) and always runs at the project root. A committed task runs commands on the machine of whoever pulls it, so two locks hold it:
+`--project` writes the task into the project config, `<root>/.rimz/config.toml`, so it travels with the repository. Such a task must repeat (`--every`, `--cron`, or `--signal` with `--repeat`) and always runs at the project root. A committed task runs commands on the machine of whoever pulls it, so it runs only when both of these hold:
 
-- **Trust decides whether the commands are acceptable.** The task's command enters the [project trust hash](./security.md), and nothing runs until you trust the project.
+- **Trust decides whether the commands are acceptable.** The task's command is part of what you approve when you [trust the project](./security.md), and nothing runs until you do.
 - **Enablement decides whether this task runs here.** A project task pulled from a repository starts disabled, even in a trusted project, until you run `rimz loop enable <name>`. A task you add with `--project` starts enabled on your machine.
 
 ### Where a fire runs
 
-A fire opens the room for the task's project, then runs its command at the project root, in the worktree an `--each-worktree` fire selected, or in a fresh worktree. Every agent the command launches without `--detach` opens in an unfocused tab beside the room's loop dashboard, so a fire never splits the tab you are working in. When the agent needs you, its tab and its sidebar card show it, as for any agent.
+A fire opens the room for the task's project, then runs its command at the project root, in the worktree an `--each-worktree` fire selected, or in a fresh worktree. Every agent the command launches without `--detach` opens in an unfocused tab of its own, so a fire never splits the tab you are working in. When the agent needs you, its tab and its sidebar card show it, as for any agent.
 
 A `--fresh-worktree` task gets a new tree for each fire: the same `git worktree add` from trunk that `rimz worktree new` runs, named `<prefix>-<yyyymmdd-hhmmss>` in UTC. When the run ends, the [worktree cleanup](./worktrees.md) removes the tree if it holds no changes, no commits that have not landed, and no open agent pane. Otherwise the tree stays for you. `rimz loop logs <name>` names each fire's tree on its `worktree:` line.
 
@@ -266,7 +272,7 @@ Each fire runs its command as one [workflow run](./workflows.md#start-runs-from-
 
 ## Wake a running agent
 
-The previous sections schedule work from your shell. An agent has the opposite problem. An `until nc -z localhost 3000; do sleep 1; done` loop in its shell tool holds its turn open while it waits for a deploy, and the follow-up otherwise falls to you. `rimz wait` lets the agent arm an alarm, end its turn, and get the result back in the same conversation:
+The previous sections schedule work from your shell. An agent needs its own alarm. An `until nc -z localhost 3000; do sleep 1; done` loop in its shell tool holds its turn open while it waits for a deploy, and the follow-up otherwise falls to you. `rimz wait` lets the agent arm an alarm, end its turn, and get the result back in the same conversation:
 
 ```sh
 rimz wait --in 30m
@@ -277,10 +283,9 @@ rimz wait --pid 16776
 rimz wait --check 'nc -z localhost 3000'
 rimz wait --file build.log --grep 'READY'
 rimz wait --run 'gh run watch --exit-status'
-rimz wait --on fail --run 'cargo test'
 ```
 
-Agents run these themselves. Only an agent RimZ can identify can arm a wait, and the wait wakes that agent alone. A watched command runs in a detached process, and the wake message gives its exit status, the elapsed time, and the path of a file holding its full output. While the agent sleeps, RimZ can send short keepalive pings so the provider's prompt cache is still warm at the wake. [Configuration](./configuration.md#idle-compaction) owns those settings.
+An agent runs these from its own shell, and the wait wakes that agent alone. RimZ refuses a wait from a shell that is not an agent's. A watched command runs in a detached process, and the wake message gives its exit status, the elapsed time, and the path of a file holding its full output. While the agent sleeps, RimZ can send short keepalive pings so the provider's prompt cache is still warm at the wake. [Configuration](./configuration.md#idle-compaction) owns those settings.
 
 A wait lasts until it fires, is canceled, or its agent ends. `rimz agents restart` and `rimz agents molt` keep it. `rimz wait list` shows an agent's own waits, and `rimz loop list` folds every agent's waits under WAKE-UPS. The [wait reference](../reference/cli/wait.md) owns every flag and the exact message each trigger delivers.
 
@@ -306,13 +311,13 @@ Each task names one trigger and one command after `--`.
 | Condition | `--when <expr>`, held with `--for <duration>` ([above](#wait-for-done-and-green)) | once, or each time it turns true again with `--repeat` | `--when 'pr[feat-x]=merged'` |
 | After a reset | `--after-reset 5h` or `7d` with `--provider` ([above](#wait-for-room-in-a-usage-window)) | fires once, then the task removes itself | `--after-reset 5h --provider claude` |
 
-`--every 1d` is an interval: it fires a day after the last fire and drifts with it. `--every day --at 07:00` fires at 07:00 each day. Calendar times, cron, and `--in` use the top-level `timezone` setting, or the system zone when it is unset. Every command and flag is in the [loop CLI reference](../reference/cli/loop.md).
+`--every 1d` is an interval: it fires a day after the last fire and drifts with it. `--every day --at 07:00` fires at 07:00 each day. Calendar times, `--at`, and cron use the top-level `timezone` setting, or the system zone when it is unset. Every command and flag is in the [loop CLI reference](../reference/cli/loop.md).
 
 ## Keep the fleet moving
 
 An unattended agent stops for reasons that need no judgment from you. The provider's usage window empties mid-turn. The API sheds load and drops the stream. The context window fills one step short of the finish. A Codex account sits on reset credits that expire unused. Each stop has a known fix: wait for the reset, retry in a few minutes, compact, redeem a credit. A stock CLI leaves each of them to whoever is watching, and overnight that is nobody.
 
-RimZ applies each fix as a configurable reflex. The room recognizes the stop from the provider's own evidence, applies the fix when it can work, and the agent carries on in the same session, as if you had typed it. Idle compaction and smart compaction are on by default. Auto-continue and auto-redeem are opt-in, except that a Codex credit about to expire is always redeemed. These reflexes type into your panes and spend on your account, so each section states the rules it follows. Every action appears in `rimz stats --assists`.
+RimZ applies each fix as a configurable reflex. The room recognizes the stop from the provider's own evidence, applies the fix when it can work, and the agent carries on in the same session, as if you had typed it. Idle compaction and smart compaction are on by default. Auto-continue and auto-redeem are opt-in, except that a Codex credit about to expire is redeemed even with auto-redeem off. These reflexes type into your panes and spend on your account, so each section states the rules it follows. Every action appears in `rimz stats --assists`.
 
 ```sh
 rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
@@ -341,19 +346,19 @@ Each attempt sends `continue` (`resume.auto_continue_text`) into the agent's pan
 
 A Codex plan grants reset credits. Redeem one and a spent usage window refills at once. Managed by hand, credits waste value at both ends: one you forget expires unspent, and one you hold while a spent window parks the fleet costs a night of work. Timing matters too. A credit redeemed just before the window's natural reset buys minutes, while one redeemed the moment a spent window blocks the fleet buys hours. Auto-redeem decides by three rules, and each redemption's record names the rule:
 
-- **Expiry rescue.** A credit within thirty minutes of expiring is spent rather than lost. This rule runs even with `auto_redeem` off, for every Codex account you declared, while any room is open.
-- **Blocked gain.** A window is spent and its natural reset is at least `resume.auto_redeem_min_gain` away (12 hours by default). Redeeming now recovers those hours. A nearer reset makes waiting cheaper.
-- **Scheduled redeem.** Several credits near expiry together and the spent window resets sooner than that gain. RimZ measures how long your usage takes to fill a fresh window and spaces the redemptions that far apart, so each lands on a window with room to use it.
+- **A credit about to expire is spent (expiry rescue).** RimZ redeems a credit within thirty minutes of its expiry, even with `auto_redeem` off, on every Codex account you declared, while any room is open. It skips an account whose window shows no usage at all, since a refill there buys nothing.
+- **A spent window far from its reset is refilled now (blocked gain).** When the natural reset is at least `resume.auto_redeem_min_gain` away (12 hours by default), a credit now recovers those hours. A nearer reset makes waiting cheaper.
+- **Credits that expire together are spread out (scheduled redeem).** When several credits near expiry together, RimZ measures how long your usage takes to fill a fresh window and redeems them that far apart, so each one lands on a window with room to use it.
 
-Blocked gain and scheduled redeem act only on an account an agent in this room uses, and only when its subscription window is spent and readable. By default, `resume.spend_order = "credits_first"` uses available paid credit before banked resets. Set it to `resets_first` to spend a useful reset first. Attempts per account are at least ten minutes apart, thirty after a success. A redemption refreshes the account's reading at once, and the refilled window wakes the agents [auto-continue](#auto-continue) parked on it.
+Blocked gain and scheduled redeem act only on an account this room uses, and only when its subscription window is spent and readable. By default, `resume.spend_order = "credits_first"` uses the account's paid credit balance before banked reset credits. Set it to `resets_first` to redeem a useful reset first. Attempts per account are at least ten minutes apart, thirty after a success. A redemption refreshes the account's reading at once, and the refilled window wakes the agents [auto-continue](#auto-continue) parked on it.
 
-The Codex block in the sidebar shows the credit count and what auto-redeem would do now. The [sidebar reference](../interface/sidebar.md) explains each marker. For Claude accounts, and Codex with `auto_redeem` off, the same rules run as advice for [`rimz accounts redeem`](../reference/cli/accounts.md#redeem).
+The Codex block in the sidebar shows the credit count and what auto-redeem would do now, and the [sidebar reference](../interface/sidebar.md) explains each marker. Claude accounts bank limit resets of their own. For those, and for Codex with `auto_redeem` off, the sidebar runs the same rules as advice for [`rimz accounts redeem`](../reference/cli/accounts.md#redeem).
 
 ### Idle compaction
 
-An idle agent can outlive its provider's prompt cache, and then its next prompt pays to cache the whole conversation again. Idle compaction sends the agent's own compact command shortly before the cache expires, once its context has reached its size floor. The agent summarizes its conversation and carries on from that smaller context. Details the summary does not keep are lost.
+An idle agent can outlive its provider's prompt cache, and then its next prompt pays to cache the whole conversation again. Idle compaction sends the agent's own compact command shortly before the cache expires, once its context holds enough tokens to be worth it. The agent summarizes its conversation and carries on from that smaller context. Details the summary does not keep are lost.
 
-It skips an agent whose account shows a spent cap for its model, or a spent usage window that no paid extra usage carries. If the agent starts another turn before the queued command lands, RimZ drops the command. Set `harness.idle_compact` to `off` to turn off the machine default. A profile or team role that sets its own floor still applies. [Configuration](./configuration.md#idle-compaction) gives the timing per provider, which agents qualify, and the floors. To change one agent's floor for its current work, run [`rimz agents tune @coder idle-compact 120k`](../reference/cli/agents.md#tune), and `reset` restores it.
+It skips an agent whose account shows a spent cap for its model, or a spent usage window that no paid extra usage carries. If the agent starts another turn before the queued command lands, RimZ drops the command. Set `harness.idle_compact` to `off` to turn off the machine default. A profile or team role that sets its own token threshold still applies. [Configuration](./configuration.md#idle-compaction) gives the timing per provider, which agents qualify, and the thresholds. To change one agent's threshold for its current work, run [`rimz agents tune @coder idle-compact 120k`](../reference/cli/agents.md#tune), and `reset` restores it.
 
 ### Smart compaction
 
