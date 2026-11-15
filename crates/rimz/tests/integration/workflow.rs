@@ -1089,20 +1089,26 @@ fn a_show_whose_live_home_moves_under_it_reads_the_finished_home_whole() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
     let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
-    // Hold `show` once it has found the live home, and move that home under it.
+    // Hold `show` in each mode once it has found the live home, and move that home under it.
     let hold = crate::common::DeliveryRendezvous::new(&env, "show-after-find");
-    let shown = env
-        .rimz()
-        .args(["workflow", "show", &id, "--json"])
-        .env("RIMZ_TEST_WORKFLOW_AFTER_FIND", &hold.path)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut release = hold.arrive();
+    let modes: [&[&str]; 3] = [&["--json"], &["--history"], &[]];
+    let shown = modes.map(|mode| {
+        env.rimz()
+            .args(["workflow", "show", &id])
+            .args(mode)
+            .env("RIMZ_TEST_WORKFLOW_AFTER_FIND", &hold.path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    });
+    let mut releases = modes.map(|_| hold.arrive());
     success(command(&env, &["workflow", "cancel", &id]));
-    release.write_all(&[1]).unwrap();
-    let value: Value = serde_json::from_str(&success(shown.wait_with_output().unwrap())).unwrap();
+    for release in &mut releases {
+        release.write_all(&[1]).unwrap();
+    }
+    let [json, history, compact] = shown.map(|child| success(child.wait_with_output().unwrap()));
+    let value: Value = serde_json::from_str(&json).unwrap();
     assert_eq!(
         (&value["record"]["state"], &value["dir"]),
         (&json!("canceled"), &json!(run_home(&env, &id).work)),
@@ -1113,6 +1119,13 @@ fn a_show_whose_live_home_moves_under_it_reads_the_finished_home_whole() {
         saved.contains("pr cancel canceled") && !events(&value, "cancel").is_empty(),
         "{value:#}"
     );
+    // The held reads print the finished run as a read after the move does.
+    assert_eq!(value["history"], saved.as_str(), "{value:#}");
+    assert_eq!(
+        history,
+        success(command(&env, &["workflow", "show", &id, "--history"]))
+    );
+    assert_eq!(compact, success(command(&env, &["workflow", "show", &id])));
 }
 
 #[test]
