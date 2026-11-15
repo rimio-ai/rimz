@@ -66,7 +66,7 @@ builds            /home/me/.rimz/builds
 | `notes` | The note store [`rimz notes`](./notes.md) writes, `notes/<kind>/<YYYYMMDD>/<slug>.md`. No RimZ command removes this tree. |
 | `accounts` | Provider homes RimZ placed for named accounts, `accounts/<kind>/<name>/`, and shared role, effort, and closed-day spend history under `.history/`. No RimZ command removes this tree. |
 | `logs` | Machine-wide JSONL logs: assists, focus repairs, loop runs, and user inputs. |
-| `loops` | Loop arming and strike overlays, the start throttle ticket queue, and their locks. |
+| `loops` | Loop arming and strike overlays, the start throttle queue, and their locks. |
 | `web` | `rimz web` ttyd and share records, their locks, and the Zellij web config. |
 | `builds` | Staged `rimz reload` builds. |
 | `cache`, `providers cache` | Pet assets, ttyd binaries and fonts, and the Zellij presence plugin under `cache/`, and provider caches (accounts, rate limits, credits, spend, pricing) under `cache/providers/`. Deleting them costs a cold provider dashboard and one full spending walk, and loses account budget choices and park state plus auto-redeem stamps and rate memos. Recorded spend history stays under `accounts/.history/`. |

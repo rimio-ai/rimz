@@ -409,13 +409,13 @@ A remote room is plain SSH under a supervisor that reconnects itself when the li
 
 ### A loop keeps reporting "still active"
 
-The task's previous run is still live, or another fire of the task still holds its run lock while it starts a run. By default a later fire records `overlapped`, naming the blocking run, instead of starting another. A non-skip [overlap policy](../reference/cli/loop.md#overlapping-triggers) keeps triggers as `deferred` until that run ends. Run `rimz loop show <name>` to see the live run and the waiting fires, then stop it:
+The task's previous run is still live, or another fire of the task still holds its run lock while it starts a run. By default a later fire records `overlapped`, naming the blocking run, instead of starting another. A non-skip [overlap policy](../reference/cli/loop.md#overlapping-triggers) keeps triggers as `deferred` until that run ends, unless its queue is full. Run `rimz loop show <name>` to see the live run and the waiting fires, then stop it:
 
 ```sh
 rimz loop stop <name>
 ```
 
-Stop cancels each live run the task started and keeps the waiting triggers, so the next one starts once the run ends. To drop them instead, run `rimz loop pause <name>`. When a lock holder survives the stop, the command exits `1` with the holder's PID. [Fire and stop a run](../reference/cli/loop.md#fire-and-stop-a-run) gives the exact sequence.
+Stop cancels each live run the task started and keeps the waiting triggers, so the next one starts once the run ends. To drop them instead, run `rimz loop pause <name>`. When a lock holder survives the stop, the command exits `1` with the holder's PID. Inspect that process, and end it yourself when it is safe. [Fire and stop a run](../reference/cli/loop.md#fire-and-stop-a-run) gives the exact sequence.
 
 ### A clock task never fired
 

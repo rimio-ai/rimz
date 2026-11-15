@@ -236,7 +236,7 @@ An agent step's launch settings apply to each fresh launch as the matching `rimz
 
 | Field | Meaning |
 | --- | --- |
-| `account` | A login name, pinned on every cell. Capacity admission counts the launch on that account and skips availability routing. |
+| `account` | A login name, pinned on every cell. The start throttle counts the launch in that account's start group and skips availability routing. |
 | `mode` | `auto`, `ask`, or `yolo`. `plan` refuses. |
 | `effort` | The effort level. |
 | `fast` | `true` or `false`. |

@@ -86,7 +86,7 @@ The [reference](../../reference/cli/workflow.md#definition-fields) owns the head
 
 ### Kinds
 
-Each node is written as one of eight tables, and the table word is its kind, so no field selects a runner. `WorkflowFile::lower` turns `test`, `script`, `judge`, `condition`, and `sleep` into a `Check`, and `agent`, `command`, and `message` into a `Step`. `Check::kind` and `Step::kind` read the lowered fields and compile into `Node::kind`. The [reference](../../reference/cli/workflow.md#definition-fields) lists every field each table takes. The rules the engine and validation add:
+Each node is written as one of eight tables, and the table word is its kind, so no field selects a runner. `WorkflowFile::lower` turns `test`, `script`, `judge`, `condition`, and `sleep` into a `Check`, and `agent`, `command`, and `message` into a `Step`. `Check::kind` and `Step::kind` read the lowered fields and compile into `Node::kind`. The [reference](../../reference/cli/workflow.md#definition-fields) lists every field each table takes and its rules. The lowering:
 
 | Table | Lowers to |
 | --- | --- |
@@ -99,7 +99,7 @@ Each node is written as one of eight tables, and the table word is its kind, so 
 | `command` | `Step`, run or shell |
 | `message` | `Step`, `StepKind::Message` ([Command and message steps](#command-and-message-steps)) |
 
-`crates/rimz/src/harness/workflow/validate.rs::Validation::condition_fields` enforces a condition's required `cases`, `else`, `timeout`, and `on.unknown`. A condition takes no `wake`, since its subscriptions come from its terms. A sealed run is not validated again, so a sealed judge without a `summary` shows a fallback description.
+A condition's `cases` are required by its type (`crates/rimz/src/harness/workflow/spec/kinds.rs::ConditionNode`), `else` and `on.unknown` by `crates/rimz/src/harness/workflow/validate.rs::Validation::condition_fields`, and its `timeout` by `Validation::requires_timeout`. A condition takes no `wake`, since its subscriptions come from its terms. A sealed run is not validated again, so a sealed judge without a `summary` shows a fallback description.
 
 A condition's cases may be written inline or as `[[condition.<name>.cases]]` blocks, and the loader reads both into the same ordered array. A case's `when` terms may not match the value `unknown`: the shared `WhenExpr` parser refuses it in every condition reader, since a term over an unread key is already unknown by itself.
 
@@ -114,15 +114,16 @@ The engine rules behind the agent-only fields:
 - `crates/rimz/src/harness/workflow/spec/kinds.rs::AgentNode` gives `lifecycle` no default, so a missing or other value is a parse error. `Step::lifecycle` reads the written value, and command steps stay turn-shaped.
 - `rest-check` refuses a sleep because a rest check samples leader turn ends, and a sleep runs its own timer.
 - A step's `timeout` runs from its launch (`crates/rimz/src/harness/workflow/inspect.rs::timeout_at`).
+- `on.asked` may not target `@wait`, and validation refuses it with `only checks can wait`.
 - `admission.max-parallel` and `admission.stagger` lower into the step's limit, the same shape as `workflow.limit` ([Admission](#admission)).
 
-`crates/rimz/src/harness/workflow/definition.rs::Node::launch_overrides` resolves the launch settings, `engine::agent::launch` passes them in `StepLaunch.overrides`, and the CLI host maps them onto the launcher's overrides and cohort request as a fresh launch applies them (`crates/rimz/src/cli/workflow/host.rs::Host::launch`). A `worktree` setting names a worktree the launch creates or reuses. A `--continue` restart resumes the provider session, and the host drops `account`, `system-prompt-file`, and `worktree` there. The relaunch takes the room's current login for the kind when it shares a history pool with the session's (`crates/rimz/src/harness/resume.rs::relaunch_login`), and otherwise refuses. It runs in the run's scope checkout. `account` also pins every cell's start group for capacity admission, which then skips availability routing. The engine asks the host for those groups (`AttemptHost::start_groups`), and both hosts resolve them through `harness::workflow::launch_groups`.
+`crates/rimz/src/harness/workflow/definition.rs::Node::launch_overrides` resolves the launch settings, `engine::agent::launch` passes them in `StepLaunch.overrides`, and the CLI host maps them onto the launcher's overrides and cohort request as a fresh launch applies them (`crates/rimz/src/cli/workflow/host.rs::Host::launch`). A `--continue` restart resumes the provider session, and the host drops `account`, `system-prompt-file`, and `worktree` there. The relaunch takes the room's current login for the kind when it shares a history pool with the session's (`crates/rimz/src/harness/resume.rs::relaunch_login`), and otherwise refuses. It runs in the run's scope checkout. `account` also pins every cell's start group for capacity admission, which then skips availability routing. The engine asks the host for those groups (`AttemptHost::start_groups`), and both hosts resolve them through `harness::workflow::launch_groups`.
 
 `max-visits` must be at least 1. It caps the step's entries counted in `RunRecord.visits`, a plain count per step (`crates/rimz/src/harness/workflow/spec.rs::Step::tripped_visit_bound`), increased by the run-wide `visit_grant`. Every step kind counts at admission, before it acts. Only a manual restart clears a count.
 
 ### Command and message steps
 
-A command step's `run` resolves the same way as a test's or a script's ([`run` and `shell`](#run-and-shell)).
+A command step's `run` resolves the same way as a test's or a script's ([`run` and `shell`](#run-and-shell)), and its `shell` text must be nonempty.
 
 A message step's `then` names one node, `@done`, or `@failed` (`crates/rimz/src/harness/workflow/validate.rs::message_then`). Its `message` must be an `@` address without a pane id that `address::parse_selector` accepts and that is neither `@user` nor `@me` (`crates/rimz/src/harness/workflow/validate.rs::message_target`). Its optional `session` pins the agent by launch: the session given, or the session a restart or molt of that launch replaced it with (`crates/rimz/src/cli/workflow/host.rs::pin_names`). A handle that another launch took over goes undelivered. `prompt-file` is optional and confined. `agent::compose` joins the prompt file when set, the node's sign, and the run prompt, and `engine::Notice::text` writes a header line before them. [Message steps](#message-steps) owns how one runs.
 
