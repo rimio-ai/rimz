@@ -51,6 +51,7 @@ Two figures RimZ prints in more than one place, each correct where it appears. N
 - Prose carries no em or en dashes. Use a period, comma, colon, or parentheses. A `console` block keeps whatever the command printed.
 - A doc states what the product does now. Words relative to a change ("unchanged", "now", "no longer") belong in the PR, not the page.
 - `sh` blocks are copy-runnable, checked against the clap definition that parses them.
+- A prose sentence that tells the reader to pass a flag names a command that takes it: check the flag against that command's clap definition, as for an `sh` block. A restart sentence once offered `--model`, which `rimz agents restart` does not accept.
 - In a recipe spread over several `sh` blocks, every file argument names the path an earlier block created (`"$ROOT/tmp/replay/..."`), never a bare filename that depends on the reader's directory.
 - A fact from a subagent's summary is not grounded. Use a subagent to find the function; read the function before writing the sentence.
 - A process command line a doc states (argv0, a script path, a parent and child) comes from a probe or a live `/proc` read of each way the program is launched (a `PATH` lookup through a linked bin entry, a direct path, a launcher), never from a package's file layout or a teammate's finding.
