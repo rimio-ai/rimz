@@ -361,7 +361,8 @@ pub struct ResumeSkip {
 /// `@planner` comes back as a planner. A launch with a durable record replays
 /// the record's model and effort, and fast mode where supported; a record
 /// with no model, no saved base, and no tier stamp relaunches with none, even
-/// over a profile, or a profile it builds on, that has since gained a model.
+/// over a profile, a profile it builds on, or a team role that has since
+/// gained a model.
 /// A record without effort takes the profile's declared effort and saves it on
 /// relaunch. A kind without an effort flag drops either effort on replay,
 /// without a warning, and saves none. Without a record, one-off `--model` /
@@ -580,6 +581,17 @@ fn resolve_posture_with_role(
         }
     }
     let base_name = request.record.and_then(|record| record.agent.as_deref());
+    // The role is the last layer over the profile, so it loses its model
+    // where the table's layers do; a `--model` in its raw `args` stays too.
+    let modelless_role = role
+        .filter(|_| {
+            request.stamped_tier.is_none() && request.record.is_some() && base_name.is_none()
+        })
+        .map(|role| crate::config::RoleBinding {
+            model: None,
+            ..role.clone()
+        });
+    let role = modelless_role.as_ref().or(role);
     let resolved =
         crate::harness::spec::resolve_agent_override(base_name, &profiles).and_then(|base| {
             crate::harness::spec::profile_cell_with_base_override(
