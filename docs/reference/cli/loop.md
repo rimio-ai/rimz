@@ -21,7 +21,7 @@ rimz loop fire watchdog
 | `rimz loop enable <NAME>...\|--all` | Arm tasks on this machine and clear holds and strikes. |
 | `rimz loop disable <NAME>...\|--all` | Hold tasks on this machine until enabled. |
 | `rimz loop pause <NAME> --for <DUR>` | Hold a task for a bounded time. |
-| `rimz loop fire <NAME>` | Run a task now in the foreground. |
+| `rimz loop fire <NAME>` | Fire a task now, outside its schedule. |
 | `rimz loop stop <NAME>` | Stop a task's active run and release its overlap lock, including a fired one-shot's run. |
 | `rimz loop list [--all] [--json]` | List the current room's tasks by lifecycle. |
 | `rimz loop watch` | Hold the open room's live glance panel with countdowns and running tasks. |
@@ -113,7 +113,7 @@ Expressions accept `!`, `&&`, `||`, and parentheses, in that precedence order. A
 | `pr.queue`, `pr.queue[branch]` | `queued`, `dequeued`, `armed`, `none` | The room sidebar's last-known merge-queue state for the checkout's or selected branch's open PR, GitHub only: `queued` while it is in the queue, `dequeued` once it has left the queue without merging, until it is queued again, re-armed (an auto-merge request enabled after the removal), merged, or closed. A push alone does not clear it. `armed` for an open PR in neither state that has an auto-merge request: one re-armed and waiting to enter the queue, or armed on a repository without a merge queue. `none` for an open PR with none of these, one that is merged or closed, any PR on Gitea, and when the last successful probe found no PR link; unread without a sidebar source. Pair it with `pr`: `pr=open && pr.queue=dequeued`. |
 | `pr.mergeable`, `pr.mergeable[branch]` | `mergeable`, `conflicting`, `none` | GitHub's settled mergeability for the open PR's current head. Unread until GitHub settles an answer at that head, when only an answer for an older head is cached, on an open PR without open-PR facts, and without a sidebar source. `none` when the last successful probe found no PR link, or a merged or closed PR. The answer is keyed by head alone: after only the base moves, the answer settled at the same head keeps reading until GitHub settles again. GitHub only. |
 | `pr.review`, `pr.review[branch]` | `draft`, `changes_requested`, `required`, `approved`, `none` | The open PR's review state, GitHub only. Draft wins over the review decision. Otherwise `changes_requested`, `required`, and `approved` reflect GitHub's review decision; a null decision reads `none`, and so does a PR the last successful probe found missing, merged, or closed. Unread when never fetched, when the review decision is unavailable on a non-draft PR, on an open PR without open-PR facts, and without a sidebar source. |
-| `window.5h.left`, `window.7d.left` | A comparison with a whole percent, `0` to `100` | Percent left in the task provider's 5-hour or 7-day window: `100` minus the cached usage, projected to the tick, so a window whose reset has passed reads `100`. A limit the provider has lifted reads `100`. Unread without a cached reading of that window. The provider is the task's `--provider` kind, recorded as `provider` on the row. The account is the room's current one for that provider, or the task's `--account`, whose reading is the last one stored for it: a room refreshes only its current account for the provider and the accounts its agents run on. |
+| `window.5h.left`, `window.7d.left` | A comparison with a whole percent, `0` to `100` | Percent left in the task provider's 5-hour or 7-day window: `100` minus the cached usage, projected to the tick, so a window whose reset has passed reads `100`, which lets the loop timer fire the task at the reset with no room open. Without an open room nothing refreshes the cache, so the projection misses usage since the last refresh. A limit the provider has lifted reads `100`. Unread without a cached reading of that window. The provider is the task's `--provider` kind, recorded as `provider` on the row. The account is the room's current one for that provider, or the task's `--account`, whose reading is the last one stored for it: a room refreshes only its current account for the provider and the accounts its agents run on. |
 
 Only `team.stage`, `ci`, `pr`, `pr.queue`, `pr.mergeable`, and `pr.review` take an optional `[branch]` selector, such as `pr[feat/x]=merged`. A selector is nonempty and contains no whitespace, `[` or `]`; its spelling is preserved. `team.stage[branch]` reads the board of the checkout on that branch, as the table says. A forge selector reads that branch even without a checkout for it in the room. A live loop condition or an Active workflow run with forge-reading cases keeps its selected branches probed; demand ends when neither needs them. `ci[branch]` prefers CI of an open or merged PR, then the branch head's CI. Forge branch readings are unknown until the sidebar has probed them or when the scope checkout has a detached HEAD, and unread with no supported forge or under the external timer ([forge freshness](#forge-freshness)). These readings emit no signals and are not latched merge events.
 
@@ -270,6 +270,25 @@ A subscription observes its whole family. A task on `ci.failed` fires on `ci.fai
 Signals come from `rimz events emit`, forge state changes on watched checkouts, trunk ref moves, managed worktree creation and removal, agent and team lifecycle transitions, team stage flips, and `rimz wait` watchers. The [signal lines table](./events.md#signal-lines) lists every name and source.
 
 Firing runs in the emitting process. A signal reaches only the tasks subscribed at that moment; a later subscription never receives it. A busy task can retain its own trigger through its [overlap policy](#overlapping-triggers). A disabled or paused task, or a project task whose project is untrusted, skips the signal.
+
+### Built-in signals
+
+RimZ emits these signals from what the room already watches. The [`rimz events` source table](./events.md#signal-lines) names which process appends each one.
+
+| Signal | Fires when | Payload |
+| --- | --- | --- |
+| `ci.passed`, `ci.failed` | The checks on a commit of a watched checkout settle on success or failure, with or without a pull request. | `path`, `branch`, `repo`. `head` (the commit the checks ran on) and `checks_url` when the commit is known. `number` and `url` when a pull request exists. |
+| `pr.merged`, `pr.closed` | The pull request of a watched checkout leaves the open state. | `path`, `branch`, `repo`, `state`, plus `number`, `url`, `head`, and `checks_url` when known. |
+| `pr.opened` | A successful probe finds a new open pull request after monitoring has already observed the branch successfully. | The `pr.merged` payload with `state: "open"`. |
+| `pr.behind`, `pr.conflicted` | GitHub only. An open pull request falls behind its base, or has confirmed conflicts, including at first sight. Fires again for a changed PR head while still in that state, never for repeated readings of the same head. | The `pr.merged` payload with `state: "open"`, plus `pr_head`, `base` when known, and `behind_by` for `pr.behind`. `head` stays the local worktree HEAD. |
+| `pr.queued`, `pr.dequeued` | GitHub only. An open pull request enters the merge queue, or leaves it while still open. See [`rimz events`](./events.md#reserved-families) for first readings, re-arms, and merges out of the queue. | The `pr.merged` payload with `state: "open"`, plus `pr_head` and `base` when known. `pr.queued` adds `queued_at`. `pr.dequeued` adds `dequeued_at`, `reason` when GitHub supplies one (`failed_checks`, `manual`), and `queue_checks_url` when GitHub names the queue commit. |
+| `trunk.moved` | The trunk ref moves to a different commit. | `trunk`, `from`, `to`, `repo`. |
+| `worktree.created`, `worktree.removed` | A managed worktree is created or removed. A reused worktree, or one rolled back after a failed creation hook, emits nothing. | `name`, `branch`, `path`, `repo`, plus `from_pr` when present. Creation adds `base` when known. Removal adds `branch_deleted`. |
+| `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended` | One agent's lifecycle transition. `agent.waiting` fires at the hook, also during Codex automatic review, before its 60-second attention delay. | `kind`, `session`, `status`, `errored`, plus `handle` when the card has a name. |
+| `team.idle`, `team.waiting`, `team.failed`, `team.ended` | A [team](./teams.md) cohort settles: every member at rest with nothing queued and no wait armed, one member waiting on input, one member's turn failing, or the last member ending. | `team`, `instance` (`forge#feat-x`), `member`, and `members` with each handle and status. A handle can be a session id. |
+| `team.stage` | A team hands its stage off, and again when a resumed owner takes its stage back. | `team`, `instance`, `to`, `owner`, `by`, `note`, `board`, plus `from` on every flip that did not open the board ([payload](./teams.md#the-teamstage-signal)). |
+
+A dequeued pull request never turns its own checks red, so `ci.failed` stays silent for it. Read the standing queue state with the [`pr.queue` condition key](#conditions).
 
 ### The trigger's evidence
 
@@ -435,7 +454,7 @@ A run whose task row is gone keeps a DONE row until it ends, with the real name 
 
 Listing is read-only and never creates a room store. Malformed local task state fails the command; a malformed other room warns with its root and is skipped. A run lock that cannot be read warns on stderr with the task's name. When a room's locks directory cannot be listed, one warning names the root and directory, and its rows show their other state.
 
-HELD is a human view of starts, not a JSON section. `capacity_wait` remains the oldest active workflow run's capacity wait, now with optional snake_case `hold`; unknown kinds are omitted and treated as self-clearing. `attention: "held"` means a hold needing a fix only. `loop show --json` also adds optional `hold` to each `held` or `waiting` ticket object.
+HELD is a human view of starts, not a JSON section. `capacity_wait` is the oldest active workflow run's capacity wait, with optional snake_case `hold`; unknown kinds are omitted and treated as self-clearing. `attention: "held"` means a hold needing a fix only. `loop show --json` also adds optional `hold` to each `held` or `waiting` ticket object.
 
 ### `loop watch`
 
@@ -495,9 +514,7 @@ Run records refused at the run lock carry `holder` when the lock names one, in t
 
 A `○ no record` row uses the warning tone, never merges, and never adds `×N`. Its WHEN is the newest refused fire's age; NOTE has `pid <pid>`, the checkout prefix when present, and the usual waiting/skipped counts. TOOK, COST, TOKENS, and MODE are `-` when their columns appear, and this row alone never introduces MODE. It counts as one row toward the heading's row limit; the missing run itself adds no record. These rows are human-only: `--json` still has one entry per real fire and no synthetic missing-run entry.
 
-A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind).
-
-Workflow-run DETAIL in `loop show` and WORKTREES uses the same count-free status phrase as `workflow list`: a check wait reads its outcome, not `said <outcome>`, and no advance count is printed. `loop list --json` and `loop show --json` keep their shapes; only `workflow_runs[].detail` text changes. Loop views do not add agent or PR enrichment.
+Workflow-run DETAIL in `loop show` and WORKTREES uses the same count-free status phrase as `workflow list`: a check wait reads its outcome, not `said <outcome>`, and no advance count is printed. The JSON of `loop list` and `loop show` carries the same phrase in `workflow_runs[].detail`. Loop views do not add agent or PR enrichment.
 
 ### `loop logs`
 
