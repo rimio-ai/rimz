@@ -6879,7 +6879,8 @@ fn loop_watch_picks_up_a_quiet_fire_that_appends_nothing_to_the_log() {
             loop_ok(&env, &["loop", "fire", "hushed"]);
             wait_for_loop_report_after(&env, "hushed", before);
         },
-        &["hushed", "✓ 0s ago"],
+        // Any age: under load the watch may first repaint seconds after the fire.
+        &["hushed", "✓ ", " ago"],
     );
     assert!(!frame.contains("never fired"), "{frame}");
     assert!(read_loop_run_records(&env).is_empty());
