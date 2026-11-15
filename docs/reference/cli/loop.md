@@ -216,7 +216,7 @@ window: claude 5h · 70% left · resets 2026-09-05 14:00
 next fire: 2026-09-05 14:00 (in 2h)
 ```
 
-A window that has not started reads `window: claude 5h · not started · 100% left` and `next fire: the next scheduler tick, since the window has not started`. A task added from a linked worktree without `--fresh-worktree` adds the `note: runs at the project root` line described under [placement](#placement).
+A window that has not started reads `window: claude 5h · not started · <N>% left` (or `usage unknown`) and `next fire: the next scheduler tick, since the window has not started`. A task added from a linked worktree without `--fresh-worktree` adds the `note: runs at the project root` line described under [placement](#placement).
 
 Replacing a task whose arming, pause, or strike state was set prints `arming: reset` right after the first line, and an `--project` add prints its [trust result](#project-tasks) there too. When no room is open and the timer is active, the last line reads `no room is open there; the loop timer will keep time`.
 

@@ -1,18 +1,22 @@
 # `rimz events`
 
-`rimz events` reads and writes the workspace's durable event log. `follow` prints each agent lifecycle transition and each signal as one JSON object per line, so a script can react to agent state without reading panes. `emit` appends a named signal of your own and fires the loop tasks subscribed to it.
+`rimz events` reads and writes the workspace's durable event log. `follow` prints each agent lifecycle transition and each signal as one JSON object per line, so a script can react to agent state without reading panes. `emit` appends a named signal of your own and fires the loop tasks and workflow runs subscribed to it.
 
 | Command | What it does |
 | --- | --- |
-| `rimz events follow` | Stream lifecycle and signal lines as JSON Lines. |
 | `rimz events list` | List recent signals from the active log. |
+| `rimz events follow` | Stream lifecycle and signal lines as JSON Lines. |
 | `rimz events emit <NAME>` | Append one signal and fire its subscribers. |
 
 All take the [global flags](../cli.md#global-flags). They reach the room [the way room commands do](../cli.md#which-room-a-command-reaches), and `--root` picks the room whose log they use.
 
-All require an existing room, one with a readable workspace record. Outside a room they exit 1 with ``error: no room at <root>: run `rimz start` there, or pass --root <room>``. `follow` refuses before it polls. `emit` checks its name and payload first, so an invalid input refuses with its own error even outside a room.
+All three need an existing room, one with a readable workspace record. It does not have to be running. Outside a room they exit 1 with ``error: no room at <root>: run `rimz start` there, or pass --root <room>``. `follow` refuses before it polls. `emit` checks its name and payload first, so an invalid input refuses with its own error even outside a room.
 
-A `--signal` value that is neither a valid name nor `FAMILY.*`, a `--since` value that does not parse, or a `-n` value that is not a non-negative integer is a usage error (exit 2).
+| Exit code | When |
+| --- | --- |
+| `0` | `list` printed, including an empty result. `follow` ended by Ctrl-C, `SIGTERM`, or a closed pipe. `emit` appended its signal. |
+| `1` | No room. A log `follow` cannot read. An `emit` [refusal](#emit-a-signal), or a firing failure after the append. |
+| `2` | An argument error: a `--signal` value that is neither a valid name nor `FAMILY.*`, a `--since` value that does not parse, or a `-n` value that is not a non-negative integer. |
 
 ## List recent signals
 
@@ -22,7 +26,20 @@ rimz events list --signal 'ci.*' --since 2h -n 10
 rimz events list --signal deploy.finished --json
 ```
 
-`list` prints signals newest first, with columns `WHEN`, `SIGNAL`, `SOURCE`, and `SUBJECT`. The subject is the same text that follows the signal name in a delivered notification, or `-` when empty. Text output folds adjacent listed signals with the same name, source, and subject into one row. Payload fields outside the subject never split a row, so custom signals with an empty subject fold even when their payloads differ. A folded row appends `×N` after the signal name. If its members span at least one second, it adds ` · over <span>` after the subject, or just `over <span>` when the subject is empty. Bursts inside one second keep `×N` without a span. `WHEN` is the age of the latest member, and the span runs from the earliest to the latest member timestamp. Lifecycle records and the `agent.*` signals derived from them are not listed.
+`list` prints signals newest first, with columns `WHEN`, `SIGNAL`, `SOURCE`, and `SUBJECT`:
+
+```console
+$ rimz events list -n 6
+WHEN  SIGNAL                SOURCE     SUBJECT
+0s    deploy.finished ×3    cli        over 4s
+4s    build.done            cli        -
+4s    deploy.failed         cli        -
+5s    deploy.finished       cli        -
+53s   wait.wait-civil-yard  watch      -
+1m    team.idle ×2          lifecycle  forge#probe · over 5s
+```
+
+The subject is the text that follows the signal name in a delivered notification, or `-` when empty. Text output folds adjacent signals with the same name, source, and subject into one row, and appends `×N` after the name. Payload fields outside the subject never split a row, so custom signals with an empty subject fold even when their payloads differ. When the folded members span at least one second, the row adds ` · over <span>` after the subject, or `over <span>` alone when the subject is empty. `WHEN` is the age of the newest member. Lifecycle records and the `agent.*` signals derived from them are not listed.
 
 | Flag | Effect |
 | --- | --- |
@@ -31,7 +48,7 @@ rimz events list --signal deploy.finished --json
 | `-n, --limit <N>` | Maximum rows after filtering and folding in text, or records after filtering with `--json`. Default `20`. A folded row is never split. |
 | `--json` | One [signal line](#signal-lines) per record, the same schema as `follow`, newest first. |
 
-Only the active event-log generation is searched, never archives, even when `--since` reaches farther back. When no row is left, text output prints `no signal matched; active log reaches back <age>`, the age of the active log's first record, or `no signal matched; active log is empty`. JSON output prints nothing. Both exit 0.
+Only the active event-log generation is searched, never archives, even when `--since` reaches farther back. When no row is left, text output prints `no signal matched; active log reaches back <age>` (the age of the active log's first record) or `no signal matched; active log is empty`, and JSON output prints nothing.
 
 ## Follow the event stream
 
@@ -40,7 +57,7 @@ rimz events follow
 rimz events follow --replay | jq 'select(.event == "signal")'
 ```
 
-`follow` starts at the live edge and prints only what is appended after it starts. `--replay` first prints the current log generation from its beginning, then keeps following. The log rotates into an archive once it reaches 64 MiB, or at the smaller size a [`rimz workspace rotate-events --max-bytes`](./maintenance.md#rotate-the-event-log) run names. Archived generations are never replayed. A follower that is already running when the log rotates reads the rest of the old generation before it moves to the new one, so it misses nothing.
+`follow` starts at the live edge and prints only what is appended after it starts. `--replay` first prints the current log generation from its beginning, then keeps following. The log rotates into an archive once it reaches 64 MiB, or at the smaller size a [`rimz workspace rotate-events --max-bytes`](./maintenance.md#rotate-the-event-log) run names. Archived generations are never replayed. A follower already running when the log rotates reads the rest of the old generation before it moves to the new one, so it misses nothing.
 
 | Flag | Effect |
 | --- | --- |
@@ -52,8 +69,7 @@ The stream follows these rules:
 
 - stdout carries one JSON object per line, flushed as each line is written.
 - stderr carries warnings, prefixed `rimz: warning:`, when an archived generation is missing or disappears before it is read, or the log generation moves backward. The stream continues after each warning.
-- Ctrl-C, `SIGTERM`, or a reader closing the pipe ends the command with exit code 0. A log that cannot be read ends it with exit code 1.
-- The follower checks the log every 250 ms. Set `RIMZ_EVENTS_POLL_MS` to a positive integer to change the interval. Any other value is ignored and the default applies.
+- The follower checks the log every 250 ms. Set `RIMZ_EVENTS_POLL_MS` to a positive integer to change the interval. Any other value is ignored.
 
 Each line's `event` field says which shape it has: `lifecycle` or `signal`. The log's other records (messages, launches, attaches) are not printed. How the follower folds the log into lines is in [publishing transitions](../../internals/agents/model.md#publishing-transitions).
 
@@ -106,17 +122,21 @@ $ rimz events follow --replay
 | `payload` | The signal's top-level JSON object, or `{}` when it has none. |
 | `source` | Who appended it (see the next table). |
 
-| `source` | Appended by | Names |
-| --- | --- | --- |
-| `cli` | `rimz events emit` | Any valid name outside the reserved families. |
-| `forge` | The room's sidebar, when a worktree branch's CI or pull request changes state | `ci.passed`, `ci.failed`, `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted`, `pr.queued`, `pr.dequeued` |
-| `git` | The room's sidebar, when the project trunk ref moves | `trunk.moved` |
-| `worktree` | Successful managed worktree creation or removal | `worktree.created`, `worktree.removed` |
-| `lifecycle` | The agent lifecycle hook, when a team member's transition changes its cohort | `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
-| `team` | A team stage flip, and the [re-wake](./teams.md#the-owners-notice) of the stage owner when it is resumed | `team.stage` |
-| `watch` | The watcher of a `rimz wait` command, check, PID, or file watch, at a check-in and its final outcome | `wait.<task-name>` |
+Every signal name, by who produces it. The families in the second column are [reserved](#reserved-families): only RimZ produces names in them.
 
-Two kinds of signal fire subscribers but print no signal line. An `agent.*` signal is derived from a lifecycle record, and that record's lifecycle line is its durable trace. A `wait.<task-name>` delivery that RimZ sends because the watcher itself died is not written to the log. A watched command's exit code travels only in the delivered message, never in the signal line's payload.
+| Names | Family | `source` | Produced by |
+| --- | --- | --- | --- |
+| Any valid name outside the reserved families | yours | `cli` | `rimz events emit` |
+| `ci.passed`, `ci.failed` | `ci` | `forge` | The room's sidebar, when a watched checkout's CI changes state |
+| `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted`, `pr.queued`, `pr.dequeued` | `pr` | `forge` | The room's sidebar, when a watched checkout's pull request changes state |
+| `trunk.moved` | `trunk` | `git` | The room's sidebar, when the project trunk ref moves |
+| `worktree.created`, `worktree.removed` | `worktree` | `worktree` | A successful managed worktree creation or removal |
+| `team.idle`, `team.waiting`, `team.failed`, `team.ended` | `team` | `lifecycle` | The agent lifecycle hook, when a team member's transition changes its cohort |
+| `team.stage` ([payload](./teams.md#the-teamstage-signal)) | `team` | `team` | A team stage flip, and the [re-wake](./teams.md#the-owners-notice) of the stage owner when it is resumed |
+| `wait.<task-name>` | `wait` | `watch` | The watcher of a `rimz wait` command, check, PID, or file watch, at a check-in and its final outcome |
+| `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended` | `agent` | none | Derived from a lifecycle record. No signal line: the lifecycle line is its trace. |
+
+A `wait.<task-name>` delivery that RimZ sends because the watcher itself died also fires subscribers without a signal line. A watched command's exit code travels only in the delivered message, never in the payload. What each built-in signal's payload carries, and when it fires, is in [the loop reference](./loop.md#built-in-signals) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
 
 ## Emit a signal
 
@@ -125,24 +145,30 @@ rimz events emit deploy.finished
 rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
 ```
 
-`emit` appends one signal record with source `cli`, then fires every loop task subscribed to it in this workspace, and prints the record id, the count of tasks it fired, and one indented line per task:
+`emit` appends one signal record with source `cli`, then fires every loop task subscribed to it in this workspace. It prints the record id, the count of tasks it started, and one indented line per task. Here `smoke` is a task added with `rimz loop add smoke --signal deploy.finished --repeat -- ...`:
 
 ```console
 $ rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
-emitted deploy.finished (evt_01a06d7d112171d0bdaceff9e4a3c6aa) · fired 1 task
-  wait-noble-lane
+emitted deploy.finished (evt_01a1dea841f674fb819852ff17c92c3a) · fired 1 task
+  smoke
 ```
 
-With no matching subscriber the line reads `no task is subscribed to it` and nothing follows. A subscription to a sibling name, such as `deploy.failed`, does not count. With matching subscribers but no started task it reads `fired no task`. Each matching task that did not start gets an indented `<task>: did not start` line after any fired task names. Multiple started tasks read `fired N tasks`.
+The part after `·` reads one of these:
 
-A matching task does not start when it is disabled, paused, or a project task whose project is not trusted, or when its run fails to launch.
+| Receipt | When |
+| --- | --- |
+| `fired 1 task`, `fired N tasks` | That many tasks started a run. Each is named on its own line. |
+| `fired no task` | Tasks took the signal, and none started. |
+| `no task is subscribed to it` | No task took the signal: none subscribes to this name or its family, each subscriber names a sibling (a task on `deploy.failed` hears `deploy.finished` and records `skipped`), or each subscriber's `--match` rejected the payload. |
+
+A task that took the signal but did not start gets an indented `<task>: did not start` line after any started task. A task does not start when it is disabled, paused, or a project task whose project is not trusted, or when its run fails to launch.
 
 | Argument | Rule |
 | --- | --- |
 | `<NAME>` | Dot-separated segments, at most 64 bytes in total. Each segment starts with a lowercase letter or digit and contains only lowercase letters, digits, `-`, and `_`. The first segment is the signal's family. |
 | `--json <OBJECT>` | One top-level JSON object, at most 64 KiB as typed (whitespace counts). Omitted, the payload is `{}`. |
 
-Firing happens inside the `emit` process, with no daemon. It needs an existing room but no running agent. It spawns one detached run for each live subscription that exists in this workspace at that moment. A task added afterwards never sees the signal. A busy task can retain its trigger through its [overlap policy](./loop.md#overlapping-triggers), not through signal replay to later subscribers. When the room has an active [workflow](./workflow.md) run, `emit` also starts one detached workflow advance, which hands the signal to the run's subscribed checks and steps. What a subscription matches, what it delivers, and when a delivery reaches its agent are in [`rimz loop` signals](./loop.md#signals).
+Firing happens inside the `emit` process, with no daemon. It needs an existing room but no running agent. It spawns one detached run for each live subscription that exists in this workspace at that moment, so a task added afterwards never sees the signal. A busy task can keep its trigger through its [overlap policy](./loop.md#overlapping-triggers). When the room has an active [workflow](./workflow.md) run, `emit` also starts one detached workflow advance, which hands the signal to the run's subscribed checks and steps. What a subscription matches, what it delivers, and when a delivery reaches its agent are in [`rimz loop` signals](./loop.md#signals).
 
 `emit` refuses these inputs with exit code 1, before it writes anything:
 
@@ -158,30 +184,21 @@ If firing fails after the append, `emit` exits 1 with `firing signal tasks`, and
 
 ### Reserved families
 
-Seven families belong to RimZ, and `emit` refuses every name in them, including names RimZ never produces (`ci.custom`):
+Seven families belong to RimZ: `agent`, `team`, `ci`, `pr`, `trunk`, `worktree`, and `wait`. `emit` refuses every name in them, including names RimZ never produces (`ci.custom`):
 
 ```console
 $ rimz events emit ci.passed
 error: signal name `ci.passed` is reserved for RimZ
 ```
 
-| Family | Names RimZ produces | Source |
-| --- | --- | --- |
-| `agent` | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended` | Derived from lifecycle records. No signal line. |
-| `team` | `team.idle`, `team.waiting`, `team.failed`, `team.ended` | `lifecycle` |
-| `team` | `team.stage` ([payload](./teams.md#the-teamstage-signal)) | `team` |
-| `ci` | `ci.passed`, `ci.failed` | `forge` |
-| `pr` | `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted`, `pr.queued`, `pr.dequeued` | `forge` |
-| `trunk` | `trunk.moved` | `git` |
-| `worktree` | `worktree.created`, `worktree.removed` | `worktree` |
-| `wait` | `wait.<task-name>` | `watch` |
+The sidebar appends forge signals by running `emit` with a hidden `--source forge` flag, which accepts only the nine `ci` and `pr` names. The hidden `--source git` accepts only `trunk.moved`. There is no CLI `worktree` source. These flags perform no caller check, so reserved families prevent name collisions, not authenticated provenance.
 
-`agent.waiting` and `team.waiting` follow the raw hook-time lifecycle transition. They still fire immediately for Codex permission requests under automatic review, even while attention surfaces show Running for the first 60 seconds. Promotion to visible waiting emits no second signal ([Codex asks](../../internals/agents/adapter_codex.md#asks-and-answers)).
+The producers follow these rules beyond the [built-in signal table](./loop.md#built-in-signals):
 
-The sidebar appends forge signals by running `emit` with a hidden `--source forge` flag, which accepts only the nine `ci` and `pr` names above. The hidden `--source git` accepts only `trunk.moved`. There is no CLI `worktree` source. These flags perform no caller check, so reserved families prevent name collisions, not authenticated provenance. What each built-in signal's payload carries is in [the loop reference](./loop.md#built-in-signals) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
-
-`pr.opened` reports a newly observed open PR after a successful prior probe, not a PR already present when monitoring starts. `trunk.moved` reports a changed commit on the same trunk ref. Worktree signals follow successful managed operations, with creation after its hook succeeds. Reuse and failed-creation rollback are silent. See [trunk and worktree signals](../../internals/harness/loops.md#trunk-and-worktree-signals) for the producer contract.
-
-`pr.behind` and `pr.conflicted` are GitHub-only signals for open PRs. They fire on entry (first sight included), or when the PR head changes while still behind or confirmed conflicting. Repeated readings of the same head do not repeat the signal. Conflict detection waits for GitHub's settled mergeability reading. Both carry the `pr.merged` payload with `state: "open"`, plus `pr_head` (the forge head, or the head where conflicts were confirmed), `base` when known, and `behind_by` for `pr.behind` only. `head` remains the local worktree HEAD. Match them by `branch` or `path` just like `pr.merged`.
-
-`pr.queued` and `pr.dequeued` are GitHub-only signals for an open PR and the merge queue. `pr.queued` fires when the PR enters the queue, and again only for a later entry. `pr.dequeued` fires when it leaves the queue while still open, and again for a later removal or when a re-arm is withdrawn, with the original `dequeued_at` in that last case. A removal already re-armed at first reading fires no `pr.dequeued`. Both also fire the first time a poll reads the standing state on a checkout the room was already watching. A room that opens on a PR already queued or dequeued hears nothing: its first poll only sets the baseline, so read the standing state with [`--when pr.queue=dequeued`](./loop.md#conditions) instead. A PR that merges out of the queue emits `pr.merged` and no `pr.dequeued`. Both carry the `pr.merged` payload with `state: "open"`, plus `pr_head` (the PR's head commit) and `base` when known. `pr.queued` adds `queued_at`, and `pr.dequeued` adds `dequeued_at`, `reason` when supplied (GitHub's own string, such as `failed_checks` or `manual`), and `queue_checks_url`, the checks page of the queue's own commit, when GitHub names that commit. The timestamps are GitHub's.
+- `pr.opened` reports a newly observed open PR after a successful prior probe, not a PR already present when monitoring starts.
+- `trunk.moved` reports a changed commit on the same trunk ref.
+- Worktree signals follow successful managed operations, with creation after its hook succeeds. Reuse and failed-creation rollback are silent. [Trunk and worktree signals](../../internals/harness/loops.md#trunk-and-worktree-signals) has the producer contract.
+- `pr.conflicted` waits for GitHub's settled mergeability reading. `pr.behind` fires on a positive `behind_by` alone. Match either by `branch` or `path`, like `pr.merged`.
+- `pr.queued` fires when the PR enters the merge queue, and again only for a later entry. `pr.dequeued` fires when it leaves the queue while still open, again for a later removal, and when a re-arm is withdrawn, with the original `dequeued_at` in that last case. A removal already re-armed at first reading fires no `pr.dequeued`. A PR that merges out of the queue emits `pr.merged` and no `pr.dequeued`. The `queued_at` and `dequeued_at` payload timestamps are GitHub's.
+- Both queue signals also fire the first time a poll reads the standing state on a checkout the room was already watching. A room that opens on a PR already queued or dequeued hears nothing, since its first poll only sets the baseline: read the standing state with [`--when pr.queue=dequeued`](./loop.md#conditions) instead.
+- `agent.waiting` and `team.waiting` follow the raw hook-time transition, so they fire at once for a Codex permission request under automatic review, though attention surfaces show Running for its first 60 seconds. Promotion to visible waiting emits no second signal ([Codex asks](../../internals/agents/adapter_codex.md#asks-and-answers)).
