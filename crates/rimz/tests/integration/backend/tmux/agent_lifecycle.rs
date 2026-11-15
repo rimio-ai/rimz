@@ -1845,6 +1845,313 @@ fn restart_unsupported_profile_skills_retains_old_pane_and_state() {
     );
 }
 
+/// The session a first launch of [`write_resumable_claude`] registers.
+const RESUMABLE_SESSION: &str = "restart-live-session";
+
+/// Replaces the stand-in `claude` in `agent_bin` with one a restart can
+/// resume. It takes its session from its `--resume <id>` argument, which it
+/// records as `<pane> --resume=<id>` (`-` for none) in `<dir>/launches`, or
+/// registers [`RESUMABLE_SESSION`], and saves that conversation where Claude
+/// does. A first launch ends its turn on an error, so a message sent to it
+/// parks. It writes its pid to `<ready>/<pane>` and appends every line its
+/// stdin reads to `<dir>/stdin-<pane>`.
+fn write_resumable_claude(env: &Env, agent_bin: &Path, ready: &Path, dir: &Path) {
+    let script = r#"#!/bin/bash
+set -eu
+case "${1:-}" in
+  --version) printf 'claude 0.0.0\n'; exit 0;;
+  auth) exit 1;;
+esac
+session='@SESSION@'
+source=startup
+resumed=-
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --resume ] && [ "$#" -gt 1 ]; then session=$2; source=resume; resumed=$2; fi
+  shift
+done
+printf '%s --resume=%s\n' "$TMUX_PANE" "$resumed" >> '@DIR@/launches'
+bucket=$(printf '%s' "$PWD" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+project="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$bucket"
+mkdir -p "$project"
+transcript="$project/$session.jsonl"
+[ -s "$transcript" ] || printf '{}\n' > "$transcript"
+feed() {
+  printf '%s\n' "$1" | RIMZ_AGENT_PID=$$ '@RIMZ@' hooks feed --source claude >/dev/null
+}
+feed '{"hook_event_name":"SessionStart","session_id":"'"$session"'","source":"'"$source"'","transcript_path":"'"$transcript"'"}'
+if [ "$source" = startup ]; then
+  feed '{"hook_event_name":"UserPromptSubmit","session_id":"'"$session"'","prompt":"start the work"}'
+  feed '{"hook_event_name":"StopFailure","session_id":"'"$session"'","error":"invalid_request"}'
+fi
+stty -echo
+printf '%s' "$$" > '@READY@/'"$TMUX_PANE"
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> '@DIR@/stdin-'"$TMUX_PANE"
+done
+"#
+    .replace("@DIR@", &dir.display().to_string())
+    .replace("@READY@", &ready.display().to_string())
+    .replace("@RIMZ@", &env.rimz_bin().display().to_string())
+    .replace("@SESSION@", RESUMABLE_SESSION);
+    std::fs::write(agent_bin.join("claude"), script).expect("write resumable claude");
+}
+
+/// Polls `probe` until it answers, failing with `what` and the state it
+/// last saw once `timeout` passes.
+fn poll_for<T>(what: &str, timeout: Duration, mut probe: impl FnMut() -> Result<T, String>) -> T {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match probe() {
+            Ok(value) => return value,
+            Err(last) if Instant::now() >= deadline => panic!("{what}; last seen: {last}"),
+            Err(_) => thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
+/// The pane and pid a stand-in wrote to `ready`, other than `except`.
+fn ready_pane(ready: &Path, except: Option<&PaneId>) -> Result<(PaneId, u32), String> {
+    let mut seen = Vec::new();
+    for entry in std::fs::read_dir(ready).unwrap().map(Result::unwrap) {
+        let pane = PaneId::from_parts(MuxName::Tmux, entry.file_name().to_string_lossy());
+        let pid = std::fs::read_to_string(entry.path()).unwrap();
+        if Some(&pane) != except
+            && let Ok(pid) = pid.parse()
+        {
+            return Ok((pane, pid));
+        }
+        seen.push(format!("{pane}={pid:?}"));
+    }
+    Err(format!("ready files {seen:?}"))
+}
+
+/// One line per row of `launch`: what a swap's assertions read.
+fn launch_rows_summary(rows: &rimz::store::runtime::AuditRows, launch: &str) -> String {
+    let holders = rimz::agents::state::LaunchHolders::new(rows.iter());
+    rows.iter()
+        .filter(|row| row.launch_key().as_str() == launch)
+        .map(|row| {
+            format!(
+                "\n  {} epoch={} name={:?} status={:?} ended={:?} stands={} replaced={} pane={:?}",
+                row.agent_id,
+                row.epoch,
+                row.name,
+                row.status,
+                row.ended_at,
+                row.stands(),
+                holders.replaced(row),
+                row.pane.as_ref().map(|pane| pane.pane_id.to_string()),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn default_restart_resumes_the_agent_through_the_real_wrapper() {
+    require_tmux!();
+    let (env, agent_bin, ready) = tab_naming_env();
+    let dir = env.home_root.join("restart-live");
+    std::fs::create_dir(&dir).expect("stand-in record directory");
+    write_resumable_claude(&env, &agent_bin, &ready, &dir);
+    crate::common::trust_claude_project(&env, &env.project_root);
+    let shell = crate::common::write_fake_login_shell(&env, "restart-shell", &[]);
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    env.rimz()
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .assert_success_within_timeout("start the room");
+    let _client = AttachedTmuxClient::attach(&server.socket, &session, 160, 40);
+    let rimz = |args: &[&str]| {
+        let mut command = env.rimz();
+        command
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&agent_bin))
+            .args(args);
+        command
+    };
+    rimz(&["--mux", "tmux", "agents", "opus", "--new-tab"])
+        .assert_success_within_timeout("launch the agent");
+    let (old_pane, old_pid) = poll_for(
+        "the first stand-in did not start",
+        Duration::from_secs(15),
+        || ready_pane(&ready, None),
+    );
+    let agent = poll_for(
+        "the agent did not register with a failed first turn",
+        Duration::from_secs(15),
+        || {
+            let agents = env
+                .store()
+                .runtime_projection(rimz::RuntimeScope::Runtime)
+                .expect("runtime projection")
+                .agents;
+            agents
+                .iter()
+                .find(|agent| {
+                    agent.agent_id.as_str() == RESUMABLE_SESSION
+                        && agent.status == AgentStatus::Failed
+                        && agent.launch_id.is_some()
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    let rows = agents.iter().map(|agent| {
+                        (
+                            agent.agent_id.to_string(),
+                            agent.launch_id.clone(),
+                            agent.status,
+                        )
+                    });
+                    format!("{:?}", rows.collect::<Vec<_>>())
+                })
+        },
+    );
+    let handle = agent.name.clone().expect("launched agent has a handle");
+    let launch = agent
+        .launch_id
+        .clone()
+        .expect("launched agent has a launch id");
+    let old_wrapper: u32 = server
+        .display(old_pane.raw(), "#{pane_pid}")
+        .parse()
+        .expect("old wrapper pid");
+
+    let output = env
+        .rimz()
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", launch.as_str())
+        .env("RIMZ_AGENT_NAME", &handle)
+        .args(["--mux", "tmux", "wait", "--in", "30m"])
+        .bounded_output()
+        .expect("arm the agent's self wait");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let note = "restart-live-parked-note";
+    let output = rimz(&["--mux", "tmux", "message", &format!("@{handle}"), note])
+        .bounded_output()
+        .expect("park a message");
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && receipt.starts_with("queued for"),
+        "the message must park behind the failed turn: {receipt}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = rimz(&["--mux", "tmux", "agents", "restart", &format!("@{handle}")])
+        .bounded_output_within(Duration::from_secs(90))
+        .expect("restart the agent");
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success()
+            && receipt.contains(&format!("(resumed session {RESUMABLE_SESSION})")),
+        "the default restart must resume the session: stdout: {receipt}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (new_pane, _) = poll_for(
+        "the resumed stand-in did not start",
+        Duration::from_secs(15),
+        || ready_pane(&ready, Some(&old_pane)),
+    );
+    let launches = std::fs::read_to_string(dir.join("launches")).expect("stand-in launches");
+    assert_eq!(
+        launches.lines().collect::<Vec<_>>(),
+        [
+            format!("{} --resume=-", old_pane.raw()),
+            format!("{} --resume={RESUMABLE_SESSION}", new_pane.raw()),
+        ],
+        "the wrapper in the new pane must resume the original session"
+    );
+    poll_for(
+        "the old wrapper did not exit",
+        Duration::from_secs(15),
+        || match rimz::proc::process_is_live(old_wrapper, None) {
+            true => Err(format!("{old_wrapper} {:?}", rimz::proc::argv(old_wrapper))),
+            false => Ok(()),
+        },
+    );
+    assert!(
+        !rimz::proc::process_is_live(old_pid, None),
+        "the old stand-in outlived its pane: {old_pid}"
+    );
+
+    let holder = poll_for(
+        "the launch did not settle on one holder at the new epoch",
+        Duration::from_secs(15),
+        || {
+            let rows = env.store().audit_rows().expect("audit rows");
+            let holders = rimz::agents::state::LaunchHolders::new(rows.iter());
+            let standing = rows
+                .iter()
+                .filter(|row| row.launch_key() == &launch && !holders.replaced(row))
+                .collect::<Vec<_>>();
+            match standing.as_slice() {
+                [holder]
+                    if holder.agent_id.as_str() == RESUMABLE_SESSION
+                        && holder.epoch == 1
+                        && holder.ended_at.is_none()
+                        && holder.name.as_deref() == Some(handle.as_str()) =>
+                {
+                    Ok((*holder).clone())
+                }
+                _ => Err(launch_rows_summary(&rows, launch.as_str())),
+            }
+        },
+    );
+    assert_eq!(
+        holder.pane.as_ref().map(|pane| &pane.pane_id),
+        Some(&new_pane)
+    );
+    // A resume keeps the session id, so the old session is the holder's own
+    // row moved off epoch 0, and the reservation is absorbed into it: any
+    // other row of the launch is a second holder or a survivor of the swap.
+    let rows = env.store().audit_rows().expect("audit rows");
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.launch_key() == &launch)
+            .count(),
+        1,
+        "the old session and the reservation must fold into the holder: {}",
+        launch_rows_summary(&rows, launch.as_str())
+    );
+    let cards = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Runtime)
+        .expect("runtime projection")
+        .agents
+        .into_iter()
+        .filter(|agent| agent.name.as_deref() == Some(handle.as_str()))
+        .map(|agent| (agent.agent_id.to_string(), agent.epoch))
+        .collect::<Vec<_>>();
+    assert_eq!(cards, [(RESUMABLE_SESSION.to_owned(), 1)], "one card");
+    let waits = crate::common::wait::wait_instances(&env);
+    assert_eq!(waits.0.len(), 1, "the self wait is still armed: {waits:?}");
+
+    let received = dir.join(format!("stdin-{}", new_pane.raw()));
+    poll_for(
+        "the parked message did not reach the resumed session",
+        Duration::from_secs(30),
+        || match std::fs::read_to_string(&received) {
+            Ok(text) if text.contains(note) => Ok(()),
+            read => Err(format!(
+                "{read:?}; queue: {:?}",
+                env.store().list_pending_messages().map(|pending| pending
+                    .into_iter()
+                    .map(|message| (message.message_id, message.status))
+                    .collect::<Vec<_>>())
+            )),
+        },
+    );
+    let old_received = std::fs::read_to_string(dir.join(format!("stdin-{}", old_pane.raw())));
+    assert!(
+        old_received
+            .as_deref()
+            .map_or(true, |text| !text.contains(note)),
+        "the old session must not receive the parked message: {old_received:?}"
+    );
+}
+
 #[test]
 fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placeholder() {
     require_tmux!();
