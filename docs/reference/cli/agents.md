@@ -722,7 +722,7 @@ Under each row, the sidebar's description rule chooses the error reason, first w
 | `success` | The last turn completed. |
 | `failed` | The last turn failed, or a live launched child's provider park can no longer resume. |
 | `paused` | Parked by a provider limit, overload, or budget cap, or by a live launched child with a provider park. |
-| `sleeping` | At rest on a timer, signal, condition, or file watch, including through a child's wait. Standing subscriptions do not count, and running, waiting, failed, or paused take precedence. |
+| `sleeping` | At rest on a timer, a one-shot signal, a condition, or a file watch, including through a child's wait. Standing subscriptions do not count, and running, waiting, failed, or paused take precedence. |
 
 The status is derived for display. Codex launched in `auto` mode shows `running` with no blocking ask during its first 60 seconds of automatic permission review, then `waiting` if the ask is still open; a rollout-proven finish of the asking Code Mode cell closes the ask and keeps `running`; questions and plan approvals remain immediate ([limits](../../internals/agents/adapter_codex.md#asks-and-answers)). [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused` or `sleeping`, except that an in-review or asking-cell-settled permission matches `running`. An unsettled permission's `waiting` dwell starts at the 60-second visibility instant. Hibernation does not change the displayed status. `show` adds the turn phase and, whenever a hibernation record exists, `hibernating since <t>, step <k> of <n>, <bytes> reclaimed` (cumulative bytes for this frozen stretch).
 

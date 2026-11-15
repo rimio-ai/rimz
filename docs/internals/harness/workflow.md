@@ -82,72 +82,53 @@ Workflow `timeout`, `sleep`, `for`, and workflow and step `stagger` use `harness
 
 ### The header
 
-| Field | Rule |
-| --- | --- |
-| `scope` | Required. `worktree` runs the run in the selected checkout, and `project` at the room's project root. An agent step's own `worktree` setting moves that step into a new worktree ([Agent steps](#agent-steps)). |
-| `start` | Required. Names a check or a step, never a special target. |
-| `summary` | Optional. One nonempty line describing the workflow. |
-| `deadline` | Optional. An RFC 3339 instant, or a local civil date or datetime. A bare date is local midnight. The record stores the resolved instant. |
-| `on.failed` | Optional. The last link of the failure chain before the run fails: a node, `@done`, or `@failed`, never `@wait`. |
-| `limit` | Optional `max-parallel`, `stagger`, or both, shared by the live agent-step attempts of every run of this workflow name across the home. |
+The [reference](../../reference/cli/workflow.md#definition-fields) owns the header fields and their rules. Two facts belong to the engine. The run record stores the instant a `deadline` resolved to at start (`RunRecord.deadline` in `crates/rimz/src/store/workflow.rs`). An agent step's own `worktree` setting moves that step out of the run's `scope` checkout ([Agent steps](#agent-steps)).
 
 ### Kinds
 
 Each node is written as one of eight tables, and the table word is its kind, so no field selects a runner. `WorkflowFile::lower` turns `test`, `script`, `judge`, `condition`, and `sleep` into a `Check`, and `agent`, `command`, and `message` into a `Step`. `Check::kind` and `Step::kind` read the lowered fields and compile into `Node::kind`. The [reference](../../reference/cli/workflow.md#definition-fields) lists every field each table takes. The rules the engine and validation add:
 
-| Table | Lowers to | Rules |
-| --- | --- | --- |
-| `test` | `Check`, `CheckKind::Test`, holding `Invoke::Run` or `Invoke::Shell` by `run` or `shell` | Required `timeout`. Answers `pass` or `fail` from its exit code. Routes only `on.pass`, `on.fail`, and its failure routes. |
-| `script` | `Check`, run or shell | Required `timeout`. Answers one JSON object on stdout. Routes any outcome it can answer, plus its failure routes. A route for any other reserved word refuses as a dead route. |
-| `judge` | `Check`, `CheckKind::Judge` | Requires `agent`, `prompt-file`, `summary`, and `timeout`. Its `admission` holds `window` only. The profile's adapter must have a headless launch. |
-| `condition` | `Check`, `CheckKind::Condition` | Requires nonempty `cases`, `else`, `timeout`, and `on.unknown` (`crates/rimz/src/harness/workflow/validate.rs::Validation::condition_fields`). A route for any outcome other than a case, `else`, `unknown`, or a failure route refuses as a dead route. No `wake`: its subscriptions come from its terms. |
-| `sleep` | `Check`, `CheckKind::Sleep` | Nonzero `sleep`, required `then`, optional `when`, `for`, `provider`, and `account`. No `timeout`, `wake`, `else`, `window`, or `prompt-file`. |
-| `agent` | `Step`, `StepKind::Agent` | Required `agent`, `lifecycle`, `prompt-file`, and `then` ([Agent steps](#agent-steps)). |
-| `command` | `Step`, run or shell | Required `timeout`. `then` names one check. |
-| `message` | `Step`, `StepKind::Message` | Required `message` and `then` ([Command and message steps](#command-and-message-steps)). |
-
-Every kind accepts a `summary`: one nonempty line describing what the node does. Judges require it, and a judge without one refuses at `judge.<name>.summary` with `add summary = "..."`. A sealed run is not validated again, so a sealed judge without a summary shows a fallback description.
-
-A `window` holds provider-window terms only. A condition or conditional sleep requires `provider` when its terms read `window.*`, and refuses a `provider` without such a term and an `account` without a `provider`.
-
-A condition's cases are an ordered array of tables, written inline in `[condition.<name>]` (`cases = [ { when = [...], outcome = "..." }, ... ]`) or as `[[condition.<name>.cases]]` blocks, which the loader reads as the same array. Each case:
-
-| Field | Rule |
+| Table | Lowers to |
 | --- | --- |
-| `when` | Required array of loop-grammar terms. A term may not match the value `unknown`: the shared `WhenExpr` parser refuses it in every condition reader, since a term over an unread key is already unknown by itself. Stage names are checked against the effective teams plus `Done` when validation runs from a workspace, with a warning otherwise. |
-| `outcome` | Required. Not a reserved word. |
-| `for` | Optional nonzero hold. A held case must route its outcome somewhere other than `@wait`. |
+| `test` | `Check`, `CheckKind::Test`, holding `Invoke::Run` or `Invoke::Shell` by `run` or `shell` |
+| `script` | `Check`, run or shell |
+| `judge` | `Check`, `CheckKind::Judge` |
+| `condition` | `Check`, `CheckKind::Condition` |
+| `sleep` | `Check`, `CheckKind::Sleep` |
+| `agent` | `Step`, `StepKind::Agent` ([Agent steps](#agent-steps)) |
+| `command` | `Step`, run or shell |
+| `message` | `Step`, `StepKind::Message` ([Command and message steps](#command-and-message-steps)) |
 
-`wake` is a list of selector strings or `{ signal, match }` tables, parsed by the loop's selector and match validator. A session's `subscribe` takes the same entries plus an optional `prompt`, which refuses on a check's `wake`. An invalid entry, an agent-family selector, and a team selector other than exact `team.stage` refuse at the entry's index on a `wake` (`SpecErr::LifecycleWake` supplies the reason). [Subscriptions](#subscriptions) owns what `subscribe` may name.
+`crates/rimz/src/harness/workflow/validate.rs::Validation::condition_fields` enforces a condition's required `cases`, `else`, `timeout`, and `on.unknown`. A condition takes no `wake`, since its subscriptions come from its terms. A sealed run is not validated again, so a sealed judge without a `summary` shows a fallback description.
+
+A condition's cases may be written inline or as `[[condition.<name>.cases]]` blocks, and the loader reads both into the same ordered array. A case's `when` terms may not match the value `unknown`: the shared `WhenExpr` parser refuses it in every condition reader, since a term over an unread key is already unknown by itself.
+
+A `wake` entry goes through the loop's selector and match validator. An agent-family selector and a team selector other than exact `team.stage` refuse at the entry's index, with `SpecErr::LifecycleWake` supplying the reason. [Subscriptions](#subscriptions) owns what `subscribe` may name.
 
 ### Agent steps
 
-An agent step's `then` names one check, `@done`, or `@failed`, never a step: where the run goes when the attempt ends cleanly. `@done` or `@failed` ends the run there.
+`agent` takes the fresh-launch layout grammar ([reference](../../reference/cli/workflow.md#definition-fields)). A team runs only in a session without a `rest-check`, since a team has no single turn end or rest to judge: `crates/rimz/src/harness/workflow/validate.rs::step_layout` refuses it on a turn or a rest-checked session, naming `lifecycle = "session"` and the removal of `rest-check`. The host launches a team through the launcher's team layout path with the step's leader run.
 
-`agent` takes the fresh-launch layout grammar: kinds, profiles, virtual cells, and mixed agent and command layouts. Command-only layouts and ambiguous prompt leaders refuse. A team runs only in a session without a `rest-check`, since a team has no single turn end or rest to judge: `crates/rimz/src/harness/workflow/validate.rs::step_layout` refuses it on a turn or a rest-checked session, naming `lifecycle = "session"` and the removal of `rest-check`. The host launches a team through the launcher's team layout path with the step's leader run.
+The engine rules behind the agent-only fields:
 
-The agent-only fields:
+- `crates/rimz/src/harness/workflow/spec/kinds.rs::AgentNode` gives `lifecycle` no default, so a missing or other value is a parse error. `Step::lifecycle` reads the written value, and command steps stay turn-shaped.
+- `rest-check` refuses a sleep because a rest check samples leader turn ends, and a sleep runs its own timer.
+- A step's `timeout` runs from its launch (`crates/rimz/src/harness/workflow/inspect.rs::timeout_at`).
+- `admission.max-parallel` and `admission.stagger` lower into the step's limit, the same shape as `workflow.limit` ([Admission](#admission)).
 
-- `lifecycle` is required, `turn` or `session`. `crates/rimz/src/harness/workflow/spec/kinds.rs::AgentNode` has no default, so a missing or other value is a parse error. `Step::lifecycle` reads the written value, and command steps stay turn-shaped.
-- `rest-check` and `subscribe` are session-only. `rest-check` refuses when empty and for any entry that is not a test, script, judge, or condition. A sleep is refused because a rest check samples leader turn ends, and a sleep runs its own timer.
-- `keep`, `timeout`, and `on.asked` hold on both lifecycles. A step's `timeout` runs from its launch (`crates/rimz/src/harness/workflow/inspect.rs::timeout_at`).
-- `on.asked` has no default. Absent, the question stays live in the agent's pane. It may not target `@wait` (`only checks can wait`), and validation prints an `asked` edge only when it is set.
-- `notes` controls the brief's `<step>-notes.md` line. Only the `agent` table takes it.
-- `admission` holds `window`, `occupancy`, `max-parallel`, `stagger`, `throttle`, and `give-up` ([Admission](#admission)). `max-parallel` and `stagger` lower into the step's limit, the same shape as `workflow.limit`.
-
-The launch settings are `account`, `mode`, `effort`, `fast`, `budget` (the `--budget` grammar), `system-prompt-file` (confined to the workflow directory), and `worktree` (a new worktree of the run's checkout under that name). `mode = "plan"`, an unparsable `budget`, and an invalid `worktree` name refuse at their paths. `crates/rimz/src/harness/workflow/definition.rs::Node::launch_overrides` resolves them, `engine::agent::launch` passes them in `StepLaunch.overrides`, and the CLI host maps them onto the launcher's overrides and cohort request as a fresh launch applies them (`crates/rimz/src/cli/workflow/host.rs::Host::launch`). A `--continue` restart resumes the provider session, and the host drops `account`, `system-prompt-file`, and `worktree` there. The relaunch takes the room's current login for the kind when it shares a history pool with the session's (`crates/rimz/src/harness/resume.rs::relaunch_login`), and otherwise refuses. It runs in the run's scope checkout. `account` also pins every cell's start group for capacity admission, which then skips availability routing. The engine asks the host for those groups (`AttemptHost::start_groups`), and both hosts resolve them through `harness::workflow::launch_groups`.
+`crates/rimz/src/harness/workflow/definition.rs::Node::launch_overrides` resolves the launch settings, `engine::agent::launch` passes them in `StepLaunch.overrides`, and the CLI host maps them onto the launcher's overrides and cohort request as a fresh launch applies them (`crates/rimz/src/cli/workflow/host.rs::Host::launch`). A `worktree` setting names a worktree the launch creates or reuses. A `--continue` restart resumes the provider session, and the host drops `account`, `system-prompt-file`, and `worktree` there. The relaunch takes the room's current login for the kind when it shares a history pool with the session's (`crates/rimz/src/harness/resume.rs::relaunch_login`), and otherwise refuses. It runs in the run's scope checkout. `account` also pins every cell's start group for capacity admission, which then skips availability routing. The engine asks the host for those groups (`AttemptHost::start_groups`), and both hosts resolve them through `harness::workflow::launch_groups`.
 
 `max-visits` must be at least 1. It caps the step's entries counted in `RunRecord.visits`, a plain count per step (`crates/rimz/src/harness/workflow/spec.rs::Step::tripped_visit_bound`), increased by the run-wide `visit_grant`. Every step kind counts at admission, before it acts. Only a manual restart clears a count.
 
 ### Command and message steps
 
-A command step's `then` names one check. Its `run` resolves the same way as a test's or a script's, and its `shell` text is nonempty and unconfined.
+A command step's `run` resolves the same way as a test's or a script's ([`run` and `shell`](#run-and-shell)).
 
 A message step's `then` names one node, `@done`, or `@failed` (`crates/rimz/src/harness/workflow/validate.rs::message_then`). Its `message` must be an `@` address without a pane id that `address::parse_selector` accepts and that is neither `@user` nor `@me` (`crates/rimz/src/harness/workflow/validate.rs::message_target`). Its optional `session` pins the agent by launch: the session given, or the session a restart or molt of that launch replaced it with (`crates/rimz/src/cli/workflow/host.rs::pin_names`). A handle that another launch took over goes undelivered. `prompt-file` is optional and confined. `agent::compose` joins the prompt file when set, the node's sign, and the run prompt, and `engine::Notice::text` writes a header line before them. [Message steps](#message-steps) owns how one runs.
 
 ### `run` and `shell`
 
-`run` is an argv parsed with `shlex`, never shell text: pipes, variable expansion, and redirection belong inside a script. Every word containing `/` names a file relative to the workflow directory (`crates/rimz/src/harness/workflow/spec.rs::resolve_argv`). Only normal path components are accepted, and canonical resolution must stay inside the directory. Other words, such as `sh` or `uv`, resolve through `PATH`. Files are resolved and hashed again at every evaluation.
+`run` is an argv parsed with `shlex`, never shell text: pipes, variable expansion, and redirection belong inside a script. Every word containing `/` names a file relative to the workflow directory (`crates/rimz/src/harness/workflow/spec.rs::resolve_argv`). Only normal path components are accepted, and canonical resolution must stay inside the directory. Other words pass through unchanged (`crates/rimz/src/harness/workflow/spec.rs::resolve_words`): a program such as `sh` or `uv` is found on `PATH` when the process spawns, and any other word is a plain argument. Files are resolved and hashed again at every evaluation.
 
 `shell` is unrestricted `sh -c` text. Its sealed spec digest covers the command, and the paths it references are neither confined nor hashed one by one.
 
@@ -844,7 +825,7 @@ Stops use the shared cascade and add no workflow-specific lifecycle events. The 
 
 ## Headless judges
 
-A judge (`crates/rimz/src/harness/workflow/script/judge.rs::run`) runs through the shared headless profile resolver and the judge core (`crates/rimz/src/harness/headless/judge.rs::prepare`) with automatic permission mode. Its profile must resolve to exactly one agent cell, or the evaluation fails (`crates/rimz/src/harness/headless.rs::HeadlessProfile::resolve`). Folder-trust and adapter minimum-version checks run before the judge takes the workspace lock to spawn.
+A judge (`crates/rimz/src/harness/workflow/script/judge.rs::run`) runs through the shared headless profile resolver and the judge core (`crates/rimz/src/harness/headless/judge.rs::prepare`). It runs in automatic permission mode unless its profile sets another mode. Its profile must resolve to exactly one agent cell, or the evaluation fails (`crates/rimz/src/harness/headless.rs::HeadlessProfile::resolve`). Folder-trust and adapter minimum-version checks run before the judge takes the workspace lock to spawn.
 
 ### The answer channel
 
