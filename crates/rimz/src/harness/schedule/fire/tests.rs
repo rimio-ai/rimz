@@ -1302,6 +1302,7 @@ fn worktree_inspection_holds_a_forge_condition_probed_before_its_fire_stamp() {
     // Discovery reports git's resolved path, which keys the probe and the fire stamp.
     let checkout = checkout.canonicalize().unwrap();
     let marker = crate::worktree::WorktreeMarker {
+        loop_fire: None,
         version: 4,
         name: "lane".into(),
         branch: "lane".into(),

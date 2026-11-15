@@ -270,3 +270,17 @@ pub fn resolve_launch_cwd(
         .map(Some)
         .with_context(|| format!("resolving --cwd `{}`", path.display()))
 }
+
+/// Stamp a tree this launch created with the loop fire the launch was made under, so the
+/// fire's task finds it; a reused tree, or a launch under no fire, is left alone.
+pub(super) fn stamp_created_tree(
+    launch: &crate::worktree::LaunchCheckout,
+    fire: Option<&crate::ids::FireId>,
+) {
+    let (Some(fire), Some(_)) = (fire, &launch.created) else {
+        return;
+    };
+    if let Err(error) = crate::worktree::stamp_loop_fire(&launch.cwd, fire) {
+        tracing::warn!(%fire, %error, path = %launch.cwd.display(), "the launch's tree carries no fire stamp");
+    }
+}

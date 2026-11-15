@@ -1283,6 +1283,10 @@ pub struct AgentState {
     /// first, carried from its launch record; empty for an agent no loop fire started.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
+    /// The loop fire this agent was launched under, carried from its launch record; `rimz loop
+    /// show` lists the agent while it has not ended, and `rimz loop stop` stops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_fire: Option<crate::ids::FireId>,
     /// Workflow attempt this agent launched for. The launcher copies the pin onto
     /// every cell of a step's layout, so it alone does not name the leader: the
     /// leader is the pinned cell whose `name` matches the attempt's recorded
@@ -2030,6 +2034,7 @@ impl AgentState {
             team: None,
             loop_task: None,
             loop_booked_by: Vec::new(),
+            loop_fire: None,
             workflow: None,
             automation: None,
             launch_group: None,

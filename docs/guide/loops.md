@@ -42,12 +42,14 @@ A clock repeats only with `--every` or `--cron`. A bare time (`--at 07:00`, `--a
 
 ## Start an agent from a task
 
-A command that launches an agent is the launch you would type, so the [`rimz agents`](./fleet.md) flags work as usual: a [profile](./fleet.md#profiles-shape-an-agent-for-one-job), `--effort`, a [permission mode](./fleet.md#set-a-permission-mode), `--worktree`. The loop adds one choice, which is whether the fire owns the agent:
+A command that launches an agent is the launch you would type, and it behaves as it would from your shell: the [`rimz agents`](./fleet.md) flags work as usual, among them a [profile](./fleet.md#profiles-shape-an-agent-for-one-job), `--effort`, a [permission mode](./fleet.md#set-a-permission-mode), `--worktree` and `--bg`. What you choose is whether the fire waits for the agent:
 
-- **A prompted launch without `--detach` is a run the fire owns.** It behaves as `rimz agents -p` does. The command waits for the agent's turn, captures its answer as the fire's output, and exits with the run's code, so the fire records the turn's success or failure. The pane opens in its own unfocused tab and closes when the turn ends. When the agent stops at a question, its tab and sidebar card show it waiting, as for any agent. If the fire ends first, for example at the task's timeout, the agent is stopped with it. Use this when the turn is the job: a nightly sweep, a report, a fix that should count as a [strike](#strikes) when it fails.
-- **`--detach` hands the agent off.** The launch returns at once, the fire ends, and the agent keeps running on its own, as it would from your shell. Use this when the agent should stay: a team that works a branch, an agent that waits for your review.
+- **A launch without `-p` returns at once.** The fire ends, and the agent keeps running in its pane, as a team does. Use this when the agent should stay: a team that works a branch, an agent that waits for your review.
+- **A `-p` launch waits for the agent's turn.** The command captures the answer as the fire's output and exits with the run's code, so the fire records the turn's success or failure and a failed turn counts a [strike](#strikes). Use this when the turn is the job: a nightly sweep, a report, a fix. `-p` takes its own `--timeout` and `--keep`, and has no timeout unless you give one.
 
-An owned launch of an agent kind refuses in a project until that kind has a folder-trust decision there. `loop add` does not check this, so grant it once before the first fire:
+Either way, what a fire launches carries the fire's id: [`rimz loop show`](#see-what-a-task-did) lists each such agent, run or team member while it is alive, and [`rimz loop stop`](#stop-pause-and-remove-a-task) stops them. A command that wants to hand an agent off removes `RIMZ_LOOP_FIRE` from the launch's environment, and the loop then neither lists nor stops it.
+
+A `-p` launch of an agent kind refuses in a project until that kind has a folder-trust decision there. `loop add` does not check this, so grant it once before the first fire:
 
 ```sh
 rimz trust grant --agents claude
@@ -57,14 +59,14 @@ Then add the tasks:
 
 ```sh
 rimz loop add sweep --every day --at 02:00 --fresh-worktree sweep -- rimz agents claude -p --timeout 1h "Scan the repository for cheap improvements and open a PR for each one worth fixing."
-rimz loop add review-team --every weekday --at 09:00 --fresh-worktree review -- rimz teams launch recon --detach "Review yesterday's merges and propose focused follow-up."
+rimz loop add review-team --every weekday --at 09:00 --fresh-worktree review -- rimz teams launch recon "Review yesterday's merges and propose focused follow-up."
 ```
 
 To try one before its time, run `rimz loop fire sweep` ([See what a task did](#see-what-a-task-did) covers what it prints).
 
-The second example launches `recon`, a team you have defined or installed ([Teams](./teams.md) shows both), in a fresh worktree each weekday. `loop add` does not load the team, so a missing one fails at the fire. An owned run is one agent, so a team of more than one role needs `--detach`. An owned launch also refuses `--bg`, since the fire must wait for the agent.
+The second example launches `recon`, a team you have defined or installed ([Teams](./teams.md) shows both), in a fresh worktree each weekday. `loop add` does not load the team, so a missing one fails at the fire.
 
-The task's timeout bounds the whole command, so it also ends an owned agent. To give the agent its own shorter `--timeout`, or to hold its pane open after the turn with `--keep`, add `-p`, as in the `sweep` example: both flags parse only beside it.
+The task's timeout bounds the command, not what it launched: a `-p` agent still in its turn keeps working after the command is ended, so give it its own `--timeout`, as above, or end it with `rimz loop stop`.
 
 Either way, RimZ appends one line to the launched agent's prompt saying which task fired and why, such as ``Rule `ci-fix` fired here. ci.failed on feature #42 @88824c2``. An unattended agent then knows what happened without asking. A plain command reads the same line from the `RIMZ_LOOP_TRIGGER` environment variable, `RIMZ_LOOP_TASK` holds the task's name, and `RIMZ_LOOP_FIRE` the id of this one fire. A clock fire or a manual fire carries no such line.
 
@@ -204,7 +206,7 @@ rimz loop logs ci-fix     # the full record of recent runs, with each command's 
 
 `rimz loop list` opens with NEEDS YOU: failing tasks, tasks disabled after [strikes](#strikes), and tasks that cannot fire until you fix something, each with the command that fixes it. ROUTINE holds repeating tasks, WAITING holds one-shots that have not fired, and DONE holds the newest one-shots that have. LAST shows each task's latest result, such as `✓ 53m ago · 143 in a row` or `✗ failed 2m ago · exit 101`.
 
-`rimz loop show <name>` opens with a verdict on the latest finished run, then that run's evidence, then the recent runs and the task's settings. `rimz loop logs <name>` prints one block per run, oldest first, with the trigger, the exit code, and the command's output. A signal fire's block includes the signal's payload.
+`rimz loop show <name>` opens with a verdict on the latest finished run, then that run's evidence, then the recent runs, LAUNCHES (what the task's fires launched that is still alive: each agent, `-p` run and workflow run, where it works, and its state) and the task's settings. `rimz loop logs <name>` prints one block per run, oldest first, with the trigger, the exit code, and the command's output. A signal fire's block includes the signal's payload.
 
 A fired one-shot needs no teardown: it has removed itself, and DONE keeps its result. A repeating task whose command exits `0` is a quiet fire. It keeps no history entry of its own, so a check that passes every five minutes does not bury the fires that failed. The task counts its quiet fires and keeps the last one's output. A fire that fails keeps its full record.
 
@@ -231,7 +233,7 @@ Some fires count for nothing: a canceled run, a fire turned away before it ran (
 Every change you make with `rimz loop` has a command that undoes it:
 
 ```sh
-rimz loop stop ci-fix            # cancel the task's running fire, keep the task
+rimz loop stop ci-fix            # cancel the running fire and what fires launched, keep the task
 rimz loop pause ci-fix --for 2h  # hold the task, then resume on its own
 rimz loop disable ci-fix         # hold the task until you enable it
 rimz loop enable ci-fix          # lift a pause, a disable, or a strike disable
@@ -239,7 +241,7 @@ rimz loop remove ci-fix          # delete the task, keep its history
 rimz loop timer remove           # stop the machine-wide timer
 ```
 
-`stop` cancels the live run and stops each agent the command launched without `--detach`. A `--detach` agent is not the fire's, so it keeps running: stop it with `rimz agents stop`. Triggers waiting under an overlap policy survive `stop`, and the next one starts at once. Pause or disable the task to drop them.
+`stop` cancels the live run, then stops everything the task's fires launched that is still alive: each agent and team member as `rimz agents stop` does, each `-p` run, and each workflow run. A launch the command handed off by removing `RIMZ_LOOP_FIRE` keeps running: stop it with `rimz agents stop`. Triggers waiting under an overlap policy survive `stop`, and the next one starts at once. Pause or disable the task to drop them.
 
 Pause, disable, and enable belong to this machine and never edit the task's definition. When a hold lifts, the schedule starts fresh from that moment, so fires missed while held never replay.
 

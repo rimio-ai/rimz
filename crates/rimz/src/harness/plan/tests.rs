@@ -5215,7 +5215,7 @@ fn supervised_launch_refuses_layouts_beyond_one_agent_cell() {
 }
 
 #[test]
-fn a_fires_blocking_launch_of_more_than_one_agent_refuses_with_the_detach_fix() {
+fn a_fire_stamped_print_run_of_more_than_one_agent_meets_the_ordinary_refusal() {
     let dir = tempfile::tempdir().expect("temp dir");
     let mut machine = MachineConfig::default();
     machine.agents.profiles.0.insert(
@@ -5252,6 +5252,7 @@ fn a_fires_blocking_launch_of_more_than_one_agent_refuses_with_the_detach_fix() 
     let plan = |spec: &str| {
         let mut request = supervised_request(spec, "work");
         request.loop_task = Some("nightly".to_owned());
+        request.loop_fire = Some(crate::ids::FireId::new(&crate::ids::TaskId::new()));
         SupervisedPlan {
             request: &request,
             caller: None,
@@ -5262,16 +5263,14 @@ fn a_fires_blocking_launch_of_more_than_one_agent_refuses_with_the_detach_fix() 
         .run(dir.path())
         .0
     };
-    for (spec, agents) in [("pair", 2), ("claude,codex", 2)] {
+    for spec in ["pair", "claude,codex"] {
         let err = plan(spec).expect_err(spec);
         assert_eq!(
             err.to_string(),
-            format!(
-                "a launch under a loop fire runs one agent until it ends, and `{spec}` resolves to {agents} agents; add --detach to launch them on their own"
-            )
+            "--print requires a layout with exactly one agent cell"
         );
     }
-    let solo = plan("solo").expect("a one-role team runs blocking under a fire");
+    let solo = plan("solo").expect("a one-role team runs as a -p run under a fire");
     assert_eq!(solo.team_name.as_deref(), Some("solo"));
 }
 

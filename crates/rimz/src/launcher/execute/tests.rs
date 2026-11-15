@@ -58,6 +58,7 @@ impl Fixture {
         Self {
             _dir: dir,
             fresh: FreshLaunch {
+                loop_fire: None,
                 context: LaunchContext {
                     workspace,
                     store,
@@ -238,7 +239,7 @@ fn a_fires_blocking_launch_carries_its_task_and_fire_and_a_taskless_step_none() 
             crate::harness::launch::decode_exec_request("claude", None, &payload).unwrap();
         (request, opened.run.unwrap().record)
     };
-    let fire = crate::ids::WorkflowRunId::new();
+    let fire = crate::ids::FireId::new(&crate::ids::TaskId::new());
     let mut blocking = Fixture::new().leader();
     blocking.loop_task = Some("nightly".into());
     blocking.loop_fire = Some(fire.clone());
@@ -248,6 +249,7 @@ fn a_fires_blocking_launch_carries_its_task_and_fire_and_a_taskless_step_none() 
         Some("nightly")
     );
     assert_eq!(record.loop_task.as_deref(), Some("nightly"));
+    assert_eq!(request.identity.params.loop_fire.as_ref(), Some(&fire));
     assert_eq!(record.loop_fire, Some(fire));
 
     let mut step = Fixture::new().leader();

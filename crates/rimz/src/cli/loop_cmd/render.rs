@@ -147,7 +147,109 @@ struct ShowView {
     kept_worktrees: Vec<rimz::worktree::ManagedWorktree>,
     /// The task's fires start workflow runs, named or compiled from its row.
     runs_workflows: bool,
+    /// What the task's fires launched that is still alive.
+    launches: Vec<LaunchView>,
     all: bool,
+}
+
+/// One alive launch of the task's fires, as `loop show` lists it and its `--json` names it.
+#[derive(Clone, Debug, serde::Serialize)]
+struct LaunchView {
+    /// `workflow run`, `supervised run` or `agent`.
+    what: &'static str,
+    /// The id or `@handle#lane` its own stop takes.
+    address: String,
+    /// A supervised run's agent pet name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    fire: rimz::ids::FireId,
+    /// The run's state, or the agent's effective status.
+    state: &'static str,
+    /// The checkout or worktree it works in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    destination: Option<PathBuf>,
+}
+
+impl LaunchView {
+    fn new(
+        launch: &schedule::launches::AliveLaunch,
+        rows: &[rimz::agents::AgentState],
+        now: Timestamp,
+    ) -> Self {
+        use schedule::launches::Launch;
+        let address = launch_address(&launch.launch, rows);
+        let (what, name, state, destination) = match &launch.launch {
+            Launch::Workflow(run) => (
+                "workflow run",
+                None,
+                run.state.as_str(),
+                Some(run.firing_checkout().to_path_buf()),
+            ),
+            Launch::Supervised(run) => (
+                "supervised run",
+                run.agent_name.clone(),
+                run.status.as_str(),
+                Some(run.worktree_path.clone()),
+            ),
+            Launch::Agent(agent) => (
+                "agent",
+                None,
+                agent.effective_status(now).as_str(),
+                agent
+                    .worktree_path
+                    .as_ref()
+                    .or(agent.checkout.as_ref())
+                    .map(PathBuf::from),
+            ),
+        };
+        Self {
+            what,
+            address,
+            name,
+            fire: launch.fire.clone(),
+            state,
+            destination,
+        }
+    }
+}
+
+/// The task's alive launches, or none while the task has no record.
+fn launch_views(id: Option<&TaskId>, root: &Path, now: Timestamp) -> Result<Vec<LaunchView>> {
+    let Some(id) = id else {
+        return Ok(Vec::new());
+    };
+    let (alive, rows) = alive_launches(id, root)?;
+    Ok(alive
+        .iter()
+        .map(|launch| LaunchView::new(launch, &rows, now))
+        .collect())
+}
+
+fn write_launches(out: &mut impl Write, launches: &[LaunchView]) -> Result<()> {
+    if launches.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "\nLAUNCHES")?;
+    let mut table = ui::Table::new(["WHAT", "ADDRESS", "STATE", "WHERE", "FIRE"]).indent(2);
+    for launch in launches {
+        let address = match &launch.name {
+            Some(name) => format!("{} @{name}", launch.address),
+            None => launch.address.clone(),
+        };
+        let fire = launch.fire.as_str();
+        table.row([
+            ui::cell(launch.what),
+            ui::cell(address),
+            ui::cell(launch.state),
+            launch
+                .destination
+                .as_deref()
+                .map_or_else(|| ui::cell("-").dash(), |path| ui::cell(display_path(path))),
+            ui::cell(format!("…{}", &fire[fire.len().saturating_sub(8)..])),
+        ]);
+    }
+    table.render(out)?;
+    Ok(())
 }
 
 impl ShowView {
@@ -885,6 +987,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     if !view.entry.each_worktree {
         write_subscriptions(out, &view.subscriptions)?;
     }
+    write_launches(out, &view.launches)?;
     write_kept_worktrees(out, &view.kept_worktrees, now)?;
     writeln!(out)?;
     write_show_facts(out, view)?;
@@ -1373,6 +1476,15 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let acting_at = history.acting().map(|acting| acting.record.at);
     let in_progress = attention::run_in_progress(in_flight, &records, id, &root, acting_at);
+    let launches = launch_views(id, &root, now).unwrap_or_else(|error| {
+        let _ = writeln!(
+            ui::err(),
+            "{} cannot read what `{}`'s fires launched, so none is listed: {error:#}",
+            ui::paint(ui::palette::warn().bold(), "warning:"),
+            args.name
+        );
+        Vec::new()
+    });
     let view = ShowView {
         kept_worktrees: if entry.fresh_worktree.is_some() {
             kept_worktrees(&entry.resolved_root(), &args.name)
@@ -1403,6 +1515,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         worktrees_error,
         workflow_runs,
         runs_workflows,
+        launches,
         all: args.all,
     };
     if args.json {
@@ -1445,6 +1558,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             capacity_wait: Option<list::CapacityWaitView>,
             #[serde(skip_serializing_if = "<[_]>::is_empty")]
             booked_by: &'a [rimz::agents::LaunchedBy],
+            launches: &'a [LaunchView],
         }
         let json = ShowJson {
             facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "runs": view.records, "quiet": view.quiet, "heard": view.heard, "running": running, "workflow_runs": view.workflow_runs, "backlog": backlog }),
@@ -1469,6 +1583,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 })
                 .flatten(),
             booked_by: &view.entry.booked_by,
+            launches: &view.launches,
         };
         writeln!(ui::out(), "{}", serde_json::to_string_pretty(&json)?)?;
     } else {

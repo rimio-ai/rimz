@@ -2061,6 +2061,46 @@ mod agent_ref {
         }
     }
 
+    /// A loop fire's `--continue` resumes the saved agent stamped with the new fire and its
+    /// booking chain, as a fresh launch is: the resumed row's earlier stamps do not stand.
+    #[test]
+    fn a_fire_resume_carries_the_new_fires_stamps() {
+        let earlier = rimz::ids::FireId::new(&rimz::ids::TaskId::new());
+        let fixture = Fixture::new(
+            LaunchParams {
+                loop_fire: Some(earlier),
+                ..LaunchParams::default()
+            },
+            false,
+            None,
+        );
+        let fire = rimz::ids::FireId::new(&rimz::ids::TaskId::new());
+        let booker = rimz::agents::LaunchedBy {
+            kind: rimz::ids::AgentKind::new_unchecked("claude"),
+            agent_id: "booker".into(),
+        };
+        let output = fixture
+            .command_args(&["worker", "--continue"])
+            .current_dir(&fixture.env.project_root)
+            .env("ZELLIJ_PANE_ID", "2")
+            .env("RIMZ_LOOP_FIRE", fire.as_str())
+            .env("RIMZ_LOOP_TASK", "nightly")
+            .env(
+                "RIMZ_LOOP_BOOKED_BY",
+                serde_json::to_string(&[&booker]).unwrap(),
+            )
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let params = fixture.request().identity.params;
+        assert_eq!(params.loop_fire, Some(fire));
+        assert_eq!(params.loop_booked_by, vec![booker]);
+    }
+
     #[test]
     fn continue_keeps_pi_fast_and_reports_the_tool_notice_once() {
         let env = Env::new();

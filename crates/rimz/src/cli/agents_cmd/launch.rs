@@ -17,7 +17,7 @@ pub(super) fn launch_layout(
     args: AgentsArgs,
     globals: &GlobalFlags,
     allow_in_place: bool,
-    fire_task: Option<String>,
+    fire: Option<rimz::harness::loop_task::FireEnv>,
 ) -> Result<()> {
     if args.launch.cohort.continue_cohort {
         validate_resume_inputs(&args.launch, ResumeEntrance::Flag)?;
@@ -30,11 +30,12 @@ pub(super) fn launch_layout(
     crate::cli::check_launch_room(globals)?;
     let mut ctx = Ctx::open(globals)?;
     let snapshot = ctx.cached_snapshot()?;
-    ctx.workspace = crate::cli::anchor_caller_workspace(
-        ctx.workspace,
-        ancestry::resolve_calling_agent(&snapshot.agents).ok(),
-        globals,
-    )?;
+    // A launch under a loop fire resolves no caller.
+    let caller = fire
+        .is_none()
+        .then(|| ancestry::resolve_calling_agent(&snapshot.agents).ok())
+        .flatten();
+    ctx.workspace = crate::cli::anchor_caller_workspace(ctx.workspace, caller, globals)?;
     let cwd = crate::cli::resolve_launch_cwd(args.launch.cwd.as_deref(), ctx.store.paths())?;
 
     let mut launch = args.launch;
@@ -143,11 +144,15 @@ pub(super) fn launch_layout(
             max_turns: launch.max_turns,
             teams_scene: launch.teams_scene,
             report_to: report_to(launch.cohort.detach),
-            loop_booked_by: fire_task
+            loop_task: fire
                 .as_ref()
-                .map(|_| rimz::harness::schedule::runner::loop_check_booked_by())
+                .map(|fire| fire.task.clone())
+                .filter(|task| !task.is_empty()),
+            loop_booked_by: fire
+                .as_ref()
+                .map(|fire| fire.booked_by.clone())
                 .unwrap_or_default(),
-            loop_task: fire_task,
+            loop_fire: fire.map(|fire| fire.fire),
         },
         cwd,
         allow_in_place,

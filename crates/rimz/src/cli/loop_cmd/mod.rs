@@ -547,6 +547,44 @@ fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<LoadedTask>> {
     Ok(task_catalog(globals)?.visible().get(name).cloned())
 }
 
+/// What task `id`'s fires launched that is still alive in the room at `root`, with the room's
+/// audit rows its agents are addressed among; no room reads no agents.
+fn alive_launches(
+    id: &rimz::ids::TaskId,
+    root: &Path,
+) -> Result<(
+    Vec<schedule::launches::AliveLaunch>,
+    Vec<rimz::agents::AgentState>,
+)> {
+    let paths = StatePaths::for_project_root(root)?;
+    let rows = match crate::cli::open_existing_store_at(paths.clone())? {
+        Some(store) => store.audit_rows()?.iter().cloned().collect(),
+        None => Vec::new(),
+    };
+    let alive = schedule::launches::alive(id, &paths, rows.iter())?;
+    Ok((alive, rows))
+}
+
+/// How to address an alive launch: a run's id, or an agent's `@handle#lane` among the room's
+/// open rows.
+fn launch_address(
+    launch: &schedule::launches::Launch,
+    rows: &[rimz::agents::AgentState],
+) -> String {
+    use schedule::launches::Launch;
+    match launch {
+        Launch::Workflow(run) => run.id.to_string(),
+        Launch::Supervised(run) => run.run_id.to_string(),
+        Launch::Agent(agent) => {
+            let peers = rows
+                .iter()
+                .filter(|row| !row.session_over())
+                .collect::<Vec<_>>();
+            rimz::address::agent_handle(agent, &peers, true)
+        }
+    }
+}
+
 /// The id of the record task `name` is bound to: its row's (live, else the newest retired one),
 /// or, with no row, the room at `root`'s; `None` with no record, or while the record does not
 /// read.

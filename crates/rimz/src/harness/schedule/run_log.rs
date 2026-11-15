@@ -388,20 +388,14 @@ pub fn try_collect_run(
     state: &crate::StatePaths,
     run: &crate::ids::WorkflowRunId,
 ) -> anyhow::Result<()> {
-    let ended = collect_under_lock(state, run)?;
-    // An ended run never runs again, so its fire's verdict cannot go stale while the lock is
-    // released; the sweep takes each supervised run's own lock and skips one already ended.
-    if ended {
-        stop_fire_launches(state, run);
-    }
-    Ok(())
+    collect_under_lock(state, run)
 }
 
-/// Report the run under the workspace lock, answering whether it has ended.
+/// Report the run under the workspace lock.
 fn collect_under_lock(
     state: &crate::StatePaths,
     run: &crate::ids::WorkflowRunId,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<()> {
     use crate::store::workflow;
     let paths = state.workflow(run);
     let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
@@ -413,13 +407,13 @@ fn collect_under_lock(
                 report_header(state, run, &header)?;
                 workflow::mark_header_report_sent(&paths, &guard)?;
             }
-            return Ok(true);
+            return Ok(());
         }
-        workflow::RunClass::Recordless => return Ok(true),
-        _ => return Ok(false),
+        workflow::RunClass::Recordless => return Ok(()),
+        _ => return Ok(()),
     };
     if !record.owes_loop_report() {
-        return Ok(record.outcome.is_some());
+        return Ok(());
     }
     let outcome = record
         .outcome
@@ -446,42 +440,7 @@ fn collect_under_lock(
             std::fs::remove_dir_all(&paths.home)?;
         }
     }
-    Ok(true)
-}
-
-/// Stop each open supervised run that the fire `run`'s command launched blocking and that its
-/// ended command left behind: a stamped run outlives a command its fire's timeout or cancel
-/// killed. Only runs stamped with this fire's id are stopped, never a successor fire's.
-fn stop_fire_launches(state: &crate::StatePaths, run: &crate::ids::WorkflowRunId) {
-    let launches = match crate::harness::run::list(state) {
-        Ok(launches) => launches,
-        Err(error) => {
-            tracing::warn!(%run, error = %format!("{error:#}"), "fire's launches not listed");
-            return;
-        }
-    };
-    let owned = launches
-        .into_iter()
-        .filter(|launch| !launch.status.is_terminal() && launch.loop_fire.as_ref() == Some(run));
-    let mut owned = owned.peekable();
-    if owned.peek().is_none() {
-        return;
-    }
-    let runtime = match crate::RuntimePaths::for_state(state) {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            tracing::warn!(%run, error = %format!("{error:#}"), "fire's launches not stopped");
-            return;
-        }
-    };
-    for launch in owned {
-        if let Err(error) =
-            crate::harness::run::cancel_and_wake_paths(state, &runtime, &launch.run_id, None)
-        {
-            let launch = &launch.run_id;
-            tracing::warn!(%run, %launch, error = %format!("{error:#}"), "fire's launch not stopped");
-        }
-    }
+    Ok(())
 }
 
 /// Report a finished run this RimZ does not decode from its record's header: the report row,

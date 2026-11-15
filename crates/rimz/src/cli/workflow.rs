@@ -515,12 +515,15 @@ fn start(
         ctx.workspace.worktree_root.clone()
     };
     refuse_unwritable_home("started")?;
+    // A run started under a loop fire carries the fire: listed and stopped by its task, owned
+    // by no task and reported to nobody.
+    let loop_fire = rimz::harness::loop_task::read_fire_env().map(|fire| fire.fire);
     let (record, advance) = workflow::create(
         ctx.store.paths(),
         workflow::DefinitionSource::Deployed {
             dir: &dir,
             task: None,
-            loop_fire: None,
+            loop_fire,
             surplus: None,
             surplus_after: None,
             fire: None,

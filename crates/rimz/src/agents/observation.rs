@@ -307,6 +307,11 @@ pub struct LaunchParams {
     /// row, which the fire may have consumed or someone may have removed or replaced.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loop_booked_by: Vec<LaunchedBy>,
+    /// The loop fire this agent was launched under (`harness::loop_task::read_fire_env`), on
+    /// every cell of the launch. It is launch identity: restart and molt keep it, a resume
+    /// keeps the row's, a fork drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_fire: Option<crate::ids::FireId>,
     /// The inline multi-agent launch cohort the launcher minted, passed through
     /// `RIMZ_LAUNCH_GROUP`. Team launches use `RIMZ_TEAM` as the cohort key.
     #[serde(default, skip_serializing_if = "Option::is_none")]

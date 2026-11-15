@@ -167,7 +167,7 @@ The rate-limit cache entry carries the exact scope and account key that produced
 
 ### Managed launches
 
-Qwen is the one adapter that binds a managed launch to an exact account. [providers.md](./providers.md#account-scope) owns the four states and what each permits. A fresh managed launch, one in a loop task's command included, starts in `PendingResolution`. Once the cwd, launch environment, model, and argv are final, `selection::resolve_managed_launch` answers `Bound` with the Alibaba account they select, or `Unresolved`. A matching exhausted 5-hour, 7-day, or 30-day window blocks the launch before its run record or pane exists, and the run exits `125`. A blocking launch in a loop task's command exits `125` the same way, so its fire fails.
+Qwen is the one adapter that binds a managed launch to an exact account. [providers.md](./providers.md#account-scope) owns the four states and what each permits. A fresh managed launch, one in a loop task's command included, starts in `PendingResolution`. Once the cwd, launch environment, model, and argv are final, `selection::resolve_managed_launch` answers `Bound` with the Alibaba account they select, or `Unresolved`. A matching exhausted 5-hour, 7-day, or 30-day window blocks the launch before its run record or pane exists, and the run exits `125`. A `-p` launch in a loop task's command exits `125` the same way, so its fire fails.
 
 The resolver answers `Unresolved` when any of these holds:
 

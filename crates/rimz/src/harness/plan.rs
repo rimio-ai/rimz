@@ -313,6 +313,10 @@ pub(super) struct ResumeLaunchIdentity {
     pub launched_by: Option<crate::agents::LaunchedBy>,
     pub isolation: Option<crate::config::Isolation>,
     pub tier: Option<Box<crate::agents::TierStamp>>,
+    /// The loop fire the resumed launch is, with its booking chain: the row's own, or a new
+    /// fire's when that fire resumes it.
+    pub loop_fire: Option<crate::ids::FireId>,
+    pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
 }
 
 impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
@@ -346,6 +350,8 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
             launched_by: agent.launched_by.clone(),
             isolation: agent.isolation,
             tier: agent.tier.clone(),
+            loop_fire: agent.loop_fire.clone(),
+            loop_booked_by: agent.loop_booked_by.clone(),
         }
     }
 }
@@ -1130,13 +1136,6 @@ pub fn plan_supervised_launch(
         &effective.teams,
     )?;
     let agents = resolved.layout.agent_cells().count();
-    if agents != 1 && request.loop_task.is_some() {
-        bail!(
-            "a launch under a loop fire runs one agent until it ends, and `{}` resolves to \
-             {agents} agents; add --detach to launch them on their own",
-            request.spec
-        );
-    }
     if agents != 1 {
         bail!("--print requires a layout with exactly one agent cell");
     }
@@ -2074,6 +2073,8 @@ pub(super) fn resume_command(
         tier: posture.tier.clone(),
         record: posture.record.clone(),
         epoch: (identity.epoch > 0).then_some(identity.epoch),
+        loop_fire: identity.loop_fire.clone(),
+        loop_booked_by: identity.loop_booked_by.clone(),
         ..Default::default()
     };
     crate::harness::launch::exec_argv(

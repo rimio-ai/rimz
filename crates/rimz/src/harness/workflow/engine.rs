@@ -340,7 +340,12 @@ fn publish(
         stranded: false,
     };
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
-    let task = record.loop_fire.as_ref().map(crate::ids::FireId::task);
+    // A run stamped with a fire but started by hand (no task) is no task's own.
+    let task = record
+        .loop_fire
+        .as_ref()
+        .filter(|_| record.task.is_some())
+        .map(crate::ids::FireId::task);
     refuse_existing(
         state,
         record.origin,

@@ -37,8 +37,6 @@ use crate::config::{CheckOn, MachineConfig, OverlapPolicy, TaskEntry, TaskTarget
 use crate::disk::lease::{Lease, LeaseAttempt, LeaseState, claim, probe};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::check_run::{CheckOutcome, CheckSignalGuard};
-use crate::harness::loop_task::{LOOP_BOOKED_BY_ENV, LOOP_TASK_ENV};
-use crate::harness::run::SupervisedRunRequest;
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
 use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
@@ -57,7 +55,6 @@ use crate::utils::time::{DurationUnit, parse_duration_units};
 use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
-pub(super) const SCHEDULED_RUN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 pub const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 const RUN_LOCK_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HOLDER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -67,61 +64,6 @@ const TASK_TIMEOUT_UNITS: &[DurationUnit] = &[
     DurationUnit::Hour,
     DurationUnit::Day,
 ];
-
-/// Check-owned launches must not capture launches made by an agent in its pane.
-pub fn loop_check_task() -> Option<String> {
-    check_task_from_identity(
-        std::env::var(LOOP_TASK_ENV).ok(),
-        std::env::var_os(crate::harness::launch::ENV_AGENT_ID).is_some(),
-    )
-}
-
-/// What fired the run whose command is running, for a launch under it to append to its
-/// prompt; outside a fire's command, nothing.
-pub fn loop_trigger() -> Option<String> {
-    loop_check_task()?;
-    std::env::var(crate::harness::loop_task::LOOP_TRIGGER_ENV)
-        .ok()
-        .filter(|text| !text.trim().is_empty())
-}
-
-fn check_task_from_identity(task: Option<String>, has_agent: bool) -> Option<String> {
-    task.filter(|task| !has_agent && !task.is_empty())
-}
-
-/// The booking chain of the fire whose command is running, for a launch under it to carry;
-/// outside a fire's command, nothing.
-pub fn loop_check_booked_by() -> Vec<crate::agents::LaunchedBy> {
-    loop_check_task()
-        .map(|_| check_booked_by(std::env::var(LOOP_BOOKED_BY_ENV).ok()))
-        .unwrap_or_default()
-}
-
-/// The firing task's booking chain from a check's environment; an absent or unreadable
-/// value is no chain.
-fn check_booked_by(raw: Option<String>) -> Vec<crate::agents::LaunchedBy> {
-    raw.and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
-}
-
-/// Apply loop-owned deadline, cleanup, and scheduled-tab placement policy, and stamp the
-/// firing task's booking chain and the fire's workflow run from the check's environment.
-pub fn shape_loop_owned(
-    request: &mut SupervisedRunRequest,
-    task: &str,
-    config: &MachineConfig,
-    mode: LoopRunMode,
-) -> Result<()> {
-    request.timeout = effective_spawn_timeout(mode, request.timeout, configured_timeout(config)?);
-    request.force_new_tab |= mode == LoopRunMode::Scheduled;
-    request.loop_task = Some(task.to_owned());
-    request.loop_booked_by = loop_check_booked_by();
-    request.loop_fire = loop_check_task()
-        .and_then(|_| std::env::var("RIMZ_WORKFLOW_RUN").ok())
-        .and_then(|raw| crate::ids::WorkflowRunId::parse(&raw).ok());
-    request.self_cleanup_on_completion = !request.keep;
-    Ok(())
-}
 
 #[derive(Clone, Debug)]
 pub enum TaskFireNotice {
@@ -832,6 +774,11 @@ impl<'a> TaskFire<'a> {
         let trigger = self.effect_prompt(String::new());
         let prompt = || Ok((!trigger.is_empty()).then(|| trigger.clone()));
         let (fire, displaced) = self.open_fire()?;
+        if let Some(tree) = &self.fire_tree
+            && let Err(error) = crate::worktree::stamp_loop_fire(&tree.path, &fire)
+        {
+            tracing::warn!(task = %self.name, %fire, %error, "the fire's tree carries no fire stamp");
+        }
         let definition = crate::harness::workflow::DefinitionSource::Inline {
             task: self.name.clone(),
             loop_fire: fire.clone(),
@@ -1890,17 +1837,6 @@ pub fn in_flight_run(name: &str, root: &Path) -> Result<Option<InFlightRun>> {
     Ok(Some(InFlightRun { holder, run }))
 }
 
-pub(super) fn effective_spawn_timeout(
-    mode: crate::harness::schedule::run_log::LoopRunMode,
-    task_timeout: Option<Duration>,
-    configured_timeout: Option<Duration>,
-) -> Option<Duration> {
-    task_timeout.or_else(|| {
-        (mode == crate::harness::schedule::run_log::LoopRunMode::Scheduled)
-            .then_some(configured_timeout.unwrap_or(SCHEDULED_RUN_DEFAULT_TIMEOUT))
-    })
-}
-
 const STOP_GRACE: Duration = Duration::from_secs(5);
 
 pub enum StopOutcome {
@@ -2464,16 +2400,6 @@ pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
         duration_ms: None,
         agent: None,
     }
-}
-
-pub(super) fn configured_timeout(config: &MachineConfig) -> Result<Option<Duration>> {
-    config
-        .r#loop
-        .default_timeout
-        .as_deref()
-        .map(parse_task_timeout)
-        .transpose()
-        .map_err(anyhow::Error::msg)
 }
 
 pub(super) fn task_timeout(entry: &TaskEntry) -> Result<Option<Duration>> {

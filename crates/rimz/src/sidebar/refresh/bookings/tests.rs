@@ -665,6 +665,7 @@ fn marked_tree(dir: &Path, name: &str, branch: &str, root: &Path) -> PathBuf {
     std::fs::create_dir_all(&admin).unwrap();
     std::fs::write(tree.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
     let marker = crate::worktree::WorktreeMarker {
+        loop_fire: None,
         version: 4,
         name: name.to_owned(),
         branch: branch.to_owned(),

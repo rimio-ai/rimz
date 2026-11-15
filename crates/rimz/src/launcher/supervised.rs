@@ -69,8 +69,9 @@ fn prepare(
     run_layout: Option<(LayoutRequest, LeaderRun)>,
     interaction: &mut dyn Interaction,
 ) -> Result<Preparation> {
-    // Harness-owned launches have no agent caller, from either env or ancestry.
-    let harness_owned = request.loop_task.is_some()
+    // Harness-owned launches have no agent caller, from either env or ancestry: a launch under
+    // a loop fire, and a workflow step's.
+    let harness_owned = request.loop_fire.is_some()
         || request.workflow.is_some()
         || run_layout
             .as_ref()
@@ -262,7 +263,7 @@ fn prepare(
         .and_then(|(layout, _)| layout.automation.clone())
         .or_else(|| {
             request
-                .loop_task
+                .loop_fire
                 .is_some()
                 .then_some(crate::agents::Automation::Loop)
         })
@@ -440,12 +441,13 @@ fn prepare(
     else {
         return Ok(Preparation::Handled(LaunchOutcome::Declined));
     };
+    checkout::stamp_created_tree(&launch, request.loop_fire.as_ref());
     if cwd.is_some() {
         launch.repo_root = workspace.at_launch_dir(&launch.cwd)?.cwd_project_root;
     }
     let home_fix = if request.workflow.is_some() {
         "start the workflow from a project directory"
-    } else if request.loop_task.is_some() {
+    } else if request.loop_fire.is_some() {
         "re-add the loop task from a project directory"
     } else if request.subagent {
         "pass `--cwd <DIR>`, or launch the parent agent from a project directory"
@@ -707,6 +709,7 @@ fn prepare(
             managed_launches,
             loop_task: None,
             loop_booked_by: Vec::new(),
+            loop_fire: None,
             cleanup_worktree: request.retries == 0,
             force_new_tab: request.force_new_tab,
             agent_shell_persistence: request.agent_shell_persistence,

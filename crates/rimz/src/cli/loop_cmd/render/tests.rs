@@ -80,6 +80,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         workflow_runs: Vec::new(),
         kept_worktrees: Vec::new(),
         runs_workflows: false,
+        launches: Vec::new(),
         all: false,
     }
 }
@@ -4467,6 +4468,7 @@ fn kept_tree(name: &str, second: i64) -> rimz::worktree::ManagedWorktree {
     let path = PathBuf::from(format!("/repo-worktrees/{name}"));
     rimz::worktree::ManagedWorktree {
         marker: rimz::worktree::WorktreeMarker {
+            loop_fire: None,
             version: 4,
             name: name.to_owned(),
             branch: name.to_owned(),

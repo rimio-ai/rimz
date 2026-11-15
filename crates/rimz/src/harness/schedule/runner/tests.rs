@@ -693,64 +693,6 @@ fn vanished_delivery_root_still_resolves_and_finds_no_active_run() {
 }
 
 #[test]
-fn loop_check_identity_excludes_agent_and_room_environments() {
-    assert_eq!(
-        check_task_from_identity(Some("nightly".to_owned()), false).as_deref(),
-        Some("nightly")
-    );
-    assert_eq!(
-        check_task_from_identity(Some("nightly".to_owned()), true),
-        None
-    );
-    assert_eq!(check_task_from_identity(Some(String::new()), false), None);
-    assert_eq!(check_task_from_identity(None, false), None);
-    assert_eq!(
-        check_booked_by(Some(
-            r#"[{"kind":"claude","agent_id":"booker"}]"#.to_owned()
-        )),
-        [crate::agents::LaunchedBy {
-            kind: crate::ids::AgentKind::new_unchecked("claude"),
-            agent_id: "booker".into(),
-        }]
-    );
-    assert!(check_booked_by(Some("not json".to_owned())).is_empty());
-    assert!(check_booked_by(None).is_empty());
-}
-
-#[test]
-fn spawn_timeout_prefers_task_then_config_then_builtin() {
-    use LoopRunMode::{Manual, Scheduled};
-    let task = Duration::from_secs(30);
-    let configured = Duration::from_secs(60);
-
-    assert_eq!(
-        effective_spawn_timeout(Scheduled, Some(task), Some(configured)),
-        Some(task),
-        "task timeout outranks config"
-    );
-    assert_eq!(
-        effective_spawn_timeout(Scheduled, Some(task), None),
-        Some(task),
-        "task timeout applies without a configured default"
-    );
-    assert_eq!(
-        effective_spawn_timeout(Scheduled, None, Some(configured)),
-        Some(configured),
-        "config timeout applies when the task is silent"
-    );
-    assert_eq!(
-        effective_spawn_timeout(Scheduled, None, None),
-        Some(SCHEDULED_RUN_DEFAULT_TIMEOUT),
-        "scheduled runs always carry a deadline"
-    );
-    assert_eq!(
-        effective_spawn_timeout(Manual, None, Some(configured)),
-        None,
-        "manual runs stay untimed even with a configured default"
-    );
-}
-
-#[test]
 fn deadline_expiry_uses_injected_time() {
     let now = Timestamp::from_second(200_000).expect("now");
     let expired = TaskEntry {

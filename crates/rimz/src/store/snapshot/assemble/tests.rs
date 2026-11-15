@@ -565,8 +565,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_agent_epoch_contract_is_version_101() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 101);
+fn snapshot_loop_fire_contract_is_version_102() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 102);
+}
+
+#[test]
+fn pre_102_fireless_agent_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(101);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views whose agent rows carry no loop fire stamp must refold"
+    );
 }
 
 #[test]
