@@ -39,7 +39,7 @@ fn stuck_stage_fails_only_the_owner_and_refreshes_group_facts() {
     assert_eq!(row(&snapshot, "coder").status(), Some(AgentStatus::Failed));
     assert_eq!(
         row(&snapshot, "coder").turn_error_label(),
-        Some("stage Implement: nothing running 30m")
+        Some("stage Implement: nothing running 15m")
     );
     assert_eq!(row(&snapshot, "reviewer").status(), Some(AgentStatus::Idle));
     let group = &snapshot.worktree_groups[0];

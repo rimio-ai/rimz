@@ -14,7 +14,7 @@ const DEFAULT_ARCHIVE_AFTER_SECS: u32 = 24 * 60 * 60;
 /// Default window before a `running` agent with no activity is treated as
 /// stalled. The per-machine `[agents.attention] stalled_after_secs` setting
 /// overrides this for the live sidebar projection.
-const DEFAULT_STALL_AFTER_SECS: u32 = 30 * 60;
+const DEFAULT_STALL_AFTER_SECS: u32 = 15 * 60;
 
 /// Consecutive identical tool calls before the sidebar annotates a card.
 const DEFAULT_TOOL_REPEAT_WARN_AFTER: u32 = 3;
