@@ -419,6 +419,9 @@ pub fn fire_signal(
 pub struct SignalFire {
     pub started: Vec<String>,
     pub not_started: Vec<String>,
+    /// Tasks subscribed to the signal's name or family whose match filter excluded its payload;
+    /// a task on a sibling name is not listed.
+    pub excluded: Vec<String>,
 }
 
 fn fire_signal_with_wait(
@@ -443,6 +446,10 @@ fn fire_signal_with_wait(
         let Ok(parsed) = task.trigger() else { continue };
         let resolution = parsed.trigger.resolve(name, signal);
         if resolution == SignalResolution::Ignore {
+            continue;
+        }
+        if resolution == SignalResolution::Excluded {
+            fired.excluded.push(name.clone());
             continue;
         }
         let key = task.key(name);

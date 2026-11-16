@@ -972,7 +972,7 @@ fn parse_trigger_rejects_conflicting_fields() {
 
 #[test]
 fn wildcard_matches_require_present_keys_and_preserve_exact_filters() {
-    use crate::harness::signal::SignalResolution::{Deliver, Ignore};
+    use crate::harness::signal::SignalResolution::{Deliver, Excluded};
     for (selector, matches, payload, expected) in [
         (
             "pr.conflicted",
@@ -996,13 +996,13 @@ fn wildcard_matches_require_present_keys_and_preserve_exact_filters() {
             "pr.conflicted",
             vec![("branch", "*")],
             serde_json::json!({}),
-            Ignore,
+            Excluded,
         ),
         (
             "pr.conflicted",
             vec![("branch", "feat/*")],
             serde_json::json!({"branch":"feat/x"}),
-            Ignore,
+            Excluded,
         ),
         (
             "pr.conflicted",
@@ -1026,13 +1026,13 @@ fn wildcard_matches_require_present_keys_and_preserve_exact_filters() {
             "team.stage",
             vec![("team", "*"), ("to", "Done")],
             serde_json::json!({"team":"a", "to":"Review"}),
-            Ignore,
+            Excluded,
         ),
         (
             "team.stage",
             vec![("team", "*"), ("to", "Done")],
             serde_json::json!({"team":"a"}),
-            Ignore,
+            Excluded,
         ),
     ] {
         let trigger = Trigger::Signal {
@@ -1075,7 +1075,7 @@ fn triggers_match_names_and_top_level_payload_values() {
             ("result".to_owned(), "failure".to_owned()),
         ]),
     };
-    use crate::harness::signal::SignalResolution::{Deliver, Ignore, Skip};
+    use crate::harness::signal::SignalResolution::{Deliver, Excluded, Ignore, Skip};
     assert_eq!(matching.resolve("task", &signal), Deliver);
     assert_eq!(
         Trigger::Schedule(parse_schedule("task", &entry(None, Some("5m"), None)).unwrap())
@@ -1109,11 +1109,16 @@ fn triggers_match_names_and_top_level_payload_values() {
         (
             "ci.failed",
             std::collections::BTreeMap::from([("result".to_owned(), "success".to_owned())]),
-            Ignore,
+            Excluded,
         ),
         (
             "ci.failed",
             std::collections::BTreeMap::from([("missing".to_owned(), "value".to_owned())]),
+            Excluded,
+        ),
+        (
+            "ci.started",
+            std::collections::BTreeMap::from([("result".to_owned(), "success".to_owned())]),
             Ignore,
         ),
     ] {
@@ -1130,12 +1135,12 @@ fn triggers_match_names_and_top_level_payload_values() {
 
 #[test]
 fn signal_selectors_observe_only_matching_family_payloads() {
-    use crate::harness::signal::SignalResolution::{Deliver, Ignore, Skip};
+    use crate::harness::signal::SignalResolution::{Deliver, Excluded, Ignore, Skip};
     for (selector, emitted, path, expected) in [
         ("ci.failed", "ci.failed", "/worktree", Deliver),
         ("ci.failed", "ci.passed", "/worktree", Skip),
         ("ci.*", "ci.passed", "/worktree", Deliver),
-        ("ci.*", "ci.failed", "/elsewhere", Ignore),
+        ("ci.*", "ci.failed", "/elsewhere", Excluded),
         ("ci.failed", "ci.passed", "/elsewhere", Ignore),
         ("ci.*", "pr.merged", "/worktree", Ignore),
         ("deploy.finished", "deploy.started", "/worktree", Skip),
@@ -1169,7 +1174,7 @@ fn signal_selectors_observe_only_matching_family_payloads() {
 
 #[test]
 fn a_branch_row_signal_without_a_path_fires_only_branch_subscriptions() {
-    use crate::harness::signal::SignalResolution::{Deliver, Ignore};
+    use crate::harness::signal::SignalResolution::{Deliver, Excluded};
     let signal = crate::harness::signal::Signal {
         name: "ci.passed".parse().unwrap(),
         payload: serde_json::Map::from_iter([
@@ -1185,9 +1190,9 @@ fn a_branch_row_signal_without_a_path_fires_only_branch_subscriptions() {
     for (key, value, expected) in [
         ("branch", "feat/x", Deliver),
         ("branch", "*", Deliver),
-        ("branch", "other", Ignore),
-        ("path", "/worktree", Ignore),
-        ("path", "*", Ignore),
+        ("branch", "other", Excluded),
+        ("path", "/worktree", Excluded),
+        ("path", "*", Excluded),
     ] {
         let trigger = Trigger::Signal {
             selector: "ci.*".parse().unwrap(),

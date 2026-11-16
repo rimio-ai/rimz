@@ -166,6 +166,65 @@ fn events_emit_distinguishes_started_disabled_and_sibling_subscriptions() {
     );
 }
 
+#[test]
+fn events_emit_names_tasks_whose_match_excluded_the_signal() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let task = |name: &str, extra: &str| {
+        format!(
+            "[tasks.{name}]\ncommand = [\"true\"]\ntimeout = \"1m\"\nrepeat = true\nroot = {:?}\nsignal = \"deploy.done\"\n{extra}",
+            env.project_root
+        )
+    };
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        [
+            task("filtered", "match = { env = \"prod\" }\n"),
+            task("paused", ""),
+            task("subscriber", ""),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let output = env
+        .rimz()
+        .args(["loop", "disable", "paused"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let emit = |payload| {
+        let output = env
+            .rimz()
+            .args(["events", "emit", "deploy.done", "--json", payload])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let receipt = emit(r#"{"env":"dev"}"#);
+    assert!(
+        receipt.contains(
+            "· fired 1 task\n  subscriber\n  paused: did not start\n  filtered: its --match excluded this signal\n"
+        ),
+        "{receipt}"
+    );
+    // A filter that excludes the signal still counts as a subscriber.
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        task("filtered", "match = { env = \"prod\" }\n"),
+    )
+    .unwrap();
+    let receipt = emit(r#"{"env":"dev"}"#);
+    assert!(
+        receipt.contains("· fired no task\n  filtered: its --match excluded this signal\n"),
+        "{receipt}"
+    );
+}
+
 fn append(env: &Env, signal: LifecycleSignal) {
     let store = env.store();
     let observation =
