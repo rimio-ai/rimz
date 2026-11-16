@@ -1699,6 +1699,29 @@ pub fn launch_holder<'a>(members: &[&'a AgentState]) -> Vec<&'a AgentState> {
         .collect()
 }
 
+/// The row `session` is now: its own key while that names a row, else the row that adopted
+/// its provisional key when a hook re-keyed it. The adopter is the one unended row of its
+/// kind holding `session`'s launch at its epoch; no row, or more than one, answers `None`.
+/// A registered key moves nowhere: a successor beside it is a row of its own.
+pub fn session_row<'a>(agents: &'a [AgentState], session: &AgentState) -> Option<&'a AgentState> {
+    let named =
+        |agent: &&AgentState| agent.kind == session.kind && agent.agent_id == session.agent_id;
+    if let Some(row) = agents.iter().find(named) {
+        return Some(row);
+    }
+    if !session.agent_id.is_provisional() {
+        return None;
+    }
+    let mut adopters = agents.iter().filter(|agent| {
+        agent.kind == session.kind
+            && agent.ended_at.is_none()
+            && agent.launch_id.as_ref() == Some(session.launch_key())
+            && agent.epoch == session.epoch
+    });
+    let adopter = adopters.next()?;
+    adopters.next().is_none().then_some(adopter)
+}
+
 /// Whether the agent a launch or session id names has ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentEnd {
