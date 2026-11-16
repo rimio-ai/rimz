@@ -2071,3 +2071,118 @@ fn a_placed_workflow_task_sees_a_hand_started_run_in_its_worktree() {
         Some(held)
     );
 }
+
+/// A delivery fire through `prepare`, its row a `wait` with `entry`'s triggers.
+fn delivery_fire<'a>(
+    root: &Path,
+    catalog: &'a TaskCatalog,
+    entry: TaskEntry,
+    signal: Option<TriggerSignal>,
+) -> TaskFire<'a> {
+    let name = format!("deliver-{}", TaskId::new().short());
+    let entry = TaskEntry {
+        root: root.to_owned(),
+        wait: Some(TaskTarget {
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            session: "session".into(),
+            handle: "@claude".to_owned(),
+        }),
+        deadline: Some(Timestamp::UNIX_EPOCH),
+        ..entry
+    };
+    TaskFire::new(
+        name.clone(),
+        LoadedTask::new(&name, entry, catalog::TaskSource::Instance),
+        catalog,
+        LoopRunMode::Manual,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        signal,
+        Instant::now(),
+    )
+    .unwrap()
+}
+
+/// A delivery's gates run scope, run lock, deadline, watch: each refusal wins over every later
+/// one.
+#[test]
+fn a_delivery_gates_scope_then_run_lock_then_deadline_then_watch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    record_room(&root).unwrap();
+    let catalog = TaskCatalog::load(Some(&root)).unwrap();
+    let every = || TaskEntry {
+        every: Some("1h".into()),
+        ..TaskEntry::default()
+    };
+    let prepared = |fire: &mut TaskFire<'_>| match fire.prepare(&mut |_| Ok(())).unwrap() {
+        TaskFirePlan::Done(done) => done.record.result,
+        _ => panic!("a refused delivery is done"),
+    };
+
+    for budget in [true, false] {
+        let mut fire = delivery_fire(&root, &catalog, every(), None);
+        if budget {
+            fire.config = Arc::new(toml::from_str("[harness]\nbudget = \"0/day\"\n").unwrap());
+        }
+        let lock = fire.fire_run_lock_path().unwrap();
+        let RunLockAttempt::Acquired(_held) = acquire_run_lock_file(&lock, None, None).unwrap()
+        else {
+            panic!("fixture takes lock")
+        };
+        let expected = if budget {
+            LoopRunResult::BudgetSkipped
+        } else {
+            LoopRunResult::Overlapped
+        };
+        assert_eq!(prepared(&mut fire), expected, "budget: {budget}");
+    }
+
+    let watched = TaskEntry {
+        watch: Some(crate::config::WatchSpec::Command("true".to_owned())),
+        on: Some(CheckOn::Fail),
+        ..TaskEntry::default()
+    };
+    let passed = TriggerSignal {
+        name: serde_json::from_value(serde_json::json!("wait.watch")).unwrap(),
+        payload: serde_json::Map::new(),
+        source: crate::store::event::SignalSource::Cli,
+        watch: Some(WatchOutcome {
+            verdict: crate::harness::signal::WatchVerdict::Exited {
+                code: Some(0),
+                elapsed_ms: 1_000,
+            },
+            output: String::new(),
+            output_path: None,
+            summary: Default::default(),
+        }),
+    };
+    let mut fire = delivery_fire(&root, &catalog, watched, Some(passed));
+    assert_eq!(prepared(&mut fire), LoopRunResult::Expired);
+}
+
+/// The history row holds SIGTERM through its write and the lease's release: a row whose
+/// backlog lock fails keeps both the hold and the lease for `release_run_lock`.
+#[test]
+fn the_record_hold_lasts_until_the_lease_is_released() {
+    for unreadable in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        record_room(root.path()).unwrap();
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let mut fire = backlog_fire(root.path(), &catalog);
+        fire.mode = LoopRunMode::Manual;
+        fire.entry.overlap = None;
+        assert!(fire.prepare_run_lock().unwrap().is_none());
+        if unreadable {
+            let path = backlog::path(&paths);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "not json").unwrap();
+        }
+        fire.record_gate(LoopRunResult::Completed, "done".to_owned());
+        assert_eq!(fire.run_lock.is_some(), unreadable, "{unreadable}");
+        assert_eq!(fire.record_hold.is_some(), unreadable, "{unreadable}");
+        fire.release_run_lock().unwrap();
+        assert!(fire.run_lock.is_none() && fire.record_hold.is_none());
+    }
+}
