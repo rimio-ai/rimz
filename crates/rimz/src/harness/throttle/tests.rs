@@ -657,6 +657,35 @@ fn capacity_check_holds_an_admitted_turn_without_holding_the_queue_lock() {
 }
 
 #[test]
+fn a_skipped_start_admitted_behind_a_checking_turn_holds_that_turns_recheck() {
+    let fake = FakeHost::new();
+    let weak = Arc::downgrade(&fake);
+    let skipped = Arc::new(Mutex::new(None));
+    let kept = Arc::clone(&skipped);
+    *fake.on_check.lock().unwrap() = Some(Box::new(move |_| {
+        let mut second = run("second");
+        second.skip = true;
+        // The fake holds its check hook while it runs, so this start writes its ticket unchecked.
+        let host = weak.upgrade().unwrap().host();
+        let attempt = try_admit_in(&host, &config(""), &second).unwrap();
+        assert!(
+            matches!(&attempt, Attempt::Turn(turn)
+                if turn.started_past_limit() == Some("queued: 1 start ahead")),
+            "the skipped start passed the checking turn ahead of it: {attempt:?}"
+        );
+        *kept.lock().unwrap() = Some(attempt);
+    }));
+    let attempt = try_admit_in(&fake.host(), &config("check = 'capacity'"), &run("first")).unwrap();
+    assert!(
+        matches!(&attempt, Attempt::Held(hold)
+            if hold.kind == HoldKind::Queue && hold.text == "queued: 1 start ahead"),
+        "{attempt:?}"
+    );
+    assert_eq!(fake.tickets(), 1, "only the skipped start keeps a ticket");
+    drop(skipped);
+}
+
+#[test]
 fn capacity_checks_refresh_open_counts_after_running_off_lock() {
     let configured = config("check='capacity'\nmax-parallel-agents=1");
     {
@@ -760,177 +789,6 @@ fn capacity_holds_are_cached_per_kind_and_account_and_diagnose_the_latest_error(
     fake.clock.fetch_add(60_000, Ordering::SeqCst);
     drop(try_admit_in(&fake.host(), &configured, &run("first")).unwrap());
     assert!(check_errors_in(fake.as_ref(), &configured).is_empty());
-}
-
-#[test]
-fn capacity_waiters_step_aside_only_for_disjoint_kinds_and_never_a_held_turn() {
-    let results: Vec<_> = [HoldKind::Capacity, HoldKind::CheckFailed]
-        .into_iter()
-        .map(|kind| {
-            let fake = FakeHost::new();
-            let first = run("first");
-            let path = enqueue_as(&fake, 1, &first);
-            let mut ticket = read_ticket(&path).unwrap().unwrap();
-            ticket.state = TicketState::Waiting {
-                reason: Some(Hold {
-                    kind,
-                    text: "no capacity".into(),
-                    kinds: vec![AgentKind::new_unchecked("claude")],
-                }),
-            };
-            write_ticket(&path, &ticket).unwrap();
-            let mut other = run("other");
-            other.groups[0].kind = AgentKind::new_unchecked("codex");
-            let codex = try_admit_in(&fake.host(), &config(""), &other).unwrap();
-            let claude = try_admit_in(&fake.host(), &config(""), &run("next")).unwrap();
-            let held_turn = try_admit_in(&fake.host(), &config(""), &other).unwrap();
-            (
-                matches!(codex, Attempt::Turn(_)),
-                matches!(claude, Attempt::Held(_)),
-                matches!(held_turn, Attempt::Held(_)),
-            )
-        })
-        .collect();
-    assert_eq!(results, [(true, true, true); 2]);
-}
-
-#[test]
-fn queued_starts_keep_the_blocking_cause_and_its_text() {
-    let fake = FakeHost::new();
-    let capacity = (HoldKind::Capacity, "claude: no capacity (your check)");
-    let failure = (
-        HoldKind::CheckFailed,
-        "capacity check failing: claude exit 2",
-    );
-    let another_failure = (
-        HoldKind::CheckFailed,
-        "capacity check failing: claude timed out after 30s",
-    );
-    let queued = (HoldKind::Queue, "queued: 1 start ahead");
-    let mine = Ticket::new(fake.as_ref(), &run("last"), fake.now_ms());
-    let mut actual = Vec::new();
-    for blockers in [
-        vec![capacity, capacity],
-        vec![capacity, failure, another_failure],
-        vec![failure, queued],
-        vec![queued],
-    ] {
-        let queue = blockers
-            .iter()
-            .map(|(kind, text)| {
-                let mut ticket = Ticket::new(fake.as_ref(), &run("first"), fake.now_ms());
-                ticket.state = TicketState::Waiting {
-                    reason: Some(Hold {
-                        kind: *kind,
-                        text: (*text).into(),
-                        kinds: mine.kinds.clone(),
-                    }),
-                };
-                (PathBuf::new(), ticket)
-            })
-            .collect::<Vec<_>>();
-        let hold = queue_hold(&queue, queue.len(), &mine).unwrap();
-        actual.push((hold.kind, hold.text));
-    }
-    assert_eq!(
-        actual,
-        [
-            (capacity.0, capacity.1.into()),
-            (failure.0, failure.1.into()),
-            (failure.0, failure.1.into()),
-            (HoldKind::Queue, "queued: 1 start ahead".into()),
-        ]
-    );
-}
-
-#[test]
-fn queued_needs_fix_causes_survive_mixed_predecessors_and_held_turns() {
-    let fake = FakeHost::new();
-    let disk = (HoldKind::Disk, "free disk 1 GB < 20 GB at /other-room");
-    let store = (HoldKind::Store, "cannot count open agents: broken room");
-    let failure = (
-        HoldKind::CheckFailed,
-        "capacity check failing: claude exit 2",
-    );
-    let queued = (HoldKind::Queue, "queued: 1 start ahead");
-    let mine = Ticket::new(fake.as_ref(), &run("last"), fake.now_ms());
-    for held_turn in [false, true] {
-        for (blockers, expected) in [
-            (vec![disk], disk),
-            (vec![store], store),
-            (vec![queued, disk], disk),
-            (vec![disk, queued], disk),
-            (vec![disk, store], disk),
-            (vec![store, disk], store),
-            (vec![queued, failure], failure),
-        ] {
-            let mut queue = Vec::new();
-            if held_turn {
-                let mut ticket = mine.clone();
-                ticket.state = TicketState::Admitted;
-                queue.push((PathBuf::new(), ticket));
-            }
-            for (kind, text) in blockers {
-                let mut ticket = Ticket::new(fake.as_ref(), &run("first"), fake.now_ms());
-                ticket.state = TicketState::Waiting {
-                    reason: Some(Hold {
-                        kind,
-                        text: text.into(),
-                        kinds: mine.kinds.clone(),
-                    }),
-                };
-                queue.push((PathBuf::new(), ticket));
-            }
-            let hold = queue_hold(&queue, queue.len(), &mine).unwrap();
-            assert_eq!((hold.kind, hold.text.as_str()), expected);
-            assert!(hold.kinds.is_empty(), "a mixed queue cannot step aside");
-        }
-    }
-}
-
-#[test]
-fn disjoint_starts_cannot_pass_a_propagated_needs_fix_follower() {
-    for kind in [HoldKind::Disk, HoldKind::Store, HoldKind::CheckFailed] {
-        let fake = FakeHost::new();
-        let head = enqueue_as(&fake, 1, &run("head"));
-        let mut ticket = read_ticket(&head).unwrap().unwrap();
-        ticket.state = TicketState::Waiting {
-            reason: Some(Hold {
-                kind,
-                text: "the head's blocker".into(),
-                kinds: ticket.kinds.clone(),
-            }),
-        };
-        write_ticket(&head, &ticket).unwrap();
-        let mixed = enqueue_as(&fake, 2, &run("mixed"));
-        let follower = enqueue_as(&fake, 3, &run("follower"));
-        step(&fake, &config(""), &run("follower"), &follower);
-        let TicketState::Waiting {
-            reason: Some(propagated),
-        } = read_ticket(&follower).unwrap().unwrap().state
-        else {
-            panic!("the follower must wait on the head's blocker");
-        };
-        assert!(
-            propagated.kinds.is_empty(),
-            "a mixed queue cannot step aside"
-        );
-        remove_ticket(&head);
-        remove_ticket(&mixed);
-        let mut codex = run("codex");
-        codex.groups[0].kind = AgentKind::new_unchecked("codex");
-        let attempt = try_admit_in(&fake.host(), &config(""), &codex).unwrap();
-        let Attempt::Held(hold) = attempt else {
-            panic!("a propagated mixed hold must block disjoint starts: {attempt:?}");
-        };
-        assert_eq!(hold.kind, kind);
-        assert_eq!(hold.text, "the head's blocker");
-        assert_eq!(
-            hold.kinds,
-            codex.kinds(),
-            "the record names this run's providers"
-        );
-    }
 }
 
 #[test]
@@ -1245,9 +1103,19 @@ fn a_dropped_turn_and_a_dead_owner_both_release_the_next_run() {
     std::mem::forget(orphan);
     fake.become_owner(3);
     let waiting = enqueue_as(&fake, 3, &run("third"));
+    let admitted = std::fs::read_to_string(&waiting).unwrap();
     assert_eq!(
         step(&fake, &configured, &run("third"), &waiting).as_deref(),
         Some("queued: 1 start ahead")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&waiting).unwrap(),
+        admitted,
+        "a blocked revalidation writes nothing"
+    );
+    assert_eq!(
+        read_ticket(&waiting).unwrap().unwrap().state,
+        TicketState::Admitted
     );
     fake.kill(2);
     assert_eq!(step(&fake, &configured, &run("third"), &waiting), None);
@@ -1355,7 +1223,8 @@ fn an_unreadable_workspace_holds_the_run_and_names_it() {
 }
 
 #[test]
-fn queue_order_follows_enqueue_order_across_owners() {
+fn queue_holds_count_the_in_scope_starts_ahead_across_owners() {
+    // Admitted tickets share the queue when skipped starts take theirs behind a checking turn.
     let fake = FakeHost::new();
     let configured = config("");
     let tickets = [1, 2, 3].map(|pid| enqueue_as(&fake, pid, &run(&format!("task-{pid}"))));
@@ -1367,59 +1236,32 @@ fn queue_order_follows_enqueue_order_across_owners() {
             &tickets[index],
         )
     };
+    let arriving = || {
+        pass(
+            fake.as_ref(),
+            &configured,
+            &run("task-4"),
+            None,
+            fake.now_ms(),
+            &mut None,
+        )
+        .expect("pass")
+        .hold()
+        .map(|hold| hold.text)
+    };
+    assert_eq!(arriving().as_deref(), Some("queued: 3 starts ahead"));
     assert_eq!(step_for(2).as_deref(), Some("queued: 2 starts ahead"));
     assert_eq!(step_for(1).as_deref(), Some("queued: 1 start ahead"));
-    assert_eq!(step_for(0), None);
     assert_eq!(
-        step_for(1).as_deref(),
+        step_for(0).as_deref(),
         Some("queued: 1 start ahead"),
-        "the turn is held"
+        "the starts behind it hold it too"
     );
     remove_ticket(&tickets[0]);
     assert_eq!(step_for(2).as_deref(), Some("queued: 1 start ahead"));
+    remove_ticket(&tickets[2]);
     assert_eq!(step_for(1), None);
-}
-
-#[test]
-fn a_waiting_run_is_reported_with_its_reason_and_place() {
-    let fake = FakeHost::new();
-    let configured = config("");
-    let (_turn, _) = admitted(admit_quiet(&fake, &configured, &run("first")));
-    let waiting = enqueue_as(&fake, 2, &run("second"));
-    let since_ms = fake.now_ms();
-    let held = |reason: Option<&str>, pid, position| Held {
-        pid,
-        checkout: PathBuf::from("/repo"),
-        since_ms,
-        kinds: vec![AgentKind::new_unchecked("claude")],
-        gives_up_ms: None,
-        reason: reason.map(str::to_owned),
-        hold: reason.map(|_| crate::ids::HoldKind::Queue),
-        position,
-    };
-    assert_eq!(
-        held_in(fake.as_ref(), "second", Path::new("/repo")),
-        [held(None, 2, 2)]
-    );
-    step(&fake, &configured, &run("second"), &waiting);
-    // Every waiting run of the task is listed, each with its own process.
-    let mut later = held(None, 3, 3);
-    enqueue_as(&fake, 3, &run("second"));
-    later.since_ms = fake.now_ms();
-    assert_eq!(
-        held_in(fake.as_ref(), "second", Path::new("/repo")),
-        [held(Some("queued: 1 start ahead"), 2, 2), later.clone()]
-    );
-    assert_eq!(held_in(fake.as_ref(), "first", Path::new("/repo")), []);
-    assert_eq!(
-        held_in(fake.as_ref(), "second", Path::new("/elsewhere")),
-        []
-    );
-    fake.kill(2);
-    assert_eq!(
-        held_in(fake.as_ref(), "second", Path::new("/repo")),
-        [later]
-    );
+    assert_eq!(arriving().as_deref(), Some("queued: 1 start ahead"));
 }
 
 #[test]
@@ -1581,15 +1423,22 @@ fn a_compacting_agent_counts_toward_both_caps_throughout_its_window() {
 
 #[test]
 fn a_corrupt_ticket_is_removed_and_the_next_run_is_admitted() {
-    let fake = FakeHost::new();
-    let corrupt = enqueue_as(&fake, 1, &run("first"));
-    std::fs::write(&corrupt, b"{\"owner\":").unwrap();
-    fake.become_owner(2);
-    let (turn, _) = admitted(admit_quiet(&fake, &config(""), &run("second")));
-    assert!(!corrupt.exists());
-    assert_eq!(fake.tickets(), 1, "only the admitted turn is left");
-    drop(turn);
-    assert_eq!(fake.tickets(), 0);
+    // A truncated write, and a waiting ticket an older binary left: no state decodes it.
+    let legacy = serde_json::json!({
+        "owner":{"pid":1,"start":null}, "task":"nightly", "root":"/repo",
+        "checkout":"/repo", "enqueued_ms":1, "state":"waiting", "reason":null
+    });
+    for bytes in [b"{\"owner\":".to_vec(), legacy.to_string().into_bytes()] {
+        let fake = FakeHost::new();
+        let corrupt = enqueue_as(&fake, 1, &run("first"));
+        std::fs::write(&corrupt, &bytes).unwrap();
+        fake.become_owner(2);
+        let (turn, _) = admitted(admit_quiet(&fake, &config(""), &run("second")));
+        assert!(!corrupt.exists());
+        assert_eq!(fake.tickets(), 1, "only the admitted turn is left");
+        drop(turn);
+        assert_eq!(fake.tickets(), 0);
+    }
 }
 
 #[test]

@@ -2172,7 +2172,7 @@ path = "crates/rimz/src/harness"
 # A limit-parked child run: the park predicate, notice text and helper request cross the producer/CLI seam, with the locked claim and its release in `run`.
 # The producer tick calls the park detector (+1).
 # The public park_notice module itself also crosses the harness/CLI boundary (+1).
-# The loop start throttle crosses to the CLI as the `Turn` a launch reports through, the start preflight, and the held-run and readings lookups `loop show` renders, and the typed `ThrottleError` the preflight and admission return, plus the public `throttle` module itself (+10).
+# The loop start throttle crosses to the CLI as the `Turn` a launch reports through, the start preflight, and the readings lookup `loop show` renders, and the typed `ThrottleError` the preflight and admission return, plus the public `throttle` module itself.
 # The keepalive helper reads the final-ping rule beside the shared eligibility recheck (+1).
 # `run::VERIFY_MAX_ATTEMPTS_DEFAULT`, the verify cap shared with the CLI (+1).
 # The exec wrapper re-wakes a resumed team member's open stage through `team_stage::rewake_resumed` (+1).
@@ -2297,7 +2297,6 @@ path = "crates/rimz/src/harness"
 # EdgeSource shares typed route provenance with CLI inspection (+1).
 # Node::kind and Kind share runner selection with definition rails.
 # Node::subscriptions shares derived and explicit wakes with the full node view.
-# throttle::room_held shares the lock-free room ticket read with sidebar and CLI (+1).
 # throttle::DiagnosticHold and diagnostic_holds share fresh read-only doctor findings (+2).
 # stall_nudge, Decision, and decision share opt-in policy with room and host callers (+3).
 # StallNudgeRequest, nudge_stalled_teams, helper, NudgeErr, and queue share the producer/CLI seam (+5).
@@ -2348,7 +2347,7 @@ path = "crates/rimz/src/harness"
 # harness::notes::RIMZ_KEYS gives `rimz notes list --filter help` the header keys the filter names.
 # throttle::probe_queue_lock lets workflow run, resume, and restart refuse an unwritable home (+1).
 # deadline::stop_claimed lets message delivery withdraw a deadline stop whose run no longer holds the stop rung (+1).
-# schedule::attention moves the loop task verdict out of the CLI for loop list, loop watch, and the sidebar: Attention, Hold with of_ticket and of_wait, Facts, TaskFacts, decide, parked_overrides, run_summary, parked_words, since_wait_armed, fired, capacity_waits, RoomReadings with new and observe, BlockingTerm, TaskReading, ReadContext, and read_room; its inputs run_log::ProcessExit with of and LoopRunRecord::exit_label, TaskActionKind::text, TaskCatalog::load_room_lenient, and the when items below come with it (+28).
+# schedule::attention moves the loop task verdict out of the CLI for loop list, loop watch, and the sidebar: Attention, Hold with of_wait, Facts, TaskFacts, decide, parked_overrides, run_summary, parked_words, since_wait_armed, fired, capacity_waits, RoomReadings with new and observe, BlockingTerm, TaskReading, ReadContext, and read_room; its inputs run_log::ProcessExit with of and LoopRunRecord::exit_label, TaskActionKind::text, TaskCatalog::load_room_lenient, and the when items below come with it.
 # WhenExpr::closed_pr_term names the closed pull request that raises the loop verdict's pr_closed cause (+1).
 # ancestry::booking_chain records who booked a loop task, walked once at `rimz loop add` (+1).
 # loop_task::LOOP_BOOKED_BY_ENV hands a fire's booking chain from its checks to the agents they launch (+1).
@@ -2551,7 +2550,7 @@ reason = "The NEEDS YOU causes, their priority, and their `--json` names, shared
 [[verdict]]
 kind = "item"
 key = "harness::schedule::attention::Hold"
-reason = "A held start's age, kind, and reason, read alike from a run's capacity wait and a queue ticket."
+reason = "A held start's age, kind, and reason, read from a run's capacity wait."
 
 [[verdict]]
 kind = "item"
@@ -6040,11 +6039,6 @@ reason = "An attempt host names the start groups it returns to workflow admissio
 kind = "item"
 key = "harness::throttle::check_errors"
 reason = "Doctor reads the latest per-kind/account capacity-check errors without executing checks."
-
-[[verdict]]
-kind = "item"
-key = "harness::throttle::room_held"
-reason = "Sidebar and loop inspection read live waiting tickets for one project without locks or mutations."
 
 [[verdict]]
 kind = "item"
@@ -11074,7 +11068,7 @@ reason = "The binary's doctor tests construct link tiers, also carried in the pu
 [[verdict]]
 kind = "item"
 key = "ids::HoldKind"
-reason = "Throttle tickets, durable waits and renderers share one wire-stable hold classification."
+reason = "Throttle holds, durable waits and renderers share one wire-stable hold classification."
 
 [[verdict]]
 kind = "item"

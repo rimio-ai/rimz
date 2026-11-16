@@ -1151,9 +1151,7 @@ fn resident_show_json_adds_unfolded_worktrees_and_keeps_existing_keys() {
     );
     let raw = loop_ok(&env, &["loop", "show", "resident", "--json"]);
     let shown: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    for key in [
-        "task", "entry", "launches", "runs", "running", "held", "waiting",
-    ] {
+    for key in ["task", "entry", "launches", "runs", "running"] {
         assert!(shown.get(key).is_some(), "existing key {key} must remain");
     }
     assert_eq!(
@@ -6673,7 +6671,9 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
     assert!(json["running"].is_null(), "{json}");
     assert!(
         json.as_object()
-            .is_some_and(|keys| keys.contains_key("running")),
+            .is_some_and(|keys| keys.contains_key("running")
+                && !keys.contains_key("held")
+                && !keys.contains_key("waiting")),
         "{json}"
     );
 }

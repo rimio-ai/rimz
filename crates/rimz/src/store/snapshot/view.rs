@@ -401,7 +401,7 @@ pub struct SidebarSnapshot {
     /// auto-continue producer reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_outcomes: Option<Arc<[ResumeOutcome]>>,
-    /// Needs-a-fix causes among live condition, workflow, and ticket holds.
+    /// Needs-a-fix causes among the capacity waits of active workflow runs.
     #[serde(default)]
     pub throttle_notices: Vec<ThrottleNotice>,
 }

@@ -1038,7 +1038,7 @@ As the pane narrows, presence drops first, help shortens to `?`, and a healthy o
 
 ### Notices and alerts
 
-Automated starts that need a fix add warning notices above the footer, one per cause: a failing capacity check, the disk floor, or an unreadable agent count. Each names the oldest held start's reason and points to `rimz doctor`. Condition fires, workflow steps, and live blocking fires in this room all count; retries do not. With several starts of one cause, `· N held` appears. Narrow panes clip the reason first, keeping the count and command. These notices clear on the next fold after the holds clear, have no dismiss key, and keep the footer unfolded. An active sidebar alert hides them until recovery, like the skipped-settings notice.
+Automated starts that need a fix add warning notices above the footer, one per cause: a failing capacity check, the disk floor, or an unreadable agent count. Each names the oldest held start's reason and points to `rimz doctor`. Only workflow steps in this room that wait on capacity count. With several starts of one cause, `· N held` appears. Narrow panes clip the reason first, keeping the count and command. These notices clear on the next fold after the holds clear, have no dismiss key, and keep the footer unfolded. An active sidebar alert hides them until recovery, like the skipped-settings notice.
 
 ```
  ⚠ capacity check failing: claude exit 1 · 4 held · rimz doctor

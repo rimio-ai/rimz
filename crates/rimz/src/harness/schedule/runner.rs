@@ -1849,28 +1849,17 @@ fn newest_active_run(paths: &StatePaths, name: &str) -> Result<Option<RunRecord>
 pub struct InFlightRun {
     pub holder: Option<RunLockInfo>,
     pub run: Option<RunRecord>,
-    /// The task's runs waiting for their turn in the start throttle; the
-    /// holder is one of them when its pid matches.
-    pub held: Vec<crate::harness::throttle::Held>,
 }
 
 /// The run of task `name` in flight under `root`. The run lock decides; the run
-/// record is read only while the lock is held, so a stale record is no run, and
-/// never for a holder still waiting in the start throttle, which has none.
+/// record is read only while the lock is held, so a stale record is no run.
 pub fn in_flight_run(name: &str, root: &Path) -> Result<Option<InFlightRun>> {
     let Some((_, holder)) = held_run_lock(name, root)? else {
         return Ok(None);
     };
     let (_, project_root) = stop_workspace(root)?;
-    let held = crate::harness::throttle::held(name, root);
-    // A holder still held for its turn has started no run of its own.
-    let holder_held = holder.is_some_and(|info| held.iter().any(|held| held.pid == info.pid));
-    let run = if holder_held {
-        None
-    } else {
-        newest_active_run(&StatePaths::for_project_root(&project_root)?, name)?
-    };
-    Ok(Some(InFlightRun { holder, run, held }))
+    let run = newest_active_run(&StatePaths::for_project_root(&project_root)?, name)?;
+    Ok(Some(InFlightRun { holder, run }))
 }
 
 pub(super) fn effective_spawn_timeout(
@@ -1981,7 +1970,7 @@ pub fn stop_task(
         let mut backlog = LockedBacklog::acquire(&backlog_paths)?;
         let transition = append_stopped_record(name, root, info, run.as_ref(), kind, &mut backlog)?;
         drop(backlog);
-        // A run stopped while held for its turn dies holding a ticket. The
+        // A run stopped while it holds its admitted ticket dies with it. The
         // kernel frees the lock before `/proc` reports the holder dead, and the
         // sweep removes a ticket only once its owner reads dead, so wait for
         // that within the same grace. A holder still live past it keeps its

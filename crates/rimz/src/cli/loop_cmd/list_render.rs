@@ -240,7 +240,7 @@ fn held_rows(
     let mut starts: Vec<_> = room
         .tasks
         .iter()
-        .flat_map(|row| row.held_starts().map(move |start| (row, start)))
+        .flat_map(|row| row.capacity.iter().map(move |start| (row, start)))
         .filter(|(_, start)| !start.wait.hold.is_some_and(|kind| kind.needs_fix()))
         .collect();
     if starts.is_empty() {
@@ -270,10 +270,10 @@ fn held_rows(
     for (row, start) in starts {
         let mut cells = vec![ui::cell(&row.name)];
         if worktree {
-            cells.push(ui::cell(held_worktree(row, &start)));
+            cells.push(ui::cell(held_worktree(row, start)));
         }
         cells.extend([
-            ui::cell(start.wait.reason),
+            ui::cell(&start.wait.reason),
             ui::cell(ui::age_label(
                 now.duration_since(start.wait.since).as_secs().max(0) as u64,
             )),
@@ -383,9 +383,7 @@ fn routine_rows(
             let mut cells = name_cells(row, worktree);
             cells.extend([
                 row.head.clone(),
-                if row.state != TaskState::Running
-                    && (!row.capacity.is_empty() || !row.held.is_empty())
-                {
+                if row.state != TaskState::Running && !row.capacity.is_empty() {
                     row.state_text(now)
                 } else {
                     row.next_at
@@ -442,8 +440,7 @@ fn waiting_rows(
                     trigger.push_str(&format!(" · {} not read", count.not_read));
                 }
             }
-            if row.state != TaskState::Running && (!row.capacity.is_empty() || !row.held.is_empty())
-            {
+            if row.state != TaskState::Running && !row.capacity.is_empty() {
                 trigger.push_str(&format!(" · {}", row.state_text(now)));
             }
             let mut cells = name_cells(row, worktree);

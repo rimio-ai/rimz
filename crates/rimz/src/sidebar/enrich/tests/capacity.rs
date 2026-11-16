@@ -113,59 +113,6 @@ fn unreadable_capacity_records_preserve_workflow_waits_and_removed_waits_clear()
 }
 
 #[test]
-fn notices_merge_live_room_tickets_and_use_the_oldest_reason_per_cause() {
-    let (dir, runtime, mut snapshot) = runtime();
-    snapshot.project_root = Some(dir.path().to_owned());
-    let queue = crate::disk::paths::loop_throttle_queue_dir();
-    std::fs::create_dir_all(&queue).unwrap();
-    let mut tickets = Vec::new();
-    let owner = nix::unistd::getpid().as_raw() as u32;
-    for (offset, root, pid, hold, text) in [
-        (
-            1,
-            dir.path(),
-            owner,
-            "check_failed",
-            "capacity check failing: first",
-        ),
-        (
-            2,
-            dir.path(),
-            owner,
-            "check_failed",
-            "capacity check failing: later",
-        ),
-        (3, Path::new("/another-room"), owner, "disk", "other room"),
-        (4, dir.path(), u32::MAX, "store", "dead owner"),
-        (5, dir.path(), owner, "capacity", "no capacity (your check)"),
-    ] {
-        let at = unix_now_ms() + offset;
-        let path = crate::disk::paths::loop_throttle_ticket_in(&queue, at);
-        std::fs::write(
-            &path,
-            serde_json::to_vec(&serde_json::json!({
-                "owner": {"pid": pid, "start": null}, "task": "triage", "root": root,
-                "checkout": root, "enqueued_ms": at, "state": "waiting",
-                "reason": {"kind": hold, "text": text}
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        tickets.push(path);
-    }
-    let projected = fold_cached(snapshot, None, &runtime);
-    for path in tickets {
-        std::fs::remove_file(path).unwrap();
-    }
-    assert_eq!(
-        serde_json::to_value(projected).unwrap()["throttle_notices"],
-        serde_json::json!([
-            {"kind": "check_failed", "reason": "capacity check failing: first", "count": 2}
-        ])
-    );
-}
-
-#[test]
 fn self_clearing_and_legacy_holds_do_not_notify() {
     let (_dir, runtime, snapshot) = runtime();
     let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();

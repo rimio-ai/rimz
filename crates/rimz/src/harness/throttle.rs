@@ -1,6 +1,6 @@
 //! Home-wide machine admission and workflow/step start limits.
 //!
-//! Blocking runs keep a ticket; condition fires try once and leave none when held.
+//! Only an admitted or launched start keeps a ticket; a held start leaves none.
 //! Machine turns release on a provider report, a workflow stop, or ceiling. A workflow-scoped turn
 //! releases at its launch report, when the run record already counts the attempt,
 //! independently of machine scope. Skipped starts claim without waiting, carrying each hold
@@ -373,9 +373,7 @@ pub(super) fn try_admit_in(
             Pass::Held(hold) => return Ok(Attempt::Held(hold)),
         };
         let path = paths::loop_throttle_ticket_in(&host.queue_dir(), now);
-        let mut ticket = Ticket::new(host.as_ref(), run, now);
-        ticket.state = TicketState::Admitted;
-        write_ticket(&path, &ticket)?;
+        write_ticket(&path, &Ticket::new(host.as_ref(), run, now))?;
         (Turn::new(host, path), passed)
     };
     let checked = check_groups(host.as_ref(), config, run);
@@ -602,11 +600,8 @@ fn check_answer(
 pub(in crate::harness) struct Hold {
     pub(in crate::harness) kind: HoldKind,
     pub(in crate::harness) text: String,
-    /// The providers the hold waits on, read by two consumers. On a ticket they decide
-    /// step-aside in `queue_hold`, so a propagated needs-a-fix hold keeps them empty there.
-    /// On the hold `pass` returns they are the providers of the starts ahead on the
-    /// provider-only path, else the run's own, and the run record saves them as
-    /// `capacity_wait.kinds`.
+    /// The providers the hold waits on, which the run record saves as `capacity_wait.kinds`:
+    /// the ones a capacity check denied, else the run's own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::harness) kinds: Vec<AgentKind>,
 }
@@ -614,9 +609,6 @@ pub(in crate::harness) struct Hold {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 enum TicketState {
-    Waiting {
-        reason: Option<Hold>,
-    },
     Admitted,
     Launched {
         at_ms: u64,
@@ -676,7 +668,7 @@ impl Ticket {
             }),
             kinds: run.kinds(),
             gives_up_ms: run.gives_up_ms,
-            state: TicketState::Waiting { reason: None },
+            state: TicketState::Admitted,
         }
     }
 
@@ -689,10 +681,6 @@ impl Ticket {
             .as_ref()
             .zip(other.limit.as_ref())
             .is_some_and(|(mine, theirs)| mine.workflow == theirs.workflow)
-    }
-
-    fn is_waiting(&self) -> bool {
-        matches!(self.state, TicketState::Waiting { .. })
     }
 }
 
@@ -887,7 +875,7 @@ fn pass(
             .ok_or_else(|| ThrottleError::Vanished(mine.to_path_buf()))?,
         None => queue.len(),
     };
-    let mut ticket = match mine {
+    let ticket = match mine {
         Some(_) => queue[position].1.clone(),
         None => Ticket::new(host, run, now),
     };
@@ -943,27 +931,9 @@ fn pass(
                 sampled
             }
         };
-        if let Some(hold) = &mut hold {
-            hold.kinds = run.kinds();
-        }
     }
-    let state = match &hold {
-        Some(hold) => TicketState::Waiting {
-            reason: Some(hold.clone()),
-        },
-        None => TicketState::Admitted,
-    };
-    if let Some(mine) = mine
-        && ticket.state != state
-    {
-        ticket.state = state;
-        write_ticket(mine, &ticket)?;
-    }
-    // The ticket keeps a propagated hold's empty kinds, so no disjoint start steps
-    // aside for it; the caller's record still names the providers this run waits for.
-    if let Some(hold) = &mut hold
-        && hold.kinds.is_empty()
-    {
+    // The caller's record names the providers this run waits for.
+    if let Some(hold) = &mut hold {
         hold.kinds = run.kinds();
     }
     Ok(match hold {
@@ -975,100 +945,34 @@ fn pass(
 fn launching(queue: &[(PathBuf, Ticket)], mine: &Ticket, path: Option<&Path>) -> usize {
     queue
         .iter()
-        .filter(|(other, ticket)| {
-            path != Some(other.as_path()) && ticket.shares_limit(mine) && !ticket.is_waiting()
-        })
+        .filter(|(other, ticket)| path != Some(other.as_path()) && ticket.shares_limit(mine))
         .count()
 }
 
-fn turn_held(queue: &[(PathBuf, Ticket)], mine: &Ticket, position: usize) -> bool {
-    queue.iter().enumerate().any(|(index, (_, ticket))| {
-        index != position && ticket.shares_scope(mine) && !ticket.is_waiting()
-    })
-}
-
-/// What in the queue keeps the ticket at `position` from being the candidate:
-/// a held turn, or a ticket ahead that nothing lets it step over.
+/// What in the queue keeps the ticket at `position` from its turn: any other admitted or
+/// launched start in its scope, ahead of it or behind it, since a skipped start takes its ticket
+/// behind a turn still checking. The text counts the starts ahead, at least one.
 fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize, mine: &Ticket) -> Option<Hold> {
-    let turn_held = turn_held(queue, mine, position);
-    let blocks_me = |index: usize| {
-        let ticket = &queue[index].1;
-        if !ticket.shares_scope(mine) {
-            return false;
-        }
-        if !ticket.is_waiting() {
-            return true;
-        }
-        if !mine.machine_gated || !ticket.machine_gated {
-            return false;
-        }
-        if let TicketState::Waiting { reason: Some(hold) } = &ticket.state
-            && matches!(hold.kind, HoldKind::Capacity | HoldKind::CheckFailed)
-            && !hold.kinds.is_empty()
-            && !mine.kinds.is_empty()
-            && mine.kinds.iter().all(|kind| !hold.kinds.contains(kind))
-        {
-            return false;
-        }
-        true
-    };
-    let mut ahead = 0;
-    let mut capacity_only = true;
-    let mut kind = HoldKind::Capacity;
-    let mut kinds = Vec::new();
-    let mut text = None;
-    let mut needs_fix = None;
-    for index in (0..position).filter(|&index| blocks_me(index)) {
-        ahead += 1;
-        if let TicketState::Waiting { reason: Some(hold) } = &queue[index].1.state
-            && hold.kind.needs_fix()
-        {
-            needs_fix.get_or_insert(hold);
-        }
-        match &queue[index].1.state {
-            TicketState::Waiting { reason: Some(hold) }
-                if matches!(hold.kind, HoldKind::Capacity | HoldKind::CheckFailed)
-                    && !hold.kinds.is_empty() =>
-            {
-                if hold.kind == HoldKind::CheckFailed && kind != HoldKind::CheckFailed {
-                    kind = HoldKind::CheckFailed;
-                    text = Some(hold.text.clone());
-                }
-                text.get_or_insert_with(|| hold.text.clone());
-                kinds.extend(hold.kinds.iter().cloned());
-            }
-            _ => capacity_only = false,
-        }
-    }
-    if !turn_held && ahead == 0 {
+    let in_scope = |index: usize| index != position && queue[index].1.shares_scope(mine);
+    if !(0..queue.len()).any(in_scope) {
         return None;
     }
-    let starts = ahead.max(1);
-    if turn_held || !capacity_only {
-        kind = HoldKind::Queue;
-        kinds.clear();
-        text = None;
-    }
-    if let Some(hold) = needs_fix {
-        kind = hold.kind;
-        text = Some(hold.text.clone());
-    }
-    kinds.sort();
-    kinds.dedup();
+    let starts = (0..position)
+        .filter(|&index| in_scope(index))
+        .count()
+        .max(1);
     Some(Hold {
-        kind,
-        kinds,
-        text: text.unwrap_or_else(|| {
-            format!(
-                "queued: {starts} start{} ahead",
-                if starts == 1 { "" } else { "s" }
-            )
-        }),
+        kind: HoldKind::Queue,
+        kinds: Vec::new(),
+        text: format!(
+            "queued: {starts} start{} ahead",
+            if starts == 1 { "" } else { "s" }
+        ),
     })
 }
 
-/// Read the queue in order and remove every ticket that is over: a waiting or
-/// admitted one whose owner died, and a launched one whose turn has passed.
+/// Read the queue in order and remove every ticket that is over: an admitted one
+/// whose owner died, and a launched one whose turn has passed.
 /// `ceiling` is `None` for a reader that only reaps the dead.
 fn sweep(host: &dyn Host, ceiling: Option<Duration>, now: u64) -> Result<Vec<(PathBuf, Ticket)>> {
     let mut queue = Vec::new();
@@ -1085,9 +989,7 @@ fn sweep(host: &dyn Host, ceiling: Option<Duration>, now: u64) -> Result<Vec<(Pa
         };
         let scopes = (ticket.machine_gated, ticket.limit.clone());
         let over = match &ticket.state {
-            TicketState::Waiting { .. } | TicketState::Admitted => {
-                !host.owner_is_live(&ticket.owner)
-            }
+            TicketState::Admitted => !host.owner_is_live(&ticket.owner),
             TicketState::Launched {
                 at_ms,
                 workspace,
@@ -1120,7 +1022,7 @@ fn sweep(host: &dyn Host, ceiling: Option<Duration>, now: u64) -> Result<Vec<(Pa
     Ok(queue)
 }
 
-/// Reap the tickets of runs that died waiting, as `rimz loop stop` leaves one.
+/// Reap the tickets of runs that died holding one, as `rimz loop stop` can leave one.
 pub(super) fn reap() {
     let host = SystemHost;
     let reaped = WorkspaceLock::acquire(&host.queue_lock())
@@ -1380,75 +1282,6 @@ fn limit_hold(
         return disk_hold(host, floor, &run.disk);
     }
     Ok(None)
-}
-
-/// A run of one task waiting for its turn, as `rimz loop show` reports it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Held {
-    /// The process waiting, as its run lock names it.
-    pub pid: u32,
-    pub checkout: PathBuf,
-    pub since_ms: u64,
-    pub kinds: Vec<AgentKind>,
-    pub gives_up_ms: Option<u64>,
-    /// The blocking reason, once the run's first pass recorded one.
-    pub reason: Option<String>,
-    pub hold: Option<HoldKind>,
-    /// 1-based place among the runs waiting or holding the turn.
-    pub position: usize,
-}
-
-/// The waiting runs of task `name` under `root`, in queue order. Read-only
-/// and lock-free: a ticket is replaced by atomic rename, so every read is whole.
-pub fn held(name: &str, root: &Path) -> Vec<Held> {
-    held_in(&SystemHost, name, root)
-}
-
-fn held_in(host: &dyn Host, name: &str, root: &Path) -> Vec<Held> {
-    waiting_in(host, Some(name), root)
-        .into_iter()
-        .map(|(_, held)| held)
-        .collect()
-}
-
-/// Live waiting starts in this room, paired with their task names. Read-only
-/// and lock-free, using the same owner check as the task lookup.
-pub fn room_held(root: &Path) -> Vec<(String, Held)> {
-    waiting_in(&SystemHost, None, root)
-}
-
-fn waiting_in(host: &dyn Host, name: Option<&str>, root: &Path) -> Vec<(String, Held)> {
-    let Ok(paths) = ticket_paths(&host.queue_dir()) else {
-        return Vec::new();
-    };
-    paths
-        .iter()
-        // Display only: an unreadable ticket is left out, never an error.
-        .filter_map(|path| read_ticket(path).ok().flatten())
-        .enumerate()
-        .filter_map(|(index, ticket)| {
-            let TicketState::Waiting { reason } = &ticket.state else {
-                return None;
-            };
-            if name.is_some_and(|name| ticket.task != name)
-                || ticket.root != root
-                || !host.owner_is_live(&ticket.owner)
-            {
-                return None;
-            }
-            let held = Held {
-                pid: ticket.owner.pid,
-                checkout: ticket.checkout.clone(),
-                since_ms: ticket.enqueued_ms,
-                kinds: ticket.kinds.clone(),
-                gives_up_ms: ticket.gives_up_ms,
-                reason: reason.as_ref().map(|hold| hold.text.clone()),
-                hold: reason.as_ref().map(|hold| hold.kind),
-                position: index + 1,
-            };
-            Some((ticket.task, held))
-        })
-        .collect()
 }
 
 /// The machine's current readings beside any configured limit, one
