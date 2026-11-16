@@ -106,7 +106,7 @@ pub(super) fn finish_line(
             theme.glyph(GlyphRole::CardBooked).to_owned(),
             theme.styled(Component::BookedHeader, Modifier::empty()),
         ),
-        Span::styled(label, theme.muted()),
+        Span::styled(label, theme.body()),
     ]);
     let fix = fix_segment(ctx, agent);
     let fix_seam = if fix.is_some() {
@@ -295,7 +295,7 @@ fn booking_entry(ctx: &RowCtx<'_>, booking: &SidebarBooking, focused: bool) -> E
         ),
         (None, None, _) | (None, Some(BookingFire { starting: true, .. }), None) => Span::styled(
             theme.glyph(GlyphRole::CardBooked).to_owned(),
-            theme.styled(Component::BookedHeader, Modifier::empty()),
+            theme.styled(Component::BookingWaiting, Modifier::empty()),
         ),
         (None, Some(_), Some(live)) => Span::styled(
             agent_glyph(theme, live.status, live.phase, ctx.head_step),
