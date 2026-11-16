@@ -670,6 +670,12 @@ fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
             json!({"kind":"project", "path":room.env.project_root})
         );
         assert_eq!(value["record"]["key"], item);
+        let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
+        let visits = if item == "one" { 1 } else { 2 };
+        assert!(
+            text.contains(&format!("visits  build {visits} of 2 · key {item}: 1\n")),
+            "{text}"
+        );
         let work = value["dir"].as_str().unwrap();
         let seq = value["record"]["attempt"]["seq"].as_u64().unwrap();
         let note = Path::new(work).join(format!("notes/{seq}.done"));
@@ -696,6 +702,11 @@ fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
     }
     let value = settled(&room.env, &id, "done");
     assert_eq!(value["record"]["visits"]["build"], 2, "{value:#}");
+    assert_eq!(
+        value["record"]["key_visits"],
+        json!({"build":[{"key":"one", "visits":1}, {"key":"two", "visits":1}]}),
+        "{value:#}"
+    );
     let picked: Vec<_> = events(&value, "evaluation")
         .into_iter()
         .filter(|row| row["outcome"] == "ready")

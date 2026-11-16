@@ -27,6 +27,18 @@ expression: value
   "id": "wf_0190b8172c0070008000000000000001",
   "input": null,
   "key": null,
+  "key_visits": {
+    "build": [
+      {
+        "key": 7,
+        "visits": 1
+      },
+      {
+        "key": "7",
+        "visits": 1
+      }
+    ]
+  },
   "launch_retry": false,
   "loop_fire": "fire_0190b8172c0070008000000000000002_0190b8172c0070008000000000000003",
   "loop_report": "none",
@@ -67,7 +79,7 @@ expression: value
   "state": "active",
   "task": null,
   "terminal_at": null,
-  "version": 12,
+  "version": 13,
   "visit_grant": 0,
   "visits": {
     "build": 2

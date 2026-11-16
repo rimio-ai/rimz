@@ -207,6 +207,11 @@ fn same_step_pushes_once_updates_input_and_counts_the_push_as_a_visit() {
     host.observed.borrow_mut().turn = Some(turn());
     let pushed = advance_ok(&state, &record.id, &host);
     assert_eq!(pushed.visits["build"], 2);
+    assert_eq!(
+        serde_json::to_value(&pushed.key_visits).unwrap(),
+        json!({"build":[{"key":7, "visits":1}, {"key":"lint", "visits":1}]}),
+        "the push charges under its verdict's key"
+    );
     assert_eq!(pushed.attempt.as_ref().unwrap().visit, Some(2));
     assert_eq!(pushed.key, Some(Key::String("lint".into())));
     assert_eq!(pushed.input.as_ref().unwrap()["reason"], "CI is red");

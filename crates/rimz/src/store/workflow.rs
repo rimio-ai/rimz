@@ -14,7 +14,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The run record's own shape version, raised when a binary on either side of a change would
 /// misread the other's record; `load` refuses a record of any other version before decoding it.
 /// A change to what a definition means raises nothing: every run reads its definition as it is.
-pub const VERSION: u32 = 12;
+pub const VERSION: u32 = 13;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -181,6 +181,13 @@ pub enum Key {
     String(String),
     Integer(i64),
     Unsigned(u64),
+}
+
+/// One item key's visits to a step.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyVisits {
+    pub key: Key,
+    pub visits: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -664,6 +671,9 @@ pub struct RunRecord {
     pub wait: Option<Wait>,
     /// Visits to each step since its last full reset.
     pub visits: BTreeMap<String, u64>,
+    /// The share of each step's visits charged under each item key, in first-charge order.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub key_visits: BTreeMap<String, Vec<KeyVisits>>,
     pub visit_grant: u64,
     pub deadline: Option<Timestamp>,
     pub deadline_fired: bool,

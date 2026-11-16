@@ -10,6 +10,7 @@ fn record() -> RunRecord {
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "park":null, "node":"pr",
         "entered_at":"2026-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
         "wait":null, "visits":{"build":2},
+        "key_visits":{"build":[{"key":7, "visits":1}, {"key":"7", "visits":1}]},
         "visit_grant":0, "deadline":null, "deadline_fired":false, "next_seq":2,
         "attempt":{"kind":"script","seq":1,"node":"pr","started_at":"2026-01-01T00:00:00Z","host":{"pid":123,"start":"token"}},
         "prev_attempt":null, "terminal_at":null

@@ -647,16 +647,30 @@ impl View<'_> {
     }
 
     fn visits(&self, out: &mut impl Write) -> Result<()> {
-        for (name, used) in &self.record.visits {
-            let Some(max) = self
+        for (name, used) in self.record.visits.iter().filter(|(_, used)| **used > 0) {
+            let max = self
                 .spec
                 .step(name)
-                .filter(|_| *used > 0)
-                .and_then(|step| step.visit_cap(self.record.visit_grant))
-            else {
+                .and_then(|step| step.visit_cap(self.record.visit_grant));
+            let share = self.record.key.as_ref().and_then(|key| {
+                self.record
+                    .key_visits
+                    .get(name)?
+                    .iter()
+                    .find(|share| &share.key == key)
+            });
+            if max.is_none() && share.is_none() {
                 continue;
-            };
-            writeln!(out, "visits  {name} {used} of {max}")?;
+            }
+            write!(out, "visits  {name} {used}")?;
+            if let Some(max) = max {
+                write!(out, " of {max}")?;
+            }
+            if let Some(share) = share {
+                let key = workflow_view::history::value(&serde_json::to_value(&share.key)?);
+                write!(out, " · key {key}: {}", share.visits)?;
+            }
+            writeln!(out)?;
         }
         Ok(())
     }

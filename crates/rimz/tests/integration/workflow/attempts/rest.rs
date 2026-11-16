@@ -607,6 +607,14 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
     assert_eq!(view["live_attempt"]["visit"], 1);
     assert!(view["prev_attempt"].is_null());
     assert!(view.get("visits").is_none());
+    assert_eq!(view["step_visits"], json!({"build":1}));
+    assert_eq!(
+        view["key_visits"],
+        value["record"]
+            .get("key_visits")
+            .cloned()
+            .unwrap_or_else(|| json!({}))
+    );
     let list = success(room.command(&["workflow", "list"]).output().unwrap());
     assert!(
         list.contains("with you in @") && list.contains(" · checking after"),

@@ -354,6 +354,7 @@ fn publish(
         recheck_at: None,
         wait: None,
         visits: BTreeMap::new(),
+        key_visits: BTreeMap::new(),
         visit_grant: 0,
         deadline: deadline.map(at).transpose()?,
         deadline_fired: false,
@@ -1538,7 +1539,7 @@ fn prepare(
     if step.is_some() {
         t.close_wait();
         seen.clear();
-        *t.record.visits.entry(t.record.node.clone()).or_default() += 1;
+        t.charge_visit();
         t.record.entered_at = t.now;
     }
     t.unpause();
@@ -1833,6 +1834,9 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &Definition) -
     let step = spec.step(&record.node).is_some();
     let output_path = (attempt.kind == AttemptKind::Judge).then(|| paths.check_output(attempt.seq));
     let mut context = json!({"run":record.id, "prompt":record.prompt, "node":record.node, "seq":attempt.seq, "key":record.key, "input":record.input, "output_path":output_path, "retry":attempt.retry, "signs_path":paths.signs(step.then_some(record.node.as_str())), "prev_attempt":record.prev_attempt});
+    let visited = record.visits.iter().filter(|(_, visits)| **visits > 0);
+    context["step_visits"] = json!(visited.collect::<BTreeMap<_, _>>());
+    context["key_visits"] = json!(record.key_visits);
     if step {
         let visits = record.visits_to(&record.node);
         context["visits"] = json!(visits);

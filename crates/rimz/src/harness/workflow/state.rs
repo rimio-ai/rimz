@@ -8,8 +8,8 @@ use crate::disk::paths::WorkflowPaths;
 use crate::harness::headless::judge::FailureKind;
 use crate::store::workflow::{
     AttemptKind, AttemptOutcome, Children, EndCause, Ending, EvaluationOrigin, JournalEntry,
-    JournalEvent, Key, LiveAttempt, Park, ParkReason, PreviousAttempt, RunRecord, RunState,
-    TurnEndAction, Verdict, Wait,
+    JournalEvent, Key, KeyVisits, LiveAttempt, Park, ParkReason, PreviousAttempt, RunRecord,
+    RunState, TurnEndAction, Verdict, Wait,
 };
 use crate::utils::time::TimeInputErr;
 
@@ -664,6 +664,38 @@ impl Transition<'_> {
         if *visits == 0 {
             self.record.visits.remove(&attempt.node);
         }
+        // Callers withdraw only the current attempt, so the key is the one its visit charged.
+        let Some(key) = &self.record.key else {
+            return;
+        };
+        let Some(shares) = self.record.key_visits.get_mut(&attempt.node) else {
+            return;
+        };
+        if let Some(share) = shares.iter_mut().find(|share| &share.key == key) {
+            share.visits = share.visits.saturating_sub(1);
+        }
+        shares.retain(|share| share.visits > 0);
+        if shares.is_empty() {
+            self.record.key_visits.remove(&attempt.node);
+        }
+    }
+
+    /// Count a visit to the current node, under the run's item key when it has one.
+    pub(super) fn charge_visit(&mut self) -> u64 {
+        let node = self.record.node.clone();
+        if let Some(key) = &self.record.key {
+            let shares = self.record.key_visits.entry(node.clone()).or_default();
+            match shares.iter_mut().find(|share| &share.key == key) {
+                Some(share) => share.visits += 1,
+                None => shares.push(KeyVisits {
+                    key: key.clone(),
+                    visits: 1,
+                }),
+            }
+        }
+        let visits = self.record.visits.entry(node).or_default();
+        *visits += 1;
+        *visits
     }
 
     pub(super) fn step_wait(&mut self, outcome: &str, detail: Option<String>) {
@@ -957,6 +989,7 @@ impl Transition<'_> {
 
     pub(super) fn reset_visits(&mut self, step: &str, outcome: &str) {
         self.record.visits.remove(step);
+        self.record.key_visits.remove(step);
         self.push(
             None,
             JournalEvent::VisitsReset {

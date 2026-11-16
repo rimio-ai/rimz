@@ -575,7 +575,7 @@ A script prints exactly one JSON object, and a judge gives one as its final mess
 
 Any other field travels too: the whole object becomes the next node's input. A script must exit 0. A nonzero exit fails it with cause `died`, and an answer it cannot use (not one object, or an outcome its `on` does not name) fails it with `invalid`. So a script that uses `set -e` must catch the failures it expects. The outcome words `failed`, `asked`, `unknown`, `hold`, and the eight causes are reserved, and a script that answers one fails with `invalid`.
 
-Scripts and command steps read their input from `$RIMZ_WORKFLOW_DIR/context.json`, which RimZ rewrites before every check and attempt. It carries `input` (the answer that routed here), `key`, the step's `visit` count, and `prev_attempt` (how the last attempt ended, its exit code, and the commits before and after). The [context file reference](../reference/cli/workflow.md#the-context-file) lists every field. Agents read the same facts through `rimz workflow show`.
+Scripts and command steps read their input from `$RIMZ_WORKFLOW_DIR/context.json`, which RimZ rewrites before every check and attempt. It carries `input` (the answer that routed here), `key`, the step's `visit` count, every step's visit count (`step_visits`) and its split by item key (`key_visits`), and `prev_attempt` (how the last attempt ended, its exit code, and the commits before and after). The [context file reference](../reference/cli/workflow.md#the-context-file) lists every field. Agents read the same facts through `rimz workflow show`.
 
 ## See also
 

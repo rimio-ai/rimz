@@ -1046,7 +1046,13 @@ fn a_past_steps_visits_survive_a_key_the_run_moved_on_to() {
     assert_eq!(value["record"]["key"], "other", "{value:#}");
     assert_eq!(value["record"]["visits"]["build"], 1, "{value:#}");
     let text = success(command(&env, &["workflow", "show", &id]));
-    contains(&text, &["visits  build 1 of 2"]);
+    contains(
+        &text,
+        &[
+            "visits  build 1 of 2\n",
+            "visits  finish 1 · key other: 1\n",
+        ],
+    );
 }
 
 #[test]

@@ -4457,7 +4457,8 @@ path = "crates/rimz/src/store"
 # store::run::CancelReason and its label record and print why RimZ canceled a run (+1).
 # RunRecord::definition_dir resolves the directory every reader takes a run's definition from (+1).
 # RunRecord::ran_for on the finished-run header selects a task's runs by the fire's task id (+1).
-surface-budget = 650
+# store::workflow::KeyVisits records each item key's share of a step's visits (+1).
+surface-budget = 651
 
 [[verdict]]
 kind = "item"
@@ -11986,6 +11987,11 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 [[verdict]]
 kind = "item"
 key = "store::workflow::Key"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::KeyVisits"
 reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
 
 [[verdict]]

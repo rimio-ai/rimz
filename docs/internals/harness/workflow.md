@@ -190,7 +190,7 @@ A new cause touches every place below. The compiler stops you at only some of th
 6. When the cause can fire only with a field set, add its case to `Definition::fireability` with a `NeverReason`, so validation and inspection do not show an edge that never fires.
 7. When a step's cause is raised before the node acts and counts no visit, add it to the `[Cause::Visits, Cause::Capacity]` list in `crates/rimz/src/harness/workflow/validate.rs::returning_failures`. Otherwise a route back to the node repeats the failure without end. A check counts no visits, so a check cause never goes there.
 8. When a loop task should report the run differently from `failed`, extend `engine::failure`, which classifies a failed run's `RunEnding` from the journal, and the mapping from `RunEnding` to a loop result in `crates/rimz/src/harness/schedule/run_log.rs::report_row`.
-9. A new reserved word refuses every definition that already uses it as an author outcome, and a live run of such a definition waits at its next engine read ([Engine reads](#engine-reads)). It raises no version. A new `AttemptOutcome` variant changes the record's shape, so it raises `store::workflow::VERSION` ([The record and its version](#the-record-and-its-version)). The record snapshot `crates/rimz/src/store/workflow/snapshots/rimz__store__workflow__tests__record.snap` and each "version 11" on this page and in the reference change with it. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists the readers of run homes the raise must audit.
+9. A new reserved word refuses every definition that already uses it as an author outcome, and a live run of such a definition waits at its next engine read ([Engine reads](#engine-reads)). It raises no version. A new `AttemptOutcome` variant changes the record's shape, so it raises `store::workflow::VERSION` ([The record and its version](#the-record-and-its-version)). The record snapshot `crates/rimz/src/store/workflow/snapshots/rimz__store__workflow__tests__record.snap` and each "version 13" on this page and in the reference change with it. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists the readers of run homes the raise must audit.
 10. Document it: the cause table above, each "eight causes" on this page, in the reference, and in the guide, the guide's sample `workflow validate` output when the kind it shows raises the cause, the [failures section of the reference](../../reference/cli/workflow.md#failures), and the guide's [When something fails](../../guide/workflows.md#when-something-fails) when a user meets the cause.
 
 Run the module's tests with `cargo xtask test 'harness::workflow'` and the store's with `cargo xtask test 'store::workflow'`. [rust-conventions.md](../../contributing/rust-conventions.md#tests) owns the gate stack.
@@ -304,7 +304,7 @@ Every view of a run is a projection of the record and the journal, and never tra
 Each room holds one home per run: `owned/workflows/<run-id>/` while the run is live, and `owned/finished-workflows/<run-id>/` once it has ended and owes its loop task no report. Every path in either directory comes from the disk path module (`crates/rimz/src/disk/paths.rs::WorkflowPaths`, `StatePaths::workflow`, `StatePaths::finished_workflow`):
 
 ```text
-record.json        current run, version 11 (reads only 11)
+record.json        current run, version 13 (reads only 13)
 journal.jsonl      append-only evidence: transitions, and a row per check evaluation, so a polling check grows it on every recheck
 definition/        an inline run's generated definition: its text and assets (no deployed run has one)
 history.txt        the history saved as the run leaves the live directory, written before the rename (a failed rename leaves it in the live home)
@@ -364,7 +364,7 @@ The record (`crates/rimz/src/store/workflow.rs::RunRecord`) stores:
 
 - the scope, project root, the canonical deployed definition directory (`spec_dir`, present exactly when `origin` is `deployed`), and prompt
 - the current node and its entry time, the state, and the routed input and key
-- the open wait and its recheck time, per-step visit counts since the last reset, the visit grant, and the deadline state
+- the open wait and its recheck time, per-step visit counts since the last reset with each step's split by item key (`key_visits`, charged beside the total by `Transition::charge_visit` and refunded by `Transition::withdraw_attempt`), the visit grant, and the deadline state
 - the sequence allocator, the live attempt, an optional held session, the previous step attempt, and the terminal time
 
 Optional fields carry:
@@ -378,7 +378,7 @@ Optional fields carry:
 
 Each step's visits serialize as one integer under the step's name. Keys keep integer versus string identity. Unknown `Wait.hold` strings load as absent, and the shared [hold-kind contract](./loops.md#holds-and-their-kinds) covers workflow and condition waits alike.
 
-Runs use version 11 (`store::workflow::VERSION`), the record's own shape version. It rises when a binary on either side of a change would misread the other's record. A change to what a definition means raises nothing, since every run reads its definition as it is at each engine read. `crates/rimz/src/store/workflow.rs::load` reads the version before it decodes the record and refuses any other version with one message naming the run and the version this RimZ reads. A change to what a stored record means raises `VERSION`, so a record an older RimZ wrote refuses rather than being misread. Raising it strands every unfinished run on disk, which the [workflow pass](#the-workflow-pass) ends. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists what such a change must audit.
+Runs use version 13 (`store::workflow::VERSION`), the record's own shape version. It rises when a binary on either side of a change would misread the other's record. A change to what a definition means raises nothing, since every run reads its definition as it is at each engine read. `crates/rimz/src/store/workflow.rs::load` reads the version before it decodes the record and refuses any other version with one message naming the run and the version this RimZ reads. A change to what a stored record means raises `VERSION`, so a record an older RimZ wrote refuses rather than being misread. Raising it strands every unfinished run on disk, which the [workflow pass](#the-workflow-pass) ends. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists what such a change must audit.
 
 `crates/rimz/src/store/workflow.rs::classify` reads a home's record as data, `RunClass`:
 
@@ -386,7 +386,7 @@ Runs use version 11 (`store::workflow::VERSION`), the record's own shape version
 | --- | --- |
 | `Current` | A run this RimZ runs. |
 | `Ended` | A record whose `RunHeader` (the few fields read without decoding the body) says it ended, but whose body this RimZ does not decode. |
-| `Stranded` | A run this RimZ cannot continue, with its `StrandedCause`: an older, missing, or invalid version, or a version-11 body that does not decode. |
+| `Stranded` | A run this RimZ cannot continue, with its `StrandedCause`: an older, missing, or invalid version, or a version-13 body that does not decode. |
 | `Newer` | A newer RimZ's run. Its record is read no further than its version. |
 | `NotObject` | A record that holds no JSON object. |
 | `Recordless` | No record. |
@@ -446,7 +446,7 @@ Another advance leaves a live host alone while no bound is due. A check host tha
 
 Any advance or cancel kills the recorded group under the lock before it withdraws the attempt, including when the host is stalled or dead (`Transition::kill_child`). It signals only when the leader's start token still matches, or, once the leader's token is unreadable, when a live member of that group carries this run's `RIMZ_WORKFLOW_RUN` marker. Membership is checked again after reading the marker and liveness. A missing or changed token alone never authorizes a signal. A hosted leader stays unreaped until its pipes close, so the published PID and token stay a valid kill handle. A surviving host reaps its child when it resumes, and its stale sequence cannot settle again.
 
-A hosted child runs in the scope checkout with null stdin, the room workspace pin, `RIMZ_WORKFLOW_RUN`, `RIMZ_WORKFLOW_DIR`, and `RIMZ_WORKFLOW_DEFINITION`. Its `context.json` holds `run`, `prompt`, `node`, `seq`, `key`, `input`, `output_path` (`work/<seq>.check.json` for a judge, null otherwise), `retry`, `signs_path`, and `prev_attempt`. A session with a `rest-check` also publishes `live_attempt` ([Rest checks](#rest-checks-judging-an-open-session)).
+A hosted child runs in the scope checkout with null stdin, the room workspace pin, `RIMZ_WORKFLOW_RUN`, `RIMZ_WORKFLOW_DIR`, and `RIMZ_WORKFLOW_DEFINITION`. Its `context.json` holds `run`, `prompt`, `node`, `seq`, `key`, `input`, `step_visits`, `key_visits`, `output_path` (`work/<seq>.check.json` for a judge, null otherwise), `retry`, `signs_path`, and `prev_attempt`. A session with a `rest-check` also publishes `live_attempt` ([Rest checks](#rest-checks-judging-an-open-session)).
 
 A step's context adds `visit` (its visit count at admission, this launch or push-back included) and `visits` (its count now, since the last reset). The live attempt stamps `visit` at launch and at each admitted push-back. The context, `live_attempt.visit`, `prev_attempt.visit`, and the attempt journal row keep that latest number through resets alone, and an attempt without a stamp uses the current count. `prev_attempt` exposes the step, attempt outcome, `routed_by`, sequence, visit, key, start and end, claim path, handle, supervised run id, HEAD pair, stopped and surviving children, ask or limit evidence, cost, exit `code`, and `log`, with null for whatever was not observed. Signs and the run prompt compose only agent prompts and message-step messages.
 
@@ -964,10 +964,10 @@ The external timer's roots (`crates/rimz/src/cli/loop_timer.rs::task_roots`) inc
 
 | Home | Action |
 | --- | --- |
-| Stranded | `store::workflow::end_stranded` patches the record in place under the lock: `state` `failed`, a first `terminal_at`, `outcome.ending` `failed` with the reason `this RimZ cannot continue the run: <cause>; it reads only record version 11`, `outcome.acted` kept or `false`, `loop_report` owed when the record names a task, and `stranded: true`. Every other member and the version stay. Then, off the lock, its report is made from the header, its agents are released (`harness::run::release_workflow`), and the home moves with a header-only `history.txt`. |
+| Stranded | `store::workflow::end_stranded` patches the record in place under the lock: `state` `failed`, a first `terminal_at`, `outcome.ending` `failed` with the reason `this RimZ cannot continue the run: <cause>; it reads only record version 13`, `outcome.acted` kept or `false`, `loop_report` owed when the record names a task, and `stranded: true`. Every other member and the version stay. Then, off the lock, its report is made from the header, its agents are released (`harness::run::release_workflow`), and the home moves with a header-only `history.txt`. |
 | `NotObject` | Agents released, then the home moves unmodified, with no history. |
 | `Current`, terminal, owing a report | Nothing: its paced advance collects it ([The tick](#the-tick)). |
-| `Ended`: a terminal record that is not version 11, or a version 11 record that does not decode | A report from the header when it owes one, `mark_header_report_sent`, then a header-only `history.txt` and the move. |
+| `Ended`: a terminal record that is not version 13, or a version 13 record that does not decode | A report from the header when it owes one, `mark_header_report_sent`, then a header-only `history.txt` and the move. |
 | `Current`, terminal, owing nothing | The history and the move. |
 | `Current` nonterminal, `Newer` (any state), `Recordless` | Nothing. |
 
