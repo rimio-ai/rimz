@@ -12,7 +12,7 @@ use serde_json::{Map, Value};
 
 use super::arming;
 use super::catalog::TaskCatalog;
-use super::runner::{check_record, task_timeout};
+use super::run_log::check_record;
 use crate::RuntimePaths;
 use crate::config::{CheckOn, FileMark, TaskEntry, WatchSpec};
 use crate::disk::lease;
@@ -269,6 +269,15 @@ fn poll_watch(
         }
         std::thread::sleep(every);
     }
+}
+
+fn task_timeout(entry: &TaskEntry) -> anyhow::Result<Option<std::time::Duration>> {
+    entry
+        .timeout
+        .as_deref()
+        .map(crate::utils::time::parse_compact_duration)
+        .transpose()
+        .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
 fn probe_pid(pid: u32) -> anyhow::Result<Probe> {

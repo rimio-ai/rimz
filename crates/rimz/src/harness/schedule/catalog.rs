@@ -791,7 +791,7 @@ impl ShownRoom {
     fn read(root: &Path) -> Option<Self> {
         let read = || -> Result<Self> {
             let paths = StatePaths::for_project_root(root)?;
-            let agents = super::runner::room_agents(&paths)?;
+            let agents = super::launches::room_agents(&paths)?;
             let owned = if root.is_dir() {
                 match crate::worktree::discover_owned(root) {
                     Err(crate::worktree::WorktreeErr::NotRepo) => Vec::new(),

@@ -45,6 +45,7 @@ pub mod run_control;
 mod run_lock;
 pub mod run_log;
 pub mod runner;
+pub mod shell_task;
 pub mod signal;
 pub mod strikes;
 pub mod task_record;
