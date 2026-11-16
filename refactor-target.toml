@@ -11919,7 +11919,7 @@ reason = "Workflow and loop inspection share a run name derived from its recorde
 [[verdict]]
 kind = "item"
 key = "store::workflow::RunAddressErr"
-reason = "Address parsing reports missing or empty components before run resolution."
+reason = "Address parsing refuses a `<workflow>#<checkout>` with an empty part or a `#` in the checkout before run resolution."
 
 [[verdict]]
 kind = "item"

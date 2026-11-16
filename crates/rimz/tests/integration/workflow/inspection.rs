@@ -289,7 +289,7 @@ fn address_miss_names_live_addresses_and_empty_parts_are_usage_errors() {
         assert_eq!(output.status.code(), Some(2), "{text}");
         assert!(
             text.contains(&format!(
-                "run address `{target}` must be <workflow>#<lane>; workflow and lane must be nonempty, and the lane holds no `#`"
+                "run address `{target}` must be <workflow>#<checkout>; workflow and checkout must be nonempty, and the checkout holds no `#`"
             )),
             "{text}"
         );
