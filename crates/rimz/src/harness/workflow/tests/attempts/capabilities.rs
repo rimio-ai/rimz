@@ -106,18 +106,14 @@ fn on_failed_names_a_live_target_on_agent_steps() {
 }
 
 #[test]
-fn on_failed_takes_a_died_timed_out_or_limited_ending_and_a_clean_end_follows_then() {
+fn on_failed_takes_a_died_or_timed_out_ending_and_a_clean_end_follows_then() {
     let rescued = STEP.replace("then='@done'", "then='@done'\non.failed='@done'");
     for (definition, ending, expected) in [
         (&rescued, "died", RunState::Done),
         (&rescued, "timeout", RunState::Done),
-        (&rescued, "limited", RunState::Done),
-        (&rescued, "refused", RunState::Done),
         (&rescued, "ended", RunState::Done),
         (&STEP.to_owned(), "died", RunState::Failed),
         (&STEP.to_owned(), "timeout", RunState::Failed),
-        (&STEP.to_owned(), "limited", RunState::Failed),
-        (&STEP.to_owned(), "refused", RunState::Failed),
     ] {
         let text = if ending == "timeout" {
             format!("{definition}timeout='1h'\n")
@@ -126,19 +122,10 @@ fn on_failed_takes_a_died_timed_out_or_limited_ending_and_a_clean_end_follows_th
         };
         let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();
-        if ending == "refused" {
-            // A budget-refused launch: the attempt ends limited before any turn runs.
-            *host.failure.borrow_mut() = Some(LaunchFailure {
-                outcome: AttemptOutcome::Limited,
-                reason: "fleet budget closed".into(),
-            });
-        }
         let mut live = advance_ok(&state, &record.id, &host);
         match ending {
             "died" => host.observed.borrow_mut().status = RunStatus::Failed,
-            "limited" => host.observed.borrow_mut().status = RunStatus::BudgetExceeded,
             "ended" => host.observed.borrow_mut().status = RunStatus::Completed,
-            "refused" => {}
             _ => {
                 live.attempt.as_mut().unwrap().started_at =
                     Timestamp::now() - std::time::Duration::from_secs(7200);
@@ -157,11 +144,7 @@ fn on_failed_takes_a_died_timed_out_or_limited_ending_and_a_clean_end_follows_th
         let failed = ending != "ended";
         assert_eq!(ended.state, expected, "{ending}: {ended:?}");
         let spec = super::super::super::spec::parse(&text).unwrap();
-        let word = if ending == "refused" {
-            "limited"
-        } else {
-            ending
-        };
+        let word = ending;
         let shown = if failed && !definition.contains("on.failed") {
             "@failed"
         } else {

@@ -93,12 +93,6 @@ expression: value
             "null"
           ]
         },
-        "limited": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "timeout": {
           "type": [
             "string",

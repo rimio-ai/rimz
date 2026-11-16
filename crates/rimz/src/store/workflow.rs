@@ -15,7 +15,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The run record's own shape version, raised when a binary on either side of a change would
 /// misread the other's record; `load` refuses a record of any other version before decoding it.
 /// A change to what a definition means raises nothing: every run reads its definition as it is.
-pub const VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -393,7 +393,6 @@ pub enum AttemptOutcome {
     Timeout,
     Asked,
     Errored,
-    Limited,
     Canceled,
 }
 
@@ -406,13 +405,14 @@ impl AttemptOutcome {
             Self::Timeout => "timeout",
             Self::Asked => "asked",
             Self::Errored => "errored",
-            Self::Limited => "limited",
             Self::Canceled => "canceled",
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// The provider reset a limited agent's account and model report, as an observation reads it.
+/// No record stores it: a judge's timeout names it in its detail.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Limited {
     pub reset_at: Option<Timestamp>,
 }
@@ -540,8 +540,6 @@ pub struct PreviousAttempt {
     pub log: Option<PathBuf>,
     pub children: Option<Children>,
     #[serde(default)]
-    pub limited: Option<Limited>,
-    #[serde(default)]
     pub asked: Option<Asked>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub errored: Option<Errored>,
@@ -661,11 +659,6 @@ pub enum RunEnding {
         waited_ms: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
-    },
-    /// The last attempt ended at its budget; `turned` says whether an agent turn ran, which a
-    /// refused launch or judge never did.
-    Budget {
-        turned: bool,
     },
 }
 
@@ -1022,8 +1015,6 @@ pub enum JournalEvent {
         cost_usd: Option<f64>,
         #[serde(default)]
         children: Option<Children>,
-        #[serde(default)]
-        limited: Option<Limited>,
         #[serde(default)]
         asked: Option<Asked>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1209,9 +1209,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     // A limit does not pause a judge's timeout, so no judge waits for you.
     let judge_warned = |report: &Validation| {
         report.warnings.iter().any(|issue| {
-            issue.path == "judge.pick"
-                || issue.message.contains("ends the attempt as limited")
-                || issue.message.contains("retries once, then fails invalid")
+            issue.path == "judge.pick" || issue.message.contains("retries once, then fails invalid")
         })
     };
     assert!(!judge_warned(&report), "{report:?}");

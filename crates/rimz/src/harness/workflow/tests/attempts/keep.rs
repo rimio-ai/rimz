@@ -178,7 +178,7 @@ fn a_session_question_takes_on_asked_and_ends_the_node_as_a_turns_does() {
 }
 
 #[test]
-fn a_kept_agent_that_died_hit_a_limit_or_was_canceled_is_stopped() {
+fn a_kept_agent_that_died_or_was_canceled_is_stopped() {
     let mut actual = Vec::new();
     for (lifecycle, held) in [
         ("lifecycle='turn'", false),
@@ -186,12 +186,7 @@ fn a_kept_agent_that_died_hit_a_limit_or_was_canceled_is_stopped() {
         ("lifecycle='session'\nrest-check=['pr']", false),
         ("lifecycle='session'\nrest-check=['pr']", true),
     ] {
-        for status in [
-            RunStatus::Failed,
-            RunStatus::BudgetExceeded,
-            RunStatus::Canceled,
-            RunStatus::Completed,
-        ] {
+        for status in [RunStatus::Failed, RunStatus::Canceled, RunStatus::Completed] {
             let definition = rest::SESSION.replace(
                 "lifecycle='session'\nrest-check=['pr']",
                 &format!("{lifecycle}\nkeep=true"),
@@ -207,7 +202,7 @@ fn a_kept_agent_that_died_hit_a_limit_or_was_canceled_is_stopped() {
             actual.push((host.stops.get(), host.detaches.get()));
         }
     }
-    let per_shape = [(1, 0), (1, 0), (1, 0), (0, 1)];
+    let per_shape = [(1, 0), (1, 0), (0, 1)];
     assert_eq!(actual, [per_shape; 4].concat());
 }
 

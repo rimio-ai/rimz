@@ -507,8 +507,8 @@ fn signs_cannot_read_outside_the_node_writable_work_directory() {
 }
 
 #[test]
-fn a_session_survives_live_asks_and_limits_and_records_only_session_end() {
-    use crate::store::workflow::{Asked, Asking, Limited};
+fn a_session_survives_live_asks_and_records_only_session_end() {
+    use crate::store::workflow::{Asked, Asking};
     let (_dir, state, record) = setup(&STEP.replace("lifecycle='turn'", "lifecycle='session'"));
     let host = FakeHost::new();
     let mut live = advance_ok(&state, &record.id, &host);
@@ -528,7 +528,6 @@ fn a_session_survives_live_asks_and_limits_and_records_only_session_end() {
                 handle: "@builder".into(),
             },
         });
-        observed.limited = Some(Limited { reset_at: None });
         drop(observed);
         let live = advance_ok(&state, &record.id, &host);
         assert_eq!(
@@ -556,7 +555,6 @@ fn a_session_survives_live_asks_and_limits_and_records_only_session_end() {
     let previous = ended.prev_attempt.unwrap();
     assert_eq!(previous.outcome, AttemptOutcome::Ended);
     assert!(previous.asked.is_none());
-    assert!(previous.limited.is_none());
     assert_eq!(host.stops.get(), 1);
 }
 
@@ -778,15 +776,14 @@ fn a_session_deadline_beats_completed_observation_and_cancel_stops() {
 }
 
 #[test]
-fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
-    use crate::store::workflow::{Asked, Asking, ChildRef, Limited};
+fn terminal_runs_and_live_asks_route_with_full_previous_attempt() {
+    use crate::store::workflow::{Asked, Asking, ChildRef};
     for (status, expected) in [
         (RunStatus::Completed, Some(AttemptOutcome::Ended)),
         (RunStatus::Failed, Some(AttemptOutcome::Died)),
         (RunStatus::VerifyFailed, Some(AttemptOutcome::Died)),
         (RunStatus::TimedOut, Some(AttemptOutcome::Died)),
         (RunStatus::Canceled, Some(AttemptOutcome::Canceled)),
-        (RunStatus::BudgetExceeded, Some(AttemptOutcome::Limited)),
         (RunStatus::Running, None),
         (RunStatus::Pending, None),
     ] {
@@ -795,7 +792,6 @@ fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
         let mut live = advance_ok(&state, &record.id, &host);
         live.attempt.as_mut().unwrap().head_start = Some("recorded-head".into());
         update(&state, &live);
-        let reset = "2099-01-01T00:00:00Z".parse().unwrap();
         {
             let mut observed = host.observed.borrow_mut();
             observed.status = status;
@@ -817,16 +813,10 @@ fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
                     handle: "@child".into(),
                 },
             });
-            if matches!(status, RunStatus::Pending | RunStatus::BudgetExceeded) {
-                observed.limited = Some(Limited {
-                    reset_at: Some(reset),
-                });
-            }
         }
         let observed = Rc::clone(&host.observed);
         *host.on_stop.borrow_mut() = Some(Box::new(move || {
             observed.borrow_mut().ask = None;
-            observed.borrow_mut().limited = None;
         }));
         let ended = advance_ok(&state, &record.id, &host);
         let Some(expected) = expected else {
@@ -860,12 +850,6 @@ fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
             }
         );
         assert!(prev.asked.is_none());
-        if status == RunStatus::Pending {
-            assert_eq!(prev.limited.as_ref().unwrap().reset_at, Some(reset));
-        }
-        if status == RunStatus::BudgetExceeded {
-            assert_eq!(prev.limited.as_ref().unwrap().reset_at, None);
-        }
     }
     let (_dir, state, record) = setup(STEP);
     let host = FakeHost::new();
@@ -881,11 +865,7 @@ fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
 
 #[test]
 fn asked_edge_routes_and_launch_failures_count_as_attempts() {
-    for outcome in [
-        AttemptOutcome::Died,
-        AttemptOutcome::Limited,
-        AttemptOutcome::Asked,
-    ] {
+    for outcome in [AttemptOutcome::Died, AttemptOutcome::Asked] {
         let (_dir, state, record) = setup(&format!("{STEP}on.asked='@failed'\ntimeout='1h'\n"));
         let host = FakeHost::new();
         if outcome != AttemptOutcome::Asked {
@@ -1134,21 +1114,7 @@ fn an_advance_during_a_failed_eviction_neither_launches_nor_spends_the_retry() {
 /// Only an unstarted `died` launch of a fresh step retries: a provider limit and a continued
 /// restart settle on their first failure as before.
 #[test]
-fn limited_and_continued_restart_launch_failures_are_not_retried() {
-    let (_dir, state, record) = setup(STEP);
-    let host = FakeHost::new();
-    host.unstarted.set(true);
-    *host.failure.borrow_mut() = Some(LaunchFailure {
-        outcome: AttemptOutcome::Limited,
-        reason: "the day cap refused the launch".into(),
-    });
-    let limited = advance_ok(&state, &record.id, &host);
-    assert_eq!(
-        limited.prev_attempt.unwrap().outcome,
-        AttemptOutcome::Limited
-    );
-    assert!(!limited.launch_retry);
-
+fn a_continued_restart_launch_failure_is_not_retried() {
     let (_dir, state, record) = setup(STEP);
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);

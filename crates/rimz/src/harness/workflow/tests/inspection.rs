@@ -103,7 +103,6 @@ fn edge_lookup_includes_engine_defaults_and_attempt_outcomes() {
         ("build", "died", "@failed"),
         ("build", "timeout", "@failed"),
         ("build", "canceled", "@failed"),
-        ("build", "limited", "@failed"),
         ("build", "visits", "@failed"),
         ("build", "capacity", "@failed"),
         ("pr", "deadline", "@failed"),

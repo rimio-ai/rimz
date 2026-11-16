@@ -79,7 +79,6 @@ pub(super) enum Cause {
     Died,
     Invalid,
     Timeout,
-    Limited,
     /// A judge's own turn ended on a provider error that waiting will not clear.
     Errored,
     Undelivered,
@@ -89,11 +88,10 @@ pub(super) enum Cause {
 }
 
 impl Cause {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 8] = [
         Self::Died,
         Self::Invalid,
         Self::Timeout,
-        Self::Limited,
         Self::Errored,
         Self::Undelivered,
         Self::Visits,
@@ -106,7 +104,6 @@ impl Cause {
             Self::Died => "died",
             Self::Invalid => "invalid",
             Self::Timeout => "timeout",
-            Self::Limited => "limited",
             Self::Errored => "errored",
             Self::Undelivered => "undelivered",
             Self::Visits => "visits",
@@ -122,16 +119,14 @@ impl Cause {
     /// The causes a node written under the kind table `table` raises, in the order a view
     /// lists them; none for a word that names no kind.
     pub fn raised_by(table: &str) -> &'static [Self] {
-        use Cause::{
-            Capacity, Deadline, Died, Errored, Invalid, Limited, Timeout, Undelivered, Visits,
-        };
+        use Cause::{Capacity, Deadline, Died, Errored, Invalid, Timeout, Undelivered, Visits};
         match table {
-            "agent" => &[Died, Timeout, Limited, Visits, Capacity, Deadline],
+            "agent" => &[Died, Timeout, Visits, Capacity, Deadline],
             "command" => &[Died, Timeout, Visits, Deadline],
             "message" => &[Undelivered, Visits, Deadline],
             "test" => &[Died, Timeout, Deadline],
             "script" => &[Died, Invalid, Timeout, Deadline],
-            "judge" => &[Died, Invalid, Timeout, Limited, Errored, Deadline],
+            "judge" => &[Died, Invalid, Timeout, Errored, Deadline],
             "condition" => &[Timeout, Deadline],
             "sleep" => &[Deadline],
             _ => &[],
@@ -140,11 +135,14 @@ impl Cause {
 }
 
 /// Whether `word` is the engine's and no author may write it as an outcome: a cause, the
-/// failure input's own `failed`, an agent's `asked` and `errored`, a reading's `unknown`, and a
-/// held condition's `hold`.
+/// failure input's own `failed`, an agent's `asked` and `errored`, a reading's `unknown`, a
+/// held condition's `hold`, and `limited`, the cause a refused budget raised before it waited.
 pub(super) fn reserved(word: &str) -> bool {
     Cause::parse(word).is_some()
-        || matches!(word, "failed" | "asked" | "errored" | "unknown" | "hold")
+        || matches!(
+            word,
+            "failed" | "asked" | "errored" | "unknown" | "hold" | "limited"
+        )
 }
 
 /// The kind table a check was written in.

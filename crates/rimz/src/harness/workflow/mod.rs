@@ -212,7 +212,7 @@ pub struct Observed {
     pub ask: Option<Asking>,
     pub limited: Option<Limited>,
     /// The handle of the agent `limited` was read from, so a reset is never paired with another
-    /// agent's stop. Held in memory only; `Limited` keeps its stored shape.
+    /// agent's stop. Held in memory only, as `Limited` is.
     pub limited_by: Option<String>,
     pub stopped: Option<Stopped>,
     /// The leader's own turn ended on an unrecoverable provider error: its supervised run

@@ -398,10 +398,7 @@ fn attempt_superseded(
     match (&next.event, outcome) {
         (
             JournalEvent::Route { outcome, .. },
-            AttemptOutcome::Died
-            | AttemptOutcome::Timeout
-            | AttemptOutcome::Limited
-            | AttemptOutcome::Canceled,
+            AttemptOutcome::Died | AttemptOutcome::Timeout | AttemptOutcome::Canceled,
         ) => Cause::parse(outcome).is_some(),
         (JournalEvent::Route { outcome, .. }, AttemptOutcome::Asked) => outcome == "asked",
         (JournalEvent::Route { outcome, .. }, AttemptOutcome::Errored) => outcome == "errored",
