@@ -5945,33 +5945,22 @@ allowed-dependencies = [
     # A replace overlap cancels its blocking run through a detached `rimz workflow cancel`.
     "child_process",
     "config",
-    # Run claims and liveness reads share the directory-gated lease protocol with watcher and GC attempts.
-    "disk::lease",
     "disk::paths",
-    "harness::assist_log",
     "harness::budget",
     "harness::check_run",
-    "harness::launch",
     # A shell fire's `-w` tree takes the launch's name admission before it is created.
     "harness::lanes",
-    "harness::loop_task",
-    "harness::name",
-    "harness::plan",
     "harness::run",
     "harness::schedule",
     "harness::signal",
     "harness::task_login",
-    "harness::throttle",
     "harness::when",
     "harness::workflow",
     "ids",
-    "proc",
     "store",
-    "store::run",
     "store::writer",
     # Budget-window reasons share month labels with the CLI and sidebar.
     "theme",
-    "utils::time",
     "workspace",
     # A shell fire of a row with `-w <name>` creates and signals the named tree it runs in.
     "worktree",

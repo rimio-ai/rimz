@@ -1,8 +1,10 @@
 //! Loop-fire policy from ordered gates through one durable history transition.
 //!
-//! [`TaskFire`] owns checks, deadlines, task consumption, run locks, prompt and
-//! launch preparation, and terminal record mapping. Every other fire starts a workflow
-//! run here; the CLI executes a prepared message delivery and returns its typed result.
+//! [`TaskFire`] owns checks, deadlines, task consumption, its run lock, prompt and
+//! launch preparation, and terminal record mapping. A shell fire starts a workflow run
+//! here and a workflow, agent or team fire spawns its launch child here; the CLI executes
+//! a prepared message delivery and returns its typed result. The lock's holder side and
+//! the stop ladder are `run_control`'s.
 
 mod prompt;
 
