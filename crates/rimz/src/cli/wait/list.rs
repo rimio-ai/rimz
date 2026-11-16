@@ -12,6 +12,7 @@ use rimz::harness::schedule::{TaskKind, Trigger};
 use super::*;
 use crate::cli::{render as ui, wake_view};
 
+use crate::cli::wake_view::RoomSource;
 pub(super) use crate::cli::wake_view::WakeRow;
 
 pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
@@ -41,6 +42,7 @@ pub(super) fn pending_rows(
     let now = jiff::Timestamp::now();
     let audit = ctx.store.audit_rows()?;
     let rows = audit.iter().collect::<Vec<_>>();
+    let room = RoomSource::read(root);
     session_deliveries(&catalog, root, agent, &rows)
         .map(|(name, task)| {
             let entry = task.entry();
@@ -69,6 +71,7 @@ pub(super) fn pending_rows(
                 pid,
                 Some(snapshot),
                 &rows,
+                &room,
                 now,
             ))
         })
@@ -82,6 +85,7 @@ fn room_rows(ctx: &Ctx, snapshot: &SidebarSnapshot) -> Result<Vec<WakeRow>> {
     let now = jiff::Timestamp::now();
     let audit = ctx.store.audit_rows()?;
     let rows = audit.iter().collect::<Vec<_>>();
+    let room = RoomSource::read(root);
     Ok(catalog
         .visible()
         .iter()
@@ -96,7 +100,7 @@ fn room_rows(ctx: &Ctx, snapshot: &SidebarSnapshot) -> Result<Vec<WakeRow>> {
                 .as_ref()
                 .and_then(|_| watcher_info(ctx.runtime(), name).ok().flatten())
                 .map(|info| info.pid);
-            WakeRow::new(name, entry, state, pid, Some(snapshot), &rows, now)
+            WakeRow::new(name, entry, state, pid, Some(snapshot), &rows, &room, now)
         })
         .collect())
 }

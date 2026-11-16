@@ -1,7 +1,7 @@
 //! Condition admission and room-aware presentation.
 
 use super::*;
-use crate::cli::wake_view::read_condition as read;
+use crate::cli::wake_view::{ConditionReading, RoomSource, read_condition};
 use rimz::harness::when::{self, CiSource, Verdict, WhenExpr, WhenTerm};
 
 pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
@@ -13,16 +13,26 @@ pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `expr` read for `entry` in its own room.
+fn read(entry: &TaskEntry, expr: &WhenExpr, fired_at: Option<Timestamp>) -> ConditionReading {
+    read_condition(
+        &RoomSource::read(&entry.resolved_root()),
+        entry,
+        expr,
+        fired_at,
+    )
+}
+
 pub(super) fn reading(entry: &TaskEntry, expr: &WhenExpr) -> Verdict {
     read(entry, expr, None).verdict
 }
 
 pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
-    let reading = read(entry, expr, None);
+    let room = RoomSource::read(&entry.resolved_root());
+    let reading = read_condition(&room, entry, expr, None);
     let scope = entry.run_dir();
     let checked_at = if expr.reads_forge() {
-        reading
-            .source
+        room.source
             .as_ref()
             .and_then(|source| source.checked_at(&scope))
     } else {
@@ -36,15 +46,9 @@ pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
                 .readings
                 .get(&term.key)
                 .and_then(|value| value.as_deref());
-            let unread = value.is_none().then(|| {
-                term_unread_reason(
-                    term,
-                    &scope,
-                    reading.room_open,
-                    reading.source.as_ref(),
-                    &reading.verdict,
-                )
-            });
+            let unread = value
+                .is_none()
+                .then(|| term_unread_reason(term, &reading.unread));
             serde_json::json!({
                 "term": term.to_string(),
                 "key": term.key,
@@ -58,7 +62,7 @@ pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
     ui::json_pretty(&serde_json::json!({
         "when": expr.to_string(),
         "scope": scope,
-        "room_open": reading.room_open,
+        "room_open": room.room_open,
         "now": reading.verdict.truth,
         "checked_at": checked_at,
         "terms": terms,
@@ -159,11 +163,13 @@ pub(super) fn write_terms(
     expr: &WhenExpr,
     verdict: &Verdict,
 ) -> Result<()> {
-    let root = entry.resolved_root();
-    let open = render::room_open(&root);
-    let source = runtime_for_root(&root)
-        .filter(|_| open)
-        .map(|runtime| CiSource::read(&runtime));
+    let room = RoomSource::read(&entry.resolved_root());
+    let unread = verdict.unread_reasons(
+        expr,
+        &entry.run_dir(),
+        room.source.as_ref(),
+        Some(Timestamp::now()),
+    );
     for (term, negated) in expr.leaves() {
         let value = verdict
             .readings
@@ -176,7 +182,7 @@ pub(super) fn write_terms(
         };
         let (glyph, style) = ui::verdict(role);
         let reason = if value.is_none() {
-            term_unread_reason(term, &entry.run_dir(), open, source.as_ref(), verdict)
+            term_unread_reason(term, &unread)
         } else {
             String::new()
         };
@@ -191,23 +197,12 @@ pub(super) fn write_terms(
     Ok(())
 }
 
-fn term_unread_reason(
-    term: &WhenTerm,
-    scope: &Path,
-    open: bool,
-    source: Option<&CiSource>,
-    verdict: &Verdict,
-) -> String {
-    if !term.reads_forge() {
-        return "not read".to_owned();
-    }
-    if !open {
-        return "readings paused (room closed)".to_owned();
-    }
-    if let Some(reason) = verdict.unread.get(&term.key) {
-        return reason.clone();
-    }
-    unread_reason(source.and_then(|source| source.unread_reason(&term.key, scope)))
+/// A term's reason from [`Verdict::unread_reasons`]; a key that reads no forge is not read.
+fn term_unread_reason(term: &WhenTerm, unread: &BTreeMap<String, String>) -> String {
+    unread
+        .get(&term.key)
+        .cloned()
+        .unwrap_or_else(|| "not read".to_owned())
 }
 
 pub(super) fn unread_reason(reason: Option<when::UnreadReason>) -> String {

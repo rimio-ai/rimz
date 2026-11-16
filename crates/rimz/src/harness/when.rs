@@ -33,11 +33,23 @@ pub struct ConditionCount {
 pub enum UnreadReason {
     NotChecked,
     NoForge,
-    LookupFailing { last_tried: u64 },
-    NoPr { branch: Option<String> },
-    NoCi { branch: Option<String> },
-    NoOpenPr { branch: Option<String> },
-    PrFactsUnavailable { branch: Option<String> },
+    /// The scope checkout's HEAD is detached, so it has no branch for the forge to read.
+    Detached,
+    LookupFailing {
+        last_tried: u64,
+    },
+    NoPr {
+        branch: Option<String>,
+    },
+    NoCi {
+        branch: Option<String>,
+    },
+    NoOpenPr {
+        branch: Option<String>,
+    },
+    PrFactsUnavailable {
+        branch: Option<String>,
+    },
 }
 
 /// A `team.stage` condition key: the scope checkout's board, or with `[branch]` the board of the
@@ -253,6 +265,7 @@ impl CiSource {
                 | UnreadReason::NoOpenPr { .. } => Some("none"),
                 UnreadReason::NotChecked
                 | UnreadReason::NoForge
+                | UnreadReason::Detached
                 | UnreadReason::LookupFailing { .. }
                 | UnreadReason::PrFactsUnavailable { .. } => None,
             })
@@ -264,6 +277,9 @@ impl CiSource {
             return UnreadReason::NotChecked;
         };
         if repo.is_empty() || repo == UNSUPPORTED_REPO_KEY {
+            if self.0.detached.contains(path.as_ref()) {
+                return UnreadReason::Detached;
+            }
             return UnreadReason::NoForge;
         }
         let Some(probe) = self.0.repos.get(repo) else {
@@ -557,6 +573,33 @@ impl Verdict {
         }
         self.truth = expr.truth(&self.readings);
         self
+    }
+
+    /// Each forge term of `expr` that reads nothing, with its reason, on every surface that
+    /// shows one: the room-closed words without a `source`, else the hold [`Self::freshen`]
+    /// put on it, else the probe's reason for `scope`. Pass `now` to age a failing lookup's
+    /// reason.
+    pub fn unread_reasons(
+        &self,
+        expr: &WhenExpr,
+        scope: &Path,
+        source: Option<&CiSource>,
+        now: Option<Timestamp>,
+    ) -> BTreeMap<String, String> {
+        expr.terms()
+            .filter(|term| term.reads_forge())
+            .filter(|term| self.readings.get(&term.key).is_none_or(Option::is_none))
+            .filter_map(|term| {
+                let reason = match (source, self.unread.get(&term.key)) {
+                    (None, _) => condition::ROOM_CLOSED.to_owned(),
+                    (Some(_), Some(reason)) => reason.clone(),
+                    (Some(source), None) => {
+                        condition::unread_reason(Some(source.unread_reason(&term.key, scope)?), now)
+                    }
+                };
+                Some((term.key.clone(), reason))
+            })
+            .collect()
     }
 }
 

@@ -344,6 +344,9 @@ pub(super) struct TaskRow {
     kind: TaskKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     condition: Option<rimz::harness::when::ConditionCount>,
+    /// Each unread forge key of an unmet condition with its reason.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    unread: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     attention: Option<Attention>,
     state: TaskState,
@@ -822,6 +825,7 @@ impl TaskRow {
             section: Section::Routine,
             kind: task.kind(),
             condition: timing.condition_count().filter(|_| !entry.each_worktree),
+            unread: timing.unread().clone(),
             attention: None,
             state,
             trigger: [head.as_str(), continuation.as_str()]
@@ -951,6 +955,7 @@ impl TaskRow {
             section: Section::Done,
             kind: TaskKind::OneOff,
             condition: None,
+            unread: BTreeMap::new(),
             attention: None,
             state: TaskState::Running,
             trigger: "one-shot fired".into(),
@@ -1045,7 +1050,7 @@ impl TaskRow {
             schedule::TaskTimingState::Upcoming(next) => ui::until_label(next, now),
             schedule::TaskTimingState::Listening { .. }
             | schedule::TaskTimingState::Watching { .. } => self.head.clone(),
-            state => state.condition_label().unwrap_or_else(|| "—".into()),
+            _ => timing.condition_label().unwrap_or_else(|| "—".into()),
         }
     }
 

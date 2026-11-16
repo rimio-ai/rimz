@@ -61,6 +61,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
     let shape = schedule::TaskShape::compile(&name, &entry);
     let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
     shape.action().map_err(Clone::clone)?;
+    crate::cli::wake_view::refuse_unreadable_forge_task(&entry)?;
     let project_pre_state = args
         .project
         .then(|| trust::status(&project_root))

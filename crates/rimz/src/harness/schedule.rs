@@ -11,6 +11,7 @@
 //! parsing, and due evaluation. CLI handlers translate flags, execute prepared
 //! effects, orchestrate terminal actions, and render.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -739,6 +740,10 @@ pub struct TaskTiming {
     state: TaskTimingState,
     arm_state: arming::ArmState,
     scheduled_next: Option<Timestamp>,
+    /// Each unread key of an unmet condition with its reason, by [`Self::with_unread`].
+    unread: BTreeMap<String, String>,
+    /// The first unmet condition key unread because its checkout has no supported forge.
+    no_forge: Option<String>,
 }
 
 /// Current schedule state before CLI presentation and live run-lock overlays.
@@ -788,10 +793,21 @@ impl TaskTimingState {
     }
 
     pub fn condition_label(&self) -> Option<String> {
+        self.condition_label_with(&BTreeMap::new())
+    }
+
+    /// [`Self::condition_label`] with each unread key's reason in place of `unknown`.
+    pub fn condition_label_with(&self, unread: &BTreeMap<String, String>) -> Option<String> {
         let readings = |readings: &[(String, Option<String>)]| {
             readings
                 .iter()
-                .map(|(key, value)| format!("{key}: {}", value.as_deref().unwrap_or("unknown")))
+                .map(|(key, value)| {
+                    let value = value
+                        .as_deref()
+                        .or_else(|| unread.get(key).map(String::as_str))
+                        .unwrap_or("unknown");
+                    format!("{key}: {value}")
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -875,6 +891,35 @@ impl TaskTiming {
         };
         self
     }
+
+    /// Keep an unmet condition's unread reasons, and the key unread for want of a supported
+    /// forge, for the readers that show or decide on them; any other state keeps none.
+    fn with_unread(mut self, unread: BTreeMap<String, String>, no_forge: Option<String>) -> Self {
+        if matches!(
+            self.state,
+            TaskTimingState::Waiting { .. } | TaskTimingState::Unknown { .. }
+        ) {
+            self.unread = unread;
+            self.no_forge = no_forge;
+        }
+        self
+    }
+
+    /// Each unread key of an unmet condition with its reason.
+    pub fn unread(&self) -> &BTreeMap<String, String> {
+        &self.unread
+    }
+
+    /// The first unmet condition key unread because its checkout has no supported forge.
+    fn no_forge_key(&self) -> Option<&str> {
+        self.no_forge.as_deref()
+    }
+
+    /// The condition state's label with each unread key's reason.
+    pub fn condition_label(&self) -> Option<String> {
+        self.state.condition_label_with(&self.unread)
+    }
+
     pub fn evaluate(
         parsed: &Result<ParsedTrigger, ScheduleErr>,
         source: catalog::TaskSource,
@@ -949,6 +994,8 @@ impl TaskTiming {
             state,
             arm_state,
             scheduled_next,
+            unread: BTreeMap::new(),
+            no_forge: None,
         }
     }
 

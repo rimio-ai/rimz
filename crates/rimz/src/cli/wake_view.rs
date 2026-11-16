@@ -33,64 +33,114 @@ pub(super) fn room_open(root: &Path) -> bool {
         .is_some_and(rimz::sidebar::fresh_sidebar_present)
 }
 
-pub(super) struct ConditionReading {
-    pub(super) verdict: Verdict,
+/// A room's condition source, read once per list and shared by each row's reading.
+pub(super) struct RoomSource {
+    runtime: Option<RuntimePaths>,
     pub(super) room_open: bool,
     pub(super) source: Option<CiSource>,
 }
 
+impl RoomSource {
+    pub(super) fn read(root: &Path) -> Self {
+        let runtime = runtime_for_root(root);
+        let room_open = room_open(root);
+        let source = runtime.as_ref().filter(|_| room_open).map(CiSource::read);
+        Self {
+            runtime,
+            room_open,
+            source,
+        }
+    }
+}
+
+pub(super) struct ConditionReading {
+    pub(super) verdict: Verdict,
+    /// Each forge term that reads nothing, with its reason (`Verdict::unread_reasons`).
+    pub(super) unread: BTreeMap<String, String>,
+}
+
 /// Read `expr` for `entry` under the freshness rule firing applies, against the task's fire
-/// stamp when it has one.
+/// stamp when it has one. `room` is the entry's room, read once by the caller.
 pub(super) fn read_condition(
+    room: &RoomSource,
     entry: &TaskEntry,
     expr: &WhenExpr,
     fired_at: Option<Timestamp>,
 ) -> ConditionReading {
-    let root = entry.resolved_root();
-    let runtime = runtime_for_root(&root);
-    let room_open = room_open(&root);
-    let source = runtime.as_ref().filter(|_| room_open).map(CiSource::read);
+    let scope = entry.run_dir();
+    let source = room.source.as_ref();
     let now = Timestamp::now();
-    let windows = WindowReadings::new(runtime.as_ref(), now);
+    let windows = WindowReadings::new(room.runtime.as_ref(), now);
     let verdict = when::evaluate(
         expr,
-        &entry.run_dir(),
-        source.as_ref(),
+        &scope,
+        source,
         entry.provider.as_ref(),
         entry.account.as_ref(),
         &windows,
     )
-    .freshen(
-        expr,
-        &entry.run_dir(),
-        source.as_ref(),
-        fired_at,
-        Some(now),
-        true,
-    );
-    ConditionReading {
-        verdict,
-        room_open,
-        source,
-    }
+    .freshen(expr, &scope, source, fired_at, Some(now), true);
+    let unread = verdict.unread_reasons(expr, &scope, source, Some(now));
+    ConditionReading { verdict, unread }
 }
 
-/// The `now:` state of a condition just armed: its readings while unmet, else `due`, or the
-/// start of its hold.
+/// The `now:` state of a condition just armed: its readings while unmet, each unread key with
+/// its reason, else `due`, or the start of its hold.
 pub(super) fn condition_now(
     entry: &TaskEntry,
     expr: &WhenExpr,
     hold: Option<std::time::Duration>,
 ) -> String {
-    let verdict = read_condition(entry, expr, None).verdict;
-    let state = schedule::TaskTimingState::unmet(expr, &verdict).unwrap_or_else(|| match hold {
-        Some(hold) => schedule::TaskTimingState::Holding {
-            elapsed: std::time::Duration::ZERO,
-            hold,
-        },
-        None => schedule::TaskTimingState::Due(Timestamp::now()),
-    });
-    state.condition_label().unwrap_or_default()
+    let reading = read_condition(&RoomSource::read(&entry.resolved_root()), entry, expr, None);
+    let state =
+        schedule::TaskTimingState::unmet(expr, &reading.verdict).unwrap_or_else(|| match hold {
+            Some(hold) => schedule::TaskTimingState::Holding {
+                elapsed: std::time::Duration::ZERO,
+                hold,
+            },
+            None => schedule::TaskTimingState::Due(Timestamp::now()),
+        });
+    state
+        .condition_label_with(&reading.unread)
+        .unwrap_or_default()
+}
+
+/// Refuse arming `expr` at `scope` in the room at `root` when the room's forge reading already
+/// says the checkout has no supported forge: a term on it could never be read. A scope never
+/// probed, a detached HEAD, and a closed room are not known to be unreadable, so they arm.
+pub(super) fn refuse_unreadable_forge(root: &Path, scope: &Path, expr: &WhenExpr) -> Result<()> {
+    if !expr.reads_forge() || !room_open(root) {
+        return Ok(());
+    }
+    let Some(source) = runtime_for_root(root).as_ref().map(CiSource::read) else {
+        return Ok(());
+    };
+    let Some(term) = expr.terms().find(|term| {
+        term.reads_forge()
+            && source.unread_reason(&term.key, scope) == Some(when::UnreadReason::NoForge)
+    }) else {
+        return Ok(());
+    };
+    let reason = when::condition::unread_reason(Some(when::UnreadReason::NoForge), None);
+    anyhow::bail!(
+        "--when: `{}` cannot be read in {}: {reason}; RimZ reads a git checkout whose `origin` \
+         remote is on github.com (through `gh`) or on a host whose name contains gitea, forgejo \
+         or codeberg (through `tea`), so wait on something else here",
+        term.key,
+        ui::home_relative(&scope.to_string_lossy())
+    )
+}
+
+/// [`refuse_unreadable_forge`] for a loop task about to be stored: its condition at its own
+/// checkout. A task that reads each worktree has no single checkout to refuse on.
+pub(super) fn refuse_unreadable_forge_task(entry: &TaskEntry) -> Result<()> {
+    let Some(when) = entry.when.as_deref().filter(|_| !entry.each_worktree) else {
+        return Ok(());
+    };
+    let Ok(expr) = WhenExpr::parse(when) else {
+        return Ok(());
+    };
+    refuse_unreadable_forge(&entry.resolved_root(), &entry.run_dir(), &expr)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -125,6 +175,9 @@ pub(super) struct WakeRow {
     watcher_pid: Option<u32>,
     owner: String,
     parent: Option<String>,
+    /// Each unread forge key of a live condition with its reason.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    unread: BTreeMap<String, String>,
     #[serde(skip)]
     entry: TaskEntry,
     #[serde(skip)]
@@ -132,6 +185,10 @@ pub(super) struct WakeRow {
 }
 
 impl WakeRow {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each list reads the snapshot, audit rows, and room source once for every row"
+    )]
     pub(super) fn new(
         name: &str,
         entry: &TaskEntry,
@@ -139,6 +196,7 @@ impl WakeRow {
         watcher_pid: Option<u32>,
         snapshot: Option<&SidebarSnapshot>,
         audit: &[&AgentState],
+        room: &RoomSource,
         now: Timestamp,
     ) -> Self {
         // The row keeps its target as the key its holder files it under now,
@@ -210,6 +268,12 @@ impl WakeRow {
                 WakeState::Paused
             }
         };
+        let unread = match parsed.as_ref().map(|parsed| &parsed.trigger) {
+            Ok(Trigger::Condition { expr, .. }) if state == WakeState::Waiting => {
+                read_condition(room, entry, expr, None).unread
+            }
+            _ => BTreeMap::new(),
+        };
         let peers = snapshot
             .map(rimz::address::addressable_agents)
             .unwrap_or_default();
@@ -237,6 +301,7 @@ impl WakeRow {
             watcher_pid,
             owner: delivery_owner(name, entry).to_string(),
             parent,
+            unread,
             entry: entry.clone(),
             arm_state,
         }
@@ -324,6 +389,14 @@ impl WakeRow {
                 }
                 _ => "paused".into(),
             },
+            WakeState::Waiting if !self.unread.is_empty() => format!(
+                "waiting · {}",
+                self.unread
+                    .iter()
+                    .map(|(key, reason)| format!("{key}: {reason}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             WakeState::Waiting => "waiting".into(),
             WakeState::Starting => "starting".into(),
             WakeState::Disabled => "disabled".into(),
@@ -734,6 +807,13 @@ pub(super) fn action_text(
 mod tests {
     use super::*;
 
+    /// No room: these rows read no condition.
+    const NO_ROOM: RoomSource = RoomSource {
+        runtime: None,
+        room_open: false,
+        source: None,
+    };
+
     fn pane_shadowed_snapshot() -> SidebarSnapshot {
         let now = Timestamp::from_second(2_000).unwrap();
         let pane_id = rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Tmux, "%1");
@@ -793,6 +873,7 @@ mod tests {
             None,
             Some(snapshot),
             &[],
+            &NO_ROOM,
             snapshot.generated_at,
         )
     }
@@ -900,6 +981,7 @@ mod tests {
                 None,
                 Some(&snapshot),
                 &audit,
+                &NO_ROOM,
                 now,
             )
         };
@@ -967,6 +1049,7 @@ mod tests {
                 None,
                 None,
                 &[],
+                &NO_ROOM,
                 now,
             ));
             let mut out = Vec::new();

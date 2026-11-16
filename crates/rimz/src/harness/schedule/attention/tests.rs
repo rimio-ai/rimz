@@ -318,6 +318,74 @@ fn a_closed_pull_request_needs_you_only_while_nothing_else_can_meet_the_conditio
 }
 
 #[test]
+fn a_live_condition_with_no_supported_forge_needs_you_until_its_reading_returns() {
+    let name = "no-forge-booking";
+    let cause = |entry: Box<dyn FnOnce(&Path) -> TaskEntry>, repo: &str, detached, open| {
+        let dir = tempfile::tempdir().unwrap();
+        let room = seeded_room(dir.path(), name, entry, serde_json::json!({}));
+        let root = room.0.to_string_lossy().into_owned();
+        std::fs::write(
+            room.2.pr_state_path(),
+            serde_json::to_vec(&serde_json::json!({
+                "branch_ci": {},
+                "path_repos": {&root: repo},
+                "repos": {"repo": {"ok": true, "refreshed_at_ms": 1_000}},
+                "branches": {"repo": {"x": pr("open")}},
+                "detached": if detached { vec![root.clone()] } else { Vec::new() },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        read_seeded(&room, name, open).attention
+    };
+    let expected = |key: &str| {
+        Some((
+            Attention::NoForge,
+            format!("{key}: no supported forge for this checkout"),
+        ))
+    };
+    assert_eq!(
+        cause(Box::new(booking("pr=merged")), "<unsupported>", false, true),
+        expected("pr")
+    );
+    assert_eq!(
+        cause(
+            Box::new(booking("pr[x]=merged || ci=passed")),
+            "<unsupported>",
+            false,
+            true
+        ),
+        expected("pr[x]"),
+        "any term that can never be read, inside a mixed expression too"
+    );
+    let routine = |root: &Path| TaskEntry {
+        repeat: true,
+        ..booking("ci=passed")(root)
+    };
+    assert_eq!(
+        cause(Box::new(routine), "<unsupported>", false, true),
+        expected("ci"),
+        "a repeating task raises it too"
+    );
+    for (repo, detached, open, why) in [
+        ("<unsupported>", false, false, "the room is closed"),
+        (
+            "<unsupported>",
+            true,
+            true,
+            "a detached HEAD is not no forge",
+        ),
+        ("repo", false, true, "the reading came back"),
+    ] {
+        assert_eq!(
+            cause(Box::new(booking("pr=merged")), repo, detached, open),
+            None,
+            "{why}"
+        );
+    }
+}
+
+#[test]
 fn a_fired_booking_with_a_gone_checkout_is_finished() {
     let name = "gone-checkout-booking";
     let dir = tempfile::tempdir().unwrap();

@@ -1,6 +1,6 @@
 //! The PR-state record the sidebar's forge probe publishes and harness policy reads.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,11 @@ pub(crate) struct PrStateCache {
     /// `ok: false` with at least one consecutive failure.
     #[serde(default)]
     pub(crate) discovery_failures: BTreeMap<String, RepoProbe>,
+    /// The needed paths in `path_repos` as `UNSUPPORTED_REPO_KEY` because their HEAD is
+    /// detached, not because their remote has no forge. A reader older than this field reads
+    /// them as no forge, as every reader did before it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) detached: BTreeSet<String>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,6 +234,8 @@ impl<'de> Deserialize<'de> for PrStateCache {
             target_seen: BTreeMap<String, TargetStamp>,
             #[serde(default)]
             discovery_failures: BTreeMap<String, RepoProbe>,
+            #[serde(default)]
+            detached: BTreeSet<String>,
         }
 
         let disk = DiskCache::deserialize(deserializer)?;
@@ -242,6 +249,7 @@ impl<'de> Deserialize<'de> for PrStateCache {
             path_repos: disk.path_repos,
             target_seen: disk.target_seen,
             discovery_failures: disk.discovery_failures,
+            detached: disk.detached,
         };
         if legacy {
             // Old freshness stamps predate branch CI, and trunk paths were
@@ -251,6 +259,7 @@ impl<'de> Deserialize<'de> for PrStateCache {
             cache.head_seen.clear();
             cache.path_repos.clear();
             cache.target_seen.clear();
+            cache.detached.clear();
         }
         Ok(cache)
     }

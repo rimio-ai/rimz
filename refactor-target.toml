@@ -2365,7 +2365,8 @@ path = "crates/rimz/src/harness"
 # schedule::pending::{wait_for, wait_of, same_target, target_holder, take_waits} and SessionWaits::contains_session give every wait reader one launch-or-session target rule (+6).
 # schedule::pending::holder_key files a wait under its holder's kind and launch, so a swap keeps the target (+1).
 # run::fail_peer_turn lets a restart fail a peer's open turn without the team-run fallback (+1).
-surface-budget = 1237
+# TaskTiming::{unread, condition_label}, TaskTimingState::condition_label_with, Verdict::unread_reasons and when::condition::ROOM_CLOSED give the CLI the reason an unread forge key shows in place of `unknown` (+5).
+surface-budget = 1242
 
 [[verdict]]
 kind = "item"
@@ -5966,7 +5967,9 @@ allowed-dependencies = [
 # WhenExpr::blocking_term and CiSource::term_pr_number name a waiting loop task's blocking term and its pull request for the loop verdict (+2).
 # WhenExpr::closed_pr_term names a merge-required pull request term that reads closed for the loop verdict (+1).
 # forge_branch and CiSource::branch_pr read a booking's unmet keys and its branch's pull request for the sidebar (+2).
-surface-budget = 54
+# condition::ROOM_CLOSED gives every surface one wording for readings paused by a closed room (+1).
+# Verdict::unread_reasons gives every surface one reason for each forge term that reads nothing (+1).
+surface-budget = 56
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"

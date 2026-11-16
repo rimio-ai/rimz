@@ -93,6 +93,7 @@ pub(super) fn produce_pr_states(
         let needs_reconcile =
             needs_target_reconcile(cache, &needed, &diff_cache, &target_paths, &retry)
                 || unsupported_probe_due(cache, &needed, &hot, &focused, now_ms)
+                || cache.detached != discovered.detached
                 || cache.branches.iter().any(|(repo, rows)| {
                     rows.keys()
                         .any(|branch| !branch_is_demanded(&groups, &retry, repo, branch))
@@ -127,8 +128,9 @@ pub(super) fn produce_pr_states(
     if due.is_empty() && !needs_reconcile {
         return prior;
     }
-    let (cache, failed) =
+    let (mut cache, failed) =
         probe_due_repos(&groups, &due, &retry, &prior, &needed, &diff_cache, now_ms);
+    mark_detached(&mut cache, &discovered.detached);
     if guard.is_some()
         && write_pr_state_cache(&path, &cache)
         && let Some(project_root) = snapshot.project_root.as_deref()
@@ -469,11 +471,32 @@ impl Target {
 }
 
 /// Every needed path's discovery outcome: a target, a retryable failure, or,
-/// absent from both, definitively unsupported.
+/// absent from both, definitively unsupported; `detached` names the unsupported
+/// paths whose HEAD is detached.
 #[derive(Default)]
 struct Discovered {
     targets: Vec<Target>,
     retryable: BTreeSet<String>,
+    detached: BTreeSet<String>,
+}
+
+/// One needed path's definitive discovery: a forge target, or none because its HEAD
+/// is detached or because nothing names a supported forge.
+enum Discovery {
+    Target(Box<Target>),
+    Detached,
+    NoForge,
+}
+
+/// Mark the cache's unsupported paths that this pass's discovery found detached.
+fn mark_detached(cache: &mut PrStateCache, detached: &BTreeSet<String>) {
+    cache.detached = detached
+        .iter()
+        .filter(|path| {
+            cache.path_repos.get(*path).map(String::as_str) == Some(UNSUPPORTED_REPO_KEY)
+        })
+        .cloned()
+        .collect();
 }
 
 /// This pass's retryable discovery failures: the paths, those whose backoff
@@ -549,8 +572,12 @@ fn build_targets(
     let mut reached = BTreeSet::new();
     for path in needed {
         let target = match discover_target(path, diff_cache, state, &mut reached) {
-            Ok(Some(target)) => target,
-            Ok(None) => continue,
+            Ok(Discovery::Target(target)) => *target,
+            Ok(Discovery::Detached) => {
+                discovered.detached.insert(path.clone());
+                continue;
+            }
+            Ok(Discovery::NoForge) => continue,
             Err(RetryableDiscovery) => {
                 discovered.retryable.insert(path.clone());
                 continue;
@@ -581,30 +608,32 @@ fn build_targets(
     discovered
 }
 
-/// One needed path's target, `None` when its inputs say it has no forge
-/// target, or `RetryableDiscovery` when a read failed.
+/// One needed path's discovery when its inputs settle it, or `RetryableDiscovery`
+/// when a read failed.
 fn discover_target(
     path: &str,
     diff_cache: &DiffStatsCache,
     state: &mut super::ProducerRefreshState,
     reached: &mut BTreeSet<PathBuf>,
-) -> Result<Option<Target>, RetryableDiscovery> {
+) -> Result<Discovery, RetryableDiscovery> {
     let worktree = Path::new(path);
     let Some(checkout) = worktree.ancestors().find(|path| path.join(".git").exists()) else {
-        return Ok(None);
+        return Ok(Discovery::NoForge);
     };
     let Some(git_dir) = crate::worktree::git_admin_dir_from_checkout_metadata(checkout)
         .map_err(|_| RetryableDiscovery)?
     else {
-        return Ok(None);
+        return Ok(Discovery::NoForge);
     };
     let Some(common_dir) = super::git_refs::common_dir(&git_dir) else {
-        return Ok(None);
+        return Ok(Discovery::NoForge);
     };
     let common_dir = match common_dir.canonicalize() {
         Ok(common_dir) => common_dir,
         // The repository the checkout names is gone, not unreadable.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Discovery::NoForge);
+        }
         Err(_) => return Err(RetryableDiscovery),
     };
     reached.insert(common_dir.clone());
@@ -619,7 +648,7 @@ fn discover_target(
         },
     };
     let Some(branch) = branch else {
-        return Ok(None);
+        return Ok(Discovery::Detached);
     };
     let trunk = is_trunk_branch(
         &branch,
@@ -654,10 +683,10 @@ fn discover_target(
         .and_then(|origin| origin.1.as_deref())
         .and_then(forge::RemoteRepo::parse)
     else {
-        return Ok(None);
+        return Ok(Discovery::NoForge);
     };
     let Some(forge_cli) = remote.forge_cli() else {
-        return Ok(None);
+        return Ok(Discovery::NoForge);
     };
     let marker = crate::worktree::read_marker_from_checkout_metadata(worktree)
         .ok()
@@ -674,7 +703,7 @@ fn discover_target(
                 == Some(head)
     });
     let repo_slug = remote.repo_slug().map(str::to_owned);
-    Ok(Some(Target {
+    Ok(Discovery::Target(Box::new(Target {
         branch_only: false,
         path: path.to_owned(),
         branch,
@@ -688,7 +717,7 @@ fn discover_target(
         inherited_head,
         marker_created_at: marker.as_ref().map(|marker| marker.created_at),
         from_pr: marker.and_then(|marker| marker.from_pr),
-    }))
+    })))
 }
 
 fn first_line(stdout: &[u8]) -> Option<String> {
