@@ -2418,7 +2418,7 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     let dir = tempdir().expect("tempdir");
     let config = load_no_fragments(&write(&dir, "")).expect("load");
     assert_eq!(config.agents.attention.active_grace_secs.get(), 180);
-    assert_eq!(config.agents.attention.stalled_after_secs.get(), 1800);
+    assert_eq!(config.agents.attention.stalled_after_secs.get(), 900);
     assert_eq!(config.agents.attention.tool_repeat_warn_after.get(), 3);
     assert_eq!(
         config.agents.attention.tool_repeat_attention_after.get(),

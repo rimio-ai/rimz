@@ -760,7 +760,11 @@ fn child_clock_shapes_survive_nerd_font_and_no_color() {
             } else {
                 format!(
                     "{} {:>3}",
-                    elapsed_glyph(&theme, quiet as i64, 1_800),
+                    elapsed_glyph(
+                        &theme,
+                        quiet as i64,
+                        snapshot.attention.stalled_after_secs.get().into(),
+                    ),
                     if quiet == 480 { "8m" } else { "40m" }
                 )
             };
