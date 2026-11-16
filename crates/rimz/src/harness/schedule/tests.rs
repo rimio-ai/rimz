@@ -469,6 +469,20 @@ fn spawn_entry() -> TaskEntry {
     }
 }
 
+/// A repeating row of `kind` under `overlap = 'allow'`, every field its kind needs set.
+fn allow_entry(kind: LaunchKind) -> TaskEntry {
+    let shell = kind == LaunchKind::Shell;
+    TaskEntry {
+        kind: Some(kind),
+        target: (!shell).then(|| "claude".to_owned()),
+        args: vec!["true".to_owned()],
+        timeout: shell.then(|| "1m".to_owned()),
+        every: Some("1h".to_owned()),
+        overlap: Some(crate::config::OverlapPolicy::Allow),
+        ..TaskEntry::default()
+    }
+}
+
 fn wait_target() -> TaskTarget {
     TaskTarget {
         kind: crate::ids::AgentKind::new_unchecked("claude"),
@@ -549,6 +563,7 @@ fn task_action_from_entry_maps_field_combinations() {
             },
             TaskActionKind::Team,
         ),
+        (allow_entry(LaunchKind::Agent), TaskActionKind::Agent),
     ] {
         let action = TaskAction::from_entry("task", &entry).expect("valid action");
         assert_eq!(action.kind(), kind, "{entry:?}");
@@ -605,6 +620,39 @@ fn task_action_from_entry_maps_field_combinations() {
                 ..spawn_entry()
             },
             "loop task `task` of kind `shell` sets `target`; a shell row runs `args` alone; re-add it with a kind flag",
+        ),
+        (
+            allow_entry(LaunchKind::Shell),
+            "loop task `task` sets `overlap`; `allow` needs fires that run side by side, and a shell task holds one unfinished run per checkout",
+        ),
+        (
+            allow_entry(LaunchKind::Workflow),
+            "loop task `task` sets `overlap`; `allow` needs fires that run side by side, and a workflow task holds one unfinished run per checkout",
+        ),
+        (
+            allow_entry(LaunchKind::Team),
+            "loop task `task` sets `overlap`; `allow` needs fires that run side by side, and a team task's fires launch the same team into one lane",
+        ),
+        (
+            TaskEntry {
+                once_per_checkout: Some(true),
+                ..allow_entry(LaunchKind::Agent)
+            },
+            "loop task `task` sets `overlap`; `allow` launches later fires beside earlier ones, and `once-per-checkout` starts nothing more in a checkout this task launched in",
+        ),
+        (
+            TaskEntry {
+                each_worktree: true,
+                ..allow_entry(LaunchKind::Agent)
+            },
+            "loop task `task` sets `overlap`; an each-worktree task takes no overlap policy, since it fires per checkout",
+        ),
+        (
+            TaskEntry {
+                every: None,
+                ..allow_entry(LaunchKind::Agent)
+            },
+            "loop task `task` sets `overlap`; a one-shot fires once, so no later fire overlaps it",
         ),
     ] {
         let err = TaskAction::from_entry("task", &entry).expect_err("invalid action");

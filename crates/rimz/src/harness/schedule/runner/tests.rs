@@ -94,20 +94,25 @@ fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
                 Some(OverlapPolicy::Coalesce),
                 Some(OverlapPolicy::Queue),
                 Some(OverlapPolicy::Replace),
+                Some(OverlapPolicy::Allow),
             ] {
                 let root = tempfile::tempdir().unwrap();
                 record_room(root.path()).unwrap();
                 let paths = StatePaths::for_project_root(root.path()).unwrap();
                 let catalog = TaskCatalog::load(Some(root.path())).unwrap();
                 let name = "unreadable-backlog-agent";
+                // `allow` is refused on a shell row, so its case fires an agent row.
+                let agent = overlap == Some(OverlapPolicy::Allow);
                 let mut fire = TaskFire::new(
                     name,
                     LoadedTask::new(
                         name,
                         TaskEntry {
                             root: root.path().to_owned(),
+                            kind: agent.then_some(LaunchKind::Agent),
+                            target: agent.then(|| "claude".to_owned()),
                             args: vec!["true".to_owned()],
-                            timeout: Some("1m".to_owned()),
+                            timeout: (!agent).then(|| "1m".to_owned()),
                             every: Some("1h".into()),
                             overlap,
                             ..Default::default()
@@ -127,8 +132,7 @@ fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(path, contents).unwrap();
                 let result = fire.reconcile_backlog();
-                if mode == LoopRunMode::Scheduled
-                    && overlap.unwrap_or_default() != OverlapPolicy::Skip
+                if mode == LoopRunMode::Scheduled && overlap.unwrap_or_default().retains_triggers()
                 {
                     assert!(
                         result.is_err(),
@@ -501,6 +505,7 @@ fn at_lock_refusals_store_the_holder_without_freezing_its_age() {
     for (mode, policy) in [
         (LoopRunMode::Scheduled, OverlapPolicy::Coalesce),
         (LoopRunMode::Scheduled, OverlapPolicy::Skip),
+        (LoopRunMode::Scheduled, OverlapPolicy::Allow),
         (LoopRunMode::Manual, OverlapPolicy::Coalesce),
     ] {
         for named in [true, false] {
@@ -661,6 +666,84 @@ fn held_locks_no_row_claims_are_listed_under_their_whole_stem() {
     assert!(
         in_flight_run("later", root.path()).unwrap().is_some(),
         "another name's unopenable lock does not fail the lookup"
+    );
+}
+
+/// Holds task `pile`'s run lock under a recorded room, with a live `-p` run an earlier fire
+/// of the task started a minute before the holder took the lock.
+fn holder_beside_an_earlier_fire_run(root: &Path) -> (RunLockGuard, StatePaths) {
+    record_room(root).unwrap();
+    let paths = StatePaths::for_project_root(root).unwrap();
+    let path = RuntimePaths::for_state(&paths)
+        .unwrap()
+        .lock_path(run_lock_file_name("pile", None));
+    let RunLockAttempt::Acquired(guard) =
+        acquire_run_lock_file(&path, Some(TaskKind::Routine), None).unwrap()
+    else {
+        panic!("fixture takes lock")
+    };
+    let earlier = supervised_run(
+        root,
+        guard.info.started_at - jiff::SignedDuration::from_mins(1),
+    );
+    crate::harness::run::create(&paths, &earlier).unwrap();
+    (guard, paths)
+}
+
+fn supervised_run(root: &Path, started_at: Timestamp) -> RunRecord {
+    let mut run = RunRecord::new(
+        crate::ids::WorkspaceId::from_project_root(root),
+        crate::ids::AgentKind::new_unchecked("codex"),
+        crate::agents::PermissionMode::Auto,
+        "task".into(),
+        root.to_path_buf(),
+    );
+    run.loop_task = Some("pile".to_owned());
+    run.started_at = started_at;
+    run
+}
+
+#[test]
+fn in_flight_run_names_only_a_run_the_holder_started() {
+    let root = tempfile::tempdir().unwrap();
+    let (guard, paths) = holder_beside_an_earlier_fire_run(root.path());
+    let in_flight = in_flight_run("pile", root.path()).unwrap().unwrap();
+    assert_eq!(in_flight.holder, Some(guard.info));
+    assert_eq!(
+        in_flight.run.map(|run| run.run_id),
+        None,
+        "an earlier fire's run is not the holder's"
+    );
+
+    let own = supervised_run(root.path(), guard.info.started_at);
+    crate::harness::run::create(&paths, &own).unwrap();
+    let in_flight = in_flight_run("pile", root.path()).unwrap().unwrap();
+    assert_eq!(in_flight.run.map(|run| run.run_id), Some(own.run_id));
+}
+
+#[test]
+fn stop_task_cancels_and_records_no_earlier_fire_run_as_the_holders() {
+    let root = tempfile::tempdir().unwrap();
+    let (guard, _) = holder_beside_an_earlier_fire_run(root.path());
+    let mut handed = Some(None);
+    let (outcome, _) = stop_task("pile", root.path(), None, |_, _, run| {
+        handed = Some(run.map(|run| run.run_id.clone()));
+        // The holder leaves at the stop, as a fire that takes the mark does.
+        drop(guard);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(handed, Some(None), "the cancel is handed no run");
+    assert!(
+        matches!(
+            outcome,
+            StopOutcome::Stopped {
+                run_id: None,
+                signaled: false,
+                ..
+            }
+        ),
+        "the stopped row names no run"
     );
 }
 

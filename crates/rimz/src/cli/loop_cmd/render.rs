@@ -1392,7 +1392,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         entry.wait_meta.as_ref().map(|meta| meta.armed_at),
     );
     let in_flight = displayed_in_flight(&args.name, in_flight_run(&args.name, &root));
-    let backlog = if entry.overlap.unwrap_or_default() != rimz::config::OverlapPolicy::Skip {
+    let backlog = if entry.overlap.unwrap_or_default().retains_triggers() {
         let mut backlog = schedule::backlog::load(&StatePaths::for_project_root(&root)?)?;
         Some(
             id.and_then(|id| backlog.tasks.remove(id.as_str()))

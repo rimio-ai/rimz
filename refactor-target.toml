@@ -6463,7 +6463,7 @@ reason = "CLI process exit must spawn a waiting drain and release under the back
 [[verdict]]
 kind = "item"
 key = "config::loop_::OverlapPolicy"
-reason = "Typed skip, coalesce, queue and replace policy is shared by task configuration, runner and display."
+reason = "Typed skip, coalesce, queue, replace and allow policy is shared by task configuration, runner and display."
 
 [[verdict]]
 kind = "item"

@@ -62,7 +62,7 @@ impl TaskBacklog {
         mut trigger: WaitingTrigger,
     ) -> bool {
         match policy {
-            OverlapPolicy::Skip => return false,
+            OverlapPolicy::Skip | OverlapPolicy::Allow => return false,
             OverlapPolicy::Queue if self.triggers.len() >= limit => return false,
             OverlapPolicy::Queue => {}
             OverlapPolicy::Coalesce | OverlapPolicy::Replace => {

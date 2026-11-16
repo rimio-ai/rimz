@@ -1240,6 +1240,172 @@ fn a_launched_agent_holds_skip_and_replace_launches_only_after_it_ends() {
     assert!(seen.exists(), "the replacement launched");
 }
 
+/// An `allow` task launches at every trigger while earlier fires' agents are alive, a manual
+/// fire included: each fire records `launched`, nothing waits, and `loop stop` reaches the
+/// agents of every fire.
+#[cfg(unix)]
+#[test]
+fn an_allow_task_launches_beside_its_alive_agents_and_stop_reaches_them_all() {
+    let env = live_room();
+    kinds_fixture(&env);
+    let (wrapper, seen, code) = launch_stand_in(&env);
+    std::fs::write(&code, "0").unwrap();
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "pile",
+            "--agent",
+            "worker",
+            "--every",
+            "1h",
+            "--overlap",
+            "allow",
+            "--",
+            "go",
+        ],
+    );
+    let shown: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "pile", "--json"])).unwrap();
+    assert_eq!(shown["entry"]["overlap"], "allow", "{shown}");
+    assert!(
+        shown["backlog"].is_null(),
+        "allow keeps no backlog: {shown}"
+    );
+    let run = |args: &[&str]| {
+        let before = read_loop_run_records(&env).len();
+        let output = env
+            .rimz()
+            .env("RIMZ_BIN", &wrapper)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        read_loop_run_records(&env)[before..].to_vec()
+    };
+    let mut fires = Vec::new();
+    for (args, agent) in [
+        (&["loop", "run", "pile"][..], "first"),
+        (&["loop", "run", "pile"][..], "second"),
+        (&["loop", "fire", "pile"][..], "third"),
+    ] {
+        let rows = run(args);
+        assert_eq!(rows.len(), 1, "{args:?}: {rows:?}");
+        assert_eq!(
+            rows[0].result,
+            LoopRunResult::Launched,
+            "{args:?}: {rows:?}"
+        );
+        assert!(seen.exists(), "{args:?} launched");
+        std::fs::remove_file(&seen).unwrap();
+        let fire = rows[0].fire.clone().unwrap();
+        seed_stamped_agent(&env, agent, &fire);
+        fires.push(fire);
+    }
+    let backlog = env
+        .state_path_for(&env.project_root)
+        .root
+        .join("records/loop-backlog.json");
+    assert!(!backlog.exists(), "nothing waits under allow");
+    let shown: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "pile", "--json"])).unwrap();
+    let alive: Vec<&str> = shown["launches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|launch| launch["address"].as_str())
+        .collect();
+    assert_eq!(alive.len(), 3, "every fire's agent is alive: {shown}");
+    for (agent, fire) in ["first", "second", "third"].iter().zip(&fires) {
+        assert!(
+            shown["launches"].as_array().unwrap().iter().any(|launch| {
+                launch["address"]
+                    .as_str()
+                    .is_some_and(|address| address.contains(agent))
+                    && launch["fire"] == fire.to_string()
+            }),
+            "{agent}: {shown}"
+        );
+    }
+
+    let output = env
+        .rimz()
+        .env("RIMZ_BIN", &wrapper)
+        .args(["loop", "stop", "pile"])
+        .output()
+        .unwrap();
+    let calls = stand_in_calls(&seen);
+    let mut stopped: Vec<&str> = calls
+        .lines()
+        .filter_map(|line| line.split_once(" agents stop @").map(|(_, rest)| rest))
+        .filter_map(|rest| rest.split(['#', ' ']).next())
+        .collect();
+    stopped.sort_unstable();
+    assert_eq!(stopped, ["first", "second", "third"], "{calls}\n{output:?}");
+}
+
+/// `loop add --overlap allow` refuses every shape whose fires cannot run side by side, with the
+/// reason true of that shape, and stores nothing.
+#[cfg(unix)]
+#[test]
+fn add_refuses_allow_where_fires_cannot_run_side_by_side() {
+    let env = live_room();
+    kinds_fixture(&env);
+    let side_by_side = "loop task `pile` sets `overlap`; `allow` needs fires that run side by side";
+    for (flags, reason) in [
+        (
+            &["--every", "1h", "--", "true"][..],
+            format!("{side_by_side}, and a shell task holds one unfinished run per checkout"),
+        ),
+        (
+            &["--workflow", "smoke", "--every", "1h"][..],
+            format!("{side_by_side}, and a workflow task holds one unfinished run per checkout"),
+        ),
+        (
+            &["--team", "forge", "--every", "1h", "--", "go"][..],
+            format!("{side_by_side}, and a team task's fires launch the same team into one lane"),
+        ),
+        (
+            &[
+                "--agent",
+                "worker",
+                "--every",
+                "1h",
+                "--each-worktree",
+                "--",
+                "go",
+            ][..],
+            "loop task `pile` sets `overlap`; an each-worktree task takes no overlap policy, \
+             since it fires per checkout"
+                .to_owned(),
+        ),
+        (
+            &["--agent", "worker", "--in", "1h", "--", "go"][..],
+            "loop task `pile` sets `overlap`; a one-shot fires once, so no later fire overlaps it"
+                .to_owned(),
+        ),
+    ] {
+        let output = env
+            .rimz()
+            .args([&["loop", "add", "pile", "--overlap", "allow"][..], flags].concat())
+            .output()
+            .unwrap();
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{flags:?}: {output:?}");
+        assert!(error.contains(&reason), "{flags:?}: {error}");
+        assert!(
+            !error.contains("backlog") && !error.contains("drain"),
+            "{error}"
+        );
+        let listed = loop_ok(&env, &["loop", "list", "--all"]);
+        assert!(
+            !listed.contains("pile"),
+            "{flags:?} stored nothing: {listed}"
+        );
+    }
+}
+
 /// `rimz gc` keeps a consumed booking's retired record while anything still shows it: while
 /// the agent its fire launched lives, so `loop show` lists it and `loop stop` finds the task,
 /// then while a history row names it, so `loop logs` still prints the fire; once nothing shows

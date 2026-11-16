@@ -1841,7 +1841,7 @@ rimz loop add
     --max-strikes <N>  [action=set takes=1..=1]
     --mux <MUX>  [action=set takes=1..=1 global]
     --once-per-checkout  [action=set-true takes=0..=0]
-    --overlap <POLICY>  [action=set takes=1..=1 values=skip|coalesce|queue|replace]
+    --overlap <POLICY>  [action=set takes=1..=1 values=skip|coalesce|queue|replace|allow]
     --overlap-limit <N>  [action=set takes=1..=1]
     --project  [action=set-true takes=0..=0]
     --provider <KIND>  [action=set takes=1..=1]
