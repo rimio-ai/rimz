@@ -151,13 +151,15 @@ The clock shapes have their own variants from `parse_schedule`: `NoTime`, `TimeC
 
 A `Watch` row is always one-shot, and a `signal` or `when` row is one-shot unless it sets `repeat = true` or carries `team`: team arming writes only standing bindings, so `schedule::repeats` reads a binding as standing whether or not an older RimZ stored `repeat` on it. `ephemeral_lifetime` names the rows that retire themselves: any row that does not repeat (`every`, `cron`, or `signal` or `when` with `repeat` or `team`), plus any row carrying a `deadline`, a `watch` spec, or a `fire-at` instant. `TaskCatalog::replace_machine` stores a row that `ephemeral_lifetime` names, or a row with a `wait` target, in the room's instance store and every other machine row in `~/.rimz/loop.toml` ([Where tasks live](#where-tasks-live)), while `TaskCatalog::replace_project` keeps a project row in `<root>/.rimz/config.toml` whatever its lifetime.
 
-`Trigger::resolve` is the whole matching rule, with three outcomes:
+`Trigger::resolve` is the whole matching rule, with four outcomes:
 
-| Trigger | `Deliver` | `Skip` | `Ignore` |
-| --- | --- | --- | --- |
-| `Signal` | every `match` key passes, and the selector is this exact name or this signal's family | every `match` key passes, but an exact selector names another member of the same family | a different family, or a failed `match` key |
-| `Watch` | the internal `wait.<task-name>` signal for this row | never | everything else, so one watcher's completion never fires another wait |
-| `Schedule`, `Condition` | never | never | always. Clocks and conditions are not signals |
+| Trigger | `Deliver` | `Excluded` | `Skip` | `Ignore` |
+| --- | --- | --- | --- | --- |
+| `Signal` | every `match` key passes, and the selector is this exact name or this signal's family | the selector is this exact name or this signal's family, and a `match` key fails | every `match` key passes, but an exact selector names another member of the same family | a different family, or an exact selector on another member whose `match` key fails |
+| `Watch` | the internal `wait.<task-name>` signal for this row | never | never | everything else, so one watcher's completion never fires another wait |
+| `Schedule`, `Condition` | never | never | never | always. Clocks and conditions are not signals |
+
+An `Excluded` task records nothing and is not fired. `harness::schedule::signal::fire_signal` lists it in `SignalFire::excluded`, which `rimz events emit` names in its receipt.
 
 A `match` key compares a JSON string payload value to the raw text and any other JSON value to its compact encoding. The whole value `"*"` instead requires that the payload carries the top-level key, including when its value is `null`. Missing keys never match. Every other value is exact, so `feat/*` matches only that literal text. Thus `from = "*"` on `team.stage` excludes the first flip, whose payload omits `from`.
 

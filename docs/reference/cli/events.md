@@ -158,10 +158,10 @@ The part after `·` reads one of these:
 | Receipt | When |
 | --- | --- |
 | `fired 1 task`, `fired N tasks` | That many tasks were handed the signal and spawned a detached run. Each is named on its own line. A busy task can still skip the trigger under its [overlap policy](./loop.md#overlapping-triggers). |
-| `fired no task` | Tasks took the signal, and none started. |
-| `no task is subscribed to it` | No task took the signal. Either no task subscribes to this name or its family, or every subscriber declined it: its `--match` rejected the payload, or it names a sibling in the family (a task on `deploy.failed` declines `deploy.finished` and records it as `skipped`). |
+| `fired no task` | Tasks took the signal or were excluded by their `--match`, and none started. |
+| `no task is subscribed to it` | No task took the signal, and no task on this name or its family was excluded by its `--match`. Either no task subscribes to this name or its family, or every subscriber names a sibling in the family (a task on `deploy.failed` declines `deploy.finished` and records it as `skipped`), or names a sibling and its `--match` rejected the payload as well. |
 
-A task that took the signal but did not start gets an indented `<task>: did not start` line after any started task. A task does not start when it is disabled, paused, or a project task whose project is not trusted, or when its run fails to launch.
+A task that took the signal but did not start gets an indented `<task>: did not start` line after any started task. A task subscribed to this name or its family whose `--match` rejected the payload gets an indented `<task>: its --match excluded this signal` line after those, and records nothing. A task on a sibling name whose `--match` rejected the payload gets no line. A task does not start when it is disabled, paused, or a project task whose project is not trusted, or when its run fails to launch.
 
 | Argument | Rule |
 | --- | --- |

@@ -79,6 +79,8 @@ pub(in crate::harness) enum SignalResolution {
     Ignore,
     Skip,
     Deliver,
+    /// The name delivers and the payload fails the subscription's match filter.
+    Excluded,
 }
 
 pub(in crate::harness) fn resolve_subscription(
@@ -86,20 +88,20 @@ pub(in crate::harness) fn resolve_subscription(
     matches: &std::collections::BTreeMap<String, String>,
     signal: &Signal,
 ) -> SignalResolution {
-    if selector.family() != signal.name.family()
-        || !matches.iter().all(|(key, expected)| {
-            signal
-                .payload
-                .get(key)
-                .is_some_and(|value| is_match_wildcard(expected) || match_value(value) == *expected)
-        })
-    {
+    if selector.family() != signal.name.family() {
         return SignalResolution::Ignore;
     }
-    if selector.matches(&signal.name) {
-        SignalResolution::Deliver
-    } else {
-        SignalResolution::Skip
+    let matched = matches.iter().all(|(key, expected)| {
+        signal
+            .payload
+            .get(key)
+            .is_some_and(|value| is_match_wildcard(expected) || match_value(value) == *expected)
+    });
+    match (selector.matches(&signal.name), matched) {
+        (true, true) => SignalResolution::Deliver,
+        (true, false) => SignalResolution::Excluded,
+        (false, true) => SignalResolution::Skip,
+        (false, false) => SignalResolution::Ignore,
     }
 }
 

@@ -291,7 +291,9 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
     .context("firing signal tasks")?;
     let mut out = render::out();
     let receipt = match fired.started.len() {
-        0 if fired.not_started.is_empty() => "no task is subscribed to it".to_owned(),
+        0 if fired.not_started.is_empty() && fired.excluded.is_empty() => {
+            "no task is subscribed to it".to_owned()
+        }
         0 => "fired no task".to_owned(),
         1 => "fired 1 task".to_owned(),
         count => format!("fired {count} tasks"),
@@ -302,6 +304,9 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
     }
     for task in fired.not_started {
         writeln!(out, "  {task}: did not start")?;
+    }
+    for task in fired.excluded {
+        writeln!(out, "  {task}: its --match excluded this signal")?;
     }
     Ok(())
 }
