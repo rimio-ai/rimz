@@ -2525,8 +2525,8 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
 }
 
 /// Accept the answer of the judge attempt `seq` of run `id`, from its own agent: the run must
-/// be active with that attempt current and neither answered nor ended, and the answer must fit
-/// the admitted definition at the judge's check. `recheck_at` resolves now, in the configured
+/// be active with that attempt current and neither answered nor ended, its timeout not yet
+/// passed, and the answer must fit the admitted definition at the judge's check. `recheck_at` resolves now, in the configured
 /// time zone, over the object's own. The run is woken to settle the answer.
 pub fn submit(
     state: &StatePaths,
@@ -2563,6 +2563,13 @@ pub fn submit(
         else {
             return refuse(&format!("no longer has the judge check {}", record.node));
         };
+        // The engine reads an answer before the timeout, so a late one is refused here.
+        if super::timeout_at(&spec, &record)?.is_some_and(|at| at <= Timestamp::now()) {
+            return refuse(&format!(
+                "has passed the timeout of the judge check {}",
+                record.node
+            ));
+        }
         if let Some(when) = recheck_at {
             let zone = crate::config::MachineConfig::load_time_zone_lenient();
             let at = when
