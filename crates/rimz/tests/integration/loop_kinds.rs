@@ -194,7 +194,7 @@ fn loop_add_resolves_a_bare_role_in_its_team_lane() {
 fn loop_add_refuses_what_a_launch_task_cannot_carry() {
     let env = live_room();
     kinds_fixture(&env);
-    let cases: [(&[&str], &str); 22] = [
+    let cases: [(&[&str], &str); 25] = [
         (
             &[
                 "--workflow",
@@ -293,6 +293,18 @@ fn loop_add_refuses_what_a_launch_task_cannot_carry() {
         (
             &["--team", "forge#lane", "--each-worktree"],
             "loop task `t`: --team `forge#lane`: a `#lane` on the team places the launch, and --each-worktree places each fire",
+        ),
+        (
+            &["--team", "forge#"],
+            "loop task `t`: --team `forge#`: expected a worktree or lane after `#` in `forge#`",
+        ),
+        (
+            &["--team", "forge#lane", "--", "-w", "x"],
+            "loop task `t`: --team `forge#lane`: worktree given twice; use either `team#worktree` or `-w/--worktree`",
+        ),
+        (
+            &["--team", "forge#lane", "--", "--channel", "x"],
+            "loop task `t`: --team `forge#lane`: --channel cannot be used with team#worktree addressing",
         ),
         (
             &["--workflow", "whole", "--fresh-worktree", "night"],

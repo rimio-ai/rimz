@@ -436,10 +436,7 @@ fn launch_team(
     isolation: Option<rimz::config::Isolation>,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let (name, worktree) = team_lane(name, launch.worktree)?;
-    if worktree.is_some() && launch.channel.is_some() {
-        bail!("--channel cannot be used with team#worktree addressing");
-    }
+    let (name, worktree) = launch_place(name, &launch)?;
     launch.worktree = worktree;
     ensure_defined(&name, globals)?;
     agents_cmd::run(
@@ -456,6 +453,19 @@ fn launch_team(
         }),
         globals,
     )
+}
+
+/// A launch's team and worktree: a `team#lane` names its worktree, which neither `-w` nor
+/// `--channel` may also place.
+fn launch_place(
+    name: String,
+    launch: &agents_cmd::CohortLaunchArgs,
+) -> Result<(String, Option<String>)> {
+    let (name, worktree) = team_lane(name, launch.worktree.clone())?;
+    if worktree.is_some() && launch.channel.is_some() {
+        bail!("--channel cannot be used with team#worktree addressing");
+    }
+    Ok((name, worktree))
 }
 
 fn team_lane(name: String, worktree: Option<String>) -> Result<(String, Option<String>)> {
@@ -557,15 +567,11 @@ pub(super) fn check_loop_launch(
     if launch.launch.detach {
         bail!("--detach drops the report a launch owes; remove it from the tail");
     }
-    let (team, lane) = launch
-        .name
-        .split_once('#')
-        .map_or((launch.name.as_str(), None), |(team, lane)| {
-            (team, Some(lane))
-        });
+    let lane = launch.name.contains('#');
+    let (team, _) = launch_place(launch.name.clone(), &launch.launch)?;
     if place.each_worktree {
         let flag = lane
-            .map(|_| "a `#lane` on the team")
+            .then_some("a `#lane` on the team")
             .or_else(|| agents_cmd::cohort_place_flag(&launch.launch));
         if let Some(flag) = flag {
             bail!("{flag} places the launch, and --each-worktree places each fire");
@@ -578,7 +584,7 @@ pub(super) fn check_loop_launch(
         root: Some(place.project_root.to_path_buf()),
         color: super::ColorWhen::Auto,
     };
-    ensure_defined(team, &globals).map(|_| ())
+    ensure_defined(&team, &globals).map(|_| ())
 }
 
 fn ensure_defined(name: &str, globals: &GlobalFlags) -> Result<rimz::config::TeamsConfig> {

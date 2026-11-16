@@ -55,6 +55,7 @@ The arguments after `--` go to the launch unchanged; loop adds no launch option 
 - `--timeout` is given: the launch's own bound applies (the workflow's `deadline`, a `-p` run's `--timeout`);
 - `--fresh-worktree` is given beside `--agent` or `--team`: put a bare `-w` in the arguments instead;
 - `--each-worktree` is given beside a `-w`, `--channel` or `--from-pr` in the arguments, or a team target's `#lane`;
+- a team target's `#lane` is empty, or comes beside a `-w` or `--channel` in the arguments, as `rimz teams launch` refuses it;
 - `--fresh-worktree` or `--each-worktree` is given beside a workflow whose `scope` is `project`;
 - `--fresh-worktree` is given beside a `-w` in the arguments: `-w` places the run, and `--fresh-worktree` places each fire;
 - the arguments carry `-w` for a workflow whose `scope` is `project`, which runs at the project root.
