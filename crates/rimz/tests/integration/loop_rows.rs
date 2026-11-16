@@ -236,8 +236,9 @@ fn loop_fire_with_a_pretend_signal_hands_its_evidence_to_the_fire_alone() {
         let argv = [&["loop", "fire", "words"][..], &flags].concat();
         let output = env.rimz().args(&argv).output().unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(2), "{flags:?}: {stderr}");
-        assert!(stderr.contains(expected), "{flags:?}: {stderr}");
+        assert_eq!(output.status.code(), Some(2), "{stderr:.300}");
+        assert!(stderr.contains(expected), "{stderr:.300}");
+        assert!(stderr.len() < 1024, "the refusal echoes its payload");
     }
     assert_eq!(read_loop_run_records(&env).len(), runs);
 }

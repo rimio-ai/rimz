@@ -338,13 +338,8 @@ struct FireArgs {
     #[arg(long, value_name = "NAME", value_parser = |raw: &str| raw.parse::<rimz::store::event::SignalName>())]
     signal: Option<rimz::store::event::SignalName>,
     /// The pretend signal's payload: a JSON object, not an output switch.
-    #[arg(
-        long,
-        value_name = "OBJECT",
-        requires = "signal",
-        value_parser = |raw: &str| rimz::harness::signal::parse_payload(Some(raw))
-    )]
-    json: Option<serde_json::Map<String, serde_json::Value>>,
+    #[arg(long, value_name = "OBJECT", requires = "signal")]
+    json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -467,23 +462,28 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Show(args) => render::show(args, globals),
         LoopSubcmd::Explain(args) => explain::run(args),
         LoopSubcmd::Logs(args) => render::logs(args, globals),
-        LoopSubcmd::Fire(args) => run_tasks::run_one(
-            RunArgs {
-                name: args.name,
-                cwd: None,
-                signal_json: None,
-                condition_json: None,
-                drain: false,
-            },
-            LoopRunMode::Manual,
-            args.signal.map(|name| rimz::harness::signal::Signal {
-                name,
-                payload: args.json.unwrap_or_default(),
-                source: rimz::store::event::SignalSource::Cli,
-                watch: None,
-            }),
-            globals,
-        ),
+        LoopSubcmd::Fire(args) => {
+            // Parsed here, not by clap, whose refusal would echo an oversize payload whole.
+            let payload = rimz::harness::signal::parse_payload(args.json.as_deref())
+                .map_err(|err| crate::cli::usage::UsageError::new(err.to_string()))?;
+            run_tasks::run_one(
+                RunArgs {
+                    name: args.name,
+                    cwd: None,
+                    signal_json: None,
+                    condition_json: None,
+                    drain: false,
+                },
+                LoopRunMode::Manual,
+                args.signal.map(|name| rimz::harness::signal::Signal {
+                    name,
+                    payload,
+                    source: rimz::store::event::SignalSource::Cli,
+                    watch: None,
+                }),
+                globals,
+            )
+        }
         LoopSubcmd::Run(args) => run_tasks::run_one(args, LoopRunMode::Scheduled, None, globals),
         LoopSubcmd::Settle => {
             if let Some(root) = project_root_for_globals(globals) {
