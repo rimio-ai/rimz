@@ -147,9 +147,20 @@ fn restart_replaces_active_and_held_agents_and_resets_all_visits() {
             live = advance_ok(&state, &record.id, &host);
             assert!(live.held.is_some());
         }
+        assert!(
+            live.key_visits.is_empty(),
+            "a run with no key counts no item"
+        );
         live.input = Some(json!({"outcome":"pending", "key":"lint"}));
         live.key = Some(Key::String("lint".into()));
         *live.visits.get_mut("build").unwrap() = 20;
+        live.key_visits.insert(
+            "build".into(),
+            vec![records::KeyVisits {
+                key: Key::String("lint".into()),
+                visits: 20,
+            }],
+        );
         update(&state, &live);
         let session = "continued-session".into();
         let seq = live.session_attempt().unwrap().seq;
@@ -161,6 +172,7 @@ fn restart_replaces_active_and_held_agents_and_resets_all_visits() {
         actual.push((
             current.node.clone(),
             current.visits["build"],
+            current.key_visits["build"][0].visits,
             current.attempt.as_ref().and_then(|attempt| attempt.visit),
             current.input == live.input,
             current.key == live.key,
@@ -183,6 +195,7 @@ fn restart_replaces_active_and_held_agents_and_resets_all_visits() {
         vec![
             (
                 "build".into(),
+                1,
                 1,
                 Some(1),
                 true,

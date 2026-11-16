@@ -598,6 +598,8 @@ RimZ rewrites `$RIMZ_WORKFLOW_DIR/context.json` before every check and every att
 | `input` | The answer that routed here, the [failure input](#the-failure-input) after a failure route, or null at the start. |
 | `key` | The current item key, or null. |
 | `visit`, `visits` | Steps only: the step's visit count stamped when this launch or push-back was admitted, and its current count, both since its last manual restart. `max-visits` caps them. |
+| `step_visits` | Every node: an object from each visited step's name to its visit count, as `visits` counts it. `{}` before any step is visited. |
+| `key_visits` | Every node: an object from each step's name to a list of `{"key": <key>, "visits": <n>}`, one entry per item key the step was visited under, in the order the keys first came. `key` is as the run holds it, so `7` and `"7"` are two items. A visit with no key counts only in the step's total. `{}` when no visit had a key. |
 | `output_path` | Judges only: the file to write the answer to. Null for other checks and steps. |
 | `retry` | Judges only: set when the judge runs again after a failed first try, with that try's outcome and reason. |
 | `signs_path` | For a step, its sign file, `signs/<step>.md`. For a check, the `signs/` directory. |
@@ -756,7 +758,7 @@ The compact view of an unfinished run prints, in order:
 5. The origin line: when and how the run started (by hand or by loop task), the number of attempts started (`1 attempt` while the first one runs, `0 attempts` for a run that has started none), and the known total cost of the ended ones, including judge evaluations. It omits cost when none is recorded, and never estimates a live attempt's spend.
 6. The block below the origin: the full ask text when asking, `takeover:` lines naming the agents that hold the checkout (`blockers unavailable` when the roster or the project's worktrees cannot be read), and for a parked run why and the `you can` commands (resume, grant more bounds, choose another node, or cancel).
 7. The definition rail ([below](#the-definition-rail)) on an active run, or the horizontal rail after `you can` on a parked run.
-8. `visits  <step> <used> of <max>` for each visited capped step, the run's grant included, counted since its last manual restart. Uncapped steps print no row.
+8. `visits  <step> <used>[ of <max>][ · key <key>: <n>]` for each visited step that is capped or has visits under the run's current key: ` of <max>` for a capped step, the run's grant included, and ` · key <key>: <n>` for the visits charged under the current key. Counts run since the step's last manual restart. An uncapped step with no visit under the current key prints no row.
 9. The `trail`: routing decisions projected from the definition and journal, consecutive matching check answers folded as `×N`, with resumes, restarts, parks, and termination. It keeps the newest eight hops with `+N earlier` for the rest, and ends in `now` while live.
 10. The home-relative work directory, the absolute notes folder when the run has one, and the command for full history.
 
@@ -940,9 +942,9 @@ A finished run id still resolves, from any room, and `show` prints it without re
 
 ### Runs this RimZ cannot continue
 
-A run whose record a newer RimZ wrote is left for that RimZ: `workflow list` skips it, and `show`, `resume`, `restart`, and `cancel` by id refuse with `` workflow run <run> has record version <N>, written by a newer RimZ; this RimZ reads only version 11. It is left for the RimZ that wrote it; nothing changed `` and exit 1.
+A run whose record a newer RimZ wrote is left for that RimZ: `workflow list` skips it, and `show`, `resume`, `restart`, and `cancel` by id refuse with `` workflow run <run> has record version <N>, written by a newer RimZ; this RimZ reads only version 13. It is left for the RimZ that wrote it; nothing changed `` and exit 1.
 
-An unfinished run this RimZ cannot continue (an older record version, a missing or invalid one, or a version-11 record that does not decode) is skipped by `workflow list` too. `show` prints its header with why, and `resume` and `restart` refuse with `` this RimZ cannot continue workflow run <run>: <cause>; it reads only record version 11. The workflow pass will end it as failed; nothing changed ``. A `record.json` that holds no JSON object refuses the same way, ending `The workflow pass will set it aside; nothing changed`.
+An unfinished run this RimZ cannot continue (an older record version, a missing or invalid one, or a version-13 record that does not decode) is skipped by `workflow list` too. `show` prints its header with why, and `resume` and `restart` refuse with `` this RimZ cannot continue workflow run <run>: <cause>; it reads only record version 13. The workflow pass will end it as failed; nothing changed ``. A `record.json` that holds no JSON object refuses the same way, ending `The workflow pass will set it aside; nothing changed`.
 
 `cancel` and `advance` on such an id end that one run: its record is marked `failed` with why, in place, its agents are released and left running as ordinary sessions, its loop task gets a `failed` report that strikes nothing, and its directory moves to `finished-workflows/`. A record that holds no JSON object moves there unmodified. `cancel` prints `` ended <run> as failed: this RimZ cannot continue it: <cause> `` (or `` set aside <run>: its record holds no JSON object ``), then the agents it left running or `no agent was pinned to it`, and a `workflow show` hint. It ends no other run. When an earlier `cancel` or pass already ended the run but could not release its agents or move its directory, `cancel` and `advance` retry the report, the release, and the move, and `cancel` prints `` <run> was already ended as failed: this RimZ cannot continue it: <cause> `` in place of the first line.
 
@@ -974,9 +976,10 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 
 | Field | Meaning |
 | --- | --- |
-| `record.version` | `11`. RimZ refuses a record of any other version ([runs this RimZ cannot continue](#runs-this-rimz-cannot-continue)). |
+| `record.version` | `12`. RimZ refuses a record of any other version ([runs this RimZ cannot continue](#runs-this-rimz-cannot-continue)). |
 | `record.spec_dir` | A deployed run's definition folder, canonical at the start. Absent for a loop task's run, which reads its own `definition/`. |
 | `record.visits.<step>` | The step's visit count since its last manual restart. |
+| `record.key_visits.<step>` | The step's visits split by item key, as `key_visits` in [the context file](#the-context-file). Absent when no step has a keyed visit. |
 | `record.prev_attempt` | As in [the context file](#the-context-file). |
 | `record.restart` | `{resume: "session-id" \| null, settled?: N}` while a manual replacement is pending. Null means a fresh start. `settled` names a previous attempt being stopped again whose end and cost are already journaled. It disappears when the launch is published, when a route leaves the step for another node (a capacity give-up, a deadline) or `resume --at` moves the run, or when the run parks or terminates. |
 | `record.held` | While checking an open session: `{attempt, entered_at, verdict?}`, the session attempt, the step's entry time, and the saved check verdict. |

@@ -207,9 +207,7 @@ pub(super) fn prepare(
             persist(t, guard)?;
             return Ok(Some(Decision::End(Box::new(t.record.clone()))));
         }
-        let visit = t.record.visits.entry(t.record.node.clone()).or_default();
-        *visit += 1;
-        let visit = *visit;
+        let visit = t.charge_visit();
         let attempt = t
             .record
             .attempt

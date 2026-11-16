@@ -345,6 +345,8 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
     let ctx: Value = serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
     assert_eq!(ctx["visit"], 1);
     assert_eq!(ctx["visits"], 1);
+    assert_eq!(ctx["step_visits"], json!({"build":1}));
+    assert_eq!(ctx["key_visits"], json!({"build":[{"key":7, "visits":1}]}));
     assert_eq!(ctx["input"], record.input.clone().unwrap());
     let attempt = live.attempt.unwrap();
     assert_eq!(
@@ -368,8 +370,8 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
     let mut ended = advance_ok(&state, &record.id, &host);
     assert!(records::journal(&paths).unwrap().iter().any(|row| matches!(&row.event, JournalEvent::Attempt { digests, .. } if digests["signs/build.md"] == super::super::script::digest(b"Keep the public API"))));
     ended.state = RunState::Active;
-    ended.key = Some(Key::Integer(8));
-    ended.input = Some(json!({"outcome":"work", "key":8}));
+    ended.key = Some(Key::String("7".into()));
+    ended.input = Some(json!({"outcome":"work", "key":"7"}));
     update(&state, &ended);
     host.observed.borrow_mut().status = RunStatus::Running;
     fs::write(paths.signs(Some("build")), "Updated sign").unwrap();
@@ -377,6 +379,12 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
     let ctx: Value = serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
     assert_eq!(ctx["visit"], 2, "a key does not split the step's count");
     assert_eq!(ctx["visits"], 2);
+    assert_eq!(ctx["step_visits"], json!({"build":2}));
+    assert_eq!(
+        ctx["key_visits"],
+        json!({"build":[{"key":7, "visits":1}, {"key":"7", "visits":1}]}),
+        "7 and \"7\" are two items"
+    );
     assert_eq!(ctx["prev_attempt"]["key"], 7);
     assert_eq!(
         host.launched.borrow()[1].prompt,
@@ -392,8 +400,15 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
         capped.input,
         Some(json!({
             "outcome":"failed", "cause":"visits", "node":"build",
-            "reason":"build has used 2 of 2 visits", "detail":{"visits":2, "max":2}, "key":8
+            "reason":"build has used 2 of 2 visits", "detail":{"visits":2, "max":2}, "key":"7"
         }))
+    );
+    assert!(
+        capped.key_visits["build"]
+            .iter()
+            .all(|item| item.visits == 1),
+        "the total trips the cap while each item is below it: {:?}",
+        capped.key_visits
     );
     assert_eq!(host.launched.borrow().len(), 2);
     capped.visit_grant = 1;
@@ -404,6 +419,7 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
     host.observed.borrow_mut().status = RunStatus::Running;
     let extended = advance_ok(&state, &record.id, &host);
     assert_eq!(extended.visits["build"], 3);
+    assert_eq!(extended.key_visits["build"][1].visits, 2);
 }
 
 #[test]
@@ -987,6 +1003,7 @@ fn eviction_failure_retries_once_then_is_a_counted_died_attempt() {
     let (_dir, state, mut record) = setup(&format!("{STEP}admission.occupancy='takeover'\n"));
     // A task run, created unengaged: the withdrawn agent attempt still engages it.
     record.engaged = Some(false);
+    record.key = Some(Key::Integer(7));
     update(&state, &record);
     let host = FakeHost::new();
     *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
@@ -1000,6 +1017,7 @@ fn eviction_failure_retries_once_then_is_a_counted_died_attempt() {
     );
     assert!(waiting.attempt.is_none() && waiting.prev_attempt.is_none());
     assert!(!waiting.visits.contains_key("build"), "{waiting:#?}");
+    assert!(waiting.key_visits.is_empty(), "{waiting:#?}");
     assert!(waiting.launch_retry);
     assert_eq!(host.evictions.get(), 1);
     assert_eq!(waiting.engaged, Some(true), "{waiting:#?}");
@@ -1186,10 +1204,12 @@ fn a_free_checkout_is_read_again_once_the_launch_is_prepared() {
         (false, blocked(), Some("takeover")),
         (true, blocked(), Some("takeover")),
     ] {
-        let (_dir, state, record) = setup(&format!(
+        let (_dir, state, mut record) = setup(&format!(
             "{STEP}admission.occupancy='{}'\n",
             if takeover { "takeover" } else { "wait" }
         ));
+        record.key = Some(Key::Integer(7));
+        update(&state, &record);
         let host = FakeHost::new();
         *host.arrives_at_launch.borrow_mut() = Some(arrived);
         let live = advance_ok(&state, &record.id, &host);
@@ -1215,7 +1235,8 @@ fn a_free_checkout_is_read_again_once_the_launch_is_prepared() {
         assert!(
             live.visits
                 .get(&live.node)
-                .is_none_or(|visits| *visits == 0),
+                .is_none_or(|visits| *visits == 0)
+                && live.key_visits.is_empty(),
             "{live:#?}"
         );
     }
