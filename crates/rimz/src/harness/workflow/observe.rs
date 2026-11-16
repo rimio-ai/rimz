@@ -11,7 +11,7 @@ use std::path::Path;
 
 use jiff::Timestamp;
 
-use super::{Observation, Observed, StopKind, Stopped, WorkflowErr, leader_turn};
+use super::{Limited, Observation, Observed, StopKind, Stopped, WorkflowErr, leader_turn};
 use crate::Store;
 use crate::agents::{AgentState, AskDelivery, AskKind, OpenAskDetail, WorkflowAttemptRef};
 use crate::disk::paths::StatePaths;
@@ -19,7 +19,7 @@ use crate::ids::EventId;
 use crate::store::StoreErr;
 use crate::store::run::{RunRecord, StoppedTurnDisposition};
 use crate::store::snapshot::SidebarSnapshot;
-use crate::store::workflow::{Asked, Asking, AttemptRun, ChildRef, Children, Limited, TeamRef};
+use crate::store::workflow::{Asked, Asking, AttemptRun, ChildRef, Children, TeamRef};
 
 /// Project the attempt led by `run` over `snapshot`, the room as the host read it with budget
 /// parks projected; review suppression and turn errors read `snapshot.now`.

@@ -836,8 +836,8 @@ fn declines(spec: &Definition, node: &str, outcome: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::workflow::Stopped;
-    use crate::store::workflow::{Asked, Asking, Limited};
+    use crate::harness::workflow::{Limited, Stopped};
+    use crate::store::workflow::{Asked, Asking};
 
     #[test]
     fn observed_outcome_covers_status_ask_error_limit_and_routed_edges_on_either_lifecycle() {
