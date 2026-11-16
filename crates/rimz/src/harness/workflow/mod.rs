@@ -38,7 +38,7 @@ pub use observe::{Cohort, detach_cohort, leader, observe, orphan, stop_cohort};
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub(crate) use spec::parse;
 pub use spec::{
-    Issue, LaunchOverrides, OccupancyPolicy, ScopeKind, SpecErr, load, parse_give_up, schema,
+    Issue, LaunchOverrides, OccupancyPolicy, ScopeKind, SpecErr, When, load, parse_when, schema,
 };
 pub use validate::{Inadmissible, NodeRow, Validation, admit, validate};
 

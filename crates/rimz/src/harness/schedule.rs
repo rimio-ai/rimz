@@ -19,7 +19,9 @@ use anyhow::Context;
 use crate::config::{LaunchKind, TaskEntry, TaskTarget};
 use crate::harness::prose::{span, verbatim};
 use crate::harness::when;
-use crate::utils::time::{ClockTime, DurationUnit, parse_duration_units};
+use crate::utils::time::{
+    CalendarAt, ClockTime, DurationUnit, parse_duration_units, parse_weekday,
+};
 use jiff::civil::Weekday;
 use jiff::{SignedDuration, Timestamp, Zoned};
 
@@ -630,19 +632,6 @@ fn short_day_name(day: Weekday) -> &'static str {
     }
 }
 
-fn parse_weekday(token: &str) -> Option<Weekday> {
-    match token.trim().to_ascii_lowercase().as_str() {
-        "mon" | "monday" => Some(Weekday::Monday),
-        "tue" | "tues" | "tuesday" => Some(Weekday::Tuesday),
-        "wed" | "weds" | "wednesday" => Some(Weekday::Wednesday),
-        "thu" | "thur" | "thurs" | "thursday" => Some(Weekday::Thursday),
-        "fri" | "friday" => Some(Weekday::Friday),
-        "sat" | "saturday" => Some(Weekday::Saturday),
-        "sun" | "sunday" => Some(Weekday::Sunday),
-        _ => None,
-    }
-}
-
 /// A normalized firing time: minute, hour (local wall-clock), and the weekday
 /// set. An empty weekday set means every day.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1186,51 +1175,9 @@ pub fn resolve_once_at(name: &str, raw: &str, now: &Zoned) -> Result<Timestamp, 
         name: name.to_owned(),
         value: raw.to_owned(),
     };
-    let trimmed = raw.trim();
-    let (day, time) = match trimmed.split_once(' ') {
-        Some((day, time)) => (Some(day), time),
-        None => (None, trimmed),
-    };
-    if time.starts_with(char::is_whitespace) {
-        return Err(bad());
-    }
-    let time = time.parse::<ClockTime>().map_err(|_| bad())?;
-    let at = |date: jiff::civil::Date| {
-        date.at(time.hour() as i8, time.minute() as i8, 0, 0)
-            .to_zoned(now.time_zone().clone())
-            .map(|zoned| zoned.timestamp())
-            .map_err(|_| bad())
-    };
-    let Some(day) = day else {
-        let today = at(now.date())?;
-        if today > now.timestamp() {
-            return Ok(today);
-        }
-        return at(now.date().tomorrow().map_err(|_| bad())?);
-    };
-    if let Some(weekday) = parse_weekday(day) {
-        let mut date = now.date();
-        loop {
-            if date.weekday() == weekday {
-                let candidate = at(date)?;
-                if candidate > now.timestamp() {
-                    return Ok(candidate);
-                }
-            }
-            date = date.tomorrow().map_err(|_| bad())?;
-        }
-    }
-    let is_iso_date = day.len() == 10
-        && day.bytes().enumerate().all(|(index, byte)| match index {
-            4 | 7 => byte == b'-',
-            _ => byte.is_ascii_digit(),
-        });
-    let date: jiff::civil::Date = is_iso_date
-        .then(|| day.parse().ok())
-        .flatten()
-        .ok_or_else(bad)?;
-    let candidate = at(date)?;
-    if candidate <= now.timestamp() {
+    let at = CalendarAt::parse(raw).ok_or_else(bad)?;
+    let candidate = at.resolve(now).ok_or_else(bad)?;
+    if matches!(at, CalendarAt::Dated(..)) && candidate <= now.timestamp() {
         return Err(ScheduleErr::PastOnceAt {
             name: name.to_owned(),
             value: raw.to_owned(),

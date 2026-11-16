@@ -412,7 +412,7 @@ To get someone involved, route the failure to an agent step of your own. It read
 
 A question or permission prompt from an agent step's agent keeps the attempt open, and the run waits for you to answer in the agent's pane. `workflow list` shows the run under NEEDS YOU as `asking you: <handle> (<kind>): <text>`, and the step's `timeout` pauses while the question is open. Set `on.asked` on the step to end the attempt on a question instead and route it.
 
-`deadline = "2026-12-01"` under `[workflow]` bounds the whole run. It takes a date (local midnight), a local date and time, or an RFC 3339 instant. When it passes, RimZ stops a live attempt and fails the current node with cause `deadline`, once. The node that failure routes to runs without a deadline.
+`deadline = "2026-12-01"` under `[workflow]` bounds the whole run, and `rimz workflow run --deadline <WHEN>` sets or replaces it for one run. Either takes a duration counted from the run's start (`8h`), a time of day (`18:00`, `fri 18:00`) at its next occurrence, a date (midnight at its start), a date and time (`2026-12-01 09:00`), or an RFC 3339 instant, read in your [`timezone`](./configuration.md#sidebar-rendering); the [reference](../reference/cli/workflow.md#workflow-times) lists every form. When it passes, RimZ stops a live attempt and fails the current node with cause `deadline`, once. The node that failure routes to runs without a deadline.
 
 A failure handler, or you, sends a run on with `resume`:
 

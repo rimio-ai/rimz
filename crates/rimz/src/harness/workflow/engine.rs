@@ -101,8 +101,10 @@ pub enum DefinitionSource<'a> {
 /// The arguments a start gives its run, whatever started it.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StartArgs {
-    /// The run's give-up instant, for a capacity wait at a step without `admission.give-up`.
-    pub give_up: Option<Timestamp>,
+    /// The run's give-up time, for a capacity wait at a step without `admission.give-up`.
+    pub give_up: Option<spec::When>,
+    /// The run's deadline, in place of the definition's `[workflow].deadline`.
+    pub deadline: Option<spec::When>,
     pub capacity: workflow::StartCapacity,
 }
 
@@ -308,6 +310,16 @@ fn publish(
         return Err(WorkflowErr::NoRoom(roots.project.clone()));
     }
     let now = Timestamp::now();
+    let zone = crate::config::MachineConfig::load_time_zone_lenient();
+    let at = |when: spec::When| when.resolve(now, &zone).map_err(WorkflowErr::Refused);
+    let deadline = match args.deadline {
+        Some(when) => Some(when),
+        None => spec
+            .deadline()
+            .map(spec::parse_when)
+            .transpose()
+            .map_err(WorkflowErr::Refused)?,
+    };
     let mut record = RunRecord {
         version: workflow::VERSION,
         id,
@@ -325,7 +337,7 @@ fn publish(
         prompt,
         scope,
         fire_tree: start.fire_tree,
-        give_up: args.give_up,
+        give_up: args.give_up.map(at).transpose()?,
         capacity: args.capacity,
         surplus: start.surplus,
         surplus_after: start.surplus_after,
@@ -343,11 +355,7 @@ fn publish(
         wait: None,
         visits: BTreeMap::new(),
         visit_grant: 0,
-        deadline: spec
-            .deadline()
-            .map(spec::parse_deadline)
-            .transpose()
-            .map_err(|e| WorkflowErr::Refused(e.to_string()))?,
+        deadline: deadline.map(at).transpose()?,
         deadline_fired: false,
         next_seq: 1,
         attempt: None,
@@ -2120,9 +2128,14 @@ pub fn resume(
                     .checked_add(value)
                     .ok_or_else(|| WorkflowErr::Refused("visit grant overflow".into()))?;
             } else if let Some(raw) = grant.strip_prefix("deadline=") {
-                t.record.deadline = Some(spec::parse_deadline(raw).map_err(|e| {
-                    WorkflowErr::Refused(format!("invalid deadline extension: {e}"))
-                })?);
+                let zone = crate::config::MachineConfig::load_time_zone_lenient();
+                t.record.deadline = Some(
+                    spec::parse_when(raw)
+                        .and_then(|when| when.resolve(t.now, &zone))
+                        .map_err(|e| {
+                            WorkflowErr::Refused(format!("invalid deadline extension: {e}"))
+                        })?,
+                );
                 t.record.deadline_fired = false;
             } else {
                 return Err(WorkflowErr::Refused(format!(

@@ -813,6 +813,31 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
         stderr.contains("deadline") && stderr.contains("--extend 'deadline=<when>'"),
         "{stderr}"
     );
+    let before = jiff::Timestamp::now();
+    let output = env
+        .rimz()
+        .env("RIMZ_BIN", "/bin/true")
+        .args(["workflow", "resume", "review", "--extend", "deadline=2h"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let text = success(output);
+    let after = jiff::Timestamp::now();
+    let extended =
+        rimz::store::workflow::load(&env.state_path_for(&env.project_root).workflow(&record.id))
+            .unwrap()
+            .deadline
+            .unwrap();
+    let two_hours = jiff::SignedDuration::from_hours(2);
+    assert!(
+        before + two_hours <= extended && extended <= after + two_hours,
+        "{extended} is not 2h after the resume"
+    );
+    assert!(
+        text.starts_with("extended review#main · deadline "),
+        "{text}"
+    );
+    assert!(!stderr.contains("already passed"), "{stderr}");
     *record.visits.get_mut("build").unwrap() = 2;
     save(&env, &record);
     let output = env

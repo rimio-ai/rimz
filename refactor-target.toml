@@ -2353,7 +2353,7 @@ path = "crates/rimz/src/harness"
 # cache_keepalive::RoomCapacities and RoomCapacities::{new, window_spent} share one capacity reading per pass across the cache ping and idle and smart compaction (+3).
 # RoomCapacities::compaction_blocked reads the pass's credits cache once for both compactions (+1).
 # team_prompt::SHIPPED_REFLECT and team_prompt::reflect_copy_path let team loads and explain resolve and label the shipped `reflect` consensus piece (+2).
-# workflow::{StartArgs, Advance, parse_give_up} and AttemptHost::machine_gated carry a start's capacity choice and give-up from the CLI to admission (+5).
+# workflow::{StartArgs, Advance, parse_when} and AttemptHost::machine_gated carry a start's capacity choice and give-up from the CLI to admission (+5).
 # run::release_workflow lets a stranded workflow run's agents go on as kept session runs, for the workflow pass and cancel (+1).
 # run_log::{QuietFires, with_quiet}, QuietFires::streak_beside and TaskHistory::acting carry a task's quiet-fire summary to the loop CLI and merge it into the streak (+4).
 # run_log::try_collect_run and workflow::reconcile_args let the workflow pass report a run and the tick spawn the pass (+2).
@@ -5323,7 +5323,9 @@ allowed-dependencies = []
 # format_duration_bound shares exact s/ms bounds between mux errors and room probes (+1).
 # parse_compact_duration is the one s/m/h/d grammar for the CLI ladder flags, subagent
 # definition timeouts, and the [agents.subagents] defaults (+1).
-surface-budget = 20
+# CalendarAt with parse and resolve, and parse_weekday, give loop and wait one-shot times and
+# workflow times one calendar resolver below harness::schedule (+4).
+surface-budget = 24
 
 [[module]]
 path = "crates/rimz/src/harness/ancestry.rs"
@@ -5774,7 +5776,8 @@ allowed-dependencies = [
 # Cohort, stop_cohort, detach_cohort and leader pick the agents an attempt's stop, detach, push and forward reach; one fits the slot leader_turn left.
 # AttemptHost::{orphan, leader_session, start_groups}, orphan and launch_groups close the engine's reads around the attempt host (+5).
 # admit and Inadmissible: run start, each advance read, resume, restart, the signal wake and the workflow CLI's waiting report share one admission (+2).
-surface-budget = 96
+# When carries a workflow time from its spelling to the instant a run resolves it (+1).
+surface-budget = 97
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
@@ -12362,8 +12365,8 @@ reason = "Workflow-local input parsers serve validation and execution without wi
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::spec::parse_deadline"
-reason = "Workflow-local input parsers serve validation and execution without widening the shared scheduler grammar."
+key = "harness::workflow::When"
+reason = "One workflow time spelling is checked without a clock by validation, admission and clap, and resolved from a now in the timezone setting at publish, resume and submit; its calendar forms resolve through utils::time::CalendarAt, as loop and wait one-shot times do."
 
 [[verdict]]
 kind = "item"
@@ -12372,8 +12375,8 @@ reason = "Workflow-local input parsers serve validation and execution without wi
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::parse_give_up"
-reason = "Workflow-local input parsers serve validation and execution without widening the shared scheduler grammar."
+key = "harness::workflow::parse_when"
+reason = "One workflow time spelling is checked without a clock by validation, admission and clap, and resolved from a now in the timezone setting at publish, resume and submit; its calendar forms resolve through utils::time::CalendarAt, as loop and wait one-shot times do."
 
 [[verdict]]
 kind = "item"

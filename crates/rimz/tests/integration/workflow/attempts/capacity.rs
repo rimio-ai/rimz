@@ -334,7 +334,7 @@ fn capacity_receipts_of_run_and_restart_say_the_start_is_held() {
 }
 
 #[test]
-fn capacity_give_up_takes_an_instant_and_ends_a_hand_run_there() {
+fn capacity_give_up_takes_a_workflow_time_and_ends_a_hand_run_there() {
     let room = Room::new("");
     let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
     fs::write(
@@ -345,21 +345,26 @@ fn capacity_give_up_takes_an_instant_and_ends_a_hand_run_there() {
     )
     .unwrap();
     write_capacity_config(&room, "[throttle]\ncheck='exit 75'\n").unwrap();
-    let refused = room
-        .command(&["workflow", "run", "review", "--give-up", "30m"])
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&refused.stderr);
-    assert_eq!(refused.status.code(), Some(2), "{stderr}");
-    assert!(
-        stderr.contains(concat!(
-            "\"30m\" is not an instant; give a timestamp (2026-11-13T21:00:00Z), ",
-            "a local date-time (2026-11-13T21:00), or a date (2026-11-14)"
-        )),
-        "{stderr}"
+    let before = jiff::Timestamp::now();
+    let receipt = success(
+        room.command(&["workflow", "run", "review", "--give-up", "30m"])
+            .output()
+            .unwrap(),
     );
-    let state = room.env.state_path_for(&room.env.project_root);
-    assert!(records::live_runs(&state).unwrap().is_empty());
+    let after = jiff::Timestamp::now();
+    let id = receipt.lines().next().unwrap();
+    let value = until(&room.env, id, |value| {
+        value["record"]["wait"]["outcome"] == "capacity"
+    });
+    let give_up: jiff::Timestamp =
+        serde_json::from_value(value["record"]["give_up"].clone()).unwrap();
+    let half_hour = jiff::SignedDuration::from_mins(30);
+    assert!(
+        before + half_hour <= give_up && give_up <= after + half_hour,
+        "{give_up} is not 30m after the start"
+    );
+    assert_eq!(value["record"]["wait"]["gives_up_at"], json!(give_up));
+    success(room.command(&["workflow", "cancel", id]).output().unwrap());
     let mut actual = Vec::new();
     for offset in [3600, -1] {
         let at = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(offset);
