@@ -774,6 +774,9 @@ fn signal_names(mut signals: Vec<String>) -> String {
 }
 
 pub(super) fn worktree_name(entry: &TaskEntry, run_dir: &Path) -> Option<String> {
+    if let Some(worktree) = &entry.worktree {
+        return Some(worktree.clone());
+    }
     (entry.wait.is_some() || entry.dir.is_some()).then(|| {
         entry
             .dir

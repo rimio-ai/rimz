@@ -852,8 +852,24 @@ impl<'a> ReportFacts<'a> {
             manual: run.manual,
             created_at: run.created_at,
             terminal_at: run.terminal_at,
-            checkout: &run.scope.path,
+            checkout: Self::checkout_of(run),
             fire_facts: run.fire_facts.as_ref(),
+        }
+    }
+
+    /// The checkout a run's rows key on. A shell task's run, which a row's `worktree` places in
+    /// that tree, keys where its fire did, at the checkout the fire sealed, so one fire's rows
+    /// name one place; a launched run keys at its own scope.
+    fn checkout_of(run: &'a crate::store::workflow::RunRecord) -> &'a Path {
+        let sealed = run
+            .fire_facts
+            .as_ref()
+            .and_then(|facts| facts.get("checkout"))
+            .and_then(Value::as_str)
+            .map(Path::new);
+        match (run.origin, sealed) {
+            (crate::store::workflow::RunOrigin::Inline, Some(sealed)) => sealed,
+            _ => &run.scope.path,
         }
     }
 }

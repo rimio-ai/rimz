@@ -107,11 +107,14 @@ pub enum TaskAction {
 }
 
 /// A non-shell fire's launch: `rimz workflow run <target>`, `rimz agents <target>` or
-/// `rimz teams launch <target>`, each followed by `args` unchanged.
+/// `rimz teams launch <target>`, each followed by the row's `-w <worktree>` and `args`
+/// unchanged.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskLaunch {
     pub kind: LaunchKind,
     pub target: String,
+    /// The row's `worktree`, handed to the launch as `-w` before `args`.
+    pub worktree: Option<String>,
     pub args: Vec<String>,
 }
 
@@ -128,6 +131,11 @@ impl TaskLaunch {
         head.iter()
             .map(|word| (*word).to_owned())
             .chain([self.target.clone()])
+            .chain(
+                self.worktree
+                    .iter()
+                    .flat_map(|name| ["-w".to_owned(), name.clone()]),
+            )
             .chain(self.args.iter().cloned())
             .collect()
     }
@@ -289,6 +297,16 @@ impl TaskAction {
                 }
             }
         }
+        if let Some(worktree) = &entry.worktree
+            && let Err(error) = crate::worktree::parse_requested_name(worktree)
+        {
+            return Err(refused(&format!("`worktree`: {error}")));
+        }
+        if entry.each_worktree && entry.worktree.is_some() {
+            return Err(refused(
+                "`worktree` places every fire, and `each-worktree` places each fire",
+            ));
+        }
         if entry.each_worktree && !repeats(entry) {
             return Err(TaskActionErr::OneShotFanOut {
                 name: name.to_owned(),
@@ -299,6 +317,7 @@ impl TaskAction {
                 (entry.kind.is_some(), "kind"),
                 (entry.target.is_some(), "target"),
                 (!entry.args.is_empty(), "args"),
+                (entry.worktree.is_some(), "worktree"),
             ] {
                 if set {
                     return Err(TaskActionErr::ConflictingActions {
@@ -363,6 +382,7 @@ impl TaskAction {
         Ok(Self::Launch(TaskLaunch {
             kind,
             target,
+            worktree: entry.worktree.clone(),
             args: entry.args.clone(),
         }))
     }

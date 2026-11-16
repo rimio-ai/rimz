@@ -889,6 +889,7 @@ pub struct ProjectTask {
     pub kind: Option<toml::Value>,
     pub target: Option<toml::Value>,
     pub args: Option<toml::Value>,
+    pub worktree: Option<toml::Value>,
     pub root: Option<PathBuf>,
     pub timeout: Option<toml::Value>,
     pub at: Option<String>,
@@ -1024,6 +1025,8 @@ struct ExecutableTask<'a> {
     target: Option<&'a toml::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     args: Option<&'a toml::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worktree: Option<&'a toml::Value>,
     timeout: Option<&'a toml::Value>,
     at: Option<&'a str>,
     every: Option<&'a str>,
@@ -1162,6 +1165,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     kind: task.kind.as_ref(),
                     target: task.target.as_ref(),
                     args: task.args.as_ref(),
+                    worktree: task.worktree.as_ref(),
                     timeout: task.timeout.as_ref(),
                     at: task.at.as_deref(),
                     every: task.every.as_deref(),

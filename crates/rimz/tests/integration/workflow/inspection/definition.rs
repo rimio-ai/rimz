@@ -172,7 +172,7 @@ fn definition_hints_parse_hyphen_leading_workflow_and_node_names() {
             node_output.status.code(),
             run_output.status.code(),
             String::from_utf8_lossy(&run_output.stderr)
-                .contains("rimz worktrees require a git repository"),
+                .contains("--worktree requires a git repository-backed room"),
             text,
             String::from_utf8_lossy(&node_output.stderr).into_owned(),
             String::from_utf8_lossy(&run_output.stderr).into_owned(),

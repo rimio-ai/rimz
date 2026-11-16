@@ -134,7 +134,7 @@ fn prepare(
     let workspace = checkout::anchor_caller_workspace(workspace, caller, context.root.as_deref())?;
     let caller_lane = super::context::caller_lane(&workspace.project_root, caller, harness_owned);
     check_supervised_subagent_allowed(request, caller, &effective.profiles)?;
-    checkout::admit_launch_worktree_name(
+    crate::harness::lanes::admit_launch_worktree_name(
         &workspace,
         &machine_config.agents.worktree,
         &projection.agents,

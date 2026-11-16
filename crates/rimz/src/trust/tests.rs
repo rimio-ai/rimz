@@ -774,6 +774,7 @@ fn hash_covers_every_documented_surface_field() {
         "[tasks.x]\ntarget = \"other\"\n",
         "[tasks.x]\nargs = [\"-p\", \"go\"]\n",
         "[tasks.x]\nargs = [\"-p go\"]\n",
+        "[tasks.x]\nworktree = \"deps\"\n",
         "[tasks.x]\nrepeat = true\n",
         "[tasks.x]\ntimeout = \"2h\"\n",
         "[tasks.x]\nat = \"08:00\"\n",

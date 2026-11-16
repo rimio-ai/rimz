@@ -560,7 +560,7 @@ impl TeamsArgs {
 pub(super) fn check_loop_launch(
     args: &TeamsArgs,
     place: &crate::cli::loop_launch::LoopLaunchPlace<'_>,
-) -> Result<()> {
+) -> Result<crate::cli::loop_launch::LoopLaunch> {
     let Some(TeamsSubcmd::Launch(launch)) = &args.command else {
         bail!("the tail does not parse as a `rimz teams launch`");
     };
@@ -568,7 +568,7 @@ pub(super) fn check_loop_launch(
         bail!("--detach drops the report a launch owes; remove it from the tail");
     }
     let lane = launch.name.contains('#');
-    let (team, _) = launch_place(launch.name.clone(), &launch.launch)?;
+    let (team, worktree) = launch_place(launch.name.clone(), &launch.launch)?;
     if place.each_worktree {
         let flag = lane
             .then_some("a `#lane` on the team")
@@ -584,7 +584,15 @@ pub(super) fn check_loop_launch(
         root: Some(place.project_root.to_path_buf()),
         color: super::ColorWhen::Auto,
     };
-    ensure_defined(&team, &globals).map(|_| ())
+    ensure_defined(&team, &globals)?;
+    Ok(crate::cli::loop_launch::LoopLaunch {
+        worktree,
+        prompt: launch
+            .prompt
+            .as_deref()
+            .is_some_and(|prompt| !prompt.trim().is_empty()),
+        ..Default::default()
+    })
 }
 
 fn ensure_defined(name: &str, globals: &GlobalFlags) -> Result<rimz::config::TeamsConfig> {

@@ -1,6 +1,7 @@
 //! Add, remove, and rename configured loop tasks.
 
 use super::*;
+use crate::cli::loop_launch::LoopLaunch;
 
 struct AddTiming {
     at: Option<String>,
@@ -18,15 +19,20 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
     let catalog = TaskCatalog::load(Some(&project_root))?;
     let name = args.name.clone().unwrap_or_else(|| catalog.mint_name());
     let mut entry = build_task_entry(&args, &name, &workspace)?;
-    check_launch(&args, &name, &workspace.project_root)?;
+    let launch = check_launch(&args, &name, &workspace.project_root)?;
+    if launch.tail_names_worktree {
+        entry.worktree = None;
+    }
+    let (kind, _) = launch_kind(&args);
+    let window = window_source(&args, kind, &launch)?;
     let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
-    let provider = args.provider.clone();
+    let provider = window.provider.clone();
     let login = provider
         .as_deref()
-        .map(|kind| task_login(&args.account.clone().into(), kind, &runtime))
+        .map(|kind| task_login(&window.account.clone().into(), kind, &runtime))
         .transpose()?
         .flatten();
-    if let Some(login) = login.as_ref().filter(|_| args.account.is_some()) {
+    if let Some(login) = login.as_ref().filter(|_| window.account.is_some()) {
         login.preflight(&rimz::agents::ambient_env())?;
     }
     let login_key = login.as_ref().map(rimz::agents::ProviderLogin::key);
@@ -56,7 +62,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
         entry.provider = Some(reset.kind.clone());
     }
     if entry.provider.is_some() {
-        entry.account.clone_from(&args.account);
+        entry.account.clone_from(&window.account);
     }
     // Compile once before writing, so validation and feedback share one shape.
     let shape = schedule::TaskShape::compile(&name, &entry);
@@ -83,8 +89,30 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
     if let Some(pre_state) = project_pre_state {
         finish_project_mutation(&mut out, &project_root, true, pre_state)?;
     }
-    write_add_feedback(&mut out, &entry, action, parsed, after_reset.as_ref())?;
-    write_linked_add_note(&mut out, &workspace)?;
+    let read_back = [
+        launch_line(kind, &launch),
+        entry
+            .provider
+            .is_some()
+            .then(|| window_source_line(&window))
+            .flatten(),
+    ];
+    write_add_feedback(
+        &mut out,
+        &entry,
+        action,
+        &read_back,
+        parsed,
+        after_reset.as_ref(),
+    )?;
+    if let Some(note) = idle_note(&args, &launch) {
+        writeln!(out, "{note}")?;
+    }
+    write_linked_add_note(
+        &mut out,
+        &workspace,
+        entry.worktree.is_some() || launch.worktree.is_some(),
+    )?;
     writeln!(
         out,
         "live while a room for {} is open",
@@ -134,11 +162,12 @@ fn launch_kind(args: &AddArgs) -> (rimz::config::LaunchKind, Option<&str>) {
 
 /// The tail checked as the fire's launch will parse it, each refusal naming the task and the
 /// kind flag.
-fn check_launch(args: &AddArgs, name: &str, project_root: &Path) -> Result<()> {
+fn check_launch(args: &AddArgs, name: &str, project_root: &Path) -> Result<LoopLaunch> {
     let (kind, target) = launch_kind(args);
     let place = crate::cli::loop_launch::LoopLaunchPlace {
         project_root,
         each_worktree: args.each_worktree,
+        worktree: args.worktree.as_deref(),
     };
     check_kind_flags(args, kind)
         .and_then(|()| crate::cli::loop_launch::check(kind, target, &args.args, &place))
@@ -270,10 +299,11 @@ fn validate_add_args(args: &AddArgs) -> Result<()> {
     {
         bail!("--provider `{kind}` is not an agent kind; see `rimz agents profiles`");
     }
-    if args.account.is_some() && args.provider.is_none() {
-        bail!(
-            "--account requires --provider; it picks the account whose windows a condition reads"
-        );
+    if let Some(worktree) = &args.worktree {
+        rimz::worktree::parse_requested_name(worktree)?;
+        if args.each_worktree {
+            bail!("-w places every fire, and --each-worktree places each fire; remove one");
+        }
     }
     Ok(())
 }
@@ -331,6 +361,7 @@ fn build_task_entry(
             .then(|| task_timeout(args.timeout.as_deref()))
             .transpose()?,
         each_worktree: args.each_worktree,
+        worktree: args.worktree.clone(),
         max_strikes: args.max_strikes,
         overlap: args.overlap.as_deref().map(|value| match value {
             "coalesce" => rimz::config::OverlapPolicy::Coalesce,
@@ -547,20 +578,27 @@ fn resolve_add_timing(args: &AddArgs, name: &str) -> Result<AddTiming> {
 fn fire_place(entry: &TaskEntry) -> String {
     if entry.each_worktree {
         "each RimZ-owned worktree where the trigger holds".to_owned()
+    } else if let Some(worktree) = &entry.worktree {
+        format!("worktree `{worktree}` (created at the first fire if missing)")
     } else {
         entry.run_dir().display().to_string()
     }
 }
 
-/// The receipt line for a task added from a linked worktree: it runs at the project root, not
-/// there.
-fn write_linked_add_note(out: &mut impl Write, workspace: &rimz::ResolvedWorkspace) -> Result<()> {
-    if workspace.worktree_root == workspace.project_root {
+/// The receipt line for a task added from a linked worktree that its own placement does not
+/// move: it runs at the project root, not there.
+fn write_linked_add_note(
+    out: &mut impl Write,
+    workspace: &rimz::ResolvedWorkspace,
+    placed: bool,
+) -> Result<()> {
+    if placed || workspace.worktree_root == workspace.project_root {
         return Ok(());
     }
     writeln!(
         out,
-        "note: runs at the project root {}, not {}",
+        "note: runs at the project root {}, not {}; add -w <name> to run each fire in a \
+         RimZ-owned worktree",
         workspace.project_root.display(),
         workspace.worktree_root.display()
     )?;
@@ -571,6 +609,7 @@ fn write_add_feedback(
     out: &mut impl Write,
     entry: &TaskEntry,
     action: &TaskAction,
+    read_back: &[Option<String>],
     parsed: &schedule::ParsedTrigger,
     after_reset: Option<&AfterReset>,
 ) -> Result<()> {
@@ -587,6 +626,9 @@ fn write_add_feedback(
             action.subject(),
             fire_place(entry),
         )?,
+    }
+    for line in read_back.iter().flatten() {
+        writeln!(out, "{line}")?;
     }
     let suffix = if parsed.once {
         "; then removed"
@@ -646,6 +688,136 @@ fn write_add_feedback(
         )?;
     }
     Ok(())
+}
+
+/// The provider and account a task's window terms read, and which of them came from its launch.
+#[derive(Debug, Default, PartialEq)]
+struct WindowSource {
+    provider: Option<String>,
+    account: Option<rimz::ids::LoginName>,
+    provider_from_launch: bool,
+    account_from_launch: bool,
+}
+
+/// What a task's window terms read: the loop's `--provider` and `--account`, else, for an
+/// agent task, the one kind its launch runs on and the tail's `--account` where that account
+/// is the provider's.
+fn window_source(
+    args: &AddArgs,
+    kind: rimz::config::LaunchKind,
+    launch: &LoopLaunch,
+) -> Result<WindowSource> {
+    let agent = kind == rimz::config::LaunchKind::Agent;
+    let reads_windows = args.after_reset.is_some()
+        || rimz::harness::when::WhenExpr::parse(&args.when)
+            .is_ok_and(|expr| expr.window_spans().next().is_some());
+    let (provider, provider_from_launch) = match (&args.provider, launch.kinds.as_slice()) {
+        (Some(provider), _) => (Some(provider.clone()), false),
+        (None, [kind]) if agent && reads_windows => (Some(kind.clone()), true),
+        (None, [first @ .., last]) if agent && reads_windows && !first.is_empty() => bail!(
+            "the launch runs {} and {last}; name the provider whose windows to read with \
+             --provider <kind>",
+            first.join(", ")
+        ),
+        (None, _) => (None, false),
+    };
+    let Some(provider) = provider else {
+        if args.account.is_some() {
+            bail!(
+                "--account requires --provider; it picks the account whose windows a condition \
+                 reads"
+            );
+        }
+        return Ok(WindowSource::default());
+    };
+    let launch_account = (agent && launch.kinds.contains(&provider))
+        .then(|| launch.account.clone())
+        .flatten();
+    let account_from_launch = args.account.is_none() && launch_account.is_some();
+    Ok(WindowSource {
+        account: args.account.clone().or(launch_account),
+        provider: Some(provider),
+        provider_from_launch,
+        account_from_launch,
+    })
+}
+
+/// The receipt line naming the window reading a launch supplied; none when the loop named it.
+fn window_source_line(source: &WindowSource) -> Option<String> {
+    if !source.provider_from_launch && !source.account_from_launch {
+        return None;
+    }
+    let from = |defaulted: bool| if defaulted { " (from the launch)" } else { "" };
+    let provider = source.provider.as_deref()?;
+    let account = source.account.as_ref().map_or_else(
+        || "the room's account".to_owned(),
+        |account| format!("account `{account}`{}", from(source.account_from_launch)),
+    );
+    Some(format!(
+        "windows: {provider}{}, {account}",
+        from(source.provider_from_launch)
+    ))
+}
+
+/// The receipt line reading a launch's parsed arguments back: the worktree they name, and for
+/// an agent or team its prompt and an agent's `-p` time limit.
+fn launch_line(kind: rimz::config::LaunchKind, launch: &LoopLaunch) -> Option<String> {
+    use rimz::config::LaunchKind;
+    let worktree = launch.worktree.as_deref().map(|name| match name {
+        "" => "a new worktree each fire".to_owned(),
+        name => format!("worktree `{name}`"),
+    });
+    let parts: Vec<String> = match kind {
+        LaunchKind::Shell => return None,
+        LaunchKind::Workflow => worktree.into_iter().collect(),
+        LaunchKind::Agent | LaunchKind::Team => {
+            let prompt = if launch.prompt {
+                "prompt found"
+            } else {
+                "no prompt"
+            };
+            let limit = launch.print.map(|limit| {
+                limit.map_or_else(
+                    || "time limit none".to_owned(),
+                    |limit| {
+                        format!(
+                            "time limit {}",
+                            rimz::utils::time::format_duration_compact(limit)
+                        )
+                    },
+                )
+            });
+            worktree
+                .into_iter()
+                .chain([prompt.to_owned()])
+                .chain(limit)
+                .collect()
+        }
+    };
+    (!parts.is_empty()).then(|| format!("launch: {}", parts.join(" · ")))
+}
+
+const AGENT_IDLE_NOTE: &str = "note: an agent left idle holds later fires; add `-p` for a run \
+                               that ends itself, `--overlap replace` to stop the old agent at \
+                               each fire, or `--overlap allow` to launch beside it";
+const TEAM_IDLE_NOTE: &str = "note: an agent left idle holds later fires; add `-p` for a run \
+                              that ends itself, or `--overlap replace` to stop the old agent at \
+                              each fire";
+
+/// The note owed by a repeating agent or team task whose launch is no `-p` run and that chose no
+/// overlap policy, since an idle agent holds its later fires; a team task refuses `allow`, so
+/// only an agent task's note names it. A `--once-per-checkout` task owes none: its launch
+/// memory, not the idle agent, holds the later fires.
+fn idle_note(args: &AddArgs, launch: &LoopLaunch) -> Option<&'static str> {
+    let repeats = args.every.is_some() || args.cron.is_some() || args.repeat;
+    if !repeats || launch.print.is_some() || args.overlap.is_some() || args.once_per_checkout {
+        return None;
+    }
+    match launch_kind(args).0 {
+        rimz::config::LaunchKind::Agent => Some(AGENT_IDLE_NOTE),
+        rimz::config::LaunchKind::Team => Some(TEAM_IDLE_NOTE),
+        _ => None,
+    }
 }
 
 fn first_next_fire(parsed: &schedule::ParsedTrigger) -> Option<Timestamp> {

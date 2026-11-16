@@ -45,7 +45,7 @@ Every command takes the [global flags](../cli.md#global-flags). `loop show --jso
 | `--agent <SPEC>` | `kind = "agent"`, `target`, `args` | `rimz agents <SPEC> <ARGS>...` | the launch process runs, a `-p` run it started is unfinished, or an agent it launched has not ended |
 | `--team <TEAM[#LANE]>` | `kind = "team"`, `target`, `args` | `rimz teams launch <TEAM[#LANE]> <ARGS>...` | the launch process runs, or an agent it launched has not ended |
 
-The arguments after `--` go to the launch unchanged; loop adds no launch option of its own. An agent that is idle in the room has not ended, so it is alive: under the default `skip` [overlap policy](#overlapping-triggers) a room agent or team a task launched holds the task until it is closed, and under `allow` an agent task launches beside it. A `-p` run in an agent task's arguments has no timeout unless those arguments give `--timeout`.
+The arguments after `--` go to the launch unchanged; loop adds no launch option of its own beyond its [`-w <name>`](#placement). An agent that is idle in the room has not ended, so it is alive: under the default `skip` [overlap policy](#overlapping-triggers) a room agent or team a task launched holds the task until it is closed, and under `allow` an agent task launches beside it. A `-p` run in an agent task's arguments has no timeout unless those arguments give `--timeout`.
 
 `loop add` checks a launch task before it stores it, and refuses, naming the task, the flag or target, and the fix, when:
 
@@ -53,10 +53,12 @@ The arguments after `--` go to the launch unchanged; loop adds no launch option 
 - the target does not resolve as the launch resolves it: an unknown workflow, profile or team, or a workflow that fails validation. An agent target is resolved in the lane the fire launches into, the arguments' `--channel` or, for a task that fires in its root, that directory's lane, so a bare role of the team that holds that lane in the room resolves as that team's role. `--workflow` takes a deployed workflow's name, not a path;
 - the arguments carry `--detach`, `--stdin`, `--input-format stream-json`, or `--resume` with no id;
 - `--timeout` is given: the launch's own bound applies (the workflow's `deadline`, a `-p` run's `--timeout`);
-- `--each-worktree` is given beside a `-w`, `--channel` or `--from-pr` in the arguments, or a team target's `#lane`;
+- `--each-worktree` is given beside a `-w`, `--channel` or `--from-pr` in the arguments, a team target's `#lane`, or the task's own `-w`;
+- the task's `-w` and a `-w` in the arguments name different worktrees, a bare `-w` in the arguments included (``-w `<name>` and the launch's worktree (a generated name) differ; keep one``); the same name in both is stored once, in the arguments;
+- the task's `-w` is not a valid worktree name;
 - a team target's `#lane` is empty, or comes beside a `-w` or `--channel` in the arguments, as `rimz teams launch` refuses it;
 - `--each-worktree` is given beside a workflow whose `scope` is `project`;
-- the arguments carry `-w` for a workflow whose `scope` is `project`, which runs at the project root.
+- the arguments or the task carry `-w` for a workflow whose `scope` is `project`, which runs at the project root.
 
 A shell command whose program is `rimz` and which reads as an agent launch, a team launch or `rimz workflow run` is refused with the kind flag to use. A command that runs `rimz` through `sh -c` or a script is a shell task.
 
@@ -73,7 +75,7 @@ A workflow run's outcome, recorded after the fire, is written by the settle pass
 
 A shell task's words after `--` are an argv, stored as `args = ["...", ...]` beside `kind = "shell"` and handed to the process word for word: nothing is re-split, expanded, or globbed, so a word holding a space, a quote, `$`, or `*` arrives as written. For a pipeline, a redirect, or a variable, write the shell yourself: `-- sh -c 'cargo test 2>&1 | tail -n 50'`. The receipt, `loop list`, and `loop show` print the argv as one shell line that reads back to the same words.
 
-Each fire starts a workflow run of one `test` check named `command` whose script execs the argv. Its working directory is the task's project root or the checkout an `--each-worktree` fire selected. Exit `0` ends the run `done`, which the task records as `completed`; any other exit, death by a signal, or the timeout ends it `failed`, a [strike](#strikes). The check's output stays in the run's `work/<seq>.check.log`, and `loop show` and `loop logs` print it. `rimz workflow show <task>` draws the one-node graph.
+Each fire starts a workflow run of one `test` check named `command` whose script execs the argv. Its working directory is the task's project root, the checkout an `--each-worktree` fire selected, or the task's [`-w` worktree](#placement). Exit `0` ends the run `done`, which the task records as `completed`; any other exit, death by a signal, or the timeout ends it `failed`, a [strike](#strikes). The check's output stays in the run's `work/<seq>.check.log`, and `loop show` and `loop logs` print it. `rimz workflow show <task>` draws the one-node graph.
 
 `--timeout <DUR>` caps the command: `s`, `m`, `h`, or `d`, greater than zero. Without it, add writes `loop.default-timeout` (default `2h`, set with `rimz config set loop.default-timeout 3h`) to the row, so the stored row always carries the cap its fires run under. A command still running at the cap is killed, and the fire fails.
 
@@ -87,7 +89,9 @@ A command fire opens the task root's room before its run starts, so a command th
 
 ### Placement
 
-A task runs at the project root, wherever it is added from. `--root` names a project: a linked worktree's path, as the cwd or as `--root`, selects that worktree's project, and the receipt then adds `note: runs at the project root <root>, not <worktree>`.
+A task runs at the project root, wherever it is added from. `--root` names a project: a linked worktree's path, as the cwd or as `--root`, selects that worktree's project, and the receipt then adds `note: runs at the project root <root>, not <worktree>; add -w <name> to run each fire in a RimZ-owned worktree`.
+
+`-w <name>` runs every fire in the RimZ-owned worktree of that name, for every kind, stored on the row as `worktree`. A launch task's fire passes `-w <name>` to its launch, which creates the tree from the configured base when it is missing, as it does from a shell. A shell task's fire creates a missing tree itself, recording `worktree.created`, and runs its command there; the task's conditions, launch memory and history stay keyed to the project root. A directory of that name that RimZ does not own fails the fire with the reason, recorded as a failed fire: a fire never asks. A hand-edited row whose `worktree` sits beside a `-w` in its arguments passes both, and the launch refuses the repeated flag, so each such fire records `error`.
 
 A task that wants a clean tree for each fire makes it itself: a shell task whose command runs [`rimz worktree new`](./worktree.md#create-a-worktree) and then works in the [path](./worktree.md#print-a-worktree-path) of the tree it made, or an agent or team task with a bare `-w` in its arguments, which gives each fire's launch a fresh worktree as it does from a shell. A tree left from a task that cut one per fire before this RimZ is an ordinary RimZ-owned worktree: `rimz worktree list` lists it, and [`sweep`](./worktree.md#sweep-landed-worktrees) treats it like any other.
 
@@ -98,7 +102,7 @@ A task that wants a clean tree for each fire makes it itself: a shell task whose
 | Shape | Flags | Repeats |
 | --- | --- | --- |
 | One-shot | `--at <TIME>`, or `--in <DUR>` | Fires once, then the task removes itself. |
-| After a window reset | `--after-reset 5h\|7d` with `--provider` | Fires once at the next reset of that provider's window, then the task removes itself; see [after a reset](#after-a-reset). |
+| After a window reset | `--after-reset 5h\|7d`, reading [the task's provider](#window-provider) | Fires once at the next reset of that provider's window, then the task removes itself; see [after a reset](#after-a-reset). |
 | Interval | `--every <DUR>`, measured from the last fire | Yes. |
 | Calendar | `--every <DAYS> --at HH:MM` | On each matching day. |
 | Raw cron | `--cron "<expression>"` | Per the expression. |
@@ -123,9 +127,13 @@ The trigger values follow these rules:
 
 ### After a reset
 
-`--after-reset <5h|7d>` fires once at the next reset of that window of the `--provider` kind's account. Add reads the window from the provider's cache and writes its reset instant to the row as `fire-at`; a window that has not started fires on the next scheduler tick instead. An instant that passed before any clock saw the task, or while it was paused, fires on the first tick it is live. The task gets one recorded attempt: a fire, an overlap, or an error all remove it, while `rimz loop fire` leaves it. A fire whose runner never started, or exited before it recorded anything, leaves the task in place and is dispatched again once five minutes pass with no runner holding its lock.
+`--after-reset <5h|7d>` fires once at the next reset of that window on the account of [the task's provider](#window-provider). Add reads the window from the provider's cache and writes its reset instant to the row as `fire-at`; a window that has not started fires on the next scheduler tick instead. An instant that passed before any clock saw the task, or while it was paused, fires on the first tick it is live. The task gets one recorded attempt: a fire, an overlap, or an error all remove it, while `rimz loop fire` leaves it. A fire whose runner never started, or exited before it recorded anything, leaves the task in place and is dispatched again once five minutes pass with no runner holding its lock.
 
 Add refuses what a [window condition](#conditions) refuses, and also a window the provider is not enforcing (use the other span) and a window with no reset time. `--after-reset` conflicts with `--at`, `--every`, `--cron`, `--in`, `--signal`, `--when`, and `--until`, and is refused with `--project` and `--each-worktree`. Listings describe the task as `once at <YYYY-MM-DD HH:MM>` in the configured zone and show that instant as its next fire.
+
+### Window provider
+
+A window term or `--after-reset` reads the windows of `--provider <kind>`. Without it, an agent task reads the kind its launch runs, and the receipt adds `windows: <kind> (from the launch), the room's account`; an agent launch that runs several kinds, or whose profile's tier can route to more than one kind, refuses, naming them and `--provider`. The account is `--account`, or else the launch's own `--account` when the provider is one of the kinds the launch runs; neither leaves the room's current account. `--account` without a provider refuses.
 
 ### Conditions
 
@@ -141,7 +149,7 @@ Expressions accept `!`, `&&`, `||`, and parentheses, in that precedence order. A
 | `pr.queue`, `pr.queue[branch]` | `queued`, `dequeued`, `armed`, `none` | The room sidebar's last-known merge-queue state for the checkout's or selected branch's open PR, GitHub only: `queued` while it is in the queue, `dequeued` once it has left the queue without merging, until it is queued again, re-armed (an auto-merge request enabled after the removal), merged, or closed. A push alone does not clear it. `armed` for an open PR in neither state that has an auto-merge request: one re-armed and waiting to enter the queue, or armed on a repository without a merge queue. `none` for an open PR with none of these, one that is merged or closed, any PR on Gitea, and when the last successful probe found no PR link; unread without a sidebar source. Pair it with `pr`: `pr=open && pr.queue=dequeued`. |
 | `pr.mergeable`, `pr.mergeable[branch]` | `mergeable`, `conflicting`, `none` | GitHub's settled mergeability for the open PR's current head. Unread until GitHub settles an answer at that head, when only an answer for an older head is cached, on an open PR without open-PR facts, and without a sidebar source. `none` when the last successful probe found no PR link, or a merged or closed PR. The answer is keyed by head alone: after only the base moves, the answer settled at the same head keeps reading until GitHub settles again. GitHub only. |
 | `pr.review`, `pr.review[branch]` | `draft`, `changes_requested`, `required`, `approved`, `none` | The open PR's review state, GitHub only. Draft wins over the review decision. Otherwise `changes_requested`, `required`, and `approved` reflect GitHub's review decision; a null decision reads `none`, and so does a PR the last successful probe found missing, merged, or closed. Unread when never fetched, when the review decision is unavailable on a non-draft PR, on an open PR without open-PR facts, and without a sidebar source. |
-| `window.5h.left`, `window.7d.left` | A comparison with a whole percent, `0` to `100` | Percent left in the task provider's 5-hour or 7-day window: `100` minus the cached usage, projected to the tick, so a window whose reset has passed reads `100`, which lets the loop timer fire the task at the reset with no room open. Without an open room nothing refreshes the cache, so the projection misses usage since the last refresh. A limit the provider has lifted reads `100`. Unread without a cached reading of that window. The provider is the task's `--provider` kind, recorded as `provider` on the row. The account is the room's current one for that provider, or the task's `--account`, whose reading is the last one stored for it: a room refreshes its current account for the provider and the accounts its agents run on, and, for Codex, each declared account. |
+| `window.5h.left`, `window.7d.left` | A comparison with a whole percent, `0` to `100` | Percent left in the task provider's 5-hour or 7-day window: `100` minus the cached usage, projected to the tick, so a window whose reset has passed reads `100`, which lets the loop timer fire the task at the reset with no room open. Without an open room nothing refreshes the cache, so the projection misses usage since the last refresh. A limit the provider has lifted reads `100`. Unread without a cached reading of that window. The provider is [the task's provider](#window-provider), recorded as `provider` on the row. The account is the room's current one for that provider, or the task's account, whose reading is the last one stored for it: a room refreshes its current account for the provider and the accounts its agents run on, and, for Codex, each declared account. |
 
 Only `team.stage`, `ci`, `pr`, `pr.queue`, `pr.mergeable`, and `pr.review` take an optional `[branch]` selector, such as `pr[feat/x]=merged`. A selector is nonempty and contains no whitespace, `[` or `]`; its spelling is preserved. `team.stage[branch]` reads the board of the checkout on that branch, as the table says. A forge selector reads that branch even without a checkout for it in the room. A live loop condition or an Active workflow run with forge-reading cases keeps its selected branches probed; demand ends when neither needs them. `ci[branch]` prefers CI of an open or merged PR, then the branch head's CI. Forge branch readings are unknown until the sidebar has probed them or when the scope checkout has a detached HEAD, and unread with no supported forge or under the external timer ([forge freshness](#forge-freshness)). These readings are not latched merge events. The room reads such a branch with no checkout as a branch row, which also emits `ci.*` and `pr.*` signals without a `path` ([built-in signals](#built-in-signals)).
 
@@ -151,7 +159,7 @@ A condition is true, false, or unknown. `=` is true when the reading is in the v
 
 A condition decides on forge readings only while they are fresh. A `ci`, `pr`, `pr.queue`, `pr.mergeable`, or `pr.review` key that is not fresh is unread and its terms are unknown; while the other terms do not settle the condition, it is unknown and holds: it does not fire, and a running `--for` hold keeps its clock. Every forge key is unread without a sidebar source (including under the external timer), while the scope checkout has no supported forge (it is never probed, so such a condition holds indefinitely, and a live one [needs you](#loop-list)) or a detached HEAD, while the latest probe has failed (the sidebar keeps its last readings, but a condition does not decide on them), and while the last successful probe is older than the task's last fire, or than its first sight before it has fired. A probe at the same instant counts as fresh. On an open PR whose head is known, bare `ci` is also unread when the CI verdict describes another commit than the PR head, or when the checkout's HEAD is definitely not on the PR, the same commit fence [workflow checks](../../guide/workflows.md#wait-on-the-outside-world) use; missing commit data skips only the comparison it prevents. That commit check runs only when the condition would otherwise be true. `loop show`, `loop list`, and `loop explain` apply the same rule and show each unread key's reason: `probed before the last fire or first sight`, `no sidebar source` (`readings paused (room closed)` when the room is closed), `no supported forge for this checkout`, `the checkout's HEAD is detached, so it has no branch to read`, the probe's own reason, or the commits that differ. `loop explain` reads no task, so it has no fire-stamp floor. A condition with no forge keys is unaffected. An idle repository's next probe can take up to five minutes, so a forge condition can hold that long after each fire.
 
-A window condition is checked against the provider's cache at add, which refuses: a task without `--provider`, naming it as the fix; a kind that selects an exact managed account at launch (Qwen); a room whose account for the kind does not resolve (`rimz accounts list`); no cached reading of the window, or one whose reset has already passed (open the room's sidebar or run `rimz accounts --refresh`); and a provider without a window of that span.
+A window condition is checked against the provider's cache at add, which refuses: a shell, workflow or team task without `--provider`, naming it as the fix; a kind that selects an exact managed account at launch (Qwen); a room whose account for the kind does not resolve (`rimz accounts list`); no cached reading of the window, or one whose reset has already passed (open the room's sidebar or run `rimz accounts --refresh`); and a provider without a window of that span.
 
 A forge condition is checked against the open room's forge reading at add. When that reading already says the scope checkout has no supported forge (the scope is not in a git checkout or its repository is gone, the checkout has no `origin` remote or one RimZ cannot parse, or the `origin` host is neither `github.com` nor a host whose name contains `gitea`, `forgejo`, or `codeberg`; a supported host whose CLI, `gh` or `tea`, is missing or failing reads as a failing lookup instead), add refuses any `ci`, `pr`, `pr.queue`, `pr.mergeable`, or `pr.review` term, one joined by `||` included, with ``--when: `<key>` cannot be read in <checkout>: no supported forge for this checkout`` and what RimZ reads: a git checkout whose `origin` remote is on `github.com` (through `gh`) or on a Gitea, Forgejo, or Codeberg host (through `tea`). A checkout the sidebar has not read yet, a detached HEAD, a closed room, and an `--each-worktree` task add as before; a live condition whose checkout turns out to have no supported forge [needs you](#loop-list) instead.
 
@@ -218,8 +226,9 @@ Forge terms read the existing room cache only: explain does not keep a selected 
 | `--match <KEY=VALUE>` | `--signal` | Require a top-level payload field to equal the value; repeatable. See [signals](#signals). |
 | `--repeat` | `--signal`, `--when` | Keep the task after a fire, so it fires again. Refused with `--every` and `--cron`. |
 | `--once-per-checkout` | repeating tasks | Store `once-per-checkout = true`: scheduled fires start at most one successful run per checkout; see [launch memory](#launch-memory). Refused on a one-shot, whose first fire removes the task. A re-add without it drops the key. |
-| `--provider <KIND>` | `--when` with a `window.*` term, `--after-reset` | The agent kind whose usage windows the condition or reset reads, recorded as `provider`. |
-| `--account <NAME>` | `--provider` | A named account of that provider whose windows the condition reads, recorded as `account`; unset follows the room's current account. It picks no login: the command's own launches choose theirs. |
+| `-w`, `--worktree <NAME>` | all but `--each-worktree` | Run every fire in this RimZ-owned worktree, created when missing; see [placement](#placement). |
+| `--provider <KIND>` | `--when` with a `window.*` term, `--after-reset` | The agent kind whose usage windows the condition or reset reads, recorded as `provider`; an agent task defaults to the kind it launches ([window provider](#window-provider)). |
+| `--account <NAME>` | `--provider`, or an agent task's default | A named account of that provider whose windows the condition reads, recorded as `account`; unset takes the launch's `--account` when the provider is one of its kinds, else follows the room's current account. It picks no login: the command's own launches choose theirs. |
 | `--max-strikes <N>` | all | Consecutive failed fires before the task disables itself. Default `3`; `0` turns the gate off. |
 | `--overlap <POLICY>` | repeating clock, signal, or condition tasks | `skip` (default), `coalesce`, `queue`, `replace`, or `allow` (agent tasks only); see [overlapping triggers](#overlapping-triggers). |
 | `--overlap-limit <N>` | `--overlap queue` | Maximum waiting triggers, at least `1`, default `10`. |
@@ -230,17 +239,20 @@ Forge terms read the existing room cache only: explain does not keep a selected 
 
 ### The receipt
 
-`add` reads back the command or launch, where it runs, a shell task's timeout, the trigger in words, and the next fire for a clock:
+`add` reads back the command or launch, where it runs, a shell task's timeout, what the launch's arguments ask for, the trigger in words, and the next fire for a clock:
 
 ```console
-$ rimz loop add deps --agent claude --every mon --at 09:00 -- -w deps 'Check for outdated dependencies.'
+$ rimz loop add deps --agent claude -w deps --every mon --at 09:00 -- -p --timeout 1h 'Check for outdated dependencies.'
 added loop task `deps`
-action: launches `rimz agents claude -w deps 'Check for outdated dependencies.'` in /home/you/code/app
+action: launches `rimz agents claude -w deps -p --timeout 1h 'Check for outdated dependencies.'` in worktree `deps` (created at the first fire if missing)
+launch: worktree `deps` · prompt found · time limit 1h
 trigger: fires every Mon at 09:00
-next fire: 2026-11-16 09:00 (in 14h 23m)
+next fire: 2026-11-23 09:00 (in 6d)
 live while a room for /home/you/code/app is open
 no room is open there; start one with `rimz start`, or use `rimz loop timer install` to fire without one
 ```
+
+The `launch:` line reads the launch's arguments back: the worktree a fire runs in (`a new worktree each fire` for a bare `-w`), for an agent or team task `prompt found` or `no prompt`, and for an agent task the `-p` run's `time limit`, `none` when it has no `--timeout`. A workflow task's line names only the worktree, and a launch with nothing to name prints none. A task whose window provider or account came from its launch adds `windows: claude (from the launch), the room's account` ([window provider](#window-provider)). A repeating agent or team task that is not a `-p` run and sets neither `--overlap` nor `--once-per-checkout` adds a note; under `--once-per-checkout` the task launches once in a checkout, so no idle agent holds a later fire. An agent task's reads ``note: an agent left idle holds later fires; add `-p` for a run that ends itself, `--overlap replace` to stop the old agent at each fire, or `--overlap allow` to launch beside it``; a team task, which refuses `allow`, gets the same note without its last clause.
 
 A one-shot's trigger line ends `; then removed`. An `--after-reset` task replaces the trigger and next-fire lines:
 

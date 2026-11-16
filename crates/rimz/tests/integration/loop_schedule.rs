@@ -5298,7 +5298,7 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
     assert!(
         receipt.lines().any(|line| line
             == format!(
-                "note: runs at the project root {}, not {}",
+                "note: runs at the project root {}, not {}; add -w <name> to run each fire in a RimZ-owned worktree",
                 root.display(),
                 linked.display()
             )),

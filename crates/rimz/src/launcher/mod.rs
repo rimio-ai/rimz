@@ -541,7 +541,7 @@ pub fn prepare_layout(
     let mut preflighted_logins = Vec::new();
     let mut empty_dir = None;
     if args.launch.selection != Selection::Cohort {
-        checkout::admit_launch_worktree_name(
+        crate::harness::lanes::admit_launch_worktree_name(
             workspace,
             &machine_config.agents.worktree,
             &projection.agents,

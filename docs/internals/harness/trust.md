@@ -29,7 +29,7 @@ The pin covers the surface itself because agents in the room can write `.rimz/co
 | `[profiles.<name>]` | `agent`, `skills`, `mode`, `model`, `effort`, `fast`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
 | `[subagents.profiles.<name>]` | the same keys as `[profiles.<name>]`, in the child-launch namespace |
 | `[agents.teams.<name>]` | `layout`, `consensus-file`, `consensus` (the piece names), `append-system-prompt-files`. Per role: `role`, `profile`, `signals`, `mode`, `model`, `effort`, `fast`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
-| `[tasks.<name>]` | `kind`, `target` and `args` (what each fire runs or launches), the old `command` key, `timeout`, `at`, `every`, `cron`, `signal`, `match`, `repeat`. A shell fire runs the hashed argv as the one check of an inline workflow run ([loops.md](./loops.md#the-compiled-graph)); a workflow, agent or team fire launches the hashed target with the hashed arguments. `kind`, `target`, `args`, `command`, `timeout` and `repeat` are hashed as written, so a value of the wrong type still changes the hash and leaves the rest of the file loading; the loop loader refuses that row alone |
+| `[tasks.<name>]` | `kind`, `target` and `args` (what each fire runs or launches), `worktree` (the RimZ-owned worktree each fire runs or launches in), the old `command` key, `timeout`, `at`, `every`, `cron`, `signal`, `match`, `repeat`. A shell fire runs the hashed argv as the one check of an inline workflow run ([loops.md](./loops.md#the-compiled-graph)); a workflow, agent or team fire launches the hashed target with the hashed arguments. `kind`, `target`, `args`, `worktree`, `command`, `timeout` and `repeat` are hashed as written, so a value of the wrong type still changes the hash and leaves the rest of the file loading; the loop loader refuses that row alone |
 | `[[hooks]]` | `event`, `command` |
 | `[env]` | every key and value |
 | `[lsp.servers.<name>]` | `command` argv, `init-options` as canonical JSON with every object's keys sorted, and `editor-check-on-save` when set |
@@ -87,7 +87,7 @@ Some keys fail the read outright because they describe machine state or a retire
 
 ### How far the hash reaches
 
-The hash covers repository definitions and what they reference by name, never the contents of a machine definition. A repo profile may inherit only repo profiles or built-in kinds (`RepoProfileEscapesTrust` otherwise), and a repo team role binds only repo profiles. A repo profile or team therefore runs only hashed definitions. A repo task always runs at the project root, but its `agent` may name a machine profile. The task's reference to it is hashed, and the machine profile's contents follow the machine config.
+The hash covers repository definitions and what they reference by name, never the contents of a machine definition. A repo profile may inherit only repo profiles or built-in kinds (`RepoProfileEscapesTrust` otherwise), and a repo team role binds only repo profiles. A repo profile or team therefore runs only hashed definitions. A repo task runs at the project root, or in the RimZ-owned worktree its hashed `worktree` names, and its `agent` may name a machine profile. The task's reference to it is hashed, and the machine profile's contents follow the machine config.
 
 ## Launch-time enforcement
 

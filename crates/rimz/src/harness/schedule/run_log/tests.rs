@@ -1120,6 +1120,38 @@ fn a_report_row_carries_the_facts_its_fire_sealed() {
     );
 }
 
+/// A shell fire that placed its run in the row's tree keys its running row and its report row
+/// at the checkout it sealed; a launched workflow run's report keys at its own scope.
+#[test]
+fn one_fire_keys_its_running_and_report_rows_at_one_checkout() {
+    let task = id("sh");
+    let fire = FireId::new(&task);
+    let mut launch = record("sh", 1, LoopRunResult::Launched);
+    launch.checkout = Some("/project".into());
+    let run = |origin: &str| -> crate::store::workflow::RunRecord {
+        serde_json::from_value(serde_json::json!({
+            "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"sh",
+            "origin":origin, "task":"sh", "loop_fire":fire, "spec_dir":"/spec",
+            "scope":{"kind":"worktree","path":"/tree"}, "project_root":"/project",
+            "created_at":"2026-01-01T00:00:00Z", "state":"done", "node":"command",
+            "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
+            "deadline_fired":false, "next_seq":2, "terminal_at":"2026-01-01T00:01:00Z",
+            "loop_report":"owed", "fire_facts":fire_facts(&launch)
+        }))
+        .unwrap()
+    };
+    let outcome = ended(RunEnding::Done, None, false);
+    let inline = run("inline");
+    let running = launch_row(&inline, &fire, "sh".to_owned(), Path::new("/project"));
+    let report = report_row(&ReportFacts::of(&inline, "sh"), &outcome);
+    assert_eq!(
+        (running.checkout, report.checkout),
+        (Some("/project".into()), Some("/project".into()))
+    );
+    let report = report_row(&ReportFacts::of(&run("deployed"), "sh"), &outcome);
+    assert_eq!(report.checkout, Some("/tree".into()));
+}
+
 fn ended(
     ending: RunEnding,
     cost_usd: Option<f64>,

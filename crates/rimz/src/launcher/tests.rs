@@ -971,13 +971,14 @@ fn launch_worktree_admission_refuses_main_before_any_work() {
     };
     let config = crate::config::WorktreeConfig::default();
 
-    let err = checkout::admit_launch_worktree_name(&workspace, &config, &[], Some("main"))
-        .expect_err("main is trunk's lane");
+    let err =
+        crate::harness::lanes::admit_launch_worktree_name(&workspace, &config, &[], Some("main"))
+            .expect_err("main is trunk's lane");
 
     assert_eq!(
         err.to_string(),
         "`main` is the project checkout's lane; pick another worktree name"
     );
-    checkout::admit_launch_worktree_name(&workspace, &config, &[], Some("docs"))
+    crate::harness::lanes::admit_launch_worktree_name(&workspace, &config, &[], Some("docs"))
         .expect("another name");
 }

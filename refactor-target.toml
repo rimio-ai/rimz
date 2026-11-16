@@ -3052,11 +3052,6 @@ reason = "CLI resume and cohort reconciliation share override admission and its 
 
 [[verdict]]
 kind = "item"
-key = "launcher::checkout::admit_launch_worktree_name"
-reason = "Layout, supervised and checkout callers share admission, settlement and verified host-path facts."
-
-[[verdict]]
-kind = "item"
 key = "launcher::checkout::resolve_launch_checkout"
 reason = "Layout, supervised and checkout callers share admission, settlement and verified host-path facts."
 
@@ -3209,6 +3204,11 @@ reason = "Launch, explain and molt share read-only resolution and prompt-file ad
 kind = "item"
 key = "launcher::resolve::resolve_finalized_layout"
 reason = "Launch, explain and molt share read-only resolution and prompt-file admission; CLI flags are parsed before this boundary."
+
+[[verdict]]
+kind = "item"
+key = "launcher::resolve::routable_kinds"
+reason = "Every agent kind a launch's tier route can resolve to, which `loop add` reads to default a window trigger's provider only for a one-kind route."
 
 [[verdict]]
 kind = "item"
@@ -5944,6 +5944,8 @@ allowed-dependencies = [
     "harness::budget",
     "harness::check_run",
     "harness::launch",
+    # A shell fire's `-w` tree takes the launch's name admission before it is created.
+    "harness::lanes",
     "harness::loop_task",
     "harness::name",
     "harness::plan",
@@ -5963,6 +5965,8 @@ allowed-dependencies = [
     "theme",
     "utils::time",
     "workspace",
+    # A shell fire of a row with `-w <name>` creates and signals the named tree it runs in.
+    "worktree",
     "address",
 ]
 # Check-launch conversion shares ownership lookup and supervised-run shaping.
@@ -11328,6 +11332,11 @@ reason = "The routing name a directory's own lane carries, read by launcher cont
 kind = "item"
 key = "harness::lanes::admit_worktree_name"
 reason = "Refuses a new worktree name that `main` or a live lane already holds, for every worktree-creating path."
+
+[[verdict]]
+kind = "item"
+key = "harness::lanes::admit_launch_worktree_name"
+reason = "The one admission of a launch's `-w` name (its parse, an existing tree, a fresh name's lane checks), shared by agent, supervised and workflow launches and a shell loop fire's tree."
 
 [[verdict]]
 kind = "item"

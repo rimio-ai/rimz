@@ -207,6 +207,10 @@ pub struct TaskEntry {
     pub args: Vec<String>,
     #[serde(rename = "each-worktree", skip_serializing_if = "std::ops::Not::not")]
     pub each_worktree: bool,
+    /// The RimZ-owned worktree every fire runs in, `rimz loop add -w`: a launch's fire hands it
+    /// to the launch as `-w`, and a shell fire creates or reuses it and runs its command there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait: Option<TaskTarget>,
     #[serde(rename = "wait-meta", skip_serializing_if = "Option::is_none")]

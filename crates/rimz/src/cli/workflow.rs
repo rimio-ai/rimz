@@ -193,13 +193,13 @@ pub(super) struct WorkflowArgs {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Start a workflow in the current checkout or an existing owned worktree.
+    /// Start a workflow in the current checkout or a RimZ-owned worktree.
     Run {
         /// Workflow name under `~/.rimz/workflows/`, or a directory inside it.
         #[arg(value_name = "NAME|DIR")]
         name: PathBuf,
-        /// Run in this existing RimZ-owned worktree instead of the current checkout; never creates
-        /// one. A workflow with `scope = "project"` refuses it.
+        /// Run in this RimZ-owned worktree instead of the current checkout, created from the
+        /// configured base when missing. A workflow with `scope = "project"` refuses it.
         #[arg(short = 'w', long, value_name = "WORKTREE")]
         worktree: Option<String>,
         /// Text appended to every agent step's prompt for this run, and exposed as `prompt` in
@@ -598,17 +598,21 @@ fn start(
             ctx.workspace.project_root.display()
         );
     }
-    let scope = if let Some(name) = &worktree {
-        rimz::worktree::resolve_owned(
-            &ctx.workspace.project_root,
-            &super::machine_config().agents.worktree,
-            name,
-        )?
-        .path
-    } else {
-        ctx.workspace.worktree_root.clone()
-    };
     refuse_unwritable_home("started")?;
+    let env_fire = rimz::harness::loop_task::read_fire_env().map(|fire| fire.fire);
+    let scope = match &worktree {
+        Some(name) => {
+            let fire = task
+                .as_ref()
+                .map(|task| &task.loop_fire)
+                .or(env_fire.as_ref());
+            match named_checkout(&ctx, name, fire)? {
+                Some(scope) => scope,
+                None => return Ok(()),
+            }
+        }
+        None => ctx.workspace.worktree_root.clone(),
+    };
     // A workflow task's fire names its run as the task's own. Any other run started under a
     // loop fire carries the fire: listed and stopped by its task, reported to nobody.
     let manual = task.as_ref().is_some_and(|task| task.manual);
@@ -624,7 +628,7 @@ fn start(
         None => workflow::DefinitionSource::Deployed {
             dir: &dir,
             task: None,
-            loop_fire: rimz::harness::loop_task::read_fire_env().map(|fire| fire.fire),
+            loop_fire: env_fire,
             fire: None,
             fire_facts: None,
         },
@@ -675,6 +679,55 @@ fn start(
         Some(passed) => receipt::write_held(&paths, &passed, ""),
         None => Ok(()),
     }
+}
+
+/// The RimZ-owned worktree `-w <name>` names, created from the configured base when missing,
+/// as an agent launch's `-w` creates it: in the room's repository, or after the caller confirms
+/// the current one, and stamped with the loop fire the run starts under. `None` when the caller
+/// declined another repository or a checkout RimZ does not own.
+fn named_checkout(
+    ctx: &super::ctx::Ctx,
+    name: &str,
+    fire: Option<&rimz::ids::FireId>,
+) -> Result<Option<PathBuf>> {
+    if name.trim().is_empty() {
+        bail!("-w takes a worktree name");
+    }
+    let mut interaction = super::launch_interaction::CliInteraction;
+    if !rimz::launcher::checkout::confirm_cross_repo_worktree(&ctx.workspace, &mut interaction)? {
+        return Ok(None);
+    }
+    let machine = super::machine_config();
+    let projection = ctx.store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    rimz::harness::lanes::admit_launch_worktree_name(
+        &ctx.workspace,
+        &machine.agents.worktree,
+        &projection.agents,
+        Some(name),
+    )?;
+    let Some(checkout) = rimz::launcher::checkout::resolve_launch_checkout(
+        &ctx.workspace,
+        &machine,
+        Some(name),
+        None,
+        None,
+        rimz::worktree::LaunchBase::Configured,
+        &mut interaction,
+    )?
+    else {
+        return Ok(None);
+    };
+    if let (Some(fire), Some(_)) = (fire, &checkout.created)
+        && let Err(error) = rimz::worktree::stamp_loop_fire(&checkout.cwd, fire)
+    {
+        tracing::warn!(
+            %fire,
+            %error,
+            path = %checkout.cwd.display(),
+            "the run's tree carries no fire stamp"
+        );
+    }
+    Ok(Some(checkout.cwd))
 }
 
 fn calling_run(globals: &super::GlobalFlags) -> Result<resolve::Selection> {
@@ -805,7 +858,7 @@ impl WorkflowArgs {
 pub(super) fn check_loop_launch(
     args: &WorkflowArgs,
     place: &super::loop_launch::LoopLaunchPlace<'_>,
-) -> Result<()> {
+) -> Result<super::loop_launch::LoopLaunch> {
     let Command::Run {
         name,
         worktree,
@@ -827,23 +880,27 @@ pub(super) fn check_loop_launch(
     if worktree.is_some() && place.each_worktree {
         bail!("-w in the tail places the run, and --each-worktree places each fire");
     }
+    let described = super::loop_launch::LoopLaunch {
+        worktree: worktree.clone(),
+        ..Default::default()
+    };
     let dir = workflow_view::deployed_definition(name, Some(place.project_root))?;
     if workflow::load(&dir)?.scope() != workflow::ScopeKind::Project {
-        return Ok(());
+        return Ok(described);
     }
-    if place.each_worktree {
-        bail!(
-            "{} has scope = project, so it runs at the project root; remove --each-worktree",
-            name.display()
-        );
-    }
-    if worktree.is_some() {
-        bail!(
-            "{} has scope = project, so it runs at the project root; remove -w from the tail",
-            name.display()
-        );
-    }
-    Ok(())
+    let remove = if place.each_worktree {
+        "--each-worktree"
+    } else if place.worktree.is_some() {
+        "-w"
+    } else if worktree.is_some() {
+        "-w from the tail"
+    } else {
+        return Ok(described);
+    };
+    bail!(
+        "{} has scope = project, so it runs at the project root; remove {remove}",
+        name.display()
+    )
 }
 
 fn validation_root(globals: &super::GlobalFlags) -> Option<PathBuf> {

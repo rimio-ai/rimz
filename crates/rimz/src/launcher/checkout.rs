@@ -5,26 +5,6 @@ use crate::agents::AgentState;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-pub fn admit_launch_worktree_name(
-    workspace: &crate::ResolvedWorkspace,
-    config: &crate::config::WorktreeConfig,
-    agents: &[crate::agents::AgentState],
-    worktree: Option<&str>,
-) -> Result<()> {
-    let Some(name) = worktree.map(str::trim).filter(|name| !name.is_empty()) else {
-        return Ok(());
-    };
-    let requested = crate::worktree::parse_requested_name(name)?;
-    let dir =
-        crate::worktree::worktree_path(workspace.launch_repo_root(), config, &requested.name)?;
-    if dir.exists() {
-        return Ok(());
-    }
-    crate::worktree::admit_fresh_name(&requested.name)?;
-    crate::harness::lanes::admit_worktree_name(agents, &requested.name, &dir)?;
-    Ok(())
-}
-
 pub fn resolve_launch_checkout(
     workspace: &crate::ResolvedWorkspace,
     config: &crate::config::MachineConfig,

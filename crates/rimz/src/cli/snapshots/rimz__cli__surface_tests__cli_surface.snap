@@ -1854,6 +1854,7 @@ rimz loop add
     --until <DUR>  [action=set takes=1..=1]
     --when <EXPR>  [action=append takes=1..=1]
     --workflow <NAME>  [action=set takes=1..=1]
+    -w, --worktree <NAME>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz loop check-exec [hidden]

@@ -2016,3 +2016,52 @@ fn a_fire_opens_its_mark_on_its_cached_task_id() {
             .contains_key(&fire.launch_checkout())
     );
 }
+
+/// A workflow task placed with `-w` is held by a hand-started run of its workflow in that
+/// worktree, not by one at the project root.
+#[test]
+fn a_placed_workflow_task_sees_a_hand_started_run_in_its_worktree() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    record_room(&root).unwrap();
+    let state = StatePaths::for_project_root(&root).unwrap();
+    let catalog = TaskCatalog::load(Some(&root)).unwrap();
+    let fire = launch_fire(
+        &root,
+        &catalog,
+        TaskEntry {
+            kind: Some(LaunchKind::Workflow),
+            target: Some("smoke".to_owned()),
+            worktree: Some("deps".to_owned()),
+            ..TaskEntry::default()
+        },
+        LoopRunMode::Scheduled,
+    );
+    let tree =
+        crate::worktree::worktree_path(&root, &MachineConfig::default().agents.worktree, "deps")
+            .unwrap();
+    let start = |scope: &Path| {
+        let run: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
+            "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(),
+            "workflow":"smoke", "project_root":root,
+            "scope":{"kind":"worktree","path":scope},
+            "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"check",
+            "entered_at":"2026-01-01T00:00:00Z", "deadline_fired":false,
+            "next_seq":1, "visits":{}, "visit_grant":0
+        }))
+        .unwrap();
+        let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        crate::store::workflow::initialize(&state, &run, &guard).unwrap();
+        run.id
+    };
+    start(&root);
+    assert!(fire.hand_started_run(&state, "smoke").unwrap().is_none());
+    std::fs::create_dir_all(&tree).unwrap();
+    let held = start(&tree.canonicalize().unwrap());
+    assert_eq!(
+        fire.hand_started_run(&state, "smoke")
+            .unwrap()
+            .map(|run| run.id),
+        Some(held)
+    );
+}
