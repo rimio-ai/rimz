@@ -9,7 +9,7 @@ use rimz::harness::schedule::arm::{
     ArmOutcome, DeliveryName, DeliveryPrompt, DeliveryProvenance, DeliverySpec, DeliveryTrigger,
     SubscriptionLifetime, arm_delivery, duration_label,
 };
-use rimz::harness::schedule::runner::{
+use rimz::harness::schedule::window::{
     AfterReset, WindowRefusal, after_reset, window_condition_provider,
 };
 use rimz::harness::schedule::{self, ScheduleErr, Trigger};

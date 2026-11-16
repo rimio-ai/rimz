@@ -52,6 +52,7 @@ mod task_record_store;
 pub mod team;
 #[cfg(test)]
 mod test_homes;
+pub mod window;
 
 pub use fire::last_stamps;
 
