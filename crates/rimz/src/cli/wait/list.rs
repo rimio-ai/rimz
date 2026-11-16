@@ -5,9 +5,9 @@ use rimz::agents::AgentState;
 use rimz::harness::schedule::arming::{self, ArmState};
 use rimz::harness::schedule::catalog::TaskCatalog;
 use rimz::harness::schedule::pending::session_deliveries;
-use rimz::harness::schedule::runner::parse_task_timeout;
 use rimz::harness::schedule::signal::watcher_info;
 use rimz::harness::schedule::{TaskKind, Trigger};
+use rimz::utils::time::parse_compact_duration;
 
 use super::*;
 use crate::cli::{render as ui, wake_view};
@@ -56,7 +56,7 @@ pub(super) fn pending_rows(
                 Trigger::Signal { .. } | Trigger::Condition { .. } => None,
             };
             if let Some(duration) = duration {
-                parse_task_timeout(duration).map_err(anyhow::Error::msg)?;
+                parse_compact_duration(duration).map_err(anyhow::Error::msg)?;
             }
             let state = ArmState::resolve(arming.get(&task.key(name)), task.source(), now);
             let pid = if entry.watch.is_some() {
