@@ -157,6 +157,33 @@ fn submit_refuses_what_the_run_cannot_take_and_leaves_the_record_unchanged() {
     assert_eq!(fs::read(&file).unwrap(), before);
 }
 
+/// An answer one second past the judge's timeout is refused, so the check fails `timeout`
+/// rather than settling by an answer the engine would read first.
+#[test]
+fn submit_refuses_an_answer_past_the_judges_timeout_and_the_check_fails_timeout() {
+    let (_dir, state, record) = setup(JUDGE);
+    let host = FakeHost::new();
+    let mut live = launched(&state, &record, &host);
+    let attempt = live.attempt.as_mut().unwrap();
+    attempt.started_at -= jiff::SignedDuration::from_secs(3_601);
+    let seq = attempt.seq;
+    update(&state, &live);
+    let file = state.workflow(&record.id).record;
+    let before = fs::read(&file).unwrap();
+    let error = submit(&state, &record.id, seq, answer("pass", json!({})), None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("has passed the timeout of the judge check review"),
+        "{error}"
+    );
+    assert_eq!(fs::read(&file).unwrap(), before);
+    let ended = advanced(&state, &record, &host);
+    assert_eq!(ended.state, RunState::Failed, "{ended:#?}");
+    let input = failure_input(&state, &record, "timeout").expect("a timeout failure");
+    assert_eq!(input["reason"], json!("review ran past its timeout 1h"));
+}
+
 #[test]
 fn submit_flags_resolve_recheck_at_now_over_the_object_and_keep_the_current_key() {
     let (_dir, state, mut record) = setup(&JUDGE.replace("fail='fix'", "fail='fix',later='@wait'"));

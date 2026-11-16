@@ -399,6 +399,7 @@ Each evaluation launches a fresh agent in a pane of the run's checkout, with the
 - The judge's own turn ending on a provider error that waiting will not clear (its card shows a provider error, an unknown error, or a lapsed plan) fails it at once with `errored`. A timeout that passes at the same look wins over the error.
 - A budget that refuses the judge's launch fails it with `limited`. Any other launch failure fails it with `died` at once.
 - The judge's timeout starts at its launch, so a wait for its `admission.window` spends none of it. The deadline wins a tie with an answer.
+- A `submit` at or after the judge's timeout is refused, so a late answer never settles the check: it fails with `timeout`.
 - An [unsupported agent version](../agent-support.md) refuses the launch, which fails with `died`. `workflow show` includes the upgrade instruction.
 
 ### Conditions
@@ -595,6 +596,7 @@ A script keeps stdout as its JSON answer and writes complete stderr, including a
 | The caller is a step's agent | `caller is a workflow step's agent, not a judge; a step ends by finishing its turn` |
 | The run ended, or moved past this judge's evaluation | `workflow run <id> is not active` or `workflow run <id> is no longer waiting on this judge` |
 | The judge already answered | `workflow run <id> already has this judge's answer` |
+| The judge's timeout has passed; the check fails with `timeout` at the next advance | `workflow run <id> has passed the timeout of the judge check <node>` |
 | The outcome is reserved, not routed by the check's `on`, or a field has the wrong type | The [check answer](#the-check-answer) rule it breaks, then `; OUTCOME is one of` and the outcomes the check routes. |
 | `--json` is not one object, or `--recheck-at` is not a workflow time | The flag's parse error, a usage error with exit 2. |
 
