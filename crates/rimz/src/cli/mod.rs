@@ -884,7 +884,7 @@ fn parse_mux(value: &str) -> std::result::Result<MuxName, String> {
 fn parse_task_label(value: &str) -> std::result::Result<String, &'static str> {
     let label = value.trim();
     if value.contains(['\n', '\r']) || !(1..=60).contains(&label.chars().count()) {
-        return Err("label must be one line of 1–60 characters");
+        return Err("label must be one line of 1 to 60 characters");
     }
     Ok(label.to_owned())
 }

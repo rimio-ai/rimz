@@ -855,7 +855,7 @@ fn wait_and_loop_labels_refuse_invalid_text_before_writing() {
             let error = String::from_utf8_lossy(&output.stderr);
             assert!(!output.status.success(), "invalid label accepted");
             assert!(
-                error.contains("label must be one line of 1–60 characters"),
+                error.contains("label must be one line of 1 to 60 characters"),
                 "{error}"
             );
             assert!(!loop_instances_path(&env).exists());
