@@ -82,7 +82,7 @@ pub(super) fn prepare(
 ) -> Result<Option<Decision>> {
     // prepare dispatches here only while the session is held, with its run pinned.
     let held = t.record.held.as_ref().expect("held preflight");
-    let mut observed = host.observe(
+    let observed = host.observe(
         held.attempt.run.as_ref().expect("held session has a run"),
         Observation::LeaderTurn,
     )?;
@@ -109,7 +109,6 @@ pub(super) fn prepare(
             .map(|outcome| (outcome, EndCause::Lifecycle, outcome_reason(outcome)))
     };
     if let Some((outcome, cause, reason)) = ending {
-        agent::fold_limited(&mut observed, outcome);
         interrupt(t, reason);
         seen.clear();
         t.stage_agent_end(
@@ -355,7 +354,6 @@ fn outcome_reason(outcome: AttemptOutcome) -> &'static str {
         AttemptOutcome::Ended => "ended",
         AttemptOutcome::Died => "died",
         AttemptOutcome::Canceled => "canceled",
-        AttemptOutcome::Limited => "limited",
         AttemptOutcome::Timeout => "timeout",
         AttemptOutcome::Asked => "asked",
         AttemptOutcome::Errored => "errored",

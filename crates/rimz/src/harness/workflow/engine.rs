@@ -546,21 +546,18 @@ pub(super) fn outcome(
         .peek()
         .is_some()
         .then(|| costs.fold(0.0, |sum, cost| sum + cost));
-    let reason = matches!(
-        ending,
-        workflow::RunEnding::Failed | workflow::RunEnding::Budget { .. }
-    )
-    .then(|| {
-        journal.iter().rev().find_map(|entry| match &entry.event {
-            JournalEvent::Attempt { reason, .. } => reason.clone(),
-            JournalEvent::Route { input, .. } => input["reason"].as_str().map(str::to_owned),
-            JournalEvent::Evaluation {
-                outcome, object, ..
-            } if outcome == "fault" => object["reason"].as_str().map(str::to_owned),
-            _ => None,
+    let reason = matches!(ending, workflow::RunEnding::Failed)
+        .then(|| {
+            journal.iter().rev().find_map(|entry| match &entry.event {
+                JournalEvent::Attempt { reason, .. } => reason.clone(),
+                JournalEvent::Route { input, .. } => input["reason"].as_str().map(str::to_owned),
+                JournalEvent::Evaluation {
+                    outcome, object, ..
+                } if outcome == "fault" => object["reason"].as_str().map(str::to_owned),
+                _ => None,
+            })
         })
-    })
-    .flatten();
+        .flatten();
     workflow::RunOutcome {
         ending,
         cost_usd,
@@ -570,11 +567,10 @@ pub(super) fn outcome(
     }
 }
 
-/// Why a failed run failed: its last route was an agent step's expired capacity wait, the
-/// failure that ended it is an attempt that ended at its budget or a judge's `limited`
-/// failure, or neither. A start that can never fit (`never_fits`) is a configuration refusal,
-/// so it fails like any other failure. A newer route of another cause, a newer attempt, or an
-/// engine fault (a misfit's) ends the run for its own reason, so the scan stops there.
+/// Why a failed run failed: its last route was an agent step's expired capacity wait, or not.
+/// A start that can never fit (`never_fits`) is a configuration refusal, so it fails like any
+/// other failure. A newer route of another cause, a newer attempt, or an engine fault (a
+/// misfit's) ends the run for its own reason, so the scan stops there.
 fn failure(journal: &[JournalEntry]) -> workflow::RunEnding {
     let capacity = journal.iter().rev().find_map(|entry| match &entry.event {
         JournalEvent::Route { outcome, input } => Some((outcome == "capacity").then_some(input)),
@@ -594,20 +590,7 @@ fn failure(journal: &[JournalEntry]) -> workflow::RunEnding {
             reason: input["reason"].as_str().map(str::to_owned),
         };
     }
-    let budget = journal.iter().rev().find_map(|entry| match &entry.event {
-        JournalEvent::Route { outcome, .. } => (outcome != "limited").then_some(None),
-        JournalEvent::Attempt {
-            outcome, handle, ..
-        } => Some((*outcome == AttemptOutcome::Limited).then_some(handle.is_some())),
-        JournalEvent::Evaluation { object, .. } => {
-            Some((object["outcome"] == "failed" && object["cause"] == "limited").then_some(false))
-        }
-        _ => None,
-    });
-    match budget {
-        Some(Some(turned)) => workflow::RunEnding::Budget { turned },
-        _ => workflow::RunEnding::Failed,
-    }
+    workflow::RunEnding::Failed
 }
 
 /// Whether the run entered an agent or message step, read against its definition; a

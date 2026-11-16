@@ -2,7 +2,7 @@ use super::super::{AttemptHost, LaunchFailure, NotLaunched, Observation, Observe
 use super::*;
 use crate::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
 use crate::store::run::RunStatus;
-use crate::store::workflow::{Children, EndCause, Ending, Limited};
+use crate::store::workflow::{Children, EndCause, Ending};
 
 pub(super) fn identity() -> Host {
     Host {
@@ -154,7 +154,6 @@ pub(super) fn observed_outcome(
             Some(AttemptOutcome::Died)
         }
         RunStatus::Canceled => Some(AttemptOutcome::Canceled),
-        RunStatus::BudgetExceeded => Some(AttemptOutcome::Limited),
         RunStatus::Pending | RunStatus::Running if on_asked && observed.ask.is_some() => {
             Some(AttemptOutcome::Asked)
         }
@@ -162,14 +161,6 @@ pub(super) fn observed_outcome(
             Some(AttemptOutcome::Errored)
         }
         _ => None,
-    }
-}
-
-pub(super) fn fold_limited(observed: &mut Observed, outcome: AttemptOutcome) {
-    if outcome == AttemptOutcome::Limited
-        && (observed.limited.is_none() || observed.status == RunStatus::BudgetExceeded)
-    {
-        observed.limited = Some(Limited { reset_at: None });
     }
 }
 
@@ -260,7 +251,7 @@ pub(super) fn prepare_end(
         .spec
         .step(&attempt.node)
         .is_some_and(|step| !step.rest_check().is_empty());
-    let mut observed = match &attempt.run {
+    let observed = match &attempt.run {
         Some(run) => host.observe(
             run,
             if rest_checked || judge {
@@ -345,7 +336,6 @@ pub(super) fn prepare_end(
         }
         return Ok(Decision::Stop);
     };
-    fold_limited(&mut observed, ending.outcome);
     let launching = missing_run && host_live;
     t.stage_agent_end(ending, &observed);
     if launching {
@@ -522,10 +512,7 @@ pub(super) fn launch(
             None
         }
         Err(failure) => {
-            let mut observed = empty_observation();
-            if failure.outcome == AttemptOutcome::Limited {
-                observed.limited = Some(Limited { reset_at: None });
-            }
+            let observed = empty_observation();
             if t.record
                 .attempt
                 .as_ref()
@@ -850,7 +837,7 @@ fn declines(spec: &Definition, node: &str, outcome: &str) -> bool {
 mod tests {
     use super::*;
     use crate::harness::workflow::Stopped;
-    use crate::store::workflow::{Asked, Asking};
+    use crate::store::workflow::{Asked, Asking, Limited};
 
     #[test]
     fn observed_outcome_covers_status_ask_error_limit_and_routed_edges_on_either_lifecycle() {
@@ -862,7 +849,6 @@ mod tests {
             (RunStatus::VerifyFailed, Some(AttemptOutcome::Died)),
             (RunStatus::TimedOut, Some(AttemptOutcome::Died)),
             (RunStatus::Canceled, Some(AttemptOutcome::Canceled)),
-            (RunStatus::BudgetExceeded, Some(AttemptOutcome::Limited)),
         ];
         let errored = Stopped {
             since: Timestamp::now(),

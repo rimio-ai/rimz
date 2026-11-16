@@ -57,7 +57,7 @@ fn failure_edges_name_the_chain_level_that_routes_them_in_every_kind() {
         (
             "judge",
             "agent='claude'\nprompt-file='judge.md'\non.ok='@done'\ntimeout='1m'",
-            "limited",
+            "invalid",
         ),
         (
             "condition",
@@ -287,8 +287,7 @@ fn edge_order_follows_cases_then_else_then_explicit_then_engine_triggers() {
     assert_eq!(
         outcomes("work"),
         [
-            "then", "asked", "errored", "died", "timeout", "limited", "visits", "capacity",
-            "deadline"
+            "then", "asked", "errored", "died", "timeout", "visits", "capacity", "deadline"
         ]
     );
     let spec = self::spec(

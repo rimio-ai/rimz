@@ -208,9 +208,7 @@ fn command_exit(ending: &str, outcome: &str, code: Value) {
     assert_eq!(attempt["head_start"], head);
     assert_ne!(head_end, head);
     assert_eq!(attempt["head_end"], head_end);
-    for field in [
-        "handle", "run_id", "children", "limited", "asked", "cost_usd",
-    ] {
+    for field in ["handle", "run_id", "children", "asked", "cost_usd"] {
         assert!(attempt[field].is_null(), "{field}: {attempt}");
     }
     let previous = &value["record"]["prev_attempt"];

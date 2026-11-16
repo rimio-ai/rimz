@@ -12569,7 +12569,7 @@ reason = "Workflow attempts share durable process, run, stop, ask, limit, and li
 [[verdict]]
 kind = "item"
 key = "store::workflow::Limited"
-reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
+reason = "Workflow observations share the provider reset a limited agent reports with the engine's judge timeout detail."
 
 [[verdict]]
 kind = "item"

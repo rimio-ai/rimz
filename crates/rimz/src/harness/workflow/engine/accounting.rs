@@ -70,7 +70,7 @@ pub(super) fn transition(t: &Transition<'_>, latched: bool) {
                     );
                     continue;
                 }
-                if outcome == "limited" || t.record.state == RunState::Canceled {
+                if t.record.state == RunState::Canceled {
                     continue;
                 }
                 if t.record.held.is_some() {
@@ -88,7 +88,6 @@ pub(super) fn transition(t: &Transition<'_>, latched: bool) {
                         AttemptOutcome::Timeout => "timeout",
                         AttemptOutcome::Asked => "asked",
                         AttemptOutcome::Errored => "errored",
-                        AttemptOutcome::Limited => "limited",
                         AttemptOutcome::Canceled => "canceled",
                     }
                     .into(),

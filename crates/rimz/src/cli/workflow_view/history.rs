@@ -504,7 +504,6 @@ impl History<'_> {
                     log,
                     reason,
                     children,
-                    limited,
                     asked,
                     digests,
                     message: notice,
@@ -570,15 +569,6 @@ impl History<'_> {
                     }
                     if let Some(children) = children {
                         children_out(out, children)?;
-                    }
-                    if let Some(limited) = limited {
-                        writeln!(
-                            out,
-                            "    reset_at: {}",
-                            limited
-                                .reset_at
-                                .map_or_else(|| "unknown".into(), |at| self.clock(at))
-                        )?;
                     }
                     if let Some(asked) = asked {
                         self.prose(

@@ -728,7 +728,7 @@ fn durable_record_round_trip_and_json_shape() {
         "head_start":"abc", "head_end":"def", "children":null,
         "code":7, "log":"/work/1.step.log"
     });
-    for field in ["limited", "asked", "cost_usd"] {
+    for field in ["asked", "cost_usd"] {
         value["prev_attempt"][field] = Value::Null;
     }
     let record: RunRecord = serde_json::from_value(value.clone()).unwrap();

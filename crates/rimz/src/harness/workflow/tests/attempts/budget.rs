@@ -74,7 +74,8 @@ fn a_launch_the_launcher_refuses_waits_each_time_with_its_visit_refunded() {
             waiting.attempt.is_none()
                 && waiting.prev_attempt.is_none()
                 && waiting.visits.is_empty()
-                && waiting.key_visits.is_empty(),
+                && waiting.key_visits.is_empty()
+                && !waiting.launch_retry,
             "{waiting:#?}"
         );
     }

@@ -890,8 +890,6 @@ pub(in crate::harness) fn report_row(
         RunEnding::Failed => LoopRunResult::Failed,
         RunEnding::Canceled => LoopRunResult::Canceled,
         RunEnding::CapacityGaveUp { .. } => LoopRunResult::ThrottleSkipped,
-        RunEnding::Budget { turned: true } => LoopRunResult::BudgetExceeded,
-        RunEnding::Budget { turned: false } => LoopRunResult::BudgetSkipped,
     };
     let ended = facts.terminal_at.unwrap_or_else(Timestamp::now);
     let mode = if facts.manual {
@@ -917,7 +915,7 @@ pub(in crate::harness) fn report_row(
     record.acted = Some(outcome.acted);
     // A failed run names why its last attempt ended, as a fire's own refusal would.
     record.error = match &outcome.ending {
-        RunEnding::Failed | RunEnding::Budget { .. } => outcome.reason.clone(),
+        RunEnding::Failed => outcome.reason.clone(),
         RunEnding::CapacityGaveUp { waited_ms, reason } => Some(format!(
             "gave up waiting for capacity after {}; {}",
             crate::utils::time::format_duration_compact(std::time::Duration::from_millis(

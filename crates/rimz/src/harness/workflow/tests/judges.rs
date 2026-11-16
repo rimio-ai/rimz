@@ -667,28 +667,7 @@ fn every_settler_settles_a_judges_errored_and_stopped_timeout_endings_alike() {
 
 #[test]
 fn a_judges_launch_failures_and_exit_without_an_answer_fail_its_check() {
-    // A budget-refused launch is limited; a failed launch died at once; a session that exits
-    // without an answer died.
-    let limited = {
-        let (_dir, state, record) = setup(JUDGE);
-        let host = FakeHost::new();
-        *host.failure.borrow_mut() = Some(LaunchFailure {
-            outcome: AttemptOutcome::Limited,
-            reason: "codex is over its daily budget".into(),
-        });
-        (
-            advanced(&state, &record, &host).state,
-            evaluations(&state, &record),
-        )
-    };
-    assert_eq!(limited.0, RunState::Failed);
-    assert!(
-        limited
-            .1
-            .contains(&(EvaluationOrigin::Engine, "limited".into())),
-        "{limited:?}"
-    );
-
+    // A failed launch died at once; a session that exits without an answer died.
     let (_dir, state, record) = setup(JUDGE);
     let host = FakeHost::new();
     *host.failure.borrow_mut() = Some(LaunchFailure {

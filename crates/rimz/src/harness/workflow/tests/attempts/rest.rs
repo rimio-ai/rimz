@@ -527,7 +527,6 @@ fn provider_endings_and_deadlines_interrupt_the_held_check() {
         (RunStatus::Completed, false, AttemptOutcome::Ended),
         (RunStatus::Failed, false, AttemptOutcome::Died),
         (RunStatus::Canceled, false, AttemptOutcome::Canceled),
-        (RunStatus::BudgetExceeded, false, AttemptOutcome::Limited),
         (RunStatus::Running, true, AttemptOutcome::Canceled),
     ] {
         let (dir, state, record) = setup(SESSION);
@@ -588,13 +587,6 @@ fn provider_endings_and_deadlines_interrupt_the_held_check() {
                 RunStatus::Canceled,
                 false,
                 Some(AttemptOutcome::Canceled),
-                vec![json!("interrupted")],
-                1
-            ),
-            (
-                RunStatus::BudgetExceeded,
-                false,
-                Some(AttemptOutcome::Limited),
                 vec![json!("interrupted")],
                 1
             ),

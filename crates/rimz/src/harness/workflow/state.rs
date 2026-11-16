@@ -609,9 +609,6 @@ impl Transition<'_> {
         }
         let mut previous = self.previous_attempt(outcome);
         previous.children = Some(observed.children.clone());
-        previous.limited = (outcome == AttemptOutcome::Limited)
-            .then(|| observed.limited.clone())
-            .flatten();
         previous.asked = (outcome == AttemptOutcome::Asked)
             .then(|| observed.ask.as_ref().map(|asking| asking.ask.clone()))
             .flatten();
@@ -645,7 +642,6 @@ impl Transition<'_> {
             code: None,
             log: None,
             children: None,
-            limited: None,
             asked: None,
             errored: None,
             cost_usd: None,
@@ -704,9 +700,6 @@ impl Transition<'_> {
         if ending.outcome != AttemptOutcome::Errored {
             previous.errored = None;
         }
-        if ending.outcome != AttemptOutcome::Limited {
-            previous.limited = None;
-        }
         self.settle_step(attempt, ending, reason)
     }
 
@@ -744,7 +737,6 @@ impl Transition<'_> {
                     log: previous.log,
                     cost_usd: previous.cost_usd,
                     children: previous.children,
-                    limited: previous.limited,
                     asked: previous.asked.clone(),
                     errored: previous.errored.clone(),
                     reason: reason.clone(),
@@ -835,16 +827,8 @@ impl Transition<'_> {
         if let Some(log) = &evidence.log {
             detail["log"] = json!(log);
         }
-        if let Some(reset_at) = evidence
-            .limited
-            .as_ref()
-            .and_then(|limited| limited.reset_at)
-        {
-            detail["reset_at"] = json!(reset_at);
-        }
         let reason = reason.unwrap_or_else(|| match cause {
             Cause::Timeout => "the step's timeout passed".into(),
-            Cause::Limited => "a provider limit or budget stopped the attempt".into(),
             Cause::Undelivered => "the message was not delivered".into(),
             _ => format!("the attempt ended {}", ending.outcome.as_str()),
         });
@@ -919,13 +903,11 @@ impl Transition<'_> {
             // No judge stages an ask; an older RimZ's staged ask ends the run as a misfit before
             // it settles here, since validation refuses a judge's `on.asked`.
             let cause = match ending.outcome {
-                AttemptOutcome::Limited => Cause::Limited,
                 AttemptOutcome::Errored => Cause::Errored,
                 _ => Cause::Died,
             };
             let (staged, detail) = failure_evidence(evidence);
             let reason = reason.or(staged).unwrap_or_else(|| match cause {
-                Cause::Limited => "a provider limit or budget stopped the judge".into(),
                 Cause::Errored => "the judge's turn ended on a provider error".into(),
                 _ => "the judge's session ended without an answer".into(),
             });
@@ -1227,8 +1209,7 @@ impl Transition<'_> {
 }
 
 /// What a judge's staged ending hands its settlement: for an errored turn the provider's text
-/// and the turn, for a timeout what the judge was stopped on when it passed, and the reset a
-/// limit named.
+/// and the turn, and for a timeout what the judge was stopped on when it passed.
 fn judge_evidence(outcome: AttemptOutcome, observed: &super::Observed) -> Option<Value> {
     match outcome {
         AttemptOutcome::Errored => observed
@@ -1237,11 +1218,6 @@ fn judge_evidence(outcome: AttemptOutcome, observed: &super::Observed) -> Option
             .and_then(super::Stopped::errored)
             .map(|errored| json!({"reason":errored.text, "errored":errored})),
         AttemptOutcome::Timeout => stopped_evidence(observed),
-        AttemptOutcome::Limited => observed
-            .limited
-            .as_ref()
-            .and_then(|limited| limited.reset_at)
-            .map(|reset_at| json!({"reset_at":reset_at})),
         _ => None,
     }
 }

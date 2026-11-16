@@ -90,7 +90,6 @@ struct AgentEdges {
     failed: Option<String>,
     died: Option<String>,
     timeout: Option<String>,
-    limited: Option<String>,
     visits: Option<String>,
     capacity: Option<String>,
     deadline: Option<String>,
@@ -444,7 +443,6 @@ impl WorkflowFile {
                         causes: routes([
                             ("died", node.on.died),
                             ("timeout", node.on.timeout),
-                            ("limited", node.on.limited),
                             ("visits", node.on.visits),
                             ("capacity", node.on.capacity),
                             ("deadline", node.on.deadline),

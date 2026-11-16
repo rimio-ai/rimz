@@ -87,7 +87,6 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
             AttemptOutcome::Died => "died",
             AttemptOutcome::Timeout => "timed out",
             AttemptOutcome::Canceled => "was canceled",
-            AttemptOutcome::Limited => "hit a provider limit",
             AttemptOutcome::Asked => "ended on a blocking question",
             AttemptOutcome::Errored => "ended on a provider error",
         };

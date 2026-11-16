@@ -286,7 +286,6 @@ fn attempts_keep_individual_rows_and_their_detail_lines() {
             log: Some(PathBuf::from(format!("work/{seq}.step.log"))),
             cost_usd: Some(0.25),
             children: None,
-            limited: None,
             asked: None,
             errored: None,
             reason: None,
@@ -477,9 +476,9 @@ fn early_advances_do_not_add_a_waiting_line_count() {
 }
 
 /// Journals `harness::workflow::tests::message` runs wrote for `TELL`, delivered and undelivered.
-const DELIVERED: &str = r#"{"seq":1,"at":"2026-11-08T22:46:30.825083175Z","node":"tell","event":"attempt","outcome":"ended","visit":1,"key":null,"routed_by":null,"digests":{"prompt":"84893a778be73583c7aef377b6ed232cccefb47cb89ea9052a636c9532fbbf7f","prompt.md":"5e383207c65159ba379ca0ca2a83d23f2d145626b4d9527af53b1a5441151549"},"started_at":"2026-11-08T22:46:30.818860072Z","ended_at":"2026-11-08T22:46:30.825083175Z","handle":"@planner","run_id":null,"head_start":null,"head_end":null,"code":null,"log":null,"cost_usd":null,"children":null,"limited":null,"asked":null,"reason":null,"message":"msg_06grqls0k849ljsn"}
+const DELIVERED: &str = r#"{"seq":1,"at":"2026-11-08T22:46:30.825083175Z","node":"tell","event":"attempt","outcome":"ended","visit":1,"key":null,"routed_by":null,"digests":{"prompt":"84893a778be73583c7aef377b6ed232cccefb47cb89ea9052a636c9532fbbf7f","prompt.md":"5e383207c65159ba379ca0ca2a83d23f2d145626b4d9527af53b1a5441151549"},"started_at":"2026-11-08T22:46:30.818860072Z","ended_at":"2026-11-08T22:46:30.825083175Z","handle":"@planner","run_id":null,"head_start":null,"head_end":null,"code":null,"log":null,"cost_usd":null,"children":null,"asked":null,"reason":null,"message":"msg_06grqls0k849ljsn"}
 {"seq":null,"at":"2026-11-08T22:46:30.825083175Z","node":"tell","event":"terminal","state":"done"}"#;
-const UNDELIVERED: &str = r#"{"seq":1,"at":"2026-11-08T22:46:30.841509403Z","node":"tell","event":"attempt","outcome":"died","visit":1,"key":null,"routed_by":null,"digests":{"prompt":"84893a778be73583c7aef377b6ed232cccefb47cb89ea9052a636c9532fbbf7f","prompt.md":"5e383207c65159ba379ca0ca2a83d23f2d145626b4d9527af53b1a5441151549"},"started_at":"2026-11-08T22:46:30.83551457Z","ended_at":"2026-11-08T22:46:30.841509403Z","handle":null,"run_id":null,"head_start":null,"head_end":null,"code":null,"log":null,"cost_usd":null,"children":null,"limited":null,"asked":null,"reason":"no agent matches target `@planner`; run `rimz agents list` to see live agents","message":"msg_06grqls0mf1fmajg"}
+const UNDELIVERED: &str = r#"{"seq":1,"at":"2026-11-08T22:46:30.841509403Z","node":"tell","event":"attempt","outcome":"died","visit":1,"key":null,"routed_by":null,"digests":{"prompt":"84893a778be73583c7aef377b6ed232cccefb47cb89ea9052a636c9532fbbf7f","prompt.md":"5e383207c65159ba379ca0ca2a83d23f2d145626b4d9527af53b1a5441151549"},"started_at":"2026-11-08T22:46:30.83551457Z","ended_at":"2026-11-08T22:46:30.841509403Z","handle":null,"run_id":null,"head_start":null,"head_end":null,"code":null,"log":null,"cost_usd":null,"children":null,"asked":null,"reason":"no agent matches target `@planner`; run `rimz agents list` to see live agents","message":"msg_06grqls0mf1fmajg"}
 {"seq":null,"at":"2026-11-08T22:46:30.841509403Z","node":"tell","event":"route","outcome":"undelivered","input":{"outcome":"undelivered","reason":"no agent matches target `@planner`; run `rimz agents list` to see live agents"}}
 {"seq":null,"at":"2026-11-08T22:46:30.841509403Z","node":"tell","event":"terminal","state":"failed"}"#;
 
