@@ -737,7 +737,7 @@ The compact view of an unfinished run prints, in order:
 2. The activity glyph and the state headline. Only the state phrase takes the state tone. Agent context uses body tone, and the bound forecast is muted.
 3. On an active run, one saved readings line from the current check's latest evaluation since entry: `key=value` pairs separated by two spaces, null as `key=unread`, then ` · read <clock>`.
 4. The `now` line, for a condition check or a sleep with `when` ([below](#the-now-line)).
-5. The origin line: when and how the run started (by hand or by loop task), the number of completed attempts, and their known total cost, including judge evaluations. It omits cost when none is recorded, and never estimates a live attempt's spend.
+5. The origin line: when and how the run started (by hand or by loop task), the number of attempts started (`1 attempt` while the first one runs, `0 attempts` for a run that has started none), and the known total cost of the ended ones, including judge evaluations. It omits cost when none is recorded, and never estimates a live attempt's spend.
 6. The block below the origin: the full ask text when asking, `takeover:` lines naming the agents that hold the checkout (`blockers unavailable` when the roster or the project's worktrees cannot be read), and for a parked run why and the `you can` commands (resume, grant more bounds, choose another node, or cancel).
 7. The definition rail ([below](#the-definition-rail)) on an active run, or the horizontal rail after `you can` on a parked run.
 8. `visits  <step> <used> of <max>` for each visited capped step, the run's grant included, counted since its last manual restart. Uncapped steps print no row.
@@ -796,7 +796,7 @@ To fit a terminal, the rail drops nodes from the left as `… `, then from the r
 | --- | --- |
 | Check answer | `<node> said <outcome>`, then `→ <target>` only when it routed, with readings, reasons, shell logs, judge cost, and invalid stderr tails. A route that repeats the preceding answer takes no row. |
 | Abandoned check | `<node> said nothing · <outcome>`. |
-| Attempt | Visits, handle (pet names kept) or command exit, duration, cost, short HEAD before and after, logs, reasons, stopped and live children, provider reset, questions, and prompt and script digests (first 12 hex characters). A command step adds `    exit <code\|—> HEAD <start8\|—> → <end8\|—>`, then `    log: <path>` when present. Any attempt with a reason adds `    reason: <text>`. A message step's attempt names the agent it reached, or `—` and why no agent took it. |
+| Attempt | Visits, the agent (its card handle while it is still in the room, as the headline names it, and its recorded handle once it has left) or command exit, duration, cost, short HEAD before and after, logs, reasons, stopped and live children, provider reset, questions, and prompt and script digests (first 12 hex characters). A command step adds `    exit <code\|—> HEAD <start8\|—> → <end8\|—>`, then `    log: <path>` when present. Any attempt with a reason adds `    reason: <text>`. A message step's attempt names the agent it reached, or `—` and why no agent took it. |
 | Failure route | `route <cause> → <target> · <fields>` ([failure input](#the-failure-input)). |
 | Other route | Its target and input fields. |
 | Wait | Outcome, count, and span. |
@@ -804,7 +804,9 @@ To fit a terminal, the rail drops nodes from the left as `… `, then from the r
 | Park | `park <reason>`. The text is omitted when the newest printed answer or route row at the same node already printed it as its `reason`. |
 | Restart | `<step> restart · fresh\|continued · visits restarted at 1`. |
 | Cancel | `cancel canceled`, or `cancel canceled · <reason>` when the row has one. |
-| Signal | `signal <name> → <handle>`, naming the leader it went to. |
+| Signal | `signal <name> → <handle>`, naming the leader it went to as an attempt row names its agent. |
+
+The card handles are display only: the history text a run's ending saves into its home and notes keeps the recorded handles.
 
 Resumes, terminal states, and wake signals print their recorded facts. Empty stopped and live child groups are omitted.
 

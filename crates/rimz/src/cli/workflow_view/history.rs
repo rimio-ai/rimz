@@ -172,6 +172,26 @@ pub(in crate::cli) fn wait_row_counts<'a>(
         .map(|row| row.count)
 }
 
+/// The run's step agents still in the room, each as its attempt's seq and its live card
+/// address. Empty for the history text a run's home keeps, which names the handles the journal
+/// recorded.
+#[derive(Default)]
+pub(in crate::cli) struct LiveAgents(Vec<(u64, String)>);
+
+impl LiveAgents {
+    pub(in crate::cli) fn new(agents: Vec<(u64, String)>) -> Self {
+        Self(agents)
+    }
+
+    /// The live card of the attempt `seq`'s agent; `handle` once it has left the room.
+    fn name<'a>(&'a self, seq: Option<u64>, handle: &'a str) -> &'a str {
+        self.0
+            .iter()
+            .find(|(attempt, _)| Some(*attempt) == seq)
+            .map_or(handle, |(_, card)| card.as_str())
+    }
+}
+
 struct History<'a> {
     record: &'a RunRecord,
     /// `None` when the definition cannot be read: rows then leave out what only it names.
@@ -179,6 +199,7 @@ struct History<'a> {
     journal: &'a [JournalEntry],
     now: Timestamp,
     prose: render::prose::Prose,
+    live: &'a LiveAgents,
 }
 
 pub(in crate::cli) fn render(
@@ -187,6 +208,7 @@ pub(in crate::cli) fn render(
     journal: &[JournalEntry],
     now: Timestamp,
     prose: render::prose::Prose,
+    live: &LiveAgents,
     out: &mut impl Write,
 ) -> Result<()> {
     History {
@@ -195,6 +217,7 @@ pub(in crate::cli) fn render(
         journal,
         now,
         prose,
+        live,
     }
     .render(out)
 }
@@ -204,10 +227,19 @@ pub(in crate::cli) fn terminal(
     spec: &Definition,
     journal: &[JournalEntry],
     prose: render::prose::Prose,
+    live: &LiveAgents,
     out: &mut impl Write,
 ) -> Result<()> {
     opening(record, out)?;
-    render(record, spec, journal, terminal_now(record), prose, out)
+    render(
+        record,
+        spec,
+        journal,
+        terminal_now(record),
+        prose,
+        live,
+        out,
+    )
 }
 
 fn terminal_now(record: &RunRecord) -> Timestamp {
@@ -255,7 +287,14 @@ pub(in crate::cli) fn saved(
             let mut out = anstream::AutoStream::new(Vec::new(), anstream::ColorChoice::Never);
             let prose = render::prose::Prose::Raw;
             match &spec {
-                Ok(spec) => terminal(record, spec, &journal, prose, &mut out)?,
+                Ok(spec) => terminal(
+                    record,
+                    spec,
+                    &journal,
+                    prose,
+                    &LiveAgents::default(),
+                    &mut out,
+                )?,
                 Err(error) => {
                     opening(record, &mut out)?;
                     // A run the unreadable definition ended already quotes the error in its
@@ -273,6 +312,7 @@ pub(in crate::cli) fn saved(
                         journal: &journal,
                         now: terminal_now(record),
                         prose,
+                        live: &LiveAgents::default(),
                     }
                     .render(&mut out)?;
                 }
@@ -500,7 +540,9 @@ impl History<'_> {
                         writeln!(
                             out,
                             "    {} HEAD {} → {} cost {}",
-                            handle.as_deref().unwrap_or("—"),
+                            handle
+                                .as_deref()
+                                .map_or("—", |handle| self.live.name(entry.seq, handle)),
                             short(head_start),
                             short(head_end),
                             cost_usd.map_or_else(|| "unknown".into(), rimz::theme::fmt::dollars2)
@@ -667,7 +709,8 @@ impl History<'_> {
                 JournalEvent::Signal { signal, .. } => writeln!(
                     out,
                     "signal {signal} → {}{note}",
-                    self.leader(entry).unwrap_or("—")
+                    self.leader(entry)
+                        .map_or("—", |handle| self.live.name(entry.seq, handle))
                 )?,
             }
         }

@@ -113,6 +113,71 @@ fn kept_turn_leader_and_companion_survive_settlement_without_workflow_pins() {
     }
 }
 
+#[test]
+fn history_names_a_kept_agent_by_its_card_until_it_leaves_the_room() {
+    // Claude, whose SessionEnd hook ends the kept row.
+    let room = Room::with_kind("keep=true\n", "claude");
+    crate::common::trust_claude_project(&room.env, &room.env.project_root);
+    let dir = room.env.rimz_home().join("workflows/review");
+    let path = dir.join("workflow.toml");
+    // The run waits at its next check once the kept step settles, so its history stays live.
+    fs::write(
+        &path,
+        fs::read_to_string(&path).unwrap().replace(
+            "[script.after]\ntimeout='365d'\nrun = 'sh checks/pr.sh'\non.done = '@done'\n",
+            "[script.after]\ntimeout='365d'\nrun = 'sh checks/after.sh'\non = { pending = '@wait', done = '@done' }\n",
+        ),
+    )
+    .unwrap();
+    fs::write(dir.join("checks/after.sh"), PENDING).unwrap();
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    until(&room.env, &id, |value| {
+        value["record"]["node"] == "after" && value["record"]["wait"].is_object()
+    });
+    let snapshot = room.env.store().snapshot_cached().unwrap();
+    let peers = rimz::address::addressable_agents(&snapshot);
+    let kept = peers
+        .iter()
+        .find(|agent| agent.name == run.agent_name)
+        .unwrap();
+    assert!(
+        kept.ended_at.is_none() && kept.workflow.is_none(),
+        "the kept agent stays in the room without its pin: {kept:#?}"
+    );
+    let card = rimz::address::agent_handle(kept, &peers, true);
+    let handle = format!("@{}", run.agent_name.as_deref().unwrap());
+    assert_ne!(
+        card, handle,
+        "the card must read apart from the recorded handle"
+    );
+    let history = || {
+        success(
+            room.command(&["workflow", "show", &id, "--history"])
+                .output()
+                .unwrap(),
+        )
+    };
+    let attempt_row = |text: &str| {
+        text.lines()
+            .find(|line| line.contains("HEAD"))
+            .map(|line| line.trim().to_owned())
+            .unwrap_or_else(|| panic!("no attempt row: {text}"))
+    };
+    let live = history();
+    assert!(
+        attempt_row(&live).starts_with(&format!("{card} HEAD")),
+        "{card}: {live}"
+    );
+    room.hook(&id, &run, json!({"hook_event_name":"SessionEnd"}));
+    let gone = history();
+    assert!(
+        attempt_row(&gone).starts_with(&format!("{handle} HEAD")),
+        "{handle}: {gone}"
+    );
+}
+
 fn register_companion(room: &Room) {
     room.list_pane(62, "claude");
     let store = room.env.store();
