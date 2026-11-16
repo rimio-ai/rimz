@@ -21,7 +21,7 @@ use super::super::refresh::bookings::{BookingFacts, BookingsCache, FireFacts, la
 mod tests;
 
 /// A row's place in the fold: group index, row index.
-type RowAt = (usize, usize);
+pub(super) type RowAt = (usize, usize);
 
 /// Attach every booking of `cache` to the card that owns it, in draw order, and clear
 /// the bookings of every other card. A row is copied only when its list changes.
@@ -70,7 +70,7 @@ pub(super) fn attach(snapshot: &mut SidebarSnapshot, cache: &BookingsCache) {
 }
 
 /// Every agent row of the fold by its kind and session id.
-fn row_index(snapshot: &SidebarSnapshot) -> HashMap<(&str, &str), RowAt> {
+pub(super) fn row_index(snapshot: &SidebarSnapshot) -> HashMap<(&str, &str), RowAt> {
     snapshot
         .worktree_groups
         .iter()
@@ -88,7 +88,7 @@ fn row_index(snapshot: &SidebarSnapshot) -> HashMap<(&str, &str), RowAt> {
         .collect()
 }
 
-fn row_of(snapshot: &SidebarSnapshot, at: RowAt) -> &SidebarRow {
+pub(super) fn row_of(snapshot: &SidebarSnapshot, at: RowAt) -> &SidebarRow {
     &snapshot.worktree_groups[at.0].rows[at.1]
 }
 

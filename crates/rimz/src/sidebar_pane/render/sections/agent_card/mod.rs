@@ -107,6 +107,7 @@ pub(in crate::sidebar_pane::render) fn delegation_motion(
         }) || !agent.background_shells.is_empty()
             || waits::visible_waits(&agent.pending_waits)
                 .any(|wait| waits::is_live_watch(&wait.trigger))
+            || agent.awaited.iter().any(waits::awaited_in_motion)
             || agent.bookings.iter().any(bookings::booking_in_motion))
 }
 
@@ -141,7 +142,8 @@ fn delegation_entries(agent: &AgentCard) -> DelegationEntries<'_> {
 }
 
 fn wait_count(agent: &AgentCard) -> usize {
-    waits::visible_waits(&agent.pending_waits).count()
+    agent.awaited.len()
+        + waits::visible_waits(&agent.pending_waits).count()
         + agent.background_shells.len()
         + usize::from(agent.idle_stop.is_some())
 }
@@ -173,9 +175,15 @@ pub(in crate::sidebar_pane::render) fn delegation_entry_stops(
     };
     let entries = delegation_entries(agent);
     let children = entries.shown.iter().filter_map(|child| child.pane.clone());
+    let awaited = agent
+        .awaited
+        .iter()
+        .filter_map(|awaited| awaited.pane.clone());
     let booked = (entries.bookings.listed.iter())
         .filter_map(|booking| bookings::booking_pane(booking).cloned());
-    children.chain(booked).map(EntryCursor::SubAgent).collect()
+    (children.chain(awaited).chain(booked))
+        .map(EntryCursor::SubAgent)
+        .collect()
 }
 
 pub(super) fn row_lines(
@@ -330,6 +338,7 @@ pub(super) fn row_lines(
                         let text = format!("{} more finished", entries.more_finished);
                         inner.push(count_line(ctx, text));
                     }
+                    inner.extend(waits::awaited_entry_lines(ctx, &agent.awaited, selected));
                     inner.extend(
                         waits::wait_entry_lines(
                             ctx,

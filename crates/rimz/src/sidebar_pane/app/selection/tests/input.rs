@@ -801,6 +801,71 @@ fn booking_entry_whose_launched_card_is_filtered_focuses_the_owning_card() {
     }
 }
 
+/// An awaited agent's entry whose own card a filter hides selects and focuses the card that
+/// waits on it, as a fired booking's entry does.
+#[test]
+fn awaited_entry_whose_agent_card_is_filtered_focuses_the_waiting_card() {
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let parent = pane_of(&snapshot, 0);
+    let awaited = PaneId::from_parts(MuxName::Zellij, "terminal_awaited");
+    let now = snapshot.now;
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    );
+    let row_id = rows[0].id.clone();
+    let open_pin = render::DelegationPin {
+        open: true,
+        turn: rows[0].as_agent().unwrap().user_turn_started_at,
+    };
+    rows[0].as_agent_mut().unwrap().awaited = vec![crate::store::snapshot::SidebarAwaitedAgent {
+        handle: "tidy-iris".to_owned(),
+        status: Some(crate::agents::AgentStatus::Idle),
+        phase: crate::agents::TurnPhase::Idle,
+        compacting: false,
+        pane: Some(awaited.clone()),
+        since: Some(now),
+        settled: Some("completed".to_owned()),
+    }];
+    let mut own_card = rows[0].clone();
+    own_card.id = "awaited-card".into();
+    own_card.pane = Some(pane("terminal_awaited", "tab_0"));
+    let card = own_card.as_agent_mut().unwrap();
+    card.status = crate::agents::AgentStatus::Idle;
+    card.awaited.clear();
+    rows.push(own_card);
+    let mut ui = render::ViewState {
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running)),
+            delegation_overrides: std::collections::BTreeMap::from([(row_id, open_pin)]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut pane_ui = UiState::default();
+    assert!(
+        ui.visible_roster(&snapshot)
+            .ordinal_of_id("awaited-card")
+            .is_none()
+    );
+    let theme = pane_ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
+    let line = composed
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("tidy-iris"))
+        .expect("the entry is drawn");
+    pane_ui.interactions = composed.interactions;
+    remember_roster(&mut ui, &mut pane_ui, &snapshot);
+    assert_eq!(
+        handle_mouse_click(1, line as u16, &mut ui, &mut pane_ui, &snapshot),
+        InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Focus(parent.clone())]
+        }
+    );
+    assert_eq!(ui.selected_pane, Some(parent));
+}
+
 fn pane_of(snapshot: &SidebarSnapshot, row: usize) -> PaneId {
     snapshot.worktree_groups[0].rows[row]
         .pane

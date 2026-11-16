@@ -401,6 +401,57 @@ fn run_waits_keep_launcher_member_and_turn_order() {
     );
 }
 
+/// A peer the launcher awaits has no parent link, yet its wait names its row as a
+/// child's does; a wait recorded before the field parses without one.
+#[test]
+fn a_peer_wait_names_the_awaited_row() {
+    use crate::agents::{AgentState, AgentStatus, PendingWaitTarget, PermissionMode};
+    use crate::store::run::{self, RunRecord};
+    let dir = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::under(
+        crate::ids::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    let now = jiff::Timestamp::from_second(4_000).unwrap();
+    let launcher = AgentState::stub("claude", "launcher", AgentStatus::Idle);
+    let mut peer = AgentState::stub("codex", "peer", AgentStatus::Running);
+    peer.name = Some("tidy-iris".into());
+    peer.launched_by = Some(crate::agents::LaunchedBy {
+        kind: launcher.kind.clone(),
+        agent_id: launcher.agent_id.clone(),
+    });
+    let mut record = RunRecord::new(
+        paths.workspace_id.clone(),
+        peer.kind.clone(),
+        PermissionMode::Auto,
+        "work".into(),
+        dir.path().into(),
+    );
+    record.agent_id = Some(peer.agent_id.clone());
+    run::write(&paths.runs_dir, &record).unwrap();
+    let expected = PendingWaitTarget {
+        kind: peer.kind.clone(),
+        agent_id: peer.agent_id.clone(),
+    };
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), vec![launcher, peer], now);
+    project_run_waits(&mut snapshot, &paths);
+    let [wait] = &snapshot.agents[0].pending_waits[..] else {
+        panic!("one peer wait: {:?}", snapshot.agents[0].pending_waits)
+    };
+    let PendingWaitTrigger::Subagent { target, .. } = &wait.trigger else {
+        panic!("a peer turn is a subagent wait")
+    };
+    assert_eq!(target.as_ref(), Some(&expected));
+    let older: PendingWaitTrigger =
+        serde_json::from_str(r#"{"kind":"subagent","active_at":"2026-11-16T00:00:00Z"}"#).unwrap();
+    assert!(matches!(
+        older,
+        PendingWaitTrigger::Subagent { target: None, .. }
+    ));
+}
+
 #[test]
 fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
     use crate::agents::{AgentState, AgentStatus, PermissionMode};
@@ -470,12 +521,24 @@ fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
         assert_eq!(wait.armed_at, Some(jiff::Timestamp::UNIX_EPOCH));
         let PendingWaitTrigger::Subagent {
             active_at,
+            target,
             deadline_at,
             settled,
         } = &wait.trigger
         else {
             panic!("subagent comes before team")
         };
+        let child = children
+            .iter()
+            .find(|child| wait.name == format!("@{}", child.agent_id))
+            .unwrap();
+        assert_eq!(
+            *target,
+            Some(crate::agents::PendingWaitTarget {
+                kind: child.kind.clone(),
+                agent_id: child.agent_id.clone(),
+            })
+        );
         assert_eq!(*active_at, now);
         assert_eq!(*deadline_at, Some(now));
         assert_eq!(

@@ -767,8 +767,8 @@ fn select_clicked_pane(
                 .position(|row| row.pane_ids().any(|id| id == &pane))
         })
     else {
-        // A fired booking whose launched card no visible row owns takes the owning card,
-        // as an entry without a pane does.
+        // A fired booking's or an awaited agent's entry whose card no visible row owns takes
+        // the card that holds the entry, as an entry without a pane does.
         let owner = roster
             .rows()
             .iter()
@@ -777,6 +777,10 @@ fn select_clicked_pane(
                     card.bookings
                         .iter()
                         .any(|booking| booking.live_pane() == Some(&pane))
+                        || card
+                            .awaited
+                            .iter()
+                            .any(|awaited| awaited.pane.as_ref() == Some(&pane))
                 })
             })
             .and_then(|row| row.pane.as_ref())

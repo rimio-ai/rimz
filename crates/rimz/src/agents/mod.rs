@@ -148,8 +148,8 @@ pub(crate) use state::usable_description;
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentCardRef, AgentState, AgentStatus, AskDelivery, BudgetPark,
     BudgetScope, BudgetWindow, COMPACTING_WINDOW_SECS, ContextSeverity, IdleStop, OpenAsk,
-    PendingIdleStop, PendingWait, PendingWaitClass, PendingWaitTrigger, QueuedAsk, TurnCompletion,
-    is_turn_dead, settled_outcome, single_line_description,
+    PendingIdleStop, PendingWait, PendingWaitClass, PendingWaitTarget, PendingWaitTrigger,
+    QueuedAsk, TurnCompletion, is_turn_dead, settled_outcome, single_line_description,
 };
 use tools::ToolErr;
 pub(crate) use tools::{

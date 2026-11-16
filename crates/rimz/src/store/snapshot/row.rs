@@ -630,6 +630,35 @@ pub struct AgentCard {
     /// sort reads them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bookings: Vec<SidebarBooking>,
+    /// The agents this card's `Subagent` waits await that have no entry among its current
+    /// children (a peer with its own card, a child from an earlier turn), in wait order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub awaited: Vec<SidebarAwaitedAgent>,
+}
+
+/// One agent a card waits on outside its subagents list, with what its waits entry
+/// draws, joined from the fold's rows after aggregation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarAwaitedAgent {
+    /// The awaited card's own handle, or the wait's name when no row answers.
+    pub handle: String,
+    /// The awaited row's display status; `None` when no row answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<AgentStatus>,
+    #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
+    pub phase: TurnPhase,
+    /// The awaited row is condensing its context window; false when no row answers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compacting: bool,
+    /// The awaited row's pane; `None` when no row answers or it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<PaneId>,
+    /// The run start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<Timestamp>,
+    /// The run's terminal status while it still owes its report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled: Option<String>,
 }
 
 /// How long a card's prompt cache stays warm: the resolved agent lifetime and
@@ -696,6 +725,7 @@ impl Default for AgentCard {
             turn_error_label: None,
             overlay_raised_at: None,
             bookings: Vec::new(),
+            awaited: Vec::new(),
         }
     }
 }
@@ -1001,6 +1031,7 @@ impl AgentCard {
             turn_error_label: None,
             overlay_raised_at: None,
             bookings: Vec::new(),
+            awaited: Vec::new(),
         }
     }
 

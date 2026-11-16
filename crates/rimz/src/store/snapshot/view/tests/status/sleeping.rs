@@ -234,6 +234,7 @@ fn settled_wait_does_not_hide_the_rested_verdict() {
         name: "@child".into(),
         trigger: PendingWaitTrigger::Subagent {
             active_at: ago(30),
+            target: None,
             deadline_at: None,
             settled: Some("completed".into()),
         },

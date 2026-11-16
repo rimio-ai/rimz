@@ -492,6 +492,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         (
             crate::agents::PendingWaitTrigger::Subagent {
                 active_at: snapshot.now,
+                target: None,
                 deadline_at: None,
                 settled: None,
             },
@@ -622,6 +623,42 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
             animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some(),
             moves,
             "compacting {status:?}"
+        );
+    }
+    // An awaited agent's entry moves while it runs; a settled run, another status, or
+    // an agent with no row leaves it static.
+    for (status, settled, compacting, moves) in [
+        (Some(crate::agents::AgentStatus::Running), None, false, true),
+        (
+            Some(crate::agents::AgentStatus::Running),
+            Some("completed"),
+            false,
+            false,
+        ),
+        (Some(crate::agents::AgentStatus::Idle), None, false, false),
+        (Some(crate::agents::AgentStatus::Idle), None, true, true),
+        (Some(crate::agents::AgentStatus::Waiting), None, true, false),
+        (None, None, false, false),
+    ] {
+        let agent = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
+        agent.sub_agents.clear();
+        agent.awaited = vec![crate::store::snapshot::SidebarAwaitedAgent {
+            handle: "tidy-iris".to_owned(),
+            status,
+            phase: crate::agents::TurnPhase::Acting,
+            compacting,
+            pane: None,
+            since: Some(snapshot.now),
+            settled: settled.map(ToOwned::to_owned),
+        }];
+        assert_eq!(
+            animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some(),
+            moves,
+            "awaited {status:?} settled {settled:?} compacting {compacting}"
         );
     }
 }

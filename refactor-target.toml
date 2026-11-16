@@ -738,6 +738,11 @@ reason = "The sidebar supplies a card's seeded slots, its child-folded clock and
 
 [[verdict]]
 kind = "item"
+key = "agents::state::PendingWaitTarget"
+reason = "A subagent wait names the awaited row by kind and session id, so the sidebar can draw a peer or earlier child the card does not list."
+
+[[verdict]]
+kind = "item"
 key = "agents::state::PendingWaitClass"
 reason = "Pending wakes carry one shared display-work class across harness, snapshot, and CLI projections."
 
@@ -4457,7 +4462,8 @@ path = "crates/rimz/src/store"
 # store::workflow::Errored, Hold and HoldStop record a step's errored turn and the stop holding it,
 # and Hold::needs_you and Hold::label decide NEEDS YOU and name the hold for every view (+5).
 # AttemptKind::owns_agent names the attempts that end through the stop protocol, an agent step's or a judge's (+1).
-surface-budget = 657
+# SidebarAwaitedAgent is one agent a card's subagent wait awaits beyond its own children (+1).
+surface-budget = 658
 
 [[verdict]]
 kind = "item"
@@ -4668,6 +4674,11 @@ reason = "`ask_detail`: The public serialized AgentCard schema carries eligible 
 kind = "item"
 key = "store::snapshot::row::AgentCard::open_ask"
 reason = "One displayed-status gate for the sidebar's blocking ask description."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::SidebarAwaitedAgent"
+reason = "One agent a card's subagent wait awaits that has no entry among its children: its handle, display state, pane and run start."
 
 [[verdict]]
 kind = "item"

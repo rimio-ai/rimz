@@ -253,6 +253,10 @@ pub enum PendingWaitTrigger {
     /// A launched child or peer turn; the wait name is its handle and armed_at is the run start.
     Subagent {
         active_at: Timestamp,
+        /// The awaited agent's row in the same snapshot; absent from a wait projected
+        /// before the field existed.
+        #[serde(default)]
+        target: Option<PendingWaitTarget>,
         #[serde(default)]
         deadline_at: Option<Timestamp>,
         /// Terminal status of a run no digest has carried yet; absent while running.
@@ -292,6 +296,13 @@ pub enum PendingWaitTrigger {
         when: String,
         hold: Option<String>,
     },
+}
+
+/// The row a `Subagent` wait awaits, keyed as the snapshot keys its rows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingWaitTarget {
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
 }
 
 impl PendingWait {

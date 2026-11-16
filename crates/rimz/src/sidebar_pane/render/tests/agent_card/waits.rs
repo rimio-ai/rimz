@@ -285,6 +285,7 @@ fn subagent_wait_uses_the_child_row_without_a_wait_count_or_entry() {
         name: "calm-fox".into(),
         trigger: PendingWaitTrigger::Subagent {
             active_at: fixed_now(),
+            target: None,
             deadline_at: None,
             settled: Some("done".into()),
         },
@@ -315,6 +316,172 @@ fn subagent_wait_uses_the_child_row_without_a_wait_count_or_entry() {
     assert_eq!(screen.matches("child-result").count(), 1, "{screen}");
     assert!(!screen.contains('⧖'), "{screen}");
     assert!(!screen.contains("reporting"), "{screen}");
+}
+
+/// The lead of an `agent` entry: the span two before its type word.
+fn lead_of(block: &RenderedBlock, line: usize) -> ratatui::text::Span<'static> {
+    let spans = &block.lines[line].spans;
+    let kind = spans
+        .iter()
+        .position(|span| span.content == "agent")
+        .unwrap();
+    spans[kind - 2].clone()
+}
+
+/// A card resting on waits for agents it does not list as children names each one in
+/// its waits, before its other waits: a live agent behind its own lead, a click target
+/// and cursor stop for its pane; one with no row, static, with neither; a settled run
+/// still reporting, static, with its pane.
+#[test]
+fn awaited_agents_draw_counted_agent_entries_before_other_waits() {
+    use crate::sidebar_pane::render::labels::agent_glyph;
+    use crate::store::snapshot::SidebarAwaitedAgent;
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    parent.phase = TurnPhase::Idle;
+    parent.prompt = Some("hand the design off".into());
+    let subagent_wait = |name: &str| PendingWait {
+        class: crate::agents::PendingWaitClass::Working,
+        name: name.into(),
+        trigger: PendingWaitTrigger::Subagent {
+            active_at: fixed_now(),
+            target: None,
+            deadline_at: None,
+            settled: None,
+        },
+        armed_at: Some(fixed_now()),
+    };
+    parent.pending_waits = vec![
+        subagent_wait("@tidy-iris"),
+        PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
+            name: "nap".into(),
+            trigger: PendingWaitTrigger::Timer {
+                due: fixed_now() + Duration::from_secs(600),
+                delay: None,
+            },
+            armed_at: Some(fixed_now()),
+        },
+    ];
+    let peer = PaneId::from_parts(MuxName::Tmux, "%peer");
+    let earlier = PaneId::from_parts(MuxName::Tmux, "%earlier");
+    let mut snapshot = snapshot_with(vec![parent]);
+    snapshot
+        .rows_mut()
+        .next()
+        .unwrap()
+        .as_agent_mut()
+        .unwrap()
+        .awaited = vec![
+        SidebarAwaitedAgent {
+            handle: "tidy-iris".into(),
+            status: Some(AgentStatus::Running),
+            phase: TurnPhase::Acting,
+            compacting: false,
+            pane: Some(peer.clone()),
+            since: Some(fixed_now()),
+            settled: None,
+        },
+        SidebarAwaitedAgent {
+            handle: "@ghost".into(),
+            status: None,
+            phase: TurnPhase::Idle,
+            compacting: false,
+            pane: None,
+            since: Some(fixed_now()),
+            settled: None,
+        },
+        SidebarAwaitedAgent {
+            handle: "earlier".into(),
+            status: Some(AgentStatus::Success),
+            phase: TurnPhase::Idle,
+            compacting: false,
+            pane: Some(earlier.clone()),
+            since: Some(fixed_now()),
+            settled: Some("completed".into()),
+        },
+    ];
+    let theme = Theme::fixed(false);
+    let cost_rolls = CostRolls::default();
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+    let texts = line_texts(&block.lines);
+    let screen = texts.join("\n");
+    assert!(screen.contains("wakes when @tidy-iris reports"), "{screen}");
+    assert!(screen.contains("waits (4)"), "{screen}");
+    let at = |needle: &str| {
+        texts
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?}:\n{screen}"))
+    };
+    let (live, ghost, settled, timer) = (
+        at("agent · tidy-iris"),
+        at("agent · @ghost"),
+        at("agent · earlier · completed, reporting"),
+        at("timer · in 10m"),
+    );
+    assert!(
+        live < ghost && ghost < settled && settled < timer,
+        "{screen}"
+    );
+    let lead = |line: usize| lead_of(&block, line);
+    assert_eq!(
+        lead(live).content,
+        agent_glyph(&theme, AgentStatus::Running, TurnPhase::Acting, 0)
+    );
+    let signal = theme.glyph(GlyphRole::CardWaitSignal);
+    for line in [ghost, settled] {
+        assert_eq!(lead(line).content, signal, "{}", texts[line]);
+        assert_eq!(
+            lead(line).style.fg,
+            Some(theme.component(Component::WaitHeader))
+        );
+    }
+    let target = |line: usize| {
+        block
+            .interactions
+            .target_at(8, u16::try_from(line).unwrap())
+    };
+    assert_eq!(target(live), Some(HitTarget::SubAgentPane(peer.clone())));
+    assert_eq!(
+        target(settled),
+        Some(HitTarget::SubAgentPane(earlier.clone()))
+    );
+    assert!(
+        !matches!(target(ghost), Some(HitTarget::SubAgentPane(_))),
+        "{:?}",
+        target(ghost)
+    );
+    let view = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
+    };
+    assert_eq!(
+        view.entry_stops(&snapshot, 0),
+        [EntryCursor::SubAgent(peer), EntryCursor::SubAgent(earlier)]
+    );
+    // A compacting awaited agent wears the compacting head, as a compacting child does.
+    snapshot
+        .rows_mut()
+        .next()
+        .unwrap()
+        .as_agent_mut()
+        .unwrap()
+        .awaited[0]
+        .compacting = true;
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+    assert_eq!(
+        lead_of(&block, live).content,
+        role_glyph(&theme, AnimationRole::Compacting, 0)
+    );
 }
 
 #[test]
