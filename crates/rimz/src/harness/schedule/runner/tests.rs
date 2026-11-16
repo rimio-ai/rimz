@@ -764,10 +764,8 @@ fn vanished_delivery_root_still_resolves_and_finds_no_active_run() {
         handle: "@claude".to_owned(),
     };
 
-    let context = FireContext::resolve(&entry, TaskAction::Deliver(target))
-        .expect("resolve persisted delivery root");
+    FireScope::resolve(&entry, &target).expect("resolve persisted delivery root");
 
-    assert!(context.scope.is_some());
     assert!(
         in_flight_run("vanished-root", &root)
             .expect("probe the vanished root's run lock")
@@ -980,8 +978,7 @@ fn skipped_fire<'a>(
     signal: Option<TriggerSignal>,
 ) -> TaskFire<'a> {
     let task = catalog.for_run(name).cloned().expect("loaded fixture");
-    let root = task.entry().resolved_root();
-    let mut fire = TaskFire::new(
+    TaskFire::new(
         name,
         task,
         catalog,
@@ -991,9 +988,7 @@ fn skipped_fire<'a>(
         signal,
         Instant::now(),
     )
-    .expect("construct task fire");
-    fire.context = Some(FireContext { root, scope: None });
-    fire
+    .expect("construct task fire")
 }
 
 #[test]
@@ -1156,7 +1151,7 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
     .unwrap()
     .with_condition(Some(evidence.clone()));
     assert_eq!(
-        fire.resolve_effect_prompt().unwrap(),
+        fire.effect_prompt(fire.entry.prompt.clone().unwrap_or_default()),
         "Rule `ship` fired here. ci.log: \"red\\nlog\" · pr.state: unknown · team.stage: Done"
     );
     let record = fire.terminal_record(LoopRunResult::Completed);
@@ -1170,7 +1165,7 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
     );
     fire.condition = None;
     assert_eq!(
-        fire.resolve_effect_prompt().unwrap(),
+        fire.effect_prompt(fire.entry.prompt.clone().unwrap_or_default()),
         "",
         "no evidence, no trigger text"
     );
@@ -1719,7 +1714,6 @@ fn a_prepared_delivery_resolves_its_holder_when_sent() {
     };
     let prepared = |session: &str| PreparedDelivery {
         root: dir.path().to_owned(),
-        task_root: dir.path().to_owned(),
         target: target(session),
         prompt: "wake".to_owned(),
         supersedes: Vec::new(),

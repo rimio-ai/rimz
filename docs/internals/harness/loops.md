@@ -374,7 +374,7 @@ A terminal `Watch` outcome takes a separate path with the watch already evaluate
 
 ### The prompt a fire delivers
 
-`resolve_effect_prompt` builds the delivered text. A delivery row's base is its `prompt`, which team arming writes. A command row has none. Nothing is substituted: `{{key}}` is delivered as typed.
+`effect_prompt` builds the delivered text. A delivery row's base is its `prompt`, which team arming writes. A command row has none. Nothing is substituted: `{{key}}` is delivered as typed.
 
 A `Command` row with no `watch` goes through `compose_launch` (`runner::TaskFire::effect_prompt` picks the composer), filled after the backlog reconcile (`runner::TaskFire::prepare_command`) from the trigger the fire serves, which the run lock or the reconcile may have switched. The text becomes the evidence of the run's fire (`RunFire::evidence`), which the command reads as `RIMZ_LOOP_TRIGGER`; the run has no prompt. A workflow task's fire (`runner::TaskFire::prepare_launch`) composes the same text and freezes it into the fire it hands `rimz workflow run`, so that run's commands read it the same way and its agent and message steps get it after the run's `--prompt`. A fire with no event hands nothing. A manual fire with `--signal` is handed that signal (`TaskFire::new`), so it composes the signal row below whatever the task's trigger:
 

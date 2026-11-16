@@ -2261,7 +2261,7 @@ path = "crates/rimz/src/harness"
 # check_run::CheckOutcome::terminated carries SIGTERM cancellation to supervised verify (+1).
 # runner::TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
 # check_run::cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
-# runner::{CheckSignalGuard, TaskFire::record_signal_guard} hold SIGTERM through terminal recording (+2).
+# check_run::CheckSignalGuard holds SIGTERM through a loop fire's terminal recording.
 # Workflow Condition and WhenExpr::truth share condition specifications and three-valued truth.
 # condition_stages and unread_reason share admission and prose with the loop CLI (+2).
 # WatchDeadline, run_command and CheckOutcome::{code,interrupted} share hosted shell execution (+4).
@@ -5991,7 +5991,7 @@ allowed-dependencies = [
 # TaskFire::take_backlog and TaskFire::release_run_lock coordinate CLI drain gates and process exit (+2).
 # discard_backlog lets the CLI drop an unrunnable task's triggers before constructing a fire (+1).
 # TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
-# TaskFire::record_signal_guard holds the `check_run::CheckSignalGuard` through terminal recording.
+# TaskFire::finish_record holds the `check_run::CheckSignalGuard` through terminal recording, with no accessor.
 # `check_run` now owns CheckOutcome, its accessors and `cancel_run_on_sigterm`, which this file exported.
 # `resolve_task_prompt`, `resolve_config_path`, `task_permission_mode`, and `agent_check` let the compiler read a fire's assets from the paths a supervised fire reads (+4).
 surface-budget = 70
@@ -6450,11 +6450,6 @@ reason = "A fire-stamped foreground `-p` wait shares the check driver's SIGTERM 
 kind = "item"
 key = "harness::check_run::CheckSignalGuard"
 reason = "A loop fire owns the action driver's SIGTERM guard across CLI cleanup and terminal recording until its run lock releases."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::runner::TaskFire::record_signal_guard"
-reason = "The CLI arms the supervised action's guard directly in the fire so errors and returns leave no fatal signal gap before terminal recording."
 
 [[verdict]]
 kind = "item"
