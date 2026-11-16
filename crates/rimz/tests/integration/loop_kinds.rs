@@ -1271,7 +1271,7 @@ fn gc_keeps_a_retired_task_record_while_anything_still_shows_it() {
     let row = read_loop_run_records(&env).last().cloned().unwrap();
     assert_eq!(row.result, LoopRunResult::Launched, "{row:?}");
     assert!(!read_loop_instances(&env).0.contains_key("booked"));
-    seed_stamped_agent(&env, "kept", &row.fire.unwrap());
+    seed_stamped_agent(&env, "kept", row.fire.as_ref().unwrap());
     let gc = || {
         let output = env.rimz().args(["gc", "--json"]).output().unwrap();
         assert!(output.status.success(), "{output:?}");
@@ -1306,7 +1306,51 @@ fn gc_keeps_a_retired_task_record_while_anything_still_shows_it() {
     let logs = loop_ok(&env, &["loop", "logs", "booked"]);
     assert!(logs.contains("launched"), "{logs}");
 
+    // A worktree whose marker carries the fire alone holds it.
     std::fs::remove_file(loop_runs_path(&env)).unwrap();
+    if !init_git_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    let tree = env.home_root.join("fired");
+    assert!(git_ok(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "fired",
+            tree.to_str().unwrap()
+        ]
+    ));
+    let admin = Command::new("git")
+        .args(["rev-parse", "--absolute-git-dir"])
+        .current_dir(&tree)
+        .output()
+        .unwrap();
+    let marker =
+        Path::new(String::from_utf8(admin.stdout).unwrap().trim()).join("rimz-worktree.json");
+    let fired = rimz::worktree::WorktreeMarker {
+        version: 4,
+        name: "fired".into(),
+        branch: "fired".into(),
+        base_branch: None,
+        from_pr: None,
+        base_ref: "HEAD".into(),
+        repo_root: canonical(&env.project_root),
+        worktree_path: canonical(&tree),
+        created_at: Timestamp::now(),
+        loop_task: None,
+        loop_fire: row.fire.clone(),
+    };
+    std::fs::write(&marker, serde_json::to_vec(&fired).unwrap()).unwrap();
+    assert!(gc().is_some(), "the worktree marker keeps the record");
+
+    // That gc may already have swept the tree, which nothing holds and which has landed.
+    if marker.exists() {
+        std::fs::remove_file(&marker).unwrap();
+    }
     assert!(gc().is_none(), "nothing shows the record, so gc deletes it");
 }
 
