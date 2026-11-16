@@ -611,7 +611,7 @@ The room restarts the stub agent when its process is killed, so an agent leaves 
 
 ssh reads `~/.ssh` from your passwd home, not `$HOME`, so an SSH command a sandbox agent runs uses your real keys and config.
 
-A held room's provider has no folder-trust decision for its worktree, so the first `a subagents claude ...` refuses with `claude has no trust decision for ...` and names `rimz trust grant --agents claude` as the fix. Run that grant as `rz trust grant --agents claude`: the plain-shell prefix writes the sandbox's home, while a bare `rimz trust grant` from your shell writes your real provider config. The launch then succeeds.
+A held room's provider has no folder-trust decision for its worktree, so the first `a subagents claude ...` refuses with `claude has no trust decision and would stop at its trust prompt for ...` and names `rimz trust grant --agents claude` as the fix. Run that grant as `rz trust grant --agents claude`: the plain-shell prefix writes the sandbox's home, while a bare `rimz trust grant` from your shell writes your real provider config. The launch then succeeds.
 
 To check a launched child's entry (its model, effort, and fast-mode bolt), prime the agent with `UserPromptSubmit` and `Stop` as well, so its card can show a subagents line, then launch children that stay alive:
 

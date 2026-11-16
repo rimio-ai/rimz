@@ -1238,12 +1238,15 @@ pub enum LaunchDirRefusal {
     #[error("`{}` is the home directory, where an unattended agent cannot be started", dir.display())]
     Home { dir: PathBuf },
     #[error(
-        "{kind} has no trust decision and would stop at its trust prompt for `{}`: {fix}",
-        dir.display()
+        "{kind} has no trust decision and would stop at its trust prompt for `{}`{}: {fix}",
+        dir.display(),
+        trust_key_note(kind, key.as_deref())
     )]
     Undecided {
         kind: &'static str,
         dir: PathBuf,
+        /// The directory the provider keys its trust on, when it is not `dir`: the fix names it.
+        key: Option<PathBuf>,
         fix: String,
     },
     #[error(
@@ -1256,6 +1259,15 @@ pub enum LaunchDirRefusal {
         dir: PathBuf,
         fix: String,
     },
+}
+
+fn trust_key_note(kind: &str, key: Option<&Path>) -> String {
+    key.map_or_else(String::new, |key| {
+        format!(
+            " ({kind} keys its trust for that directory on `{}`)",
+            key.display()
+        )
+    })
 }
 
 /// Check the working directory for supervised panes or headless execution.
@@ -1288,6 +1300,7 @@ pub fn preflight_launch_dir(
             Err(LaunchDirRefusal::Undecided {
                 kind: adapter.spec().kind,
                 dir: cwd.to_path_buf(),
+                key: (canonical(&gap.key) != canonical(cwd)).then(|| gap.key.clone()),
                 fix: if crate::disk::paths::is_under_root(
                     cwd,
                     &crate::disk::paths::empty_dir_root(),
