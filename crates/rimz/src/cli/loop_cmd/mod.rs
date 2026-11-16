@@ -32,9 +32,9 @@ use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult, ProcessExit,
     RunStage, RunTransition,
 };
-use rimz::harness::schedule::runner::{
-    AfterReset, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, after_reset as resolve_after_reset,
-    window_condition_provider,
+use rimz::harness::schedule::runner::SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL;
+use rimz::harness::schedule::window::{
+    AfterReset, after_reset as resolve_after_reset, window_condition_provider,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
