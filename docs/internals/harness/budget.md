@@ -178,7 +178,7 @@ Interactive work gets a park and a waiver. Automation gets a refusal before it s
 | Caller | On a refusal |
 | --- | --- |
 | Supervised run ([scripting.md](./scripting.md#status-and-exit-codes)) | `SupervisedRunOutcome::BudgetExceeded` and exit `125`, before a run record or agent pane exists |
-| Workflow agent step ([workflow.md](./workflow.md#how-an-attempt-ends)) | the attempt ends `limited`, with the gate's reason |
+| Workflow agent step or judge ([workflow.md](./workflow.md#admission)) | the node waits `budget`, with the gate's reason and no attempt or visit counted. The engine reads `scope_gate` before the launch, and a refusal the launcher returns after that read withdraws the attempt into the same wait |
 | Loop delivery row ([loops.md](./loops.md#one-fire)) | one `budget skipped` history row, no strike |
 
 The launcher (`launcher/execute.rs::budget_gate`) runs the gate for every launch that opens a leader run, which covers the supervised run and the workflow step. It runs after room birth and before the agent pane opens. Supervised runs launch once per attempt, so a retry ladder stops as soon as a cap closes mid-sequence. Exit `125` has a second source: a non-workflow turn run already under way whose agent is parked by any cap ends as `budget_exceeded` through the helper in [The park](#the-park). Every caller also checks an exact managed-launch provider quota, and that gate belongs to [providers.md](../agents/providers.md).
