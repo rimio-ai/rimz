@@ -60,11 +60,11 @@ One unfinished run holds each `(workflow, scope path)` pair, and a run a loop ta
 
 On success it prints three lines:
 
-1. The run id. This line keeps its scripting format.
-2. The run's work directory (`RIMZ_WORKFLOW_DIR`). This line keeps its scripting format.
+1. The run id, printed at once. This line keeps its scripting format.
+2. The run's work directory (`RIMZ_WORKFLOW_DIR`) where the run's home is after the first decision: the finished directory when the run ended in it, since an ended run's home moves there. This line keeps its scripting format.
 3. `→ rimz workflow show <run>`.
 
-The first advance starts in the background, and the command waits up to 30 seconds for its first decision. When the run is held in front of its node by capacity, a usage window, or a checkout occupant, a fourth line names the node and the hold in the phrase `show` prints, such as `build held 0s · claude: no capacity (your check)`. `rimz loop fire` and `rimz workflow restart` add the same line to their receipts. A run that launched, ended, or whose advance exited without deciding prints the three lines alone.
+The first advance starts in the background, and the command waits up to 30 seconds for its first decision before it prints lines 2 and 3; a run that ends in that time is waited for until its advance has moved its home. When the run is held in front of its node by capacity, a usage window, or a checkout occupant, a fourth line names the node and the hold in the phrase `show` prints, such as `build held 0s · claude: no capacity (your check)`. `rimz loop fire` and `rimz workflow restart` add the same line to their receipts. A run that launched, ended, or whose advance exited without deciding prints the three lines alone.
 
 Before it writes anything, `run` opens the home-wide start lock, `~/.rimz/loops/throttle.lock`, for write without taking it, since the background engine opens the same file on its first launch. `resume` and `restart`, including `rimz agents restart` on a workflow agent, do the same. When the open fails, the command exits 1 with `nothing was started` (`resumed`, `restarted`) and the cause, and leaves no run, record, or journal change behind. A read-only RimZ home, for example inside a provider's command sandbox, adds `this command cannot write the RimZ home` and the [sandbox remedy](./wait.md#inside-a-providers-command-sandbox), worded for `rimz workflow`. An agent inside its provider's sandbox runs `rimz workflow run` bare, so its [routine rule](../../guide/fleet.md#set-a-permission-mode) runs it outside the sandbox. The check covers RimZ's own files only: a check script that writes elsewhere, such as a tool's cache, can still fail inside a sandbox.
 
