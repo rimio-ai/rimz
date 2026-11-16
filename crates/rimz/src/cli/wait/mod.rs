@@ -40,9 +40,9 @@ enum WaitSubcmd {
         json: bool,
     },
     /// Cancel one wait or subscription by name, or all your waits; stops a watched command.
+    #[command(group(clap::ArgGroup::new("target").required(true).args(["name", "all"])))]
     Cancel {
         /// The wait or subscription name, as `rimz wait list` prints it.
-        #[arg(required_unless_present = "all", conflicts_with = "all")]
         name: Option<TaskName>,
         /// Cancel only waits you armed with `rimz wait`, leaving subscriptions intact.
         #[arg(long)]
@@ -87,7 +87,14 @@ struct WaitArgs {
     #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     every: Option<Duration>,
     /// Wait for this file to change: created, deleted, written, or replaced.
-    #[arg(long, value_name = "PATH")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        value_parser = clap::builder::TypedValueParser::map(
+            clap::builder::OsStringValueParser::new(),
+            std::path::PathBuf::from,
+        )
+    )]
     file: Option<std::path::PathBuf>,
     /// With --file, wait for a new line containing this literal text.
     #[arg(long, value_name = "PATTERN")]
