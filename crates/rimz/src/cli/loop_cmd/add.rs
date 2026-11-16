@@ -336,7 +336,7 @@ fn task_timeout(raw: Option<&str>) -> Result<String> {
         let configured = MachineConfig::load_lenient().r#loop.default_timeout.clone();
         return Ok(configured.unwrap_or_else(|| SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned()));
     };
-    let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
+    let duration = parse_compact_duration(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
     if duration.is_zero() {
         bail!("--timeout must be greater than zero");
     }
@@ -463,7 +463,8 @@ pub(super) fn pause(args: PauseArgs, globals: &GlobalFlags) -> Result<()> {
             args.name
         );
     }
-    let duration = parse_task_timeout(&args.pause_for).map_err(|err| anyhow::anyhow!(err))?;
+    let duration =
+        parse_compact_duration(&args.pause_for).map_err(|err| anyhow::anyhow!("{err}"))?;
     if duration.is_zero() {
         bail!("--for must be greater than zero");
     }
@@ -555,7 +556,7 @@ fn resolve_add_timing(args: &AddArgs, name: &str) -> Result<AddTiming> {
         deadline: None,
     };
     if let Some(raw) = args.in_after.as_deref() {
-        let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
+        let duration = parse_compact_duration(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
         if duration.is_zero() {
             bail!("--in must be greater than zero");
         }

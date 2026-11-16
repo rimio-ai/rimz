@@ -50,19 +50,12 @@ use crate::ids::{MessageId, RunId, WorkspaceId};
 use crate::store::run::RunRecord;
 use crate::store::workflow::RunFire;
 use crate::store::writer::LaunchLogin;
-use crate::utils::time::{DurationUnit, parse_duration_units};
+use crate::utils::time::parse_compact_duration;
 use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
-pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 pub const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 const RUN_LOCK_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HOLDER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
-const TASK_TIMEOUT_UNITS: &[DurationUnit] = &[
-    DurationUnit::Second,
-    DurationUnit::Minute,
-    DurationUnit::Hour,
-    DurationUnit::Day,
-];
 
 #[derive(Clone, Debug)]
 pub enum TaskFireNotice {
@@ -2003,10 +1996,6 @@ pub fn after_reset(
     })
 }
 
-pub fn parse_task_timeout(raw: &str) -> std::result::Result<Duration, String> {
-    parse_duration_units(raw, TASK_TIMEOUT_UNITS).map_err(|err| err.to_string())
-}
-
 /// Newest durable supervised run still active for one loop task, started at or after its run
 /// lock holder took the lock: an earlier fire's run (an `allow` task's, or one a fire is about
 /// to record as overlapped) is never the holder's.
@@ -2580,7 +2569,7 @@ pub(super) fn task_timeout(entry: &TaskEntry) -> Result<Option<Duration>> {
     entry
         .timeout
         .as_deref()
-        .map(|raw| parse_duration_units(raw, TASK_TIMEOUT_UNITS))
+        .map(parse_compact_duration)
         .transpose()
         .map_err(|err| anyhow::anyhow!("{err}"))
 }

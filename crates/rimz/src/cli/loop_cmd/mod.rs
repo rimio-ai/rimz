@@ -32,7 +32,7 @@ use rimz::harness::schedule::run_log::{
 use rimz::harness::schedule::runner::{
     AfterReset, InFlightRun, RunLockInfo, RunLockState, RunLocks,
     SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, after_reset as resolve_after_reset, in_flight_run,
-    parse_task_timeout, window_condition_provider,
+    window_condition_provider,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
@@ -45,6 +45,7 @@ use rimz::harness::task_login::task_login;
 use rimz::sidebar::fresh_sidebar_present;
 use rimz::store::message::DeliveryGate;
 use rimz::trust::{self, TrustState};
+use rimz::utils::time::parse_compact_duration;
 use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;

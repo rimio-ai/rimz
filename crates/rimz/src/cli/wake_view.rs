@@ -12,11 +12,11 @@ use rimz::config::TaskEntry;
 use rimz::disk::paths::{RuntimePaths, StatePaths};
 use rimz::harness::schedule::arm::duration_label;
 use rimz::harness::schedule::arming::ArmState;
-use rimz::harness::schedule::runner::parse_task_timeout;
 use rimz::harness::schedule::{self, DeliveryOwner, TaskActionKind, Trigger, delivery_owner};
 use rimz::harness::when::{self, CiSource, Verdict, WhenExpr, WindowReadings};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::snapshot::SidebarSnapshot;
+use rimz::utils::time::parse_compact_duration;
 use serde::Serialize;
 
 use super::render as ui;
@@ -223,7 +223,7 @@ impl WakeRow {
                     WakeState::Starting
                 },
                 entry.timeout.as_deref().and_then(|raw| {
-                    parse_task_timeout(raw)
+                    parse_compact_duration(raw)
                         .ok()
                         .map(|value| (duration_label(value), value.as_secs()))
                 }),
@@ -232,7 +232,7 @@ impl WakeRow {
                 "timer",
                 WakeState::Pending,
                 delay.and_then(|raw| {
-                    parse_task_timeout(raw)
+                    parse_compact_duration(raw)
                         .ok()
                         .map(|value| (raw.to_owned(), value.as_secs()))
                 }),

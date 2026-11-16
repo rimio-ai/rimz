@@ -31,7 +31,7 @@ enum EventsSubcmd {
         #[arg(long)]
         signal: Option<SignalSelector>,
         /// Keep signals within this duration, such as 2h.
-        #[arg(long, value_parser = rimz::harness::schedule::runner::parse_task_timeout)]
+        #[arg(long, value_parser = rimz::utils::time::parse_compact_duration)]
         since: Option<Duration>,
         /// Maximum rows after filtering and folding, or records with --json.
         #[arg(short = 'n', long, default_value_t = 20)]

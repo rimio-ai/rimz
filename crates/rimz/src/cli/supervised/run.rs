@@ -8,6 +8,8 @@ use rimz::store::run::{RunRecord, RunStatus};
 use std::io::{IsTerminal as _, Write as _};
 use std::sync::{Arc, Mutex};
 
+const CHECK_DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 pub(in crate::cli) fn run_print(
     request: SupervisedRunRequest,
     presentation: SupervisedPresentation,
@@ -167,9 +169,7 @@ fn verify_phase(
     let max_attempts = request
         .max_attempts
         .unwrap_or(rimz::harness::run::VERIFY_MAX_ATTEMPTS_DEFAULT);
-    let verify_timeout = request
-        .timeout
-        .unwrap_or(rimz::harness::schedule::runner::CHECK_DEFAULT_TIMEOUT);
+    let verify_timeout = request.timeout.unwrap_or(CHECK_DEFAULT_TIMEOUT);
     let mut verify_attempt = 1;
     let mut verify_error = None;
     while record.status == RunStatus::Completed {
