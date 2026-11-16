@@ -581,7 +581,9 @@ impl TaskShape {
         &self.trigger
     }
 
-    const fn is_ephemeral(&self) -> bool {
+    /// Whether the row is a one-shot or deadline-bound, which the catalog keeps in the room's
+    /// instance store rather than a task file.
+    pub const fn is_ephemeral(&self) -> bool {
         self.ephemeral
     }
 }

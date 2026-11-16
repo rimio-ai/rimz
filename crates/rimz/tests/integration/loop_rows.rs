@@ -224,15 +224,44 @@ fn once_per_checkout_does_not_refire_after_exit_zero_and_does_after_a_failure() 
     let code = env.home_root.join("code");
     let fired = env.home_root.join("fired");
     std::fs::write(&code, "1").unwrap();
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.once]\nroot = {:?}\nevery = '1h'\ntimeout = '1m'\nonce-per-checkout = true\nargs = ['sh', '-c', 'echo fired >> \"$1\"; exit \"$(cat \"$2\")\"', 'sh', {:?}, {:?}]\n",
-            env.project_root,
-            fired.display().to_string(),
-            code.display().to_string()
-        ),
+    let (fired_arg, code_arg) = (fired.to_str().unwrap(), code.to_str().unwrap());
+    let add = |flag: &[&str]| {
+        let argv = [
+            &["loop", "add", "once", "--every", "1h", "--timeout", "1m"][..],
+            flag,
+            &[
+                "--",
+                "sh",
+                "-c",
+                r#"echo fired >> "$1"; exit "$(cat "$2")""#,
+            ],
+            &["sh", fired_arg, code_arg],
+        ]
+        .concat();
+        loop_ok(&env, &argv);
+    };
+    add(&["--once-per-checkout"]);
+    assert_eq!(
+        stored_rows(&env)["once"].get("once-per-checkout"),
+        Some(&toml::Value::Boolean(true))
     );
+    // A one-shot's row is gone after its fire, so the flag is refused and nothing is written.
+    let (_, stderr) = loop_fail(
+        &env,
+        &[
+            "loop",
+            "add",
+            "spent",
+            "--in",
+            "5m",
+            "--once-per-checkout",
+            "--",
+            "true",
+        ],
+    );
+    assert!(stderr.contains("cannot be used on a one-shot"), "{stderr}");
+    assert!(!stored_rows(&env).contains_key("spent"));
+    assert!(!loop_instances_path(&env).exists());
     let fires = || {
         std::fs::read_to_string(&fired)
             .unwrap_or_default()
@@ -252,6 +281,12 @@ fn once_per_checkout_does_not_refire_after_exit_zero_and_does_after_a_failure() 
     loop_ok(&env, &["loop", "run", "once"]);
     assert_eq!(read_loop_run_records(&env).len(), before);
     assert_eq!(fires(), 3, "an exit-0 fire is remembered for its checkout");
+    add(&[]);
+    assert_eq!(
+        stored_rows(&env)["once"].get("once-per-checkout"),
+        None,
+        "a re-add without the flag drops it"
+    );
 }
 
 #[cfg(unix)]

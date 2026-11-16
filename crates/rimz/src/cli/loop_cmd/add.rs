@@ -332,7 +332,7 @@ fn build_task_entry(
     let timing = resolve_add_timing(args, name)?;
     let (kind, target) = launch_kind(args);
     let shell = kind == rimz::config::LaunchKind::Shell;
-    Ok(TaskEntry {
+    let entry = TaskEntry {
         label: args.label.clone(),
         kind: Some(kind),
         target: target.map(str::to_owned),
@@ -360,9 +360,18 @@ fn build_task_entry(
         hold: args.hold.clone(),
         matches: (!matches.is_empty()).then_some(matches),
         repeat: args.repeat,
+        once_per_checkout: args.once_per_checkout.then_some(true),
         deadline: timing.deadline,
         ..TaskEntry::default()
-    })
+    };
+    if args.once_per_checkout && schedule::TaskShape::compile(name, &entry).is_ephemeral() {
+        bail!(
+            "--once-per-checkout cannot be used on a one-shot: its first fire removes the task, \
+             so launch memory never acts; make it repeat with --every, --cron, or --repeat beside \
+             --signal or --when"
+        );
+    }
+    Ok(entry)
 }
 
 pub(super) fn remove(name: &str, globals: &GlobalFlags) -> Result<()> {
