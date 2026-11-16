@@ -26,7 +26,7 @@ pub use definition::{Condition, Definition, Invocation, Kind, Limit, Node, Targe
 pub(crate) use engine::hears_lifecycle;
 pub use engine::{
     Advance, DefinitionSource, InlineDefinition, StartArgs, TaskStart, WorkflowErr, advance,
-    cancel, create, launch_groups, restart, resume, submit, wake, wake_run,
+    budget_refusal, cancel, create, launch_groups, restart, resume, submit, wake, wake_run,
 };
 pub(crate) use engine::{reassign_task, unacted_task_runs};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
@@ -145,6 +145,13 @@ pub trait AttemptHost {
         agent: &str,
         account: Option<&crate::ids::LoginName>,
     ) -> Result<Vec<crate::harness::throttle::StartGroup>, WorkflowErr>;
+    /// The reason the launch budget gate would refuse launching `groups` now, as
+    /// [`budget_refusal`] reads it; `None` when it would admit the launch.
+    fn budget_refusal(
+        &self,
+        record: &crate::store::workflow::RunRecord,
+        groups: &[crate::harness::throttle::StartGroup],
+    ) -> Result<Option<String>, WorkflowErr>;
     /// Whether this host's starts take a turn at the machine's `[throttle]` gate. A host whose
     /// launches never report to the machine's start queue answers no, and its starts meet the
     /// workflow and step limits and the machine caps alone.
@@ -385,6 +392,9 @@ pub enum NotLaunched {
     /// The checkout's read once the launch was prepared found it taken; the step waits as it
     /// would on the first read, with no attempt counted.
     Taken(Occupancy),
+    /// The launcher's budget gate refused the launch for this reason; the node waits as it
+    /// would on the first read of the gate, with no attempt counted.
+    Budget(String),
 }
 
 impl From<LaunchFailure> for NotLaunched {

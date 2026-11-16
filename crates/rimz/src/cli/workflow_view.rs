@@ -231,11 +231,15 @@ pub(super) fn wait(
                 render::age_short(wait.first, now),
             )
         }
-        "unknown" | "retry" | "window" => match wait.detail.as_deref() {
+        "unknown" | "retry" | "window" | "budget" => match wait.detail.as_deref() {
             Some(detail) => format!(
                 "{}{}{detail}",
                 wait.outcome,
-                if wait.outcome == "window" { " " } else { ": " },
+                if matches!(wait.outcome.as_str(), "window" | "budget") {
+                    " "
+                } else {
+                    ": "
+                },
                 detail = render::one_line(detail),
             ),
             None => wait.outcome.clone(),
@@ -508,6 +512,7 @@ mod tests {
             ("hold", "holding pending 0s/?"),
             ("unknown", "unknown: pending"),
             ("window", "window pending"),
+            ("budget", "budget pending"),
             ("retry", "retry: pending"),
             ("takeover", "takeover"),
             ("occupied", "occupied"),

@@ -16,6 +16,7 @@ const OUTCOME_STEP: &str = "[workflow]\nscope='worktree'\nstart='watch'\n\
     [agent.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=6\n";
 
 mod brief;
+mod budget;
 mod capabilities;
 mod edits;
 mod keep;

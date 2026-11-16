@@ -443,16 +443,19 @@ pub(super) fn launch(
         }
         return Ok(false);
     }
+    // An ending staged during the launch (a cancel, a move, a misfit) settles through `finish`.
+    let unstaged = t
+        .record
+        .attempt
+        .as_ref()
+        .is_some_and(|a| a.ending.is_none());
     let launched = match launched {
         Ok(run) => Ok(run),
         Err(NotLaunched::Unstarted(failure))
             if !t.record.launch_retry
                 && failure.outcome == AttemptOutcome::Died
                 && record.restart.as_ref().is_none_or(|r| r.resume.is_none())
-                && t.record
-                    .attempt
-                    .as_ref()
-                    .is_some_and(|a| a.ending.is_none()) =>
+                && unstaged =>
         {
             // Nothing started, so the next advance runs the step again; no attempt is counted.
             t.withdraw_attempt();
@@ -462,7 +465,7 @@ pub(super) fn launch(
             return Ok(false);
         }
         Err(NotLaunched::Failed(failure) | NotLaunched::Unstarted(failure)) => Err(failure),
-        Err(NotLaunched::Taken(occupancy)) => {
+        Err(NotLaunched::Taken(occupancy)) if unstaged => {
             // The step waits as the first read would have, with no attempt counted.
             t.withdraw_attempt();
             // Only a step's launch carries an eviction, so only a step's is taken.
@@ -476,6 +479,22 @@ pub(super) fn launch(
             persist(&mut t, &guard)?;
             return Ok(wait.is_none());
         }
+        Err(NotLaunched::Budget(reason)) if unstaged => {
+            // The budget was spent after the first read admitted the launch: the node waits as
+            // that read would have, with no attempt counted, and a restart stays to be launched.
+            t.withdraw_attempt();
+            t.step_wait("budget", Some(reason));
+            persist(&mut t, &guard)?;
+            return Ok(false);
+        }
+        Err(NotLaunched::Taken(_)) => Err(LaunchFailure {
+            outcome: AttemptOutcome::Died,
+            reason: "the checkout was taken during the launch".into(),
+        }),
+        Err(NotLaunched::Budget(reason)) => Err(LaunchFailure {
+            outcome: AttemptOutcome::Died,
+            reason,
+        }),
     };
     if record.restart.is_some() && t.record.restart == record.restart {
         t.record.restart = None;

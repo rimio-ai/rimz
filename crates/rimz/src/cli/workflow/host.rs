@@ -344,7 +344,9 @@ impl workflow::AttemptHost for Host<'_> {
                     run_id: run.record.run_id,
                 }));
             }
-            Ok(Ok(LaunchOutcome::BudgetExceeded { reason })) => (AttemptOutcome::Limited, reason),
+            Ok(Ok(LaunchOutcome::BudgetExceeded { reason })) => {
+                return Ok(Err(workflow::NotLaunched::Budget(reason)));
+            }
             Ok(Ok(LaunchOutcome::Declined | LaunchOutcome::Existing)) => {
                 (AttemptOutcome::Died, "workflow launch aborted".into())
             }
@@ -630,6 +632,14 @@ impl workflow::AttemptHost for Host<'_> {
         account: Option<&rimz::ids::LoginName>,
     ) -> Result<Vec<rimz::harness::throttle::StartGroup>, WorkflowErr> {
         workflow::launch_groups(record, agent, account)
+    }
+
+    fn budget_refusal(
+        &self,
+        record: &rimz::store::workflow::RunRecord,
+        groups: &[rimz::harness::throttle::StartGroup],
+    ) -> Result<Option<String>, WorkflowErr> {
+        workflow::budget_refusal(record, groups)
     }
 }
 

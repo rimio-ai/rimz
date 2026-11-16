@@ -374,7 +374,7 @@ pub(in crate::cli) fn write_held(
             && wait.node == record.node
             && matches!(
                 wait.outcome.as_str(),
-                "capacity" | "window" | "occupied" | "takeover"
+                "capacity" | "window" | "budget" | "occupied" | "takeover"
             )
     }) else {
         return Ok(());

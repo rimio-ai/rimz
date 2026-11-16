@@ -2497,6 +2497,11 @@ reason = "The start-group resolver stays in the library; the CLI attempt host's 
 
 [[verdict]]
 kind = "item"
+key = "harness::workflow::budget_refusal"
+reason = "The budget gate's first read of a workflow launch stays in the library; the CLI attempt host's budget_refusal delegates to it."
+
+[[verdict]]
+kind = "item"
 key = "harness::workflow::orphan"
 reason = "The lookup of a dead launcher's unpublished supervised run stays in the library; the CLI attempt host's orphan delegates to it."
 
@@ -5775,7 +5780,8 @@ allowed-dependencies = [
 # admit and Inadmissible: run start, each advance read, resume, restart, the signal wake and the workflow CLI's waiting report share one admission (+2).
 # When carries a workflow time from its spelling to the instant a run resolves it (+1).
 # submit lets a judge's `rimz workflow submit` answer its check through the engine (+1).
-surface-budget = 98
+# AttemptHost::budget_refusal and budget_refusal let the engine hold a launch the budget gate would refuse (+2).
+surface-budget = 100
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"

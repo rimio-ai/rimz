@@ -14,6 +14,7 @@ struct Room {
     owners: std::cell::RefCell<BTreeMap<String, std::process::Child>>,
 }
 
+mod budget;
 mod capacity;
 mod keep;
 mod message;

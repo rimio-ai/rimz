@@ -15,6 +15,15 @@ pub(in crate::harness) struct FakeHost {
     pub(in crate::harness) failure: RefCell<Option<LaunchFailure>>,
     /// The start groups admission sees, in place of resolving the step's agent.
     pub(super) groups: RefCell<Option<Vec<crate::harness::throttle::StartGroup>>>,
+    /// Fail resolving the start groups with this error, as a broken project config does.
+    pub(super) groups_error: RefCell<Option<String>>,
+    /// The reason the budget gate refuses every launch it is asked about, read before the launch.
+    pub(in crate::harness) budget: RefCell<Option<String>>,
+    /// Fail the budget read with a host error.
+    pub(in crate::harness) budget_error: Cell<bool>,
+    pub(in crate::harness) budget_reads: Cell<usize>,
+    /// The reason the launcher's own gate refuses every launch it prepares.
+    pub(super) launch_budget: RefCell<Option<String>>,
     /// Report the injected failure as one that started nothing.
     unstarted: Cell<bool>,
     /// Fail the launch with a host error after it opened, giving the engine no verdict.
@@ -104,6 +113,11 @@ impl FakeHost {
             retired: RefCell::new(Vec::new()),
             leader_session: RefCell::new(None),
             groups: RefCell::new(None),
+            groups_error: RefCell::new(None),
+            budget: RefCell::new(None),
+            budget_error: Cell::new(false),
+            budget_reads: Cell::new(0),
+            launch_budget: RefCell::new(None),
         }
     }
 
@@ -157,8 +171,19 @@ impl AttemptHost for FakeHost {
                     }
                     *self.occupancy.borrow_mut() = Occupancy::Free;
                 }
-                taken => return Ok(Err(NotLaunched::Taken(taken))),
+                taken => {
+                    if let Some(check) = &*self.on_launch.borrow() {
+                        check();
+                    }
+                    return Ok(Err(NotLaunched::Taken(taken)));
+                }
             }
+        }
+        if let Some(reason) = &*self.launch_budget.borrow() {
+            if let Some(check) = &*self.on_launch.borrow() {
+                check();
+            }
+            return Ok(Err(NotLaunched::Budget(reason.clone())));
         }
         self.launched.borrow_mut().push(step);
         if let Some(check) = &*self.on_launch.borrow() {
@@ -297,10 +322,25 @@ impl AttemptHost for FakeHost {
         agent: &str,
         account: Option<&crate::ids::LoginName>,
     ) -> Result<Vec<crate::harness::throttle::StartGroup>, WorkflowErr> {
+        if let Some(error) = &*self.groups_error.borrow() {
+            return Err(WorkflowErr::Refused(error.clone()));
+        }
         match &*self.groups.borrow() {
             Some(groups) => Ok(groups.clone()),
             None => launch_groups(record, agent, account),
         }
+    }
+
+    fn budget_refusal(
+        &self,
+        _: &crate::store::workflow::RunRecord,
+        _: &[crate::harness::throttle::StartGroup],
+    ) -> Result<Option<String>, WorkflowErr> {
+        self.budget_reads.set(self.budget_reads.get() + 1);
+        if self.budget_error.get() {
+            return Err(WorkflowErr::Refused("spend ledger unreadable".into()));
+        }
+        Ok(self.budget.borrow().clone())
     }
 
     /// The fake's launches never report to the machine's start queue, which every test
