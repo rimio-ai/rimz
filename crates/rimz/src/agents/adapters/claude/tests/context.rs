@@ -247,6 +247,40 @@ fn statusline_push_keeps_a_model_limit_turn_paused() {
 }
 
 #[test]
+fn turn_ending_denial_reaches_the_observed_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!(
+            "{\"type\":\"user\",\"timestamp\":\"2026-11-16T07:41:37.485Z\",",
+            "\"toolDenialKind\":\"automode-unavailable\",\"toolDenialEndsTurn\":true,",
+            "\"permissionDecision\":{\"decision\":\"reject\",",
+            "\"reasonCode\":\"classifier:auto-mode:no-verdict\"},",
+            "\"message\":{\"content\":[{\"type\":\"tool_result\",\"is_error\":true,",
+            "\"content\":\"Auto mode is unavailable\"}]}}\n",
+            "{\"type\":\"system\",\"subtype\":\"turn_duration\"}\n",
+        ),
+    )
+    .unwrap();
+
+    let context = ClaudeAdapter
+        .observe_context(
+            "claude",
+            &json!({
+                "session_id": "sess-1",
+                "transcript_path": transcript.to_str().unwrap(),
+            }),
+        )
+        .map(|observation| observation.context)
+        .expect("observed");
+    let error = context.turn_error.expect("the stopped turn is detected");
+    assert_eq!(error.class, TurnErrorClass::PausedOverloaded);
+    assert_eq!(error.label.as_deref(), Some("Auto mode is unavailable"));
+    assert!(context.settle.is_none());
+}
+
+#[test]
 fn turn_interrupted_reads_the_tail_from_the_payload_path() {
     let dir = tempfile::tempdir().unwrap();
     let transcript = dir.path().join("session.jsonl");
