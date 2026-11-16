@@ -385,7 +385,7 @@ impl Row {
         if let Some(check) = spec.check(name) {
             let runner = match check.kind() {
                 Some(Kind::Test(invocation) | Kind::Script(invocation)) => command_line(invocation),
-                Some(Kind::Judge(agent)) => format!("{agent}, headless"),
+                Some(Kind::Judge(agent)) => format!("{agent}, judge"),
                 Some(Kind::Condition(_)) => "condition".into(),
                 Some(Kind::Sleep(sleep)) => format!("sleep {}", sleep.duration().text()),
                 Some(Kind::Command(_) | Kind::Agent(_) | Kind::Message(_)) | None => {

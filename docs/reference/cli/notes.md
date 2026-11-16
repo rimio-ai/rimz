@@ -66,11 +66,11 @@ Each note opens with a YAML header between `---` lines, then the body. RimZ writ
 | `role` | The agent's team role, from `RIMZ_AGENT_ROLE`. | The agent holds a role. |
 | `model` | The model the agent was launched with, from `RIMZ_AGENT_MODEL`. A model switched mid-session is not seen. | The launch named a model. |
 | `project` | The project root, from `RIMZ_PROJECT_ROOT`, else the project the current directory resolves to. The global `--root` names it ahead of both. | The writer is inside a project. |
-| `worktree` | The checkout the writer runs in, from `RIMZ_WORKTREE_PATH`: the project's main checkout or a linked worktree, so it can equal `project`. | The writer runs in a room pane, or RimZ started it as a headless check, a start-throttle check, a loop task's workflow script, or a worktree hook. |
+| `worktree` | The checkout the writer runs in, from `RIMZ_WORKTREE_PATH`: the project's main checkout or a linked worktree, so it can equal `project`. | The writer runs in a room pane, or RimZ started it as a start-throttle check, a loop task's workflow script, or a worktree hook. |
 | `channel` | The agent's channel, from `RIMZ_CHANNEL`. | The agent is on a named channel. |
-| `loop-task` | The loop task that started the writer, from `RIMZ_LOOP_TASK`. | A loop task started the writer as a headless check, a start-throttle check, or a workflow script. An agent a loop fire launches carries `workflow-run` instead. |
+| `loop-task` | The loop task that started the writer, from `RIMZ_LOOP_TASK`. | A loop task started the writer as a start-throttle check or a workflow script. An agent a loop fire launches carries `workflow-run` instead. |
 | `loop-fire` | The fire that started the writer, from `RIMZ_LOOP_FIRE`. | A loop fire started the writer as a start-throttle check or a workflow script. |
-| `workflow-run` | The workflow run the writer belongs to, from `RIMZ_WORKFLOW_RUN`. | A workflow step launched it, including a headless check. |
+| `workflow-run` | The workflow run the writer belongs to, from `RIMZ_WORKFLOW_RUN`. | A workflow run launched it: a step's or a judge's agent, or a check's script. |
 
 These facts come from the writer's environment alone; RimZ reads no room record to fill them. A variable set to the empty string counts as absent, and a plain shell writes `kind`, `title`, `written`, and usually `project`. When resolving the project fails (a broken RimZ home, a failing `git`), the note is still written without `project`, and one warning on stderr says why; stdout still holds the path alone.
 

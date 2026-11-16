@@ -568,8 +568,8 @@ on.fail='@wait'
 }
 
 #[test]
-fn horizontal_canceled_limited_judge_wait_marks_the_stopping_node() {
-    // Cancel a limited judge after its Engine-origin evaluation, before the scheduled recheck.
+fn horizontal_canceled_held_judge_marks_the_stopping_node() {
+    // Cancel a judge held in its pane on a limit: the cancel abandons its check.
     canceled_horizontal(
         r#"[judge.work]
 agent='claude'
@@ -608,16 +608,11 @@ on.fail='@failed'
     "ended_at": "2026-11-04T15:13:38.548114847Z",
     "event": "evaluation",
     "node": "work",
-    "object": {
-      "outcome": "limited",
-      "reason": "Claude check failed: quota exhausted"
-    },
+    "object": null,
     "origin": "engine",
-    "outcome": "limited",
-    "retry": null,
+    "outcome": "canceled",
     "seq": 2,
-    "started_at": "2026-11-04T15:13:38.537922564Z",
-    "stderr_tail": ""
+    "started_at": "2026-11-04T15:13:38.537922564Z"
   },
   {
     "at": "2026-11-04T15:13:38.572010164Z",

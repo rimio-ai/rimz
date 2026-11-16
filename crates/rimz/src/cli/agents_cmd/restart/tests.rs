@@ -444,7 +444,6 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
             continue_session: false,
             follow_up_message: None,
             reminder_section: expected,
-            headless: None,
             identity: rimz::harness::launch::ExecIdentity {
                 row_key: None,
                 resume_model_override: false,

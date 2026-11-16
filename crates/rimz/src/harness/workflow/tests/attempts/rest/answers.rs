@@ -77,20 +77,13 @@ fn shell_and_judge_pushbacks_name_the_answering_check_and_its_output() {
         check.agent = Some("claude".into());
         check.prompt_file = Some("prompt.md".into());
     });
-    fs::write(
-        paths.check_output(seq),
-        r#"{"outcome":"fail","reason":"exited 1"}"#,
-    )
-    .unwrap();
+    // A judge's answer is the whole account: no file link.
     let text = crate::harness::workflow::brief::push(&paths, &spec, &pushed).unwrap();
-    assert!(text.find("exited 1") < text.find("output:"), "{text}");
+    assert!(text.contains("check `review` answered `fail`"), "{text}");
     assert!(
-        text.contains(&format!("output: {} (", paths.check_output(seq).display())),
+        !text.contains("\n\noutput:") && !text.contains("\n\nno output"),
         "{text}"
     );
-    fs::remove_file(paths.check_output(seq)).unwrap();
-    let text = crate::harness::workflow::brief::push(&paths, &spec, &pushed).unwrap();
-    assert!(text.contains("\n\nno output\n\n"), "{text}");
     fs::remove_file(&paths.journal).unwrap();
     let text = crate::harness::workflow::brief::push(&paths, &spec, &pushed).unwrap();
     assert!(text.contains("check `pr` answered `fail`"), "{text}");

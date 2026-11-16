@@ -29,7 +29,6 @@ mod account;
 mod app_server;
 mod ask;
 pub(in crate::agents) mod broker;
-mod headless;
 mod install;
 mod local_sessions;
 mod model_alias;
@@ -245,7 +244,6 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             "-c",
             "tui.question_esc_back=false",
         ]),
-        headless: Some(&headless::CodexHeadless),
         definitions: DEFINITIONS,
         program: Some("codex"),
         fixed_args: &["--no-daemon", "-c", "tui.question_esc_back=false"],
@@ -983,10 +981,6 @@ impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
             return Ok(None);
         }
         install::adopt_config(existing, target)
-    }
-
-    fn headless_requires_folder_trust(&self) -> bool {
-        true
     }
 
     fn folder_trust(

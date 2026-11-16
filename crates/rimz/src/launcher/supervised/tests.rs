@@ -140,7 +140,6 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             continue_session: false,
             follow_up_message: None,
             reminder_section: None,
-            headless: None,
             identity: rimz::harness::launch::ExecIdentity {
                 row_key: None,
                 resume_model_override: false,

@@ -262,10 +262,6 @@ impl WorkflowPaths {
         self.work.join("notes")
     }
 
-    pub fn check_output(&self, seq: u64) -> PathBuf {
-        self.work.join(format!("{seq}.check.json"))
-    }
-
     pub fn check_log(&self, seq: u64) -> PathBuf {
         self.work.join(format!("{seq}.check.log"))
     }

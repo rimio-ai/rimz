@@ -26,7 +26,7 @@ pub use definition::{Condition, Definition, Invocation, Kind, Limit, Node, Targe
 pub(crate) use engine::hears_lifecycle;
 pub use engine::{
     Advance, DefinitionSource, InlineDefinition, StartArgs, TaskStart, WorkflowErr, advance,
-    cancel, create, launch_groups, restart, resume, wake, wake_run,
+    cancel, create, launch_groups, restart, resume, submit, wake, wake_run,
 };
 pub(crate) use engine::{reassign_task, unacted_task_runs};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};

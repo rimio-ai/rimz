@@ -3484,16 +3484,6 @@ fn supervised_claude_without_folder_trust_refuses_but_headless_passes() {
             .to_string()
             .contains("rimz trust grant --agents claude")
     );
-    assert!(
-        rimz::agents::preflight_launch_dir(
-            adapter,
-            &env.project_root,
-            Some(&env.project_root),
-            &login_env,
-            rimz::agents::LaunchDirMode::Headless
-        )
-        .is_ok()
-    );
     assert!(!config.exists(), "preflight must not grant folder trust");
 }
 
@@ -4713,7 +4703,6 @@ fn run_exiting_resume_wrapper(
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity {
             params: LaunchParams {
                 isolation: Some(rimz::config::Isolation::Host),

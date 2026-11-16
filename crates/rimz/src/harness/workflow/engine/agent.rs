@@ -53,6 +53,80 @@ pub(super) fn compose(
     Ok(parts.join("\n\n"))
 }
 
+/// A judge's launch prompt: its check's prompt file, which validation requires, and the submit
+/// contract.
+pub(super) fn compose_judge(
+    record: &RunRecord,
+    paths: &WorkflowPaths,
+    spec: &Definition,
+    digests: &mut BTreeMap<String, String>,
+) -> Result<String> {
+    let Some(prompt_file) = spec.check(&record.node).and_then(Node::prompt_file) else {
+        return Err(WorkflowErr::Refused(format!(
+            "judge.{}.prompt-file: a judge check requires prompt-file",
+            record.node
+        )));
+    };
+    let file = spec::confined_file(&record.definition_dir(paths), prompt_file)?;
+    let prompt = std::fs::read_to_string(file)?;
+    digests.insert(prompt_file.into(), script::digest(prompt.as_bytes()));
+    Ok(super::super::brief::judge_prompt(
+        &prompt, paths, spec, record,
+    ))
+}
+
+/// Stop the judges an interrupt abandoned, then clear their debt from the record in a later
+/// locked write. The debt stays stored until its stop was attempted, so a pass that dies
+/// between the two finds it again and repeats the stop. A workflow launch sets no run timeout,
+/// so nothing else would stop the judge. `finish` makes the same stops ahead of its settlement
+/// instead, so no write ends a run that still owes one.
+pub(super) fn stop_abandoned(
+    state: &StatePaths,
+    paths: &WorkflowPaths,
+    spec: &Definition,
+    host: &dyn AttemptHost,
+    runs: &[workflow::AttemptRun],
+) -> Result<()> {
+    if runs.is_empty() {
+        return Ok(());
+    }
+    stop_owed(host, runs);
+    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let Some(record) = super::reload(paths)? else {
+        return Ok(());
+    };
+    let mut t = Transition {
+        record,
+        spec,
+        paths,
+        now: Timestamp::now(),
+        entries: Vec::new(),
+    };
+    if clear_owed(&mut t.record, runs) {
+        persist(&mut t, &guard)?;
+    }
+    Ok(())
+}
+
+/// Stop each owed judge. A stop that fails is logged and still counts as attempted, so a judge
+/// that cannot be stopped never holds the run.
+fn stop_owed(host: &dyn AttemptHost, runs: &[workflow::AttemptRun]) {
+    for run in runs {
+        if let Err(error) = host.stop(run) {
+            tracing::warn!(run = %run.run_id, %error, "abandoned workflow judge not stopped");
+        }
+    }
+}
+
+/// Drop the debts whose stop was attempted, answering whether any was owed.
+fn clear_owed(record: &mut RunRecord, runs: &[workflow::AttemptRun]) -> bool {
+    let owed = record.abandoned.len();
+    record
+        .abandoned
+        .retain(|debt| runs.iter().all(|run| run.run_id != debt.run_id));
+    record.abandoned.len() != owed
+}
+
 pub(super) fn empty_observation() -> Observed {
     Observed {
         status: RunStatus::Pending,
@@ -159,14 +233,17 @@ pub(super) fn prepare_end(
         .as_ref()
         .expect("agent attempt was checked");
     let host_live = crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref());
+    let judge = attempt.kind == AttemptKind::Judge;
     if let Some(ending) = &attempt.ending {
         if host_live {
             return Ok(Decision::Stop);
         }
-        if t.record
-            .prev_attempt
-            .as_ref()
-            .is_none_or(|previous| previous.seq != attempt.seq)
+        // A judge stages its evidence on its own attempt, so only a step's can go missing.
+        if !judge
+            && t.record
+                .prev_attempt
+                .as_ref()
+                .is_none_or(|previous| previous.seq != attempt.seq)
         {
             let observed = match &attempt.run {
                 Some(run) => host.observe(run, Observation::Attempt)?,
@@ -185,7 +262,7 @@ pub(super) fn prepare_end(
     let mut observed = match &attempt.run {
         Some(run) => host.observe(
             run,
-            if rest_checked {
+            if rest_checked || judge {
                 Observation::LeaderTurn
             } else {
                 Observation::Attempt
@@ -210,6 +287,13 @@ pub(super) fn prepare_end(
             route: None,
             reason: None,
         })
+    } else if judge && attempt_answered(&t.record) {
+        Some(Ending {
+            outcome: AttemptOutcome::Ended,
+            cause: EndCause::Lifecycle,
+            route: None,
+            reason: None,
+        })
     } else if t.timeout_at()?.is_some_and(|at| at <= t.now) {
         Some(Ending {
             outcome: AttemptOutcome::Timeout,
@@ -219,6 +303,11 @@ pub(super) fn prepare_end(
         })
     } else {
         observed_outcome(&observed, on_asked, on_errored)
+            // A judge's session that ended without an answer died, however it ended.
+            .map(|outcome| match outcome {
+                AttemptOutcome::Ended if judge => AttemptOutcome::Died,
+                outcome => outcome,
+            })
             .or_else(|| (missing_run && !host_live).then_some(AttemptOutcome::Canceled))
             .map(|outcome| Ending {
                 outcome,
@@ -237,6 +326,9 @@ pub(super) fn prepare_end(
                 persist(t, guard)?;
             }
             return Ok(Decision::Push(Box::new(t.record.clone())));
+        }
+        if judge {
+            return remind(t, guard, &observed, hold_changed);
         }
         if rest::begin(t, &observed)? {
             persist(t, guard)?;
@@ -260,6 +352,37 @@ pub(super) fn prepare_end(
     Ok(Decision::End(Box::new(t.record.clone())))
 }
 
+fn attempt_answered(record: &RunRecord) -> bool {
+    record
+        .attempt
+        .as_ref()
+        .is_some_and(|attempt| attempt.answer.is_some())
+}
+
+/// Remind a judge once, at its first clean rest without an answer; otherwise it waits.
+fn remind(
+    t: &mut Transition<'_>,
+    guard: &WorkspaceLock,
+    observed: &Observed,
+    hold_changed: bool,
+) -> Result<Decision> {
+    // prepare_end hands on only its published judge attempt.
+    let attempt = t.record.attempt.as_mut().expect("observed judge attempt");
+    if attempt.reminded || rest::eligible(observed).is_none() {
+        if hold_changed {
+            persist(t, guard)?;
+        }
+        return Ok(Decision::Stop);
+    }
+    attempt.reminded = true;
+    attempt.push = Some(workflow::PushBack {
+        message: crate::ids::MessageId::new(),
+        queued: false,
+    });
+    persist(t, guard)?;
+    Ok(Decision::Push(Box::new(t.record.clone())))
+}
+
 /// A published agent attempt ready to launch: its record, prompt, machine turn, and takeover.
 pub(super) type Launch = (
     RunRecord,
@@ -278,49 +401,12 @@ pub(super) fn launch(
     let record = &record;
     // Preparation publishes the attempt before entering this off-lock launch.
     let attempt = record.attempt.as_ref().expect("prepared agent launch");
-    let step = spec.step(&record.node).expect("prepared agent step");
-    let prepared = prompt.and_then(|prompt| {
-        let overrides = step
-            .launch_overrides(&record.definition_dir(paths))
-            .map_err(|error| error.to_string())?;
-        Ok((prompt, overrides))
-    });
-    let launched = match prepared {
-        Ok((prompt, overrides)) => host
+    let launched = match prompt.and_then(|prompt| step_launch(paths, spec, record, prompt)) {
+        Ok(launch) => host
             .launch(StepLaunch {
-                automation: crate::agents::Automation::Workflow {
-                    workflow: record.workflow.clone(),
-                    step: record.node.clone(),
-                },
-                workflow: WorkflowAttemptRef {
-                    run: record.id.clone(),
-                    seq: attempt.seq,
-                    role: WorkflowAttemptRole::Step,
-                },
-                // Preparation dispatches only validated agent steps here.
-                agent: match step.kind() {
-                    Some(Kind::Agent(agent)) => agent.clone(),
-                    _ => unreachable!("agent step layout"),
-                },
-                lifecycle: attempt.lifecycle,
-                keep: step.keep().unwrap_or(false),
-                resume: record
-                    .restart
-                    .as_ref()
-                    .and_then(|restart| restart.resume.clone()),
-                prompt,
-                workflow_note: super::super::brief::step(paths, spec, record),
-                cwd: record.scope.path.clone(),
                 throttle_turn,
-                overrides,
-                takeover: step.occupancy() == Some(super::super::OccupancyPolicy::Takeover),
-                task: record.task.clone(),
-                booked_by: record
-                    .fire
-                    .as_ref()
-                    .map(|fire| fire.booked_by().to_vec())
-                    .unwrap_or_default(),
                 evict,
+                ..launch
             })
             .unwrap_or_else(|error| {
                 Err(NotLaunched::Failed(LaunchFailure {
@@ -373,6 +459,10 @@ pub(super) fn launch(
         Err(NotLaunched::Taken(occupancy)) => {
             // The step waits as the first read would have, with no attempt counted.
             t.withdraw_attempt();
+            // Only a step's launch carries an eviction, so only a step's is taken.
+            let step = spec
+                .step(&record.node)
+                .expect("an evicting launch is a step's");
             let wait = super::occupancy_wait(&occupancy, step);
             if let Some(wait) = wait {
                 t.step_wait(wait, None);
@@ -388,7 +478,10 @@ pub(super) fn launch(
         Ok(run) => {
             t.record.attempt.as_mut().expect("current launch").run = Some(run);
             persist(&mut t, &guard)?;
-            accounting::step(&t.record, None);
+            // A judge's account is its Evaluation entry and its decline assist.
+            if attempt.kind != AttemptKind::Judge {
+                accounting::step(&t.record, None);
+            }
             if t.record
                 .attempt
                 .as_ref()
@@ -433,6 +526,91 @@ pub(super) fn launch(
     finish(state, paths, spec, &record, host, reason)
 }
 
+/// The launch an agent step or a judge takes, before its machine turn and eviction.
+fn step_launch(
+    paths: &WorkflowPaths,
+    spec: &Definition,
+    record: &RunRecord,
+    prompt: String,
+) -> std::result::Result<StepLaunch, String> {
+    // Preparation publishes the attempt before entering this off-lock launch.
+    let attempt = record.attempt.as_ref().expect("prepared agent launch");
+    let workflow = WorkflowAttemptRef {
+        run: record.id.clone(),
+        seq: attempt.seq,
+        role: role(attempt),
+    };
+    let automation = crate::agents::Automation::Workflow {
+        workflow: record.workflow.clone(),
+        step: record.node.clone(),
+    };
+    let booked_by = record
+        .fire
+        .as_ref()
+        .map(|fire| fire.booked_by().to_vec())
+        .unwrap_or_default();
+    if attempt.kind == AttemptKind::Judge {
+        // Preparation dispatches only validated judge checks here.
+        let Some(Kind::Judge(agent)) = spec.check(&record.node).and_then(Node::kind) else {
+            unreachable!("judge check layout")
+        };
+        return Ok(StepLaunch {
+            automation,
+            workflow,
+            agent: agent.clone(),
+            lifecycle: attempt.lifecycle,
+            keep: false,
+            resume: None,
+            prompt,
+            workflow_note: super::super::brief::judge(spec, record),
+            cwd: record.scope.path.clone(),
+            throttle_turn: None,
+            overrides: super::super::LaunchOverrides::default(),
+            takeover: false,
+            task: record.task.clone(),
+            booked_by,
+            evict: None,
+        });
+    }
+    let step = spec.step(&record.node).expect("prepared agent step");
+    let overrides = step
+        .launch_overrides(&record.definition_dir(paths))
+        .map_err(|error| error.to_string())?;
+    Ok(StepLaunch {
+        automation,
+        workflow,
+        // Preparation dispatches only validated agent steps here.
+        agent: match step.kind() {
+            Some(Kind::Agent(agent)) => agent.clone(),
+            _ => unreachable!("agent step layout"),
+        },
+        lifecycle: attempt.lifecycle,
+        keep: step.keep().unwrap_or(false),
+        resume: record
+            .restart
+            .as_ref()
+            .and_then(|restart| restart.resume.clone()),
+        prompt,
+        workflow_note: super::super::brief::step(paths, spec, record),
+        cwd: record.scope.path.clone(),
+        throttle_turn: None,
+        overrides,
+        takeover: step.occupancy() == Some(super::super::OccupancyPolicy::Takeover),
+        task: record.task.clone(),
+        booked_by,
+        evict: None,
+    })
+}
+
+/// The pin role of an attempt that owns an agent run.
+fn role(attempt: &LiveAttempt) -> WorkflowAttemptRole {
+    if attempt.kind == AttemptKind::Judge {
+        WorkflowAttemptRole::Judge
+    } else {
+        WorkflowAttemptRole::Step
+    }
+}
+
 fn detaches(spec: &Definition, attempt: &LiveAttempt) -> bool {
     let ending = attempt.ending.as_ref().expect("published agent ending");
     let keep = spec.step(&attempt.node).and_then(Node::keep);
@@ -462,10 +640,11 @@ pub(super) fn finish(
         let identity = WorkflowAttemptRef {
             run: record.id.clone(),
             seq: attempt.seq,
-            role: WorkflowAttemptRole::Step,
+            role: role(attempt),
         };
         run = host.orphan(state, &identity)?;
     }
+    let mut kind = None;
     let (children, cost) = match &run {
         Some(run) => (
             if detached {
@@ -475,6 +654,7 @@ pub(super) fn finish(
                 // An unreadable record leaves the launch's turn to its report or ceiling.
                 if let Ok(stopped) = crate::harness::run::load(state, &run.run_id) {
                     crate::harness::throttle::release_stopped(&stopped);
+                    kind = Some(stopped.kind);
                 }
                 children
             },
@@ -482,7 +662,14 @@ pub(super) fn finish(
         ),
         None => (Children::default(), None),
     };
+    stop_owed(host, &record.abandoned);
     let head_end = super::super::head(&record.scope.path);
+    // A judge settles against the definition as it reads after the stop, as a script check
+    // does after its child; a step keeps the one its ending was staged under.
+    let fresh = (attempt.kind == AttemptKind::Judge)
+        .then(|| super::Reader::new().reread(paths, record))
+        .flatten();
+    let spec = fresh.as_ref().unwrap_or(spec);
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let Some(current) = super::reload(paths)? else {
         return Ok(false);
@@ -512,11 +699,126 @@ pub(super) fn finish(
         drop(guard);
         return finish(state, paths, spec, &record, host, reason);
     }
-    t.record.attempt.as_mut().expect("current agent ending").run = run;
+    // A close stages its own ending and has checked the fit; any other judge ending checks it
+    // against the reread definition before it settles.
+    let closed = t
+        .record
+        .attempt
+        .as_ref()
+        .and_then(|current| current.ending.as_ref())
+        .is_some_and(|ending| ending.cause == EndCause::Cancel);
+    if attempt.kind == AttemptKind::Judge
+        && !closed
+        && let Some(reason) = super::fit::misfit(spec, &t.record)
+    {
+        super::fit::close(
+            state,
+            paths,
+            t,
+            guard,
+            host,
+            super::fit::Closing::Fail(reason),
+        )?;
+        // The close staged its ending on this live process, so this pass finishes it.
+        let Some(record) = super::reload(paths)?.filter(|record| {
+            record
+                .attempt
+                .as_ref()
+                .is_some_and(|attempt| attempt.ending.is_some())
+        }) else {
+            return Ok(false);
+        };
+        return finish(state, paths, spec, &record, host, None);
+    }
+    let current = t.record.attempt.as_mut().expect("current agent ending");
+    let woken = std::mem::take(&mut current.woken);
+    current.run = run;
     // A concurrent cancel may have replaced the ending while the stop ran.
     t.settle_agent(children, cost, head_end, reason)?;
+    // A judge a subscribed signal reached while it ran evaluates again rather than sleeping
+    // on its answer's recheck time, as a woken script check does; a rest check's held session
+    // takes its own wake in `rest::prepare`.
+    let rechecks = woken && t.record.held.is_none() && t.record.wait.is_some();
+    if rechecks && let Some(wait) = &mut t.record.wait {
+        wait.recheck_at = None;
+        t.record.recheck_at = None;
+    }
+    let answer = (attempt.kind == AttemptKind::Judge)
+        .then(|| accepted(&t.entries, attempt.seq))
+        .flatten();
+    clear_owed(&mut t.record, &record.abandoned);
     persist(&mut t, &guard)?;
-    Ok(t.record.state == RunState::Active && t.record.wait.is_none())
+    drop(guard);
+    if let (Some(answer), Some(kind)) = (answer, kind) {
+        record_decline(spec, record, kind, &answer, cost);
+    }
+    Ok(t.record.state == RunState::Active && (t.record.wait.is_none() || rechecks))
+}
+
+/// The answer a judge's settlement accepted, read from its check Evaluation entry.
+fn accepted(entries: &[workflow::JournalEntry], seq: u64) -> Option<serde_json::Value> {
+    entries.iter().find_map(|entry| match &entry.event {
+        JournalEvent::Evaluation {
+            origin: workflow::EvaluationOrigin::Check,
+            object,
+            ..
+        } if entry.seq == Some(seq) => Some(object.clone()),
+        _ => None,
+    })
+}
+
+/// An accepted answer from a judge in a loop-started run that holds the run's act back is one
+/// assist. A loop fire's command row compiles no judge.
+fn record_decline(
+    spec: &Definition,
+    record: &RunRecord,
+    kind: crate::ids::AgentKind,
+    object: &serde_json::Value,
+    cost_usd: Option<f64>,
+) {
+    let (Some(task), Some(outcome)) = (record.task.as_ref(), object["outcome"].as_str()) else {
+        return;
+    };
+    let Some(Kind::Judge(profile)) = spec.check_kind(&record.node) else {
+        return;
+    };
+    if !declines(spec, &record.node, outcome) {
+        return;
+    }
+    crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
+        at: Timestamp::now(),
+        assist: crate::harness::assist_log::Assist::JudgeDecline {
+            task: task.clone(),
+            checkout: record.scope.path.clone(),
+            profile: profile.clone(),
+            kind,
+            reason: object["reason"].as_str().unwrap_or_default().to_owned(),
+            cost_usd,
+        },
+    });
+}
+
+/// Whether a judge's verdict routes away from every step and judge check while its opposite
+/// verdict leads into one: a judge that guards the run's act.
+fn declines(spec: &Definition, node: &str, outcome: &str) -> bool {
+    let opposite = match outcome {
+        "pass" => "fail",
+        "fail" => "pass",
+        _ => return false,
+    };
+    let edges = spec.edges(node);
+    let acts = |outcome: &str| {
+        edges
+            .iter()
+            .find(|edge| edge.outcome == outcome)
+            .map(|edge| {
+                edge.target.node().is_some_and(|node| {
+                    spec.step(node).is_some()
+                        || matches!(spec.check_kind(node), Some(Kind::Judge(_)))
+                })
+            })
+    };
+    acts(outcome) == Some(false) && acts(opposite) == Some(true)
 }
 
 #[cfg(test)]

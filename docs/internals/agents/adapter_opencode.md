@@ -154,7 +154,6 @@ Detection searches `PATH`, then `~/.opencode/bin`. Launch, install, setup, and `
 
 Other launch text limits:
 
-- A headless request refuses, because `launch.headless` is `None`.
 - A compaction instruction is dropped without notice, because `CompactInstruction::Unsupported` renders only `/compact`.
 
 `crates/rimz/src/agents/adapters/opencode/mod.rs::OPENCODE_DESCRIPTOR` declares `SystemPromptFile` as `PresetArgMatcher::EnvConfigMember`, naming `OPENCODE_CONFIG_CONTENT` and `agents.build.system`. Every OpenCode definition therefore requires a nonempty `agents/opencode.md` kind base, even without a craft body. A home with no definitions needs none; there, a bare `rimz agents opencode` still launches without a replacement. The [kind-base validation rule](../../reference/definitions.md#kind-bases) supplies the missing-base error.
@@ -326,7 +325,7 @@ The spend cache stamps one origin per database file, either an origin override f
 
 - Native answering, background parking, background shells, and remote control are unsupported.
 - Idle attention is partial: OpenCode has no idle notification, so RimZ reconstructs it from turn boundaries, native asks, and the stall window.
-- Plan mode at launch, fork, and headless runs are unsupported. Effort requires a model-selection step; missing-model launches and effort-only resumes warn as [above](#model-selection). System-prompt replacement has the [agent-selection, managed-settings, and artifact-retention limits](#replacement-limits) above.
+- Plan mode at launch and fork is unsupported. Effort requires a model-selection step; missing-model launches and effort-only resumes warn as [above](#model-selection). System-prompt replacement has the [agent-selection, managed-settings, and artifact-retention limits](#replacement-limits) above.
 - RimZ does not read `OPENCODE_DB`, and it skips channel databases whose names contain a `.`, which OpenCode allows ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-storage-and-credentials)).
 - Workspace-scoped spend reads one origin for the whole shared database.
 - The reference does not record whether OpenCode runs the `context` hook for title or generate requests, so whether those requests carry the launch reminder is unverified.

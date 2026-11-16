@@ -84,11 +84,7 @@ fn tick_retries_a_reopened_judge_window() {
     judges::capacity(&env, 100);
     let shell = write_fake_login_shell(&env, "window-shell", &[]);
     let bin = env.home_root.join("window-bin");
-    write_path_shim(
-        &bin,
-        "claude",
-        "printf '%s\\n' '{\"structured_output\":{\"outcome\":\"done\"}}'",
-    );
+    write_path_shim(&bin, "claude", "exit 0");
     let receipt = success(
         env.rimz()
             .args(["workflow", "run", "review"])
@@ -100,8 +96,10 @@ fn tick_retries_a_reopened_judge_window() {
     let id = receipt.lines().next().unwrap();
     until(&env, id, |v| v["record"]["wait"]["outcome"] == "window");
     judges::capacity(&env, 0);
+    // The reopened window lets the judge's launch go ahead; this fixture has no room for its
+    // pane, so the test stops at the wait the tick closes.
     until(&env, id, |v| {
-        if v["record"]["state"] == "done" {
+        if v["record"]["wait"]["outcome"] != "window" {
             return true;
         }
         success(

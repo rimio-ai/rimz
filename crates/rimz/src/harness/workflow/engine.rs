@@ -67,9 +67,7 @@ impl From<super::Inadmissible> for WorkflowErr {
 
 mod agent;
 
-/// Where a new run's definition comes from, with the surplus gate its judges read (`surplus`,
-/// `surplus-after`), which no caller sets since a loop row carries neither, and the `fire` its
-/// briefs name.
+/// Where a new run's definition comes from, with the `fire` its briefs name.
 pub enum DefinitionSource<'a> {
     /// A deployed workflow directory; its basename names the run.
     /// `fire_tree` marks a task run whose checkout is its fire's own fresh worktree.
@@ -78,8 +76,6 @@ pub enum DefinitionSource<'a> {
         task: Option<String>,
         loop_fire: Option<crate::ids::FireId>,
         fire_tree: bool,
-        surplus: Option<String>,
-        surplus_after: Option<String>,
         fire: Option<RunFire>,
         fire_facts: Option<serde_json::Value>,
     },
@@ -91,8 +87,6 @@ pub enum DefinitionSource<'a> {
         loop_fire: crate::ids::FireId,
         definition: InlineDefinition,
         fire_tree: bool,
-        surplus: Option<String>,
-        surplus_after: Option<String>,
         fire: Option<RunFire>,
         fire_facts: Option<serde_json::Value>,
     },
@@ -172,8 +166,6 @@ pub fn create(
             task,
             loop_fire,
             fire_tree,
-            surplus,
-            surplus_after,
             fire,
             fire_facts,
         } => {
@@ -189,8 +181,6 @@ pub fn create(
                 loop_fire: loop_fire.clone(),
                 spec_dir: dir,
                 fire_tree: *fire_tree,
-                surplus: surplus.clone(),
-                surplus_after: surplus_after.clone(),
                 fire: fire.clone(),
                 fire_facts: fire_facts.clone(),
             }
@@ -199,8 +189,6 @@ pub fn create(
             task,
             loop_fire,
             fire_tree,
-            surplus,
-            surplus_after,
             fire,
             fire_facts,
             ..
@@ -211,8 +199,6 @@ pub fn create(
             loop_fire: Some(loop_fire.clone()),
             spec_dir: std::path::PathBuf::new(),
             fire_tree: *fire_tree,
-            surplus: surplus.clone(),
-            surplus_after: surplus_after.clone(),
             fire: fire.clone(),
             fire_facts: fire_facts.clone(),
         },
@@ -264,8 +250,6 @@ struct RunStart {
     loop_fire: Option<crate::ids::FireId>,
     spec_dir: std::path::PathBuf,
     fire_tree: bool,
-    surplus: Option<String>,
-    surplus_after: Option<String>,
     fire: Option<RunFire>,
     fire_facts: Option<serde_json::Value>,
 }
@@ -339,8 +323,6 @@ fn publish(
         fire_tree: start.fire_tree,
         give_up: args.give_up.map(at).transpose()?,
         capacity: args.capacity,
-        surplus: start.surplus,
-        surplus_after: start.surplus_after,
         fire: start.fire,
         project_root: roots.project.clone(),
         created_at: now,
@@ -365,10 +347,7 @@ fn publish(
         prev_attempt: None,
         terminal_at: None,
         outcome: None,
-        check_retry: 0,
-        check_retry_context: None,
-        paused_since: None,
-        paused_ms: 0,
+        abandoned: Vec::new(),
         launch_retry: false,
         engaged: Some(false),
         fire_facts: start.fire_facts,
@@ -593,7 +572,7 @@ pub(super) fn outcome(
 
 /// Why a failed run failed: its last route was an agent step's expired capacity wait, the
 /// failure that ended it is an attempt that ended at its budget or a judge's `limited`
-/// refusal, or neither. A start that can never fit (`never_fits`) is a configuration refusal,
+/// failure, or neither. A start that can never fit (`never_fits`) is a configuration refusal,
 /// so it fails like any other failure. A newer route of another cause, a newer attempt, or an
 /// engine fault (a misfit's) ends the run for its own reason, so the scan stops there.
 fn failure(journal: &[JournalEntry]) -> workflow::RunEnding {
@@ -908,7 +887,7 @@ fn fail_unreadable(
         now: Timestamp::now(),
         entries: Vec::new(),
     };
-    let closing = fit::Closing::Fail(reason, None);
+    let closing = fit::Closing::Fail(reason);
     fit::close(state, paths, t, guard, host, closing)
 }
 
@@ -1018,7 +997,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             return Ok(());
         }
         if let Some(reason) = fit::misfit(spec, &t.record) {
-            let closing = fit::Closing::Fail(reason, result.cost_usd);
+            let closing = fit::Closing::Fail(reason);
             return fit::close(state, &paths, t, guard, host, closing);
         }
         let mut recheck_woken = false;
@@ -1028,37 +1007,20 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
                 .attempt
                 .as_ref()
                 .is_some_and(|attempt| attempt.woken);
-            let retry = if record
-                .attempt
-                .as_ref()
-                .is_some_and(|a| a.kind == AttemptKind::Judge)
-            {
-                t.finish_judge(seq, result)?
-            } else if let (Err(reason), Some(Kind::Script(_))) =
+            if let (Err(reason), Some(Kind::Script(_))) =
                 (&result.object, spec.check_kind(&record.node))
             {
                 let cause = spec::Cause::parse(result.failure).unwrap_or(spec::Cause::Invalid);
                 let reason = reason.clone();
                 t.check_failure(seq, Some(cause), reason, result.detail, result.stderr_tail)?;
-                false
             } else {
                 t.finish_check(seq, result.object, result.detail, result.stderr_tail)?;
-                false
-            };
-            if retry {
-                seen.remove(&record.node);
             }
             if woken && let Some(wait) = &mut t.record.wait {
                 wait.recheck_at = None;
                 t.record.recheck_at = None;
                 seen.remove(&record.node);
                 recheck_woken = true;
-            }
-        } else {
-            for entry in &mut t.entries {
-                if let JournalEvent::Evaluation { cost_usd, .. } = &mut entry.event {
-                    *cost_usd = result.cost_usd;
-                }
             }
         }
         persist(&mut t, &guard)?;
@@ -1110,7 +1072,7 @@ fn command_step(
         return Ok(false);
     }
     if let Some(reason) = fit::misfit(spec, &t.record) {
-        let closing = fit::Closing::Fail(reason, None);
+        let closing = fit::Closing::Fail(reason);
         fit::close(state, paths, t, guard, host, closing)?;
         return Ok(false);
     }
@@ -1314,8 +1276,14 @@ fn prepare(
     if t.record.state != RunState::Active {
         return Ok(Decision::Stop);
     }
+    if !t.record.abandoned.is_empty() {
+        let abandoned = t.record.abandoned.clone();
+        drop(guard);
+        agent::stop_abandoned(state, paths, spec, host, &abandoned)?;
+        return Ok(Decision::Again);
+    }
     if let Some(reason) = fit::misfit(spec, &t.record) {
-        let closing = fit::Closing::Fail(reason, None);
+        let closing = fit::Closing::Fail(reason);
         fit::close(state, paths, t, guard, host, closing)?;
         return Ok(Decision::Stop);
     }
@@ -1334,7 +1302,7 @@ fn prepare(
     if t.record
         .attempt
         .as_ref()
-        .is_some_and(|a| a.kind == AttemptKind::Agent)
+        .is_some_and(|a| a.kind.owns_agent())
     {
         return agent::prepare_end(&mut t, host, &guard);
     }
@@ -1481,18 +1449,14 @@ fn prepare(
         if let (Some(window), Some(Kind::Judge(profile))) = (node.window(), node.kind())
             && let Some(detail) = window_wait_for_launch(&t.record, profile, window, windows, host)?
         {
-            // A judge's clock waits with it: the clock starts when the window admits it.
-            t.record.paused_since.get_or_insert(t.now);
             t.step_wait("window", Some(detail));
             persist(&mut t, &guard)?;
             return Ok(Decision::Stop);
         }
-        if node.window().is_some()
-            && t.record
-                .wait
-                .as_ref()
-                .is_some_and(|wait| wait.outcome == "window")
-        {
+        // A judge launches past its window, or again after a launch that started nothing.
+        if t.record.wait.as_ref().is_some_and(|wait| {
+            (node.window().is_some() && wait.outcome == "window") || wait.outcome == "retry"
+        }) {
             t.close_wait();
         }
         if !seen.insert(t.record.node.clone()) {
@@ -1519,9 +1483,14 @@ fn prepare(
         }
     };
     let mut digests = BTreeMap::new();
-    let prompt = agent_step.map(|step| {
-        agent::compose(&t.record, paths, step, &mut digests).map_err(|error| error.to_string())
-    });
+    let prompt = if let Some(step) = agent_step {
+        Some(agent::compose(&t.record, paths, step, &mut digests))
+    } else if kind == AttemptKind::Judge {
+        Some(agent::compose_judge(&t.record, paths, spec, &mut digests))
+    } else {
+        None
+    }
+    .map(|prompt| prompt.map_err(|error| error.to_string()));
     let notice = step
         .filter(|_| matches!(step_kind, Some(Kind::Message(_))))
         .map(|step| Notice::text(&t.record, paths, step, &mut digests));
@@ -1542,7 +1511,6 @@ fn prepare(
         t.charge_visit();
         t.record.entered_at = t.now;
     }
-    t.unpause();
     let seq = t.record.next_seq;
     t.record.next_seq += 1;
     if let Some(held) = &mut t.record.held {
@@ -1550,7 +1518,12 @@ fn prepare(
     }
     t.record.attempt = Some(LiveAttempt {
         kind,
-        lifecycle: step.map_or(workflow::StepLifecycle::Turn, Node::lifecycle),
+        // A judge lives until it answers, as a session does.
+        lifecycle: match step {
+            Some(step) => step.lifecycle(),
+            None if kind == AttemptKind::Judge => workflow::StepLifecycle::Session,
+            None => workflow::StepLifecycle::Turn,
+        },
         seq,
         node: t.record.node.clone(),
         visit: step.map(|_| t.record.visits_to(&t.record.node)),
@@ -1582,7 +1555,9 @@ fn prepare(
         head_start,
         digests,
         ending: None,
-        retry: t.record.check_retry_context.clone(),
+        answer: None,
+        reminded: false,
+        evidence: None,
     });
     persist(&mut t, &guard)?;
     write_context(&t.record, paths, spec)?;
@@ -1833,8 +1808,7 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &Definition) -
         .as_ref()
         .expect("context belongs to a recorded attempt");
     let step = spec.step(&record.node).is_some();
-    let output_path = (attempt.kind == AttemptKind::Judge).then(|| paths.check_output(attempt.seq));
-    let mut context = json!({"run":record.id, "prompt":record.prompt, "node":record.node, "seq":attempt.seq, "key":record.key, "input":record.input, "output_path":output_path, "retry":attempt.retry, "signs_path":paths.signs(step.then_some(record.node.as_str())), "prev_attempt":record.prev_attempt});
+    let mut context = json!({"run":record.id, "prompt":record.prompt, "node":record.node, "seq":attempt.seq, "key":record.key, "input":record.input, "signs_path":paths.signs(step.then_some(record.node.as_str())), "prev_attempt":record.prev_attempt});
     let visited = record.visits.iter().filter(|(_, visits)| **visits > 0);
     context["step_visits"] = json!(visited.collect::<BTreeMap<_, _>>());
     context["key_visits"] = json!(record.key_visits);
@@ -2019,7 +1993,9 @@ pub fn restart(
             child: None,
             digests: BTreeMap::new(),
             ending: None,
-            retry: None,
+            answer: None,
+            reminded: false,
+            evidence: None,
             woken: false,
             asking: None,
             held_since: None,
@@ -2105,7 +2081,7 @@ pub fn resume(
         }
         if at.is_some()
             && record.attempt.as_ref().is_some_and(|attempt| {
-                attempt.kind == AttemptKind::Agent
+                attempt.kind.owns_agent()
                     && (attempt.ending.is_some() || attempt.run.is_none())
                     && crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref())
             })
@@ -2199,7 +2175,7 @@ pub fn resume(
 }
 
 /// End the live attempt `resume --at` moves the run away from, its route going to `target`:
-/// an agent attempt is staged canceled for the next advance to stop, a step's child is
+/// an agent or judge attempt is staged canceled for the next advance to stop, a step's child is
 /// killed and its attempt settled, and a check's evaluation is abandoned. Whether the
 /// settlement already moved the run.
 fn move_live_attempt(
@@ -2222,7 +2198,7 @@ fn move_live_attempt(
         }),
         reason: None,
     };
-    if attempt.kind == AttemptKind::Agent {
+    if attempt.kind.owns_agent() {
         attempt.ending = Some(ending);
         if attempt.run.is_some() {
             // No off-lock owner is launching this published session.
@@ -2545,6 +2521,80 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
         }
     }
     Ok(())
+}
+
+/// Accept the answer of the judge attempt `seq` of run `id`, from its own agent: the run must
+/// be active with that attempt current and neither answered nor ended, and the answer must fit
+/// the admitted definition at the judge's check. `recheck_at` resolves now, in the configured
+/// time zone, over the object's own. The run is woken to settle the answer.
+pub fn submit(
+    state: &StatePaths,
+    id: &WorkflowRunId,
+    seq: u64,
+    mut answer: serde_json::Map<String, serde_json::Value>,
+    recheck_at: Option<spec::When>,
+) -> Result<()> {
+    let paths = state.workflow(id);
+    let reader = Reader::new();
+    let record = {
+        let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+        let refuse = |why: &str| Err(WorkflowErr::Refused(format!("workflow run {id} {why}")));
+        let Some(record) = reload(&paths)? else {
+            return refuse("is no longer available");
+        };
+        if record.state != RunState::Active {
+            return refuse("is not active");
+        }
+        let Some(attempt) = record
+            .attempt
+            .as_ref()
+            .filter(|attempt| attempt.kind == AttemptKind::Judge && attempt.seq == seq)
+        else {
+            return refuse("is no longer waiting on this judge");
+        };
+        if attempt.answer.is_some() || attempt.ending.is_some() {
+            return refuse("already has this judge's answer");
+        }
+        let spec = reader.admitted(&paths, &record)?;
+        let Some(check) = spec
+            .check(&record.node)
+            .filter(|check| matches!(check.kind(), Some(Kind::Judge(_))))
+        else {
+            return refuse(&format!("no longer has the judge check {}", record.node));
+        };
+        if let Some(when) = recheck_at {
+            let zone = crate::config::MachineConfig::load_time_zone_lenient();
+            let at = when
+                .resolve(Timestamp::now(), &zone)
+                .map_err(WorkflowErr::Refused)?;
+            answer.insert("recheck_at".into(), json!(at.to_string()));
+        }
+        let object = super::state::normalize_object(
+            serde_json::Value::Object(answer),
+            check,
+            record.key.as_ref(),
+            &spec.edges(&record.node),
+        )
+        .map_err(|why| {
+            let answers = super::brief::answers(&spec, &record);
+            WorkflowErr::Refused(format!("{why}; OUTCOME is one of {answers}"))
+        })?;
+        let mut t = Transition {
+            record,
+            spec: &spec,
+            paths: &paths,
+            now: Timestamp::now(),
+            entries: Vec::new(),
+        };
+        t.record
+            .attempt
+            .as_mut()
+            .expect("current judge attempt")
+            .answer = Some(object);
+        persist(&mut t, &guard)?;
+        t.record
+    };
+    spawn(&record).map(drop)
 }
 
 pub fn wake_run(project_root: &Path, id: &WorkflowRunId) -> Result<()> {

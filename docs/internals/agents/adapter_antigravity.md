@@ -44,7 +44,6 @@ Some launch inputs have no Antigravity channel:
 | profile system prompt | refused before launch: `presets.system_prompt_file` stays `None`, since upstream publishes no system-prompt flag |
 | launch reminders | no append-system-text channel, so only the child no-delegation body arrives, through the user-prompt fallback ([fleet.md](../harness/fleet.md#launch-reminders)) |
 | `rimz agents fork` | unsupported: native `/fork` switches identity inside the TUI and has no source-id launch flag ([reference](../../externals/agent-adapter/antigravity-reference.md#fork-rewind-and-clear)) |
-| headless judge | refused: the spec has no `HeadlessForm`, so a workflow judge profile on Antigravity fails validation |
 | scoped profile `skills` list | refused: the manual-skill marker is `Unsupported` ([sandbox.md](../sandbox.md#skill-roots-and-user-only-markers)) |
 | `sandbox` isolation | warns and launches without a provider sandbox: `has_native_sandbox` keeps its `false` default |
 

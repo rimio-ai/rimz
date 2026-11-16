@@ -220,10 +220,6 @@ pub enum LaunchPlanErr {
 }
 
 impl LaunchPlan {
-    pub(super) fn state(&self) -> &StatePaths {
-        &self.state
-    }
-
     /// The handoff uses the same temp owner the provider's launch resolved.
     pub fn park_state_file(&self, wrapper_pid: u32) -> PathBuf {
         let launch_id = self
@@ -597,7 +593,7 @@ fn long_cache_requested(
     machine: &crate::config::MachineConfig,
     effective: Option<&LaunchAgents>,
 ) -> bool {
-    if request.headless.is_some() || !machine.harness.cache_keepalive {
+    if !machine.harness.cache_keepalive {
         return false;
     }
     let (teams, profiles) = effective.map_or(
@@ -620,9 +616,6 @@ fn idle_compact_covered(
     machine: &crate::config::MachineConfig,
     effective: Option<&LaunchAgents>,
 ) -> bool {
-    if request.headless.is_some() {
-        return false;
-    }
     let (teams, profiles) = effective.map_or(
         (&machine.agents.teams, &machine.agents.profiles),
         |effective| (&effective.teams, &effective.profiles),
@@ -752,9 +745,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     reminders.long_cache = long_cache_requested(&request, inputs.machine, inputs.effective);
     reminders.disable_native_idle_compaction =
         idle_compact_covered(&request, inputs.machine, inputs.effective);
-    // A headless check or judge has no pane for RimZ to resume.
-    reminders.disable_native_auto_continue =
-        request.headless.is_none() && inputs.machine.resume.auto_continue;
+    reminders.disable_native_auto_continue = inputs.machine.resume.auto_continue;
     if request
         .allowed_tools
         .as_ref()
@@ -793,8 +784,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     reminders.settings = Some((inputs.runtime.prompt_dir(), login_env.clone()));
     // The block rides the provider's prompt hook: without wired hooks the
     // launch keeps its listing, as a provider without the capability does.
-    reminders.runtime_env = request.headless.is_none()
-        && adapter.spec().capabilities.prompt_context
+    reminders.runtime_env = adapter.spec().capabilities.prompt_context
         && inputs
             .effective
             .is_none_or(|effective| effective.runtime_env)
@@ -845,10 +835,6 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     let unit = inputs.state.temp_unit_dir(owner);
     let view = sandbox::TmpView::current(isolation, owner, inputs.state);
     let tmp = view.agent_path(&unit);
-    if let Some(headless) = &mut request.headless {
-        headless.schema_file = view.agent_path(&headless.schema_file);
-        headless.verdict_file = view.agent_path(&headless.verdict_file);
-    }
     let shared = inputs.state.room_shared_dir.clone();
     reminders.permission_roots = Some([
         inputs.state.root.clone(),
@@ -990,46 +976,6 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             .filter(|key| !login_env.contains_key(*key) && !process.env.contains_key(*key))
             .map(|key| (key.clone(), sandbox::EnvPin::Unset)),
     );
-    if request.headless.is_some() {
-        unset.extend(
-            inputs
-                .ambient_env
-                .keys()
-                .chain(process.env.keys())
-                .filter(|key| key.starts_with("RIMZ_AGENT_"))
-                .map(|key| (key.clone(), sandbox::EnvPin::Unset)),
-        );
-        unset.insert(
-            crate::workspace::ENV_CHANNEL.to_owned(),
-            sandbox::EnvPin::Unset,
-        );
-        unset.insert(launch::ENV_RUNTIME_ENV.to_owned(), sandbox::EnvPin::Unset);
-        unset.extend(
-            crate::workspace::pin_env(
-                &crate::ids::WorkspaceId::from_project_root(inputs.project_root),
-                inputs.project_root,
-            )
-            .into_iter()
-            .map(|(key, value)| (key, sandbox::EnvPin::Set(value))),
-        );
-        unset.insert(
-            crate::workspace::ENV_WORKTREE_PATH.to_owned(),
-            sandbox::EnvPin::Set(
-                request
-                    .identity
-                    .params
-                    .checkout
-                    .clone()
-                    .unwrap_or_else(|| inputs.cwd.display().to_string()),
-            ),
-        );
-        if let Some(task) = &request.identity.params.loop_task {
-            unset.insert(
-                super::loop_task::LOOP_TASK_ENV.to_owned(),
-                sandbox::EnvPin::Set(task.clone()),
-            );
-        }
-    }
     for key in [
         "RIMZ_WORKFLOW_RUN",
         "RIMZ_WORKFLOW_DIR",
@@ -1175,18 +1121,21 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     })
 }
 
-fn judge_read_only(
-    request: &ExecRequest,
-    cwd: &Path,
-    checkout: Option<&Path>,
-) -> Result<Vec<PathBuf>, LaunchPlanErr> {
-    if !request
+fn judge_launch(request: &ExecRequest) -> bool {
+    request
         .identity
         .params
         .workflow
         .as_ref()
         .is_some_and(|workflow| workflow.role == crate::agents::WorkflowAttemptRole::Judge)
-    {
+}
+
+fn judge_read_only(
+    request: &ExecRequest,
+    cwd: &Path,
+    checkout: Option<&Path>,
+) -> Result<Vec<PathBuf>, LaunchPlanErr> {
+    if !judge_launch(request) {
         return Ok(Vec::new());
     }
     let mut paths = vec![cwd.to_path_buf()];
@@ -1296,7 +1245,9 @@ fn reminders(
             Vec::new(),
         );
     }
-    let subagent_catalog = request.headless.is_none().then(|| {
+    // A judge's checkout is read-only; a `rimz subagents` child would get a
+    // writable one.
+    let subagent_catalog = (!judge_launch(request)).then(|| {
         super::subagent_policy::catalog(
             request.identity.params.profile.as_deref(),
             &effective.profiles,

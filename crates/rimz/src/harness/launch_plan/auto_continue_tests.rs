@@ -69,34 +69,13 @@ fn rimz_auto_continue_turns_claudes_off_and_keeps_every_other_setting() {
 #[test]
 fn claudes_auto_continue_is_left_alone_when_rimz_does_not_resume() {
     let project = tempfile::tempdir().unwrap();
-    let headless = || {
-        let mut request = request("claude", action_with_args("launch", Vec::new()));
-        request.headless = Some(crate::agents::HeadlessRequest {
-            schema_open: false,
-            schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
-            schema_file: "/check/schema.json".into(),
-            verdict_file: "/check/verdict.json".into(),
-        });
-        request
-    };
     let launch = || request("claude", action_with_args("launch", Vec::new()));
-    let actual = [
-        ("rimz off", launch(), false),
-        ("headless", headless(), true),
-        ("rimz on", launch(), true),
-    ]
-    .map(|(label, request, on)| {
-        let plan = compile_seat(project.path(), &request, &machine(on), None);
-        (label, native_auto_continue(&plan))
-    });
-    assert_eq!(
-        actual,
-        [
-            ("rimz off", None),
-            ("headless", None),
-            ("rimz on", Some(false))
-        ]
-    );
+    let actual =
+        [("rimz off", launch(), false), ("rimz on", launch(), true)].map(|(label, request, on)| {
+            let plan = compile_seat(project.path(), &request, &machine(on), None);
+            (label, native_auto_continue(&plan))
+        });
+    assert_eq!(actual, [("rimz off", None), ("rimz on", Some(false))]);
     for kind in ["codex", "pi"] {
         let request = request(kind, action_with_args("launch", Vec::new()));
         assert_eq!(

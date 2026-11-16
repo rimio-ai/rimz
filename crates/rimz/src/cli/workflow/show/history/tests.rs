@@ -32,7 +32,6 @@ fn evaluation(seq: u64, minute: i64, outcome: &str, case: Option<u32>) -> Journa
             ended_at: at(minute),
             stderr_tail: None,
             cost_usd: None,
-            retry: None,
         },
     }
 }

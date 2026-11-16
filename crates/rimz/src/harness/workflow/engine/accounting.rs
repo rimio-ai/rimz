@@ -73,19 +73,6 @@ pub(super) fn transition(t: &Transition<'_>, latched: bool) {
                 if outcome == "limited" || t.record.state == RunState::Canceled {
                     continue;
                 }
-                if t.record.state == RunState::Active && t.record.check_retry_context.is_some() {
-                    diagnostic(
-                        &t.record,
-                        DiagEvent::WorkflowRetry {
-                            run: t.record.id.clone(),
-                            node: entry.node.clone(),
-                            seq: entry.seq.unwrap_or_default(),
-                            outcome: outcome.clone(),
-                            reason: object["reason"].as_str().unwrap_or_default().to_owned(),
-                        },
-                    );
-                    continue;
-                }
                 if t.record.held.is_some() {
                     continue;
                 }

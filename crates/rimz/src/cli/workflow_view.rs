@@ -3,7 +3,9 @@
 use jiff::Timestamp;
 use rimz::config::GlyphRole;
 use rimz::harness::workflow::{Definition, Target};
-use rimz::store::workflow::{Asking, Hold, ParkReason, RunRecord, RunState};
+use rimz::store::workflow::{
+    Asking, AttemptKind, Hold, LiveAttempt, ParkReason, RunRecord, RunState,
+};
 
 use super::render;
 
@@ -108,24 +110,47 @@ pub(super) fn with_you(record: &RunRecord) -> bool {
             .is_some_and(|attempt| !attempt.lifecycle.is_turn() && attempt.run.is_some())
 }
 
-pub(super) fn asking(record: &RunRecord) -> Option<&Asking> {
-    if record.state != RunState::Active {
-        return None;
-    }
-    record.session_attempt()?.asking.as_ref()
-}
-
-/// The stop the run's live agent attempt is held on: the current attempt's, else a session's
-/// held under its rest check.
-pub(super) fn held(record: &RunRecord) -> Option<&Hold> {
-    if record.state != RunState::Active {
-        return None;
-    }
+/// The run's live agent attempts: the current one, a judge's included, then a session held
+/// under its rest check. A run that is not active has none.
+fn live_attempts(record: &RunRecord) -> impl Iterator<Item = &LiveAttempt> {
+    let active = record.state == RunState::Active;
     record
         .attempt
         .iter()
         .chain(record.held.as_ref().map(|held| &held.attempt))
-        .find_map(|attempt| attempt.held_on.as_ref())
+        .filter(move |_| active)
+}
+
+/// The ask the run's live agent attempt shows, with the attempt that shows it.
+pub(super) fn asker(record: &RunRecord) -> Option<(&LiveAttempt, &Asking)> {
+    live_attempts(record).find_map(|attempt| Some((attempt, attempt.asking.as_ref()?)))
+}
+
+pub(super) fn asking(record: &RunRecord) -> Option<&Asking> {
+    asker(record).map(|(_, asking)| asking)
+}
+
+/// The handle of the agent judging the run's current check.
+pub(super) fn judge(record: &RunRecord) -> Option<&str> {
+    let attempt = record.attempt.as_ref()?;
+    let run = attempt.run.as_ref()?;
+    (attempt.kind == AttemptKind::Judge).then_some(run.handle.as_str())
+}
+
+/// The stop the run's live agent attempt is held on, with the attempt it holds.
+pub(super) fn holder(record: &RunRecord) -> Option<(&LiveAttempt, &Hold)> {
+    live_attempts(record).find_map(|attempt| Some((attempt, attempt.held_on.as_ref()?)))
+}
+
+pub(super) fn held(record: &RunRecord) -> Option<&Hold> {
+    holder(record).map(|(_, hold)| hold)
+}
+
+/// The agent a hold names: its own handle, else its attempt's agent.
+pub(super) fn hold_handle<'r>(attempt: &'r LiveAttempt, hold: &'r Hold) -> Option<&'r str> {
+    hold.handle
+        .as_deref()
+        .or_else(|| attempt.run.as_ref().map(|run| run.handle.as_str()))
 }
 
 /// Whether the active run waits on the user: an agent asking, or held on an error no wait
@@ -147,10 +172,10 @@ pub(super) fn since(record: &RunRecord) -> Timestamp {
 }
 
 /// `<handle> held <age>: <what holds it>`, the hold as one phrase.
-pub(super) fn hold_phrase(hold: &Hold, now: Timestamp) -> String {
+pub(super) fn hold_phrase(attempt: &LiveAttempt, hold: &Hold, now: Timestamp) -> String {
     format!(
         "{} held {}: {}",
-        hold.handle.as_deref().unwrap_or("agent"),
+        hold_handle(attempt, hold).unwrap_or("—"),
         render::age_short(hold.since, now),
         render::one_line(&hold.label()),
     )
@@ -275,13 +300,13 @@ pub(super) fn detail(
             render::one_line(&ask.text),
         );
     }
-    if let Some(hold) = held(record) {
+    if let Some((attempt, hold)) = holder(record) {
         let suffix = if with_you(record) {
             with_you_suffix(record, spec, now)
         } else {
             String::new()
         };
-        return format!("{}{suffix}", hold_phrase(hold, now));
+        return format!("{}{suffix}", hold_phrase(attempt, hold, now));
     }
     if with_you(record) {
         let agent = agent.map_or_else(String::new, |agent| format!(" in {agent}"));
@@ -304,7 +329,7 @@ pub(super) fn detail(
             },
         );
     }
-    "checking".into()
+    judge(record).map_or_else(|| "checking".into(), |judge| format!("checking in {judge}"))
 }
 
 pub(super) fn with_you_suffix(
@@ -399,6 +424,60 @@ mod tests {
                 "first":Timestamp::UNIX_EPOCH, "last":Timestamp::UNIX_EPOCH, "count":3,
             }))
             .unwrap(),
+        );
+    }
+
+    #[test]
+    fn a_judge_reads_as_checking_in_its_pane_and_shows_its_ask_and_hold() {
+        let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(2);
+        let mut record = record();
+        session(&mut record, false);
+        let attempt = record.attempt.as_mut().unwrap();
+        attempt.kind = AttemptKind::Judge;
+        assert_eq!(detail(&record, None, now, None), "checking in @fox");
+        let attempt = record.attempt.as_mut().unwrap();
+        attempt.held_on = Some(
+            serde_json::from_value(
+                json!({"since":Timestamp::UNIX_EPOCH, "handle":"@fox", "stop":"error"}),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            detail(&record, None, now, None),
+            "@fox held 2m: errored turn"
+        );
+        assert!(calls_you(&record));
+        let attempt = record.attempt.as_mut().unwrap();
+        attempt.asking = Some(
+            serde_json::from_value(json!({"since":Timestamp::UNIX_EPOCH,
+                "text":"Which base?", "kind":"question", "handle":"@fox"}))
+            .unwrap(),
+        );
+        assert_eq!(
+            detail(&record, None, now, None),
+            "asking you: @fox (question): Which base?"
+        );
+    }
+
+    /// A held session's rest-check judge asks or is held: the phrase names the judge's agent,
+    /// and a hold that carries no handle names its attempt's.
+    #[test]
+    fn a_rest_check_judge_held_without_a_handle_names_its_own_agent() {
+        let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(2);
+        let mut record = record();
+        session(&mut record, true);
+        let mut judge = record.held.as_ref().unwrap().attempt.clone();
+        judge.kind = AttemptKind::Judge;
+        judge.node = "ruled".into();
+        judge.seq = 2;
+        judge.run.as_mut().unwrap().handle = "@owl".into();
+        judge.held_on = Some(
+            serde_json::from_value(json!({"since":Timestamp::UNIX_EPOCH, "stop":"error"})).unwrap(),
+        );
+        record.attempt = Some(judge);
+        assert_eq!(
+            detail(&record, None, now, None),
+            "@owl held 2m: errored turn · checking ruled"
         );
     }
 

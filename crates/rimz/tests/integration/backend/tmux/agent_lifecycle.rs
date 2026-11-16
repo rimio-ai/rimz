@@ -1048,7 +1048,6 @@ fn tmux_agent_exec_command(
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: rimz::harness::launch::ExecIdentity::default(),
     };
     let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &env.runtime_paths(), &request)
@@ -1099,7 +1098,6 @@ fn tmux_resume_command(
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: rimz::harness::launch::ExecIdentity::default(),
     };
     let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &env.runtime_paths(), &request)
@@ -1145,7 +1143,6 @@ fn tmux_failing_agent_exec_command(env: &Env, agent_bin: &Path, launch_id: &str)
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: rimz::harness::launch::ExecIdentity {
             name: Some("pruner".to_owned()),
             launch_id: Some(launch_id.to_owned()),

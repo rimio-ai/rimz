@@ -320,25 +320,6 @@ fn long_cache_ownership_is_recomputed_on_every_launch() {
 }
 
 #[test]
-fn long_cache_is_not_requested_for_headless_pi() {
-    let machine = crate::config::MachineConfig {
-        harness: toml::from_str("keep_warm = '2h'").unwrap(),
-        ..Default::default()
-    };
-    let actual = [false, true].map(|headless| {
-        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("pi"), Vec::new());
-        request.headless = headless.then(|| crate::agents::HeadlessRequest {
-            schema_open: false,
-            schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
-            schema_file: "/check/schema.json".into(),
-            verdict_file: "/check/verdict.json".into(),
-        });
-        long_cache_requested(&request, &machine, None)
-    });
-    assert_eq!(actual, [true, false]);
-}
-
-#[test]
 fn long_cache_preserves_trusted_project_retention_over_an_inherited_pair() {
     if std::env::var_os("RIMZ_TEST_LONG_CACHE_ENV").is_none() {
         let home = tempfile::tempdir().unwrap();
@@ -1213,7 +1194,6 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity::default(),
     }
 }
@@ -2437,7 +2417,7 @@ fn omits_team_context_without_team_identity_and_catalog_for_children() {
 }
 
 #[test]
-fn headless_requests_keep_native_delegation_without_a_catalog() {
+fn judge_requests_keep_native_delegation_without_a_catalog() {
     let project = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     let mut machine = crate::config::MachineConfig::default();
@@ -2447,11 +2427,10 @@ fn headless_requests_keep_native_delegation_without_a_catalog() {
         exec_launch_reminders(&request, &machine, project.path(), config.path()).subagent_catalog,
         Some(super::super::subagent_policy::SubagentCatalog::Available(_))
     ));
-    request.headless = Some(crate::agents::HeadlessRequest {
-        schema_open: false,
-        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
-        schema_file: "/check/schema.json".into(),
-        verdict_file: "/check/verdict.json".into(),
+    request.identity.params.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Judge,
     });
 
     let reminders = exec_launch_reminders(&request, &machine, project.path(), config.path());
@@ -2460,25 +2439,24 @@ fn headless_requests_keep_native_delegation_without_a_catalog() {
 }
 
 #[test]
-fn headless_judge_reminder_omits_subagents_with_profiles_configured() {
+fn judge_reminder_omits_subagents_with_profiles_configured() {
     let project = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     let mut machine = crate::config::MachineConfig::default();
     machine.subagents.profiles = toml::from_str("[explorer]\nagent = 'claude'\n").unwrap();
     let mut request = request("claude", action_with_args("launch", vec![]));
-    request.headless = Some(crate::agents::HeadlessRequest {
-        schema_open: false,
-        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
-        schema_file: "/check/schema.json".into(),
-        verdict_file: "/check/verdict.json".into(),
+    request.identity.params.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Judge,
     });
-    request.reminder_section = Some(ReminderSection::Judge(
-        "Decide without a user or pane.".into(),
+    request.reminder_section = Some(ReminderSection::Workflow(
+        "You are the judge of a workflow check.".into(),
     ));
     let reminders = exec_launch_reminders(&request, &machine, project.path(), config.path());
     let text = super::super::launch_reminders::render(&request, &reminders, project.path(), None);
 
-    assert!(text.contains("### Judge\n\nDecide without a user or pane."));
+    assert!(text.contains("### Workflow\n\nYou are the judge of a workflow check."));
     assert!(!text.contains("### Subagents"), "{text}");
 }
 

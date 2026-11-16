@@ -10,7 +10,6 @@ This page maps Claude Code onto RimZ's internal types: which hook carries which 
 | `payloads.rs` | typed hook payloads |
 | `ask.rs` | ask questions, answers, and `rimz answer` key plans |
 | `install.rs` | the `settings.json` hook and statusline integration |
-| `headless.rs` | the headless check form |
 | `statusline.rs` | statusline parsing, the conversation parser, and the turn-death and turn-interruption scans |
 | `subagent_statusline.rs`, `subagent_cost.rs`, `subagents.rs` | child statusline enrichment, child cost cursors, and interrupted-child repair |
 | `local_context.rs` | the session-cumulative token fold |
@@ -127,7 +126,7 @@ The spec's `LaunchSpec` and `LaunchCapability` render every Claude launch:
 | launch reminders | `--append-system-prompt`, internal only ([system prompt](#system-prompt)) |
 | fast preset | `fastMode: true`, merged into the launch's one `--settings` ([settings merge](#settings-merge)) |
 | native idle compaction | `idleCompaction: false` when RimZ covers the seat, unless launch settings already set it ([settings merge](#settings-merge)) |
-| native auto-continue at a usage limit | `autoContinueAtUsageLimit: false` when `resume.auto_continue` is on and the launch is not headless, unless launch settings already set it ([settings merge](#settings-merge)) |
+| native auto-continue at a usage limit | `autoContinueAtUsageLimit: false` when `resume.auto_continue` is on, unless launch settings already set it ([settings merge](#settings-merge)) |
 | compaction command | `/compact <brief>` |
 | Native delegation disabled | for a `rimz subagents` child, or a launch with [callable `rimz-subagents`](../harness/fleet.md#launch-reminders) and an available catalog, `--disallowedTools` gains `Agent` in one final occurrence, even when `tools:` lists it |
 | shared language servers configured | with callable `rimz-lsp`, `--disallowedTools` gains `LSP` ([native LSP denial](#native-lsp-denial)) |
@@ -149,8 +148,8 @@ Claude honours only the last `--settings` on its command line, so every RimZ add
 5. Notes. The canonical directories of the launch's notes runs (a workflow run's `automation-notes/` folder and the checkout's team archive run for this launch's team, each when present) join `permissions.additionalDirectories`, then the canonical home-wide note store (`crates/rimz/src/disk/paths.rs::notes_dir`) when it exists. A missing store is skipped, not created.
 6. Added directories. The launch's `add_dirs` joins `permissions.additionalDirectories`, independently of routine permissions. This grants file access without folder trust or loading that directory's configuration; Claude's native added-directory argv is never used.
 7. Command sandbox. `sandbox.filesystem.allowWrite` gains the room's state, runtime, and shared roots at every isolation level. Scoped isolation adds `enableWeakerNestedSandbox: true`, and `sandbox` isolation adds `enabled: true` and nothing else.
-8. Native idle compaction. Insert `idleCompaction: false` only if absent and RimZ covers the seat: a non-headless launch, a token floor resolved from the role, profile chain, then harness (never a launched child), and a configured prompt-cache lifetime above the margin for unknown, subscription, and API-key sign-in alike. Launch compilation has no live cache-write evidence or known sign-in. Effective project tables win over machine tables; runtime compaction shares the same floor resolver. A configuration change takes effect at the next launch or restart, not in an already running session.
-9. Native auto-continue. Insert `autoContinueAtUsageLimit: false` only if absent, when the machine's `resume.auto_continue` is on and the launch is not headless (a check or judge has no pane for RimZ to resume), so RimZ's own auto-continue is the only resume after a usage limit. Every pane launch reaches it: fresh launches, team seats and restore seats, resumes, forks, restarts, molts, and supervised pane children. The key is an observation of the Claude Code 2.1.322 binary, not a published setting ([upstream](../../externals/agent-adapter/claude-reference.md#native-auto-continue-at-a-usage-limit)). Like idle compaction, it takes effect at the next launch or restart.
+8. Native idle compaction. Insert `idleCompaction: false` only if absent and RimZ covers the seat: a token floor resolved from the role, profile chain, then harness (never a launched child), and a configured prompt-cache lifetime above the margin for unknown, subscription, and API-key sign-in alike. Launch compilation has no live cache-write evidence or known sign-in. Effective project tables win over machine tables; runtime compaction shares the same floor resolver. A configuration change takes effect at the next launch or restart, not in an already running session.
+9. Native auto-continue. Insert `autoContinueAtUsageLimit: false` only if absent, when the machine's `resume.auto_continue` is on, so RimZ's own auto-continue is the only resume after a usage limit. Every pane launch reaches it: fresh launches, team seats and restore seats, resumes, forks, restarts, molts, supervised pane children, and workflow judges. The key is an observation of the Claude Code 2.1.322 binary, not a published setting ([upstream](../../externals/agent-adapter/claude-reference.md#native-auto-continue-at-a-usage-limit)). Like idle compaction, it takes effect at the next launch or restart.
 10. Fast mode. The fast preset rides outside the document until every other step has run, then merges `fastMode: true`.
 
 Steps 2 to 7 apply to every permission mode, every isolation level, and child, resume, and fork launches alike. A preflight compile has no room roots and skips routine RimZ permissions, notes, command sandbox settings, native idle compaction, and native auto-continue (steps 4, 5, 7, 8, and 9); it still merges added directories. Other user settings, other `autoMode` classifier arrays, and other sandbox keys survive the merge. RimZ checks no sandbox dependency, so Claude's own behaviour applies when its sandbox cannot start ([upstream contract and probes](../../externals/agent-adapter/claude-reference.md#per-launch-permissions-and-auto-mode)).
@@ -187,21 +186,6 @@ Effective shared-language-server configuration calls `disable_native_lsp_args` o
 The grant key is the canonical main root or cwd. Claude never persists a home-directory grant, so that key returns a gap without a writable preview. Missing homes and unreadable, malformed, or non-object JSON also produce actionable gaps, so none of them appears decided.
 
 The preview sets `projects.<key>.hasTrustDialogAccepted` through `json_edit.rs`. A borrowed JSON parser locates the edited value, so every unrelated byte and the key order survive. The preview is accepted only when it parses back to the original value with exactly that leaf changed. The neutral [`grant_folder_trust`](../../../crates/rimz/src/agents/folder_trust.rs) writer rejects bytes changed since the preview and publishes through the symlink-following provider-file writer. A provider write between that freshness check and the replacement is not serialized by this API.
-
-### Headless form
-
-`ClaudeHeadless` ([`claude/headless.rs`](../../../crates/rimz/src/agents/adapters/claude/headless.rs)) is the [headless form](./adapter.md#the-spec) that loop and workflow judges run. Its argv is `claude <profile args> -p --output-format json --json-schema <schema> -- <prompt>`. It merges `disableAllHooks = true` into the profile settings through the same [settings merge](#settings-merge), pending artifact included, so the check fires no RimZ hook and exactly one `--settings` survives.
-
-`read_result` parses the last non-blank stdout line as Claude's JSON result:
-
-| Field | Becomes |
-| --- | --- |
-| `is_error` with `result` or `subtype` | an error whose text passes through `crates/rimz/src/agents/adapters/claude/statusline.rs::classify_api_error`. `PausedRateLimit` and `PausedSpendLimit` become `ProviderLimit`, and every other class becomes `Other` |
-| `structured_output` | the value. A result without it is an `Other` error |
-| `total_cost_usd` | the cost, kept only when finite and non-negative |
-| `usage` | input tokens (fresh plus cache-creation plus cache-read) and output tokens |
-
-A line that is not valid JSON is an `Other` error with no tokens or cost.
 
 ## Subagents
 

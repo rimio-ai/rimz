@@ -140,6 +140,54 @@ pub(super) fn judge(spec: &Definition, record: &RunRecord) -> String {
     .join("\n\n")
 }
 
+/// How a judge answers, as `rimz workflow submit` takes it.
+const SUBMIT: &str = "rimz workflow submit <OUTCOME> [--reason <TEXT>] [--key <KEY>] \
+                      [--recheck-at <WHEN>] [--json '<OBJECT>']";
+
+/// The outcomes a judge at the current node may answer: the words its `on` table routes, less
+/// the ones the engine raises.
+pub(super) fn answers(spec: &Definition, record: &RunRecord) -> String {
+    spec.edges(&record.node)
+        .iter()
+        .map(|edge| edge.outcome.as_str())
+        .filter(|outcome| !super::spec::reserved(outcome))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(span)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A judge's launch prompt: its prompt file's text, then how it answers.
+pub(super) fn judge_prompt(
+    prompt: &str,
+    paths: &WorkflowPaths,
+    spec: &Definition,
+    record: &RunRecord,
+) -> String {
+    format!(
+        "{prompt}\n\nAnswer this check by running `{SUBMIT}`. OUTCOME is one of {}. \
+         `--reason` says why, in one line. `--key` names the item the answer is about, as text; \
+         without it the run keeps its current item. `--recheck-at` asks the run to look again at \
+         a time (a duration such as `30m`, `HH:MM`, `<weekday> HH:MM`, or a date and time), for \
+         an outcome that waits. `--json` takes a JSON object whose other fields are carried to \
+         the next node as its input. A refused submit prints why; correct it and submit again. \
+         Your final message is not read: only an accepted submit answers, and your pane closes \
+         once it is accepted. The scope checkout is read-only; write signs only under \
+         `signs/<step>.md` in RIMZ_WORKFLOW_DIR ({}).",
+        answers(spec, record),
+        paths.work.display()
+    )
+}
+
+/// The one reminder a judge that rested without an answer gets.
+pub(super) fn judge_reminder(spec: &Definition, record: &RunRecord) -> String {
+    format!(
+        "This workflow check still needs its answer. Run `{SUBMIT}` with OUTCOME one of {}.",
+        answers(spec, record)
+    )
+}
+
 fn position(spec: &Definition, record: &RunRecord, what: &str, node_kind: &str) -> String {
     format!(
         "You are {what} a RimZ workflow: {DEFINITION} You are the {node_kind} {} of the workflow {} (→ a route, ⇄ a step that returns to its check, [ ] you):\n\n{}",
@@ -393,20 +441,12 @@ pub(super) fn push(
             ));
         }
     }
+    // A judge answers through `rimz workflow submit`, so its answer is the whole account.
     if let Some((_, seq)) = &pushed
-        && matches!(
-            check.kind(),
-            Some(Kind::Test(_) | Kind::Script(_) | Kind::Judge(_))
-        )
+        && matches!(check.kind(), Some(Kind::Test(_) | Kind::Script(_)))
     {
         let output = seq
-            .map(|seq| {
-                if matches!(check.kind(), Some(Kind::Judge(_))) {
-                    paths.check_output(seq)
-                } else {
-                    paths.check_log(seq)
-                }
-            })
+            .map(|seq| paths.check_log(seq))
             .and_then(|path| {
                 let summary = FileSummary::measure(&path)
                     .ok()

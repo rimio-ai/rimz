@@ -45,7 +45,7 @@ Codex and Hermes run a new or changed hook only after you approve it in the agen
   fix: launch hermes in a terminal and answer y to each RimZ hook prompt
 ```
 
-An `rimz agents` launch, restart, resume, or fork from your own shell proceeds with one notice per account: choose **Trust all and continue** in Codex's new pane, or RimZ cannot track it. Agent-started launches, teams, loops, and subagent resumes refuse before opening panes, naming the command to ask you to run once. Room recovery skips that agent and names a user-run fix. RimZ never grants hook trust or bypasses Codex's review. [The account check at launch](./agents.md#the-account-check-at-launch) defines which starts are watched; account selection and headless checks are unchanged.
+An `rimz agents` launch, restart, resume, or fork from your own shell proceeds with one notice per account: choose **Trust all and continue** in Codex's new pane, or RimZ cannot track it. Agent-started launches, teams, loops, and subagent resumes refuse before opening panes, naming the command to ask you to run once. Room recovery skips that agent and names a user-run fix. RimZ never grants hook trust or bypasses Codex's review. [The account check at launch](./agents.md#the-account-check-at-launch) defines which starts are watched; account selection keeps its own hook-trust check.
 
 Hermes follows the same watched/unattended rule: from your own shell, launch `rimz agents hermes` and answer `y` to each RimZ hook prompt in its new pane. Answering `N` leaves that hook unapproved for the session; relaunch to approve it. RimZ never writes Hermes's hook allowlist or bypasses its consent.
 

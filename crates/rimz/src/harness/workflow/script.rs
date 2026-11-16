@@ -12,13 +12,9 @@ use sha2::{Digest, Sha256};
 use super::{Definition, Invocation, Kind, Node, SpecErr, spec};
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::harness::check_run::{self, CheckEcho, WatchDeadline};
-use crate::harness::headless::exit_failure;
 use crate::store::workflow::{self, RunRecord, RunState};
 
 mod condition;
-mod judge;
-#[cfg(test)]
-pub(super) use judge::budget_refusal;
 
 pub use condition::{CaseMark, CaseMarks, case_marks, unread_reasons};
 
@@ -90,8 +86,6 @@ pub(super) struct Evaluation {
     pub failure: &'static str,
     /// The failure's detail: a dead script's exit code, when it had one, and its log.
     pub detail: Value,
-    pub limited: Option<workflow::Limited>,
-    pub cost_usd: Option<f64>,
     /// Why the poll interrupted the child, when it did.
     pub interrupt: Option<Interrupt>,
 }
@@ -103,11 +97,24 @@ impl Evaluation {
             stderr_tail: None,
             failure,
             detail: json!({}),
-            limited: None,
-            cost_usd: None,
             interrupt: None,
         }
     }
+}
+
+/// A check's nonzero exit in words: its exit code, else its signal.
+fn exit_failure(label: &str, status: std::process::ExitStatus) -> String {
+    use std::os::unix::process::ExitStatusExt;
+
+    if let Some(code) = status.code() {
+        return format!("{label} exited {code}");
+    }
+    if let Some(raw) = status.signal() {
+        let signal = nix::sys::signal::Signal::try_from(raw)
+            .map_or_else(|_| format!("signal {raw}"), |signal| signal.to_string());
+        return format!("{label} killed by {signal}");
+    }
+    format!("{label} {status}")
 }
 
 pub(super) fn digest(bytes: &[u8]) -> String {
@@ -145,7 +152,6 @@ pub(super) fn evaluate(
         return Evaluation::failed("invalid", "check needs exactly one runner");
     };
     let run = match check.kind() {
-        Some(Kind::Judge(_)) => return judge::evaluate(state, paths, live, record),
         Some(Kind::Test(invocation)) => {
             return evaluate_test(state, paths, live, record, invocation);
         }
@@ -161,7 +167,8 @@ pub(super) fn evaluate(
             return result;
         }
         Some(Kind::Script(invocation)) => invocation,
-        Some(Kind::Command(_) | Kind::Agent(_) | Kind::Message(_)) | None => {
+        // A judge is an agent the engine launches, never a hosted evaluation.
+        Some(Kind::Judge(_) | Kind::Command(_) | Kind::Agent(_) | Kind::Message(_)) | None => {
             return Evaluation::failed("invalid", "check needs exactly one runner");
         }
     };

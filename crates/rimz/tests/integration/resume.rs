@@ -313,7 +313,6 @@ fn resume_argv(h: &Harness, kind: &str, id: &str, name: &str) -> Vec<String> {
             continue_session: false,
             follow_up_message: None,
             reminder_section: None,
-            headless: None,
             identity: ExecIdentity {
                 name: Some(name.to_owned()),
                 launch_id: Some(id.to_owned()),

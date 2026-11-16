@@ -1,7 +1,6 @@
 use super::*;
-use crate::common::{path_with_front, write_fake_login_shell, write_path_shim};
 use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
-use sha2::Digest;
+use std::collections::BTreeMap;
 
 pub(super) fn capacity(env: &Env, used: u8) -> jiff::Timestamp {
     let reset = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(2);
@@ -25,447 +24,42 @@ pub(super) fn capacity(env: &Env, used: u8) -> jiff::Timestamp {
     reset
 }
 
-use std::collections::BTreeMap;
-
-fn failed_judge(body: &str, envelope: &str) -> (Value, String) {
+/// `submit` refuses a caller that is no judge, and an answer it cannot parse, before it
+/// touches any run.
+#[test]
+fn submit_refuses_a_non_judge_caller_and_unparsable_flags_leaving_the_run_alone() {
     let (env, _) = fixture(
-        &format!(
-            "{HEADER}[judge.pr]\ntimeout='365d'\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\non.invalid='recover'\non.died='recover'\n[test.recover]\ntimeout='365d'\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
+        &format!("{HEADER}{WAIT}"),
+        "printf '{\"outcome\":\"pending\"}'",
+    );
+    let id = start(&env);
+    let before = until(&env, &id, |value| value["record"]["wait"].is_object())["record"].clone();
+    for (args, reason) in [
+        (
+            &["workflow", "submit", "done"][..],
+            "error: caller is not a workflow judge; rimz workflow submit answers a check from \
+             its judge's own pane\n",
         ),
-        "",
-    );
-    let shell = write_fake_login_shell(&env, "judge-shell", &[]);
-    let bin = env.home_root.join("judge-bin");
-    write_path_shim(
-        &bin,
-        "claude",
-        &format!(
-            "if [ \"$1\" = --version ]; then echo 'claude 9.0.0'; exit 0; fi\n\
-             printf '%s\\n' '{envelope}'\n{body}\n",
+        (
+            &["workflow", "submit", "done", "--json", "[1]"][..],
+            "invalid value '[1]' for '--json <OBJECT>': expected one JSON object",
         ),
-    );
-    let receipt = success(
-        env.rimz()
-            .args(["workflow", "run", "review"])
-            .env("SHELL", &shell)
-            .env("PATH", path_with_front(&bin))
-            .output()
-            .unwrap(),
-    );
-    let id = receipt.lines().next().unwrap();
-    let value = settled(&env, id, "done");
-    let history = success(command(&env, &["workflow", "show", id, "--history"]));
-    (value, history)
-}
-
-#[test]
-fn judge_exit_names_the_code_without_an_exit_status_label() {
-    let (value, _) = failed_judge("exit 7", r#"{"structured_output":{"outcome":"done"}}"#);
-    assert!(
-        events(&value, "evaluation")
-            .iter()
-            .filter(|row| row["node"] == "pr")
-            .all(|row| row["object"]["reason"] == "judge exited 7")
-    );
-}
-
-#[test]
-fn judge_signal_names_the_signal() {
-    let (value, _) = failed_judge(
-        "kill -KILL \"$$\"",
-        r#"{"structured_output":{"outcome":"done"}}"#,
-    );
-    assert!(
-        events(&value, "evaluation")
-            .iter()
-            .filter(|row| row["node"] == "pr")
-            .all(|row| row["object"]["reason"] == "judge killed by SIGKILL")
-    );
-}
-
-#[test]
-fn failed_judge_history_shows_the_invalid_route_after_retry() {
-    let (value, history) = failed_judge("exit 0", r#"{"structured_output":{"outcome":"missing"}}"#);
-    assert_eq!(events(&value, "evaluation").len(), 3, "{value:#}");
-    assert!(
-        history.contains("said invalid → recover"),
-        "failed judges must route after their retry: {history}"
-    );
-    assert!(
-        !history
-            .lines()
-            .any(|line| line.trim_start().starts_with("retry:")),
-        "{history}"
-    );
-    assert_eq!(
-        history
-            .matches("reserved or unrouted outcome \"missing\"")
-            .count(),
-        1,
-        "{history}"
-    );
-    assert!(history.contains("recover said pass → @done\n"), "{history}");
-    assert!(history.ends_with("recover terminal done\n"), "{history}");
-}
-
-#[test]
-#[cfg(target_os = "linux")]
-fn scoped_judge_guard_restores_and_records_replacements() {
-    if let Err(error) = rimz::sandbox::preflight(rimz::config::Isolation::Scoped) {
-        crate::common::skip(&format!("bubblewrap unusable: {error}"));
-        return;
-    }
-    let (env, _) = fixture(
-        &format!(
-            "{HEADER}[judge.pr]\ntimeout='365d'\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"
+        (
+            &["workflow", "submit", "done", "--recheck-at", "soonish"][..],
+            "invalid value 'soonish' for '--recheck-at <WHEN>': \"soonish\" is not a workflow \
+             time; give a duration (8h), HH:MM, <weekday> HH:MM, a date (2026-11-14), a \
+             date-time (2026-11-14 09:00), or a timestamp (2026-11-13T21:00:00Z)",
         ),
-        "",
-    );
-    fs::write(
-        env.rimz_home().join("config.toml"),
-        "[agents]\nisolation = 'scoped'\n",
-    )
-    .unwrap();
-    env.install_agent_hooks("claude");
-    crate::common::trust_claude_project(&env, &env.project_root);
-    let path = env.home_root.join(".gitconfig");
-    fs::write(&path, "original").unwrap();
-    let shell = write_fake_login_shell(&env, "judge-shell", &[]);
-    let bin = env.home_root.join("judge-bin");
-    write_path_shim(
-        &bin,
-        "claude",
-        r#"
-if [ "$1" = --version ]; then echo 'claude 9.0.0'; exit 0; fi
-printf ready > "$HOME/judge-ready"
-while [ ! -f "$HOME/judge-go" ]; do sleep 0.02; done
-if (printf agent >> "$HOME/.gitconfig") 2>/dev/null; then outcome=writable; else outcome=done; fi
-printf '{"structured_output":{"outcome":"%s"}}\n' "$outcome"
-"#,
-    );
-    let receipt = success(
-        env.rimz()
-            .args(["workflow", "run", "review"])
-            .env("SHELL", &shell)
-            .env("PATH", path_with_front(&bin))
-            .output()
-            .unwrap(),
-    );
-    let id = receipt.lines().next().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !env.home_root.join("judge-ready").exists() {
-        assert!(Instant::now() < deadline, "judge did not start");
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    fs::write(path.with_extension("lock"), "replacement").unwrap();
-    fs::rename(path.with_extension("lock"), &path).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let records = loop {
-        let records = workflow_diagnostics(&env, "scoped_bind_restored");
-        if !records.is_empty() {
-            break records;
-        }
+    ] {
+        let output = command(&env, args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            Instant::now() < deadline,
-            "headless executor must record its repair"
+            !output.status.success() && stderr.contains(reason),
+            "{args:?}: {stderr}"
         );
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    assert_eq!(records.len(), 1, "{records:?}");
-    assert_eq!(records[0]["event"]["agent_kind"], "claude");
-    assert_eq!(records[0]["event"]["paths"], json!([path]));
-    fs::write(env.home_root.join("judge-go"), "go").unwrap();
-    let value = settled(&env, id, "done");
-    assert_eq!(events(&value, "evaluation")[0]["object"]["outcome"], "done");
-}
-
-#[test]
-#[cfg(target_os = "linux")]
-fn scoped_judge_guard_arm_refusal_names_the_limit_without_spawning() {
-    if let Err(error) = rimz::sandbox::preflight(rimz::config::Isolation::Scoped) {
-        crate::common::skip(&format!("bubblewrap unusable: {error}"));
-        return;
+        assert!(!stderr.contains("accepted"), "{args:?}: {stderr}");
     }
-    let (env, _) = fixture(
-        &format!(
-            "{HEADER}[judge.pr]\ntimeout='365d'\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"
-        ),
-        "",
-    );
-    fs::write(
-        env.rimz_home().join("config.toml"),
-        "[agents]\nisolation = 'scoped'\n",
-    )
-    .unwrap();
-    env.install_agent_hooks("claude");
-    crate::common::trust_claude_project(&env, &env.project_root);
-    fs::write(env.home_root.join(".gitconfig"), "original").unwrap();
-    let shell = write_fake_login_shell(&env, "judge-shell", &[]);
-    let bin = env.home_root.join("judge-bin");
-    write_path_shim(
-        &bin,
-        "claude",
-        r#"
-if [ "$1" = --version ]; then echo 'claude 9.0.0'; exit 0; fi
-printf spawned > "$HOME/provider-spawned"
-printf '%s\n' '{"structured_output":{"outcome":"done"}}'
-"#,
-    );
-    let receipt = success(
-        env.rimz()
-            .args(["workflow", "run", "review"])
-            .env("SHELL", &shell)
-            .env("PATH", path_with_front(&bin))
-            .env("RIMZ_TEST_SCOPED_BIND_ARM_ERRNO", "24")
-            .output()
-            .unwrap(),
-    );
-    let id = receipt.lines().next().unwrap();
-    let value = until(&env, id, |value| !events(value, "evaluation").is_empty());
-    let evaluation = &events(&value, "evaluation")[0];
-    assert_eq!(evaluation["object"]["outcome"], "died", "{value}");
-    let reason = evaluation["object"]["reason"].as_str().unwrap();
-    assert_eq!(
-        reason,
-        "scoped protected-file guard: Too many open files (os error 24); raise fs.inotify.max_user_instances"
-    );
-    assert!(
-        !reason.contains("timed out") && !reason.contains("version"),
-        "{reason}"
-    );
-    assert!(!env.home_root.join("provider-spawned").exists());
-}
-
-#[test]
-fn judge_refuses_below_version_floor_before_provider_spawn() {
-    let (env, _) = fixture(
-        &format!(
-            "{HEADER}[judge.pr]\ntimeout='365d'\nsummary=\"Review the work\"\nagent='codex'\nprompt-file='prompt.md'\non.done='@done'\n"
-        ),
-        "",
-    );
-    env.write_config(&env.project_root, "[agents]\nisolation = 'host'\n");
-    env.install_agent_hooks("codex");
-    crate::common::trust_codex_preflight_hooks(&env);
-    crate::common::trust_codex_project(&env, &env.project_root);
-    let shell = write_fake_login_shell(&env, "judge-shell", &[]);
-    let bin = env.home_root.join("judge-bin");
-    write_path_shim(
-        &bin,
-        "codex",
-        r#"
-printf '%s\n' "$*" >> "$HOME/judge-calls"
-if [ "$1" = '--version' ]; then printf '%s\n' 'codex-cli 0.162.0'; exit 0; fi
-while [ "$#" -gt 0 ]; do
-    if [ "$1" = '-o' ]; then shift; printf '%s' '{"outcome":"done"}' > "$1"; fi
-    shift
-done
-"#,
-    );
-    let receipt = success(
-        env.rimz()
-            .args(["workflow", "run", "review"])
-            .env("SHELL", &shell)
-            .env("PATH", path_with_front(&bin))
-            .output()
-            .unwrap(),
-    );
-    let id = receipt.lines().next().unwrap();
-    let value = until(&env, id, |value| !events(value, "evaluation").is_empty());
-    let evaluation = &events(&value, "evaluation")[0];
-    assert_eq!(evaluation["object"]["outcome"], "died");
-    let reason = evaluation["object"]["reason"].as_str().unwrap();
-    assert!(
-        reason.contains("0.162.0") && reason.contains("0.163.0"),
-        "{reason}"
-    );
-    assert!(reason.ends_with("upgrade Codex"), "{reason}");
-    let value = settled(&env, id, "failed");
-    assert_eq!(events(&value, "route")[0]["outcome"], "died");
-    let evaluations = events(&value, "evaluation");
-    assert!(
-        evaluations.iter().all(|row| row["digests"] == json!({})),
-        "a refused judge never spawned: {evaluations:#?}"
-    );
-    let calls = fs::read_to_string(env.home_root.join("judge-calls")).unwrap();
-    assert!(!calls.is_empty());
-    assert!(calls.lines().all(|call| call == "--version"), "{calls}");
-}
-
-#[test]
-fn judge_process_objects_retry_limit_and_dead_host_policy() {
-    struct NameModeOnPanic(&'static str);
-    impl Drop for NameModeOnPanic {
-        #[expect(
-            clippy::print_stderr,
-            reason = "names the failing mode beside the panic"
-        )]
-        fn drop(&mut self) {
-            if std::thread::panicking() {
-                eprintln!("judge mode {} failed", self.0);
-            }
-        }
-    }
-    let digest = hex::encode(sha2::Sha256::digest(b"Build it"));
-    for mode in ["object", "file", "missing", "limited", "dead-host"] {
-        let _named = NameModeOnPanic(mode);
-        let (env, _) = fixture(
-            &format!(
-                "{HEADER}[judge.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\ntimeout='1h'\n"
-            ),
-            "",
-        );
-        let shell = write_fake_login_shell(&env, "judge-shell", &[]);
-        let bin = env.home_root.join("judge-bin");
-        let body = match mode {
-            "file" => {
-                "printf '%s\\n' '{\"outcome\":\"done\",\"reason\":\"judge passed\"}' > \"$(sed -n 's/^  \"output_path\": \"\\(.*\\)\",*$/\\1/p' \"$RIMZ_WORKFLOW_DIR/context.json\")\"; printf '%s\\n' '{\"is_error\":false}'"
-            }
-            "missing" => "printf '%s\\n' '{\"is_error\":false}'",
-            "limited" => "printf '%s\\n' '{\"is_error\":true,\"result\":\"quota exhausted\"}'",
-            "dead-host" => "sleep 60",
-            _ => {
-                "printf '%s\\n' \"$@\" > \"$RIMZ_WORKFLOW_DIR/judge-argv\"; printf '%s\\n' '{\"structured_output\":{\"outcome\":\"done\",\"reason\":\"judge passed\"},\"total_cost_usd\":0.25}'"
-            }
-        };
-        write_path_shim(&bin, "claude", body);
-        let invoke = |args: &[&str]| {
-            env.rimz()
-                .args(args)
-                .env("SHELL", &shell)
-                .env("PATH", path_with_front(&bin))
-                .output()
-                .unwrap()
-        };
-        let id = start_with(|| {
-            let mut command = env.rimz();
-            command
-                .env("SHELL", &shell)
-                .env("PATH", path_with_front(&bin));
-            command
-        });
-        let id = id.as_str();
-        match mode {
-            "object" | "file" => {
-                let value = settled(&env, id, "done");
-                assert_eq!(
-                    events(&value, "evaluation")[0]["object"]["reason"],
-                    "judge passed"
-                );
-                if mode == "object" {
-                    assert_eq!(events(&value, "evaluation")[0]["cost_usd"], 0.25);
-                    let prompt = fs::read_to_string(
-                        Path::new(value["dir"].as_str().unwrap()).join("judge-argv"),
-                    )
-                    .unwrap();
-                    assert!(
-                        prompt.contains("required string outcome")
-                            && prompt.contains("string-or-integer key")
-                            && prompt.contains("no prose")
-                            && prompt.contains("other fields"),
-                        "the prompt must carry the open object contract: {prompt}"
-                    );
-                    assert!(
-                        prompt.contains("### Workflow\n\nYou are a check in a RimZ workflow:")
-                            && prompt.contains("You are the check `pr` of the workflow `review`")
-                            && prompt.contains("\n\n[pr]\n\n"),
-                        "the compiled judge request must carry its Workflow section: {prompt}"
-                    );
-                    assert!(
-                        !prompt.contains("context.json")
-                            && prompt.contains("rimz workflow show $RIMZ_WORKFLOW_RUN --history"),
-                        "judges must read the workflow view, not raw context: {prompt}"
-                    );
-                }
-                // The context names the output where the live judge wrote it.
-                let output = context(&value)["output_path"].as_str().unwrap().to_owned();
-                let name = Path::new(&output).file_name().unwrap();
-                assert!(
-                    Path::new(value["dir"].as_str().unwrap())
-                        .join(name)
-                        .is_file()
-                );
-            }
-            "missing" => {
-                let value = settled(&env, id, "failed");
-                assert_eq!(value["record"]["input"]["cause"], "died");
-                assert_eq!(value["record"]["check_retry"], 1);
-                assert_eq!(events(&value, "evaluation").len(), 2);
-                assert_eq!(context(&value)["retry"]["outcome"], "died");
-                assert_eq!(workflow_diagnostics(&env, "workflow_retry").len(), 1);
-            }
-            "limited" => {
-                // Capacity is consulted after the provider result, not as a launch gate.
-                capacity(&env, 100);
-                success(invoke(&["workflow", "advance", id]));
-                let value = until(&env, id, |value| value["record"]["recheck_at"].is_string());
-                let entered: jiff::Timestamp = value["record"]["entered_at"]
-                    .as_str()
-                    .unwrap()
-                    .parse()
-                    .unwrap();
-                let recheck: jiff::Timestamp = value["record"]["recheck_at"]
-                    .as_str()
-                    .unwrap()
-                    .parse()
-                    .unwrap();
-                assert!(
-                    value["record"]["paused_since"].is_string()
-                        && recheck > entered + jiff::SignedDuration::from_hours(1),
-                    "a limited judge's clock pauses, so the reset is not clamped to its timeout: {}",
-                    value["record"]
-                );
-                assert_eq!(value["record"]["check_retry"], 0);
-                let count = events(&value, "evaluation").len();
-                success(invoke(&["workflow", "advance", id]));
-                assert_eq!(events(&show(&env, id), "evaluation").len(), count);
-                success(command(&env, &["workflow", "cancel", id]));
-            }
-            _ => {
-                let value = until(&env, id, |value| {
-                    value["record"]["attempt"]["child"].is_object()
-                });
-                let host = value["record"]["attempt"]["host"]["pid"].as_u64().unwrap() as u32;
-                nix::sys::signal::kill(
-                    nix::unistd::Pid::from_raw(host as i32),
-                    nix::sys::signal::Signal::SIGKILL,
-                )
-                .unwrap();
-                // The kill is only queued: an advance that still reads the host live
-                // leaves it alone, and nothing here advances the run again.
-                until(&env, id, |_| !rimz::proc::process_is_live(host, None));
-                write_path_shim(
-                    &bin,
-                    "claude",
-                    "printf '%s\\n' '{\"structured_output\":{\"outcome\":\"done\"}}'",
-                );
-                success(
-                    env.rimz()
-                        .args(["workflow", "advance", id])
-                        .env("SHELL", &shell)
-                        .env("PATH", path_with_front(&bin))
-                        .output()
-                        .unwrap(),
-                );
-                let value = settled(&env, id, "done");
-                assert_eq!(value["record"]["check_retry"], 0);
-                assert!(
-                    events(&value, "evaluation")
-                        .iter()
-                        .any(|entry| entry["outcome"] == "canceled" && entry["origin"] == "engine")
-                );
-                assert_eq!(workflow_diagnostics(&env, "workflow_rerun").len(), 1);
-            }
-        }
-        let evaluations = events(&show(&env, id), "evaluation");
-        for evaluation in &evaluations {
-            assert_eq!(
-                evaluation["digests"],
-                json!({"prompt.md": digest}),
-                "{mode}: {evaluations:#?}"
-            );
-        }
-    }
+    assert_eq!(show(&env, &id)["record"], before);
 }
 
 pub(super) fn workflow_diagnostics(env: &Env, kind: &str) -> Vec<Value> {
@@ -477,53 +71,4 @@ pub(super) fn workflow_diagnostics(env: &Env, kind: &str) -> Vec<Value> {
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .filter(|record| record["event"]["kind"] == kind)
         .collect()
-}
-
-/// A judge whose definition is edited out from under it while it runs: the run ends as a
-/// misfit, and the judge's cost still counts in its journal and its outcome.
-#[test]
-fn a_judge_settled_by_a_misfit_keeps_its_cost() {
-    let (env, dir) = fixture(
-        &format!(
-            "{HEADER}[judge.pr]\ntimeout='1h'\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"
-        ),
-        "",
-    );
-    fs::write(
-        dir.join("edited.toml"),
-        "[workflow]\nscope='worktree'\nstart='other'\n[test.other]\ntimeout='1h'\nshell='true'\non.pass='@done'\non.fail='@failed'\n",
-    )
-    .unwrap();
-    let shell = write_fake_login_shell(&env, "judge-shell", &[]);
-    let bin = env.home_root.join("judge-bin");
-    write_path_shim(
-        &bin,
-        "claude",
-        &format!(
-            "if [ \"$1\" = --version ]; then echo 'claude 9.0.0'; exit 0; fi\n\
-             cp '{edited}' '{spec}'\n\
-             printf '%s\\n' '{{\"structured_output\":{{\"outcome\":\"done\",\"reason\":\"judge passed\"}},\"total_cost_usd\":0.25}}'\n",
-            edited = dir.join("edited.toml").display(),
-            spec = dir.join("workflow.toml").display(),
-        ),
-    );
-    let id = start_with(|| {
-        let mut command = env.rimz();
-        command
-            .env("SHELL", &shell)
-            .env("PATH", path_with_front(&bin));
-        command
-    });
-    let value = settled(&env, &id, "failed");
-    let reason =
-        "pr: the workflow definition changed under the run: it is no longer in the definition";
-    let faults: Vec<_> = events(&value, "evaluation")
-        .into_iter()
-        .filter(|row| row["outcome"] == "fault")
-        .collect();
-    assert_eq!(faults.len(), 1, "{value:#}");
-    assert_eq!(faults[0]["object"]["reason"], reason, "{value:#}");
-    assert_eq!(faults[0]["cost_usd"], 0.25, "{value:#}");
-    assert_eq!(value["record"]["outcome"]["cost_usd"], 0.25, "{value:#}");
-    assert_eq!(value["record"]["outcome"]["reason"], reason, "{value:#}");
 }

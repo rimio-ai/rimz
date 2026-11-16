@@ -63,7 +63,6 @@ fn worktree_exec_request(worktree: &Path) -> ExecRequest {
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity::default(),
     }
 }

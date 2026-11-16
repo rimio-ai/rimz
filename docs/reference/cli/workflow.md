@@ -16,6 +16,7 @@ rimz workflow show babysit-pr pr                  # one definition node in full
 rimz workflow resume 'babysit-pr#feat-x' --at pr --extend visits=+1
 rimz workflow restart 'babysit-pr#feat-x' --continue
 rimz workflow cancel 'babysit-pr#feat-x'
+rimz workflow submit pass --reason 'tests cover it' # from a judge's own pane
 ```
 
 The [global flags](../cli.md#global-flags) apply. Every subcommand except `run` works from any directory: a run id resolves across every room on the machine.
@@ -106,7 +107,6 @@ While the room is open, its scheduler advances every due run about once a minute
 | `notes/` | A link to the run's kept notes folder, `automation-notes/<yyyymmdd>/<HHMMSS>Z-workflow-<workflow>-<checkout>/` under the room's state directory. |
 | `signs/` | One `<step>.md` per agent step that has a sign. |
 | `<seq>.check.log` | A test's combined output, or a script's complete stderr (written even when empty). |
-| `<seq>.check.json` | A judge's saved answer. |
 | `<seq>.step.log` | A command step's combined output. |
 | `<seq>.claim.json` | An agent attempt's claim. |
 
@@ -200,11 +200,11 @@ A definition is `workflow.toml`: one `[workflow]` table and any number of nodes,
 
 | `[judge.<name>]` | Meaning |
 | --- | --- |
-| `agent` | Required. An agent kind or profile with a headless launch. |
+| `agent` | Required. An agent kind or profile. |
 | `prompt-file` | Required. A file confined to the definition directory. |
 | `summary` | Required. |
-| `on.<outcome>` | One target per outcome the judge answers, plus the failure routes `on.died`, `on.invalid`, `on.timeout`, `on.limited`, `on.deadline`, and `on.failed`. |
-| `timeout` | Required. Paused while the judge waits for its window or a limit's reset. |
+| `on.<outcome>` | One target per outcome the judge answers, plus the failure routes `on.died`, `on.invalid`, `on.timeout`, `on.limited`, `on.deadline`, and `on.failed`, and the optional `on.asked` and `on.errored`, which route a held question or provider error instead of holding the judge. |
+| `timeout` | Required. Runs from the judge's launch and pauses while the judge is held. |
 | `wake` | Signals that re-run the judge. |
 | `admission` | `window` only. |
 
@@ -311,10 +311,10 @@ At each clean leader turn end, with the leader at rest and no blocking ask, prov
 | --- | --- |
 | Back to the step | The answer becomes the next prompt in the same session, updates input and key, and spends one visit. A push-back past the cap fails the step with cause `visits` instead, closing the agent by default (detaching it under `keep`). |
 | `@wait` | Holds the session at the check without spending a visit. Subscribed signals and the minute tick re-sample it while the leader stays at rest on that turn. |
-| Another listed check, a failure route included | Keeps the session open, resets the check retry, and starts the destination check's clock. An answer keeps the step's input and key, so a later check reads earlier answers from their output files or the world. A failure hands the next check its failure input. |
+| Another listed check, a failure route included | Keeps the session open and starts the destination check's clock. An answer keeps the step's input and key, so a later check reads earlier answers from their output files or the world. A failure hands the next check its failure input. |
 | Anything else | Closes the session, closing the layout by default, and the run goes there. |
 
-The push-back prompt names the check that answered, its outcome, its `reason` when present, then `output: <path> (<size label>)`: a test's or script's `<seq>.check.log`, or the judge's whole saved `<seq>.check.json`. An empty or missing file reads `no output`. No tail or file content is copied into the prompt. A condition push-back explains its false terms and unread readings instead. The prompt says the run moves on when the check passes.
+The push-back prompt names the check that answered, its outcome, its `reason` when present, then, for a test or script, `output: <path> (<size label>)`: a test's or script's `<seq>.check.log`. An empty or missing file reads `no output`. A judge's push-back carries no output line: its answer is the whole account. No tail or file content is copied into the prompt. A condition push-back explains its false terms and unread readings instead. The prompt says the run moves on when the check passes.
 
 A new leader turn abandons a held wait and any check in flight without stopping the session, and discards a saved closing verdict. The next eligible turn end starts again at the first check. Provider exit, deadline, cancel, and restart end the session as they do without a rest check: an exit at rest follows `then` and runs no rest check first.
 
@@ -324,7 +324,7 @@ While a rest check runs, `list` reads `with you · checking <check>`, with any w
 
 #### Keep
 
-`keep = true` on an agent step of either lifecycle leaves the leader and companions open, outside the workflow, on a natural attempt end, an `on.asked` ending, or a closing rest-check route (a rest check's failure route included). The workflow no longer owns them. A forced ending (cancel, restart, `resume --at`, the step's `timeout`, the deadline) and a `died`, `limited`, or `canceled` attempt still stop them. A push-back past `max-visits` detaches them. On a `turn` step, a check returning to the step can leave the old agent beside the new launch, and occupancy still applies.
+`keep = true` on an agent step of either lifecycle leaves the leader and companions open, outside the workflow, on a natural attempt end, an `on.asked` or `on.errored` ending, or a closing rest-check route (a rest check's failure route included). The workflow no longer owns them. A forced ending (cancel, restart, `resume --at`, the step's `timeout`, the deadline) and a `died`, `limited`, or `canceled` attempt still stop them. A push-back past `max-visits` detaches them. On a `turn` step, a check returning to the step can leave the old agent beside the new launch, and occupancy still applies.
 
 #### Notes
 
@@ -380,7 +380,7 @@ A message step returns at once, so a cycle through it needs `max-visits` and a w
 
 ### Checks
 
-Every test, script, judge, and condition requires a `timeout`. The timeout starts each time the run enters the check and runs across every evaluation and wait there. A test does not inherit the loop's default timeout. When it passes, the check fails with cause `timeout`.
+Every test, script, judge, and condition requires a `timeout`. The timeout starts each time the run enters the check and runs across every evaluation and wait there. A judge's runs from its launch instead, less the time it was held. A test does not inherit the loop's default timeout. When it passes, the check fails with cause `timeout`.
 
 Tests and scripts run as child processes in the checkout with no stdin, in a session of their own detached from any terminal, so a command that opens `/dev/tty` cannot stop on job control. Timeout, deadline, and cancellation stop the whole process group. An interrupted check can run again: the process hosting it can die after the command ran.
 
@@ -388,17 +388,17 @@ Tests and scripts run as child processes in the checkout with no stdin, in a ses
 | --- | --- |
 | `test` | Exit 0 answers `pass`, any other exit `fail`. A signal, a spawn error, or a log-open error raises `died`. Both streams go to `<seq>.check.log`. Requires both `on.pass` and `on.fail`. |
 | `script` | Stdout is one JSON object ([the check answer](#the-check-answer)). It must also exit 0: a nonzero exit or signal raises `died`. Its complete stderr goes to `<seq>.check.log`, even when empty. |
-| `judge` | A headless model answers with one JSON object as its final message, which RimZ saves to `output_path`. When the provider returns no structured answer, RimZ reads a file the judge wrote at `output_path`. |
+| `judge` | An agent in a pane answers through [`rimz workflow submit`](#workflow-submit). |
 | `condition` | Ordered cases over [condition keys](#conditions), with no child process. |
 
-A judge runs headless in the checkout, with no pane. Its permission mode is automatic unless its profile sets one. Its shorter `### Workflow` note names its check, the graph position, and the run's origin, says its answer chooses where the run goes, and points to `rimz workflow show $RIMZ_WORKFLOW_RUN --history`. Its prompt carries the JSON answer contract. Under scoped isolation, RimZ mounts the checkout and its Git directories read-only for the judge. Under host isolation only the prompt says so. `validate` refuses a judge whose agent has no headless mode.
+Each evaluation launches a fresh agent in a pane of the run's checkout, with the Judge role and a session lifecycle. Its permission mode is automatic unless its profile sets one. Its shorter `### Workflow` note names its check, the graph position, and the run's origin, says its answer chooses where the run goes, and points to `rimz workflow show $RIMZ_WORKFLOW_RUN --history`. Its prompt teaches `rimz workflow submit`. Under scoped isolation, RimZ mounts the checkout and its Git directories read-only for the judge. Under host isolation only the prompt says so. Any agent kind can judge.
 
-- A judge that fails with `died` or `invalid` runs once more, with `retry` in `context.json`, before its failure is raised.
-- A judge's timeout and `limited` (a daily cap spent, or the account parked) fail at once.
-- With [auto-continue](../../guide/loops.md#auto-continue) on, a provider limit mid-run waits for its reset without failing. With it off, it ends the attempt as `limited`, and `validate` warns.
-- The judge's timeout pauses while it waits for its `admission.window` or a limit's reset, and a rerun stays inside the same timeout.
-- An [unsupported agent version](../agent-support.md) refuses before the judge runs and follows the same retry and failure policy. `workflow show` includes the upgrade instruction.
-- A headless Claude judge that hits the Console API usage cap fails as `died`.
+- An accepted answer closes the pane and routes the run. A judge's final message is not read.
+- A judge at a clean rest without an answer is reminded once. One that exits without an answer fails with `died`; an answer accepted before the exit wins.
+- A question, a provider error, or a provider limit holds the judge in its pane as it holds a step's agent ([held agents](#how-an-attempt-ends)), and the timeout pauses while it is held. `on.asked` and `on.errored` route a question or an error instead.
+- A budget that refuses the judge's launch fails it with `limited`. Any other launch failure fails it with `died` at once.
+- The judge's timeout starts at its launch, so a wait for its `admission.window` spends none of it. The deadline wins a tie with an answer.
+- An [unsupported agent version](../agent-support.md) refuses the launch, which fails with `died`. `workflow show` includes the upgrade instruction.
 
 ### Conditions
 
@@ -473,7 +473,7 @@ A sleep takes required `sleep` (a nonzero duration) and `then` (a node, `@done`,
 
 | Field | Rule |
 | --- | --- |
-| `max-parallel` | Integer at least 1. Counts one per unfinished run whose record holds an agent step attempt, including an idle session, a session held at its rest check (counted under its own step), and an attempt whose agent has not registered yet or has died, until an advance settles it. Companions, RimZ-launched children and peers, headless judges, and a kept agent whose attempt has ended do not count. A step with companions counts as one, so a layout wider than the limit still starts. |
+| `max-parallel` | Integer at least 1. Counts one per unfinished run whose record holds an agent step attempt, including an idle session, a session held at its rest check (counted under its own step), and an attempt whose agent has not registered yet or has died, until an advance settles it. Companions, RimZ-launched children and peers, judges, and a kept agent whose attempt has ended do not count. A step with companions counts as one, so a layout wider than the limit still starts. |
 | `stagger` | Positive duration. Minimum gap between launches at this scope, stamped at launch and shared across rooms and restarts. It is not a gap between admissions or user turns. |
 
 Limits use each run's definition as it is now, so an edit reaches waiting runs at their next retry. They count runs of that workflow name, so a finished run frees its slot even when it kept its agents open. Waiting, paused, hibernated, and compacting sessions count while their run holds the attempt, and so does a parked run's. The incoming start counts as one, and a same-workflow start admitted but not yet launched holds the next one until its launch is reported. Limits apply after window and occupancy, before the two machine caps and other machine checks, even with no `[throttle]` table. No workflow or step limit bypasses a machine cap. Earlier active capacity waiters held by a workflow limit go first across all steps. A step-limit waiter holds only its step. Ties use run id. A freed slot waits for the earlier run's next retry. Limits never stop an existing turn or pane.
@@ -510,10 +510,10 @@ A node fails with one of eight causes, and each kind raises only its own:
 
 | Cause | Raised when |
 | --- | --- |
-| `died` | The node's process could not start or ended abnormally: an agent launch that failed, including a failed continued restart; a turn step's provider exit before its clean turn end; a session's exit away from rest ([how an attempt ends](#how-an-attempt-ends)); an agent attempt a room rebirth ended; a command's or script's nonzero exit or signal; a test killed by a signal; a command, test, or script that could not spawn or open its log; a command whose host died; a judge process that failed, or a judge answer that is missing or not one JSON object. |
-| `invalid` | A script or judge gave an answer the node cannot use: a script's stdout that is not one JSON object, a wrong field type, an outcome its `on` does not name or a reserved word, or a bad `recheck_at`. |
+| `died` | The node's process could not start or ended abnormally: an agent launch that failed, including a failed continued restart; a turn step's provider exit before its clean turn end; a session's exit away from rest ([how an attempt ends](#how-an-attempt-ends)); an agent attempt a room rebirth ended; a command's or script's nonzero exit or signal; a test killed by a signal; a command, test, or script that could not spawn or open its log; a command whose host died; a judge's session that ended without an answer. |
+| `invalid` | A script gave an answer the node cannot use (stdout that is not one JSON object, a wrong field type, an outcome its `on` does not name or a reserved word, or a bad `recheck_at`), or a definition edit left a judge's accepted answer unroutable. |
 | `timeout` | The node's `timeout` passed. |
-| `limited` | A budget refused an agent step's launch or stopped its run, or a judge's account may not spend (the fleet's or the account's daily cap is spent, or the account is parked), or a judge hit a provider limit while auto-continue is off. |
+| `limited` | A budget refused an agent's launch, a judge's included, or stopped it. |
 | `undelivered` | A message step found no single living agent, its prompt could not be composed, or the address resolved to another session than its pinned `session`. |
 | `visits` | An entry would exceed the step's `max-visits` plus the run's visit grant. Nothing launches and no visit is counted. |
 | `capacity` | An agent step's capacity wait gave up, or its start can never fit under a machine cap. No visit is counted. |
@@ -554,7 +554,7 @@ The attempt the failure route admits records the cause as its `routed_by`. `show
 
 ### The check answer
 
-A script prints, and a judge gives as its final message, exactly one JSON object:
+A script prints exactly one JSON object, and a judge sends one through [`rimz workflow submit`](#workflow-submit):
 
 | Field | Required | Meaning |
 | --- | --- | --- |
@@ -565,7 +565,7 @@ A script prints, and a judge gives as its final message, exactly one JSON object
 
 Any other field travels too: the whole object becomes the next node's `input`. `null` is not a valid value for `reason`, `recheck_at`, or `key`, so an answer cannot clear the key. A script must also exit 0: a nonzero exit fails it with `died`, and an answer it cannot use fails it with `invalid`.
 
-Reserved outcome words: the eight causes (`died`, `invalid`, `timeout`, `limited`, `undelivered`, `visits`, `capacity`, `deadline`), `failed`, `asked`, `errored`, `unknown`, and `hold`. A case or `else` that names one refuses, and a script or judge that answers one fails with `invalid`. In an `on` table they are the engine's routes. A check's route refuses when the check cannot answer it (`dead route: this check cannot answer that outcome`), and `on.hold` is always a dead route.
+Reserved outcome words: the eight causes (`died`, `invalid`, `timeout`, `limited`, `undelivered`, `visits`, `capacity`, `deadline`), `failed`, `asked`, `errored`, `unknown`, and `hold`. A case or `else` that names one refuses, a script that answers one fails with `invalid`, and `submit` refuses one and says why. In an `on` table they are the engine's routes. A check's route refuses when the check cannot answer it (`dead route: this check cannot answer that outcome`), and `on.hold` is always a dead route.
 
 A step's `limited` failure routed to a script names `cause: "limited"` in its input, and `context.json` carries `prev_attempt.limited.reset_at` (also `input.detail.reset_at` when known), so the script can answer a waiting outcome with that time as `recheck_at`. The [sample `pr.py`](../../../crates/rimz/tests/fixtures/workflows/babysit-pr/checks/pr.py) does this.
 
@@ -576,6 +576,21 @@ A test's answer is `{outcome, code, log}` plus an inherited `key` when present. 
 ### Script answers
 
 A script keeps stdout as its JSON answer and writes complete stderr, including an empty stream, to `work/<seq>.check.log` once it settles. Invalid answers journal the stderr tail.
+
+### `workflow submit`
+
+`rimz workflow submit <OUTCOME> [--reason <TEXT>] [--key <KEY>] [--recheck-at <WHEN>] [--json <OBJECT>]` is how a judge answers its check, from its own pane. The flags set the answer's fields: `--key` as text, and `--recheck-at` in any [workflow time](#workflow-times) spelling, resolved in the `timezone` setting and stored as an RFC 3339 instant. `--json` takes one JSON object whose other fields travel with the answer; a flag wins over the same field there. It prints `accepted <outcome> for workflow run <id>; this pane closes once the run settles it`. The run settles the answer at its next advance, closes the judge's pane, and routes.
+
+`submit` refuses with exit 1 and its reason, leaving the run as it was, and the judge can submit again:
+
+| Case | Reason |
+| --- | --- |
+| The caller is not an agent RimZ launched as a workflow judge, a judge's own child included | `caller is not a workflow judge; rimz workflow submit answers a check from its judge's own pane` |
+| The caller is a step's agent | `caller is a workflow step's agent, not a judge; a step ends by finishing its turn` |
+| The run ended, or moved past this judge's evaluation | `workflow run <id> is not active` or `workflow run <id> is no longer waiting on this judge` |
+| The judge already answered | `workflow run <id> already has this judge's answer` |
+| The outcome is reserved, not routed by the check's `on`, or a field has the wrong type | The [check answer](#the-check-answer) rule it breaks, then `; OUTCOME is one of` and the outcomes the check routes. |
+| `--json` is not one object, or `--recheck-at` is not a workflow time | The flag's parse error, a usage error with exit 2. |
 
 ### Condition answers
 
@@ -601,8 +616,6 @@ RimZ rewrites `$RIMZ_WORKFLOW_DIR/context.json` before every check and every att
 | `visit`, `visits` | Steps only: the step's visit count stamped when this launch or push-back was admitted, and its current count, both since its last manual restart. `max-visits` caps them. |
 | `step_visits` | Every node: an object from each visited step's name to its visit count, as `visits` counts it. `{}` before any step is visited. |
 | `key_visits` | Every node: an object from each step's name to a list of `{"key": <key>, "visits": <n>}`, one entry per item key the step was visited under, in the order the keys first came. `key` is as the run holds it, so `7` and `"7"` are two items. A visit with no key counts only in the step's total. `{}` when no visit had a key. |
-| `output_path` | Judges only: the file to write the answer to. Null for other checks and steps. |
-| `retry` | Judges only: set when the judge runs again after a failed first try, with that try's outcome and reason. |
 | `signs_path` | For a step, its sign file, `signs/<step>.md`. For a check, the `signs/` directory. |
 | `prev_attempt` | How the last step attempt ended, or null. |
 | `live_attempt` | The open session of a step with a `rest-check`, during its rest checks too. Absent for a turn, a session without a `rest-check`, or a staged ending. |
@@ -770,11 +783,11 @@ The headline:
 | State | Headline |
 | --- | --- |
 | Running step | The step, its visit limit, and the agent's full card handle (channel included, recorded pet name as fallback). |
+| Running check | `checking <check> <age>`, with ` in <handle>` while a judge's agent is up. |
 | Session | `<step> is with you`, plus the same check and wait suffix as `list`, not repeated below. |
-| Held | `<step> is held <age> · <handle>: <stop>` for a step of either lifecycle held on an error, a limit, an overload, or a budget park. The headline takes the waiting tone when the hold needs you. |
-| Asking | `<step> is asking you · <handle> (<kind>)`, with an instruction to answer in the pane or with `rimz answer`. The step's timeout pauses while asking. |
+| Held | `<step> is held <age> · <handle>: <stop>` for a step of either lifecycle, or the current judge's check, held on an error, a limit, an overload, or a budget park. The headline takes the waiting tone when the hold needs you. |
+| Asking | `<step> is asking you · <handle> (<kind>)`, with an instruction to answer in the pane or with `rimz answer`. The step's or judge's timeout pauses while asking. A judge's question names its check. |
 | Waiting | The wait phrase with its node, elapsed time, recheck, and the next bound's time and target. A hold names its outcome, duration, and the next bound. |
-| Judge waiting | Adds `the judge waits for its window or a limit's reset · the judge timeout is paused`. |
 | Parked | `parked at <node> <age> · <reason>`, with the explanation in the block below. |
 | Ended, before its directory moves | `done`, `failed`, or `canceled`, with no PR badge. The headline ages from the ending. Once the directory is in `finished-workflows/`, `show` prints the [finished view](#finished-runs). |
 
@@ -903,7 +916,7 @@ An unfinished run holds its worktree against removal and automatic cleanup, even
 
 ### `resume`
 
-`rimz workflow resume <RUN> [--at <NODE>] [--extend <GRANT>]...` puts a run back to work, at its current node or at `--at <NODE>`, with a fresh timeout clock and a cleared check retry. `--extend` repeats:
+`rimz workflow resume <RUN> [--at <NODE>] [--extend <GRANT>]...` puts a run back to work, at its current node or at `--at <NODE>`, with a fresh timeout clock. `--extend` repeats:
 
 | Grant | Effect |
 | --- | --- |
@@ -964,7 +977,7 @@ A loop task starts a deployed workflow with `--workflow`, as in `rimz loop add b
 
 ## Failure text
 
-Script process failures say `<script> exited N` or `<script> killed by SIGTERM` (the signal's name when known). `<script>` is the first `run` word containing `/`, or its first word when none does. Judge process failures say `judge exited N` or `judge killed by SIGKILL`. Provider errors or invalid provider output take precedence over the exit status. A run keeps the text it recorded when it ran.
+Script process failures say `<script> exited N` or `<script> killed by SIGTERM` (the signal's name when known). `<script>` is the first `run` word containing `/`, or its first word when none does. A judge whose session ends without an answer says `the judge's session ended without an answer` unless its launch named another reason. A run keeps the text it recorded when it ran.
 
 ## Assists
 
@@ -987,8 +1000,8 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 | `record.prev_attempt` | As in [the context file](#the-context-file). |
 | `record.restart` | `{resume: "session-id" \| null, settled?: N}` while a manual replacement is pending. Null means a fresh start. `settled` names a previous attempt being stopped again whose end and cost are already journaled. It disappears when the launch is published, when a route leaves the step for another node (a capacity give-up, a deadline) or `resume --at` moves the run, or when the run parks or terminates. |
 | `record.held` | While checking an open session: `{attempt, entered_at, verdict?}`, the session attempt, the step's entry time, and the saved check verdict. |
+| `record.abandoned` | Judges whose evaluation ended while their agent still ran (an interrupt of the held session they judged), owed a stop. The next engine pass stops them, and a run that ends stops them as it ends. Omitted when empty. |
 | `record.wait` | The open wait: `node`, `detail`, `first`, `last`, `count`, and for a condition `recheck_at`, `case` during a `for` hold (omitted without one), and `unknown` (the reason of an `unknown` answer routed to `@wait` during a hold, cleared by a true answer of the held case). |
-| `paused_since`, `paused_ms` | A judge's pause: open while it waits for its window or a limit's reset, and the closed pause time in milliseconds. The judge's next start closes the pause, every entry into a node clears both, and both are omitted when empty or zero. |
 
 A capacity wait has `record.wait.outcome = "capacity"`, provider `kinds`, optional `hold` (the [typed cause](../../internals/harness/loops.md#the-start-throttle)), and optional `gives_up_at` (absent for `forever`, and when neither the node nor the run bounds the wait). Closing the wait carries `hold` into its history entry.
 
@@ -1007,10 +1020,13 @@ A verdict is `{node, entered_at, at, target, object, reason}`, where `at` is the
 | `attempt.push` | `{message, queued}`: the push-back message id, persisted before delivery. `queued` means the host has confirmed enqueue, including an id already in live or retained history. |
 | `attempt.judged` | `{agent_id, started_at, ended_at}`, the consumed leader turn end. |
 | `attempt.started_past_limit` | The `--skip-capacity` hold text. |
+| `attempt.answer` | A judge's accepted `submit` answer, normalized against its check. The engine routes on it alone. Omitted until one is accepted. |
+| `attempt.reminded` | `true` once a judge that rested without an answer was reminded. Omitted while false. |
+| `attempt.evidence` | A judge's staged ending evidence: the input its `asked` or `errored` route hands on, or its failure's detail. A judge's ending leaves `prev_attempt` the last step's. |
 | `code`, `log` | A command step's exit code (null after a signal or an unobserved exit) and the absolute `work/<seq>.step.log` path when the file exists. Null for agent attempts. |
 | `message` | A message step's queued message id, also on its journal `attempt` row. Other attempts omit it. |
 
-`asking`, `asked_ms`, and `held_since` pause a step's timeout, not the run deadline. They are omitted when empty or zero. Command steps have null `handle`, `run_id`, `children`, `limited`, `asked`, and `cost_usd`. A message-step attempt carries `handle` (the target, null when undelivered) and `message`, with `code`, `log`, and `run_id` null. The hosting process samples `head_start` before a command and `head_end` after reaping it. `claim_path` names `work/<seq>.claim.json`.
+`asking`, `asked_ms`, and `held_since` pause a step's or judge's timeout, not the run deadline. They are omitted when empty or zero. Command steps have null `handle`, `run_id`, `children`, `limited`, `asked`, and `cost_usd`. A message-step attempt carries `handle` (the target, null when undelivered) and `message`, with `code`, `log`, and `run_id` null. The hosting process samples `head_start` before a command and `head_end` after reaping it. `claim_path` names `work/<seq>.claim.json`.
 
 ### Journal rows
 
@@ -1031,5 +1047,5 @@ A verdict is `{node, entered_at, at, target, object, reason}`, where `at` is the
 | Code | When |
 | --- | --- |
 | `0` | Success, including `cancel` of an already-finished run, `show <WORKFLOW>` with an unavailable definition, and `validate` with warnings only. |
-| `1` | A refusal or failure: an unknown or ambiguous run, a duplicate start, a terminal resume or restart, a validation error, an unknown node, `show` with no RUN outside a workflow, and a node view of a finished run. |
+| `1` | A refusal or failure: an unknown or ambiguous run, a duplicate start, a terminal resume or restart, a refused `submit`, a validation error, an unknown node, `show` with no RUN outside a workflow, and a node view of a finished run. |
 | `2` | A usage error: a clap parse error, a malformed `<workflow>#<checkout>` address, `show <run> <NODE>` with an unfinished run's address or id, `--history` with a workflow name, `--history` or a NODE together with `--json`, and a name that is both a deployed workflow and a loop task without a `workflow:` or `task:` selector. |

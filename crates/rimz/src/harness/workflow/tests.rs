@@ -10,6 +10,8 @@ pub(in crate::harness) struct FakeHost {
     pub(super) occupancy: Rc<RefCell<Occupancy>>,
     pub(in crate::harness) launched: RefCell<Vec<StepLaunch>>,
     pub(in crate::harness) observed: Rc<RefCell<Observed>>,
+    /// What one run's observation reads in place of `observed`.
+    pub(super) observed_runs: RefCell<std::collections::HashMap<crate::ids::RunId, Observed>>,
     pub(in crate::harness) failure: RefCell<Option<LaunchFailure>>,
     /// The start groups admission sees, in place of resolving the step's agent.
     pub(super) groups: RefCell<Option<Vec<crate::harness::throttle::StartGroup>>>,
@@ -22,6 +24,8 @@ pub(in crate::harness) struct FakeHost {
     /// The occupancy the checkout reaches while a launch is prepared, after its first read.
     arrives_at_launch: RefCell<Option<Occupancy>>,
     stops: Cell<usize>,
+    /// The runs each successful stop named, in order.
+    stopped: RefCell<Vec<crate::ids::RunId>>,
     detaches: Cell<usize>,
     evictions: Cell<usize>,
     occupancies: Cell<usize>,
@@ -65,6 +69,7 @@ impl FakeHost {
                 cost_usd: Some(0.25),
                 turn: None,
             })),
+            observed_runs: RefCell::new(std::collections::HashMap::new()),
             failure: RefCell::new(None),
             unstarted: Cell::new(false),
             host_error: Cell::new(false),
@@ -72,6 +77,7 @@ impl FakeHost {
             stale_after_evict: Cell::new(false),
             arrives_at_launch: RefCell::new(None),
             stops: Cell::new(0),
+            stopped: RefCell::new(Vec::new()),
             detaches: Cell::new(0),
             evictions: Cell::new(0),
             occupancies: Cell::new(0),
@@ -170,12 +176,15 @@ impl AttemptHost for FakeHost {
         })
     }
 
-    fn observe(&self, _: &AttemptRun, observation: Observation) -> Result<Observed, WorkflowErr> {
+    fn observe(&self, run: &AttemptRun, observation: Observation) -> Result<Observed, WorkflowErr> {
         self.observations.set(self.observations.get() + 1);
         if let Some(check) = &*self.on_observe.borrow() {
             check();
         }
-        let mut observed = self.observed.borrow().clone();
+        let mut observed = match self.observed_runs.borrow().get(&run.run_id) {
+            Some(own) => own.clone(),
+            None => self.observed.borrow().clone(),
+        };
         match observation {
             Observation::Attempt => observed.turn = None,
             Observation::LeaderTurn => self.turn_observations.set(self.turn_observations.get() + 1),
@@ -255,7 +264,7 @@ impl AttemptHost for FakeHost {
         Ok(self.observed.borrow().children.clone())
     }
 
-    fn stop(&self, _: &AttemptRun) -> Result<Children, WorkflowErr> {
+    fn stop(&self, run: &AttemptRun) -> Result<Children, WorkflowErr> {
         if self.stop_error.replace(false) {
             return Err(WorkflowErr::Refused("stop interrupted".into()));
         }
@@ -263,6 +272,7 @@ impl AttemptHost for FakeHost {
             check();
         }
         self.stops.set(self.stops.get() + 1);
+        self.stopped.borrow_mut().push(run.run_id.clone());
         Ok(self.observed.borrow().children.clone())
     }
 
@@ -1113,7 +1123,7 @@ fn validation_accepts_shell_checks_without_confining_the_command() {
 }
 
 #[test]
-fn validation_refuses_judges_without_a_headless_launch() {
+fn validation_admits_a_judge_on_any_agent_kind() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
@@ -1124,12 +1134,12 @@ fn validation_refuses_judges_without_a_headless_launch() {
     )
     .unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
+    assert!(report.errors.is_empty(), "{report:?}");
     assert!(
         report
-            .errors
+            .rows
             .iter()
-            .any(|issue| issue.path == "judge.pick.agent" && issue.message.contains("headless")),
-        "{report:?}"
+            .any(|row| row.node == "pick" && row.kind == "judge")
     );
 }
 

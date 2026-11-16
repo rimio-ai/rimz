@@ -147,7 +147,6 @@ pub(super) fn render(
     if let Some(section) = &request.reminder_section {
         let (heading, body) = match section {
             ReminderSection::Loop(body) => ("Loop", body),
-            ReminderSection::Judge(body) => ("Judge", body),
             ReminderSection::Workflow(body) => ("Workflow", body),
         };
         paragraphs.push(format!("### {heading}\n\n{body}"));

@@ -92,6 +92,9 @@ pub struct CohortRequest {
 pub struct LaunchOverrides {
     pub login: Option<crate::ids::LoginName>,
     pub mode: Option<PermissionMode>,
+    /// The mode the launch takes where its profile sets none, as a workflow judge's automatic
+    /// mode; `mode` wins over both.
+    pub default_mode: Option<PermissionMode>,
     pub tier: Option<crate::config::tiers::ModelTier>,
     pub agent: Option<String>,
     pub preset: crate::agents::LaunchPreset,

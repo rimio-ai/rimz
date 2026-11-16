@@ -224,7 +224,7 @@ fn capacity_edges_fire_on_every_agent_step() {
 }
 
 #[test]
-fn judge_invalid_fires_after_retry_and_defaults_to_the_run_end() {
+fn judge_invalid_fires_and_defaults_to_the_run_end() {
     for (settings, target) in [("", "@failed"), ("on.invalid='work'", "work")] {
         let spec = spec(
             &format!("agent='claude'\non.ready='work'\n{settings}"),

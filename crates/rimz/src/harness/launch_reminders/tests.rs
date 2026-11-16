@@ -411,52 +411,6 @@ fn env_paragraph_escapes_cwd_and_names_shell_kind_only() {
 }
 
 #[test]
-fn headless_check_section_replaces_loop_in_the_same_slot() {
-    let mut request =
-        ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
-    request.reminder_section = Some(ReminderSection::Judge(
-        "Decide without a user or pane.".into(),
-    ));
-    request.headless = Some(crate::agents::HeadlessRequest {
-        schema_open: false,
-        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
-        schema_file: "/check/schema.json".into(),
-        verdict_file: "/check/verdict.json".into(),
-    });
-    request.identity.params.model = Some("haiku".into());
-    let text = render(
-        &request,
-        &LaunchReminders {
-            env: true,
-            ..Default::default()
-        },
-        Path::new("/w"),
-        None,
-    );
-    assert!(!text.contains("### Loop"));
-    assert!(text.contains("### Judge"), "{text}");
-    let check = text
-        .find("### Judge\n\nDecide without a user or pane.")
-        .unwrap();
-    assert!(text.find("Haiku").unwrap() < check);
-    assert!(check < text.find("### Environment").unwrap());
-    request.reminder_section = Some(ReminderSection::Workflow("A workflow check.".into()));
-    let text = render(
-        &request,
-        &LaunchReminders {
-            env: true,
-            ..Default::default()
-        },
-        Path::new("/w"),
-        None,
-    );
-    assert!(!text.contains("### Judge"));
-    let workflow = text.find("### Workflow\n\nA workflow check.").unwrap();
-    assert!(text.find("Haiku").unwrap() < workflow);
-    assert!(workflow < text.find("### Environment").unwrap());
-}
-
-#[test]
 fn skills_section_follows_a_listed_rimz_skill() {
     let mut request =
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());

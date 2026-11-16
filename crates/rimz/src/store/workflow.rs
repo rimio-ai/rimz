@@ -201,6 +201,14 @@ pub enum AttemptKind {
     Workflow,
 }
 
+impl AttemptKind {
+    /// Whether an attempt of this kind owns an agent run, which ends through the stop protocol:
+    /// an agent step's or a judge's.
+    pub fn owns_agent(self) -> bool {
+        matches!(self, Self::Agent | Self::Judge)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Host {
     pub pid: u32,
@@ -277,8 +285,18 @@ pub struct LiveAttempt {
     pub digests: BTreeMap<String, String>,
     #[serde(default)]
     pub ending: Option<Ending>,
-    #[serde(default)]
-    pub retry: Option<Value>,
+    /// A judge's answer, accepted from `rimz workflow submit` and normalized against its node;
+    /// the engine routes on it alone, never on the judge's last message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Value>,
+    /// A judge that rested without an answer was reminded once.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reminded: bool,
+    /// A judge's ending evidence, staged with its ending for the settlement after the stop: the
+    /// input its `asked` or `errored` route hands on, or the detail of its failure. A judge's
+    /// ending never touches `prev_attempt`, which stays the last step's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub woken: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -715,14 +733,6 @@ pub struct RunRecord {
     /// Whether the run's starts wait at a capacity hold or launch past it, a start argument.
     #[serde(default, skip_serializing_if = "StartCapacity::is_wait")]
     pub capacity: StartCapacity,
-    /// The `surplus` value an older RimZ's loop fire froze from its task row; a loop row carries
-    /// none now, so no fire sets it. The run's judges gate on it and on `surplus_after`; a record
-    /// with neither applies no surplus gate to its judges.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub surplus: Option<String>,
-    /// The `surplus-after` value an older RimZ's loop fire froze from its task row.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub surplus_after: Option<String>,
     /// What the loop fire that started the run tells the run's briefs, frozen at creation, so an
     /// edit, rename or removal of the task mid-run leaves every brief as it was; a run
     /// `rimz workflow run` started carries none.
@@ -762,18 +772,11 @@ pub struct RunRecord {
     /// How the run ended, written with the terminal state; none while the run is live.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<RunOutcome>,
-    #[serde(default)]
-    pub check_retry: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub check_retry_context: Option<Value>,
-    /// The current judge's clock is paused from this instant, while the judge waits for its
-    /// usage window or a provider limit's reset; the judge's next start folds it into
-    /// `paused_ms`, and every fresh entry clears both.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub paused_since: Option<Timestamp>,
-    /// Milliseconds the current judge's clock has spent paused on this entry.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub paused_ms: u64,
+    /// Judges whose evaluation an interrupt of their held session abandoned while their agents
+    /// ran, owed a stop: the next engine pass stops them off the lock, and a closing run stops
+    /// them as it ends.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub abandoned: Vec<AttemptRun>,
     /// The current step entry spent its one retry of a launch whose eviction failed before it
     /// started anything; cleared wherever the run enters a step afresh.
     #[serde(default)]
@@ -1000,8 +1003,6 @@ pub enum JournalEvent {
         stderr_tail: Option<String>,
         #[serde(default)]
         cost_usd: Option<f64>,
-        #[serde(default)]
-        retry: Option<Value>,
     },
     Attempt {
         outcome: AttemptOutcome,

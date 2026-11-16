@@ -197,7 +197,6 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity::default(),
     }
 }
@@ -6845,7 +6844,6 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             continue_session: false,
             follow_up_message: None,
             reminder_section: None,
-            headless: None,
             identity: ExecIdentity::default(),
         };
         resume.identity.params.isolation = Some(rimz::config::Isolation::Host);
@@ -7003,7 +7001,6 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             continue_session: false,
             follow_up_message: None,
             reminder_section: None,
-            headless: None,
             identity: ExecIdentity::default(),
         };
         env.rimz()
@@ -7117,7 +7114,6 @@ esac"#,
         continue_session: true,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity::default(),
     };
     request.identity.params.isolation = Some(rimz::config::Isolation::Host);
@@ -7323,7 +7319,6 @@ esac"#,
         continue_session: false,
         follow_up_message: failed_follow_up,
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity::default(),
     };
     resume.identity.params.isolation = Some(rimz::config::Isolation::Host);

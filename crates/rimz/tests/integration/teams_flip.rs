@@ -1568,7 +1568,6 @@ impl Fixture {
             continue_session: false,
             follow_up_message: None,
             reminder_section: None,
-            headless: None,
             skills: None,
             no_skill_tool: false,
             allowed_tools: None,

@@ -1,20 +1,6 @@
-//! Provider-neutral requests, paths, and results for bounded headless judges.
-
-use std::path::{Path, PathBuf};
+//! The verdict loop judges answered before outcome words, kept to read old loop run logs.
 
 use serde::{Deserialize, Serialize};
-
-use super::pricing::PriceBook;
-use super::skills::{LaunchSettingsArtifact, LaunchSettingsErr};
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HeadlessRequest {
-    pub schema: String,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub schema_open: bool,
-    pub schema_file: PathBuf,
-    pub verdict_file: PathBuf,
-}
 
 /// The `{pass, reason}` verdict loop judges answered before outcome words, kept only
 /// to read legacy `AgentCheckRecord` rows in the loop run log.
@@ -34,59 +20,6 @@ fn bounded_reason<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<S
     }
     reason.drain(..start);
     Ok(reason)
-}
-
-#[derive(Debug, Default, PartialEq)]
-pub struct HeadlessResult {
-    pub verdict: Option<serde_json::Value>,
-    pub cost_usd: Option<f64>,
-    pub input_tokens: Option<u64>,
-    pub output_tokens: Option<u64>,
-    pub error: Option<HeadlessError>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HeadlessErrorKind {
-    ProviderLimit,
-    Other,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HeadlessError {
-    pub kind: HeadlessErrorKind,
-    pub text: String,
-}
-
-impl From<String> for HeadlessError {
-    fn from(text: String) -> Self {
-        Self {
-            kind: HeadlessErrorKind::Other,
-            text,
-        }
-    }
-}
-
-pub trait HeadlessForm: std::fmt::Debug + Sync {
-    fn render_argv(
-        &self,
-        extra_args: &[String],
-        prompt: Option<&str>,
-        request: &HeadlessRequest,
-        cwd: &Path,
-        settings: (&Path, &mut Option<LaunchSettingsArtifact>),
-    ) -> Result<Vec<String>, LaunchSettingsErr>;
-
-    fn read_result(
-        &self,
-        stdout: &[u8],
-        stderr: &[u8],
-        request: &HeadlessRequest,
-        model: Option<&str>,
-        // The check's launch posture asked the provider for fast mode, for a
-        // form whose output carries no service tier to price from.
-        fast: bool,
-        prices: &PriceBook,
-    ) -> HeadlessResult;
 }
 
 #[cfg(test)]
