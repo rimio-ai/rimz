@@ -70,7 +70,7 @@ Validate the definition. The command prints every node with the edges it resolve
 $ rimz workflow validate ~/.rimz/workflows/fix-tests
 WORKFLOW   NODE   KIND   RUNNER      BACKGROUND  EDGES
 fix-tests  tests  test   cargo test  —           fail → fix (explicit), pass → @done (explicit), died → @failed (default), timeout → @failed (default), deadline → @failed (default, only with a deadline)
-fix-tests  fix    agent  claude      yes         then → tests (explicit), died → @failed (default), timeout → @failed (default), limited → @failed (default), visits → @failed (default), capacity → @failed (default), deadline → @failed (default, only with a deadline)
+fix-tests  fix    agent  claude      yes         then → tests (explicit), died → @failed (default), timeout → @failed (default), visits → @failed (default), capacity → @failed (default), deadline → @failed (default, only with a deadline)
 warning: fix-tests: agent.fix: auto-continue is off; a step paused on a provider limit waits for you
 ```
 
@@ -97,7 +97,7 @@ Then start the run:
    RUN='fix-tests#feat-x'
    ```
 
-`run` validates again, prints any warnings to stderr, and prints three lines: the run id (`wf_` and 32 hexadecimal digits), the run's work directory, and a `rimz workflow show` command for the run. The first node starts in the background. When the first step cannot start yet (no capacity, a closed usage window, an agent already in the checkout), a fourth line says what it waits for. The work directory moves when the run ends ([Stop a run and clean up](#stop-a-run-and-clean-up)), so a run that ends before `run` returns prints the directory it moved to.
+`run` validates again, prints any warnings to stderr, and prints three lines: the run id (`wf_` and 32 hexadecimal digits), the run's work directory, and a `rimz workflow show` command for the run. The first node starts in the background. When the first step cannot start yet (no capacity, a closed usage window, a spent budget, an agent already in the checkout), a fourth line says what it waits for. The work directory moves when the run ends ([Stop a run and clean up](#stop-a-run-and-clean-up)), so a run that ends before `run` returns prints the directory it moved to.
 
 Without `-w` the run uses the checkout you are in. `-w <name>` runs it in that RimZ worktree, created from your configured base when it does not exist yet. A workflow holds at most one unfinished run per checkout, so a second `run` there refuses and names the run that holds it. `--prompt 'keep the public API unchanged'` adds text to the end of every agent step's prompt for this run.
 
@@ -135,7 +135,7 @@ no active or parked runs of fix-tests
 
 `rimz workflow show fix-tests fix` prints one node in full, with every resolved edge, including the default ones the graph leaves out.
 
-`list` names each run by an address such as `fix-tests#feat-x`: the workflow, then the checkout's directory name, or `main` for the project root. Use that address in place of `$RUN` in `show`, `resume`, `restart`, and `cancel`. The runs that need you come first, under NEEDS YOU: an agent step with a question open, an agent step held on an error that waiting will not clear (a provider error, an unknown error, a lapsed plan), and a capacity hold that needs a fix. A step held on a rate or spend limit, an overload, or a budget park clears by itself and stays in its workflow's group. The other runs group by workflow. The two captures below come from a test room: its checkout is named `probe`, its test was `false`, and other agents held the checkout, so `fix` could not start:
+`list` names each run by an address such as `fix-tests#feat-x`: the workflow, then the checkout's directory name, or `main` for the project root. Use that address in place of `$RUN` in `show`, `resume`, `restart`, and `cancel`. The runs that need you come first, under NEEDS YOU: an agent step with a question open, an agent step held on an error that waiting will not clear (a provider error, an unknown error, a lapsed plan), and a capacity hold that needs a fix. A step held on a rate or spend limit, an overload, or a budget park stays in its workflow's group. The limit and the overload clear by themselves. A budget park clears by itself only when its cap's `/day` or `/month` window resets with [auto-continue](./loops.md#keep-the-fleet-moving) on; otherwise it holds the step until you raise the cap or message the agent ([what resumes a parked agent](./budget.md#what-resumes-a-parked-agent)). The other runs group by workflow. The two captures below come from a test room: its checkout is named `probe`, its test was `false`, and other agents held the checkout, so `fix` could not start:
 
 ```console
 $ rimz workflow list
@@ -297,12 +297,12 @@ admission = { occupancy = "takeover" }
 then = "pr"
 max-visits = 5
 timeout = "6h"
-on = { died = "pr", timeout = "pr", limited = "pr" }
+on = { died = "pr", timeout = "pr" }
 ```
 
 A condition is a check that reads facts RimZ already tracks, with no command to run. `summary` is an optional one-line description that `show` and the launch reminder print. Its `cases` are tried in order and the first true case wins. Each `when` array is ANDed, and each string takes the [loop condition grammar](./loops.md#wait-for-done-and-green): keys such as `ci`, `pr`, and `pr.queue`, combined with `!`, `&&`, `||`, and parentheses. When no case is true, the condition answers `else`. Every outcome needs an `on` edge.
 
-Here a merged PR ends the run, and a queued or pending PR waits. CI that has failed, or a PR dequeued from the merge queue, for two minutes running launches `sweep`. The `for = "2m"` hold keeps a brief red from launching an agent. `occupancy = "takeover"` lets the sweeper stop an idle agent you left in the worktree. A clean turn follows `then` back to `pr`, and so does a sweep that died, timed out, or was refused by a budget, through its `on` routes, so the condition reads the PR again. A sixth sweep fails the run. The sweep prompt must re-arm the PR after a queue removal (enable auto-merge or queue it again), since a push alone does not clear `pr.queue=dequeued`.
+Here a merged PR ends the run, and a queued or pending PR waits. CI that has failed, or a PR dequeued from the merge queue, for two minutes running launches `sweep`. The `for = "2m"` hold keeps a brief red from launching an agent. `occupancy = "takeover"` lets the sweeper stop an idle agent you left in the worktree. A clean turn follows `then` back to `pr`, and so does a sweep that died or timed out, through its `on` routes, so the condition reads the PR again. A sixth sweep fails the run. The sweep prompt must re-arm the PR after a queue removal (enable auto-merge or queue it again), since a push alone does not clear `pr.queue=dequeued`.
 
 Unread is not false. When a case before the first true case cannot read its facts yet, the condition answers `unknown`, even under `!`. Every condition routes `unknown`, and `unknown = "@wait"` waits for the evidence. Forge facts come from the room, which asks GitHub (through `gh`) or Gitea (through `tea`) about the checkout's PR. A fact read before the run reached the check does not count, and an idle repository's next read can take up to five minutes, so keep the room open. A checkout whose `origin` is on no supported forge stays `unknown` until the check's `timeout`. The [condition reference](../reference/cli/workflow.md#conditions) gives the freshness rules, and the [condition keys](../reference/cli/loop.md#conditions) list every reading.
 
@@ -320,7 +320,7 @@ Entries take the [loop signal grammar](../reference/cli/loop.md#signals). `ci` a
 
 Since a check's `timeout` starts each time the run enters the check, each return from `sweep` starts a new two days.
 
-A script answers with a JSON object, so it can say more than pass or fail: `{"outcome": "pending", "recheck_at": "2026-11-15T10:00:00Z"}` waits and asks again at that time. [The check answer](#the-check-answer) lists the fields. A step's `limited` failure routed to a script carries the provider's reset time when RimZ knows it, so the script can wait until then. The [sample `pr.py`](../../crates/rimz/tests/fixtures/workflows/babysit-pr/checks/pr.py) does this.
+A script answers with a JSON object, so it can say more than pass or fail: `{"outcome": "pending", "recheck_at": "2026-11-15T10:00:00Z"}` waits and asks again at that time. [The check answer](#the-check-answer) lists the fields.
 
 ### Hand signals to a session
 
@@ -335,7 +335,7 @@ lifecycle = "session"
 rest-check = ["pr"]
 then = "pr"
 subscribe = ["ci.failed", { signal = "review.changes", match = { repo = "acme/app" } }]
-on = { died = "pr", limited = "pr" }
+on = { died = "pr" }
 ```
 
 `review.changes` stands for a signal your own tooling fires with [`rimz events emit`](../reference/cli/loop.md#signals). Entries take the same forms and checkout defaults as `wake`. A forward moves the run nowhere, and `rimz workflow show --history` prints one `signal` row for each. Forwarding stops when the attempt ends. A `turn` step refuses `subscribe`, since its turn ends where the message would land.
@@ -385,7 +385,7 @@ Its permission mode is automatic unless its profile sets one. A judge either ans
 
 With `timeout = "1d"` above, an unanswered question holds the run for at most a day.
 
-`admission.window` holds the judge until its provider's usage window has room: `5h.left>=40` waits until at least 40 percent of the five-hour window is left, read as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window). The judge's `timeout` starts when it launches, so the wait spends none of it.
+`admission.window` holds the judge until its provider's usage window has room: `5h.left>=40` waits until at least 40 percent of the five-hour window is left, read as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window). The judge's `timeout` starts when it launches, so the wait spends none of it, nor does a wait for its budget.
 
 Put the cheap case in a script and the unclear case in a judge. A script that answers `unsure`, routed to a judge, pays for a model only when it has to.
 
@@ -404,7 +404,6 @@ With none set, the run ends as failed. A failure never follows `then`. Each kind
 | `died` | An agent fails to start or exits early, or a command or script exits nonzero. |
 | `timeout` | The node's `timeout` passed. |
 | `visits` | A step would pass its `max-visits`. Nothing launches. |
-| `limited` | A budget refused an agent's launch or stopped it. |
 | `errored` | A judge's own turn ended on a provider error that waiting will not clear. |
 | `capacity` | A step gave up waiting for room to start. |
 | `invalid` | A script gave an answer the run cannot use, such as an outcome its `on` does not name, or a definition edit left a judge's accepted answer unroutable. |
@@ -500,7 +499,9 @@ Run `rimz workflow validate fix-and-reflect` before you start it. The reflection
 
 An agent step also waits for the [machine's start limits](./configuration.md#agent-start-limits) before it launches, however the run started. A held step spends no visit and retries about once a minute. `workflow list` shows it as `held` with the reason, and `show` prints how long it has waited.
 
-By default a held step waits as long as it takes. Set `admission.give-up = "6h"` on the step to give up after six hours, or start the run with `--give-up 2027-01-15T06:00` to bound every step that sets none. Giving up fails the step with cause `capacity`, which takes the failure routes. When a run is urgent, start it with `--skip-capacity` to launch its steps past every capacity hold. A usage window or an agent in the checkout still holds them.
+By default a held step waits as long as it takes. Set `admission.give-up = "6h"` on the step to give up after six hours, or start the run with `--give-up 2027-01-15T06:00` to bound every step that sets none. Giving up fails the step with cause `capacity`, which takes the failure routes. When a run is urgent, start it with `--skip-capacity` to launch its steps past every capacity hold. A usage window, a spent budget, or an agent in the checkout still holds them.
+
+A step or judge whose launch a [budget](./budget.md) would refuse waits at its node the same way, before any visit, and fails nothing: `workflow list` shows it as `budget` with the cap that refuses it, and the first advance after you raise or clear that budget launches it.
 
 ### Limit one workflow or step
 
@@ -578,7 +579,7 @@ A script prints exactly one JSON object, and a judge sends one through `rimz wor
 | `recheck_at` | no | An RFC 3339 time. On `@wait`, the check does not run again before it, unless a subscribed signal arrives. |
 | `key` | no | A string or integer naming the item the run now works on, such as an issue number. Later nodes see it. An answer without `key` keeps the current one. |
 
-Any other field travels too: the whole object becomes the next node's input. A script must exit 0. A nonzero exit fails it with cause `died`, and an answer it cannot use (not one object, or an outcome its `on` does not name) fails it with `invalid`. So a script that uses `set -e` must catch the failures it expects. The outcome words `failed`, `asked`, `unknown`, `hold`, and the nine causes (`errored` among them) are reserved, and a script that answers one fails with `invalid`, while `submit` refuses one and says why.
+Any other field travels too: the whole object becomes the next node's input. A script must exit 0. A nonzero exit fails it with cause `died`, and an answer it cannot use (not one object, or an outcome its `on` does not name) fails it with `invalid`. So a script that uses `set -e` must catch the failures it expects. The outcome words `failed`, `asked`, `unknown`, `hold`, the eight causes (`errored` among them), and `limited` are reserved, and a script that answers one fails with `invalid`, while `submit` refuses one and says why.
 
 Scripts and command steps read their input from `$RIMZ_WORKFLOW_DIR/context.json`, which RimZ rewrites before every check and attempt. It carries `input` (the answer that routed here), `key`, the step's `visit` count, every step's visit count (`step_visits`) and its split by item key (`key_visits`), and `prev_attempt` (how the last attempt ended, its exit code, and the commits before and after). The [context file reference](../reference/cli/workflow.md#the-context-file) lists every field. Agents read the same facts through `rimz workflow show`.
 

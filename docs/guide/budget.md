@@ -120,7 +120,7 @@ Two honest limits. A cap stops the next spend, never the request already in flig
 - **You do.** A human message delivered after the park waives that agent's next turn, once; the waiver is consumed when the turn ends. Background and agent-to-agent deliveries stay parked, so a chatty team cannot spend through your cap.
 - **The window does.** A `/day` park reopens at local midnight; an account `/month` park at 00:00 UTC on the next 1st. With [auto-continue](./loops.md#keep-the-fleet-moving) on, the continue prompt waits for the last binding window to reset and goes to agents RimZ interrupted, never to agents that were already at rest.
 - **A raise does.** Raising or clearing a cap (`rimz agents tune @coder budget +5`, `rimz budget +10`) queues the configured continue prompt to the agents that cap parked in this room; add `--no-continue` to lift the cap and leave them at rest.
-- **Automation never does.** While the room or account scope has no headroom, `-p` launches exit `125` and scheduled wake-ups record `budget skipped`. Interactive launches stay available, so a crossed cap never locks you out of your own room.
+- **Automation never does.** While the room or account scope has no headroom, `-p` launches exit `125`, scheduled wake-ups record `budget skipped`, and a workflow step waits at its node. Interactive launches stay available, so a crossed cap never locks you out of your own room.
 
 ## See also
 

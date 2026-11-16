@@ -154,14 +154,13 @@ Each edge also carries fireability and, when it can never fire, a typed reason (
 
 ### Failure causes
 
-A failure is one of nine causes, raised at a node. `crates/rimz/src/harness/workflow/spec.rs::Cause` is the closed set, and `Cause::raised_by` is the one table of which kind raises which. Every other reader (edge compile, validation, the schema test) derives from it.
+A failure is one of eight causes, raised at a node. `crates/rimz/src/harness/workflow/spec.rs::Cause` is the closed set, and `Cause::raised_by` is the one table of which kind raises which. Every other reader (edge compile, validation, the schema test) derives from it.
 
 | Cause | Means | Raised by |
 | --- | --- | --- |
 | `died` | The node's process could not start or ended abnormally. A step attempt that ends `died` or `canceled` raises it. | agent, command, test, script, judge |
 | `invalid` | An answer the node cannot use. | script, judge |
 | `timeout` | The node's clock passed ([Bounds](#bounds)). | agent, command, test, script, judge, condition |
-| `limited` | A budget or provider refusal that ends the node. | agent, judge |
 | `errored` | A judge's own turn ended on a provider error that waiting will not clear. A step's errored turn is an attempt outcome routed by the step's own `on.errored`, never this cause. | judge |
 | `undelivered` | A message found no single living agent. A message attempt that ends `died` or `canceled` raises it. | message |
 | `visits` | The entry would pass `max-visits`. Raised before the node acts, counting no visit. | agent, command, message |
@@ -170,7 +169,7 @@ A failure is one of nine causes, raised at a node. `crates/rimz/src/harness/work
 
 Every failure goes through one entry, `crates/rimz/src/harness/workflow/state.rs::Transition::failure`. It builds the failure input `{outcome: "failed", cause, node, reason, detail}` plus the inherited `key`, journals a `Route` under the cause's word, and takes the target `Definition::failure_route` resolves: the node's `on.<cause>`, else its `on.failed`, else `[workflow] on.failed`, else `@failed`. The resolved source is `EdgeSource::Explicit`, `NodeFailed`, `WorkflowFailed`, or `Default` (wire `on.failed`, `workflow.on.failed`). A failure route is never `@wait` (`Validation::failure_target`): the failure has ended the node's work, and waiting there would hold a run that nothing rechecks.
 
-`detail` holds the cause's own facts. A step ending builds it from the attempt's evidence (`code`, `log`, `reset_at` when present). `visits` adds `{visits, max}`, `capacity` adds `{waited_ms, first}` (and `never_fits` for a start too wide for a machine cap), and `deadline` adds the instant.
+`detail` holds the cause's own facts. A step ending builds it from the attempt's evidence (`code` and `log`, when present). `visits` adds `{visits, max}`, `capacity` adds `{waited_ms, first}` (and `never_fits` for a start too wide for a machine cap), and `deadline` adds the instant.
 
 A step attempt's ending reaches a cause through `Definition::ending_cause` under `Definition::target`: `died` or `canceled` raises `died` (`undelivered` for a message step), a step's `errored` raises nothing and takes the step's own `on.errored`, any other cause word raises itself, and only a clean end follows `then`. A check reaches a cause by its kind, as step 4 of [Adding a failure cause](#adding-a-failure-cause) lists.
 
@@ -191,8 +190,8 @@ A new cause touches every place below. The compiler stops you at only some of th
 6. When the cause can fire only with a field set, add its case to `Definition::fireability` with a `NeverReason`, so validation and inspection do not show an edge that never fires.
 7. When a step's cause is raised before the node acts and counts no visit, add it to the `[Cause::Visits, Cause::Capacity]` list in `crates/rimz/src/harness/workflow/validate.rs::returning_failures`. Otherwise a route back to the node repeats the failure without end. A check counts no visits, so a check cause never goes there.
 8. When a loop task should report the run differently from `failed`, extend `engine::failure`, which classifies a failed run's `RunEnding` from the journal, and the mapping from `RunEnding` to a loop result in `crates/rimz/src/harness/schedule/run_log.rs::report_row`.
-9. A new reserved word refuses every definition that already uses it as an author outcome, and a live run of such a definition waits at its next engine read ([Engine reads](#engine-reads)). It raises no version. A new `AttemptOutcome` variant changes the record's shape, so it raises `store::workflow::VERSION` ([The record and its version](#the-record-and-its-version)). The record snapshot `crates/rimz/src/store/workflow/snapshots/rimz__store__workflow__tests__record.snap` and each "version 13" on this page and in the reference change with it. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists the readers of run homes the raise must audit.
-10. Document it: the cause table above, each "nine causes" on this page (the count moves with the set), in the reference, and in the guide, the guide's sample `workflow validate` output when the kind it shows raises the cause, the [failures section of the reference](../../reference/cli/workflow.md#failures), and the guide's [When something fails](../../guide/workflows.md#when-something-fails) when a user meets the cause.
+9. A new reserved word refuses every definition that already uses it as an author outcome, and a live run of such a definition waits at its next engine read ([Engine reads](#engine-reads)). It raises no version. A new `AttemptOutcome` variant changes the record's shape, so it raises `store::workflow::VERSION` ([The record and its version](#the-record-and-its-version)). The record snapshot `crates/rimz/src/store/workflow/snapshots/rimz__store__workflow__tests__record.snap` and each "version 14" on this page and in the reference change with it. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists the readers of run homes the raise must audit.
+10. Document it: the cause table above, each "eight causes" on this page (the count moves with the set), in the reference, and in the guide, the guide's sample `workflow validate` output when the kind it shows raises the cause, the [failures section of the reference](../../reference/cli/workflow.md#failures), and the guide's [When something fails](../../guide/workflows.md#when-something-fails) when a user meets the cause.
 
 Run the module's tests with `cargo xtask test 'harness::workflow'` and the store's with `cargo xtask test 'store::workflow'`. [rust-conventions.md](../../contributing/rust-conventions.md#tests) owns the gate stack.
 
@@ -202,7 +201,7 @@ Validation enforces each of these, and the engine the last. Each row says why th
 
 | Rule | Why |
 | --- | --- |
-| The nine causes, `failed`, `asked`, `unknown`, and `hold` are reserved (`crates/rimz/src/harness/workflow/spec.rs::reserved`). No case or `else` uses one, and no check answers one, except a condition's or conditional sleep's `unknown`. | The engine produces them for its own routes. A script that answers a reserved word has given an answer no outcome names, which is `invalid`. |
+| The eight causes, `limited` (the cause a refused budget raised before it waited), `failed`, `asked`, `unknown`, and `hold` are reserved (`crates/rimz/src/harness/workflow/spec.rs::reserved`). No case or `else` uses one, and no check answers one, except a condition's or conditional sleep's `unknown`. | The engine produces them for its own routes. A script that answers a reserved word has given an answer no outcome names, which is `invalid`. |
 | A `command`, `test`, `script`, `judge`, or `condition` needs a `timeout` (`Validation::requires_timeout`). An agent's is optional, and `message` and `sleep` take none. | Every check is bounded, so no check holds a run until someone comes: a judge's timeout runs from its launch through any question, limit, or budget park. A sleep has its own finite duration and a message send does not wait. An agent step's is optional, and its clock pauses while its agent cannot work. |
 | A cycle through steps needs a `max-visits` on one of them. Every route counts as an edge except a `deadline` route. | Otherwise the run can revisit its steps without end. |
 | A check-only cycle needs a `@wait` edge. A hold is not an edge and does not count. | Otherwise one advance would loop without pause. |
@@ -304,7 +303,7 @@ Every view of a run is a projection of the record and the journal, and never tra
 Each room holds one home per run: `owned/workflows/<run-id>/` while the run is live, and `owned/finished-workflows/<run-id>/` once it has ended and owes its loop task no report. Every path in either directory comes from the disk path module (`crates/rimz/src/disk/paths.rs::WorkflowPaths`, `StatePaths::workflow`, `StatePaths::finished_workflow`):
 
 ```text
-record.json        current run, version 13 (reads only 13)
+record.json        current run, version 14 (reads only 14)
 journal.jsonl      append-only evidence: transitions, and a row per check evaluation, so a polling check grows it on every recheck
 definition/        an inline run's generated definition: its text and assets (no deployed run has one)
 history.txt        the history saved as the run leaves the live directory, written before the rename (a failed rename leaves it in the live home)
@@ -376,7 +375,7 @@ Optional fields carry:
 
 Each step's visits serialize as one integer under the step's name. Keys keep integer versus string identity. Unknown `Wait.hold` strings load as absent, and the shared [hold-kind contract](./loops.md#holds-and-their-kinds) covers workflow and condition waits alike.
 
-Runs use version 13 (`store::workflow::VERSION`), the record's own shape version. It rises when a binary on either side of a change would misread the other's record. A change to what a definition means raises nothing, since every run reads its definition as it is at each engine read. `crates/rimz/src/store/workflow.rs::load` reads the version before it decodes the record and refuses any other version with one message naming the run and the version this RimZ reads. A change to what a stored record means raises `VERSION`, so a record an older RimZ wrote refuses rather than being misread. Raising it strands every unfinished run on disk, which the [workflow pass](#the-workflow-pass) ends. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists what such a change must audit.
+Runs use version 14 (`store::workflow::VERSION`), the record's own shape version. It rises when a binary on either side of a change would misread the other's record. A change to what a definition means raises nothing, since every run reads its definition as it is at each engine read. `crates/rimz/src/store/workflow.rs::load` reads the version before it decodes the record and refuses any other version with one message naming the run and the version this RimZ reads. A change to what a stored record means raises `VERSION`, so a record an older RimZ wrote refuses rather than being misread. Raising it strands every unfinished run on disk, which the [workflow pass](#the-workflow-pass) ends. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists what such a change must audit.
 
 `crates/rimz/src/store/workflow.rs::classify` reads a home's record as data, `RunClass`:
 
@@ -384,7 +383,7 @@ Runs use version 13 (`store::workflow::VERSION`), the record's own shape version
 | --- | --- |
 | `Current` | A run this RimZ runs. |
 | `Ended` | A record whose `RunHeader` (the few fields read without decoding the body) says it ended, but whose body this RimZ does not decode. |
-| `Stranded` | A run this RimZ cannot continue, with its `StrandedCause`: an older, missing, or invalid version, or a version-13 body that does not decode. |
+| `Stranded` | A run this RimZ cannot continue, with its `StrandedCause`: an older, missing, or invalid version, or a version-14 body that does not decode. |
 | `Newer` | A newer RimZ's run. Its record is read no further than its version. |
 | `NotObject` | A record that holds no JSON object. |
 | `Recordless` | No record. |
@@ -577,15 +576,16 @@ The shared launch compiler (`crates/rimz/src/harness/launch_plan.rs::compile`) t
 
 ### Admission
 
-Every agent start, whatever its origin, passes admission in this order: bounds, the visit cap, each agent cell's provider window, checkout occupancy, the workflow and step limits, the machine FIFO when machine-gated, and both machine caps. Unless the step sets `admission.throttle = "off"`, the start also checks machine stagger, resources, and the capacity script. The caps and the workflow and step limits apply to an `off` step too.
+Every agent start, whatever its origin, passes admission in this order: bounds, the visit cap, each agent cell's provider window, the room's and each cell's account budget, checkout occupancy, the workflow and step limits, the machine FIFO when machine-gated, and both machine caps. Unless the step sets `admission.throttle = "off"`, the start also checks machine stagger, resources, and the capacity script. The caps and the workflow and step limits apply to an `off` step too.
 
-One value decides whether a start waits for capacity: `prepare` reads `RunRecord.capacity` once and hands it to `prepare_capacity`, so the admission errors `prepare` keeps and the holds `prepare_capacity` waits on cannot disagree. A `skip` run launches past every capacity hold and capacity admission error, except a start too wide for a machine cap, and records each hold on the attempt. It still waits on the provider window, a takeover, and an occupied checkout, which `prepare` decides before it reaches capacity.
+One value decides whether a start waits for capacity: `prepare` reads `RunRecord.capacity` once and hands it to `prepare_capacity`, so the admission errors `prepare` keeps and the holds `prepare_capacity` waits on cannot disagree. A `skip` run launches past every capacity hold and capacity admission error, except a start too wide for a machine cap, and records each hold on the attempt. It still waits on the provider window, a budget, a takeover, and an occupied checkout, which `prepare` decides before it reaches capacity.
 
-Each blocked window, occupancy, or capacity check merges a wait that keeps the routed input and key and spends no visit or sequence:
+Each blocked window, budget, occupancy, or capacity check merges a wait that keeps the routed input and key and spends no visit or sequence:
 
 | Blocker | Wait |
 | --- | --- |
 | The step's `window` is closed for any agent cell's provider. | `window`, with the blocking term and its reading in `Wait.detail` (`5h.left=12<42`). |
+| The launcher's budget gate would refuse the launch: the room's budget, or the account budget of a cell's resolved login (`crates/rimz/src/harness/workflow/engine.rs::budget_refusal`, read for a judge too). The provider window gate needs a prepared launch, so the launch answers for it. | `budget`, with the gate's reason in `Wait.detail`. |
 | An occupant is mid-turn. | `takeover` |
 | An idle occupant, and the step's `admission.occupancy` is `wait` (the default). | `occupied` |
 | The shared start throttle or a workflow or step limit holds the step. | `capacity`, with `Wait.kinds`, `Wait.detail`, an optional typed `Wait.hold`, and an optional `Wait.gives_up_at`. The kind survives retries and closing the wait into history. |
@@ -617,7 +617,9 @@ Nothing makes the occupancy read and the pane closes atomic, which is why the ho
 
 #### Launch retry
 
-A launch whose eviction failed, reported as `NotLaunched::Unstarted`, started nothing and is retried once per step entry (`crates/rimz/src/harness/workflow/engine/agent.rs::launch`). The engine withdraws the attempt and its visit, sets `RunRecord::launch_retry`, and waits `retry` with the reason in `Wait.detail`, which the journal keeps when the wait closes. The next advance (a tick or a hook wake) launches again with no `recheck_at` floor. A continued restart (`StepLaunch.resume`) and a `limited` failure are not retried.
+A launch whose eviction failed, reported as `NotLaunched::Unstarted`, started nothing and is retried once per step entry (`crates/rimz/src/harness/workflow/engine/agent.rs::launch`). The engine withdraws the attempt and its visit, sets `RunRecord::launch_retry`, and waits `retry` with the reason in `Wait.detail`, which the journal keeps when the wait closes. The next advance (a tick or a hook wake) launches again with no `recheck_at` floor. A continued restart (`StepLaunch.resume`) is not retried.
+
+A launch the launcher's own budget gate refused, reported as `NotLaunched::Budget`, started nothing either: the budget was spent between `prepare`'s read and the launch, or a gate the read leaves to the launch refused. The engine withdraws the attempt and its visit and waits `budget` as the first read would have, keeping a pending `RunRecord::restart` for the launch after the wait. It sets no `launch_retry`, so the wait repeats until a launch is admitted. The withdrawal closes no wait: `prepare` closed the earlier one at launch, so the new wait's `count` starts at 1. This wait, the `takeover` or `occupied` one after a failed eviction re-read, and the unstarted retry are taken only when no ending was staged on the attempt while it launched off the lock (a cancel, a restart, a misfit). With one staged, the refusal goes down the launch-failure path, which keeps the staged ending, and `finish` settles it.
 
 These become a counted `died` attempt, which takes the failure chain:
 
@@ -704,7 +706,6 @@ An unreadable required room or stagger record holds a scheduled start as `store`
 | Supervised run `completed` | `ended` | `then` |
 | `failed`, `verify_failed`, or `timed_out` | `died` | raises `died` |
 | `canceled` | `canceled` | raises `died` |
-| `budget_exceeded` | `limited`, with no known reset | raises `limited` |
 | Run `pending` or `running`, a blocking ask, and an explicit `on.asked` (turn or session, whatever else is observed) | `asked` | `on.asked` |
 | Run `pending` or `running`, the leader's own errored turn (`Observed::errored`), and an explicit `on.errored` | `errored` | `on.errored` |
 | Run `pending` or `running` with any other observed provider limit, error, interrupt, or budget park | Keep the attempt live, holding it on that stop (`LiveAttempt::held_on`) | None |
@@ -716,7 +717,7 @@ The Route column is one rule, `Definition::ending_cause` under `Definition::targ
 
 The terminal-status and explicit-ask mapping is one pure function, `crates/rimz/src/harness/workflow/engine/agent.rs::observed_outcome`, which takes no lifecycle, so a session ends on a blocking ask only when the step routes `on.asked`, and on an errored turn only when it routes `on.errored`, as a turn does. Timeout and deadline stay outside it. Live provider limits and overloads never end an attempt. The errored turn is read from the leader's own row and its supervised run's `stopped_turn` (`crates/rimz/src/harness/workflow/observe.rs::observe`), never from the merged stop, so a companion's error or an earlier limit cannot end the leader's attempt. A routed ask wins over a routed errored turn. A pending ask therefore beats the step timeout even with `on.asked`, but not the deadline or cancel. A completed run still ends `ended` even when an ask is still visible. `prev_attempt.asked` is set only for an `asked` ending, and `prev_attempt.errored` only for an `errored` one. An `errored` route parks with `ParkReason::Asked` if it ever reaches `@user`, which admission refuses on every route.
 
-A route through `then` forwards the run's routed input unchanged, with the current key: the attempt's outcome and evidence go to `prev_attempt`, never into the input. A launch refusal ends the attempt `died`, or `limited` for a budget refusal, with the refusal text as the attempt's reason. A queued asynchronous question does not end an attempt.
+A route through `then` forwards the run's routed input unchanged, with the current key: the attempt's outcome and evidence go to `prev_attempt`, never into the input. A launch refusal other than the budget gate's ([Launch retry](#launch-retry)) ends the attempt `died`, with the refusal text as the attempt's reason. A workflow-owned supervised run never ends `budget_exceeded`: `harness::run::budget_exceeded` leaves it open. A queued asynchronous question does not end an attempt.
 
 #### What the host observes
 
@@ -724,7 +725,7 @@ The host reads the leader's run record and the room snapshot with budget parks p
 
 - It scans the leader, then its live launched descendants depth first, past an ended child and everything under it.
 - It reads each agent's first actionable ask, not one by ask id, until it finds a blocking one, and never reads an agent whose permission is still under automatic review. That permission's hold starts when its review ends.
-- Limits come from typed turn-error classes, the reset read once from the first limited agent's account and model, never from provider text.
+- Limits come from typed turn-error classes, never from provider text.
 - The earliest stop wins, a tie keeps the one scanned first, and an interrupt stands only while nothing else stops the attempt.
 - Companion trees never control an attempt's end.
 
@@ -747,7 +748,7 @@ Leader lifecycle hooks wake the run. Subagents have no workflow pin and are samp
 
 #### A session's end
 
-A session records live ask holds and never ends on a live provider limit. Its `timeout` ends it as `timeout` once due. Turn ends, interruptions, session-end hooks, and RimZ budget parks keep its session run open, and a `rest-check` adds the check-driven close below. A budget park still interrupts the provider and stamps its ledger, and a budget-gate refusal before launch still reads `limited`.
+A session records live ask holds and never ends on a live provider limit. Its `timeout` ends it as `timeout` once due. Turn ends, interruptions, session-end hooks, and RimZ budget parks keep its session run open, and a `rest-check` adds the check-driven close below. A budget park still interrupts the provider and stamps its ledger, and a budget-gate refusal before launch waits `budget` with no attempt ([Launch retry](#launch-retry)).
 
 A provider exit completes a session as `ended` only when it had ended a turn and was at rest (`turn_started_at` set and `idle_stop::rests` holds, `crates/rimz/src/harness/workflow/mod.rs::exited_at_rest`). Any other exit, an unregistered session's included, reads `died`. That reading uses the row's turn stamps and rest states only: the rest check's debt gate (an owed message, a running child) and its pending-ingress gate in `leader_turn` are left out, so a session that exits at a clean rest while it owes a message or a child's result settles `ended`. A missing snapshot row or an unreadable snapshot also settles `ended`. The run deadline beats a completed observation and raises `deadline` with outcome `canceled`. Cancel, restart, reset, and rebirth also cancel sessions.
 
@@ -823,7 +824,7 @@ Every end publishes `ending` and saves the observation into `prev_attempt` under
 
 No successor launches before the stop or detach returns. Attempt cost comes from the leader run after the stop or detach. Companion spend stays on cards and in stats, and unstamped spend stays null.
 
-For `keep = true`, `StepLaunch.keep` disables the leader wrapper's completion cleanup, and a Lifecycle ending whose outcome is `ended`, `asked`, or `errored` calls `AttemptHost::detach` instead of stop (`crates/rimz/src/harness/workflow/engine/agent.rs::detaches`). A `died`, `limited`, or `canceled` attempt stops the layout like a forced ending. A push-back past `max-visits` ends as `ended` and detaches like any other natural ending. Detach cancels a nonterminal supervised run and clears each matching leader and companion pin that `harness::workflow::detach_cohort` selects, through `crates/rimz/src/store/writer.rs::Store::clear_workflow_pin`, and stops nothing. Its `agent.workflow_cleared` event compares the complete expected `{run, seq, role}` again in the reducer, and a mismatch keeps its pin. The event changes no card field. Cleared cards are ordinary recovery candidates. `agents resume` refuses a current pin with the workflow-restart fix, clears a former pin only after preflight, and keeps it with a warning when the workflow record cannot be read.
+For `keep = true`, `StepLaunch.keep` disables the leader wrapper's completion cleanup, and a Lifecycle ending whose outcome is `ended`, `asked`, or `errored` calls `AttemptHost::detach` instead of stop (`crates/rimz/src/harness/workflow/engine/agent.rs::detaches`). A `died` or `canceled` attempt stops the layout like a forced ending. A push-back past `max-visits` ends as `ended` and detaches like any other natural ending. Detach cancels a nonterminal supervised run and clears each matching leader and companion pin that `harness::workflow::detach_cohort` selects, through `crates/rimz/src/store/writer.rs::Store::clear_workflow_pin`, and stops nothing. Its `agent.workflow_cleared` event compares the complete expected `{run, seq, role}` again in the reducer, and a mismatch keeps its pin. The event changes no card field. Cleared cards are ordinary recovery candidates. `agents resume` refuses a current pin with the workflow-restart fix, clears a former pin only after preflight, and keeps it with a warning when the workflow record cannot be read.
 
 Settlement rechecks a forced ending after an off-lock detach, so a cancel that replaced the Lifecycle ending still stops the layout before settling. Stop can recover already-detached, unpinned cells from the leader's original launch group, and a card pinned to a different attempt is never selected by that fallback.
 
@@ -836,7 +837,7 @@ Stops use the shared cascade and add no workflow-specific lifecycle events. The 
 
 ## Judges
 
-A judge evaluation is an agent attempt: `engine::prepare` gives it a fresh `seq` and a session-lifecycle attempt of kind `judge`, and it launches through the step's launch seam (`crates/rimz/src/harness/workflow/engine/agent.rs::step_launch`) with the Judge role and the check's profile. It takes no keep, resume, overrides, takeover, or eviction, counts no visit, and writes no step-launch assist. The CLI host launches a Judge-role pin in automatic permission mode unless its profile sets another (`LaunchOverrides.default_mode`). Folder trust, the adapter's minimum version, and the budget gates are the launch's own: a budget refusal fails the judge `limited` and any other launch failure `died` at once. A launch the host reports as having started nothing (`NotLaunched::Unstarted`) is a failed eviction, and a judge never evicts, so the step's one `retry` wait never reaches a judge.
+A judge evaluation is an agent attempt: `engine::prepare` gives it a fresh `seq` and a session-lifecycle attempt of kind `judge`, and it launches through the step's launch seam (`crates/rimz/src/harness/workflow/engine/agent.rs::step_launch`) with the Judge role and the check's profile. It takes no keep, resume, overrides, takeover, or eviction, counts no visit, and writes no step-launch assist. The CLI host launches a Judge-role pin in automatic permission mode unless its profile sets another (`LaunchOverrides.default_mode`). Folder trust and the adapter's minimum version are the launch's own, and a launch failure fails the judge `died` at once. A budget that would refuse the launch holds the judge as the `budget` wait instead, through `prepare`'s read or the launcher's `NotLaunched::Budget`, as for a step ([Launch retry](#launch-retry)). A launch the host reports as having started nothing (`NotLaunched::Unstarted`) is a failed eviction, and a judge never evicts, so the step's one `retry` wait never reaches a judge.
 
 ### The answer channel
 
@@ -852,21 +853,16 @@ The next advance reads the answer in `prepare_end`, ends the attempt through the
 | A question, a provider limit, or a budget park | The shared hold of an agent step records `asking`, `held_since`, and `held_on` for the views, but the timeout keeps running: the judge answers in time or ends as `timeout`. A question never ends a judge, and validation refuses `on.asked` on one as a dead route. |
 | The judge's own errored turn (`Observed::errored`) | `errored` at once, through the failure chain. A timeout seen at the same advance wins (`prepare_end` tests the timeout before the observed outcome). |
 | The session ends without an accepted answer | `died` (`the judge's session ended without an answer`). |
-| A provider limit or budget stopped it | `limited`. |
 | Its session closed under it (`canceled`) | `Transition::abandon_check`: the next pass evaluates the check afresh. |
 | Timeout or deadline | `timeout` or `deadline`, after the stop. A `timeout` that passes while the judge is stopped names the stop in its `reason` and `detail` (`asked`, or `stopped` with `reset_at` beside a limit's known reset when `Observed::limited_by` shows the reset was read from the stopped agent, since `observe` reads the reset of the first limited agent only), built by `state.rs::stopped_evidence` from the observation of the ending advance, since staging clears the hold fields. An ask wins over any other stop, as the hold orders them. |
 
-A judge's ending stages its evidence on its own attempt (`attempt.evidence`, `crates/rimz/src/harness/workflow/state.rs::judge_evidence`) and never replaces `prev_attempt`, which stays the last step's. Its timeout runs from the attempt's start and is not due before the launch (`inspect::timeout_at`), so an `admission.window` wait spends none of it, while `held_since` and `asked_ms` never move it. A judge's ending staged by an older RimZ settles by the same rule: a staged `errored` fails it with that cause, and a staged `asked` never reaches it: the run's definition still routes the judge's `on.asked`, which admission refuses, so the run waits at the refused definition, and once an edit removes `on.asked` it ends as a misfit (`engine/fit.rs::misfit`).
+A judge's ending stages its evidence on its own attempt (`attempt.evidence`, `crates/rimz/src/harness/workflow/state.rs::judge_evidence`) and never replaces `prev_attempt`, which stays the last step's. Its timeout runs from the attempt's start and is not due before the launch (`inspect::timeout_at`), so an `admission.window` or `budget` wait spends none of it, while `held_since` and `asked_ms` never move it. A judge's ending staged by an older RimZ settles by the same rule: a staged `errored` fails it with that cause, and a staged `asked` never reaches it: the run's definition still routes the judge's `on.asked`, which admission refuses, so the run waits at the refused definition, and once an edit removes `on.asked` it ends as a misfit (`engine/fit.rs::misfit`).
 
 An interrupt of a held session abandons the rest-check judge evaluating it: `abandon_check` journals an engine `canceled` evaluation and pushes the judge's run onto `record.abandoned`. The next engine pass and `agent::finish` take that list, persist, and stop each run off the lock (`agent::stop_abandoned`). `workflow restart` and `cancel` stop a live judge through the same stop protocol as a step's agent.
 
 ### Isolation
 
 A judge is read-only on the scope checkout and its Git admin and common directories. Scoped isolation overlays them read-only for a Judge-role launch after all reach rebinds, and host isolation enforces the rule only through the prompt. The root view and the required-path rebinds leave `work/` writable, a room home under host `/tmp` included. A judge gets no subagent catalog and keeps native delegation.
-
-### Budget endings
-
-`engine::failure` classifies a failed run as `Budget` only when the failure that ended it is an agent attempt that ended at its budget, or a `limited` failure evaluation (a judge's). Its scan stops at a newer route of another cause or a newer evaluation, so a refusal an `on.limited` route handled, followed by another failure, reports `failed`. `run_log` writes a `Budget` ending whose agent never turned as `budget skipped`.
 
 ### Declines
 
@@ -953,10 +949,10 @@ The external timer's roots (`crates/rimz/src/cli/loop_timer.rs::task_roots`) inc
 
 | Home | Action |
 | --- | --- |
-| Stranded | `store::workflow::end_stranded` patches the record in place under the lock: `state` `failed`, a first `terminal_at`, `outcome.ending` `failed` with the reason `this RimZ cannot continue the run: <cause>; it reads only record version 13`, `outcome.acted` kept or `false`, `loop_report` owed when the record names a task, and `stranded: true`. Every other member and the version stay. Then, off the lock, its report is made from the header, its agents are released (`harness::run::release_workflow`), and the home moves with a header-only `history.txt`. |
+| Stranded | `store::workflow::end_stranded` patches the record in place under the lock: `state` `failed`, a first `terminal_at`, `outcome.ending` `failed` with the reason `this RimZ cannot continue the run: <cause>; it reads only record version 14`, `outcome.acted` kept or `false`, `loop_report` owed when the record names a task, and `stranded: true`. Every other member and the version stay. Then, off the lock, its report is made from the header, its agents are released (`harness::run::release_workflow`), and the home moves with a header-only `history.txt`. |
 | `NotObject` | Agents released, then the home moves unmodified, with no history. |
 | `Current`, terminal, owing a report | Nothing: its paced advance collects it ([The tick](#the-tick)). |
-| `Ended`: a terminal record that is not version 13, or a version 13 record that does not decode | A report from the header when it owes one, `mark_header_report_sent`, then a header-only `history.txt` and the move. |
+| `Ended`: a terminal record that is not version 14, or a version 14 record that does not decode | A report from the header when it owes one, `mark_header_report_sent`, then a header-only `history.txt` and the move. |
 | `Current`, terminal, owing nothing | The history and the move. |
 | `Current` nonterminal, `Newer` (any state), `Recordless` | Nothing. |
 
@@ -1032,7 +1028,7 @@ The same record scan projects live runs into frame-backed worktree groups, inclu
 | Explicit `Route` | One `workflow_route`, unless the record now waits, holds a session, or the transition carries `turn_end`. |
 | Check-origin evaluation | One `workflow_route`, unless the record now waits, holds a session, an explicit route accounts for it, or the transition carries `turn_end`. |
 | Engine-origin `canceled`, run active | `workflow_rerun` diagnostic, no assist. |
-| Engine-origin `limited`, or run canceled | No assist. |
+| Run canceled | No assist. |
 | Other engine-origin evaluation | One `workflow_route` (a judge's failure included), unless the record holds a session, an explicit route accounts for it, or the transition carries `turn_end`. |
 | Attempt end | One `workflow_route`, unless the run was canceled, an explicit route accounts for it, or the transition carries `turn_end`. |
 | `turn_end` | One `workflow_route` at the check for a push-back, a close, or a kept move between listed checks. None for a kept `@wait`, a discard, or an interrupt. |
@@ -1042,6 +1038,6 @@ The same record scan projects live runs into frame-backed worktree groups, inclu
 
 Held evaluations keep ordinary rerun diagnostics without route assists unless a verdict is saved, and then engine-origin evaluations book nothing and raise no `WorkflowRerun`. No writer raises `WorkflowRetry`; the variant stays so older diagnostic records still read.
 
-An open wait has no route assist yet: `list` and `show` carry its live state, and the sidebar raises notices only for holds that need a fix. Closing a window, takeover, occupied, or capacity wait follows the same summary rule. Route records outside waits omit `count`.
+An open wait has no route assist yet: `list` and `show` carry its live state, and the sidebar raises notices only for holds that need a fix. Closing a window, budget, takeover, occupied, or capacity wait follows the same summary rule. Route records outside waits omit `count`.
 
 `crates/rimz/src/harness/workflow/engine/accounting.rs::step` appends `workflow_step` after an agent step's supervised run or a command step's child is published, and once per message attempt after the host call, with the target handle when one agent took it. A command step has a null handle and supervised run id. A task's run gets its `workflow_start` from the engine once it first starts an agent, a judge, or a message, or at a terminal transition other than done before that, and a quiet run gets none. `rimz stats` counts the five workflow assist kinds (start, step, route, park, end) each in its own rollup field (`workflow_starts` and the rest), and a `JudgeDecline` in `judge_declines`. Diagnostics are rate-limited forensics that `rimz stats` never reads.

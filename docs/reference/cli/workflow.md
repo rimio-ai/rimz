@@ -162,7 +162,7 @@ A definition is `workflow.toml`: one `[workflow]` table and any number of nodes,
 | `subscribe` | Signals forwarded to a session's leader. A `turn` step refuses it. |
 | `on.asked` | Where a blocking question goes (either lifecycle). |
 | `on.errored` | Where the leader's own errored turn goes (either lifecycle): a turn end the provider failed, with an error waiting will not clear ([below](#how-an-attempt-ends)). |
-| `on.died`, `on.timeout`, `on.limited`, `on.visits`, `on.capacity`, `on.deadline`, `on.failed` | Failure routes. |
+| `on.died`, `on.timeout`, `on.visits`, `on.capacity`, `on.deadline`, `on.failed` | Failure routes. |
 | `admission` | `window`, `occupancy`, `max-parallel`, `stagger`, `throttle`, `give-up` ([admission](#admission)). |
 | `account`, `mode`, `effort`, `fast`, `budget`, `system-prompt-file`, `worktree` | Launch settings ([launch settings](#launch-settings)). |
 
@@ -203,7 +203,7 @@ A definition is `workflow.toml`: one `[workflow]` table and any number of nodes,
 | `agent` | Required. An agent kind or profile. |
 | `prompt-file` | Required. A file confined to the definition directory. |
 | `summary` | Required. |
-| `on.<outcome>` | One target per outcome the judge answers, plus the failure routes `on.died`, `on.invalid`, `on.timeout`, `on.limited`, `on.errored`, `on.deadline`, and `on.failed`. `on.asked` refuses as a dead route: a question never ends a judge. |
+| `on.<outcome>` | One target per outcome the judge answers, plus the failure routes `on.died`, `on.invalid`, `on.timeout`, `on.errored`, `on.deadline`, and `on.failed`. `on.asked` refuses as a dead route: a question never ends a judge. |
 | `timeout` | Required. Runs from the judge's launch and never pauses. |
 | `wake` | Signals that re-run the judge. |
 | `admission` | `window` only. |
@@ -285,7 +285,7 @@ Only a clean end follows `then`. A blocking ask with `on.asked` set, and an erro
 
 A session's exit is at rest when the leader had ended a turn and has no turn open, no blocking ask, no errored turn end, no background work or pending `rimz wait`, and no budget park on its card. A message still waiting for the leader, or a child's result it has not collected, does not count against an exit at rest. A session never reads `then` at a turn end. A molt of the leader keeps the step: the replaced session's exit ends nothing, and the exit of the new session decides.
 
-On both lifecycles, failed or interrupted turns, live provider limits, and budget parks keep the agent open, and a later clean turn completes the attempt. Some providers report an interrupt as a clean end, and RimZ follows that report. The one exception is an errored turn on a step that sets `on.errored`: the leader's own turn ended failed, and its card shows a provider error, an unknown error, or a lapsed plan. The attempt then ends `errored` and routes `on.errored` with the input `{"outcome": "errored", "reason": <the error>, "errored": {"text", "class", "handle"}}` and the run's key. A blocking ask wins when the step routes both. A rate or spend limit or an overload never ends the attempt, nor does a companion's error. A Claude Console API usage cap (`You have reached your specified API usage limits`) leaves the leader's card reading `failed`, ends the attempt through `on.errored` when the step sets it, and otherwise keeps the step open. A budget refusal before launch ends the attempt as `limited`. A companion's question or limit does not end the leader's attempt. A peer or team launched later by a cell keeps running until stopped.
+On both lifecycles, failed or interrupted turns, live provider limits, and budget parks keep the agent open, and a later clean turn completes the attempt. Some providers report an interrupt as a clean end, and RimZ follows that report. The one exception is an errored turn on a step that sets `on.errored`: the leader's own turn ended failed, and its card shows a provider error, an unknown error, or a lapsed plan. The attempt then ends `errored` and routes `on.errored` with the input `{"outcome": "errored", "reason": <the error>, "errored": {"text", "class", "handle"}}` and the run's key. A blocking ask wins when the step routes both. A rate or spend limit or an overload never ends the attempt, nor does a companion's error. A Claude Console API usage cap (`You have reached your specified API usage limits`) leaves the leader's card reading `failed`, ends the attempt through `on.errored` when the step sets it, and otherwise keeps the step open. A budget that would refuse the launch holds the step before it, as the [`budget`](#the-waiting-line) wait, with no attempt or visit counted. A companion's question or limit does not end the leader's attempt. A peer or team launched later by a cell keeps running until stopped.
 
 `workflow list` reads a live session as `with you in @<handle>`, and `show` as `<step> is with you`, or `<step> is asking you` while a blocking ask is open. A step of either lifecycle held on a stop reads `<handle> held <age>: <stop>` in `list` and `<step> is held <age> · <handle>: <stop>` in `show`, where the stop is `provider error`, `unknown error`, or `plan lapsed` (an errored turn, with its text when known), `rate limit`, `spend limit`, `provider overloaded`, or `budget park`. The leader's own errored turn names the hold over a companion's stop.
 
@@ -324,7 +324,7 @@ While a rest check runs, `list` reads `with you · checking <check>`, with any w
 
 #### Keep
 
-`keep = true` on an agent step of either lifecycle leaves the leader and companions open, outside the workflow, on a natural attempt end, an `on.asked` or `on.errored` ending, or a closing rest-check route (a rest check's failure route included). The workflow no longer owns them. A forced ending (cancel, restart, `resume --at`, the step's `timeout`, the deadline) and a `died`, `limited`, or `canceled` attempt still stop them. A push-back past `max-visits` detaches them. On a `turn` step, a check returning to the step can leave the old agent beside the new launch, and occupancy still applies.
+`keep = true` on an agent step of either lifecycle leaves the leader and companions open, outside the workflow, on a natural attempt end, an `on.asked` or `on.errored` ending, or a closing rest-check route (a rest check's failure route included). The workflow no longer owns them. A forced ending (cancel, restart, `resume --at`, the step's `timeout`, the deadline) and a `died` or `canceled` attempt still stop them. A push-back past `max-visits` detaches them. On a `turn` step, a check returning to the step can leave the old agent beside the new launch, and occupancy still applies.
 
 #### Notes
 
@@ -397,8 +397,8 @@ Each evaluation launches a fresh agent in a pane of the run's checkout, with the
 - A judge at a clean rest without an answer is reminded once. One that exits without an answer fails with `died`; an answer accepted before the exit wins.
 - A question or permission prompt, from the judge or a subagent it launched, leaves the judge in its pane: an answer there followed by a `submit` routes as usual, and otherwise the judge fails with `timeout`. A provider limit, an error that waiting clears, or a budget park holds it there the same way, and it resumes and submits in time or fails with `timeout`. `workflow list` and `workflow show` name what it is stopped on, but its timeout keeps running.
 - The judge's own turn ending on a provider error that waiting will not clear (its card shows a provider error, an unknown error, or a lapsed plan) fails it at once with `errored`. A timeout that passes at the same look wins over the error.
-- A budget that refuses the judge's launch fails it with `limited`. Any other launch failure fails it with `died` at once.
-- The judge's timeout starts at its launch, so a wait for its `admission.window` spends none of it. The deadline wins a tie with an answer.
+- A budget that would refuse the judge's launch holds it at its node as the [`budget`](#the-waiting-line) wait. Any other launch failure fails it with `died` at once.
+- The judge's timeout starts at its launch, so a wait for its `admission.window` or its [`budget`](#the-waiting-line) spends none of it. The deadline wins a tie with an answer.
 - A `submit` at or after the judge's timeout is refused, so a late answer never settles the check: it fails with `timeout`.
 - An [unsupported agent version](../agent-support.md) refuses the launch, which fails with `died`. `workflow show` includes the upgrade instruction.
 
@@ -497,16 +497,16 @@ Machine cap reasons name reservations separately (`1 more starting`) and a multi
 
 ### Failures
 
-A node fails with one of nine causes, and each kind raises only its own:
+A node fails with one of eight causes, and each kind raises only its own:
 
 | Kind | Causes |
 | --- | --- |
-| `agent` | `died`, `timeout`, `limited`, `visits`, `capacity`, `deadline` |
+| `agent` | `died`, `timeout`, `visits`, `capacity`, `deadline` |
 | `command` | `died`, `timeout`, `visits`, `deadline` |
 | `message` | `undelivered`, `visits`, `deadline` |
 | `test` | `died`, `timeout`, `deadline` |
 | `script` | `died`, `invalid`, `timeout`, `deadline` |
-| `judge` | `died`, `invalid`, `timeout`, `limited`, `errored`, `deadline` |
+| `judge` | `died`, `invalid`, `timeout`, `errored`, `deadline` |
 | `condition` | `timeout`, `deadline` |
 | `sleep` | `deadline` |
 
@@ -515,7 +515,6 @@ A node fails with one of nine causes, and each kind raises only its own:
 | `died` | The node's process could not start or ended abnormally: an agent launch that failed, including a failed continued restart; a turn step's provider exit before its clean turn end; a session's exit away from rest ([how an attempt ends](#how-an-attempt-ends)); an agent attempt a room rebirth ended; a command's or script's nonzero exit or signal; a test killed by a signal; a command, test, or script that could not spawn or open its log; a command whose host died; a judge's session that ended without an answer. |
 | `invalid` | A script gave an answer the node cannot use (stdout that is not one JSON object, a wrong field type, an outcome its `on` does not name or a reserved word, or a bad `recheck_at`), or a definition edit left a judge's accepted answer unroutable. |
 | `timeout` | The node's `timeout` passed. |
-| `limited` | A budget refused an agent's launch, a judge's included, or stopped it. |
 | `errored` | A judge's own turn ended on a provider error that waiting will not clear. A step's errored turn is not a failure: it takes the step's `on.errored`, or holds the step. |
 | `undelivered` | A message step found no single living agent, its prompt could not be composed, or the address resolved to another session than its pinned `session`. |
 | `visits` | An entry would exceed the step's `max-visits` plus the run's visit grant. Nothing launches and no visit is counted. |
@@ -545,7 +544,6 @@ Every failure route hands its target this object as `input`, with the run's `key
 | --- | --- |
 | `died`, `timeout` on a command step | `code`, the exit code (absent after a signal or a spawn error), and `log`, the step log's path when it exists |
 | `died` or `invalid` on a test or script once its `.check.log` exists | `log`, the `.check.log` path, and `code` once its process exited (absent after a signal, and when the process could not spawn) |
-| `limited` on an agent step or a judge | `reset_at`, when the provider's reset is known |
 | `errored` | `errored`, `{text, class, handle}` of the judge's errored turn: the error's text, its class (`failed`, `unknown`, or `not_entitled`), and the judge's handle |
 | `timeout` on a judge stopped when it passed | `asked`, `{text, kind, handle}` of an open question; otherwise `stopped`, `{kind, handle, class, text}` of what it was stopped on, `kind` one of `limit`, `error`, or `budget`, and `reset_at` beside it when the reset of the agent `handle` names is known (a reset read from another agent is left out). Members not known are left out. |
 | `capacity` | `waited_ms`, how long the start was held, and `first`, when the hold began; `never_fits: true` when the start is wider than a machine cap |
@@ -572,9 +570,7 @@ A script prints exactly one JSON object, and a judge sends one through [`rimz wo
 
 Any other field travels too: the whole object becomes the next node's `input`. `null` is not a valid value for `reason`, `recheck_at`, or `key`, so an answer cannot clear the key. A script must also exit 0: a nonzero exit fails it with `died`, and an answer it cannot use fails it with `invalid`.
 
-Reserved outcome words: the nine causes (`died`, `invalid`, `timeout`, `limited`, `errored`, `undelivered`, `visits`, `capacity`, `deadline`), `failed`, `asked`, `unknown`, and `hold`. A case or `else` that names one refuses, a script that answers one fails with `invalid`, and `submit` refuses one and says why. In an `on` table they are the engine's routes. A check's route refuses when the check cannot answer it (`dead route: this check cannot answer that outcome`): `on.hold` is always a dead route, `on.asked` on any check is one, and `on.errored` is one on every check but a judge.
-
-A step's `limited` failure routed to a script names `cause: "limited"` in its input, and `context.json` carries `prev_attempt.limited.reset_at` (also `input.detail.reset_at` when known), so the script can answer a waiting outcome with that time as `recheck_at`. The [sample `pr.py`](../../../crates/rimz/tests/fixtures/workflows/babysit-pr/checks/pr.py) does this.
+Reserved outcome words: the eight causes (`died`, `invalid`, `timeout`, `errored`, `undelivered`, `visits`, `capacity`, `deadline`), `limited`, `failed`, `asked`, `unknown`, and `hold`. A case or `else` that names one refuses, a script that answers one fails with `invalid`, and `submit` refuses one and says why. In an `on` table they are the engine's routes. A check's route refuses when the check cannot answer it (`dead route: this check cannot answer that outcome`): `on.hold` is always a dead route, `on.asked` on any check is one, and `on.errored` is one on every check but a judge.
 
 ### Test answers
 
@@ -632,7 +628,7 @@ RimZ rewrites `$RIMZ_WORKFLOW_DIR/context.json` before every check and every att
 
 | Field | Meaning |
 | --- | --- |
-| `outcome` | `ended`, `died`, `timeout`, `asked`, `errored`, `limited`, or `canceled`. `asked` occurs only with `on.asked` set, and `errored` only with `on.errored` set. A command step ends `ended`, `died`, `timeout`, or `canceled`. |
+| `outcome` | `ended`, `died`, `timeout`, `asked`, `errored`, or `canceled`. `asked` occurs only with `on.asked` set, and `errored` only with `on.errored` set. A command step ends `ended`, `died`, `timeout`, or `canceled`. |
 | `routed_by` | The outcome that admitted the attempt, or the cause when a failure route did. Null for a start step. |
 | `key`, `visit` | The attempt's key, and the visit count stamped when its launch or push-back was admitted. |
 | `started_at`, `ended_at` | The attempt's start and end times. |
@@ -641,7 +637,6 @@ RimZ rewrites `$RIMZ_WORKFLOW_DIR/context.json` before every check and every att
 | `cost_usd` | The leader's known cost. Null for a command step. |
 | `asked` | The question it asked, when it ended on `on.asked`. |
 | `errored` | `{text, class, handle}` of the leader's errored turn, when it ended on `on.errored`: the error's text, its class (`failed`, `unknown`, or `not_entitled`), and the leader's handle. |
-| `limited.reset_at` | The provider's reset time, when known. |
 | `code`, `log` | A command step's exit code (null after a signal or an unobserved exit) and its output file when one exists. Null for agent attempts. |
 
 `live_attempt` is `{step, seq, visit, visits, key, started_at, handle, run_id, claim_path, head_start, turn_end}`: `turn_end` is the last consumed turn identity, or null. It carries no outcome or end evidence. During a check, the top-level fields describe that check, without `visit` or `visits`, while `live_attempt` describes the session. A push-back or discard rewrites the file to the step view, a held `@wait` keeps the check view, and a close leaves it until the next publication.
@@ -839,7 +834,7 @@ To fit a terminal, the rail drops nodes from the left as `… `, then from the r
 | --- | --- |
 | Check answer | `<node> said <outcome>`, then `→ <target>` only when it routed, with readings, reasons, shell logs, judge cost, and invalid stderr tails. A route that repeats the preceding answer takes no row. |
 | Abandoned check | `<node> said nothing · <outcome>`. |
-| Attempt | Visits, the agent (its card handle while it is still in the room, as the headline names it, and its recorded handle once it has left) or command exit, duration, cost, short HEAD before and after, logs, reasons, stopped and live children, provider reset, questions, and prompt and script digests (first 12 hex characters). A command step adds `    exit <code\|—> HEAD <start8\|—> → <end8\|—>`, then `    log: <path>` when present. Any attempt with a reason adds `    reason: <text>`. A message step's attempt names the agent it reached, or `—` and why no agent took it. |
+| Attempt | Visits, the agent (its card handle while it is still in the room, as the headline names it, and its recorded handle once it has left) or command exit, duration, cost, short HEAD before and after, logs, reasons, stopped and live children, questions, and prompt and script digests (first 12 hex characters). A command step adds `    exit <code\|—> HEAD <start8\|—> → <end8\|—>`, then `    log: <path>` when present. Any attempt with a reason adds `    reason: <text>`. A message step's attempt names the agent it reached, or `—` and why no agent took it. |
 | Failure route | `route <cause> → <target> · <fields>` ([failure input](#the-failure-input)). |
 | Other route | Its target and input fields. |
 | Wait | Outcome, count, and span. |
@@ -880,6 +875,7 @@ review · 1 active · started by hand
 | `sleeping <elapsed>/<sleep>[ when <terms>] → <then>` | A sleep's entry-based clock. It replaces every other phrase at a sleep, unread and held conditions included, and carries no recheck clock. |
 | `unknown: <keys and reasons>` | A condition cannot read enough data to choose its first matching case ([reason forms](#condition-answers)). |
 | `window <term>` | An agent step or judge whose provider `window` is closed, with the failing term and its reading, such as `window 5h.left=12<40`. |
+| `budget <reason>` | An agent step or judge whose launch a room or account dollar budget would refuse, with the gate's reason, such as `budget fleet budget exhausted ($50.21 of $50.00/day)` and the command that raises it. The first advance after the budget allows the launch launches it. |
 | `takeover` | The checkout holds an agent mid-turn, so the step cannot stop it yet. A step with `occupancy = "share"` never waits here. |
 | `occupied` | The checkout holds an idle agent and the step's `occupancy` is `wait`, the default. |
 | `retry: <reason>` | The step's launch failed stopping the checkout's occupants, before it started anything, and the next advance (the scheduler's minute tick or a hook wake) launches it once more. A second failure is a counted `died` attempt. |
@@ -967,9 +963,9 @@ A finished run id still resolves, from any room, and `show` prints it without re
 
 ### Runs this RimZ cannot continue
 
-A run whose record a newer RimZ wrote is left for that RimZ: `workflow list` skips it, and `show`, `resume`, `restart`, and `cancel` by id refuse with `` workflow run <run> has record version <N>, written by a newer RimZ; this RimZ reads only version 13. It is left for the RimZ that wrote it; nothing changed `` and exit 1.
+A run whose record a newer RimZ wrote is left for that RimZ: `workflow list` skips it, and `show`, `resume`, `restart`, and `cancel` by id refuse with `` workflow run <run> has record version <N>, written by a newer RimZ; this RimZ reads only version 14. It is left for the RimZ that wrote it; nothing changed `` and exit 1.
 
-An unfinished run this RimZ cannot continue (an older record version, a missing or invalid one, or a version-13 record that does not decode) is skipped by `workflow list` too. `show` prints its header with why, and `resume` and `restart` refuse with `` this RimZ cannot continue workflow run <run>: <cause>; it reads only record version 13. The workflow pass will end it as failed; nothing changed ``. A `record.json` that holds no JSON object refuses the same way, ending `The workflow pass will set it aside; nothing changed`.
+An unfinished run this RimZ cannot continue (an older record version, a missing or invalid one, or a version-14 record that does not decode) is skipped by `workflow list` too. `show` prints its header with why, and `resume` and `restart` refuse with `` this RimZ cannot continue workflow run <run>: <cause>; it reads only record version 14. The workflow pass will end it as failed; nothing changed ``. A `record.json` that holds no JSON object refuses the same way, ending `The workflow pass will set it aside; nothing changed`.
 
 `cancel` and `advance` on such an id end that one run: its record is marked `failed` with why, in place, its agents are released and left running as ordinary sessions, its loop task gets a `failed` report that strikes nothing, and its directory moves to `finished-workflows/`. A record that holds no JSON object moves there unmodified. `cancel` prints `` ended <run> as failed: this RimZ cannot continue it: <cause> `` (or `` set aside <run>: its record holds no JSON object ``), then the agents it left running or `no agent was pinned to it`, and a `workflow show` hint. It ends no other run. When an earlier `cancel` or pass already ended the run but could not release its agents or move its directory, `cancel` and `advance` retry the report, the release, and the move, and `cancel` prints `` <run> was already ended as failed: this RimZ cannot continue it: <cause> `` in place of the first line.
 
@@ -1001,7 +997,7 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 
 | Field | Meaning |
 | --- | --- |
-| `record.version` | `12`. RimZ refuses a record of any other version ([runs this RimZ cannot continue](#runs-this-rimz-cannot-continue)). |
+| `record.version` | `14`. RimZ refuses a record of any other version ([runs this RimZ cannot continue](#runs-this-rimz-cannot-continue)). |
 | `record.spec_dir` | A deployed run's definition folder, canonical at the start. Absent for a loop task's run, which reads its own `definition/`. |
 | `record.visits.<step>` | The step's visit count since its last manual restart. |
 | `record.key_visits.<step>` | The step's visits split by item key, as `key_visits` in [the context file](#the-context-file). Absent when no step has a keyed visit. |
@@ -1034,7 +1030,7 @@ A verdict is `{node, entered_at, at, target, object, reason}`, where `at` is the
 | `code`, `log` | A command step's exit code (null after a signal or an unobserved exit) and the absolute `work/<seq>.step.log` path when the file exists. Null for agent attempts. |
 | `message` | A message step's queued message id, also on its journal `attempt` row. Other attempts omit it. |
 
-`asking`, `asked_ms`, and `held_since` pause a step's timeout, not the run deadline. A judge records them too, for the views that name its stop, and its timeout never reads them. They are omitted when empty or zero. Command steps have null `handle`, `run_id`, `children`, `limited`, `asked`, and `cost_usd`. A message-step attempt carries `handle` (the target, null when undelivered) and `message`, with `code`, `log`, and `run_id` null. The hosting process samples `head_start` before a command and `head_end` after reaping it. `claim_path` names `work/<seq>.claim.json`.
+`asking`, `asked_ms`, and `held_since` pause a step's timeout, not the run deadline. A judge records them too, for the views that name its stop, and its timeout never reads them. They are omitted when empty or zero. Command steps have null `handle`, `run_id`, `children`, `asked`, and `cost_usd`. A message-step attempt carries `handle` (the target, null when undelivered) and `message`, with `code`, `log`, and `run_id` null. The hosting process samples `head_start` before a command and `head_end` after reaping it. `claim_path` names `work/<seq>.claim.json`.
 
 ### Journal rows
 
