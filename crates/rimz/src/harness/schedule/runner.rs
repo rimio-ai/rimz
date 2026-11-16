@@ -41,7 +41,7 @@ use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
     RunTransition, SignalRecord,
 };
-use crate::harness::schedule::{TaskAction, TaskActionKind, TaskKind, TaskLaunch, Trigger};
+use crate::harness::schedule::{TaskAction, TaskKind, TaskLaunch, Trigger};
 use crate::harness::signal::{Signal as TriggerSignal, WatchOutcome};
 use crate::harness::task_login::task_login;
 use crate::ids::AgentKind;
@@ -352,11 +352,7 @@ impl<'a> TaskFire<'a> {
             return Ok(false);
         }
         let path = self.fire_run_lock_path()?;
-        let RunLockAttempt::Acquired(guard) = acquire_run_lock_file(
-            &path,
-            Some(self.task.kind()),
-            self.task.action().ok().map(TaskAction::kind),
-        )?
+        let RunLockAttempt::Acquired(guard) = acquire_run_lock_file(&path, Some(self.task.kind()))?
         else {
             return Ok(false);
         };
@@ -1377,11 +1373,7 @@ impl<'a> TaskFire<'a> {
         if policy.retains_triggers() {
             let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
             let mut backlog = LockedBacklog::acquire(&paths)?;
-            match acquire_run_lock_file(
-                &path,
-                Some(self.task.kind()),
-                self.task.action().ok().map(TaskAction::kind),
-            )? {
+            match acquire_run_lock_file(&path, Some(self.task.kind()))? {
                 RunLockAttempt::Acquired(guard) => {
                     if self.mode == LoopRunMode::Scheduled {
                         let waiting = backlog
@@ -1440,11 +1432,7 @@ impl<'a> TaskFire<'a> {
                 RunLockAttempt::Held(info) => return Ok(Some(self.record_overlap(info))),
             }
         }
-        match acquire_run_lock_file(
-            &path,
-            Some(self.task.kind()),
-            self.task.action().ok().map(TaskAction::kind),
-        )? {
+        match acquire_run_lock_file(&path, Some(self.task.kind()))? {
             RunLockAttempt::Acquired(guard) => {
                 self.run_lock = Some(guard);
                 Ok(None)
@@ -2069,10 +2057,9 @@ pub enum StopOutcome {
 pub fn stop_task(
     name: &str,
     root: &Path,
-    expected: Option<RunLockInfo>,
     cancel: impl FnOnce(Option<&ResolvedWorkspace>, StatePaths, Option<&RunRecord>) -> Result<()>,
 ) -> Result<(StopOutcome, RunTransition)> {
-    if expected.is_none() && held_run_lock(name, root)?.is_none() {
+    if held_run_lock(name, root)?.is_none() {
         return Ok((StopOutcome::NoActiveRun, RunTransition::Recorded));
     }
     let (workspace, project_root) = stop_workspace(root)?;
@@ -2080,22 +2067,9 @@ pub fn stop_task(
     let backlog_paths = StatePaths::for_project_root(root)?;
     let mut backlog = LockedBacklog::acquire(&backlog_paths)?;
     let Some((lock, holder)) = held_run_lock(name, root)? else {
-        let key = stop_key(name, None);
-        let transition = match expected {
-            Some(info) => append_stopped_record(&key, name, root, info, None, None, &mut backlog)?,
-            None => RunTransition::Recorded,
-        };
-        return Ok((StopOutcome::NoActiveRun, transition));
+        return Ok((StopOutcome::NoActiveRun, RunTransition::Recorded));
     };
     let key = stop_key(name, Some(&lock));
-    if let Some(expected) = expected
-        && Some(expected) != holder
-    {
-        // The original holder released and a drainer may already own this file.
-        let transition =
-            append_stopped_record(&key, name, root, expected, None, None, &mut backlog)?;
-        return Ok((StopOutcome::NoActiveRun, transition));
-    }
     let info = holder
         .context("loop run lock holder identity unavailable; stop the holder manually and retry")?;
     let metadata = std::fs::read(&lock)
@@ -2105,18 +2079,11 @@ pub fn stop_task(
     let kind = metadata.as_ref().and_then(|metadata| metadata.kind);
 
     let waiting = backlog.record.tasks.entry(key.clone()).or_default();
-    if expected.is_none()
-        || !waiting
-            .stopping
-            .as_ref()
-            .is_some_and(|mark| info.matches_stop(mark))
-    {
-        waiting.stopping = Some(StopMark {
-            pid: info.pid,
-            started_at: info.started_at,
-            cause: StopCause::Stop,
-        });
-    }
+    waiting.stopping = Some(StopMark {
+        pid: info.pid,
+        started_at: info.started_at,
+        cause: StopCause::Stop,
+    });
     let waiting = waiting.triggers.len();
     backlog.save()?;
     let run = newest_active_run(&paths, name, Some(info));
@@ -2320,8 +2287,6 @@ struct RunLockMetadata {
     holder: RunLockInfo,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     kind: Option<TaskKind>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    action_kind: Option<TaskActionKind>,
 }
 
 enum RunLockAttempt {
@@ -2522,11 +2487,7 @@ fn wait_for_process_exit(pid: u32, grace: Duration) -> bool {
     true
 }
 
-fn acquire_run_lock_file(
-    path: &Path,
-    kind: Option<TaskKind>,
-    action_kind: Option<TaskActionKind>,
-) -> Result<RunLockAttempt> {
+fn acquire_run_lock_file(path: &Path, kind: Option<TaskKind>) -> Result<RunLockAttempt> {
     let mut holder = None;
     match claim(path, |file| {
         let info = RunLockInfo {
@@ -2534,15 +2495,8 @@ fn acquire_run_lock_file(
             started_at: Timestamp::now(),
         };
         holder = Some(info);
-        serde_json::to_writer(
-            file,
-            &RunLockMetadata {
-                holder: info,
-                kind,
-                action_kind,
-            },
-        )
-        .map_err(std::io::Error::other)
+        serde_json::to_writer(file, &RunLockMetadata { holder: info, kind })
+            .map_err(std::io::Error::other)
     })
     .with_context(|| format!("locking loop run lock `{}`", path.display()))?
     {
