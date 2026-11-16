@@ -825,7 +825,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
     success(output);
     assert!(!stderr.contains("has used"), "{stderr}");
     save(&env, &record);
-    write_definition(&record, &format!("{SPEC}on.visits='gate'\n"));
+    write_definition(&record, &format!("{SPEC}on.visits='@failed'\n"));
     let output = env
         .rimz()
         .env("RIMZ_BIN", "/bin/true")
@@ -834,7 +834,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     success(output);
-    assert!(!stderr.contains("goes to gate at once"), "{stderr}");
+    assert!(!stderr.contains("goes to @failed at once"), "{stderr}");
     assert!(!stderr.contains("park again"), "{stderr}");
 
     record.state = RunState::Active;

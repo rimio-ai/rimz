@@ -375,3 +375,77 @@ fn a_session_hears_its_cohorts_and_other_agents_lifecycle_signals() {
     cancel(&state, &record.id, &host, None).unwrap();
     assert!(!hears_lifecycle(&state, &idle, &|_| None).unwrap());
 }
+
+/// A check run that waits for `review.ready`, and the same check routing `done` to a node that
+/// does not exist, which parses and admission refuses.
+const WAITING: &str = "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\nrun='sh check.sh'\ntimeout='1h'\nwake=['review.ready']\non.pending='@wait'\non.done='@done'\n";
+
+/// The signal wake admits each matching run before it touches it: a refused definition keeps
+/// its backoff and gets no journal row or forward, and the wake goes on to the next run.
+#[test]
+fn a_wake_skips_a_refused_definition_and_wakes_the_next_run() {
+    let refused = WAITING.replace("on.done='@done'", "on.done='nowhere'");
+    let (dir, state, first) = setup(WAITING);
+    check(
+        dir.path(),
+        json!({"outcome":"pending", "recheck_at":"2099-01-01T00:00:00Z"}),
+    );
+    let other = dir.path().join("another");
+    fs::create_dir_all(&other).unwrap();
+    let mut second = first.clone();
+    second.id = crate::ids::WorkflowRunId::new();
+    second.spec_dir = Some(other.clone());
+    let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    records::initialize(&state, &second, &guard).unwrap();
+    drop(guard);
+    fs::write(definition_file(&second), WAITING).unwrap();
+    let host = FakeHost::new();
+    for record in [&first, &second] {
+        let waiting = advance_ok(&state, &record.id, &host);
+        assert!(waiting.wait.is_some(), "{waiting:#?}");
+    }
+    fs::write(definition_file(&first), &refused).unwrap();
+    let paths = state.workflow(&first.id);
+    let before = (
+        fs::read_to_string(&paths.record).unwrap(),
+        fs::read_to_string(&paths.journal).ok(),
+    );
+    wake(&state, &signal("review.ready", json!({})), &host).unwrap();
+    assert_eq!(
+        (
+            fs::read_to_string(&paths.record).unwrap(),
+            fs::read_to_string(&paths.journal).ok()
+        ),
+        before,
+        "the refused run keeps its backoff and journal"
+    );
+    let journal = records::journal(&state.workflow(&second.id)).unwrap();
+    assert!(
+        journal
+            .iter()
+            .any(|row| matches!(row.event, JournalEvent::Wake { .. })),
+        "{journal:#?}"
+    );
+}
+
+/// A session's subscription on a refused definition forwards nothing and journals no signal.
+#[test]
+fn a_session_on_a_refused_definition_hears_nothing() {
+    let (dir, state, record) = setup(SUBSCRIBED);
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    fs::write(
+        definition_file(&record),
+        SUBSCRIBED.replace("then='@done'", "then='build'"),
+    )
+    .unwrap();
+    wake(
+        &state,
+        &signal("ci.failed", json!({"path": dir.path().to_string_lossy()})),
+        &host,
+    )
+    .unwrap();
+    assert!(host.forwards.borrow().is_empty());
+    assert!(forwarded(&state, &record).is_empty());
+    cancel(&state, &record.id, &host, None).unwrap();
+}

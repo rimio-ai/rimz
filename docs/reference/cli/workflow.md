@@ -855,6 +855,7 @@ Without `--continue`, the replacement starts fresh. With it, the leader resumes 
 
 These refuse before anything stops:
 
+- A definition that does not read, or that validation refuses, with the error `workflow advance` reports for it. `rimz agents restart` on the step's agent refuses the same way.
 - A missing conversation, an unsupported provider resume, or a different account's history pool, naming a fresh `workflow restart` or `rimz accounts use` fix.
 - A finished run: `workflow run <id> has ended (<state>); cannot restart`.
 - A run being canceled, and a check without a held session.
@@ -891,6 +892,7 @@ Grants live on the run record, never in the definition, and `show` includes them
 
 | Refusal | Message |
 | --- | --- |
+| A definition that does not read, or that validation refuses | the error `workflow advance` reports for it; the run is left as it was |
 | Any other grant spelling | `invalid extension "<grant>"; use visits=+N or deadline=<when>` |
 | An active run with neither flag | `an active run needs --at <node> or --extend to resume` |
 | `--at` while the current attempt is settling | `the attempt at <node> is settling; retry resume after it finishes` |

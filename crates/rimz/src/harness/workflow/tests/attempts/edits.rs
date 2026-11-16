@@ -440,3 +440,96 @@ fn acted_reads_a_checks_only_definition_by_its_steps() {
     assert_eq!(ended.state, RunState::Canceled, "{ended:#?}");
     assert!(!ended.outcome.as_ref().unwrap().acted, "{ended:#?}");
 }
+
+/// `SESSION` with its step routing back to itself: it parses, and admission refuses it.
+fn refused_session() -> String {
+    SESSION.replace("then='pr'", "then='build'")
+}
+
+/// `resume` and `restart` admit the definition before they touch the run: a refused one
+/// leaves the record, the journal and a held session's running check child as they were, with
+/// the error an advance gives; once it is fixed each proceeds.
+#[test]
+fn resume_and_restart_refuse_a_refused_definition_before_touching_the_run() {
+    use std::os::unix::process::CommandExt;
+
+    let (_dir, state, record) = setup(SESSION);
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    let mut child = std::process::Command::new("sleep")
+        .arg("347")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut holding = held(&live, false);
+    let mut running = live.attempt.unwrap();
+    running.node = "pr".into();
+    running.kind = records::AttemptKind::Script;
+    running.lifecycle = records::StepLifecycle::Turn;
+    running.judged = None;
+    running.run = None;
+    running.visit = None;
+    running.seq = holding.next_seq;
+    running.child = Some(records::HostChild {
+        pid: child.id(),
+        start: crate::proc::process_start_token(child.id()),
+    });
+    holding.next_seq += 1;
+    holding.attempt = Some(running);
+    update(&state, &holding);
+    edit(&state, &record, &refused_session());
+    let paths = state.workflow(&record.id);
+    let before = (
+        fs::read_to_string(&paths.record).unwrap(),
+        fs::read_to_string(&paths.journal).ok(),
+    );
+    let refusal = advance(&state, &record.id, &host).unwrap_err().to_string();
+    let resumed = resume(&state, &record.id, &host, Some("build"), &[]);
+    let restarted = restart(&state, &record.id, None, &host);
+    assert_eq!(
+        (
+            resumed.map(drop).map_err(|error| error.to_string()),
+            restarted.map(drop).map_err(|error| error.to_string()),
+        ),
+        (Err(refusal.clone()), Err(refusal))
+    );
+    assert_eq!(
+        (
+            fs::read_to_string(&paths.record).unwrap(),
+            fs::read_to_string(&paths.journal).ok()
+        ),
+        before
+    );
+    assert!(child.try_wait().unwrap().is_none(), "the check child lives");
+    assert_eq!(host.stops.get(), 0);
+
+    edit(&state, &record, SESSION);
+    let moved = resume(&state, &record.id, &host, Some("build"), &[]).unwrap();
+    assert_eq!(moved.node, "build");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "resume kills the check"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// A restart refused by admission stops nothing; the fixed definition restarts the step.
+#[test]
+fn restart_admits_before_it_stops_the_agent() {
+    let (_dir, state, record) = setup(STEP);
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    edit(
+        &state,
+        &record,
+        &STEP.replace("then='@done'", "then='build'"),
+    );
+    assert!(restart(&state, &record.id, None, &host).is_err());
+    assert_eq!(host.stops.get(), 0);
+    edit(&state, &record, STEP);
+    restart(&state, &record.id, None, &host).unwrap();
+    assert_eq!(host.stops.get(), 1);
+}
