@@ -236,6 +236,53 @@ fn only_the_fix_segment_of_the_booked_line_takes_the_warning_tone() {
     }
 }
 
+/// The `▷` header wears the tone of the `⧉` and `⧖` headers on every card shape that
+/// draws the booked line, its label the body weight, while an unfired entry's `▷` lead
+/// stays muted.
+#[test]
+fn the_booked_header_takes_the_section_header_tone_and_unfired_leads_stay_muted() {
+    let theme = Theme::fixed(false);
+    let meta = theme.component(Component::WaitHeader);
+    assert_eq!(meta, theme.component(Component::SubagentHeader));
+    let booked = theme.glyph(GlyphRole::CardBooked);
+    let fresh = planner_snapshot_as(healthy_plan(), 60, true);
+    let mut compact = planner_snapshot(healthy_plan(), 60);
+    compact.theme.display.card_density = CardDensityMode::Compact;
+    for (snapshot, selected) in [
+        (planner_snapshot(healthy_plan(), 60), usize::MAX),
+        (planner_snapshot(healthy_plan(), 172_800), usize::MAX),
+        (fresh, usize::MAX),
+        (compact, usize::MAX),
+        (planner_snapshot(healthy_plan(), 60), 0),
+    ] {
+        let lines = group_lines_at_width(&snapshot, &theme, selected, 46);
+        let line = lines
+            .iter()
+            .find(|line| line.to_string().contains("booked (7)"))
+            .expect("the booked line");
+        let at = line
+            .spans
+            .iter()
+            .position(|span| span.content == booked)
+            .unwrap();
+        assert_eq!(line.spans[at].style.fg, Some(meta), "{line}");
+        assert_eq!(line.spans[at + 1].content, " booked (7)");
+        assert_eq!(line.spans[at + 1].style.fg, theme.body().fg, "{line}");
+    }
+    let open = group_lines_at_width(&planner_snapshot(healthy_plan(), 60), &theme, 0, 46);
+    let unfired = open
+        .iter()
+        .find(|line| line.to_string().contains("lang-docs"))
+        .expect("the unfired entry");
+    let lead = unfired
+        .spans
+        .iter()
+        .find(|span| span.content == booked)
+        .unwrap();
+    assert_eq!(lead.style.fg, theme.muted().fg, "{unfired}");
+    assert_ne!(lead.style.fg, Some(meta));
+}
+
 #[test]
 fn the_resting_summary_gives_way_running_first_and_the_fix_never_drops() {
     let theme = Theme::fixed(false);

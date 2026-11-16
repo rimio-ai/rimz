@@ -125,8 +125,10 @@ pub(crate) enum Component {
     SubagentHeader,
     /// The `⧖` pending-waits header.
     WaitHeader,
-    /// The `▷` booked-launches header and the lead of a booking that has not fired.
+    /// The booked-launches header glyph.
     BookedHeader,
+    /// The `▷` lead of a booking that has not fired.
+    BookingWaiting,
     /// The `–` lead of a fired booking with nothing it launched alive.
     BookingEnded,
     /// The `⚠` segment of the section line and the lead of a booking that needs a fix.
@@ -244,6 +246,7 @@ impl Component {
         Component::SubagentHeader,
         Component::WaitHeader,
         Component::BookedHeader,
+        Component::BookingWaiting,
         Component::BookingEnded,
         Component::BookingFix,
         Component::RemoteControl,
@@ -299,8 +302,8 @@ impl Component {
             }
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge
             | MessageQueued => palette.cool,
-            TeamLabel | SubagentHeader | WaitHeader | ProcIo | CacheWrite | CompactionPoint
-            | WorkflowBadge => palette.meta,
+            TeamLabel | SubagentHeader | WaitHeader | BookedHeader | ProcIo | CacheWrite
+            | CompactionPoint | WorkflowBadge => palette.meta,
             RemoteControlDown | WorktreePrClosed | WorktreeCiFailing => palette.alarm,
             Input => palette.expense,
             CacheExpired => palette.cache_expired,
@@ -309,7 +312,7 @@ impl Component {
             WorktreeQualifier | WorktreeBranchName | WorktreeMerged | InactiveChip
             | WindowMedium | RemoteControlOff | ContextCompacted | WorkflowVisits
             | StallLeadFading | StallFading | StallOverflow | NotTrackedSuffix | NotTrackedTip
-            | NeedsYouFilter | BookedHeader | BookingEnded => palette.muted,
+            | NeedsYouFilter | BookingWaiting | BookingEnded => palette.muted,
         })
     }
 }

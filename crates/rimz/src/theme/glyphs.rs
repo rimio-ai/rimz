@@ -113,7 +113,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(CardWaits, "⧖", Some("\u{f00a0}")),
     glyph!(CardWaitTimer, "◷", Some("\u{f051f}")),
     glyph!(CardWaitSignal, "⌁", Some("\u{f1720}")),
-    glyph!(CardBooked, "▷", None),
+    glyph!(CardBooked, "▷", Some("\u{f00f0}")),
     glyph!(CardBookingEnded, "–", None),
     glyph!(CardParkedBg, "⋯", None),
     glyph!(CardTierMove, "↪", None),
@@ -482,6 +482,8 @@ mod tests {
         assert_eq!(nerd_font_glyph(GlyphRole::CardWaits), Some("\u{f00a0}"));
         assert_eq!(unicode_glyph(GlyphRole::CardWaitTimer), "◷");
         assert_eq!(nerd_font_glyph(GlyphRole::CardWaitTimer), Some("\u{f051f}"));
+        assert_eq!(unicode_glyph(GlyphRole::CardBooked), "▷");
+        assert_eq!(nerd_font_glyph(GlyphRole::CardBooked), Some("\u{f00f0}"));
         assert_eq!(unicode_glyph(GlyphRole::Seam), "·");
         assert_eq!(nerd_font_glyph(GlyphRole::Seam), None);
         assert_eq!(unicode_glyph(GlyphRole::CardWaitSignal), "⌁");

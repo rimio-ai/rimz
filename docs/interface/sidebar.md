@@ -153,7 +153,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `⌁` | a signal wait |
 | working spinner, in violet | a live watch (command, check, PID, file) or a background shell |
 | `2 more finished` | finished subagents of the current turn beyond the five listed |
-| `▷` | a booked launch that will start: the `▷ booked (N)` half and each unfired entry |
+| `▷` (Nerd Font: `󰃰`) | a booked launch that will start: the `▷ booked (N)` half, its mark in the violet of `⧉` and `⧖`, and each unfired entry, muted |
 | `–` | a fired booked launch with nothing left alive |
 | `⚠`, in the warning tone | a booked launch that needs a fix, with the loop's reason |
 | `+2 later` | booked launches behind the next ones, each listed once the launch ahead of it fires |
