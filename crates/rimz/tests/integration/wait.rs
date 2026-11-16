@@ -1,5 +1,7 @@
 //! Integration coverage for the agent-facing `rimz wait` doorway.
 
+#[cfg(target_os = "linux")]
+use crate::common::wait::wait_for_loop_runs_to_exit;
 use crate::common::wait::{
     agent_wait, agent_wait_at, loop_instances_path, publish_claude_5h, publish_claude_5h_resetting,
     register_agent, register_agent_with_owner, register_calling_agent,
@@ -4093,27 +4095,6 @@ fn wait_for_wait_messages(env: &Env, count: usize) -> Vec<MessageRecord> {
 fn wait_for_no_wait_instances(env: &Env) {
     wait_until(env, "wait instance was not retired", || {
         wait_instances(env).0.is_empty()
-    });
-}
-
-/// A delivering `rimz loop run` appends its terminal record before it releases
-/// its run lock, and `loop show` reads that held lock with no row as a run in
-/// flight, so a read after the record waits for the runner to exit.
-#[cfg(target_os = "linux")]
-fn wait_for_loop_runs_to_exit(env: &Env, task: &str) {
-    let spec = rimz::testkit::sandbox::SandboxSpec {
-        home_root: env.home_root.clone(),
-        runtime_root: env.runtime_root.clone(),
-    };
-    wait_until(env, &format!("`rimz loop run {task}` did not exit"), || {
-        !rimz::testkit::sandbox::sandbox_processes(&spec)
-            .into_iter()
-            .filter_map(rimz::proc::argv)
-            .any(|argv| {
-                ["loop", "run", task]
-                    .iter()
-                    .all(|word| argv.iter().any(|arg| arg == word))
-            })
     });
 }
 

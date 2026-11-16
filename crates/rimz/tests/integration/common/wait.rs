@@ -59,6 +59,33 @@ pub fn seed_signal_wait(env: &Env, name: &str, signal: &str, repeat: bool) {
     std::fs::write(path, serde_json::to_vec(&tasks).unwrap()).unwrap();
 }
 
+/// Waits until no process in `env`'s sandbox runs `rimz loop run <task>`. A delivering
+/// runner appends its row before it releases its run lock, and `loop show` reads that held
+/// lock with no row as a run in flight, so a read or the next signal waits for its exit.
+#[cfg(target_os = "linux")]
+pub fn wait_for_loop_runs_to_exit(env: &Env, task: &str) {
+    let spec = rimz::testkit::sandbox::SandboxSpec {
+        home_root: env.home_root.clone(),
+        runtime_root: env.runtime_root.clone(),
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while rimz::testkit::sandbox::sandbox_processes(&spec)
+        .into_iter()
+        .filter_map(rimz::proc::argv)
+        .any(|argv| {
+            ["loop", "run", task]
+                .iter()
+                .all(|word| argv.iter().any(|arg| arg == word))
+        })
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "`rimz loop run {task}` did not exit"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
 pub fn register_calling_agent(env: &Env) {
     register_calling_agent_with_launch(env, LaunchParams::default());
 }
