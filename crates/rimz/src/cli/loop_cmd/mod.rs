@@ -334,6 +334,17 @@ struct FireArgs {
         crate::cli::complete::loop_tasks
     ))]
     name: String,
+    /// Fire as if this signal had triggered the task; nothing is emitted and no other task wakes.
+    #[arg(long, value_name = "NAME", value_parser = |raw: &str| raw.parse::<rimz::store::event::SignalName>())]
+    signal: Option<rimz::store::event::SignalName>,
+    /// The pretend signal's payload: a JSON object, not an output switch.
+    #[arg(
+        long,
+        value_name = "OBJECT",
+        requires = "signal",
+        value_parser = |raw: &str| rimz::harness::signal::parse_payload(Some(raw))
+    )]
+    json: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Args)]
@@ -465,9 +476,15 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
                 drain: false,
             },
             LoopRunMode::Manual,
+            args.signal.map(|name| rimz::harness::signal::Signal {
+                name,
+                payload: args.json.unwrap_or_default(),
+                source: rimz::store::event::SignalSource::Cli,
+                watch: None,
+            }),
             globals,
         ),
-        LoopSubcmd::Run(args) => run_tasks::run_one(args, LoopRunMode::Scheduled, globals),
+        LoopSubcmd::Run(args) => run_tasks::run_one(args, LoopRunMode::Scheduled, None, globals),
         LoopSubcmd::Settle => {
             if let Some(root) = project_root_for_globals(globals) {
                 rimz::harness::schedule::run_log::settle_open_fires(&root);

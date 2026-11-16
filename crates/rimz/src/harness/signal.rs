@@ -91,18 +91,24 @@ pub(in crate::harness) fn resolve_subscription(
     if selector.family() != signal.name.family() {
         return SignalResolution::Ignore;
     }
-    let matched = matches.iter().all(|(key, expected)| {
-        signal
-            .payload
-            .get(key)
-            .is_some_and(|value| is_match_wildcard(expected) || match_value(value) == *expected)
-    });
+    let matched = matches
+        .iter()
+        .all(|(key, expected)| holds_match(signal, key, expected));
     match (selector.matches(&signal.name), matched) {
         (true, true) => SignalResolution::Deliver,
         (true, false) => SignalResolution::Excluded,
         (false, true) => SignalResolution::Skip,
         (false, false) => SignalResolution::Ignore,
     }
+}
+
+/// Whether `signal`'s payload carries `key` at `expected`, or at any value for the wildcard; a
+/// missing key never holds.
+pub(in crate::harness) fn holds_match(signal: &Signal, key: &str, expected: &str) -> bool {
+    signal
+        .payload
+        .get(key)
+        .is_some_and(|value| is_match_wildcard(expected) || match_value(value) == expected)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -122,6 +128,35 @@ impl From<&Signal> for SignalEventPayload {
             payload: signal.payload.clone(),
             source: signal.source,
         }
+    }
+}
+
+/// The largest `--json` payload a signal carries.
+const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
+
+/// Why a `--json` payload is refused.
+#[derive(Debug, thiserror::Error)]
+pub enum PayloadErr {
+    #[error("--json payload exceeds 64 KiB")]
+    TooLarge,
+    #[error("parsing --json payload: {0}")]
+    Invalid(serde_json::Error),
+    #[error("--json payload must be a JSON object")]
+    NotObject,
+}
+
+/// A signal's payload from its `--json` text: a JSON object of at most 64 KiB, or an empty
+/// object when the flag is absent.
+pub fn parse_payload(raw: Option<&str>) -> Result<Map<String, Value>, PayloadErr> {
+    let Some(raw) = raw else {
+        return Ok(Map::new());
+    };
+    if raw.len() > MAX_PAYLOAD_BYTES {
+        return Err(PayloadErr::TooLarge);
+    }
+    match serde_json::from_str::<Value>(raw).map_err(PayloadErr::Invalid)? {
+        Value::Object(payload) => Ok(payload),
+        _ => Err(PayloadErr::NotObject),
     }
 }
 
@@ -439,6 +474,28 @@ fn append_identity(headline: &mut String, payload: &Map<String, Value>, key: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_payload_is_an_object_of_at_most_64_kib_and_absent_is_empty() {
+        assert_eq!(parse_payload(None).unwrap(), Map::new());
+        assert_eq!(
+            Value::Object(parse_payload(Some(r#"{"env":"prod","n":1}"#)).unwrap()),
+            serde_json::json!({"env": "prod", "n": 1})
+        );
+        let at_cap = format!(r#"{{"a":"{}"}}"#, "x".repeat(MAX_PAYLOAD_BYTES - 8));
+        assert_eq!(at_cap.len(), MAX_PAYLOAD_BYTES);
+        assert!(parse_payload(Some(&at_cap)).is_ok());
+        let over = format!(r#"{{"a":"{}"}}"#, "x".repeat(MAX_PAYLOAD_BYTES - 7));
+        for (raw, expected) in [
+            (over.as_str(), "--json payload exceeds 64 KiB"),
+            ("[]", "--json payload must be a JSON object"),
+            ("\"text\"", "--json payload must be a JSON object"),
+            ("{nope", "parsing --json payload: key must be a string"),
+        ] {
+            let refusal = parse_payload(Some(raw)).unwrap_err().to_string();
+            assert!(refusal.starts_with(expected), "{raw:.20}: {refusal}");
+        }
+    }
 
     #[test]
     fn watch_verdicts_share_labels_and_check_semantics() {
