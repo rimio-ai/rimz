@@ -220,6 +220,7 @@ fn bookings_move_no_status_attention_count_sort_or_wait() {
                 name: "w".to_owned(),
                 trigger: PendingWaitTrigger::Subagent {
                     active_at: now(),
+                    target: None,
                     deadline_at: None,
                     settled: None,
                 },

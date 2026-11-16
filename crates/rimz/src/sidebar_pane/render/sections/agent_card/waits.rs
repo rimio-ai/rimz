@@ -1,4 +1,4 @@
-//! Type-led wait entries share the subagent layout and pin armed age right. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells, with signals last and a pending idle stop after them. Subagent waits use the child's own row instead.
+//! Type-led wait entries share the subagent layout and pin armed age right. Agents the card awaits outside its subagents list come first, one `agent` entry each: a live one behind its own state lead, a click target and cursor stop for its pane, and a settled run still reporting or an agent with no row behind the static signal lead. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells, with signals last and a pending idle stop after them. Subagent waits draw only through the card's awaited list, so a child with its own entry is not listed twice.
 
 use jiff::Timestamp;
 
@@ -8,6 +8,7 @@ use crate::agents::{
 };
 use crate::proc::command::{command_program_basename, program_label};
 use crate::sidebar_pane::render::labels::hour_age_glyph;
+use crate::store::snapshot::SidebarAwaitedAgent;
 
 use super::*;
 
@@ -15,6 +16,64 @@ pub(super) fn visible_waits(waits: &[PendingWait]) -> impl Iterator<Item = &Pend
     waits
         .iter()
         .filter(|wait| !matches!(wait.trigger, PendingWaitTrigger::Subagent { .. }))
+}
+
+/// An awaited agent whose run is working or compacting: its entry animates, as a child's does.
+pub(super) fn awaited_in_motion(awaited: &SidebarAwaitedAgent) -> bool {
+    awaited.settled.is_none()
+        && awaited.status.is_some_and(|status| {
+            status == AgentStatus::Running || (awaited.compacting && !status.is_attention())
+        })
+}
+
+/// One `agent` entry per awaited agent, in the card's order, each line targeting the
+/// awaited pane when it has one.
+pub(super) fn awaited_entry_lines(
+    ctx: &RowCtx<'_>,
+    awaited: &[SidebarAwaitedAgent],
+    selected: bool,
+) -> Vec<CardLine> {
+    let theme = ctx.theme;
+    let mut lines = Vec::new();
+    for agent in awaited {
+        let headline = match &agent.settled {
+            Some(status) => format!("{}{}{status}, reporting", agent.handle, value_seam(theme)),
+            None => agent.handle.clone(),
+        };
+        let mut entry = entry(
+            ctx,
+            theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
+            "agent",
+            Some(headline),
+            None,
+            agent.since,
+        );
+        if let (Some(status), None) = (agent.status, &agent.settled) {
+            entry.lead = if agent.compacting && !status.is_attention() {
+                Span::styled(
+                    role_glyph(theme, AnimationRole::Compacting, ctx.head_step),
+                    role_style(theme, AnimationRole::Compacting, ctx.animation_phase),
+                )
+            } else {
+                Span::styled(
+                    agent_glyph(theme, status, agent.phase, ctx.head_step),
+                    agent_role_style_at(theme, status, agent.phase, ctx.animation_phase),
+                )
+            };
+        }
+        entry.focused = selected
+            && agent
+                .pane
+                .as_ref()
+                .is_some_and(|pane| ctx.entry_cursor == Some(&EntryCursor::SubAgent(pane.clone())));
+        let mut entry_lines = Vec::new();
+        push_entry(ctx, &mut entry_lines, entry);
+        lines.extend(entry_lines.into_iter().map(|line| CardLine {
+            line,
+            target: agent.pane.clone().map(HitTarget::SubAgentPane),
+        }));
+    }
+    lines
 }
 
 /// A wait its watcher is actively working on: it animates while armed.

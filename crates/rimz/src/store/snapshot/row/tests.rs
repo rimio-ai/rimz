@@ -780,6 +780,7 @@ fn card_description_sleeping_uses_first_sleeping_wait_and_view_clock() {
                 name: "@child".into(),
                 trigger: crate::agents::PendingWaitTrigger::Subagent {
                     active_at: row_time(),
+                    target: None,
                     deadline_at: None,
                     settled: Some("completed".into()),
                 },

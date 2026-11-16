@@ -42,6 +42,7 @@ use super::refresh::rate_limits::apply_cached_rate_limits;
 use super::timing::LINK_STATS_STALE;
 use crate::remote::link::LINK_STATS_EXPIRE;
 
+mod awaited;
 mod bookings;
 mod workflows;
 
@@ -1025,6 +1026,7 @@ fn enrich_core(
     super::unread::derive(&mut snapshot, &episodes, &read_marks);
     super::attention::AttentionStamps::load(runtime).derive(&mut snapshot);
     bookings::attach(&mut snapshot, &bookings_cache);
+    awaited::attach(&mut snapshot);
     // Late git, unread and attention facts land after the pane fold's initial
     // sort, so publish the spine once all presentation inputs are present.
     snapshot.sort_groups_for_presentation();

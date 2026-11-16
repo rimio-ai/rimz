@@ -56,8 +56,8 @@ pub(super) use project::{observation_stale_at, observation_stale_on};
 pub use row::{
     AgentCard, BookingBand, BookingBlocker, BookingFire, BookingLive, BookingPr, BookingSibling,
     BookingStage, BookingStarts, BookingState, BookingWait, CacheClock, CardDescription, PaneAgent,
-    ProcessCard, ProcessState, RowCallSplit, RowCard, SiblingState, SidebarBooking, SidebarRow,
-    SidebarSubAgent, SubAgentTokens,
+    ProcessCard, ProcessState, RowCallSplit, RowCard, SiblingState, SidebarAwaitedAgent,
+    SidebarBooking, SidebarRow, SidebarSubAgent, SubAgentTokens,
 };
 pub(crate) use view::sort_windows;
 pub use view::{

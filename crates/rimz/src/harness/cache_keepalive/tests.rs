@@ -316,6 +316,7 @@ fn keepalive_excludes_non_sleepers_and_disabled_or_unsafe_seats() {
     for trigger in [
         PendingWaitTrigger::Subagent {
             active_at: ts(3540),
+            target: None,
             deadline_at: None,
             settled: None,
         },

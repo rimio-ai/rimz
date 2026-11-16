@@ -290,6 +290,10 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
                             armed_at: Some(run.started_at),
                             trigger: PendingWaitTrigger::Subagent {
                                 active_at: child.last_activity,
+                                target: Some(crate::agents::PendingWaitTarget {
+                                    kind: child.kind.clone(),
+                                    agent_id: child.agent_id.clone(),
+                                }),
                                 deadline_at: run.deadline_at,
                                 settled: run
                                     .status
