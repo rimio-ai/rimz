@@ -80,7 +80,7 @@ impl Definition {
             }
         };
         let definition =
-            rimz::harness::schedule::runner::command_definition(name, task.entry(), argv)?;
+            rimz::harness::schedule::shell_task::command_definition(name, task.entry(), argv)?;
         let scratch = Scratch(std::env::temp_dir().join(format!(
             "rimz-task-{}-{}",
             std::process::id(),

@@ -180,7 +180,7 @@ fn verify_phase(
                 break;
             }
         };
-        let detail = rimz::harness::schedule::runner::check_record(&outcome);
+        let detail = rimz::harness::schedule::run_log::check_record(&outcome);
         let output = if outcome.passed() {
             record
                 .verify

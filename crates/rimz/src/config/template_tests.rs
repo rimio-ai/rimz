@@ -135,7 +135,7 @@ fn template_comparison_defaults(mut config: MachineConfig) -> MachineConfig {
     // Scheduled runs apply this effective default only at execution time so a
     // missing value can still participate correctly in layered config.
     config.r#loop.default_timeout =
-        Some(crate::harness::schedule::runner::SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned());
+        Some(crate::harness::schedule::shell_task::SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned());
     config
 }
 

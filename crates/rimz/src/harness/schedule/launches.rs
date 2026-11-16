@@ -189,6 +189,15 @@ pub fn alive<'a>(
     Ok(alive)
 }
 
+/// The room's audit rows, empty while the room has no store.
+pub(super) fn room_agents(state: &StatePaths) -> anyhow::Result<Vec<AgentState>> {
+    let runtime = crate::disk::paths::RuntimePaths::for_state(state)?;
+    Ok(match crate::Store::open_existing(state.clone(), runtime) {
+        Some(store) => store.audit_rows()?.iter().cloned().collect(),
+        None => Vec::new(),
+    })
+}
+
 #[cfg(test)]
 #[path = "launches/tests.rs"]
 mod tests;

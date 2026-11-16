@@ -6,10 +6,9 @@
 
 mod prompt;
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
@@ -19,11 +18,14 @@ use super::{
     backlog_store::{self, LockedBacklog},
     fire::deadline_expired_at,
     fires,
+    launches::room_agents,
     run_control::{
         RunLockAttempt, RunLockGuard, RunLockInfo, acquire_run_lock_file, run_lock_path,
         set_stopped_result, spawn_backlog_drain,
     },
     run_lock::file_name as run_lock_file_name,
+    run_log::check_record,
+    shell_task::command_definition,
     task_record::{self, FireMark},
     task_record_store,
 };
@@ -44,10 +46,7 @@ use crate::ids::{FireId, TaskId};
 use crate::ids::{MessageId, RunId, WorkspaceId};
 use crate::store::workflow::RunFire;
 use crate::store::writer::LaunchLogin;
-use crate::utils::time::parse_compact_duration;
 use crate::workspace::WorkspaceResolver;
-
-pub const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 
 #[derive(Clone, Debug)]
 pub enum TaskFireNotice {
@@ -197,15 +196,6 @@ fn launched_addresses(state: &StatePaths, fire: &FireId) -> Option<String> {
             );
             None
         })
-}
-
-/// The room's audit rows, empty while the room has no store.
-pub(super) fn room_agents(state: &StatePaths) -> Result<Vec<crate::agents::AgentState>> {
-    let runtime = RuntimePaths::for_state(state)?;
-    Ok(match crate::Store::open_existing(state.clone(), runtime) {
-        Some(store) => store.audit_rows()?.iter().cloned().collect(),
-        None => Vec::new(),
-    })
 }
 
 /// One loop fire from ordered gates through one history transition, unless a drain finds no work.
@@ -1822,78 +1812,6 @@ fn fire_tree_room(root: &Path) -> Option<(crate::Store, crate::ResolvedWorkspace
     let store = crate::Store::open_existing(paths, runtime)?;
     let workspace = crate::workspace::WorkspaceResolver::resolve(root, None).ok()?;
     Some((store, workspace))
-}
-
-/// The node a command fire's run starts at and ends on.
-pub const COMMAND_NODE: &str = "command";
-
-/// The inline definition one fire of task `name` runs: a `test` check whose script execs `argv`
-/// under the row's `timeout`, routing a zero exit to `@done` and anything else to `@failed`.
-/// `sh` only execs the argv, every word single-quoted, so each reaches the process as written;
-/// a `command` step would confine every word holding `/` to the definition's directory.
-pub fn command_definition(
-    name: &str,
-    entry: &TaskEntry,
-    argv: &[String],
-) -> Result<crate::harness::workflow::InlineDefinition> {
-    let timeout = entry
-        .timeout
-        .as_deref()
-        .with_context(|| format!("loop task `{name}` has a command without `timeout`"))?;
-    let on = toml::Table::from_iter(
-        [
-            ("pass", "@done"),
-            ("fail", "@failed"),
-            ("timeout", "@failed"),
-            ("died", "@failed"),
-        ]
-        .map(|(outcome, target)| (outcome.to_owned(), toml::Value::from(target))),
-    );
-    let check = toml::Table::from_iter([
-        ("summary".to_owned(), "the task's command".into()),
-        (
-            "shell".to_owned(),
-            format!("exec {}", super::command_line(argv)).into(),
-        ),
-        ("timeout".to_owned(), timeout.into()),
-        ("on".to_owned(), on.into()),
-    ]);
-    let workflow = toml::Table::from_iter([
-        ("summary".to_owned(), format!("loop task {name}").into()),
-        ("scope".to_owned(), "worktree".into()),
-        ("start".to_owned(), COMMAND_NODE.into()),
-    ]);
-    let spec = toml::Table::from_iter([
-        ("workflow".to_owned(), workflow.into()),
-        (
-            "test".to_owned(),
-            toml::Table::from_iter([(COMMAND_NODE.to_owned(), check.into())]).into(),
-        ),
-    ]);
-    Ok(crate::harness::workflow::InlineDefinition {
-        text: toml::to_string(&spec)?,
-        assets: BTreeMap::new(),
-    })
-}
-
-pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
-    CheckRecord {
-        code: outcome.code(),
-        timed_out: outcome.timed_out(),
-        output: outcome.output().to_owned(),
-        output_path: None,
-        duration_ms: None,
-        agent: None,
-    }
-}
-
-pub(super) fn task_timeout(entry: &TaskEntry) -> Result<Option<Duration>> {
-    entry
-        .timeout
-        .as_deref()
-        .map(parse_compact_duration)
-        .transpose()
-        .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
 fn polarity_fires(on: Option<CheckOn>, outcome: &CheckOutcome) -> bool {

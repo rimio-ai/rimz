@@ -19,6 +19,7 @@ use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
 
 use crate::disk::paths::logs_dir;
+use crate::harness::check_run::CheckOutcome;
 use crate::harness::schedule::arming;
 use crate::harness::schedule::catalog::LoadedTask;
 use crate::harness::schedule::run_control::RunLockInfo;
@@ -1051,7 +1052,8 @@ fn command_exit(journal: &[crate::store::workflow::JournalEntry]) -> Option<Chec
             return None;
         };
         let timed_out = outcome == "timeout";
-        if entry.node != super::runner::COMMAND_NODE || !(timed_out || object.get("code").is_some())
+        if entry.node != super::shell_task::COMMAND_NODE
+            || !(timed_out || object.get("code").is_some())
         {
             return None;
         }
@@ -1235,6 +1237,17 @@ pub struct CheckRecord {
     /// Legacy model-check rows only; new fires write the `judge` array.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentCheckRecord>,
+}
+
+pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
+    CheckRecord {
+        code: outcome.code(),
+        timed_out: outcome.timed_out(),
+        output: outcome.output().to_owned(),
+        output_path: None,
+        duration_ms: None,
+        agent: None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
