@@ -7,7 +7,7 @@ use crate::agents::{
     LaunchedBy, PendingWait, PendingWaitClass, PendingWaitTrigger, WorkflowAttemptRef,
     WorkflowAttemptRole,
 };
-use crate::ids::{AgentKind, MuxName, PaneId, WorkflowRunId, WorkspaceId};
+use crate::ids::{AgentKind, FireId, MuxName, PaneId, TaskId, WorkspaceId};
 use crate::sidebar::body_filter::BodyFilter;
 use crate::sidebar::refresh::bookings::{BlockingFacts, FireFacts};
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
@@ -17,15 +17,17 @@ fn now() -> Timestamp {
     "2026-11-13T12:00:00Z".parse().unwrap()
 }
 
-/// The same run id for the same name within one test thread.
-fn run_id(name: &str) -> WorkflowRunId {
+/// The same fire id for the same name within one test thread, every one a fire of one task.
+fn fire_id(name: &str) -> FireId {
     thread_local! {
-        static IDS: std::cell::RefCell<BTreeMap<String, WorkflowRunId>> = Default::default();
+        static TASK: TaskId = TaskId::new();
+        static IDS: std::cell::RefCell<BTreeMap<String, FireId>> = Default::default();
     }
+    let task = TASK.with(Clone::clone);
     IDS.with(|ids| {
         ids.borrow_mut()
             .entry(name.to_owned())
-            .or_insert_with(WorkflowRunId::new)
+            .or_insert_with(|| FireId::new(&task))
             .clone()
     })
 }
@@ -94,11 +96,11 @@ fn facts(task: &str, chain: &[&str]) -> BookingFacts {
     }
 }
 
-fn fired(task: &str, chain: &[&str], run: &str, at: Timestamp) -> BookingFacts {
+fn fired(task: &str, chain: &[&str], fire: &str, at: Timestamp) -> BookingFacts {
     BookingFacts {
         fire: Some(FireFacts {
             at,
-            run: Some(run_id(run)),
+            fire: fire_id(fire),
             ended_at: None,
             pr: BookingPr::Unread,
             team_done: None,
@@ -145,15 +147,11 @@ fn tasks(bookings: &[SidebarBooking]) -> Vec<(&str, BookingBand)> {
         .collect()
 }
 
-fn leader_of(task: &str, run: Option<&str>, registered: Timestamp, id: &str) -> AgentState {
+/// A row the fire `fire` launched: it carries the fire's id.
+fn leader_of(fire: &str, registered: Timestamp, id: &str) -> AgentState {
     AgentState {
-        loop_task: Some(task.to_owned()),
+        loop_fire: Some(fire_id(fire)),
         registered_at: Some(registered),
-        workflow: run.map(|run| WorkflowAttemptRef {
-            run: run_id(run),
-            seq: 1,
-            role: WorkflowAttemptRole::Step,
-        }),
         ..agent(id)
     }
 }
@@ -211,7 +209,7 @@ fn bookings_move_no_status_attention_count_sort_or_wait() {
     };
     let launched = AgentState {
         status: AgentStatus::Failed,
-        ..leader_of("lang", Some("wf_1"), ago(100), "child")
+        ..leader_of("wf_1", ago(100), "child")
     };
     let mut plain = snapshot(vec![waiting, resting, launched]);
     for row in Arc::make_mut(&mut Arc::make_mut(&mut plain.worktree_groups)[0].rows) {
@@ -284,11 +282,14 @@ fn bookings_move_no_status_attention_count_sort_or_wait() {
     );
 }
 
+/// A fire's launch is joined by its fire id alone: a row carrying it is the launch whether or
+/// not a workflow pin is set or cleared, and a row of another fire of the same task, or with
+/// no fire id, is not, whenever it registered.
 #[test]
-fn the_launch_join_survives_a_cleared_workflow_pin() {
-    let detached = leader_of("lang", None, ago(100), "child");
-    let earlier = leader_of("lang", None, ago(900), "stale");
-    let mut fold = snapshot(vec![agent("booker"), detached, earlier]);
+fn the_launch_join_is_the_fire_id_whatever_the_workflow_pin() {
+    let unpinned = leader_of("wf_1", ago(100), "child");
+    let earlier = leader_of("wf_0", ago(900), "stale");
+    let mut fold = snapshot(vec![agent("booker"), earlier, unpinned]);
     attach(
         &mut fold,
         &cache(vec![fired("lang", &["booker"], "wf_1", ago(200))]),
@@ -298,24 +299,46 @@ fn the_launch_join_survives_a_cleared_workflow_pin() {
     };
     assert_eq!(
         fire.live.as_ref().and_then(|live| live.pane.clone()),
-        Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
-        "the pinless leader registered after the fire is the launch; the earlier one is not"
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_2")),
+        "the row carrying the fire's id is the launch; the earlier fire's row is not"
     );
 
-    let mut pinned_elsewhere = snapshot(vec![
-        agent("booker"),
-        leader_of("lang", Some("wf_other"), ago(100), "child"),
-    ]);
+    let pinned = AgentState {
+        workflow: Some(WorkflowAttemptRef {
+            run: crate::ids::WorkflowRunId::new(),
+            seq: 1,
+            role: WorkflowAttemptRole::Step,
+        }),
+        ..leader_of("wf_1", ago(100), "child")
+    };
+    let mut pinned_fold = snapshot(vec![agent("booker"), pinned]);
     attach(
-        &mut pinned_elsewhere,
+        &mut pinned_fold,
         &cache(vec![fired("lang", &["booker"], "wf_1", ago(200))]),
     );
-    let BookingState::Fired(fire) = &on_cards(&pinned_elsewhere)["booker"][0].state else {
+    let BookingState::Fired(fire) = &on_cards(&pinned_fold)["booker"][0].state else {
+        panic!("fired");
+    };
+    assert!(
+        fire.live.is_some(),
+        "a workflow pin does not decide the join"
+    );
+
+    let unstamped = AgentState {
+        loop_fire: None,
+        ..leader_of("wf_1", ago(100), "child")
+    };
+    let mut unstamped_fold = snapshot(vec![agent("booker"), unstamped]);
+    attach(
+        &mut unstamped_fold,
+        &cache(vec![fired("lang", &["booker"], "wf_1", ago(200))]),
+    );
+    let BookingState::Fired(fire) = &on_cards(&unstamped_fold)["booker"][0].state else {
         panic!("fired");
     };
     assert_eq!(
         fire.live, None,
-        "a row pinned to another run is not this launch"
+        "a row registered after the fire without its id is not this launch"
     );
 }
 
@@ -325,12 +348,11 @@ fn a_team_launch_reads_its_cohort_stage_and_focus() {
         team: Some("forge".to_owned()),
         role: Some(role.to_owned()),
         status,
-        ..leader_of("lang", Some("wf_1"), ago(100), id)
+        ..leader_of("wf_1", ago(100), id)
     };
-    let mut planner = team("planner", "planner", AgentStatus::Idle);
+    let planner = team("planner", "planner", AgentStatus::Idle);
     let mut coder = team("coder", "coder", AgentStatus::Waiting);
-    coder.loop_task = None;
-    planner.loop_task = Some("lang".to_owned());
+    coder.loop_fire = None;
     let mut fold = snapshot(vec![agent("booker"), planner, coder]);
     let mut facts = fired("lang", &["booker"], "wf_1", ago(200));
     facts.starts = BookingStarts::Team("forge".to_owned());
@@ -369,12 +391,12 @@ fn order_bands_siblings_and_adoption() {
         agent_id: "c2-session".into(),
         launch_id: Some("c2-ended".into()),
         ended_at: Some(ago(30)),
-        ..leader_of("second", Some("wf_2"), ago(300), "c2-ended")
+        ..leader_of("wf_2", ago(300), "c2-ended")
     };
     let mut fold = snapshot(vec![
         agent("booker"),
-        leader_of("first", Some("wf_1"), ago(500), "c1"),
-        leader_of("second", Some("wf_2"), ago(300), "c2"),
+        leader_of("wf_1", ago(500), "c1"),
+        leader_of("wf_2", ago(300), "c2"),
         c2_ended,
     ]);
     let mut first = fired("first", &["booker"], "wf_1", ago(600));
@@ -492,10 +514,7 @@ fn ended_entries_past_the_newest_five_fold_older_unless_depended_on() {
 
 #[test]
 fn an_ended_launch_with_no_branch_to_read_is_finished() {
-    let mut fold = snapshot(vec![
-        agent("booker"),
-        leader_of("treeless-live", Some("wf_live"), ago(50), "c1"),
-    ]);
+    let mut fold = snapshot(vec![agent("booker"), leader_of("wf_live", ago(50), "c1")]);
     let mut branched = fired("branched", &["booker"], "wf_b", ago(100));
     branched.branch = Some("branched".to_owned());
     branched.worktree = true;
@@ -583,11 +602,11 @@ fn the_renderer_fixture_round_trips_on_a_card_in_band_order() {
 fn fired_launching(
     task: &str,
     chain: &[&str],
-    run: &str,
+    fire: &str,
     at: Timestamp,
     launches: &[&str],
 ) -> BookingFacts {
-    let mut facts = fired(task, chain, run, at);
+    let mut facts = fired(task, chain, fire, at);
     facts.fire.as_mut().unwrap().launches = launches.iter().map(|id| (*id).to_owned()).collect();
     facts
 }
@@ -599,7 +618,7 @@ fn fired_launching(
 fn adoption_follows_the_fire_that_launched_the_booker_at_every_depth_and_once() {
     let mut fold = snapshot(vec![
         agent("booker"),
-        leader_of("z", Some("wf_z"), ago(300), "z-agent"),
+        leader_of("wf_z", ago(300), "z-agent"),
     ]);
     attach(
         &mut fold,
@@ -869,8 +888,8 @@ fn a_team_focus_tie_picks_the_pane_rimz_teams_focus_picks() {
         team: Some("forge".to_owned()),
         role: Some(role.to_owned()),
         status: AgentStatus::Idle,
-        loop_task: task.map(str::to_owned),
-        ..leader_of("lang", Some("wf_1"), ago(100), id)
+        loop_fire: task.map(|_| fire_id("wf_1")),
+        ..leader_of("wf_1", ago(100), id)
     };
     let agents = vec![
         agent("booker"),

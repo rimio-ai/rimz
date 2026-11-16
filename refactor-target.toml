@@ -2601,21 +2601,6 @@ reason = "The read-only, path-explicit verdict reader the sidebar calls once per
 
 [[verdict]]
 kind = "item"
-key = "harness::loop_task::FireLaunch"
-reason = "A booked row's command read as the launch it types: doorway, target, worktree and detach, for the sidebar's bookings lane."
-
-[[verdict]]
-kind = "item"
-key = "harness::loop_task::LaunchTree"
-reason = "The worktree a booked launch asks for, named or generated, from which the bookings lane reads its destination branch."
-
-[[verdict]]
-kind = "item"
-key = "harness::loop_task::read_fire_launch"
-reason = "The one reading of a loop command as an agent or team launch; the CLI's parser tests pin it to clap, and an argv it cannot read whole is no booking."
-
-[[verdict]]
-kind = "item"
 key = "harness::schedule::attention::read_catalog"
 reason = "read_room over a catalog the caller already loaded, so the bookings lane reads the loop's verdicts without a second load."
 
@@ -5819,7 +5804,7 @@ path = "crates/rimz/src/harness/loop_task.rs"
 # Leaf in the sidebar import graph holding the loop fire's environment keys.
 # LOOP_BOOKED_BY_ENV carries the firing task's booking chain beside it (+1).
 # LOOP_TRIGGER_ENV carries what fired the run to its command and the launches under it (+1).
-# FireLaunch, LaunchTree and read_fire_launch read a booked row's command as the agent or team launch it types, for the sidebar's bookings lane (+3).
+# The bookings lane reads a booking's declared kind and target, so the reader of a booked row's command as a launch is gone.
 allowed-dependencies = [
     "agents",
     "harness::launch",
@@ -5827,7 +5812,7 @@ allowed-dependencies = [
 ]
 # LOOP_FIRE_ENV spells the fire id a shell command's environment carries (+1).
 # FireEnv and read_fire_env are the one reading of that environment a launch entry stamps from, guarded on no agent identity (+2).
-surface-budget = 9
+surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/harness/name.rs"
@@ -6373,7 +6358,7 @@ reason = "Shared fire/heard partition returned to the loop CLI."
 [[verdict]]
 kind = "item"
 key = "harness::schedule::run_log::QuietFires"
-reason = "A task's quiet-fire summary (count, streak, last row), read from loop-fires.json and rendered by loop list, show and logs."
+reason = "A task's quiet-fire summary (count, streak, last row), kept on its task record and rendered by loop list, show and logs."
 
 [[verdict]]
 kind = "item"
@@ -6438,7 +6423,7 @@ reason = "Supervised verify must cancel on a caught SIGTERM, not re-prompt as it
 [[verdict]]
 kind = "item"
 key = "harness::check_run::cancel_run_on_sigterm"
-reason = "Loop-owned supervised waits share the check driver's SIGTERM bookkeeping to cancel durably without overriding its conditional default."
+reason = "A fire-stamped foreground `-p` wait shares the check driver's SIGTERM bookkeeping to cancel its run durably without overriding its conditional default."
 
 [[verdict]]
 kind = "item"
@@ -11983,7 +11968,7 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 [[verdict]]
 kind = "item"
 key = "store::workflow::RunRecord::started_by"
-reason = "The loop selector and locked rename share one predicate for a task's live workflow runs."
+reason = "The loop selector, the runner, the verdict and the locked removal share one predicate for a task's live workflow runs."
 
 [[verdict]]
 kind = "item"
