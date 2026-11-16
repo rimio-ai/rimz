@@ -852,8 +852,8 @@ impl Transition<'_> {
     }
 
     /// Settle a judge whose ending was staged and whose agent was stopped: by its answer, by
-    /// the failure or engine route its ending raises, or by the route, cancel or deadline that
-    /// ended it. The Evaluation entries it writes carry the judge's cost.
+    /// the failure its ending raises, or by the route, cancel or deadline that ended it. The
+    /// Evaluation entries it writes carry the judge's cost.
     fn settle_judge(
         &mut self,
         attempt: LiveAttempt,
@@ -901,60 +901,35 @@ impl Transition<'_> {
                 .check(&node)
                 .and_then(super::Node::timeout)
                 .map(super::definition::Parsed::text);
-            self.check_failure(
-                seq,
-                Some(Cause::Timeout),
-                format!(
-                    "{node} ran past its timeout {}",
-                    timeout.unwrap_or_default()
-                ),
-                json!({}),
-                None,
-            )?;
+            let mut reason = format!(
+                "{node} ran past its timeout {}",
+                timeout.unwrap_or_default()
+            );
+            let (stopped_on, detail) = failure_evidence(evidence);
+            if let Some(stopped_on) = stopped_on {
+                reason = format!("{reason} {stopped_on}");
+            }
+            self.check_failure(seq, Some(Cause::Timeout), reason, detail, None)?;
         } else if let Some(answer) = answer.filter(|_| ending.outcome == AttemptOutcome::Ended) {
             self.finish_check(seq, Ok(answer), json!({}), None)?;
-        } else if matches!(
-            ending.outcome,
-            AttemptOutcome::Asked | AttemptOutcome::Errored
-        ) {
-            let outcome = ending.outcome.as_str();
-            // The staged ending is this judge's own, checked above.
-            let attempt = self.record.attempt.take().expect("current judge attempt");
-            let object = self.engine_object(evidence);
-            self.push(
-                Some(seq),
-                JournalEvent::Evaluation {
-                    origin: EvaluationOrigin::Engine,
-                    outcome: outcome.into(),
-                    cost_usd: None,
-                    object: object.clone(),
-                    digests: attempt.digests,
-                    started_at: attempt.started_at,
-                    ended_at: self.now,
-                    stderr_tail: None,
-                },
-            );
-            // As a step's: admission refuses `@user` on these routes, so neither parks.
-            self.engine_route(
-                outcome,
-                object,
-                &self.spec.engine_target(&node, outcome),
-                ParkReason::Asked,
-            )?;
         } else if ending.outcome == AttemptOutcome::Canceled {
             // Its session was closed under it: the next pass evaluates the check afresh.
             self.abandon_check("canceled");
         } else {
-            let cause = if ending.outcome == AttemptOutcome::Limited {
-                Cause::Limited
-            } else {
-                Cause::Died
+            // No judge stages an ask; an older RimZ's staged ask ends the run as a misfit before
+            // it settles here, since validation refuses a judge's `on.asked`.
+            let cause = match ending.outcome {
+                AttemptOutcome::Limited => Cause::Limited,
+                AttemptOutcome::Errored => Cause::Errored,
+                _ => Cause::Died,
             };
-            let reason = reason.unwrap_or_else(|| match cause {
+            let (staged, detail) = failure_evidence(evidence);
+            let reason = reason.or(staged).unwrap_or_else(|| match cause {
                 Cause::Limited => "a provider limit or budget stopped the judge".into(),
+                Cause::Errored => "the judge's turn ended on a provider error".into(),
                 _ => "the judge's session ended without an answer".into(),
             });
-            self.check_failure(seq, Some(cause), reason, evidence, None)?;
+            self.check_failure(seq, Some(cause), reason, detail, None)?;
         }
         for entry in &mut self.entries[from..] {
             if entry.seq == Some(seq)
@@ -1251,19 +1226,17 @@ impl Transition<'_> {
     }
 }
 
-/// What a judge's staged ending hands its settlement: the input its `asked` or `errored`
-/// route carries, or the reset a limit named.
+/// What a judge's staged ending hands its settlement: for an errored turn the provider's text
+/// and the turn, for a timeout what the judge was stopped on when it passed, and the reset a
+/// limit named.
 fn judge_evidence(outcome: AttemptOutcome, observed: &super::Observed) -> Option<Value> {
     match outcome {
-        AttemptOutcome::Asked => observed
-            .ask
-            .as_ref()
-            .map(|asking| json!({"outcome":"asked", "reason":asking.ask.text, "asked":asking.ask})),
         AttemptOutcome::Errored => observed
             .errored
             .as_ref()
             .and_then(super::Stopped::errored)
-            .map(|errored| json!({"outcome":"errored", "reason":errored.text, "errored":errored})),
+            .map(|errored| json!({"reason":errored.text, "errored":errored})),
+        AttemptOutcome::Timeout => stopped_evidence(observed),
         AttemptOutcome::Limited => observed
             .limited
             .as_ref()
@@ -1271,6 +1244,85 @@ fn judge_evidence(outcome: AttemptOutcome, observed: &super::Observed) -> Option
             .map(|reset_at| json!({"reset_at":reset_at})),
         _ => None,
     }
+}
+
+/// What a judge was stopped on as its timeout passed, as the words its failure's reason ends
+/// with and the members its detail carries: an ask ahead of any other stop, as the hold orders
+/// them, then the leader's own errored turn or the merged stop; none when nothing stopped it.
+/// A limit carries its reset only when the reset was read from the agent the stop names.
+fn stopped_evidence(observed: &super::Observed) -> Option<Value> {
+    use super::StopKind;
+    if let Some(asking) = &observed.ask {
+        let ask = &asking.ask;
+        let asked = match ask.kind.as_str() {
+            "permission" => "for permission",
+            "plan_approval" => "for plan approval",
+            _ => "a question",
+        };
+        let reason = format!("while {} asked {asked}: {}", ask.handle, ask.text);
+        return Some(json!({"reason":reason, "asked":ask}));
+    }
+    let stopped = observed
+        .errored
+        .as_ref()
+        .or(observed.stopped.as_ref())
+        .filter(|stopped| stopped.kind != StopKind::Interrupt)?;
+    let who = stopped.handle.as_deref().unwrap_or("the judge");
+    let mut members = serde_json::Map::new();
+    let (kind, noun) = match stopped.kind {
+        StopKind::Budget => ("budget", "budget"),
+        StopKind::Limit => ("limit", "provider limit"),
+        StopKind::Error | StopKind::Interrupt => ("error", "provider error"),
+    };
+    let mut reason = match stopped.kind {
+        StopKind::Budget => format!("while {who} was parked on its budget"),
+        _ => format!("while {who} was stopped on a {noun}"),
+    };
+    members.insert("kind".into(), kind.into());
+    if let Some(handle) = &stopped.handle {
+        members.insert("handle".into(), handle.as_str().into());
+    }
+    if let Some(class) = stopped.class {
+        members.insert("class".into(), json!(class));
+        if class.words() != noun {
+            reason = format!("{reason} ({})", class.words());
+        }
+    }
+    if let Some(text) = &stopped.text {
+        members.insert("text".into(), text.as_str().into());
+        reason = format!("{reason}: {text}");
+    }
+    let mut evidence = json!({"stopped":members});
+    let reset_at = observed
+        .limited
+        .as_ref()
+        .and_then(|limited| limited.reset_at)
+        .filter(|_| {
+            stopped.kind == StopKind::Limit
+                && observed.limited_by.is_some()
+                && observed.limited_by == stopped.handle
+        });
+    if let Some(reset_at) = reset_at {
+        evidence["reset_at"] = json!(reset_at);
+        reason = format!("{reason} (resets {reset_at})");
+    }
+    evidence["reason"] = reason.into();
+    Some(evidence)
+}
+
+/// A judge's staged evidence as its failure's reason words and detail: the `reason` it names,
+/// and its other members. An older RimZ's errored evidence also carries the `outcome` its route
+/// took, which no failure detail holds.
+fn failure_evidence(evidence: Value) -> (Option<String>, Value) {
+    let Value::Object(mut members) = evidence else {
+        return (None, json!({}));
+    };
+    members.remove("outcome");
+    let reason = match members.remove("reason") {
+        Some(Value::String(reason)) => Some(reason),
+        _ => None,
+    };
+    (reason, Value::Object(members))
 }
 
 fn case_index(object: &Value) -> Option<u32> {

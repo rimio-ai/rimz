@@ -210,145 +210,431 @@ fn a_judge_resting_without_an_answer_is_reminded_once_and_never_before_its_first
     assert_eq!(advanced(&state, &record, &host).state, RunState::Active);
 }
 
-#[test]
-fn a_judges_timeout_runs_from_its_launch_and_pauses_while_it_is_held() {
-    let (_dir, state, record) = setup(JUDGE);
-    let host = FakeHost::new();
-    let mut live = launched(&state, &record, &host);
-    let attempt = live.attempt.as_mut().unwrap();
-    attempt.started_at -= jiff::SignedDuration::from_mins(90);
-    // Held for an hour of it: half an hour of its clock remains.
-    attempt.asked_ms = 3_600_000;
-    update(&state, &live);
-    let at = timeout_at(
-        &spec::load(&live.definition_dir(&state.workflow(&live.id))).unwrap(),
-        &live,
-    )
-    .unwrap()
-    .unwrap();
-    let remaining = at.duration_since(jiff::Timestamp::now());
-    assert!(
-        remaining > jiff::SignedDuration::from_mins(29)
-            && remaining <= jiff::SignedDuration::from_mins(30),
-        "{remaining}"
-    );
-    live.attempt.as_mut().unwrap().asked_ms = 0;
-    update(&state, &live);
-    let ended = advanced(&state, &record, &host);
-    assert_eq!(ended.state, RunState::Failed, "{ended:#?}");
-    assert!(
-        evaluations(&state, &record)
-            .iter()
-            .any(|(origin, outcome)| *origin == EvaluationOrigin::Engine && outcome == "timeout"),
-        "{:#?}",
-        evaluations(&state, &record)
-    );
-    assert_eq!(host.stops.get(), 1);
+/// The input of the failure route the run journaled under `cause`, if it took one.
+fn failure_input(state: &StatePaths, record: &RunRecord, cause: &str) -> Option<Value> {
+    records::journal(&state.workflow(&record.id))
+        .unwrap()
+        .into_iter()
+        .find_map(|entry| match entry.event {
+            JournalEvent::Route { outcome, input, .. } if outcome == cause => Some(input),
+            _ => None,
+        })
+}
 
-    // A judge held on a provider limit has no timeout, and the run's deadline still fires.
+/// The run's journal as its readers project it at the judge: each route hop out of `review` by
+/// its outcome and target, and each evaluation's routed target.
+fn judge_hops(state: &StatePaths, record: &RunRecord) -> (Vec<(String, String)>, Vec<bool>) {
+    use crate::harness::workflow::inspect::{HopKind, evaluation_target, hops};
+    let paths = state.workflow(&record.id);
+    let journal = records::journal(&paths).unwrap();
+    let spec = spec::load(&record.definition_dir(&paths)).unwrap();
+    let routes = hops(&spec, &journal, None)
+        .into_iter()
+        .filter(|hop| hop.node == "review" && hop.kind == HopKind::Route)
+        .map(|hop| {
+            (
+                hop.outcome.unwrap_or_default(),
+                hop.target
+                    .map(|target| target.as_str().to_owned())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
+    let evaluations = journal
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| {
+            entry.node == "review" && matches!(entry.event, JournalEvent::Evaluation { .. })
+        })
+        .map(|(index, entry)| {
+            evaluation_target(&spec, entry, &journal[index + 1..], None).is_some()
+        })
+        .collect();
+    (routes, evaluations)
+}
+
+/// What the judge's pane shows it stopped on at the next observation.
+#[derive(Clone, Copy, Debug)]
+enum Stop {
+    Nothing,
+    LeaderAsks,
+    /// Its subagent asks while the judge is also stopped on a limit.
+    SubagentAsks,
+    Limit,
+    /// Its subagent hit a limit before the judge hit its own, whose reset is the one read.
+    ChildLimitFirst,
+    Budget,
+    Errored,
+}
+
+fn stops_on(host: &FakeHost, stop: Stop) {
+    use crate::agents::TurnErrorClass;
+    use crate::harness::workflow::{StopKind, Stopped};
+    use crate::store::workflow::{Asked, Asking, Limited};
+    let now = jiff::Timestamp::now();
+    let asks = |handle: &str| Asking {
+        since: now,
+        ask: Asked {
+            text: "Which branch?".into(),
+            kind: "question".into(),
+            handle: handle.into(),
+        },
+    };
+    let stopped = |kind, class, text: Option<&str>| Stopped {
+        since: now,
+        kind,
+        handle: Some("@judge".into()),
+        class,
+        text: text.map(str::to_owned),
+    };
+    let limit = stopped(
+        StopKind::Limit,
+        Some(TurnErrorClass::PausedRateLimit),
+        Some("usage limit"),
+    );
+    let mut observed = host.observed.borrow_mut();
+    match stop {
+        Stop::Nothing => {}
+        Stop::LeaderAsks => observed.ask = Some(asks("@judge")),
+        Stop::SubagentAsks => {
+            observed.ask = Some(asks("@scout"));
+            observed.stopped = Some(limit);
+        }
+        Stop::Limit | Stop::ChildLimitFirst => {
+            observed.stopped = Some(Stopped {
+                handle: Some(
+                    if matches!(stop, Stop::Limit) {
+                        "@judge"
+                    } else {
+                        "@child"
+                    }
+                    .into(),
+                ),
+                ..limit
+            });
+            observed.limited = Some(Limited {
+                reset_at: Some(RESET.parse().unwrap()),
+            });
+            observed.limited_by = Some("@judge".into());
+        }
+        Stop::Budget => observed.stopped = Some(stopped(StopKind::Budget, None, None)),
+        Stop::Errored => {
+            // The leader's own errored turn is also the merged stop.
+            let error = stopped(
+                StopKind::Error,
+                Some(TurnErrorClass::Failed),
+                Some("API Error: 500"),
+            );
+            observed.stopped = Some(error.clone());
+            observed.errored = Some(error);
+        }
+    }
+}
+
+const RESET: &str = "2026-11-16T18:00:00Z";
+
+/// Push the live judge's launch `minutes` into the past.
+fn launched_ago(state: &StatePaths, record: &RunRecord, minutes: i64) {
+    let mut live = records::load(&state.workflow(&record.id)).unwrap();
+    live.attempt.as_mut().unwrap().started_at -= jiff::SignedDuration::from_mins(minutes);
+    update(state, &live);
+}
+
+/// The reason and detail of a judge's `timeout` failure while it was stopped on `stop`.
+fn timed_out(stop: Stop) -> (String, Value) {
+    let past = "review ran past its timeout 1h";
+    let asked = |handle: &str| {
+        (
+            format!("{past} while {handle} asked a question: Which branch?"),
+            json!({"asked":{"text":"Which branch?", "kind":"question", "handle":handle}}),
+        )
+    };
+    match stop {
+        Stop::Nothing => (past.to_owned(), json!({})),
+        Stop::LeaderAsks => asked("@judge"),
+        Stop::SubagentAsks => asked("@scout"),
+        Stop::Limit => (
+            format!(
+                "{past} while @judge was stopped on a provider limit (rate limit): usage limit \
+                 (resets {RESET})"
+            ),
+            json!({
+                "stopped":{"kind":"limit", "handle":"@judge", "class":"paused_rate_limit",
+                    "text":"usage limit"},
+                "reset_at":RESET,
+            }),
+        ),
+        Stop::ChildLimitFirst => (
+            format!(
+                "{past} while @child was stopped on a provider limit (rate limit): usage limit"
+            ),
+            json!({
+                "stopped":{"kind":"limit", "handle":"@child", "class":"paused_rate_limit",
+                    "text":"usage limit"},
+            }),
+        ),
+        Stop::Budget => (
+            format!("{past} while @judge was parked on its budget"),
+            json!({"stopped":{"kind":"budget", "handle":"@judge"}}),
+        ),
+        Stop::Errored => (
+            format!("{past} while @judge was stopped on a provider error: API Error: 500"),
+            json!({"stopped":{"kind":"error", "handle":"@judge", "class":"failed",
+                "text":"API Error: 500"}}),
+        ),
+    }
+}
+
+/// The judge's `timeout` failure input while it was stopped on `stop`.
+fn timeout_input(stop: Stop) -> Value {
+    let (reason, detail) = timed_out(stop);
+    json!({
+        "outcome":"failed", "cause":"timeout", "node":"review", "reason":reason, "detail":detail,
+    })
+}
+
+/// The judge's `errored` failure input.
+fn errored_input() -> Value {
+    json!({
+        "outcome":"failed", "cause":"errored", "node":"review", "reason":"API Error: 500",
+        "detail":{"errored":{"text":"API Error: 500", "class":"failed", "handle":"@judge"}},
+    })
+}
+
+#[test]
+fn a_judges_timeout_runs_from_its_launch_while_it_asks_or_is_held_and_names_its_stop() {
+    for (stop, shown) in [
+        (Stop::Nothing, (false, false)),
+        (Stop::LeaderAsks, (true, false)),
+        (Stop::SubagentAsks, (true, true)),
+        (Stop::Limit, (false, true)),
+        (Stop::ChildLimitFirst, (false, true)),
+        (Stop::Budget, (false, true)),
+    ] {
+        let (_dir, state, record) = setup(JUDGE);
+        let host = FakeHost::new();
+        launched(&state, &record, &host);
+        stops_on(&host, stop);
+        let mut live = advanced(&state, &record, &host);
+        let spec = spec::load(&live.definition_dir(&state.workflow(&live.id))).unwrap();
+        let attempt = live
+            .attempt
+            .as_ref()
+            .expect("a stopped judge stays in its pane");
+        assert_eq!(
+            (attempt.asking.is_some(), attempt.held_on.is_some()),
+            shown,
+            "{stop:?}: {live:#?}"
+        );
+        assert_eq!(
+            timeout_at(&spec, &live).unwrap(),
+            Some(attempt.started_at + jiff::SignedDuration::from_hours(1)),
+            "{stop:?}: nothing the judge is stopped on pauses its clock"
+        );
+        // An hour and a half in, whatever held time an older RimZ credited it.
+        let attempt = live.attempt.as_mut().unwrap();
+        attempt.started_at -= jiff::SignedDuration::from_mins(90);
+        attempt.asked_ms = 3_600_000;
+        update(&state, &live);
+        let ended = advanced(&state, &record, &host);
+        assert_eq!(ended.state, RunState::Failed, "{stop:?}: {ended:#?}");
+        assert_eq!(host.stops.get(), 1, "{stop:?}");
+        let input = failure_input(&state, &record, "timeout").expect("a timeout failure");
+        let (reason, detail) = timed_out(stop);
+        assert_eq!(
+            (&input["reason"], &input["detail"]),
+            (&json!(reason), &detail),
+            "{stop:?}"
+        );
+        assert_eq!(
+            judge_hops(&state, &record),
+            (vec![("timeout".into(), "@failed".into())], vec![true]),
+            "{stop:?}"
+        );
+    }
+
+    // The run's deadline still fires while the judge is held.
     let (_dir, state, record) = setup(JUDGE);
     let host = FakeHost::new();
     launched(&state, &record, &host);
-    {
-        let mut observed = host.observed.borrow_mut();
-        observed.status = crate::store::run::RunStatus::Pending;
-        observed.stopped = Some(crate::harness::workflow::Stopped {
-            since: jiff::Timestamp::now(),
-            kind: crate::harness::workflow::StopKind::Limit,
-            handle: Some("@judge".into()),
-            class: None,
-            text: Some("usage limit".into()),
-        });
-    }
+    stops_on(&host, Stop::Limit);
     let mut held = advanced(&state, &record, &host);
     assert!(
         held.attempt.as_ref().unwrap().held_since.is_some(),
         "{held:#?}"
-    );
-    let spec = spec::load(&held.definition_dir(&state.workflow(&held.id))).unwrap();
-    assert_eq!(
-        timeout_at(&spec, &held).unwrap(),
-        None,
-        "a held judge's clock is paused"
     );
     held.deadline = Some(jiff::Timestamp::now());
     update(&state, &held);
     let ended = advanced(&state, &record, &host);
     assert_eq!(ended.state, RunState::Failed, "{ended:#?}");
     assert!(
-        records::journal(&state.workflow(&record.id))
-            .unwrap()
-            .iter()
-            .any(|entry| matches!(
-                &entry.event,
-                JournalEvent::Route { outcome, .. } if outcome == "deadline"
-            )),
+        failure_input(&state, &record, "deadline").is_some(),
         "the run deadline fires while the judge is held"
     );
 }
 
-/// The judge's pane shows an ask, or its leader's own errored turn, at the next observation.
-fn stops_on(host: &FakeHost, outcome: &str) {
-    use crate::harness::workflow::{StopKind, Stopped};
-    use crate::store::workflow::{Asked, Asking};
-    if outcome == "asked" {
-        host.observed.borrow_mut().ask = Some(Asking {
-            since: jiff::Timestamp::now(),
-            ask: Asked {
-                text: "Which branch?".into(),
-                kind: "question".into(),
-                handle: "@builder".into(),
-            },
-        });
-        return;
-    }
-    // The leader's own errored turn is also the merged stop.
-    let stop = Stopped {
-        since: jiff::Timestamp::now(),
-        kind: StopKind::Error,
-        handle: Some("@builder".into()),
-        class: Some(crate::agents::TurnErrorClass::Failed),
-        text: Some("API Error: 500".into()),
-    };
-    let mut observed = host.observed.borrow_mut();
-    observed.stopped = Some(stop.clone());
-    observed.errored = Some(stop);
+#[test]
+fn an_ask_leaves_a_judge_in_its_pane_until_it_submits_its_answer() {
+    let (_dir, state, record) = setup(JUDGE);
+    let host = FakeHost::new();
+    let live = launched(&state, &record, &host);
+    stops_on(&host, Stop::LeaderAsks);
+    let asking = advanced(&state, &record, &host);
+    assert!(
+        asking.attempt.as_ref().unwrap().asking.is_some(),
+        "{asking:#?}"
+    );
+    assert_eq!(host.stops.get(), 0);
+    // Answered in its pane, the judge goes on to submit.
+    host.observed.borrow_mut().ask = None;
+    let seq = live.attempt.as_ref().unwrap().seq;
+    submit(&state, &record.id, seq, answer("pass", json!({})), None).unwrap();
+    let ended = advanced(&state, &record, &host);
+    assert_eq!(ended.state, RunState::Done, "{ended:#?}");
+    assert!(evaluations(&state, &record).contains(&(EvaluationOrigin::Check, "pass".into())));
 }
 
 #[test]
-fn an_ask_or_error_holds_a_judge_unless_the_check_routes_it() {
-    for (outcome, routes) in [
-        ("asked", false),
-        ("asked", true),
-        ("errored", false),
-        ("errored", true),
+fn a_judges_errored_turn_fails_it_at_once_through_the_failure_chain() {
+    let routes = |on: &str| JUDGE.replace("fail='fix'", &format!("fail='fix',{on}"));
+    let header = JUDGE.replace("start='review'\n", "start='review'\non.failed='@done'\n");
+    for (text, node, state_after, target) in [
+        (
+            routes("errored='@done',failed='fix'"),
+            "review",
+            RunState::Done,
+            "@done",
+        ),
+        (routes("failed='fix'"), "fix", RunState::Active, "fix"),
+        (header, "review", RunState::Done, "@done"),
+        (JUDGE.to_owned(), "review", RunState::Failed, "@failed"),
     ] {
-        let text = if routes {
-            JUDGE.replace("fail='fix'", &format!("fail='fix',{outcome}='fix'"))
-        } else {
-            JUDGE.to_owned()
-        };
         let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();
         launched(&state, &record, &host);
-        stops_on(&host, outcome);
-        let after = advanced(&state, &record, &host);
-        if !routes {
-            let attempt = after.attempt.as_ref().expect("a held judge stays live");
-            assert!(attempt.held_since.is_some(), "{outcome}: {after:#?}");
-            assert_eq!(host.stops.get(), 0, "{outcome}");
-            continue;
+        stops_on(&host, Stop::Errored);
+        let ended = advanced(&state, &record, &host);
+        assert_eq!(
+            (ended.node.as_str(), ended.state),
+            (node, state_after),
+            "{text}"
+        );
+        assert_eq!(host.stops.get(), 1, "{text}");
+        assert_eq!(
+            failure_input(&state, &record, "errored"),
+            Some(errored_input()),
+            "{text}"
+        );
+        assert!(
+            evaluations(&state, &record).contains(&(EvaluationOrigin::Engine, "errored".into())),
+            "{text}"
+        );
+        assert_eq!(
+            judge_hops(&state, &record),
+            (vec![("errored".into(), target.into())], vec![true]),
+            "{text}"
+        );
+    }
+}
+
+/// A timeout that has passed wins over the errored turn the same advance observes: the judge
+/// fails `timeout`, naming the provider error it was stopped on, and routes no `errored`.
+#[test]
+fn a_judges_timeout_wins_over_an_errored_turn_seen_at_the_same_advance() {
+    let (_dir, state, record) = setup(JUDGE);
+    let host = FakeHost::new();
+    launched(&state, &record, &host);
+    launched_ago(&state, &record, 90);
+    stops_on(&host, Stop::Errored);
+    let ended = advanced(&state, &record, &host);
+    assert_eq!(ended.state, RunState::Failed, "{ended:#?}");
+    assert_eq!(
+        failure_input(&state, &record, "timeout"),
+        Some(timeout_input(Stop::Errored))
+    );
+    assert_eq!(failure_input(&state, &record, "errored"), None);
+    assert_eq!(
+        judge_hops(&state, &record),
+        (vec![("timeout".into(), "@failed".into())], vec![true])
+    );
+}
+
+/// Stage the judge's ending the way a pass whose stop failed leaves it, by a process that has
+/// since exited.
+fn staged(state: &StatePaths, record: &RunRecord, stop: Stop) {
+    let host = FakeHost::new();
+    launched(state, record, &host);
+    if matches!(stop, Stop::Limit) {
+        launched_ago(state, record, 90);
+    }
+    stops_on(&host, stop);
+    host.stop_error.set(true);
+    assert!(advance(state, &record.id, &host).is_err(), "{stop:?}");
+    dead_host(state, record);
+}
+
+fn dead_host(state: &StatePaths, record: &RunRecord) {
+    let mut staged = records::load(&state.workflow(&record.id)).unwrap();
+    let attempt = staged.attempt.as_mut().unwrap();
+    assert!(attempt.ending.is_some(), "{staged:#?}");
+    attempt.host = records::Host {
+        pid: u32::MAX,
+        start: None,
+    };
+    update(state, &staged);
+}
+
+/// A judge's `errored` and stopped `timeout` endings settle alike whoever settles them: the
+/// pass that staged them, with a second advance landing while it stops the judge, and the
+/// dead-host reclaim of a pass that died before settling. A cancel over either staged ending
+/// ends the run canceled instead.
+#[test]
+fn every_settler_settles_a_judges_errored_and_stopped_timeout_endings_alike() {
+    for (stop, cause) in [(Stop::Errored, "errored"), (Stop::Limit, "timeout")] {
+        let expected = if cause == "errored" {
+            errored_input()
+        } else {
+            timeout_input(stop)
+        };
+
+        let (_dir, state, record) = setup(JUDGE);
+        let host = FakeHost::new();
+        launched(&state, &record, &host);
+        if cause == "timeout" {
+            launched_ago(&state, &record, 90);
         }
-        assert_eq!(after.node, "fix", "{outcome}: {after:#?}");
-        assert_eq!(after.input.as_ref().unwrap()["outcome"], outcome);
-        assert!(
-            after.prev_attempt.is_none(),
-            "a judge's ending is not a step's previous attempt"
+        stops_on(&host, stop);
+        let (second, id) = (state.clone(), record.id.clone());
+        *host.on_stop.borrow_mut() = Some(Box::new(move || {
+            advance(&second, &id, &FakeHost::new()).unwrap();
+        }));
+        assert_eq!(advanced(&state, &record, &host).state, RunState::Failed);
+        assert_eq!(
+            failure_input(&state, &record, cause),
+            Some(expected.clone()),
+            "{stop:?}: settled by its own pass"
         );
-        assert!(
-            evaluations(&state, &record).contains(&(EvaluationOrigin::Engine, outcome.to_owned())),
-            "{outcome}"
+
+        let (_dir, state, record) = setup(JUDGE);
+        staged(&state, &record, stop);
+        let ended = advanced(&state, &record, &FakeHost::new());
+        assert_eq!(ended.state, RunState::Failed, "{stop:?}: {ended:#?}");
+        assert_eq!(
+            failure_input(&state, &record, cause),
+            Some(expected),
+            "{stop:?}: settled by the dead-host reclaim"
         );
+
+        let (_dir, state, record) = setup(JUDGE);
+        staged(&state, &record, stop);
+        assert!(cancel(&state, &record.id, &FakeHost::new(), None).unwrap());
+        let canceled = records::load(&state.workflow(&record.id)).unwrap();
+        assert_eq!(
+            canceled.state,
+            RunState::Canceled,
+            "{stop:?}: {canceled:#?}"
+        );
+        assert_eq!(failure_input(&state, &record, cause), None, "{stop:?}");
     }
 }
 
@@ -598,38 +884,48 @@ fn a_dead_launchers_unpublished_judge_is_found_by_its_judge_pin_and_stopped() {
     assert_eq!(died, Some(Some(0.5)));
 }
 
-/// A pass that staged a judge's routed ask or error died before settling it, and an edit then
-/// removed that route: the run ends as a misfit instead of routing by the old graph.
+/// A judge ending an older RimZ staged and did not settle: its routed ask, whose route the
+/// author has since removed, ends the run as a misfit, and its routed errored turn settles as
+/// the `errored` failure.
 #[test]
-fn a_staged_judge_ending_whose_route_an_edit_removed_ends_the_run_as_a_misfit() {
-    for outcome in ["asked", "errored"] {
-        let (_dir, state, record) =
-            setup(&JUDGE.replace("fail='fix'", &format!("fail='fix',{outcome}='fix'")));
-        let host = FakeHost::new();
-        launched(&state, &record, &host);
-        stops_on(&host, outcome);
-        host.stop_error.set(true);
-        assert!(advance(&state, &record.id, &host).is_err(), "{outcome}");
-        let mut staged = records::load(&state.workflow(&record.id)).unwrap();
-        let attempt = staged.attempt.as_mut().unwrap();
-        assert!(attempt.ending.is_some(), "{outcome}: {staged:#?}");
-        // The process that staged the ending and failed its stop has exited.
-        attempt.host = records::Host {
-            pid: u32::MAX,
-            start: None,
-        };
-        update(&state, &staged);
-        fs::write(super::attempts::definition_file(&record), JUDGE).unwrap();
-        let ended = advanced(&state, &record, &host);
-        assert_eq!(ended.state, RunState::Failed, "{outcome}: {ended:#?}");
-        let reason = format!(
-            "review: the workflow definition changed under the run: it no longer routes {outcome}"
-        );
-        assert_eq!(
-            ended.outcome.as_ref().unwrap().reason.as_deref(),
-            Some(reason.as_str()),
-            "{ended:#?}"
-        );
+fn an_older_rimzs_staged_judge_ask_ends_as_a_misfit_and_its_errored_turn_as_the_failure() {
+    use crate::store::workflow::{EndCause, Ending};
+    for outcome in [AttemptOutcome::Asked, AttemptOutcome::Errored] {
+        let (_dir, state, record) = setup(JUDGE);
+        let mut live = launched(&state, &record, &FakeHost::new());
+        let attempt = live.attempt.as_mut().unwrap();
+        attempt.ending = Some(Ending {
+            outcome,
+            cause: EndCause::Lifecycle,
+            route: None,
+            reason: None,
+        });
+        attempt.evidence = Some(if outcome == AttemptOutcome::Asked {
+            json!({"outcome":"asked", "reason":"Which branch?",
+                "asked":{"text":"Which branch?", "kind":"question", "handle":"@judge"}})
+        } else {
+            json!({"outcome":"errored", "reason":"API Error: 500",
+                "errored":{"text":"API Error: 500", "class":"failed", "handle":"@judge"}})
+        });
+        update(&state, &live);
+        dead_host(&state, &record);
+        let ended = advanced(&state, &record, &FakeHost::new());
+        assert_eq!(ended.state, RunState::Failed, "{outcome:?}: {ended:#?}");
+        if outcome == AttemptOutcome::Asked {
+            assert_eq!(
+                ended.outcome.as_ref().unwrap().reason.as_deref(),
+                Some(
+                    "review: the workflow definition changed under the run: it no longer \
+                     routes asked"
+                ),
+                "{ended:#?}"
+            );
+        } else {
+            assert_eq!(
+                failure_input(&state, &record, "errored"),
+                Some(errored_input())
+            );
+        }
     }
 }
 

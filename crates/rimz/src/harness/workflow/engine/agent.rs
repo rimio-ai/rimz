@@ -132,6 +132,7 @@ pub(super) fn empty_observation() -> Observed {
         status: RunStatus::Pending,
         ask: None,
         limited: None,
+        limited_by: None,
         stopped: None,
         errored: None,
         children: Children::default(),
@@ -274,7 +275,12 @@ pub(super) fn prepare_end(
     let missing_run = attempt.run.is_none();
     let edges = t.spec.edges(&attempt.node);
     let routes = |outcome: &str| edges.iter().any(|edge| edge.outcome == outcome);
-    let (on_asked, on_errored) = (routes("asked"), routes("errored"));
+    // A judge's ask leaves it in its pane, and its errored turn fails it at once.
+    let (on_asked, on_errored) = if judge {
+        (false, true)
+    } else {
+        (routes("asked"), routes("errored"))
+    };
     let hold_changed = hold(
         t.record.attempt.as_mut().expect("observed agent attempt"),
         &observed,
@@ -866,6 +872,7 @@ mod tests {
                                     },
                                 }),
                                 limited: limit.then_some(Limited { reset_at: None }),
+                                limited_by: None,
                                 stopped: error.then(|| errored.clone()),
                                 errored: error.then(|| errored.clone()),
                                 children: Children::default(),

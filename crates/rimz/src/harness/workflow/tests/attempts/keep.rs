@@ -233,7 +233,8 @@ fn an_errored_turn_takes_on_errored_with_its_evidence_and_key_and_ends_the_node(
     ] {
         let definition = rest::SESSION.replace(
             "lifecycle='session'\nrest-check=['pr']",
-            &format!("{lifecycle}\nkeep={keep}\non.errored='@done'"),
+            // A step's `on.failed` never catches its errored turn.
+            &format!("{lifecycle}\nkeep={keep}\non.errored='@done'\non.failed='@failed'"),
         );
         let (_dir, state, mut record) = setup(&definition);
         record.key = Some(Key::Integer(7));
@@ -264,6 +265,17 @@ fn an_errored_turn_takes_on_errored_with_its_evidence_and_key_and_ends_the_node(
                         ..
                     }
                 ))
+        );
+        let paths = state.workflow(&record.id);
+        let spec = spec::load(&record.definition_dir(&paths)).unwrap();
+        let journal = records::journal(&paths).unwrap();
+        assert!(
+            crate::harness::workflow::inspect::hops(&spec, &journal, None)
+                .iter()
+                .any(|hop| hop.node == "build"
+                    && hop.outcome.as_deref() == Some("errored")
+                    && hop.target.as_ref().map(|target| target.as_str()) == Some("@done")),
+            "{lifecycle}: {journal:#?}"
         );
         actual.push((
             ended.state,
@@ -312,7 +324,7 @@ fn an_ask_wins_over_an_errored_turn_when_the_node_routes_both() {
 fn without_on_errored_the_errored_turn_holds_the_step_and_names_its_stop_until_it_clears() {
     use crate::agents::TurnErrorClass;
     use crate::store::workflow::{Hold, HoldStop};
-    let (_dir, state, record) = setup(&format!("{STEP}timeout='1h'\n"));
+    let (_dir, state, record) = setup(&format!("{STEP}timeout='1h'\non.failed='@failed'\n"));
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
     let error = errored_turn();

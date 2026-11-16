@@ -355,6 +355,11 @@ fn rate_and_spend_limits_stop_as_limits_and_the_first_limited_agent_reads_its_re
         );
         assert_eq!(readers.reset_reads.take(), ["leader"]);
         assert_eq!(
+            observed.limited_by.as_deref(),
+            Some("@leader"),
+            "the reset names the agent it was read from"
+        );
+        assert_eq!(
             observed.stopped,
             Some(Stopped {
                 since: ago(20),

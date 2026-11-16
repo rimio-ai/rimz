@@ -252,6 +252,25 @@ fn unknown_failure_fields_and_reserved_outcomes_refuse() {
             "script.pick.on.errored",
         ),
         (
+            format!("{head}{agent}[condition.pick]\ntimeout='1h'\nelse='no'\non={{yes='@done',no='@done',unknown='@wait',errored='@done'}}\ncases=[{{when=['pr=merged'],outcome='yes'}}]\n")
+                .replace("then='gate'", "then='pick'"),
+            "condition.pick.on.errored",
+        ),
+        (
+            format!("{head}{agent}").replace("fail='@failed'}", "fail='@failed',errored='@failed'}"),
+            "test.gate.on.errored",
+        ),
+        (
+            format!("{head}{agent}[judge.pick]\ntimeout='1h'\nagent='claude'\nsummary='Picks'\nprompt-file='prompts/build.md'\non={{ok='@done',asked='@done'}}\n")
+                .replace("then='gate'", "then='pick'"),
+            "judge.pick.on.asked",
+        ),
+        (
+            format!("{head}{agent}[judge.pick]\ntimeout='1h'\nagent='claude'\nsummary='Picks'\nprompt-file='prompts/build.md'\non={{ok='@done',errored='@wait'}}\n")
+                .replace("then='gate'", "then='pick'"),
+            "judge.pick.on.errored",
+        ),
+        (
             format!("{head}{agent}on.errored='@wait'\n"),
             "agent.build.on.errored",
         ),
@@ -270,6 +289,18 @@ fn unknown_failure_fields_and_reserved_outcomes_refuse() {
             .map(|issue| issue.path.as_str())
             .collect();
         assert_eq!(paths, [path], "{text}\n{:?}", report.errors);
+        let refusal = match path {
+            "judge.pick.on.asked" => Some("dead route: this check cannot answer that outcome"),
+            "judge.pick.on.errored" => Some("a failure route cannot wait"),
+            _ => None,
+        };
+        if let Some(refusal) = refusal {
+            assert!(
+                report.errors[0].message.contains(refusal),
+                "{text}\n{:?}",
+                report.errors
+            );
+        }
         if ["on-break", "on.deadline", "on.cap", "lint.on.errored"]
             .iter()
             .any(|field| path.ends_with(field))

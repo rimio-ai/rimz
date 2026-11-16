@@ -256,7 +256,7 @@ fn output_of(definition: &str, with_you: bool) -> (String, String) {
 }
 
 #[test]
-fn an_asking_or_held_judge_names_its_pane_and_its_paused_timeout() {
+fn an_asking_or_held_judge_names_its_pane_and_its_running_timeout() {
     let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(2);
     let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[judge.pr]\nagent='claude'\nsummary='Reviews'\nprompt-file='p.md'\ntimeout='1h'\non.ok='@done'\n").unwrap();
     let globals = crate::cli::GlobalFlags {
@@ -314,7 +314,7 @@ fn an_asking_or_held_judge_names_its_pane_and_its_paused_timeout() {
         view.headline(&mut headline, None, None).unwrap();
         let text = String::from_utf8(headline).unwrap();
         lines.push((
-            text.contains("the check timeout is paused"),
+            text.contains("the check timeout keeps running"),
             text.contains("pr is held 2m") && text.contains("@fox: rate limit"),
             text.contains("checking pr in @fox"),
         ));
@@ -324,7 +324,7 @@ fn an_asking_or_held_judge_names_its_pane_and_its_paused_timeout() {
         [
             (false, false, true),
             (true, false, false),
-            (false, true, false),
+            (true, true, false),
             (false, false, false),
         ]
     );

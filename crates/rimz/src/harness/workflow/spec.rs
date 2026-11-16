@@ -80,6 +80,8 @@ pub(super) enum Cause {
     Invalid,
     Timeout,
     Limited,
+    /// A judge's own turn ended on a provider error that waiting will not clear.
+    Errored,
     Undelivered,
     Visits,
     Capacity,
@@ -87,11 +89,12 @@ pub(super) enum Cause {
 }
 
 impl Cause {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Died,
         Self::Invalid,
         Self::Timeout,
         Self::Limited,
+        Self::Errored,
         Self::Undelivered,
         Self::Visits,
         Self::Capacity,
@@ -104,6 +107,7 @@ impl Cause {
             Self::Invalid => "invalid",
             Self::Timeout => "timeout",
             Self::Limited => "limited",
+            Self::Errored => "errored",
             Self::Undelivered => "undelivered",
             Self::Visits => "visits",
             Self::Capacity => "capacity",
@@ -118,14 +122,16 @@ impl Cause {
     /// The causes a node written under the kind table `table` raises, in the order a view
     /// lists them; none for a word that names no kind.
     pub fn raised_by(table: &str) -> &'static [Self] {
-        use Cause::{Capacity, Deadline, Died, Invalid, Limited, Timeout, Undelivered, Visits};
+        use Cause::{
+            Capacity, Deadline, Died, Errored, Invalid, Limited, Timeout, Undelivered, Visits,
+        };
         match table {
             "agent" => &[Died, Timeout, Limited, Visits, Capacity, Deadline],
             "command" => &[Died, Timeout, Visits, Deadline],
             "message" => &[Undelivered, Visits, Deadline],
             "test" => &[Died, Timeout, Deadline],
             "script" => &[Died, Invalid, Timeout, Deadline],
-            "judge" => &[Died, Invalid, Timeout, Limited, Deadline],
+            "judge" => &[Died, Invalid, Timeout, Limited, Errored, Deadline],
             "condition" => &[Timeout, Deadline],
             "sleep" => &[Deadline],
             _ => &[],
