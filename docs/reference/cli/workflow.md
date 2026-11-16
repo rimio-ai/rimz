@@ -203,8 +203,8 @@ A definition is `workflow.toml`: one `[workflow]` table and any number of nodes,
 | `agent` | Required. An agent kind or profile. |
 | `prompt-file` | Required. A file confined to the definition directory. |
 | `summary` | Required. |
-| `on.<outcome>` | One target per outcome the judge answers, plus the failure routes `on.died`, `on.invalid`, `on.timeout`, `on.limited`, `on.deadline`, and `on.failed`, and the optional `on.asked` and `on.errored`, which route a held question or provider error instead of holding the judge. |
-| `timeout` | Required. Runs from the judge's launch and pauses while the judge is held. |
+| `on.<outcome>` | One target per outcome the judge answers, plus the failure routes `on.died`, `on.invalid`, `on.timeout`, `on.limited`, `on.errored`, `on.deadline`, and `on.failed`. `on.asked` refuses as a dead route: a question never ends a judge. |
+| `timeout` | Required. Runs from the judge's launch and never pauses. |
 | `wake` | Signals that re-run the judge. |
 | `admission` | `window` only. |
 
@@ -380,7 +380,7 @@ A message step returns at once, so a cycle through it needs `max-visits` and a w
 
 ### Checks
 
-Every test, script, judge, and condition requires a `timeout`. The timeout starts each time the run enters the check and runs across every evaluation and wait there. A judge's runs from its launch instead, less the time it was held. A test does not inherit the loop's default timeout. When it passes, the check fails with cause `timeout`.
+Every test, script, judge, and condition requires a `timeout`. The timeout starts each time the run enters the check and runs across every evaluation and wait there. A judge's runs from its launch instead, and nothing it is stopped on pauses it. A test does not inherit the loop's default timeout. When it passes, the check fails with cause `timeout`.
 
 Tests and scripts run as child processes in the checkout with no stdin, in a session of their own detached from any terminal, so a command that opens `/dev/tty` cannot stop on job control. Timeout, deadline, and cancellation stop the whole process group. An interrupted check can run again: the process hosting it can die after the command ran.
 
@@ -395,7 +395,8 @@ Each evaluation launches a fresh agent in a pane of the run's checkout, with the
 
 - An accepted answer closes the pane and routes the run. A judge's final message is not read.
 - A judge at a clean rest without an answer is reminded once. One that exits without an answer fails with `died`; an answer accepted before the exit wins.
-- A question, a provider error, or a provider limit holds the judge in its pane as it holds a step's agent ([held agents](#how-an-attempt-ends)), and the timeout pauses while it is held. `on.asked` and `on.errored` route a question or an error instead.
+- A question or permission prompt, from the judge or a subagent it launched, leaves the judge in its pane: an answer there followed by a `submit` routes as usual, and otherwise the judge fails with `timeout`. A provider limit, an error that waiting clears, or a budget park holds it there the same way, and it resumes and submits in time or fails with `timeout`. `workflow list` and `workflow show` name what it is stopped on, but its timeout keeps running.
+- The judge's own turn ending on a provider error that waiting will not clear (its card shows a provider error, an unknown error, or a lapsed plan) fails it at once with `errored`. A timeout that passes at the same look wins over the error.
 - A budget that refuses the judge's launch fails it with `limited`. Any other launch failure fails it with `died` at once.
 - The judge's timeout starts at its launch, so a wait for its `admission.window` spends none of it. The deadline wins a tie with an answer.
 - An [unsupported agent version](../agent-support.md) refuses the launch, which fails with `died`. `workflow show` includes the upgrade instruction.
@@ -495,7 +496,7 @@ Machine cap reasons name reservations separately (`1 more starting`) and a multi
 
 ### Failures
 
-A node fails with one of eight causes, and each kind raises only its own:
+A node fails with one of nine causes, and each kind raises only its own:
 
 | Kind | Causes |
 | --- | --- |
@@ -504,7 +505,7 @@ A node fails with one of eight causes, and each kind raises only its own:
 | `message` | `undelivered`, `visits`, `deadline` |
 | `test` | `died`, `timeout`, `deadline` |
 | `script` | `died`, `invalid`, `timeout`, `deadline` |
-| `judge` | `died`, `invalid`, `timeout`, `limited`, `deadline` |
+| `judge` | `died`, `invalid`, `timeout`, `limited`, `errored`, `deadline` |
 | `condition` | `timeout`, `deadline` |
 | `sleep` | `deadline` |
 
@@ -514,6 +515,7 @@ A node fails with one of eight causes, and each kind raises only its own:
 | `invalid` | A script gave an answer the node cannot use (stdout that is not one JSON object, a wrong field type, an outcome its `on` does not name or a reserved word, or a bad `recheck_at`), or a definition edit left a judge's accepted answer unroutable. |
 | `timeout` | The node's `timeout` passed. |
 | `limited` | A budget refused an agent's launch, a judge's included, or stopped it. |
+| `errored` | A judge's own turn ended on a provider error that waiting will not clear. A step's errored turn is not a failure: it takes the step's `on.errored`, or holds the step. |
 | `undelivered` | A message step found no single living agent, its prompt could not be composed, or the address resolved to another session than its pinned `session`. |
 | `visits` | An entry would exceed the step's `max-visits` plus the run's visit grant. Nothing launches and no visit is counted. |
 | `capacity` | An agent step's capacity wait gave up, or its start can never fit under a machine cap. No visit is counted. |
@@ -526,7 +528,7 @@ A failure takes the node's `on.<cause>` when set, else the node's `on.failed`, e
 - The deadline fails the node the run is at once per grant. The node it routes to runs without a deadline until `resume --extend deadline=<WHEN>` grants another.
 - A fresh agent launch whose takeover could not stop the checkout's occupants, before it started anything, is tried once more: the step waits as [`retry`](#the-waiting-line) with no attempt or visit counted, the run's next advance launches again, and only a second failure is `died`. Each new entry into the step gets its retry back.
 
-A condition's reading error and a sleep's evaluation error are not failures of the node: the run ends `failed` with the error as its reason and takes no route. A blocking question takes `on.asked` when set and otherwise stays open in the agent's pane: it is not a failure. A `workflow cancel` and a `workflow restart` take no failure route. A definition edited under a run can also end it with no route ([live definitions](#live-definitions)).
+A condition's reading error and a sleep's evaluation error are not failures of the node: the run ends `failed` with the error as its reason and takes no route. A blocking question takes a step's `on.asked` when set and otherwise stays open in the agent's pane: it is not a failure. A judge's question stays open in its pane until its timeout. A `workflow cancel` and a `workflow restart` take no failure route. A definition edited under a run can also end it with no route ([live definitions](#live-definitions)).
 
 ### The failure input
 
@@ -542,11 +544,15 @@ Every failure route hands its target this object as `input`, with the run's `key
 | --- | --- |
 | `died`, `timeout` on a command step | `code`, the exit code (absent after a signal or a spawn error), and `log`, the step log's path when it exists |
 | `died` or `invalid` on a test or script once its `.check.log` exists | `log`, the `.check.log` path, and `code` once its process exited (absent after a signal, and when the process could not spawn) |
-| `limited` on an agent step | `reset_at`, when the provider's reset is known |
+| `limited` on an agent step or a judge | `reset_at`, when the provider's reset is known |
+| `errored` | `errored`, `{text, class, handle}` of the judge's errored turn: the error's text, its class (`failed`, `unknown`, or `not_entitled`), and the judge's handle |
+| `timeout` on a judge stopped when it passed | `asked`, `{text, kind, handle}` of an open question; otherwise `stopped`, `{kind, handle, class, text}` of what it was stopped on, `kind` one of `limit`, `error`, or `budget`, and `reset_at` beside it when the reset of the agent `handle` names is known (a reset read from another agent is left out). Members not known are left out. |
 | `capacity` | `waited_ms`, how long the start was held, and `first`, when the hold began; `never_fits: true` when the start is wider than a machine cap |
 | `visits` | `visits`, the step's count, and `max`, its limit with the run's grant |
 | `deadline` | `deadline`, the instant that passed |
 | any other | none |
+
+A judge's `errored` reason is the provider's error text, or `the judge's turn ended on a provider error` without one. A judge's `timeout` reason reads `<node> ran past its timeout <S>`, followed, when it was stopped, by what on: ` while <handle> asked a question: <text>` (`asked for permission`, `asked for plan approval`), ` while <handle> was stopped on a provider limit (<class>): <text> (resets <time>)` (`provider error` for an error, `the judge` without a handle, the class left out where it repeats the stop's noun, as a plain provider error's does, `(resets <time>)` only when it is that agent's own reset, the parts not known left out), or ` while <handle> was parked on its budget`. A question wins over any other stop, and the handle is the agent that asked, a subagent's included.
 
 The attempt the failure route admits records the cause as its `routed_by`. `show --history` prints the route as `route <cause> → <target> · <fields>`, each of `reason`, `key`, and the `detail` members as `name=value`, joined by ` · `. A start wider than a machine cap is a configuration refusal: unrouted, it ends the run `failed`, and a loop task records a `failed` run with a strike, not `throttle skipped`.
 
@@ -565,7 +571,7 @@ A script prints exactly one JSON object, and a judge sends one through [`rimz wo
 
 Any other field travels too: the whole object becomes the next node's `input`. `null` is not a valid value for `reason`, `recheck_at`, or `key`, so an answer cannot clear the key. A script must also exit 0: a nonzero exit fails it with `died`, and an answer it cannot use fails it with `invalid`.
 
-Reserved outcome words: the eight causes (`died`, `invalid`, `timeout`, `limited`, `undelivered`, `visits`, `capacity`, `deadline`), `failed`, `asked`, `errored`, `unknown`, and `hold`. A case or `else` that names one refuses, a script that answers one fails with `invalid`, and `submit` refuses one and says why. In an `on` table they are the engine's routes. A check's route refuses when the check cannot answer it (`dead route: this check cannot answer that outcome`), and `on.hold` is always a dead route.
+Reserved outcome words: the nine causes (`died`, `invalid`, `timeout`, `limited`, `errored`, `undelivered`, `visits`, `capacity`, `deadline`), `failed`, `asked`, `unknown`, and `hold`. A case or `else` that names one refuses, a script that answers one fails with `invalid`, and `submit` refuses one and says why. In an `on` table they are the engine's routes. A check's route refuses when the check cannot answer it (`dead route: this check cannot answer that outcome`): `on.hold` is always a dead route, `on.asked` on any check is one, and `on.errored` is one on every check but a judge.
 
 A step's `limited` failure routed to a script names `cause: "limited"` in its input, and `context.json` carries `prev_attempt.limited.reset_at` (also `input.detail.reset_at` when known), so the script can answer a waiting outcome with that time as `recheck_at`. The [sample `pr.py`](../../../crates/rimz/tests/fixtures/workflows/babysit-pr/checks/pr.py) does this.
 
@@ -665,7 +671,7 @@ Below the table, each error prints as `<workflow>: <path>: <message>`, then each
 
 Warnings:
 
-- When auto-continue is off, each agent step warns at `agent.<step>` that a step paused on a provider limit waits for you, and each judge warns at `judge.<check>` that a judge paused on a provider limit waits for you.
+- When auto-continue is off, each agent step warns at `agent.<step>` that a step paused on a provider limit waits for you. A judge does not warn: its timeout runs through a limit.
 - Turn steps and sessions with a `rest-check` warn when the leader adapter has no background reporting: a turn end may finish the attempt while provider background work remains.
 
 ### Refusals
@@ -785,8 +791,8 @@ The headline:
 | Running step | The step, its visit limit, and the agent's full card handle (channel included, recorded pet name as fallback). |
 | Running check | `checking <check> <age>`, with ` in <handle>` while a judge's agent is up. |
 | Session | `<step> is with you`, plus the same check and wait suffix as `list`, not repeated below. |
-| Held | `<step> is held <age> · <handle>: <stop>` for a step of either lifecycle, or the current judge's check, held on an error, a limit, an overload, or a budget park. The headline takes the waiting tone when the hold needs you. |
-| Asking | `<step> is asking you · <handle> (<kind>)`, with an instruction to answer in the pane or with `rimz answer`. The step's or judge's timeout pauses while asking. A judge's question names its check. |
+| Held | `<step> is held <age> · <handle>: <stop>` for a step of either lifecycle, or the current judge's check, held on an error, a limit, an overload, or a budget park. A held judge's line ends ` · the check timeout keeps running`. The headline takes the waiting tone when the hold needs you. |
+| Asking | `<step> is asking you · <handle> (<kind>)`, with an instruction to answer in the pane or with `rimz answer`: the step's line ends `the step timeout is paused`, a judge's `the check timeout keeps running`, and either reads `no <kind> timeout is set` without one. A judge's question names its check. |
 | Waiting | The wait phrase with its node, elapsed time, recheck, and the next bound's time and target. A hold names its outcome, duration, and the next bound. |
 | Parked | `parked at <node> <age> · <reason>`, with the explanation in the block below. |
 | Ended, before its directory moves | `done`, `failed`, or `canceled`, with no PR badge. The headline ages from the ending. Once the directory is in `finished-workflows/`, `show` prints the [finished view](#finished-runs). |
@@ -1022,11 +1028,11 @@ A verdict is `{node, entered_at, at, target, object, reason}`, where `at` is the
 | `attempt.started_past_limit` | The `--skip-capacity` hold text. |
 | `attempt.answer` | A judge's accepted `submit` answer, normalized against its check. The engine routes on it alone. Omitted until one is accepted. |
 | `attempt.reminded` | `true` once a judge that rested without an answer was reminded. Omitted while false. |
-| `attempt.evidence` | A judge's staged ending evidence: the input its `asked` or `errored` route hands on, or its failure's detail. A judge's ending leaves `prev_attempt` the last step's. |
+| `attempt.evidence` | A judge's staged ending evidence: its failure's detail, with a `reason` naming an errored turn's text or what a timeout found it stopped on. A judge's ending leaves `prev_attempt` the last step's. |
 | `code`, `log` | A command step's exit code (null after a signal or an unobserved exit) and the absolute `work/<seq>.step.log` path when the file exists. Null for agent attempts. |
 | `message` | A message step's queued message id, also on its journal `attempt` row. Other attempts omit it. |
 
-`asking`, `asked_ms`, and `held_since` pause a step's or judge's timeout, not the run deadline. They are omitted when empty or zero. Command steps have null `handle`, `run_id`, `children`, `limited`, `asked`, and `cost_usd`. A message-step attempt carries `handle` (the target, null when undelivered) and `message`, with `code`, `log`, and `run_id` null. The hosting process samples `head_start` before a command and `head_end` after reaping it. `claim_path` names `work/<seq>.claim.json`.
+`asking`, `asked_ms`, and `held_since` pause a step's timeout, not the run deadline. A judge records them too, for the views that name its stop, and its timeout never reads them. They are omitted when empty or zero. Command steps have null `handle`, `run_id`, `children`, `limited`, `asked`, and `cost_usd`. A message-step attempt carries `handle` (the target, null when undelivered) and `message`, with `code`, `log`, and `run_id` null. The hosting process samples `head_start` before a command and `head_end` after reaping it. `claim_path` names `work/<seq>.claim.json`.
 
 ### Journal rows
 
