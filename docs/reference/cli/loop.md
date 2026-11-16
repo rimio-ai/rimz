@@ -61,7 +61,7 @@ The arguments after `--` go to the launch unchanged; loop adds no launch option 
 
 A shell command whose program is `rimz` and which reads as an agent launch, a team launch or `rimz workflow run` is refused with the kind flag to use. A command that runs `rimz` through `sh -c` or a script is a shell task.
 
-A launch task's fire starts its launch as a separate process in the fire's checkout, with the environment a shell task's command gets minus `RIMZ_CHANNEL` and every `RIMZ_AGENT_*` variable, no stdin, and its output in a log file. The fire waits for that process to exit, so `rimz loop fire` and `rimz loop run` return once the launch is placed. An agent fire stops waiting as soon as a `-p` run carrying its fire id is published. A room launch opens unfocused. The fire records one outcome:
+A launch task's fire starts its launch as a separate process in the fire's checkout, with the environment a shell task's command gets minus `RIMZ_CHANNEL`, every `RIMZ_AGENT_*` variable and the room pin (`RIMZ_PROJECT_ROOT`, `RIMZ_WORKSPACE_ID`), so it lands in the task's room whatever room's pane you fire it from, no stdin, and its output in a log file. The fire waits for that process to exit, so `rimz loop fire` and `rimz loop run` return once the launch is placed. An agent fire stops waiting as soon as a `-p` run carrying its fire id is published. A room launch opens unfocused. The fire records one outcome:
 
 | Kind | Outcome |
 | --- | --- |
