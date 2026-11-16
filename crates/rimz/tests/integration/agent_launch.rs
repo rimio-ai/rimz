@@ -4832,6 +4832,7 @@ fn silent_child_tells_its_parent_once_and_records_the_queued_assist() {
                     workspace_id: workspace.workspace_id.clone(),
                     run_id: run.run_id.clone(),
                     stalled_after_secs: window,
+                    continuation: rimz::harness::park_notice::Continuation::Off,
                 },
             ))
             .assert()
@@ -5244,6 +5245,7 @@ fn never_started_child_notice(registered: bool) {
                     workspace_id: workspace.workspace_id.clone(),
                     run_id: run.run_id.clone(),
                     stalled_after_secs: window,
+                    continuation: rimz::harness::park_notice::Continuation::Off,
                 },
             ))
             .assert()

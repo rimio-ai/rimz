@@ -17,7 +17,9 @@ pub(super) fn run(request: StallNoticeRequest) -> Result<()> {
     let paths = ctx.store.paths();
     let run =
         rimz::harness::run::load(paths, &request.run_id).context("loading silent child run")?;
-    let Some(stall) = unnoticed_stall(&run, &agents, now, request.stalled_after_secs) else {
+    let Some(stall) = unnoticed_stall(&run, &agents, now, request.stalled_after_secs, |_| {
+        request.continuation
+    }) else {
         return Ok(());
     };
     if !rimz::harness::run::claim_stall_notice(paths, &run.run_id, now)? {

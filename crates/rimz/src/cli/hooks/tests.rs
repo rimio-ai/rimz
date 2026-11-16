@@ -703,6 +703,7 @@ fn delayed_progress_hook_preserves_credit_limit_park_instead_of_stall() {
             &snapshot.agents,
             now + Duration::from_secs(1_800),
             1_800,
+            |_| rimz::harness::park_notice::Continuation::Off,
         )
         .is_none(),
         "the limit marker suppresses silent_child_for even past the stall window"
