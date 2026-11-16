@@ -5781,7 +5781,8 @@ allowed-dependencies = [
 # When carries a workflow time from its spelling to the instant a run resolves it (+1).
 # submit lets a judge's `rimz workflow submit` answer its check through the engine (+1).
 # AttemptHost::budget_refusal and budget_refusal let the engine hold a launch the budget gate would refuse (+2).
-surface-budget = 100
+# Limited moves here from store::workflow, an in-memory observation no record stores (+1).
+surface-budget = 101
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
@@ -12576,8 +12577,8 @@ reason = "Workflow attempts share durable process, run, stop, ask, limit, and li
 
 [[verdict]]
 kind = "item"
-key = "store::workflow::Limited"
-reason = "Workflow observations share the provider reset a limited agent reports with the engine's judge timeout detail."
+key = "harness::workflow::Limited"
+reason = "Workflow observations carry the provider reset a limited agent reports, in memory only, to the engine's judge timeout detail."
 
 [[verdict]]
 kind = "item"

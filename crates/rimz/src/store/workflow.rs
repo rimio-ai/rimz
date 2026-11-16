@@ -410,13 +410,6 @@ impl AttemptOutcome {
     }
 }
 
-/// The provider reset a limited agent's account and model report, as an observation reads it.
-/// No record stores it: a judge's timeout names it in its detail.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Limited {
-    pub reset_at: Option<Timestamp>,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Asked {
     pub text: String,

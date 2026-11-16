@@ -296,8 +296,8 @@ enum Stop {
 
 fn stops_on(host: &FakeHost, stop: Stop) {
     use crate::agents::TurnErrorClass;
-    use crate::harness::workflow::{StopKind, Stopped};
-    use crate::store::workflow::{Asked, Asking, Limited};
+    use crate::harness::workflow::{Limited, StopKind, Stopped};
+    use crate::store::workflow::{Asked, Asking};
     let now = jiff::Timestamp::now();
     let asks = |handle: &str| Asking {
         since: now,

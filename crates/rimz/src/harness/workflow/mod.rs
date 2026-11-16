@@ -9,7 +9,7 @@ use crate::harness::when::head;
 use crate::ids::{EventId, RunId, WorkflowRunId};
 use crate::store::StoreErr;
 use crate::store::run::RunStatus;
-use crate::store::workflow::{Asking, AttemptOutcome, AttemptRun, Children, Limited, TurnEnd};
+use crate::store::workflow::{Asking, AttemptOutcome, AttemptRun, Children, TurnEnd};
 
 mod brief;
 mod definition;
@@ -204,6 +204,13 @@ pub struct StepLaunch {
 pub struct Eviction {
     pub checkout: PathBuf,
     pub project_root: PathBuf,
+}
+
+/// The provider reset a limited agent's account and model report, as an observation reads it.
+/// No record stores it: a judge's timeout names it in its detail.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Limited {
+    pub reset_at: Option<jiff::Timestamp>,
 }
 
 #[derive(Clone, Debug)]
