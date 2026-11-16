@@ -50,7 +50,7 @@ The arguments after `--` go to the launch unchanged; loop adds no launch option 
 `loop add` checks a launch task before it stores it, and refuses, naming the task, the flag or target, and the fix, when:
 
 - the arguments do not parse as that launch (the launch's own error is shown), read as one of the scene's other verbs, or set a global flag;
-- the target does not resolve as the launch resolves it: an unknown workflow, profile or team, or a workflow that fails validation. `--workflow` takes a deployed workflow's name, not a path;
+- the target does not resolve as the launch resolves it: an unknown workflow, profile or team, or a workflow that fails validation. An agent target is resolved in the lane the fire launches into, the arguments' `--channel` or, for a task that fires in its root, that directory's lane, so a bare role of the team that holds that lane in the room now resolves as that team's role. `--workflow` takes a deployed workflow's name, not a path;
 - the arguments carry `--detach`, `--stdin`, `--input-format stream-json`, or `--resume` with no id;
 - `--timeout` is given: the launch's own bound applies (the workflow's `deadline`, a `-p` run's `--timeout`);
 - `--fresh-worktree` is given beside `--agent` or `--team`: put a bare `-w` in the arguments instead;
