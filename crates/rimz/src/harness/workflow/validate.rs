@@ -126,7 +126,7 @@ pub(super) fn validate_spec(
     let header = &spec.authored().workflow;
     report.summary("workflow.summary", header.summary.as_deref());
     report.parses("workflow.deadline", header.deadline.as_deref(), |raw| {
-        spec::parse_deadline(raw).map(|_| ())
+        spec::parse_when(raw).map(|_| ())
     });
     if let Some(limit) = &header.limit {
         if limit.max_parallel.is_none() && limit.stagger.is_none() {

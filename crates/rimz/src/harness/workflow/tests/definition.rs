@@ -120,3 +120,46 @@ fn a_lifecycle_on_a_command_refuses() {
         matches!(load(&dir), Err(SpecErr::Toml { path, .. }) if path == "command.build.lifecycle")
     );
 }
+
+#[test]
+fn every_time_spelling_resolves_in_the_given_zone() {
+    // Friday 2026-11-13, 15:30 at +05:30.
+    let now: jiff::Timestamp = "2026-11-13T10:00:00Z".parse().unwrap();
+    let zone = jiff::tz::TimeZone::fixed(jiff::tz::Offset::from_seconds(19_800).unwrap());
+    let cases = [
+        ("8h", "2026-11-13T18:00:00Z"),
+        ("90s", "2026-11-13T10:01:30Z"),
+        ("15:30", "2026-11-14T10:00:00Z"),
+        ("16:00", "2026-11-13T10:30:00Z"),
+        ("fri 15:30", "2026-11-20T10:00:00Z"),
+        ("Monday 09:00", "2026-11-16T03:30:00Z"),
+        ("2026-11-13 09:00", "2026-11-13T03:30:00Z"),
+        ("2026-11-20T08:15", "2026-11-20T02:45:00Z"),
+        ("2026-11-20T08:15:30", "2026-11-20T02:45:30Z"),
+        ("2026-11-21", "2026-11-20T18:30:00Z"),
+        ("2026-11-13T21:00:00Z", "2026-11-13T21:00:00Z"),
+        ("2026-11-13T21:00:00+01:00", "2026-11-13T20:00:00Z"),
+    ];
+    let actual = cases
+        .iter()
+        .map(|(raw, _)| {
+            let when = parse_when(raw).unwrap_or_else(|e| panic!("{raw}: {e}"));
+            (*raw, when.resolve(now, &zone).unwrap().to_string())
+        })
+        .collect::<Vec<_>>();
+    let expected = cases
+        .iter()
+        .map(|(raw, at)| (*raw, (*at).to_owned()))
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+    for raw in ["never", "25:00", "fri  09:00", "366d", "2026-13-01"] {
+        assert_eq!(
+            parse_when(raw),
+            Err(format!(
+                "{raw:?} is not a workflow time; give a duration (8h), HH:MM, <weekday> HH:MM, \
+                 a date (2026-11-14), a date-time (2026-11-14 09:00), or a timestamp \
+                 (2026-11-13T21:00:00Z)"
+            ))
+        );
+    }
+}

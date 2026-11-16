@@ -102,6 +102,82 @@ impl FromStr for ClockTime {
     }
 }
 
+/// A weekday by its English name or a common abbreviation, in any case.
+pub(crate) fn parse_weekday(token: &str) -> Option<jiff::civil::Weekday> {
+    use jiff::civil::Weekday;
+    match token.trim().to_ascii_lowercase().as_str() {
+        "mon" | "monday" => Some(Weekday::Monday),
+        "tue" | "tues" | "tuesday" => Some(Weekday::Tuesday),
+        "wed" | "weds" | "wednesday" => Some(Weekday::Wednesday),
+        "thu" | "thur" | "thurs" | "thursday" => Some(Weekday::Thursday),
+        "fri" | "friday" => Some(Weekday::Friday),
+        "sat" | "saturday" => Some(Weekday::Saturday),
+        "sun" | "sunday" => Some(Weekday::Sunday),
+        _ => None,
+    }
+}
+
+/// A wall-clock time on a calendar: `HH:MM`, `<weekday> HH:MM`, or `YYYY-MM-DD HH:MM`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CalendarAt {
+    Daily(ClockTime),
+    Weekly(jiff::civil::Weekday, ClockTime),
+    Dated(jiff::civil::Date, ClockTime),
+}
+
+impl CalendarAt {
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
+        let trimmed = raw.trim();
+        let (day, time) = match trimmed.split_once(' ') {
+            Some((day, time)) => (Some(day), time),
+            None => (None, trimmed),
+        };
+        if time.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let time = time.parse::<ClockTime>().ok()?;
+        let Some(day) = day else {
+            return Some(Self::Daily(time));
+        };
+        if let Some(weekday) = parse_weekday(day) {
+            return Some(Self::Weekly(weekday, time));
+        }
+        let is_iso_date = day.len() == 10
+            && day.bytes().enumerate().all(|(index, byte)| match index {
+                4 | 7 => byte == b'-',
+                _ => byte.is_ascii_digit(),
+            });
+        let date = is_iso_date.then(|| day.parse().ok()).flatten()?;
+        Some(Self::Dated(date, time))
+    }
+
+    /// The instant in `now`'s zone: a daily or weekly time's first strictly after `now`, a
+    /// dated time as written, past or not.
+    pub(crate) fn resolve(self, now: &jiff::Zoned) -> Option<jiff::Timestamp> {
+        let at = |date: jiff::civil::Date, time: ClockTime| {
+            date.at(time.hour() as i8, time.minute() as i8, 0, 0)
+                .to_zoned(now.time_zone().clone())
+                .ok()
+                .map(|zoned| zoned.timestamp())
+        };
+        let (weekday, time) = match self {
+            Self::Dated(date, time) => return at(date, time),
+            Self::Daily(time) => (None, time),
+            Self::Weekly(weekday, time) => (Some(weekday), time),
+        };
+        let mut date = now.date();
+        loop {
+            if weekday.is_none_or(|weekday| date.weekday() == weekday) {
+                let candidate = at(date, time)?;
+                if candidate > now.timestamp() {
+                    return Some(candidate);
+                }
+            }
+            date = date.tomorrow().ok()?;
+        }
+    }
+}
+
 /// Failures while parsing RimZ's compact duration and wall-clock inputs.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum TimeInputErr {

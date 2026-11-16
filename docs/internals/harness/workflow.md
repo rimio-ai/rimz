@@ -12,7 +12,7 @@ Paths are under `crates/rimz/src/`.
 
 | Path | Owns |
 | --- | --- |
-| `harness/workflow/spec.rs` | `load` and `parse`, the lowered model (`WorkflowSpec`, `Check`, `Step`, `Case`, `Wake`) with its table word (`CheckTable`, `StepTable`), the failure causes (`Cause`), the reserved words, validation `Issue`s, the visit bound, `run` argv resolution, and deadline and window parsing. The lowered model is private to `harness::workflow`: `parse` compiles it into a `Definition`, and only `parse`, `definition.rs`, `graph.rs` (through `Definition::authored`), admission validation, and the schema read it. The module is in the sidebar import graph. |
+| `harness/workflow/spec.rs` | `load` and `parse`, the lowered model (`WorkflowSpec`, `Check`, `Step`, `Case`, `Wake`) with its table word (`CheckTable`, `StepTable`), the failure causes (`Cause`), the reserved words, validation `Issue`s, the visit bound, `run` argv resolution, window parsing, and the workflow time (`When`: `parse_when` checks a spelling without a clock, `When::resolve` turns it into an instant from a `now` and the `timezone` setting, its calendar forms through `crates/rimz/src/utils/time.rs::CalendarAt`, which loop and wait one-shot times share). The lowered model is private to `harness::workflow`: `parse` compiles it into a `Definition`, and only `parse`, `definition.rs`, `graph.rs` (through `Definition::authored`), admission validation, and the schema read it. The module is in the sidebar import graph. |
 | `harness/workflow/spec/kinds.rs` | The authored file (`WorkflowFile`): the header and one `deny_unknown_fields` table per node kind, with one `*Edges` struct per kind for its `on` table. `rimz workflow schema` derives from these types. Also the one-name-across-kinds check and the lowering into `Check` and `Step`. In the sidebar import graph. |
 | `harness/workflow/definition.rs` | The typed `Definition` that `parse` and `load` return: its `Node`s with their `Kind`, `Target`s, edges resolved once at compile, and every parsed value held beside its authored text (`Parsed`). In the sidebar import graph. |
 | `harness/workflow/graph.rs` | The edge compile, the failure chain (`Definition::failure_route`), how a step's ending maps to a cause (`Definition::ending_cause`), fireability and mark text, routing (`Definition::target`), and the graph walk (`Definition::walk`). |
@@ -82,7 +82,7 @@ Workflow `timeout`, `sleep`, `for`, and workflow and step `stagger` use `harness
 
 ### The header
 
-The [reference](../../reference/cli/workflow.md#definition-fields) owns the header fields and their rules. Two facts belong to the engine. The run record stores the instant a `deadline` resolved to at start (`RunRecord.deadline` in `crates/rimz/src/store/workflow.rs`). An agent step's own `worktree` setting moves that step out of the run's `scope` checkout ([Agent steps](#agent-steps)).
+The [reference](../../reference/cli/workflow.md#definition-fields) owns the header fields and their rules. Two facts belong to the engine. The run record stores the instant `run --deadline`, else the header `deadline`, resolved to at start (`RunRecord.deadline` in `crates/rimz/src/store/workflow.rs`), and `resume --extend deadline=` replaces it with the instant its own time resolves to at the resume. An agent step's own `worktree` setting moves that step out of the run's `scope` checkout ([Agent steps](#agent-steps)).
 
 ### Kinds
 
@@ -146,7 +146,7 @@ Each edge also carries fireability and, when it can never fire, a typed reason (
 - A `timeout` edge never fires on an agent step without a `timeout`, the one kind where the field is optional.
 - A `visits` edge never fires without `max-visits`.
 - An agent step's `capacity` edge always fires: a start wider than a machine cap raises it on any run, a `--skip-capacity` run included, so the return check (step 7 of [Adding a failure cause](#adding-a-failure-cause)) and inspection follow it whatever the step's `give-up`.
-- An unset header deadline makes a `deadline` edge conditional on a deadline a person grants the run later with `resume --extend deadline=<when>` (`Fireability::WithDeadline`), not never-firing.
+- An unset header deadline makes a `deadline` edge conditional on a deadline the run gets from `workflow run --deadline` or a later `resume --extend deadline=<when>` (`Fireability::WithDeadline`), not never-firing. The mark reads the definition alone, so `workflow validate` and the definition views print it; a run's own views print no `deadline` edge.
 
 `crates/rimz/src/harness/workflow/graph.rs::Definition::walk` takes reverse postorder from `start`, traversing fireable edges last to first in display order, and lists unreachable nodes alphabetically. A step hangs under its `then` check only when that check occurs earlier in the walk and has a fireable edge to the step. This keeps a forward return, such as a `triage` check routing back to a `ruled` step, standalone. Hanging children follow their parent's edge order.
 

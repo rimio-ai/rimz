@@ -712,25 +712,59 @@ pub(super) fn resolve_words(dir: &Path, words: &[String]) -> Result<Vec<OsString
         .collect()
 }
 
-pub(super) fn parse_deadline(raw: &str) -> Result<jiff::Timestamp, jiff::Error> {
-    if let Ok(at) = raw.parse::<jiff::Timestamp>() {
-        return Ok(at);
-    }
-    let civil = raw.parse::<jiff::civil::DateTime>().or_else(|_| {
-        raw.parse::<jiff::civil::Date>()
-            .map(|date| date.at(0, 0, 0, 0))
-    })?;
-    Ok(civil.to_zoned(jiff::tz::TimeZone::system())?.timestamp())
+/// A workflow time, checked without a clock: what `[workflow].deadline`, `workflow run
+/// --deadline` and `--give-up`, and `resume --extend deadline=` take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct When(Form);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Form {
+    Instant(jiff::Timestamp),
+    Civil(jiff::civil::DateTime),
+    Calendar(crate::utils::time::CalendarAt),
+    After(std::time::Duration),
 }
 
-/// A start's give-up instant, in the grammar of the workflow `deadline`.
-pub fn parse_give_up(raw: &str) -> Result<jiff::Timestamp, String> {
-    parse_deadline(raw).map_err(|_| {
-        format!(
-            "{raw:?} is not an instant; give a timestamp (2026-11-13T21:00:00Z), a local \
-             date-time (2026-11-13T21:00), or a date (2026-11-14)"
-        )
-    })
+/// Check a workflow time's spelling; the refusal names the value and the accepted forms.
+pub fn parse_when(raw: &str) -> Result<When, String> {
+    use crate::utils::time::CalendarAt;
+    let form = if let Ok(at) = raw.parse::<jiff::Timestamp>() {
+        Form::Instant(at)
+    } else if let Ok(civil) = raw.parse::<jiff::civil::DateTime>() {
+        Form::Civil(civil)
+    } else if let Ok(date) = raw.parse::<jiff::civil::Date>() {
+        Form::Civil(date.at(0, 0, 0, 0))
+    } else if let Some(at) = CalendarAt::parse(raw) {
+        Form::Calendar(at)
+    } else if let Ok(delay) = crate::harness::duration::duration(raw) {
+        Form::After(delay)
+    } else {
+        return Err(format!(
+            "{raw:?} is not a workflow time; give a duration (8h), HH:MM, <weekday> HH:MM, a \
+             date (2026-11-14), a date-time (2026-11-14 09:00), or a timestamp \
+             (2026-11-13T21:00:00Z)"
+        ));
+    };
+    Ok(When(form))
+}
+
+impl When {
+    /// The instant this time names from `now`: a duration after it, `HH:MM` and `<weekday>
+    /// HH:MM` at their first instant strictly after it, and a date or date-time as written in
+    /// `zone`, even when it has passed.
+    pub fn resolve(
+        self,
+        now: jiff::Timestamp,
+        zone: &jiff::tz::TimeZone,
+    ) -> Result<jiff::Timestamp, String> {
+        let at = match self.0 {
+            Form::Instant(at) => Some(at),
+            Form::Civil(civil) => civil.to_zoned(zone.clone()).ok().map(|at| at.timestamp()),
+            Form::Calendar(at) => at.resolve(&now.to_zoned(zone.clone())),
+            Form::After(delay) => now.checked_add(delay).ok(),
+        };
+        at.ok_or_else(|| "the time lies outside the calendar".to_owned())
+    }
 }
 
 pub(super) fn parse_window(raw: &str) -> Result<crate::harness::when::WhenExpr, SpecErr> {

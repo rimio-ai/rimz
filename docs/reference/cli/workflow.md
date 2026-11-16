@@ -42,14 +42,15 @@ The checkout name is the basename of the run's recorded scope path, kept after t
 
 ## Run a workflow
 
-`rimz workflow run <NAME|DIR> [-w <WORKTREE>] [--prompt <TEXT>] [--give-up <WHEN>] [--skip-capacity]`
+`rimz workflow run <NAME|DIR> [-w <WORKTREE>] [--prompt <TEXT>] [--deadline <WHEN>] [--give-up <WHEN>] [--skip-capacity]`
 
 | Argument or flag | Meaning |
 | --- | --- |
 | `<NAME\|DIR>` | A single path component is a name under `~/.rimz/workflows/`. Anything else is a directory, which must exist inside `~/.rimz/workflows/` (otherwise `<NAME\|DIR>: directory must exist inside <home>`). `.` is the current directory. |
 | `-w, --worktree <WORKTREE>` | Select an existing RimZ-owned worktree instead of the current checkout. It never creates one. A workflow with `scope = "project"` refuses it. |
 | `--prompt <TEXT>` | Stored unchanged, appended to every agent step's prompt and every message step's message, and exposed as `prompt` in `context.json`. The value may begin with `-`. For a value spelled like a flag (`--help`), write `--prompt=<TEXT>`. |
-| `--give-up <WHEN>` | The run's give-up instant. A capacity wait at an agent step without its own `admission.give-up` gives up at `<WHEN>` and fails with cause `capacity`. `<WHEN>` is a timestamp (`2026-11-13T21:00:00Z`), a local date-time (`2026-11-13T21:00`), or a date (`2026-11-14`), the forms a workflow `deadline` takes. Any other value exits 2 with those forms. An instant already past gives up at the first hold. |
+| `--deadline <WHEN>` | The run's deadline, in place of the definition's `[workflow].deadline`; with neither, the run has no deadline. `<WHEN>` is a [workflow time](#workflow-times), resolved when the run is created and stored on the run, where `resume --extend deadline=` replaces it. Any other value exits 2 with the forms. An instant already past fires the deadline at the run's first advance. |
+| `--give-up <WHEN>` | The run's give-up instant. A capacity wait at an agent step without its own `admission.give-up` gives up at `<WHEN>` and fails with cause `capacity`. `<WHEN>` is a [workflow time](#workflow-times), resolved when the run is created. Any other value exits 2 with the forms. An instant already past gives up at the first hold. |
 | `--skip-capacity` | The run's agent steps launch past every capacity hold, workflow and step limits and the machine [start throttle](../../guide/configuration.md#agent-start-limits) alike, and record the holds they passed. A usage window or a checkout occupant still holds them. `restart` and `resume` keep the run's choice. |
 
 Before creating a run, the command validates the definition and refuses on any error, printing each as `<workflow>: <path>: <message>`. Warnings alone do not refuse: each prints to stderr as `warning: <workflow>: <path>: <reason>` before starting. It needs an existing room (`rimz start` creates one).
@@ -63,6 +64,21 @@ On success it prints three lines:
 1. The run id, printed at once. This line keeps its scripting format.
 2. The run's work directory (`RIMZ_WORKFLOW_DIR`) where the run's home is after the first decision: the finished directory when the run ended in it, since an ended run's home moves there. This line keeps its scripting format.
 3. `→ rimz workflow show <run>`.
+
+### Workflow times
+
+`[workflow].deadline`, `run --deadline`, `run --give-up`, and `resume --extend deadline=` take one spelling. `workflow validate`, the start's validation, and the flags check it without a clock, and refuse any other value with `"<value>" is not a workflow time; give a duration (8h), HH:MM, <weekday> HH:MM, a date (2026-11-14), a date-time (2026-11-14 09:00), or a timestamp (2026-11-13T21:00:00Z)`.
+
+| Form | Example | Instant |
+| --- | --- | --- |
+| Duration | `8h`, `90m`, `2d` | That long after the time resolves. Units `s`, `m`, `h`, `d`, at most `365d`. |
+| `HH:MM` | `18:00` | The first such time strictly after the time resolves: a time equal to now names tomorrow's. |
+| `<weekday> HH:MM` | `fri 18:00` | The first such day and time strictly after the time resolves. A weekday is its name or a short form (`mon`, `tues`, `thurs`), in any case. |
+| `YYYY-MM-DD HH:MM`, `YYYY-MM-DDTHH:MM[:SS]` | `2026-11-14 09:00` | As written. |
+| `YYYY-MM-DD` | `2026-11-14` | Midnight at the start of that date. |
+| RFC 3339 timestamp | `2026-11-13T21:00:00Z` | As written, in its own offset. |
+
+Every form but a duration and a timestamp reads in the top-level [`timezone`](../../guide/configuration.md#sidebar-rendering) setting, or the system zone when it is unset. A time resolves once: a run's deadline and give-up when `run` creates the run, an extension when `resume` runs. An instant already past is accepted, with no rounding. A run keeps the instant it stored, whatever its definition says later.
 
 The first advance starts in the background, and the command waits up to 30 seconds for its first decision before it prints lines 2 and 3; a run that ends in that time is waited for until its advance has moved its home. When the run is held in front of its node by capacity, a usage window, or a checkout occupant, a fourth line names the node and the hold in the phrase `show` prints, such as `build held 0s · claude: no capacity (your check)`. `rimz loop fire` and `rimz workflow restart` add the same line to their receipts. A run that launched, ended, or whose advance exited without deciding prints the three lines alone.
 
@@ -128,7 +144,7 @@ A definition is `workflow.toml`: one `[workflow]` table and any number of nodes,
 | `scope` | Required. `worktree` or `project`. |
 | `start` | Required. The first node: a check or a step, never an `@` target. |
 | `summary` | One nonempty line describing the workflow. |
-| `deadline` | A date (local midnight), local date and time, or RFC 3339 instant that bounds the run. |
+| `deadline` | A [workflow time](#workflow-times) that bounds the run, resolved when the run is created; a duration counts from then. `run --deadline` replaces it. |
 | `limit` | `max-parallel` and `stagger`, at least one ([limits](#limits-and-capacity)). |
 | `on.failed` | Where a failure goes when its node routes neither its cause nor `on.failed` ([failures](#failures)). |
 
@@ -624,7 +640,7 @@ An edge's `source` is `explicit`, `on.failed` (the node's catch-all), `workflow.
 | --- | --- |
 | `never: no timeout` | The agent step sets no `timeout`. |
 | `never: no max-visits` | The step sets no `max-visits`. |
-| `only with a deadline` | The run recorded no deadline at its start: a run needs a deadline grant. |
+| `only with a deadline` | The definition sets no `[workflow].deadline`: the edge fires on a run started with `run --deadline` or granted one by `resume --extend deadline=`. |
 
 Rows follow the graph from `start`, with a returning step immediately below the earlier check that sends it. Unreachable nodes come last in name order. A check's edges follow case order without repeats, then `else`, then other explicit outcomes in name order. A step's edges start with `then`, then `asked`. One edge per cause the node's kind raises follows, in the order of the [cause table](#failures), each with the target its chain resolves to. A session's `rest-check` edges come last, in list order. Command rows list `then`, `died`, `timeout`, `visits`, and `deadline`. Message rows list `then`, `undelivered`, `visits`, and `deadline`. An agent step's `capacity` edge always fires: a start wider than a machine cap raises `capacity` on any run, a `--skip-capacity` run included. A sleep's edges are explicit `then → <then>`, default `sleeping → @wait`, default `unknown → @wait` only with `when`, and `deadline`, in that order, with no timeout edge.
 
@@ -886,7 +902,7 @@ An unfinished run holds its worktree against removal and automatic cleanup, even
 | Grant | Effect |
 | --- | --- |
 | `visits=+N` | N is a positive integer. Adds N to every step's `max-visits` for this run. The grant survives restarts and resets. |
-| `deadline=<WHEN>` | Replaces the run's deadline and arms it again. `WHEN` is an RFC 3339 instant or a local date or date-time. A bare date is local midnight. |
+| `deadline=<WHEN>` | Replaces the run's deadline and arms it again. `WHEN` is a [workflow time](#workflow-times), resolved when the resume runs: `deadline=2h` is two hours after it. A spelling it refuses fails with `invalid deadline extension: ` and that refusal. |
 
 Grants live on the run record, never in the definition, and `show` includes them in the limit, such as `visits  fix 3 of 5`.
 

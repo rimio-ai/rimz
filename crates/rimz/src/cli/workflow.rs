@@ -206,10 +206,15 @@ enum Command {
         /// `context.json`.
         #[arg(long, allow_hyphen_values = true, value_name = "TEXT")]
         prompt: Option<String>,
-        /// Give up a capacity wait at this instant, at a step that sets no `admission.give-up`: a
-        /// timestamp, a local date-time, or a date.
-        #[arg(long, value_name = "WHEN", value_parser = workflow::parse_give_up)]
-        give_up: Option<jiff::Timestamp>,
+        /// End the run through its `deadline` routes at this time, in place of the definition's
+        /// `[workflow].deadline`: a duration, `HH:MM`, `<weekday> HH:MM`, a date, a date-time, or
+        /// a timestamp.
+        #[arg(long, value_name = "WHEN", value_parser = workflow::parse_when)]
+        deadline: Option<workflow::When>,
+        /// Give up a capacity wait at this time, at a step that sets no `admission.give-up`; takes
+        /// what --deadline takes.
+        #[arg(long, value_name = "WHEN", value_parser = workflow::parse_when)]
+        give_up: Option<workflow::When>,
         /// Launch past every capacity hold instead of waiting, recording each one on the
         /// attempt.
         #[arg(long)]
@@ -255,8 +260,8 @@ enum Command {
         /// Move the run to this node; a live attempt at its current node ends canceled.
         #[arg(long, value_name = "NODE")]
         at: Option<String>,
-        /// Grant this run more bounds: `visits=+N` or `deadline=<WHEN>`. Repeatable; an active run
-        /// takes it without --at.
+        /// Grant this run more bounds: `visits=+N` or `deadline=<WHEN>`, where WHEN takes what
+        /// `run --deadline` takes. Repeatable; an active run takes it without --at.
         #[arg(long, value_name = "GRANT")]
         extend: Vec<String>,
     },
@@ -304,12 +309,14 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             name,
             worktree,
             prompt,
+            deadline,
             give_up,
             skip_capacity,
             loop_fire_json,
         } => {
             let args = workflow::StartArgs {
                 give_up,
+                deadline,
                 capacity: if skip_capacity {
                     records::StartCapacity::Skip
                 } else {

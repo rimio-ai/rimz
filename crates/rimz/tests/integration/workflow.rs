@@ -1380,6 +1380,82 @@ fn visits_only_self_cycle_is_refused_before_launch() {
 }
 
 #[test]
+fn run_deadline_reads_the_timezone_setting_and_wins_over_the_header() {
+    let route = "[script.pr]\nrun = 'sh checks/pr.sh'\ntimeout = '1h'\n\
+                 on = { pending = '@wait', done = '@done', deadline = '@failed' }\n";
+    let (env, dir) = fixture(&format!("{HEADER}{route}"), PENDING);
+    fs::write(
+        env.rimz_home().join("config.toml"),
+        "timezone = 'Asia/Tokyo'\n",
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        env.rimz()
+            .env("TZ", "UTC")
+            .args(["workflow", "run", "review"])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let started = |output| -> String {
+        success(output)
+            .split_whitespace()
+            .find(|word| word.starts_with("wf_"))
+            .unwrap()
+            .into()
+    };
+    let forms = "is not a workflow time; give a duration (8h), HH:MM, <weekday> HH:MM, a date \
+                 (2026-11-14), a date-time (2026-11-14 09:00), or a timestamp \
+                 (2026-11-13T21:00:00Z)";
+    let refused = run(&["--deadline", "never"]);
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert_eq!(refused.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains(&format!("\"never\" {forms}")), "{stderr}");
+
+    let id = started(run(&["--deadline", "2099-01-02 09:00"]));
+    let value = until(&env, &id, |v| v["record"]["wait"].is_object());
+    assert_eq!(value["record"]["deadline"], "2099-01-02T00:00:00Z");
+    let text = success(command(&env, &["workflow", "show", &id]));
+    assert!(!text.contains("only with a deadline"), "{text}");
+    success(command(&env, &["workflow", "cancel", &id]));
+
+    let id = started(run(&["--deadline", "2000-01-01"]));
+    let value = settled(&env, &id, "failed");
+    assert_eq!(value["record"]["deadline"], "1999-12-31T15:00:00Z");
+    let routes = events(&value, "route");
+    assert!(
+        routes.iter().any(|row| row["outcome"] == "deadline"),
+        "{routes:#?}"
+    );
+
+    let headed = format!("{HEADER}deadline = '8h'\n{route}");
+    fs::write(dir.join("workflow.toml"), &headed).unwrap();
+    for flag in [&[][..], &["--deadline", "2099-01-02 09:00"]] {
+        let id = started(run(flag));
+        let value = until(&env, &id, |v| v["record"]["wait"].is_object());
+        let created: jiff::Timestamp =
+            serde_json::from_value(value["record"]["created_at"].clone()).unwrap();
+        let expected = if flag.is_empty() {
+            json!(created + jiff::SignedDuration::from_hours(8))
+        } else {
+            json!("2099-01-02T00:00:00Z")
+        };
+        assert_eq!(value["record"]["deadline"], expected, "{flag:?}");
+        success(command(&env, &["workflow", "cancel", &id]));
+    }
+
+    fs::write(dir.join("workflow.toml"), headed.replace("'8h'", "'never'")).unwrap();
+    let output = command(&env, &["workflow", "validate"]);
+    let text = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("workflow.deadline") && text.contains(&format!("\"never\" {forms}")),
+        "{text}"
+    );
+}
+
+#[test]
 fn deadline_routes_once_and_can_be_rearmed() {
     let spec = format!(
         "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\non.failed = 'report'\n{WAIT}[script.report]\nwake=['review.ready']\nrun = 'sh checks/pr.sh'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
