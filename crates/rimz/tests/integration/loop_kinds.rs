@@ -150,6 +150,46 @@ fn loop_add_stores_each_kind_as_its_target_and_tail_unchanged() {
 
 /// Each tail or flag a task of a launch kind cannot carry is refused at add, naming the task,
 /// the kind flag and its target, and the fix; nothing is written.
+/// `loop add` resolves an agent target in the lane its fire would launch into, as the launch
+/// does: a bare role of the team that holds the tail's `--channel` lane is that team's role,
+/// and outside the lane it stays unknown.
+#[test]
+fn loop_add_resolves_a_bare_role_in_its_team_lane() {
+    let env = live_room();
+    kinds_fixture(&env);
+    env.install_agent_hooks("claude");
+    crate::channel::register_idle_lane_agent(&env, "sess-forge-coder", "forge", Some("forge"));
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "inlane",
+            "--agent",
+            "reviewer",
+            "--every",
+            "1h",
+            "--",
+            "--channel",
+            "forge",
+            "go",
+        ],
+    );
+    let outside = env
+        .rimz()
+        .args([
+            "loop", "add", "outside", "--agent", "reviewer", "--every", "1h", "--", "go",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&outside.stderr);
+    assert!(
+        !outside.status.success()
+            && stderr.contains("no team, profile, or command named `reviewer`"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn loop_add_refuses_what_a_launch_task_cannot_carry() {
     let env = live_room();

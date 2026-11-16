@@ -1426,8 +1426,33 @@ pub(super) fn check_loop_launch(
     }
     let machine_config = crate::cli::machine_config();
     let effective = rimz::config::effective::load(&machine_config, place.project_root)?;
+    // The lane a fire launches into, as the launch reads it; a fire's own worktree is not
+    // known yet, so only the tail's `--channel` names one there.
+    let lane = launch
+        .cohort
+        .channel
+        .as_deref()
+        .map(rimz::ids::LaneName::dashed)
+        .or_else(|| {
+            (!place.each_worktree && !place.fresh_worktree).then(|| {
+                rimz::harness::lanes::directory_channel(place.project_root, place.project_root)
+            })?
+        });
+    let snapshot = match &lane {
+        Some(_) if launch.spec.is_some() => {
+            let workspace = rimz::WorkspaceResolver::resolve_participant(
+                place.project_root,
+                Some(place.project_root.to_path_buf()),
+            )?;
+            crate::cli::open_existing_store(&workspace)?
+                .map(|store| store.snapshot_cached())
+                .transpose()
+                .context("reading agent snapshot")?
+        }
+        _ => None,
+    };
     resolve_finalized_layout(
-        None,
+        snapshot.as_ref(),
         &machine_config,
         &effective,
         rimz::config::effective::ProfileScope::Agents,
@@ -1436,7 +1461,7 @@ pub(super) fn check_loop_launch(
         &launch.overrides,
         launch.cohort.budget,
         launch.max_turns,
-        None,
+        lane.as_ref(),
         launch.name.is_some(),
         None,
     )?;
