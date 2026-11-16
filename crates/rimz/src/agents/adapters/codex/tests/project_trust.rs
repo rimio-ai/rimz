@@ -222,6 +222,45 @@ fn project_trust_accepts_canonical_and_symlink_keys() {
 }
 
 #[test]
+fn undecided_refusal_says_why_the_grant_folder_differs_from_the_launch_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let cwd = dir.path().join("sub");
+    std::fs::create_dir(&cwd).unwrap();
+    let login_env = std::collections::BTreeMap::from([(
+        "CODEX_HOME".to_owned(),
+        dir.path().to_string_lossy().into_owned(),
+    )]);
+    let adapter = crate::agents::definition_by_kind("codex").unwrap();
+    let error = crate::agents::preflight_launch_dir(
+        adapter,
+        &cwd,
+        Some(dir.path()),
+        &login_env,
+        LaunchDirMode::Supervised,
+    )
+    .unwrap_err();
+    let crate::agents::LaunchDirRefusal::Undecided { fix, .. } = &error else {
+        panic!("expected a folder-trust refusal");
+    };
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "codex has no trust decision and would stop at its trust prompt for `{}` (codex keys \
+             its trust for that directory on `{}`): {}",
+            cwd.display(),
+            dir.path().display(),
+            fix
+        )
+    );
+    assert!(
+        fix.contains(&format!("in `{}`", dir.path().display())),
+        "{fix}"
+    );
+}
+
+#[test]
 fn codex_config_path_honors_codex_home_and_override() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join(".git")).unwrap();
@@ -250,7 +289,7 @@ fn codex_config_path_honors_codex_home_and_override() {
             LaunchDirMode::Supervised,
         )
         .unwrap_err();
-        let crate::agents::LaunchDirRefusal::Undecided { kind, dir, fix } = &error else {
+        let crate::agents::LaunchDirRefusal::Undecided { kind, dir, fix, .. } = &error else {
             panic!("expected a folder-trust refusal");
         };
         assert_eq!(*kind, "codex");
