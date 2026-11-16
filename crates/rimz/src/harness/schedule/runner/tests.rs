@@ -54,12 +54,12 @@ fn terminal_records_name_the_lock_that_refused_other_fires() {
         let paths = StatePaths::for_project_root(root.path()).unwrap();
         let catalog = TaskCatalog::load(Some(root.path())).unwrap();
         let mut fire = backlog_fire(root.path(), &catalog);
-        assert!(fire.prepare_run_lock().unwrap().is_none());
+        assert!(fire.core.prepare_run_lock().unwrap().is_none());
         let (_, Some(info)) = held_run_lock("pending", root.path()).unwrap().unwrap() else {
             panic!("holder is recorded")
         };
         let mut refused = backlog_fire(root.path(), &catalog);
-        let refused = refused.prepare_run_lock().unwrap().unwrap();
+        let refused = refused.core.prepare_run_lock().unwrap().unwrap();
         assert_eq!(refused.record.result, LoopRunResult::Deferred);
         assert_eq!(refused.record.holder, Some(info));
         assert_eq!(refused.record.run_lock, None);
@@ -73,7 +73,7 @@ fn terminal_records_name_the_lock_that_refused_other_fires() {
         )
         .unwrap();
 
-        let done = fire.record_terminal_with(
+        let done = fire.core.record_terminal_with(
             LoopRunResult::Completed,
             LoopRunPresentation::default(),
             TaskFireNotice::None,
@@ -83,7 +83,7 @@ fn terminal_records_name_the_lock_that_refused_other_fires() {
         assert_eq!(done.record.run_lock, Some(info));
         let recorded = run_log::task_records(
             &crate::disk::paths::logs_dir(),
-            &fire.task_id,
+            &fire.core.task_id,
             Some(root.path()),
         );
         assert_eq!(recorded.last().unwrap().run_lock, Some(info));
@@ -133,11 +133,11 @@ fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
                     Instant::now(),
                 )
                 .unwrap();
-                fire.prepare_run_lock().unwrap();
+                fire.core.prepare_run_lock().unwrap();
                 let path = backlog::path(&paths);
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(path, contents).unwrap();
-                let result = fire.reconcile_backlog();
+                let result = fire.core.reconcile_backlog();
                 if mode == LoopRunMode::Scheduled && overlap.unwrap_or_default().retains_triggers()
                 {
                     assert!(
@@ -150,7 +150,7 @@ fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
                     matches!(result, Ok(None)),
                     "an unrelated unreadable backlog must not cause an errored strike: {mode:?}, {overlap:?}"
                 );
-                let done = fire.record_terminal_with(
+                let done = fire.core.record_terminal_with(
                     LoopRunResult::Completed,
                     LoopRunPresentation::default(),
                     TaskFireNotice::None,
@@ -162,7 +162,7 @@ fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
                 assert!(
                     !super::super::strikes::load()
                         .unwrap()
-                        .contains_key(&fire.task.key(name))
+                        .contains_key(&fire.core.task.key(name))
                 );
             }
         }
@@ -183,8 +183,8 @@ fn reconciliation_keeps_firing_order_on_acquisition_and_after_admission() {
             } else {
                 (1, "a", "b", 2, "b", "c")
             };
-        fire.now = Timestamp::from_second(own_time).unwrap();
-        fire.signal = Some(
+        fire.core.now = Timestamp::from_second(own_time).unwrap();
+        fire.core.signal = Some(
             serde_json::from_value(serde_json::json!({
                 "name": "trunk.moved", "source": "git",
                 "payload": {"from": own_from, "to": own_to}
@@ -192,10 +192,10 @@ fn reconciliation_keeps_firing_order_on_acquisition_and_after_admission() {
             .unwrap(),
         );
         if after_admission {
-            fire.prepare_run_lock().unwrap();
+            fire.core.prepare_run_lock().unwrap();
         }
         let mut locked = LockedBacklog::acquire(&paths).unwrap();
-        locked.record.tasks.insert(fire.task_id.to_string(), serde_json::from_value(serde_json::json!({
+        locked.record.tasks.insert(fire.core.task_id.to_string(), serde_json::from_value(serde_json::json!({
             "triggers": [{"arrived_at": Timestamp::from_second(waiting_time).unwrap(),
                 "signal": {"name": "trunk.moved", "payload": {"from": waiting_from, "to": waiting_to}},
                 "absorbed": 0}]
@@ -203,18 +203,18 @@ fn reconciliation_keeps_firing_order_on_acquisition_and_after_admission() {
         locked.save().unwrap();
         drop(locked);
         if after_admission {
-            assert!(fire.reconcile_backlog().unwrap().is_none());
+            assert!(fire.core.reconcile_backlog().unwrap().is_none());
         } else {
-            assert!(fire.prepare_run_lock().unwrap().is_none());
+            assert!(fire.core.prepare_run_lock().unwrap().is_none());
         }
         assert_eq!(
-            fire.signal.as_ref().unwrap().payload,
+            fire.core.signal.as_ref().unwrap().payload,
             *serde_json::json!({"from": "a", "to": "c"})
                 .as_object()
                 .unwrap()
         );
-        assert_eq!(fire.waiting_trigger().arrived_at.as_second(), 2);
-        assert_eq!(fire.absorbed, 1);
+        assert_eq!(fire.core.waiting_trigger().arrived_at.as_second(), 2);
+        assert_eq!(fire.core.absorbed, 1);
     }
 }
 
@@ -227,7 +227,7 @@ fn stop_marks_retype_the_holder_once_and_replacements_never_strike() {
         let catalog = TaskCatalog::load(Some(root.path())).unwrap();
         for strike in 1..=3 {
             let mut fire = backlog_fire(root.path(), &catalog);
-            fire.prepare_run_lock().unwrap();
+            fire.core.prepare_run_lock().unwrap();
             let (_, Some(info)) = held_run_lock("pending", root.path()).unwrap().unwrap() else {
                 panic!("holder is recorded")
             };
@@ -235,7 +235,7 @@ fn stop_marks_retype_the_holder_once_and_replacements_never_strike() {
             locked
                 .record
                 .tasks
-                .entry(fire.task_id.to_string())
+                .entry(fire.core.task_id.to_string())
                 .or_default()
                 .stopping = Some(backlog::StopMark {
                 pid: info.pid,
@@ -244,7 +244,7 @@ fn stop_marks_retype_the_holder_once_and_replacements_never_strike() {
             });
             locked.save().unwrap();
             drop(locked);
-            let done = fire.record_terminal_with(
+            let done = fire.core.record_terminal_with(
                 LoopRunResult::Canceled,
                 LoopRunPresentation::default(),
                 TaskFireNotice::None,
@@ -264,7 +264,7 @@ fn stop_marks_retype_the_holder_once_and_replacements_never_strike() {
                 !backlog::load(&paths)
                     .unwrap()
                     .tasks
-                    .contains_key(fire.task_id.as_str()),
+                    .contains_key(fire.core.task_id.as_str()),
                 "the recording runner must clear its mark"
             );
             assert!(
@@ -281,14 +281,14 @@ fn arrival_reprobes_a_released_lock_and_absorbs_the_waiting_slot() {
     record_room(root.path()).unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
     let mut fire = backlog_fire(root.path(), &catalog);
-    seed_backlog(root.path(), &fire.task_id);
-    assert!(fire.prepare_run_lock().unwrap().is_none());
+    seed_backlog(root.path(), &fire.core.task_id);
+    assert!(fire.core.prepare_run_lock().unwrap().is_none());
     assert!(
-        fire.run_lock.is_some(),
+        fire.core.run_lock.is_some(),
         "an arrival that finds the lock free runs"
     );
     assert_eq!(
-        serde_json::to_value(fire.terminal_record(LoopRunResult::Completed)).unwrap()["absorbed"],
+        serde_json::to_value(fire.core.terminal_record(LoopRunResult::Completed)).unwrap()["absorbed"],
         1
     );
 }
@@ -301,33 +301,36 @@ fn release_unlocks_under_the_backlog_lock_and_spawns_only_when_triggers_wait() {
         let paths = StatePaths::for_project_root(root.path()).unwrap();
         let catalog = TaskCatalog::load(Some(root.path())).unwrap();
         let mut fire = backlog_fire(root.path(), &catalog);
-        fire.mode = LoopRunMode::Manual;
-        fire.prepare_run_lock().unwrap();
+        fire.core.mode = LoopRunMode::Manual;
+        fire.core.prepare_run_lock().unwrap();
         if pending {
-            seed_backlog(root.path(), &fire.task_id);
+            seed_backlog(root.path(), &fire.core.task_id);
         }
-        let lock_file = run_lock_file_name(fire.task_id.as_str(), None);
+        let lock_file = run_lock_file_name(fire.core.task_id.as_str(), None);
         let mut spawns = 0;
-        fire.release_run_lock_with(|_, _, _| {
-            spawns += 1;
-            assert!(
-                crate::disk::lock::WorkspaceLock::try_acquire(
-                    &paths.lock_path("loop-backlog.lock")
-                )
-                .unwrap()
-                .is_none()
-            );
-            assert!(matches!(
-                probe_run_lock_path(&run_lock_path(&lock_file, &fire_entry(root.path())).unwrap())
+        fire.core
+            .release_run_lock_with(|_, _, _| {
+                spawns += 1;
+                assert!(
+                    crate::disk::lock::WorkspaceLock::try_acquire(
+                        &paths.lock_path("loop-backlog.lock")
+                    )
+                    .unwrap()
+                    .is_none()
+                );
+                assert!(matches!(
+                    probe_run_lock_path(
+                        &run_lock_path(&lock_file, &fire_entry(root.path())).unwrap()
+                    )
                     .unwrap(),
-                RunLockState::Held(_)
-            ));
-            Ok(())
-        })
-        .unwrap();
+                    RunLockState::Held(_)
+                ));
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(spawns, usize::from(pending));
         assert!(
-            fire.run_lock.is_none(),
+            fire.core.run_lock.is_none(),
             "release must let go even when nothing waits"
         );
     }
@@ -347,8 +350,8 @@ fn a_cold_check_observes_the_run_lock_before_it_can_execute() {
     let paths = StatePaths::for_project_root(root.path()).unwrap();
     let runtime = RuntimePaths::for_state(&paths).unwrap();
     let mut fire = backlog_fire(root.path(), &catalog);
-    fire.entry.overlap = None;
-    let task = fire.task_id.clone();
+    fire.core.entry.overlap = None;
+    let task = fire.core.task_id.clone();
     let mut checked = false;
     fire.prepare(&mut |_| {
         checked = true;
@@ -369,9 +372,9 @@ fn a_drainer_claims_nothing_while_held_then_pops_exactly_one_when_free() {
     record_room(root.path()).unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
     let mut fire = backlog_fire(root.path(), &catalog);
-    seed_backlog(root.path(), &fire.task_id);
+    seed_backlog(root.path(), &fire.core.task_id);
     let lock_path = run_lock_path(
-        &run_lock_file_name(fire.task_id.as_str(), None),
+        &run_lock_file_name(fire.core.task_id.as_str(), None),
         &fire_entry(root.path()),
     )
     .unwrap();
@@ -381,17 +384,17 @@ fn a_drainer_claims_nothing_while_held_then_pops_exactly_one_when_free() {
         panic!("fixture takes lock")
     };
     assert!(!fire.take_backlog().unwrap());
-    assert!(!fire.finished, "held drainer writes no row");
+    assert!(!fire.core.finished, "held drainer writes no row");
     drop(held);
     let paths = StatePaths::for_project_root(root.path()).unwrap();
     let arrived_at =
-        backlog::load(&paths).unwrap().tasks[fire.task_id.as_str()].triggers[0].arrived_at;
+        backlog::load(&paths).unwrap().tasks[fire.core.task_id.as_str()].triggers[0].arrived_at;
     assert!(
         fire.take_backlog().unwrap(),
         "free drainer must claim waiting work"
     );
-    assert_eq!(fire.waiting_trigger().arrived_at, arrived_at);
-    assert!(!fire.finished);
+    assert_eq!(fire.core.waiting_trigger().arrived_at, arrived_at);
+    assert!(!fire.core.finished);
 }
 
 fn record_room(root: &Path) -> Result<()> {
@@ -465,7 +468,7 @@ fn scheduled_workflow_rechecks_launch_memory_under_early_and_late_run_locks() {
         outcomes.push((
             matches!(result, Ok(TaskFirePlan::AlreadyLaunched)),
             calls,
-            fire.run_lock.is_some(),
+            fire.core.run_lock.is_some(),
         ));
     }
     // Launch memory is read before the lease, then again under it after the room is born.
@@ -491,9 +494,9 @@ fn at_lock_refusals_store_the_holder_without_freezing_its_age() {
             record_room(root.path()).unwrap();
             let catalog = TaskCatalog::load(Some(root.path())).unwrap();
             let mut fire = backlog_fire(root.path(), &catalog);
-            fire.mode = mode;
-            fire.entry.overlap = Some(policy);
-            let path = fire.fire_run_lock_path().unwrap();
+            fire.core.mode = mode;
+            fire.core.entry.overlap = Some(policy);
+            let path = fire.core.fire_run_lock_path().unwrap();
             std::fs::write(
                 &path,
                 if named {
@@ -505,7 +508,7 @@ fn at_lock_refusals_store_the_holder_without_freezing_its_age() {
             .unwrap();
             let lock = File::open(&path).unwrap();
             lock.try_lock().unwrap();
-            let finished = fire.prepare_run_lock().unwrap().unwrap();
+            let finished = fire.core.prepare_run_lock().unwrap().unwrap();
             let value = serde_json::to_value(&finished.record).unwrap();
             let TaskFireNotice::Overlap { detail } = finished.notice else {
                 panic!("expected overlap notice");
@@ -640,8 +643,8 @@ fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
         crate::harness::schedule::instances::insert(&state, name, &entry).unwrap();
         let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
         let mut fire = skipped_fire(name, &catalog, None);
-        fire.mode = mode;
-        let finished = fire.record_gate(result, "no surplus".to_owned());
+        fire.core.mode = mode;
+        let finished = fire.core.record_gate(result, "no surplus".to_owned());
         assert_eq!(finished.record.result, result, "{name}");
         assert!(
             matches!(finished.notice, TaskFireNotice::Gate { .. }),
@@ -752,7 +755,7 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
             Instant::now(),
         )
         .unwrap();
-        fire.run_lock_path = |file, entry| {
+        fire.core.run_lock_path = |file, entry| {
             let runtime =
                 RuntimePaths::under(WorkspaceId::from_project_root(&entry.root), &entry.root)?;
             Ok(runtime.lock_path(file))
@@ -836,10 +839,11 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
     .unwrap()
     .with_condition(Some(evidence.clone()));
     assert_eq!(
-        fire.effect_prompt(fire.entry.prompt.clone().unwrap_or_default()),
+        fire.core
+            .effect_prompt(fire.core.entry.prompt.clone().unwrap_or_default()),
         "Rule `ship` fired here. ci.log: \"red\\nlog\" · pr.state: unknown · team.stage: Done"
     );
-    let record = fire.terminal_record(LoopRunResult::Completed);
+    let record = fire.core.terminal_record(LoopRunResult::Completed);
     assert_eq!(
         record.kind,
         Some(crate::harness::schedule::TaskKind::Routine)
@@ -848,9 +852,10 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
         serde_json::to_value(&record).unwrap()["condition"],
         serde_json::to_value(&evidence).unwrap()
     );
-    fire.condition = None;
+    fire.core.condition = None;
     assert_eq!(
-        fire.effect_prompt(fire.entry.prompt.clone().unwrap_or_default()),
+        fire.core
+            .effect_prompt(fire.core.entry.prompt.clone().unwrap_or_default()),
         "",
         "no evidence, no trigger text"
     );
@@ -931,7 +936,7 @@ fn assert_sealed_evidence_names_the_served_trigger(name: &str, switch: TriggerSw
     )
     .unwrap();
     let at = |offset: i64| Timestamp::from_second(now.as_second() + offset).unwrap();
-    let task = fire.task_id.clone();
+    let task = fire.core.task_id.clone();
     if switch == TriggerSwitch::RunLock {
         seed_deploy_trigger(root.path(), &task, "a", at(-1));
     }
@@ -1097,17 +1102,18 @@ fn a_fire_mark_names_its_run_and_its_booker() {
             "deadline_fired":false, "next_seq":1, "loop_report":"owed"
         }))
         .unwrap();
-        let (fire_id, _) = fire.open_fire().unwrap();
+        let (fire_id, _) = fire.core.open_fire().unwrap();
         assert_eq!(
-            fire.note_launched(&fire_id, Some(&record.id), record.created_at),
+            fire.core
+                .note_launched(&fire_id, Some(&record.id), record.created_at),
             None,
             "{name}"
         );
         let records = task_record::load().unwrap();
-        let mark = &records.get(&fire.task_id).unwrap().marks[&fire.launch_checkout()];
+        let mark = &records.get(&fire.core.task_id).unwrap().marks[&fire.core.launch_checkout()];
         assert_eq!(
             (&mark.fire, mark.run.as_ref(), &mark.booked_by, mark.once),
-            (&fire_id, Some(&run), &fire.entry.booked_by, dedupes),
+            (&fire_id, Some(&run), &fire.core.entry.booked_by, dedupes),
             "{name}"
         );
     }
@@ -1211,10 +1217,11 @@ fn a_workflow_launch_that_exited_0_is_launched_wherever_its_run_is() {
         },
         LoopRunMode::Scheduled,
     );
-    let (fire_id, _) = fire.open_fire().unwrap();
+    let (fire_id, _) = fire.core.open_fire().unwrap();
     let state = StatePaths::for_project_root(&root).unwrap();
     let run = crate::ids::WorkflowRunId::new();
     let plan = fire
+        .core
         .launch_outcome(
             LaunchKind::Workflow,
             &state,
@@ -1249,15 +1256,20 @@ fn a_dead_manual_fire_settles_as_a_manual_row() {
     record_room(&root).unwrap();
     let catalog = TaskCatalog::load(Some(&root)).unwrap();
     let fire = launch_fire(&root, &catalog, agent_entry(), LoopRunMode::Manual);
-    let (fire_id, _) = fire.open_fire().unwrap();
+    let (fire_id, _) = fire.core.open_fire().unwrap();
     task_record_store::mutate(|records| {
-        for mark in records.get_mut(&fire.task_id).unwrap().marks.values_mut() {
+        for mark in records
+            .get_mut(&fire.core.task_id)
+            .unwrap()
+            .marks
+            .values_mut()
+        {
             mark.opener = None;
         }
     })
     .unwrap();
     assert_eq!(run_log::settle_open_fires(&root), 1);
-    let rows = run_log::task_records(&logs_dir(), &fire.task_id, None);
+    let rows = run_log::task_records(&logs_dir(), &fire.core.task_id, None);
     let row = rows
         .iter()
         .find(|row| row.fire.as_ref() == Some(&fire_id))
@@ -1274,10 +1286,11 @@ fn a_scheduled_agent_fire_leaves_its_attempt_proof_at_the_fire() {
     record_room(&root).unwrap();
     let catalog = TaskCatalog::load(Some(&root)).unwrap();
     let mut fire = launch_fire(&root, &catalog, agent_entry(), LoopRunMode::Scheduled);
-    let (fire_id, _) = fire.open_fire().unwrap();
+    let (fire_id, _) = fire.core.open_fire().unwrap();
     let state = StatePaths::for_project_root(&root).unwrap();
-    let since = fire.now;
+    let since = fire.core.now;
     let plan = fire
+        .core
         .launch_outcome(
             LaunchKind::Agent,
             &state,
@@ -1286,7 +1299,7 @@ fn a_scheduled_agent_fire_leaves_its_attempt_proof_at_the_fire() {
         )
         .unwrap();
     assert!(matches!(plan, TaskFirePlan::Done(_)));
-    let key = fire.task.key(&fire.name);
+    let key = fire.core.task.key(&fire.core.name);
     assert!(fires::scheduled_since(&key, None, since).unwrap());
 }
 
@@ -1299,25 +1312,25 @@ fn a_fire_settles_the_dead_mark_it_displaces() {
     record_room(&root).unwrap();
     let catalog = TaskCatalog::load(Some(&root)).unwrap();
     let fire = launch_fire(&root, &catalog, agent_entry(), LoopRunMode::Scheduled);
-    let old = FireId::new(&fire.task_id);
+    let old = FireId::new(&fire.core.task_id);
     task_record_store::mutate(|records| {
         records
-            .get_mut(&fire.task_id)
+            .get_mut(&fire.core.task_id)
             .unwrap()
             .marks
-            .insert(fire.launch_checkout(), dead_mark(old.clone(), false));
+            .insert(fire.core.launch_checkout(), dead_mark(old.clone(), false));
     })
     .unwrap();
-    let (fresh, _) = fire.open_fire().unwrap();
+    let (fresh, _) = fire.core.open_fire().unwrap();
     assert_ne!(fresh, old);
-    let rows = run_log::task_records(&logs_dir(), &fire.task_id, None);
+    let rows = run_log::task_records(&logs_dir(), &fire.core.task_id, None);
     assert!(
         rows.iter()
             .any(|row| row.fire.as_ref() == Some(&old) && row.result == LoopRunResult::Errored),
         "{rows:?}"
     );
     let records = task_record::load().unwrap();
-    assert_eq!(records.get(&fire.task_id).unwrap().strikes, 1);
+    assert_eq!(records.get(&fire.core.task_id).unwrap().strikes, 1);
 }
 
 /// A fire opens its mark on the task id it cached at its start: a rename mid-fire mints no
@@ -1330,18 +1343,19 @@ fn a_fire_opens_its_mark_on_its_cached_task_id() {
     let catalog = TaskCatalog::load(Some(&root)).unwrap();
     let fire = launch_fire(&root, &catalog, agent_entry(), LoopRunMode::Scheduled);
     task_record_store::mutate(|records| {
-        records.get_mut(&fire.task_id).unwrap().binding.name = format!("{}-renamed", fire.name);
+        records.get_mut(&fire.core.task_id).unwrap().binding.name =
+            format!("{}-renamed", fire.core.name);
     })
     .unwrap();
-    let (fire_id, _) = fire.open_fire().unwrap();
-    assert_eq!(fire_id.task(), fire.task_id);
+    let (fire_id, _) = fire.core.open_fire().unwrap();
+    assert_eq!(fire_id.task(), fire.core.task_id);
     let records = task_record::load().unwrap();
     assert!(
         records
-            .get(&fire.task_id)
+            .get(&fire.core.task_id)
             .unwrap()
             .marks
-            .contains_key(&fire.launch_checkout())
+            .contains_key(&fire.core.launch_checkout())
     );
 }
 
@@ -1383,11 +1397,17 @@ fn a_placed_workflow_task_sees_a_hand_started_run_in_its_worktree() {
         run.id
     };
     start(&root);
-    assert!(fire.hand_started_run(&state, "smoke").unwrap().is_none());
+    assert!(
+        fire.core
+            .hand_started_run(&state, "smoke")
+            .unwrap()
+            .is_none()
+    );
     std::fs::create_dir_all(&tree).unwrap();
     let held = start(&tree.canonicalize().unwrap());
     assert_eq!(
-        fire.hand_started_run(&state, "smoke")
+        fire.core
+            .hand_started_run(&state, "smoke")
             .unwrap()
             .map(|run| run.id),
         Some(held)
@@ -1445,9 +1465,9 @@ fn a_delivery_gates_scope_then_run_lock_then_deadline_then_watch() {
     for budget in [true, false] {
         let mut fire = delivery_fire(&root, &catalog, every(), None);
         if budget {
-            fire.config = Arc::new(toml::from_str("[harness]\nbudget = \"0/day\"\n").unwrap());
+            fire.core.config = Arc::new(toml::from_str("[harness]\nbudget = \"0/day\"\n").unwrap());
         }
-        let lock = fire.fire_run_lock_path().unwrap();
+        let lock = fire.core.fire_run_lock_path().unwrap();
         let RunLockAttempt::Acquired(_held) = acquire_run_lock_file(&lock, None).unwrap() else {
             panic!("fixture takes lock")
         };
@@ -1492,18 +1512,19 @@ fn the_record_hold_lasts_until_the_lease_is_released() {
         let paths = StatePaths::for_project_root(root.path()).unwrap();
         let catalog = TaskCatalog::load(Some(root.path())).unwrap();
         let mut fire = backlog_fire(root.path(), &catalog);
-        fire.mode = LoopRunMode::Manual;
-        fire.entry.overlap = None;
-        assert!(fire.prepare_run_lock().unwrap().is_none());
+        fire.core.mode = LoopRunMode::Manual;
+        fire.core.entry.overlap = None;
+        assert!(fire.core.prepare_run_lock().unwrap().is_none());
         if unreadable {
             let path = backlog::path(&paths);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, "not json").unwrap();
         }
-        fire.record_gate(LoopRunResult::Completed, "done".to_owned());
-        assert_eq!(fire.run_lock.is_some(), unreadable, "{unreadable}");
-        assert_eq!(fire.record_hold.is_some(), unreadable, "{unreadable}");
+        fire.core
+            .record_gate(LoopRunResult::Completed, "done".to_owned());
+        assert_eq!(fire.core.run_lock.is_some(), unreadable, "{unreadable}");
+        assert_eq!(fire.core.record_hold.is_some(), unreadable, "{unreadable}");
         fire.release_run_lock().unwrap();
-        assert!(fire.run_lock.is_none() && fire.record_hold.is_none());
+        assert!(fire.core.run_lock.is_none() && fire.core.record_hold.is_none());
     }
 }
