@@ -400,8 +400,6 @@ pub(super) struct TaskRow {
     #[serde(skip)]
     in_progress: Option<InProgress<Option<RunLockInfo>>>,
     #[serde(skip)]
-    held: Vec<Held>,
-    #[serde(skip)]
     worktree_here: bool,
     #[serde(skip)]
     watcher_pid: Option<u32>,
@@ -457,22 +455,6 @@ impl CapacityWaitView {
 
     pub(super) fn reason(&self) -> &str {
         &self.reason
-    }
-}
-
-impl From<&Held> for CapacityWaitView {
-    fn from(held: &Held) -> Self {
-        let hold = attention::Hold::of_ticket(held);
-        Self {
-            kinds: held.kinds.clone(),
-            since: hold.since,
-            gives_up_at: held
-                .gives_up_ms
-                .and_then(|ms| i64::try_from(ms).ok())
-                .and_then(|ms| Timestamp::from_millisecond(ms).ok()),
-            reason: hold.reason.to_owned(),
-            hold: hold.kind,
-        }
     }
 }
 
@@ -572,10 +554,6 @@ fn load(
         let runtime = runtime_for_root(&root);
         let open = runtime.as_ref().is_some_and(fresh_sidebar_present);
         let clocks_kept = open || *timer_active.get_or_init(timer::active);
-        let mut tickets: BTreeMap<String, Vec<Held>> = BTreeMap::new();
-        for (name, held) in rimz::harness::throttle::room_held(&root) {
-            tickets.entry(name).or_default().push(held);
-        }
         let conditions = std::cell::OnceCell::new();
         let stamps = runtime
             .as_ref()
@@ -665,7 +643,6 @@ fn load(
                     wait,
                 }),
             );
-            row.held = tickets.remove(name).unwrap_or_default();
             row.refresh_attention(count, now);
             row.worktree_here =
                 here && workspace.is_some_and(|workspace| run_dir == workspace.worktree_root);
@@ -683,9 +660,7 @@ fn load(
                 .collect::<Vec<_>>();
             for (name, holder) in locks.rowless(&names) {
                 let history = stats.get(&name);
-                let held = tickets.remove(&name).unwrap_or_default();
                 let mut row = TaskRow::rowless(name, InProgress::Locked(holder), history);
-                row.held = held;
                 let (attention, reason) = attention(&row, 0, now);
                 if attention.is_some() {
                     row.attention = attention;
@@ -855,7 +830,6 @@ impl TaskRow {
             task: Some(task.clone()),
             timing: Some(timing),
             in_progress,
-            held: Vec::new(),
             worktree_here: false,
             watcher_pid,
             launched_count: 0,
@@ -949,7 +923,6 @@ impl TaskRow {
         in_progress: InProgress<Option<RunLockInfo>>,
         stats: Option<&run_log::LoopRunStats>,
     ) -> Self {
-        let held = Vec::new();
         let mut row = Self {
             name,
             section: Section::Done,
@@ -981,7 +954,6 @@ impl TaskRow {
             task: None,
             timing: None,
             in_progress: Some(in_progress),
-            held,
             worktree_here: false,
             watcher_pid: None,
             launched_count: 0,
@@ -1022,13 +994,7 @@ impl TaskRow {
     fn state_text(&self, now: Timestamp) -> String {
         let count = self.self_clearing_count();
         if self.state == TaskState::Running {
-            return render::in_flight_text(
-                self.holder(),
-                self.running_since,
-                &self.held,
-                count,
-                now,
-            );
+            return render::in_flight_text(self.running_since, count, now);
         }
         if count > 0 {
             return format!("○ {count} held");
@@ -1054,33 +1020,11 @@ impl TaskRow {
         }
     }
 
-    /// The held run lock's holder, when the lock is held and names one.
-    fn holder(&self) -> Option<RunLockInfo> {
-        match self.in_progress {
-            Some(InProgress::Locked(holder)) => holder,
-            _ => None,
-        }
-    }
-
-    fn held_starts(&self) -> impl Iterator<Item = CapacityStart> + '_ {
+    fn self_clearing_count(&self) -> usize {
         self.capacity
             .iter()
-            .cloned()
-            .chain(self.held.iter().map(|held| CapacityStart {
-                checkout: held.checkout.clone(),
-                wait: CapacityWaitView::from(held),
-            }))
-    }
-
-    fn self_clearing_count(&self) -> usize {
-        self.held_starts()
             .filter(|start| !start.wait.hold.is_some_and(|kind| kind.needs_fix()))
             .count()
-    }
-
-    fn running_agents(&self) -> bool {
-        self.state == TaskState::Running
-            && render::split_held(self.holder(), &self.held).0.is_none()
     }
 
     fn last_text(&self, now: Timestamp) -> String {
@@ -1519,9 +1463,9 @@ fn trigger_text(
 }
 
 fn attention(row: &TaskRow, count: u32, now: Timestamp) -> (Option<Attention>, String) {
-    let starts = row.held_starts().collect::<Vec<_>>();
     let facts = attention::Facts {
-        holds: starts
+        holds: row
+            .capacity
             .iter()
             .map(|start| attention::Hold {
                 since: start.wait.since,

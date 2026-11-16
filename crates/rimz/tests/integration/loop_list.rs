@@ -2206,7 +2206,6 @@ fn every_cause_reads_alike_in_list_and_reader() {
         "failing-strikes",
         "failing-exit",
         "strikes",
-        "held-ticket",
         "held-wait",
         "parked-one",
         "parked-two",
@@ -2355,21 +2354,6 @@ fn every_cause_reads_alike_in_list_and_reader() {
         .unwrap(),
     )
     .unwrap();
-    let queue = env.rimz_home().join("loops/throttle");
-    std::fs::create_dir_all(&queue).unwrap();
-    let pid = std::process::id();
-    let enqueued_ms = old.as_millisecond();
-    std::fs::write(
-        queue.join(format!("{enqueued_ms:020}-{}", uuid::Uuid::from_u128(1))),
-        serde_json::to_vec(&json!({
-            "owner": {"pid": pid, "start": rimz::proc::process_start_token(pid)},
-            "task": "held-ticket", "root": rooms["held-ticket"],
-            "checkout": rooms["held-ticket"], "enqueued_ms": enqueued_ms,
-            "state": "waiting", "reason": {"kind": "disk", "text": "free disk low at the queue"},
-        }))
-        .unwrap(),
-    )
-    .unwrap();
     seed_room_run(
         &env,
         &rooms["held-wait"],
@@ -2437,7 +2421,7 @@ fn every_cause_reads_alike_in_list_and_reader() {
         text.push_str(&loop_ok(&env, args));
     }
 
-    let expected: [(&str, Option<&str>, Option<&str>); 22] = [
+    let expected: [(&str, Option<&str>, Option<&str>); 21] = [
         ("failing", Some("failing"), Some("✗ failing")),
         (
             "failing-strikes",
@@ -2450,11 +2434,6 @@ fn every_cause_reads_alike_in_list_and_reader() {
             Some("✗ failing · 2/3 strikes · exit 2"),
         ),
         ("strikes", Some("strikes"), Some("disabled after 3 strikes")),
-        (
-            "held-ticket",
-            Some("held"),
-            Some("free disk low at the queue"),
-        ),
         ("held-wait", Some("held"), Some("free disk low at the wait")),
         ("parked-one", Some("parked"), None),
         ("parked-two", Some("parked"), None),

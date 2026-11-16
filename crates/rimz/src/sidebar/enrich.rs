@@ -592,10 +592,7 @@ pub fn project_local(
     snapshot
 }
 
-fn throttle_notices(
-    workflows: &[crate::store::workflow::RunRecord],
-    root: Option<&Path>,
-) -> Vec<ThrottleNotice> {
+fn throttle_notices(workflows: &[crate::store::workflow::RunRecord]) -> Vec<ThrottleNotice> {
     let workflow_waits = workflows
         .iter()
         .filter(|record| record.state == crate::store::workflow::RunState::Active)
@@ -608,18 +605,8 @@ fn throttle_notices(
                 wait.detail.as_deref().unwrap_or_default(),
             )
         });
-    let tickets = root
-        .map(crate::harness::throttle::room_held)
-        .unwrap_or_default();
-    let ticket_waits = tickets.iter().map(|(_, wait)| {
-        let since = i64::try_from(wait.since_ms)
-            .ok()
-            .and_then(|ms| Timestamp::from_millisecond(ms).ok())
-            .unwrap_or(Timestamp::UNIX_EPOCH);
-        (wait.hold, since, wait.reason.as_deref().unwrap_or_default())
-    });
     let mut notices: Vec<(Timestamp, ThrottleNotice)> = Vec::new();
-    for (hold, since, reason) in workflow_waits.chain(ticket_waits) {
+    for (hold, since, reason) in workflow_waits {
         let Some(kind) = hold.filter(|kind| kind.needs_fix()) else {
             continue;
         };
@@ -657,7 +644,7 @@ fn project_workflow_and_throttle_state(
         tracing::warn!(error = %err, "workflow runs unreadable for the sidebar");
         Vec::new()
     });
-    snapshot.throttle_notices = throttle_notices(&records, snapshot.project_root.as_deref());
+    snapshot.throttle_notices = throttle_notices(&records);
     records
 }
 

@@ -1571,13 +1571,6 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             } => Some(serde_json::json!({ "pid": null, "started_at": since, "run_id": null })),
             InProgress::Run { .. } => None,
         });
-        let (held, waiting) = match &view.in_progress {
-            Some(InProgress::Locked(in_flight)) => {
-                let (own, others) = split_held(in_flight.holder, &in_flight.held);
-                (own.map(held_json), others.map(held_json).collect())
-            }
-            _ => (None, Vec::new()),
-        };
         let backlog = view.backlog.as_ref().map(|backlog| {
             serde_json::json!({
                 "policy": view.entry.overlap.unwrap_or_default(),
@@ -1607,7 +1600,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             booked_by: &'a [rimz::agents::LaunchedBy],
         }
         let json = ShowJson {
-            facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "launches": view.launches, "runs": view.records, "quiet": view.quiet, "heard": view.heard, "running": running, "held": held, "waiting": waiting, "workflow_runs": view.workflow_runs, "backlog": backlog }),
+            facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "launches": view.launches, "runs": view.records, "quiet": view.quiet, "heard": view.heard, "running": running, "workflow_runs": view.workflow_runs, "backlog": backlog }),
             fresh_worktree: view.entry.fresh_worktree.as_deref(),
             kept_worktrees: view
                 .kept_worktrees
@@ -2663,76 +2656,15 @@ pub(super) fn running_text(since: Option<Timestamp>, now: Timestamp) -> String {
     }
 }
 
-/// A run waiting for its turn in the start throttle, in place of running.
-fn held_run_text(held: &Held, now: Timestamp) -> String {
-    let text = list::CapacityWaitView::from(held).text(now);
-    match &held.reason {
-        Some(reason) => format!("{text} · {reason}"),
-        None => text,
-    }
-}
-
-/// The holder's own waiting ticket, matched by pid, and the task's other
-/// waiting runs. A holder the lock does not name owns none.
-pub(super) fn split_held(
-    holder: Option<RunLockInfo>,
-    held: &[Held],
-) -> (Option<&Held>, impl Iterator<Item = &Held>) {
-    let own = holder.and_then(|info| held.iter().find(|held| held.pid == info.pid));
-    let others = held
-        .iter()
-        .filter(move |held| own.is_none_or(|own| !std::ptr::eq(own, *held)));
-    (own, others)
-}
-
-/// The task's waiting runs beside the one in flight: their count and the
-/// first one's reason.
-pub(super) fn others_held_text<'a>(mut others: impl Iterator<Item = &'a Held>) -> Option<String> {
-    let first = others.next()?;
-    Some(format!(
-        "{} held: {}",
-        1 + others.count(),
-        first.reason.as_deref().unwrap_or("waiting for its turn")
-    ))
-}
-
-/// List/watch NEXT: count self-clearing starts beside a genuinely running
-/// checkout, or in place of running when the holder itself is held. `since` is
+/// List/watch NEXT: count self-clearing starts beside a running checkout. `since` is
 /// when the running run started: the holder's, or a lock-free run's.
-pub(super) fn in_flight_text(
-    holder: Option<RunLockInfo>,
-    since: Option<Timestamp>,
-    held: &[Held],
-    count: usize,
-    now: Timestamp,
-) -> String {
-    if let Some(own) = split_held(holder, held).0 {
-        return if count > 0 {
-            format!("○ {count} held")
-        } else {
-            held_run_text(own, now)
-        };
-    }
+pub(super) fn in_flight_text(since: Option<Timestamp>, count: usize, now: Timestamp) -> String {
     let running = running_text(since, now);
     if count > 0 {
         format!("{running} · ○ {count} held")
     } else {
         running
     }
-}
-
-fn held_json(held: &Held) -> serde_json::Value {
-    let mut value = serde_json::json!({
-        "pid": held.pid,
-        "checkout": held.checkout,
-        "since": Timestamp::from_millisecond(i64::try_from(held.since_ms).unwrap_or(i64::MAX)).ok(),
-        "reason": held.reason,
-        "position": held.position,
-    });
-    if let Some(hold) = held.hold {
-        value["hold"] = serde_json::json!(hold);
-    }
-    value
 }
 
 /// The running state with the holder's pid and the run's id, for `show` and `logs`.
@@ -2746,15 +2678,8 @@ fn running_text_full(in_flight: &InFlightRun, now: Timestamp) -> String {
         .as_ref()
         .map(|run| format!(" · run {}", run.run_id))
         .unwrap_or_default();
-    let (own, others) = split_held(in_flight.holder, &in_flight.held);
-    let state = match own {
-        Some(own) => held_run_text(own, now),
-        None => running_text(in_flight.holder.map(|info| info.started_at), now),
-    };
-    let others = others_held_text(others)
-        .map(|others| format!(" · {others}"))
-        .unwrap_or_default();
-    format!("{state}{pid}{run}{others}")
+    let state = running_text(in_flight.holder.map(|info| info.started_at), now);
+    format!("{state}{pid}{run}")
 }
 
 /// The running state of a run in progress, for `show` and `logs`: the held lock's wording, or

@@ -12,7 +12,6 @@ use serde::Serialize;
 
 use crate::config::TaskEntry;
 use crate::disk::paths::{RuntimePaths, StatePaths};
-use crate::harness::throttle::{self, Held};
 use crate::harness::when::{self, CiSource, Verdict, WhenExpr, WindowReadings};
 use crate::ids::HoldKind;
 use crate::store::workflow::{RunRecord, RunState, Wait};
@@ -47,7 +46,7 @@ pub enum Attention {
     Lost,
 }
 
-/// One start of the task held for capacity: a run's capacity wait or a queue ticket.
+/// One start of the task held for capacity: a run's capacity wait.
 pub struct Hold<'a> {
     pub since: Timestamp,
     pub kind: Option<HoldKind>,
@@ -55,17 +54,6 @@ pub struct Hold<'a> {
 }
 
 impl<'a> Hold<'a> {
-    pub fn of_ticket(held: &'a Held) -> Self {
-        Self {
-            since: i64::try_from(held.since_ms)
-                .ok()
-                .and_then(|ms| Timestamp::from_millisecond(ms).ok())
-                .unwrap_or(Timestamp::UNIX_EPOCH),
-            kind: held.hold,
-            reason: held.reason.as_deref().unwrap_or("waiting for its turn"),
-        }
-    }
-
     pub fn of_wait(wait: &'a Wait) -> Self {
         Self {
             since: wait.first,
@@ -528,7 +516,7 @@ pub struct ReadContext<'a> {
 /// the caller names, by task name. Each input (the catalog, the workflow runs, the launch
 /// ledger, the condition readings, the run locks, arming, strikes) is read once per call,
 /// however many tasks the room holds. Machine-wide records (the catalog's machine rows,
-/// arming, strikes, the start queue) are read where every loop reader reads them.
+/// arming, strikes) are read where every loop reader reads them.
 pub fn read_room(
     root: &Path,
     state: &StatePaths,
@@ -565,10 +553,6 @@ pub fn read_catalog(
     let strikes = strikes::load();
     let readings = RoomReadings::new(Some(runtime), open, now.timestamp());
     let workflows = list_runs(state);
-    let mut tickets = BTreeMap::<String, Vec<Held>>::new();
-    for (task, held) in throttle::room_held(root) {
-        tickets.entry(task).or_default().push(held);
-    }
     let ledger = if tasks
         .iter()
         .any(|(_, task)| task.entry().dedupes_checkout())
@@ -604,14 +588,9 @@ pub fn read_catalog(
             let exit = acting.and_then(|acting| acting.record.exit_label());
             let launch = launch_ledger::launched(entry, name, &run_dir, &ledger);
             let fired = fired(task, launch);
-            let held = tickets
-                .get(name.as_str())
-                .map(Vec::as_slice)
-                .unwrap_or_default();
             let facts = Facts {
                 holds: capacity_waits(&workflows, name, root)
                     .map(|(_, wait)| Hold::of_wait(wait))
-                    .chain(held.iter().map(Hold::of_ticket))
                     .collect(),
                 task: Some(TaskFacts {
                     task,

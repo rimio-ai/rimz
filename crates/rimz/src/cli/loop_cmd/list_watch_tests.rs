@@ -275,18 +275,20 @@ fn band_priority_and_hold() {
 }
 
 #[test]
-fn throttle_holds_count_as_held_until_a_fix_is_needed() {
-    let mut held = running("held");
-    held.held.push(Held {
-        pid: 42,
+fn capacity_holds_count_as_held_until_a_fix_is_needed() {
+    let start = |hold, reason: &str| CapacityStart {
         checkout: "/repo".into(),
-        since_ms: 99_000_000,
-        kinds: Vec::new(),
-        gives_up_ms: None,
-        reason: Some("queued: 1 start ahead".into()),
-        hold: Some(rimz::ids::HoldKind::Queue),
-        position: 2,
-    });
+        wait: CapacityWaitView {
+            kinds: Vec::new(),
+            since: Timestamp::from_millisecond(99_000_000).unwrap(),
+            gives_up_at: None,
+            reason: reason.into(),
+            hold: Some(hold),
+        },
+    };
+    let mut held = row("held");
+    held.capacity
+        .push(start(rimz::ids::HoldKind::Queue, "queued: 1 start ahead"));
     let output = frame(&room(vec![held]), 100, 24, true);
     assert_eq!(output.lines().next(), Some("loop · ○ 1 held"));
     assert!(
@@ -300,19 +302,9 @@ fn throttle_holds_count_as_held_until_a_fix_is_needed() {
     assert_eq!(output.lines().next(), Some("loop · ✗ 1 needs you"));
 
     let mut mixed = row("mixed");
-    let ticket = |hold, reason: &str| Held {
-        pid: 42,
-        checkout: "/repo".into(),
-        since_ms: 99_000_000,
-        kinds: Vec::new(),
-        gives_up_ms: None,
-        reason: Some(reason.into()),
-        hold: Some(hold),
-        position: 1,
-    };
-    mixed.held = vec![
-        ticket(rimz::ids::HoldKind::Disk, "free disk 1 GB < 20 GB at /repo"),
-        ticket(rimz::ids::HoldKind::Queue, "queued: 1 start ahead"),
+    mixed.capacity = vec![
+        start(rimz::ids::HoldKind::Disk, "free disk 1 GB < 20 GB at /repo"),
+        start(rimz::ids::HoldKind::Queue, "queued: 1 start ahead"),
     ];
     (mixed.attention, mixed.reason) = attention(&mixed, 0, now());
     mixed.section = Section::NeedsYou;
@@ -324,7 +316,7 @@ fn throttle_holds_count_as_held_until_a_fix_is_needed() {
     assert_eq!(output.matches("free disk").count(), 1, "{output}");
 
     let mut lone = running("lone");
-    lone.held = vec![ticket(
+    lone.capacity = vec![start(
         rimz::ids::HoldKind::Disk,
         "free disk 1 GB < 20 GB at /repo",
     )];

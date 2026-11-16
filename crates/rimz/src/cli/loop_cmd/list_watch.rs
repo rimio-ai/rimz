@@ -129,7 +129,7 @@ pub(super) fn write(
 }
 
 fn held(row: &TaskRow) -> bool {
-    (!row.running_agents() && row.self_clearing_count() > 0)
+    (row.state != TaskState::Running && row.self_clearing_count() > 0)
         || matches!(
             row.state,
             TaskState::Off | TaskState::NotEnabled | TaskState::Paused | TaskState::WaitsForRoom
@@ -169,7 +169,7 @@ fn blocked(row: &TaskRow) -> bool {
 fn rank_key(row: &TaskRow) -> (u8, Option<Timestamp>, &str) {
     let (rank, next) = if row.section == Section::NeedsYou {
         (0, None)
-    } else if row.running_agents() {
+    } else if row.state == TaskState::Running {
         (1, None)
     } else if held(row) {
         (5, None)
@@ -185,7 +185,7 @@ fn rank_key(row: &TaskRow) -> (u8, Option<Timestamp>, &str) {
 
 fn next_timestamp(row: &TaskRow) -> Option<Timestamp> {
     let timing = row.timing.as_ref()?;
-    if row.running_agents() {
+    if row.state == TaskState::Running {
         return timing.scheduled_next_timestamp();
     }
     if held(row) || blocked(row) {
@@ -195,7 +195,7 @@ fn next_timestamp(row: &TaskRow) -> Option<Timestamp> {
 }
 
 fn next_style(row: &TaskRow) -> anstyle::Style {
-    if row.running_agents() {
+    if row.state == TaskState::Running {
         return ui::palette::cool();
     }
     if held(row) || blocked(row) {

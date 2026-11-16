@@ -1901,8 +1901,8 @@ pub fn loops_dir() -> PathBuf {
     rimz_home().join("loops")
 }
 
-/// The loop start throttle's queue: one ticket per run waiting for or holding
-/// the turn, shared by every room of this home.
+/// The loop start throttle's queue: one ticket per admitted or launched start,
+/// shared by every room of this home.
 pub(crate) fn loop_throttle_queue_dir() -> PathBuf {
     loops_dir().join("throttle")
 }

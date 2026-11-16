@@ -452,7 +452,6 @@ fn show_header_leads_with_the_finished_verdict_before_waiting_fires() {
         view.in_progress = Some(InProgress::Locked(InFlightRun {
             holder: None,
             run: None,
-            held: Vec::new(),
         }));
         let triggers = vec![
             serde_json::json!({
@@ -2765,50 +2764,8 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
     let holderless = InFlightRun {
         holder: None,
         run: None,
-        held: Vec::new(),
     };
     assert_eq!(running_text_full(&holderless, now), "▸ running");
-
-    let since_ms = u64::try_from((now - jiff::SignedDuration::from_secs(192)).as_millisecond())
-        .expect("after the epoch");
-    let mut held = Held {
-        pid: holder(200).pid,
-        checkout: "/repo/.worktrees/a".into(),
-        since_ms,
-        reason: Some("cpu pressure 41% ≥ 25%".to_owned()),
-        hold: None,
-        kinds: Vec::new(),
-        gives_up_ms: None,
-        position: 2,
-    };
-    let waiting = InFlightRun {
-        holder: Some(holder(200)),
-        run: None,
-        held: vec![held.clone()],
-    };
-    let phrase = rimz::theme::fmt::held_start(
-        Timestamp::from_millisecond(since_ms as i64).unwrap(),
-        None,
-        now,
-    );
-    assert_eq!(
-        running_text_full(&waiting, now),
-        format!(
-            "{phrase} · cpu pressure 41% ≥ 25% · pid {}",
-            holder(200).pid
-        )
-    );
-    let json = held_json(&held);
-    assert_eq!(json["pid"], holder(200).pid);
-    assert_eq!(json["checkout"], "/repo/.worktrees/a");
-    assert_eq!(json["reason"], "cpu pressure 41% ≥ 25%");
-    assert_eq!(json["position"], 2);
-    assert_eq!(
-        json["since"],
-        serde_json::json!(now - jiff::SignedDuration::from_secs(192))
-    );
-    held.reason = None;
-    assert_eq!(held_run_text(&held, now), phrase);
 
     let pause = Arming {
         enabled: true,
@@ -2820,7 +2777,6 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
     let in_flight = InFlightRun {
         holder: Some(holder(180)),
         run: None,
-        held: Vec::new(),
     };
     let mut out = Vec::new();
     write_show_headline(
@@ -2890,7 +2846,6 @@ fn a_run_in_progress_takes_the_headline_and_withholds_failing() {
             started_at: since,
         }),
         run: None,
-        held: Vec::new(),
     })));
     assert_eq!(
         locked[0], "sweep · routine · ▸ running 30s · pid 42",
@@ -4076,7 +4031,6 @@ fn trailing_at_lock_fires_take_no_row_and_keep_the_stale_verdict() {
         view.in_progress = running.then_some(InProgress::Locked(InFlightRun {
             holder: None,
             run: None,
-            held: Vec::new(),
         }));
         show_text(&view)
     });
@@ -4361,67 +4315,21 @@ fn watch_history_uses_verdict_words_and_output_path() {
 }
 
 #[test]
-fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
+fn a_running_task_shows_its_held_starts_beside_it() {
     let now = Timestamp::from_second(100_000).unwrap();
     let running = RunLockInfo {
         pid: 41,
         started_at: now - jiff::SignedDuration::from_secs(120),
     };
-    let since_ms = u64::try_from((now - jiff::SignedDuration::from_secs(30)).as_millisecond())
-        .expect("after the epoch");
-    let waiting = |pid: u32, checkout: &str, reason: Option<&str>, position| Held {
-        pid,
-        checkout: checkout.into(),
-        since_ms,
-        reason: reason.map(str::to_owned),
-        hold: None,
-        kinds: Vec::new(),
-        gives_up_ms: None,
-        position,
-    };
-    // Checkout a launched and runs; b and c wait in other processes.
-    let held = [
-        waiting(42, "/repo/.worktrees/b", Some("queued: 2 starts ahead"), 3),
-        waiting(43, "/repo/.worktrees/c", None, 4),
-    ];
-    assert_eq!(
-        in_flight_text(Some(running), Some(running.started_at), &held, 2, now),
-        "▸ running 2m · ○ 2 held"
-    );
-    // A lock-free newer run reads the same, aged from its own start.
-    assert_eq!(
-        in_flight_text(None, Some(running.started_at), &held, 2, now),
-        "▸ running 2m · ○ 2 held"
-    );
+    let since = Some(running.started_at);
+    assert_eq!(in_flight_text(since, 2, now), "▸ running 2m · ○ 2 held");
+    assert_eq!(in_flight_text(since, 0, now), "▸ running 2m");
+    assert_eq!(in_flight_text(None, 2, now), "▸ running · ○ 2 held");
     let in_flight = InFlightRun {
         holder: Some(running),
         run: None,
-        held: held.to_vec(),
     };
-    assert_eq!(
-        running_text_full(&in_flight, now),
-        "▸ running 2m · pid 41 · 2 held: queued: 2 starts ahead"
-    );
-    let (own, others) = split_held(Some(running), &held);
-    assert!(own.is_none());
-    assert_eq!(others.map(|held| held.pid).collect::<Vec<_>>(), [42, 43]);
-
-    // The holder is itself held: its own reason, never another checkout's.
-    let held = [
-        waiting(42, "/repo/.worktrees/b", Some("queued: 1 start ahead"), 2),
-        waiting(41, "/repo/.worktrees/a", Some("cpu pressure 41% ≥ 25%"), 3),
-    ];
-    assert_eq!(
-        in_flight_text(Some(running), Some(running.started_at), &held, 2, now),
-        "○ 2 held"
-    );
-    let (own, _) = split_held(Some(running), &held);
-    assert_eq!(own.map(|held| held.pid), Some(41));
-    // A holder the lock does not name owns no ticket.
-    assert_eq!(
-        in_flight_text(None, None, &held, 2, now),
-        "▸ running · ○ 2 held"
-    );
+    assert_eq!(running_text_full(&in_flight, now), "▸ running 2m · pid 41");
 }
 
 #[test]
@@ -4430,32 +4338,6 @@ fn a_sub_cent_run_cost_is_not_shown_as_free() {
     assert_eq!(run_cost(0.0031), "<$0.01");
     assert_eq!(run_cost(0.006), "$0.01");
     assert_eq!(run_cost(1.239), "$1.24");
-}
-
-#[test]
-fn capacity_blocking_json_reports_only_known_hold_kinds() {
-    let since: Timestamp = "2026-06-01T15:02:00Z".parse().unwrap();
-    let held = Held {
-        pid: 42,
-        checkout: "/repo".into(),
-        since_ms: since.as_millisecond() as u64,
-        kinds: vec![rimz::ids::AgentKind::new_unchecked("claude")],
-        gives_up_ms: None,
-        reason: Some("queued: 1 start ahead".into()),
-        hold: Some(rimz::ids::HoldKind::Queue),
-        position: 2,
-    };
-    let phrase = rimz::theme::fmt::held_start(since, None, since);
-    assert_eq!(
-        held_run_text(&held, since),
-        format!("{phrase} · queued: 1 start ahead")
-    );
-    assert!(held_json(&held).get("kinds").is_none());
-    assert!(held_json(&held).get("gives_up_ms").is_none());
-    assert_eq!(held_json(&held)["hold"], "queue");
-    let mut unknown = held;
-    unknown.hold = None;
-    assert!(held_json(&unknown).get("hold").is_none());
 }
 
 #[test]

@@ -1,6 +1,19 @@
 use super::*;
 use unicode_width::UnicodeWidthStr;
 
+fn start(hold: rimz::ids::HoldKind, since_ms: i64, reason: &str) -> CapacityStart {
+    CapacityStart {
+        checkout: "/repo".into(),
+        wait: CapacityWaitView {
+            kinds: Vec::new(),
+            since: Timestamp::from_millisecond(since_ms).unwrap(),
+            gives_up_at: None,
+            reason: reason.into(),
+            hold: Some(hold),
+        },
+    }
+}
+
 #[test]
 fn held_starts_have_their_own_table_without_moving_the_task() {
     let now = Timestamp::from_second(100_000).unwrap();
@@ -10,16 +23,11 @@ fn held_starts_have_their_own_table_without_moving_the_task() {
     task.state = TaskState::Live;
     task.worktree = Some("fold-rule".into());
     task.worktree_here = true;
-    task.held = vec![Held {
-        pid: 42,
-        checkout: "/repo".into(),
-        since_ms: 99_760_000,
-        kinds: Vec::new(),
-        gives_up_ms: None,
-        reason: Some("queued: 1 start ahead".into()),
-        hold: Some(rimz::ids::HoldKind::Queue),
-        position: 2,
-    }];
+    task.capacity = vec![start(
+        rimz::ids::HoldKind::Queue,
+        99_760_000,
+        "queued: 1 start ahead",
+    )];
     let room = Room {
         root: "/repo".into(),
         open: true,
@@ -37,7 +45,8 @@ fn held_starts_have_their_own_table_without_moving_the_task() {
     };
     for (bounded, running) in [(false, false), (true, false), (false, true)] {
         let task = &mut model.rooms[0].tasks[0];
-        task.held[0].gives_up_ms = bounded.then_some(101_000_000);
+        task.capacity[0].wait.gives_up_at =
+            bounded.then(|| Timestamp::from_millisecond(101_000_000).unwrap());
         if running {
             task.in_progress = Some(InProgress::Locked(None));
             task.state = TaskState::Running;
@@ -82,23 +91,13 @@ fn held_starts_have_their_own_table_without_moving_the_task() {
 }
 
 #[test]
-fn needs_a_fix_tickets_use_the_oldest_reason_for_attention() {
+fn needs_a_fix_starts_use_the_oldest_reason_for_attention() {
     let now = Timestamp::from_second(100_000).unwrap();
     let mut row = TaskRow::rowless("triage".into(), InProgress::Locked(None), None);
-    let ticket = |hold, since_ms, reason: &str| Held {
-        pid: 42,
-        checkout: "/repo".into(),
-        since_ms,
-        kinds: Vec::new(),
-        gives_up_ms: None,
-        reason: Some(reason.into()),
-        hold: Some(hold),
-        position: 1,
-    };
-    row.held = vec![
-        ticket(rimz::ids::HoldKind::Queue, 1, "queued: 1 start ahead"),
-        ticket(rimz::ids::HoldKind::Disk, 3, "later disk"),
-        ticket(
+    row.capacity = vec![
+        start(rimz::ids::HoldKind::Queue, 1, "queued: 1 start ahead"),
+        start(rimz::ids::HoldKind::Disk, 3, "later disk"),
+        start(
             rimz::ids::HoldKind::Store,
             2,
             "cannot count open agents: broken",
@@ -110,7 +109,7 @@ fn needs_a_fix_tickets_use_the_oldest_reason_for_attention() {
         "a needs-a-fix start must raise attention"
     );
     assert_eq!(reason, "cannot count open agents: broken");
-    row.held.truncate(1);
+    row.capacity.truncate(1);
     let (kind, reason) = attention(&row, 0, now);
     assert!(kind.is_none() && reason.is_empty());
 }

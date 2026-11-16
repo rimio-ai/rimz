@@ -41,7 +41,6 @@ use rimz::harness::schedule::{
     strikes,
 };
 use rimz::harness::task_login::task_login;
-use rimz::harness::throttle::Held;
 use rimz::sidebar::fresh_sidebar_present;
 use rimz::store::message::DeliveryGate;
 use rimz::trust::{self, TrustState};
