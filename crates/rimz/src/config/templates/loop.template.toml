@@ -4,42 +4,49 @@
 # Durable recurring loop tasks live here. One-shots and self-waits created by
 # RimZ live in the state store instead, so this file stays hand-editable.
 
-# A fire whose task sets no `timeout` may run its command this long.
+# The `timeout` `rimz loop add` writes on a shell task given no `--timeout`.
 # default-timeout = "2h"
 
 # Scheduled loop tasks. Each entry drives one `rimz loop run <name>` fire, by the
 # sidebar host while a room for the task's project is open, or by the OS timer
-# installed with `rimz loop timer install` otherwise. A fire runs the task's
-# `command` (an argv, no shell) and lasts as long as it does: exit 0 ends it done,
-# anything else, or the timeout, failed. `rimz loop add [name] <trigger> -- <command>`
-# writes an entry; edit entries here as well.
+# installed with `rimz loop timer install` otherwise. A task declares the kind of
+# thing it launches. A `shell` task runs `args` (an argv, no shell) under its
+# `timeout`, which a hand-written shell task must set: exit 0 ends the fire done,
+# anything else, or the timeout, failed. A `workflow`, `agent` or `team` task
+# launches `rimz workflow run`, `rimz agents` or `rimz teams launch` with its
+# `target` and `args`; those kinds take no `timeout`, and agent and team tasks
+# take no `fresh-worktree`. `rimz loop add [name] <trigger> [--workflow|--agent|--team
+# <target>] -- <args>` writes an entry; edit entries here as well.
 # [tasks]
 ## [tasks.morning]
-## command = ["rimz", "teams", "launch", "forge", "-w", "morning", "--detach", "summarize what landed"]
-## timeout = "30m"                     # how long the command may run; else default-timeout
+## kind = "team"
+## target = "forge"
+## args = ["-w", "morning", "summarize what landed"]
 ## root = "/home/you/code/app"         # absolute project root whose room hosts the fire
 ## at = "07:00"                        # 24h firing time in the configured timezone
 ## every = "weekday"                   # "day", "weekday", "weekend", or "mon,wed,fri"
-## fresh-worktree = "morning"          # optional prefix: a fresh worktree from trunk each fire
 ##
 ## [tasks.pr_watch]
-## command = ["gh", "pr", "checks"]
-## timeout = "5m"
+## kind = "shell"
+## args = ["gh", "pr", "checks"]
+## timeout = "5m"                      # how long the command may run; required on a shell task
 ## root = "/home/you/code/app"
 ## every = "15m"                       # interval; `cron = "*/15 * * * *"` uses raw cron syntax
 ## overlap = "coalesce"                # busy triggers: skip (default), coalesce (newest), queue, replace (stop for newest)
 ## # overlap-limit = 10                # only with overlap = "queue"; at least 1
 ##
 ## [tasks.deployed]
-## command = ["./scripts/smoke"]
-## timeout = "10m"
+## kind = "workflow"
+## target = "smoke"
+## fresh-worktree = "smoke"            # optional prefix: a fresh worktree from trunk each fire
 ## root = "/home/you/code/app"
 ## signal = "deploy.done"
 ## repeat = true                       # signal and when tasks fire once unless they repeat
 ##
 ## [tasks.roomy]
-## command = ["rimz", "agents", "launch", "claude", "refactor the next rough module"]
-## timeout = "2h"
+## kind = "agent"
+## target = "claude"
+## args = ["refactor the next rough module"]
 ## root = "/home/you/code/app"
 ## when = ["window.5h.left>=60"]
 ## provider = "claude"                 # `rimz loop add` stores the kind a window term reads as state

@@ -142,17 +142,57 @@ pub enum OverlapPolicy {
 #[serde(transparent)]
 pub struct Tasks(pub BTreeMap<String, TaskEntry>);
 
-/// One triggered loop wake-up: a trigger, its placement, and one action. `command` is the argv
-/// a fire runs in its checkout; `wait` delivers to a pinned session instead, the row `rimz wait`
-/// and team arming write. Every key outside the row refuses that row alone (`refused`).
+/// What a loop task's fire launches: a shell command, or a workflow, agent or team launch.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LaunchKind {
+    #[default]
+    Shell,
+    Workflow,
+    Agent,
+    Team,
+}
+
+impl LaunchKind {
+    /// The word a row's `kind` key, `rimz loop add`'s flag and the JSON views spell.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::Workflow => "workflow",
+            Self::Agent => "agent",
+            Self::Team => "team",
+        }
+    }
+
+    /// What bounds a fire of this kind in place of a shell task's `timeout`.
+    pub const fn timeout_bound(self) -> &'static str {
+        match self {
+            Self::Shell => "the task's `timeout` bounds its command",
+            Self::Workflow => "a workflow task's run is bounded by its workflow's deadline",
+            Self::Agent => "an agent task's `-p` run takes `--timeout` in its arguments after `--`",
+            Self::Team => "loop does not time a team task's launch",
+        }
+    }
+}
+
+/// One triggered loop wake-up: a trigger, its placement, and one action. `kind`, `target` and
+/// `args` say what a fire launches in its checkout; `wait` delivers to a pinned session instead,
+/// the row `rimz wait` and team arming write. Every key outside the row refuses that row alone
+/// (`refused`), an older row's `command` included.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(remote = "Self", default, deny_unknown_fields)]
 pub struct TaskEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// The argv each fire runs, word for word, in the fire's checkout.
+    /// What each fire launches; a row with `args` and no `kind` is a shell row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<LaunchKind>,
+    /// The workflow, agent spec or team (with its `#lane`) a non-shell fire launches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// A shell row's argv, word for word; else the tail each fire hands its launch unchanged.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub command: Vec<String>,
+    pub args: Vec<String>,
     #[serde(rename = "each-worktree", skip_serializing_if = "std::ops::Not::not")]
     pub each_worktree: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,20 +208,21 @@ pub struct TaskEntry {
     pub prompt: Option<String>,
     #[serde(rename = "max-strikes", skip_serializing_if = "Option::is_none")]
     pub max_strikes: Option<u32>,
-    /// Whether the task fires at most once per checkout whose command exited 0.
+    /// Whether the task fires at most once per checkout whose fire did not fail.
     #[serde(rename = "once-per-checkout", skip_serializing_if = "Option::is_none")]
     pub once_per_checkout: Option<bool>,
     /// A watch's polarity: which of its outcomes delivers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on: Option<CheckOn>,
     pub root: PathBuf,
-    /// Directory the command or watch runs in; the arming worktree, or `root` when absent.
+    /// Directory the launch or watch runs in; the arming worktree, or `root` when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dir: Option<PathBuf>,
-    /// The name prefix of the fresh worktree each fire creates and runs its command in.
+    /// The name prefix of the fresh worktree each fire creates and launches in (shell and
+    /// workflow rows).
     #[serde(rename = "fresh-worktree", skip_serializing_if = "Option::is_none")]
     pub fresh_worktree: Option<String>,
-    /// How long a fire's command may run; a watch's check-in interval on a delivery row.
+    /// How long a shell row's command may run; a watch's check-in interval on a delivery row.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -232,7 +273,8 @@ pub struct TaskEntry {
     pub refused: Option<RefusedRow>,
 }
 
-/// A stored row this RimZ does not take, kept byte for byte so a rewrite of its file keeps it.
+/// A stored row this RimZ does not take, kept as its decoded values so a rewrite of its file
+/// keeps them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefusedRow {
     pub raw: serde_json::Value,
@@ -270,6 +312,14 @@ impl Serialize for TaskEntry {
 }
 
 impl TaskEntry {
+    /// The kind a launch row fires: its `kind`, else shell. `None` on a delivery row.
+    pub fn launch_kind(&self) -> Option<LaunchKind> {
+        if self.wait.is_some() {
+            return None;
+        }
+        Some(self.kind.unwrap_or_default())
+    }
+
     pub fn dedupes_checkout(&self) -> bool {
         self.once_per_checkout.unwrap_or(false)
     }

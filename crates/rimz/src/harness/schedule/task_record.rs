@@ -96,9 +96,63 @@ pub struct FireMark {
     /// The fire's recorded outcome; `None` while it is open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<LoopRunResult>,
+    /// The kind the task declared at the fire; a mark an older RimZ wrote has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::config::LaunchKind>,
+    /// The launch's target at the fire: a workflow, agent spec or team.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Whether the fire was made by hand (`rimz loop fire`), so a row the settle pass writes
+    /// for it is never read as a scheduled attempt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual: bool,
+    /// The `rimz` process that made the fire, while it may still launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener: Option<ProcessMark>,
+    /// The launch child a workflow, agent or team fire spawned, written before the fire waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child: Option<ProcessMark>,
+}
+
+/// One process by pid and start token, so a reused pid never reads as it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessMark {
+    pub pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+}
+
+impl ProcessMark {
+    /// The calling process.
+    pub(super) fn current() -> Self {
+        Self::of(std::process::id())
+    }
+
+    pub(super) fn of(pid: u32) -> Self {
+        Self {
+            pid,
+            start: crate::proc::process_start_token(pid),
+        }
+    }
+
+    /// Whether the process still runs; without a start token it reads as gone, since a reused
+    /// pid cannot be ruled out.
+    pub fn is_live(&self) -> bool {
+        self.start
+            .as_deref()
+            .is_some_and(|start| crate::proc::process_is_live(self.pid, Some(start)))
+    }
 }
 
 impl FireMark {
+    /// Whether the fire may still record its own outcome: it is open, and the process that made
+    /// it or the launch child it spawned still runs.
+    pub fn launching(&self) -> bool {
+        self.result.is_none()
+            && (self.opener.as_ref().is_some_and(ProcessMark::is_live)
+                || self.child.as_ref().is_some_and(ProcessMark::is_live))
+    }
+
     /// Whether the fire still holds its checkout for `once-per-checkout`: it counts, and its
     /// outcome is open or did not fail.
     pub fn holds_checkout(&self) -> bool {
@@ -396,6 +450,11 @@ impl FireMark {
             run: None,
             scope,
             result: None,
+            kind: None,
+            target: None,
+            manual: false,
+            opener: None,
+            child: None,
         }
     }
 }

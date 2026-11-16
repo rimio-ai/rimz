@@ -30,6 +30,11 @@ fn opened(task: &TaskId) -> (TaskRecord, FireId) {
             run: None,
             scope: crate::store::workflow::ScopeKind::Worktree,
             result: None,
+            kind: None,
+            target: None,
+            manual: false,
+            opener: None,
+            child: None,
         },
     );
     (record, fire)

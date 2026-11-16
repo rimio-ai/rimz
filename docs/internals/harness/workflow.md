@@ -955,7 +955,7 @@ When any live home awaits [the workflow pass](#the-workflow-pass) (`RunClass::aw
 
 The cadence a workflow author sees: an ordinary check's `@wait` without `recheck_at` is re-evaluated about every minute, so a check that wants a slower pace sets `recheck_at`. A held rest-check `@wait` follows the same cadence and subscribed signal wakes while the leader rests on its judged turn. A live step is observed every tick, so a descendant's ask or provider limit is noticed within a minute.
 
-The external timer's roots (`crates/rimz/src/cli/loop_timer.rs::task_roots`) include every room whose live directory holds a nonterminal run this RimZ continues, a terminal one that owes its loop report, or a home that awaits the workflow pass. So a manual run in a room with no loop task and no sidebar still ticks, and a stranded run is ended there too.
+The external timer's roots (`crates/rimz/src/cli/loop_timer.rs::task_roots`) include, beside the rooms of task rows and open fire marks, every room whose live directory holds a nonterminal run this RimZ continues, a terminal one that owes its loop report, or a home that awaits the workflow pass. So a manual run in a room with no loop task and no sidebar still ticks, and a stranded run is ended there too.
 
 ### The workflow pass
 
@@ -984,7 +984,7 @@ A run is announced by the pass whose move of its home succeeds, with its cause r
 
 ## Loop tasks
 
-Every loop fire but a delivery row starts a workflow run of the inline graph that `crates/rimz/src/harness/schedule/runner.rs::command_definition` builds from the row: one `test` check named `command` that runs the row's argv under its `timeout` ([loops.md § The compiled graph](./loops.md#the-compiled-graph)). [loops.md § One fire](./loops.md#one-fire) owns the gates in front of the run.
+A shell task's fire starts a workflow run of the inline graph that `crates/rimz/src/harness/schedule/runner.rs::command_definition` builds from the row: one `test` check named `command` that runs the row's argv under its `timeout` ([loops.md § The compiled graph](./loops.md#the-compiled-graph)). A workflow task's fire runs `rimz workflow run <target> --loop-fire-json` in a launch child, which publishes a run of the deployed workflow carrying the fire, and an agent or team task's fire publishes no run of its own. [loops.md § One fire](./loops.md#one-fire) owns the gates in front of the run.
 
 ### What a fire puts on the record
 
@@ -1011,9 +1011,9 @@ The engine never reports and never rewrites the mark. Collection never reads the
 
 Who collects: `rimz workflow advance`, `cancel`, and `restart` (which `rimz agents restart` of a current step reaches) collect the run after the engine returns, whether it returned `Ok` or an error. `rimz loop run` collects every owed finished run of its task (`collect_task_runs`) before it reads strikes, arming, and launch memory. `tick_workflows` treats an owed run as due, paced by its retry gap ([The tick](#the-tick)), and `advance` on a terminal run does no engine work, so its command's collection is the retry.
 
-The mark waits for both the row and the strike. A failed append returns before the strike, and a failed strike leaves the row written, each with one warning naming the run, and the run stays owed. A record without an outcome, or a crash before the mark, leaves the run owed the same way. A failed collection never fails the command's transition, which is already durable. So the report can land twice, and its readers fold it by run id ([strikes](./loops.md#strikes)). A record without the mark reads `none` and never reports.
+The mark waits for both the strike and the row. The strike, which closes the fire's mark in the same write, comes first, so a reader that sees the row sees the checkout settled. A failed strike returns before the append, and a failed append leaves the strike noted, each with one warning naming the run, and the run stays owed; the retry's strike moves nothing a second time, since a fire id counts once. A record without an outcome, or a crash before the mark, leaves the run owed the same way. A failed collection never fails the command's transition, which is already durable. So the report can land twice, and its readers fold it by run id ([strikes](./loops.md#strikes)). A record without the mark reads `none` and never reports.
 
-Collection stops nothing the fire's command launched: those launches carry the fire's id as `loop_fire` and end by their own rules or `rimz loop stop` ([loops.md](./loops.md#stopping-a-run)). Until the outcome row is appended, `rimz loop show` and `loop logs` list a `launched` row read from the run's live record. The row is appended before the strike and the mark, so a run whose strike or mark failed is still owed but already shows its outcome.
+Collection stops nothing the fire's command launched: those launches carry the fire's id as `loop_fire` and end by their own rules or `rimz loop stop` ([loops.md](./loops.md#stopping-a-run)). Until the outcome row is appended, `rimz loop show` and `loop logs` list a `launched` row read from the run's live record. The row is appended after the strike and the mark, so a run whose strike failed shows that `launched` row until a retry lands both.
 
 ### Selection, rename, and removal
 

@@ -301,7 +301,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
     fn booking_chains_round_trip_and_old_rows_rewrite_byte_identical() {
         let dir = tempfile::tempdir().unwrap();
         let old = TaskEntry {
-            command: vec!["rimz".to_owned(), "teams".to_owned(), "forge".to_owned()],
+            args: vec!["rimz".to_owned(), "teams".to_owned(), "forge".to_owned()],
             timeout: Some("2h".to_owned()),
             when: Some(vec!["pr[x]=merged".to_owned()]),
             root: dir.path().to_path_buf(),
@@ -333,7 +333,9 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
     fn task_entry_serialization_uses_canonical_schema_and_store_policy() {
         let entry = TaskEntry {
             label: Some("nightly".to_owned()),
-            command: vec!["cargo".to_owned(), "test".to_owned()],
+            kind: Some(crate::config::LaunchKind::Shell),
+            target: None,
+            args: vec!["cargo".to_owned(), "test".to_owned()],
             each_worktree: false,
             team: None,
             loop_task: None,
@@ -379,7 +381,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
         assert!(machine.contains_key("dir"));
         assert!(machine_text.contains("fresh-worktree = \"fire\""));
         assert!(machine.contains_key("max-strikes"));
-        assert!(machine_text.contains("command = [\"cargo\", \"test\"]"));
+        assert!(machine_text.contains("args = [\"cargo\", \"test\"]"));
         assert!(machine_text.contains("repeat = true"));
         assert!(machine.contains_key("fire-at"));
         assert!(machine_text.contains("[tasks.full.match]"));
@@ -430,14 +432,14 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
     #[test]
     fn stored_rows_compile_alike_through_all_four_readers() {
         let shared = [
-            "command = ['cargo', 'test']\ntimeout = '1h'\nevery = '1h'\noverlap = 'queue'",
-            "command = ['true']\ntimeout = '5m'\nsignal = 'ci.failed'\nrepeat = true",
+            "args = ['cargo', 'test']\ntimeout = '1h'\nevery = '1h'\noverlap = 'queue'",
+            "args = ['true']\ntimeout = '5m'\nsignal = 'ci.failed'\nrepeat = true",
             "agent = 'claude'\nprompt = 'fix'\nevery = '1h'",
         ];
         let machine_only = [
-            "command = ['true']\ntimeout = '5m'\neach-worktree = true\nevery = '1h'",
-            "command = ['true']\ntimeout = '5m'\nevery = '10m'\ndeadline = '2030-01-01T00:00:00Z'",
-            "command = ['true']\ntimeout = '5m'\nwhen = ['ci=passed']\nfor = '5m'",
+            "args = ['true']\ntimeout = '5m'\neach-worktree = true\nevery = '1h'",
+            "args = ['true']\ntimeout = '5m'\nevery = '10m'\ndeadline = '2030-01-01T00:00:00Z'",
+            "args = ['true']\ntimeout = '5m'\nwhen = ['ci=passed']\nfor = '5m'",
             "once = true\nwait = { kind = 'claude', session = 's', handle = '@c' }\nat = '07:00'",
         ];
         let dir = tempfile::tempdir().unwrap();

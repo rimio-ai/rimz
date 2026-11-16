@@ -243,12 +243,12 @@ rimz subagents fanout --wait <<'JSON'
 JSON
 ```
 
-**Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) runs the command after `--` on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. The command can be anything you would type in a shell; a `rimz agents` launch in it starts an agent, and the fire ends when that agent's turn does. A fire that exits nonzero or outruns its `--timeout` counts a strike. There is no scheduler daemon: an open room keeps time, and `rimz loop timer install` adds a systemd or launchd timer for the hours when none is open. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off; put `--budget 5` on the launch to bound what each run costs.
+**Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) starts an agent, a team, a workflow, or a shell command on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. `--agent`, `--team`, and `--workflow` name what a fire launches, and the arguments after `--` go to that launch as you would type them; a task with no kind flag runs the command after `--`. A launch that fails, or a command that exits nonzero or outruns its `--timeout`, counts a strike. There is no scheduler daemon: an open room keeps time, and `rimz loop timer install` adds a systemd or launchd timer for the hours when none is open. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off; put `--budget 5` on the launch to bound what each run costs.
 
 ```sh
 # 07:00 every weekday: overnight changes, summarized before you sit down
-rimz loop add standup --every weekday --at 07:00 -- \
-    rimz agents claude "Summarize what landed on main since yesterday and flag anything that needs review"
+rimz loop add standup --every weekday --at 07:00 --agent claude -- \
+    "Summarize what landed on main since yesterday and flag anything that needs review"
 
 # Every 15 minutes: run the tests, and start an agent only when they fail
 rimz loop add watchdog --every 15m -- \
@@ -269,8 +269,8 @@ rimz wait --run 'gh run watch --exit-status' # a command exits, with its output 
 
 ```sh
 # Start a fixer each time CI fails on the feature branch
-rimz loop add ci-red --signal ci.failed --match branch=feature --repeat -- \
-    rimz agents codex -w ci-red "Fix the failing checks."
+rimz loop add ci-red --signal ci.failed --match branch=feature --repeat --agent codex -- \
+    -w ci-red "Fix the failing checks."
 
 # Run a script once, on the next merge
 rimz loop add merged --signal pr.merged -- ./scripts/announce-release.sh

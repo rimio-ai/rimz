@@ -224,7 +224,7 @@ fn worktree_tasks(
     }
     let tasks = one(loaded(TaskEntry {
         root: root.path().to_owned(),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         once_per_checkout: Some(true),
         each_worktree: true,
@@ -262,6 +262,11 @@ fn holding(task: &LoadedTask, checkout: &Path, scope: ScopeKind) -> TaskRecords 
             run: None,
             scope,
             result: None,
+            kind: None,
+            target: None,
+            manual: false,
+            opener: None,
+            child: None,
         },
     );
     let mut records = TaskRecords::empty();
@@ -336,7 +341,7 @@ fn an_unreadable_task_record_holds_every_task() {
             name.into(),
             loaded(TaskEntry {
                 root: root.path().to_owned(),
-                command: vec!["true".to_owned()],
+                args: vec!["true".to_owned()],
                 timeout: Some("1m".to_owned()),
                 once_per_checkout: stay.then_some(true),
                 when: Some(vec!["team.stage=Done".into()]),
@@ -600,7 +605,7 @@ fn condition_write_failure_preserves_clock_fires() {
     .unwrap();
     let entry = TaskEntry {
         root: root.path().to_owned(),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
@@ -689,7 +694,7 @@ fn window_condition_reads_the_provider_window_under_the_elder() {
     .unwrap();
     let tasks = one(loaded(TaskEntry {
         root: root.path().to_owned(),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         when: Some(vec!["window.5h.left>=40".to_owned()]),
         provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
@@ -742,7 +747,7 @@ fn window_conditions_read_each_tasks_own_account_in_one_pass() {
     let task = |account: Option<&str>| {
         loaded(TaskEntry {
             root: root.path().to_owned(),
-            command: vec!["true".to_owned()],
+            args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             when: Some(vec!["window.5h.left>=40".to_owned()]),
             provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
@@ -801,7 +806,7 @@ fn condition_replacement_resets_fired_and_hold_state() {
         let (_, _, old) = condition_tick(hold, Some(prior), None, Some(true), false, &now);
         for change in ["expression", "hold", "scope", "legacy"] {
             let mut entry = TaskEntry {
-                command: vec!["true".to_owned()],
+                args: vec!["true".to_owned()],
                 timeout: Some("1m".to_owned()),
                 when: Some(vec!["team.stage=Done".to_owned()]),
                 hold: hold.map(str::to_owned),
@@ -851,7 +856,7 @@ fn condition_tick(
     now: &Zoned,
 ) -> PlannedTasks {
     let task = loaded(TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         when: Some(vec!["team.stage=Done".to_owned()]),
         hold: hold.map(str::to_owned),
@@ -893,7 +898,7 @@ fn conditions_retry_at_five_minutes_until_a_fire_holds_the_checkout() {
     for stay in [true, false] {
         let tasks = one(loaded(TaskEntry {
             root: root.path().to_owned(),
-            command: vec!["true".to_owned()],
+            args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             once_per_checkout: stay.then_some(true),
             // A one-shot named lost retries as a fire; the repeating row keeps the tick's timing.
@@ -1089,7 +1094,7 @@ fn lost_once_condition_retries_past_the_grace_on_a_true_reading() {
     let tick = |once: bool, age: i64, truth: Option<bool>| {
         plan(
             &one(loaded(TaskEntry {
-                command: vec!["true".to_owned()],
+                args: vec!["true".to_owned()],
                 when: Some(vec!["team.stage=Done".to_owned()]),
                 repeat: !once,
                 ..TaskEntry::default()
@@ -1164,7 +1169,7 @@ fn condition_unknown_of_any_cause_holds_the_stamp_and_clock_and_false_drops_them
     let prior = seconds_before(now.timestamp(), 60);
     let state = condition_state(None, seconds_before(now.timestamp(), 120), false);
     let tasks = one(loaded(TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         when: Some(vec!["team.stage=Done".to_owned()]),
         ..TaskEntry::default()
@@ -1222,7 +1227,7 @@ fn forge_conditions_hold_until_a_successful_probe_at_or_after_the_fire_stamp() {
     let stamp = seconds_before(now.timestamp(), 60);
     let entry = TaskEntry {
         root: root.path().to_owned(),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         when: Some(vec!["!ci=failed".to_owned()]),
         ..TaskEntry::default()
@@ -1326,7 +1331,7 @@ fn worktree_inspection_holds_a_forge_condition_probed_before_its_fire_stamp() {
     let stamp = seconds_before(now, 60);
     let task = loaded(TaskEntry {
         root: repo.clone(),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         when: Some(vec!["ci=none".to_owned()]),
         each_worktree: true,
@@ -1396,7 +1401,7 @@ fn a_task_fired_on_a_true_reading_skips_the_commit_fence_git_reads() {
     let stamp = seconds_before(now.timestamp(), 60);
     let entry = TaskEntry {
         root: root.path().to_owned(),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         when: Some(vec!["!ci=failed".to_owned()]),
         ..TaskEntry::default()
@@ -1459,7 +1464,7 @@ fn a_task_fired_on_a_true_reading_skips_the_commit_fence_git_reads() {
     // A fired one-shot whose runner is lost retries as a fire, so the fence holds it.
     let once = loaded(TaskEntry {
         root: root.path().to_owned(),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         when: Some(vec!["ci=passed".to_owned()]),
         ..TaskEntry::default()
     });
@@ -1720,7 +1725,7 @@ fn loaded_from(entry: TaskEntry, source: TaskSource) -> LoadedTask {
 
 fn task(root: &str, every: &str) -> LoadedTask {
     loaded(TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         root: PathBuf::from(root),
         every: Some(every.to_owned()),
@@ -1826,7 +1831,7 @@ fn plan_arms_fires_and_carries_each_task_state() {
     let every_5m = &task("/repo", "5m");
     // `every` and `at` together are a time conflict, so this row never parses.
     let malformed = &loaded(TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         every: Some("5m".to_owned()),
         at: Some("07:00".to_owned()),
@@ -1875,7 +1880,7 @@ fn plan_arms_fires_and_carries_each_task_state() {
 fn signal_tasks_only_arm_while_missing_watchers_fire_after_the_grace() {
     let now = zdt(2026, 6, 24, 8, 5, 0);
     let signal = loaded(TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         signal: Some("ci.failed".to_owned()),
         ..TaskEntry::default()
@@ -1886,7 +1891,7 @@ fn signal_tasks_only_arm_while_missing_watchers_fire_after_the_grace() {
 
     let root = tempfile::tempdir().unwrap();
     let watch = loaded(TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         root: root.path().to_path_buf(),
         watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
@@ -1967,7 +1972,7 @@ fn invalid_renamed_watcher_signal_does_not_stop_elder_fire() {
         LoadedTask::new(
             name,
             TaskEntry {
-                command: vec!["true".to_owned()],
+                args: vec!["true".to_owned()],
                 timeout: Some("1m".to_owned()),
                 root: root.path().to_path_buf(),
                 watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
@@ -2017,7 +2022,7 @@ fn ended_pause_sets_the_effective_fire_edge() {
     );
 
     let daily = &loaded(TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         root: PathBuf::from("/repo"),
         every: Some("day".to_owned()),
@@ -2043,7 +2048,7 @@ fn ended_pause_sets_the_effective_fire_edge() {
 fn fire_at_fires_once_at_or_after_its_instant_through_a_pause() {
     let at = zdt(2026, 6, 24, 8, 0, 0);
     let instant = &loaded(TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         root: PathBuf::from("/repo"),
         fire_at: Some(at.timestamp()),
@@ -2157,7 +2162,7 @@ fn stranded_fire_at_retries_only_when_its_runner_is_lost() {
     let task = LoadedTask::new(
         STRANDED,
         TaskEntry {
-            command: vec!["true".to_owned()],
+            args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             root: root.path().to_path_buf(),
             fire_at: Some(seconds_before(stamp, 60)),
@@ -2238,7 +2243,7 @@ fn stranded_once_condition_retries_only_when_its_runner_is_lost() {
     let now = zdt(2026, 6, 24, 9, 0, 0);
     let stamp = seconds_before(now.timestamp(), FIRE_AT_RETRY_SECS);
     let entry = TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         root: root.path().to_path_buf(),
         when: Some(vec!["team.stage=Done".to_owned()]),
         ..TaskEntry::default()
@@ -2347,7 +2352,7 @@ fn a_held_fire_at_waits_unstamped_and_fires_once_cleared() {
     let now = zdt(2026, 6, 24, 9, 0, 0);
     let stamp = seconds_before(now.timestamp(), 600);
     let tasks = one(loaded(TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         root: root.path().to_path_buf(),
         once_per_checkout: Some(true),
@@ -2395,7 +2400,7 @@ fn project_task_stays_held_until_enable_and_does_not_replay() {
     let prior = seconds_before(now.timestamp(), 600);
     let task = loaded_from(
         TaskEntry {
-            command: vec!["true".to_owned()],
+            args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             root: PathBuf::from("/repo"),
             every: Some("5m".to_owned()),

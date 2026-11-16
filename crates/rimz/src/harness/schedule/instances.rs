@@ -280,7 +280,7 @@ mod tests {
 
     fn task() -> TaskEntry {
         TaskEntry {
-            command: vec!["true".to_owned()],
+            args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             root: PathBuf::from("/repo"),
             at: Some("07:00".to_owned()),
@@ -391,7 +391,7 @@ mod tests {
         insert(&paths, "wait", &entry).expect("insert");
         let encoded = std::fs::read_to_string(path(&paths.root)).expect("serialized instances");
         let value: serde_json::Value = serde_json::from_str(&encoded).expect("instances json");
-        assert_eq!(value["wait"]["command"], serde_json::json!(["true"]));
+        assert_eq!(value["wait"]["args"], serde_json::json!(["true"]));
         assert_eq!(value["wait"]["timeout"], "1m");
         assert_eq!(value["wait"]["root"], "/repo");
         assert_eq!(value["wait"]["at"], "07:00");

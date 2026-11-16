@@ -376,7 +376,7 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
         root: root.path().to_owned(),
         dir: Some(scope.clone()),
         when: Some(vec!["ci=passed".to_owned()]),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
@@ -493,7 +493,7 @@ fn live_forge_signal_tasks_hold_their_literal_branch_under_the_project_root() {
                 .collect(),
         ),
         repeat: true,
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
@@ -658,7 +658,7 @@ outcome = "ready"
             root: root.path().to_owned(),
             dir: Some(checkout.clone()),
             when: Some(vec!["ci[loop]=passed".into()]),
-            command: vec!["true".to_owned()],
+            args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             ..TaskEntry::default()
         },

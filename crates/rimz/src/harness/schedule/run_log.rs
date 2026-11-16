@@ -12,7 +12,7 @@
 //! retains that fold across repaints, rebuilding on rotation or a local date or
 //! time-zone change. `rimz loop show` reads records for per-task inspection.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use jiff::{Timestamp, Zoned};
@@ -71,7 +71,8 @@ enum ReportFailure {
     Room(anyhow::Error),
 }
 
-/// Attempt the history append before updating the task's strike count and arming. Both are
+/// Attempt the history append before updating the task's strike count and arming, except that a
+/// fire's own row closes its mark first, so a reader that sees the row sees it closed. Both are
 /// best-effort: a row with no fire has no retry to hand a failure to. A workflow run's report
 /// takes `report_run`'s fallible path instead.
 ///
@@ -92,12 +93,42 @@ pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> Ru
             .ok();
     }
     let record = &record;
+    if let Some(fire) = &record.fire {
+        // The mark closes before the row lands, so a reader that sees the row sees it closed.
+        let transition = settle_fire_row(task, fire, record);
+        append_for_root(&task.entry().resolved_root(), record);
+        return transition;
+    }
     append_for_root(&task.entry().resolved_root(), record);
     end_quiet_streak(&binding, record);
     note_strike(task, &binding, record).unwrap_or_else(|err| {
         tracing::warn!(task = record.task, error = %err, "loop strike state update failed");
         RunTransition::Recorded
     })
+}
+
+/// Settle a fire's own row: its mark closes and its strike signal moves the count once per
+/// fire id, in one write.
+fn settle_fire_row(task: &LoadedTask, fire: &FireId, record: &LoopRunRecord) -> RunTransition {
+    let settled = super::fires::settle(super::fires::Outcome {
+        fire,
+        result: record.result,
+        signal: strikes::classify(record),
+        quiet: None,
+        ends_streak: record.polarity() == Some(RunPolarity::Failure),
+        strike_out: strikes::threshold(task.entry()).map(|max| (max, task.source())),
+        now: Timestamp::now(),
+    });
+    match settled {
+        Ok(Some(settled)) if settled.disabled => RunTransition::AutoDisabled {
+            strikes: settled.count,
+        },
+        Ok(_) => RunTransition::Recorded,
+        Err(err) => {
+            tracing::warn!(task = record.task, %fire, error = %err, "loop fire outcome not settled");
+            RunTransition::Recorded
+        }
+    }
 }
 
 /// Note the record's strike signal, then disable a task that struck out; the disable is
@@ -132,11 +163,32 @@ fn note_strike(
 }
 
 /// Append a `rimz loop stop` cancellation, which may outlive its task's row. A
-/// cancellation is strike-neutral, so no overlay moves and no row is needed.
+/// cancellation is strike-neutral, so no strike moves; a stopped launch fire's row also closes
+/// its open mark, the one of the task its row's id names (with no id, of the task so named).
 pub(super) fn record_stopped(root: &Path, record: &LoopRunRecord, kind: Option<super::TaskKind>) {
     debug_assert_eq!(strikes::classify(record), strikes::Signal::Neutral);
     let mut record = record.clone();
     record.kind = kind;
+    // A stopped launch fire's runner never closes its mark: the stop's row is that fire's one
+    // outcome, written only when it settles the mark first.
+    let launch = (record.run_id.is_none())
+        .then(|| open_marks(root).ok())
+        .flatten()
+        .and_then(|fires| {
+            fires.into_iter().find(|(fire, binding, mark)| {
+                let task = match &record.task_id {
+                    Some(id) => fire.task() == *id,
+                    None => binding.name == record.task,
+                };
+                task && mark.child.is_some()
+            })
+        });
+    if let Some((fire, binding, _)) = launch {
+        record.task_id = Some(fire.task());
+        record.fire = Some(fire);
+        settle_dead_fire(root, &binding, &record);
+        return;
+    }
     append_for_root(root, &record);
 }
 
@@ -496,9 +548,9 @@ fn report_header(
     report_neutral(&facts, &outcome, &root)
 }
 
-/// Report a run without moving a strike or the quiet streak: append its row, close its fire's
-/// mark, so the checkout it held is free, and drain the task's waiting triggers. A run with no
-/// fire names no task id and closes no mark.
+/// Report a run without moving a strike or the quiet streak: close its fire's mark, so the
+/// checkout it held is free, then append its row, and drain the task's waiting triggers. A run
+/// with no fire names no task id and closes no mark.
 fn report_neutral(
     facts: &ReportFacts<'_>,
     outcome: &crate::store::workflow::RunOutcome,
@@ -513,7 +565,6 @@ fn report_neutral(
         }
         None => project_root.to_path_buf(),
     };
-    try_append_for_root(&root, &record).map_err(ReportFailure::from)?;
     if let Some(fire) = facts.fire {
         super::fires::settle(super::fires::Outcome {
             fire,
@@ -526,6 +577,7 @@ fn report_neutral(
         })
         .map_err(ReportFailure::from)?;
     }
+    try_append_for_root(&root, &record).map_err(ReportFailure::from)?;
     drain_waiting(facts.task, facts.fire, &root);
     Ok(())
 }
@@ -556,6 +608,229 @@ pub fn collect_task_runs(root: &Path, task: &str) -> bool {
         Ok(None) => false,
         Err(error) => {
             tracing::warn!(task, error = %format!("{error:#}"), "owed workflow runs not read");
+            false
+        }
+    }
+}
+
+/// The settle pass: give each open fire mark of the room at `root` whose fire can no longer record
+/// its own outcome (neither the process that made it nor its launch child runs) the one outcome
+/// its launches show, retired tasks' marks included. A workflow or shell fire is its run's: a
+/// finished run that owes its report is collected, a live one is left, and a fire that published
+/// none is `error`. An agent or team fire is its supervised runs' newest status once all are
+/// terminal, else `launched` when it stamped an agent, else `error`. Returns how many it settled.
+pub fn settle_open_fires(root: &Path) -> usize {
+    let settled = (|| -> anyhow::Result<usize> {
+        let state = crate::StatePaths::for_project_root(root)?;
+        if !state.root.exists() {
+            return Ok(0);
+        }
+        let mut settled = 0;
+        for (fire, binding, mark) in open_fires(root)? {
+            settled += usize::from(settle_fire(root, &state, &fire, &binding, &mark)?);
+        }
+        Ok(settled)
+    })();
+    settled.unwrap_or_else(|error| {
+        tracing::warn!(error = %format!("{error:#}"), "loop fires not settled");
+        0
+    })
+}
+
+/// Settle one open mark of the room at `root` the way the settle pass does, when no process
+/// still runs its fire: a fire about to displace it keeps its outcome and strike.
+pub(super) fn settle_displaced(
+    root: &Path,
+    binding: &super::task_record::Binding,
+    mark: &super::task_record::FireMark,
+) {
+    if mark.result.is_some() || mark.launching() {
+        return;
+    }
+    let settled = crate::StatePaths::for_project_root(root)
+        .map_err(anyhow::Error::from)
+        .and_then(|state| settle_fire(root, &state, &mark.fire, binding, mark));
+    if let Err(error) = settled {
+        tracing::warn!(fire = %mark.fire, error = %format!("{error:#}"), "displaced loop fire not settled");
+    }
+}
+
+fn settle_fire(
+    root: &Path,
+    state: &crate::StatePaths,
+    fire: &FireId,
+    binding: &super::task_record::Binding,
+    mark: &super::task_record::FireMark,
+) -> anyhow::Result<bool> {
+    Ok(dead_fire_row(state, fire, &binding.name, mark)?
+        .is_some_and(|record| settle_dead_fire(root, binding, &record)))
+}
+
+/// Whether a ready mark waits for the settle pass in the room at `root`, read without a write.
+pub fn has_open_fires(root: &Path) -> bool {
+    open_fires(root).is_ok_and(|open| !open.is_empty())
+}
+
+/// The rooms holding a mark whose outcome is not recorded, so a tick reaches a room that only a
+/// consumed or removed task's dead fire still names. An unreadable record names none.
+pub fn open_fire_roots() -> std::collections::BTreeSet<PathBuf> {
+    let Ok(records) = super::task_record::load() else {
+        return std::collections::BTreeSet::new();
+    };
+    records
+        .tasks
+        .values()
+        .flat_map(|record| record.marks.iter())
+        .filter(|(_, mark)| mark.result.is_none())
+        .filter_map(|(checkout, _)| {
+            crate::workspace::WorkspaceResolver::persisted_project_root(checkout).ok()
+        })
+        .collect()
+}
+
+/// An open mark: its fire, the task record's binding and the mark.
+type OpenFire = (
+    FireId,
+    super::task_record::Binding,
+    super::task_record::FireMark,
+);
+
+/// The open marks of every task record whose fire no process still runs, in checkouts of the
+/// room at `root`.
+fn open_fires(root: &Path) -> anyhow::Result<Vec<OpenFire>> {
+    let mut fires = open_marks(root)?;
+    fires.retain(|(_, _, mark)| !mark.launching());
+    Ok(fires)
+}
+
+/// Every mark in the room whose outcome is not recorded, its process alive or not.
+fn open_marks(root: &Path) -> anyhow::Result<Vec<OpenFire>> {
+    let records = super::task_record::load()?;
+    let in_room = |checkout: &Path| {
+        crate::workspace::WorkspaceResolver::persisted_project_root(checkout)
+            .is_ok_and(|resolved| resolved == root)
+    };
+    Ok(records
+        .tasks
+        .values()
+        .flat_map(|record| record.marks.iter().map(move |mark| (record, mark)))
+        .filter(|(_, (checkout, mark))| mark.result.is_none() && in_room(checkout))
+        .map(|(record, (_, mark))| (mark.fire.clone(), record.binding.clone(), mark.clone()))
+        .collect())
+}
+
+/// The row a dead fire's launches give it; `None` while one of them is alive or its run's own
+/// collection reports it.
+fn dead_fire_row(
+    state: &crate::StatePaths,
+    fire: &FireId,
+    task: &str,
+    mark: &super::task_record::FireMark,
+) -> anyhow::Result<Option<LoopRunRecord>> {
+    use crate::config::LaunchKind;
+    let row = |result: LoopRunResult, error: Option<&str>| {
+        let mode = if mark.manual {
+            LoopRunMode::Manual
+        } else {
+            LoopRunMode::Scheduled
+        };
+        let mut record = LoopRunRecord::new(task, result, mode, 0);
+        record.task_id = Some(fire.task());
+        record.fire = Some(fire.clone());
+        record.target.clone_from(&mark.target);
+        record.error = error.map(str::to_owned);
+        record
+    };
+    if !matches!(mark.kind, Some(LaunchKind::Agent | LaunchKind::Team)) {
+        let runs: Vec<_> = crate::store::workflow::live_runs(state)?
+            .into_iter()
+            .filter(|run| run.loop_fire.as_ref() == Some(fire))
+            .collect();
+        if runs.is_empty() {
+            return Ok(Some(row(
+                LoopRunResult::Errored,
+                Some("the fire ended before it published a run"),
+            )));
+        }
+        for run in runs.iter().filter(|run| run.owes_loop_report()) {
+            collect_run(state, &run.id);
+        }
+        return Ok(None);
+    }
+    let runs: Vec<_> = crate::harness::run::list(state)?
+        .into_iter()
+        .filter(|run| run.loop_fire.as_ref() == Some(fire))
+        .collect();
+    if runs.iter().any(|run| !run.status.is_terminal()) {
+        return Ok(None);
+    }
+    if let Some(newest) = runs.iter().max_by_key(|run| run.started_at) {
+        let mut record = row(newest.status.into(), None);
+        record.run_id = Some(newest.run_id.to_string());
+        return Ok(Some(record));
+    }
+    let runtime = crate::disk::paths::RuntimePaths::for_state(state)?;
+    let rows = crate::Store::open_existing(state.clone(), runtime)
+        .map(|store| store.audit_rows())
+        .transpose()?
+        .map(|rows| rows.iter().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let stamped = rows
+        .iter()
+        .any(|agent| agent.loop_fire.as_ref() == Some(fire));
+    Ok(Some(if stamped {
+        let mut record = row(LoopRunResult::Launched, None);
+        record.target = super::launches::launched(fire, state, &rows).ok().flatten();
+        record
+    } else {
+        row(
+            LoopRunResult::Errored,
+            Some("the fire ended before it launched anything"),
+        )
+    }))
+}
+
+/// Settle a dead fire's outcome on its task record, then append its row, once per fire id: a
+/// concurrent pass that settled it first appends nothing.
+fn settle_dead_fire(
+    root: &Path,
+    binding: &super::task_record::Binding,
+    record: &LoopRunRecord,
+) -> bool {
+    let Some(fire) = &record.fire else {
+        return false;
+    };
+    let catalog = super::catalog::TaskCatalog::load_lenient(Some(root));
+    let task = catalog
+        .for_run(&record.task)
+        .filter(|task| task.key(&record.task) == binding.key());
+    let settled = super::fires::settle(super::fires::Outcome {
+        fire,
+        result: record.result,
+        signal: strikes::classify(record),
+        quiet: None,
+        ends_streak: record.polarity() == Some(RunPolarity::Failure),
+        strike_out: task
+            .and_then(|task| strikes::threshold(task.entry()).map(|max| (max, task.source()))),
+        now: Timestamp::now(),
+    });
+    match settled {
+        Ok(Some(settled)) if settled.counted => {
+            let mut record = record.clone();
+            record.kind = task.map(LoadedTask::kind);
+            let root = task.map_or_else(|| root.to_path_buf(), |task| task.entry().resolved_root());
+            append_for_root(&root, &record);
+            if settled.disabled
+                && let Some(notify) = LOOP_DISABLED.get()
+            {
+                notify(&record.task, &root, settled.count);
+            }
+            drain_waiting(&record.task, Some(fire), &root);
+            true
+        }
+        Ok(_) => false,
+        Err(err) => {
+            tracing::warn!(task = record.task, %fire, error = %err, "loop fire outcome not settled");
             false
         }
     }
@@ -674,9 +949,10 @@ pub(in crate::harness) fn report_row(
 /// closes the fire's mark with the run's result (only a run whose command exited 0 keeps holding
 /// its checkout for `once-per-checkout`), moves the strike count once per fire id, adds a quiet
 /// fire to the task's quiet summary or ends the quiet streak on a failure, and disables a task
-/// that struck out. A quiet run whose task row exists writes no row; any other appends one
-/// first, so a failed append returns before the settle and a retry does both, and history readers
-/// fold a repeated row by its run id. When a scheduled fire's command exited 0, an `--until` row
+/// that struck out. A quiet run whose task row exists writes no row; any other appends one after
+/// the settle, so a reader that sees the row sees the mark closed; a failed append returns an
+/// error, and the retry's settle moves nothing a second time (once per fire id) before it
+/// appends, while history readers fold a repeated row by its run id. When a scheduled fire's command exited 0, an `--until` row
 /// is consumed, quiet or not. Either way a waiting trigger is drained once the report landed.
 /// `command` is how the run's command ended, which a row carries as its check.
 pub(in crate::harness) fn report_run(
@@ -718,8 +994,6 @@ pub(in crate::harness) fn report_run(
         record.check = quiet_check(run);
         strikes::Signal::Reset
     } else {
-        // The facts a consumed one-shot's fire sealed still name the kind its row had.
-        try_append_for_root(&root, &record).map_err(ReportFailure::from)?;
         strikes::classify(&record)
     };
     let settled = super::fires::settle(super::fires::Outcome {
@@ -734,6 +1008,10 @@ pub(in crate::harness) fn report_run(
         now: Timestamp::now(),
     })
     .map_err(ReportFailure::from)?;
+    if !quiet {
+        // The facts a consumed one-shot's fire sealed still name the kind its row had.
+        try_append_for_root(&root, &record).map_err(ReportFailure::from)?;
+    }
     let transition = match settled {
         Some(settled) if settled.disabled => RunTransition::AutoDisabled {
             strikes: settled.count,
@@ -1554,6 +1832,19 @@ fn launch_row(
     row.run_id = Some(run.id.to_string());
     row.acted = None;
     row
+}
+
+/// The task ids the machine's loop run history names, in its current and rotated files.
+pub(super) fn logged_task_ids() -> BTreeSet<TaskId> {
+    #[derive(Deserialize)]
+    struct Row {
+        task_id: Option<TaskId>,
+    }
+    let mut ids = BTreeSet::new();
+    crate::disk::rotating::visit_records(&log_path(&logs_dir()), |row: Row| {
+        ids.extend(row.task_id);
+    });
+    ids
 }
 
 /// A task's logged history rows in log order, as `is_history` keeps them. A row with no task

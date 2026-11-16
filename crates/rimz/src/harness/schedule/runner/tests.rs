@@ -14,7 +14,7 @@ fn backlog_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
             "pending",
             TaskEntry {
                 root: root.to_owned(),
-                command: vec!["true".to_owned()],
+                args: vec!["true".to_owned()],
                 timeout: Some("1m".to_owned()),
                 every: Some("1h".into()),
                 overlap: Some(crate::config::OverlapPolicy::Coalesce),
@@ -106,7 +106,7 @@ fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
                         name,
                         TaskEntry {
                             root: root.path().to_owned(),
-                            command: vec!["true".to_owned()],
+                            args: vec!["true".to_owned()],
                             timeout: Some("1m".to_owned()),
                             every: Some("1h".into()),
                             overlap,
@@ -454,7 +454,7 @@ fn scheduled_workflow_rechecks_launch_memory_under_early_and_late_run_locks() {
                 "land",
                 TaskEntry {
                     root: root.path().to_owned(),
-                    command: vec!["true".to_owned()],
+                    args: vec!["true".to_owned()],
                     timeout: Some("1m".to_owned()),
                     once_per_checkout: Some(true),
                     when: Some(vec!["pr=open".into()]),
@@ -864,7 +864,7 @@ fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
         ),
     ] {
         let entry = TaskEntry {
-            command: vec!["true".to_owned()],
+            args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             root: dir.path().to_path_buf(),
             at: (!fire_at).then(|| "07:00".to_owned()),
@@ -922,7 +922,7 @@ fn check_room_hook_precedes_the_run_and_carries_the_rows_checkout() {
     let worktree = tempfile::tempdir().unwrap();
     let worktree_root = worktree.path().canonicalize().unwrap();
     let entry = TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         root: project_root.clone(),
         dir: Some(worktree_root.clone()),
@@ -971,7 +971,7 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
     let entry = TaskEntry {
-        command: vec!["touch".to_owned(), "check-ran".to_owned()],
+        args: vec!["touch".to_owned(), "check-ran".to_owned()],
         timeout: Some("1m".to_owned()),
         root: dir.path().to_path_buf(),
         every: Some("1m".to_owned()),
@@ -1042,7 +1042,7 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
 #[test]
 fn condition_evidence_reaches_prompt_and_terminal_record() {
     let entry = TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         when: Some(vec!["team.stage=Done".to_owned()]),
         repeat: true,
@@ -1391,7 +1391,7 @@ fn a_fresh_tree_no_run_took_over_is_removed_with_the_fire() {
     git_in(&root, &["commit", "-q", "--allow-empty", "-m", "base"]);
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
     let entry = TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         every: Some("1h".to_owned()),
         root: root.clone(),
@@ -1469,7 +1469,7 @@ fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwit
             name,
             TaskEntry {
                 root: root.path().to_owned(),
-                command: vec!["true".to_owned()],
+                args: vec!["true".to_owned()],
                 timeout: Some("1m".to_owned()),
                 signal: Some("deploy.done".into()),
                 repeat: true,
@@ -1576,7 +1576,7 @@ fn a_fire_mark_names_its_run_and_its_booker() {
         (
             "booked",
             TaskEntry {
-                command: launch(&["rimz", "agents", "coder", "--detach"]),
+                args: launch(&["rimz", "agents", "coder", "--detach"]),
                 booked_by: vec![booker.clone()],
                 ..TaskEntry::default()
             },
@@ -1585,7 +1585,7 @@ fn a_fire_mark_names_its_run_and_its_booker() {
         (
             "deduped",
             TaskEntry {
-                command: launch(&["true"]),
+                args: launch(&["true"]),
                 once_per_checkout: Some(true),
                 ..TaskEntry::default()
             },
@@ -1594,7 +1594,7 @@ fn a_fire_mark_names_its_run_and_its_booker() {
         (
             "unbooked",
             TaskEntry {
-                command: launch(&["rimz", "agents", "coder", "--detach"]),
+                args: launch(&["rimz", "agents", "coder", "--detach"]),
                 ..TaskEntry::default()
             },
             false,
@@ -1602,7 +1602,7 @@ fn a_fire_mark_names_its_run_and_its_booker() {
         (
             "not-a-launch",
             TaskEntry {
-                command: launch(&["true"]),
+                args: launch(&["true"]),
                 booked_by: vec![booker.clone()],
                 ..TaskEntry::default()
             },
@@ -1611,7 +1611,7 @@ fn a_fire_mark_names_its_run_and_its_booker() {
         (
             "repeating",
             TaskEntry {
-                command: launch(&["rimz", "teams", "forge"]),
+                args: launch(&["rimz", "teams", "forge"]),
                 booked_by: vec![booker],
                 when: Some(vec!["pr=open".to_owned()]),
                 repeat: true,
@@ -1653,7 +1653,11 @@ fn a_fire_mark_names_its_run_and_its_booker() {
         }))
         .unwrap();
         let (fire_id, _) = fire.open_fire().unwrap();
-        assert_eq!(fire.note_launched(&fire_id, &record), None, "{name}");
+        assert_eq!(
+            fire.note_launched(&fire_id, Some(&record.id), record.created_at),
+            None,
+            "{name}"
+        );
         let records = task_record::load().unwrap();
         let mark = &records.get(&fire.task_id).unwrap().marks[&fire.launch_checkout()];
         assert_eq!(
@@ -1701,4 +1705,287 @@ fn a_prepared_delivery_resolves_its_holder_when_sent() {
     ]
     .map(|(stage, session, handle)| (stage.to_owned(), (session.to_owned(), handle.to_owned())));
     assert_eq!(seen, expected);
+}
+
+/// A fire of a launch task named uniquely, so the shared unit-test home's machine records
+/// never collide; `kind` and `target` are its declared launch.
+fn launch_fire<'a>(
+    root: &Path,
+    catalog: &'a TaskCatalog,
+    entry: TaskEntry,
+    mode: LoopRunMode,
+) -> TaskFire<'a> {
+    let name = format!("launch-{}", TaskId::new().short());
+    let entry = TaskEntry {
+        root: root.to_owned(),
+        every: Some("1h".into()),
+        ..entry
+    };
+    TaskFire::new(
+        name.clone(),
+        LoadedTask::new(&name, entry, catalog::TaskSource::Instance),
+        catalog,
+        mode,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        None,
+        Instant::now(),
+    )
+    .unwrap()
+}
+
+fn agent_entry() -> TaskEntry {
+    TaskEntry {
+        kind: Some(LaunchKind::Agent),
+        target: Some("worker".to_owned()),
+        args: vec!["-p".to_owned(), "go".to_owned()],
+        ..TaskEntry::default()
+    }
+}
+
+/// A launch mark for `fire` in `checkout`, open, its processes gone.
+fn dead_mark(fire: FireId, child: bool) -> FireMark {
+    FireMark {
+        fire,
+        at: Timestamp::now(),
+        booked_by: Vec::new(),
+        once: false,
+        run: None,
+        scope: crate::store::workflow::ScopeKind::Worktree,
+        result: None,
+        kind: Some(LaunchKind::Agent),
+        target: None,
+        manual: false,
+        opener: None,
+        child: child.then_some(task_record::ProcessMark {
+            pid: 1,
+            start: None,
+        }),
+    }
+}
+
+/// A workflow fire whose launch child exited 0 published its run (`rimz workflow run` returns
+/// only after `create`), even when the run has left the live directory before the fire reads:
+/// `launched` with the run the child printed, and the fresh tree is the run's.
+#[test]
+fn a_workflow_launch_that_exited_0_is_launched_wherever_its_run_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    git_in(&root, &["init", "-q", "-b", "main"]);
+    git_in(&root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    let root = root.canonicalize().unwrap();
+    record_room(&root).unwrap();
+    let catalog = TaskCatalog::load(Some(&root)).unwrap();
+    let mut fire = launch_fire(
+        &root,
+        &catalog,
+        TaskEntry {
+            kind: Some(LaunchKind::Workflow),
+            target: Some("smoke".to_owned()),
+            fresh_worktree: Some("night".to_owned()),
+            ..TaskEntry::default()
+        },
+        LoopRunMode::Scheduled,
+    );
+    fire.prepare_fire_tree().unwrap();
+    let tree = fire.fire_dir();
+    let (fire_id, _) = fire.open_fire().unwrap();
+    let state = StatePaths::for_project_root(&root).unwrap();
+    let run = crate::ids::WorkflowRunId::new();
+    let plan = fire
+        .launch_outcome(
+            LaunchKind::Workflow,
+            &state,
+            fire_id,
+            super::super::launch::Ended::Exited {
+                code: Some(0),
+                tail: String::new(),
+                run: Some(run.clone()),
+            },
+        )
+        .unwrap();
+    let TaskFirePlan::Done(done) = plan else {
+        panic!("expected TaskFirePlan::Done")
+    };
+    assert_eq!(
+        done.record.result,
+        LoopRunResult::Launched,
+        "{:?}",
+        done.record
+    );
+    assert_eq!(done.record.run_id.as_deref(), Some(run.as_str()));
+    drop(fire);
+    assert!(tree.exists(), "the run's tree is handed over, not removed");
+}
+
+/// The `canceled` row a stop appends carries the task id its key binds, and settles that
+/// task's open launch mark, never another task's of the same name.
+#[test]
+fn a_stop_row_carries_its_task_id_and_settles_that_tasks_mark() {
+    for target in 0..2 {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        record_room(&root).unwrap();
+        let paths = StatePaths::for_project_root(&root).unwrap();
+        let name = format!("same-{}", TaskId::new().short());
+        let scopes = [
+            task_record::Scope::Machine,
+            task_record::Scope::Workspace(WorkspaceId::from_project_root(&root)),
+        ];
+        let ids = scopes.map(|scope| {
+            task_record_store::mutate(|records| {
+                let (id, record) = records.bind(&task_record::Binding {
+                    scope,
+                    name: name.clone(),
+                });
+                record
+                    .marks
+                    .insert(root.clone(), dead_mark(FireId::new(&id), true));
+                id
+            })
+            .unwrap()
+        });
+        let info = RunLockInfo {
+            pid: 4242,
+            started_at: Timestamp::now(),
+        };
+        let mut backlog = LockedBacklog::acquire(&paths).unwrap();
+        backlog
+            .record
+            .tasks
+            .entry(ids[target].to_string())
+            .or_default()
+            .stopping = Some(StopMark {
+            pid: info.pid,
+            started_at: info.started_at,
+            cause: StopCause::Stop,
+        });
+        append_stopped_record(
+            ids[target].as_str(),
+            &name,
+            &root,
+            info,
+            None,
+            None,
+            &mut backlog,
+        )
+        .unwrap();
+        drop(backlog);
+        let records = task_record::load().unwrap();
+        for (index, id) in ids.iter().enumerate() {
+            let mark = &records.get(id).unwrap().marks[&root];
+            assert_eq!(mark.result.is_some(), index == target, "{target}: {mark:?}");
+        }
+        let rows = run_log::task_records(&logs_dir(), &ids[target], Some(&root));
+        assert!(
+            rows.iter().any(|row| row.result == LoopRunResult::Canceled),
+            "{target}: {rows:?}"
+        );
+    }
+}
+
+/// A manual fire whose processes died is settled by the pass as the manual fire it was, so it
+/// is never read as a scheduled attempt.
+#[test]
+fn a_dead_manual_fire_settles_as_a_manual_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    record_room(&root).unwrap();
+    let catalog = TaskCatalog::load(Some(&root)).unwrap();
+    let fire = launch_fire(&root, &catalog, agent_entry(), LoopRunMode::Manual);
+    let (fire_id, _) = fire.open_fire().unwrap();
+    task_record_store::mutate(|records| {
+        for mark in records.get_mut(&fire.task_id).unwrap().marks.values_mut() {
+            mark.opener = None;
+        }
+    })
+    .unwrap();
+    assert_eq!(run_log::settle_open_fires(&root), 1);
+    let rows = run_log::task_records(&logs_dir(), &fire.task_id, None);
+    let row = rows
+        .iter()
+        .find(|row| row.fire.as_ref() == Some(&fire_id))
+        .unwrap_or_else(|| panic!("{rows:?}"));
+    assert_eq!(row.mode, Some(LoopRunMode::Manual), "{row:?}");
+}
+
+/// A scheduled `-p` agent fire stamps its task's launch proof at the fire, so a clock pass
+/// that reads it before the settle pass sees the attempt.
+#[test]
+fn a_scheduled_agent_fire_leaves_its_attempt_proof_at_the_fire() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    record_room(&root).unwrap();
+    let catalog = TaskCatalog::load(Some(&root)).unwrap();
+    let mut fire = launch_fire(&root, &catalog, agent_entry(), LoopRunMode::Scheduled);
+    let (fire_id, _) = fire.open_fire().unwrap();
+    let state = StatePaths::for_project_root(&root).unwrap();
+    let since = fire.now;
+    let plan = fire
+        .launch_outcome(
+            LaunchKind::Agent,
+            &state,
+            fire_id,
+            super::super::launch::Ended::Published(RunId::new()),
+        )
+        .unwrap();
+    assert!(matches!(plan, TaskFirePlan::Done(_)));
+    let key = fire.task.key(&fire.name);
+    assert!(fires::scheduled_since(&key, None, since).unwrap());
+}
+
+/// A fire that displaces its checkout's open mark whose processes died settles that mark
+/// first, so its outcome and strike are kept.
+#[test]
+fn a_fire_settles_the_dead_mark_it_displaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    record_room(&root).unwrap();
+    let catalog = TaskCatalog::load(Some(&root)).unwrap();
+    let fire = launch_fire(&root, &catalog, agent_entry(), LoopRunMode::Scheduled);
+    let old = FireId::new(&fire.task_id);
+    task_record_store::mutate(|records| {
+        records
+            .get_mut(&fire.task_id)
+            .unwrap()
+            .marks
+            .insert(fire.launch_checkout(), dead_mark(old.clone(), false));
+    })
+    .unwrap();
+    let (fresh, _) = fire.open_fire().unwrap();
+    assert_ne!(fresh, old);
+    let rows = run_log::task_records(&logs_dir(), &fire.task_id, None);
+    assert!(
+        rows.iter()
+            .any(|row| row.fire.as_ref() == Some(&old) && row.result == LoopRunResult::Errored),
+        "{rows:?}"
+    );
+    let records = task_record::load().unwrap();
+    assert_eq!(records.get(&fire.task_id).unwrap().strikes, 1);
+}
+
+/// A fire opens its mark on the task id it cached at its start: a rename mid-fire mints no
+/// second id.
+#[test]
+fn a_fire_opens_its_mark_on_its_cached_task_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    record_room(&root).unwrap();
+    let catalog = TaskCatalog::load(Some(&root)).unwrap();
+    let fire = launch_fire(&root, &catalog, agent_entry(), LoopRunMode::Scheduled);
+    task_record_store::mutate(|records| {
+        records.get_mut(&fire.task_id).unwrap().binding.name = format!("{}-renamed", fire.name);
+    })
+    .unwrap();
+    let (fire_id, _) = fire.open_fire().unwrap();
+    assert_eq!(fire_id.task(), fire.task_id);
+    let records = task_record::load().unwrap();
+    assert!(
+        records
+            .get(&fire.task_id)
+            .unwrap()
+            .marks
+            .contains_key(&fire.launch_checkout())
+    );
 }

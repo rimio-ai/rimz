@@ -48,6 +48,13 @@ impl TaskRecords {
         (id, record)
     }
 
+    /// The record `id`, a fire's cached task id, bound to `binding` when it has none.
+    pub(super) fn bind_id(&mut self, id: &TaskId, binding: &Binding) -> &mut TaskRecord {
+        self.tasks
+            .entry(id.clone())
+            .or_insert_with(|| TaskRecord::new(binding.clone()))
+    }
+
     /// The live record bound to `key`, for an edit that binds nothing.
     pub(super) fn live_mut(&mut self, key: &str) -> Option<&mut TaskRecord> {
         self.tasks

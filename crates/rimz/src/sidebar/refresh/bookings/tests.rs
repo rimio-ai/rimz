@@ -21,8 +21,9 @@ fn argv(words: &[&str]) -> Vec<String> {
 
 fn booked(root: &Path) -> TaskEntry {
     TaskEntry {
-        command: argv(&["rimz", "agents", "coder", "go"]),
-        timeout: Some("1h".to_owned()),
+        kind: Some(crate::config::LaunchKind::Agent),
+        target: Some("coder".to_owned()),
+        args: argv(&["go"]),
         when: Some(vec!["pr[feature]=merged".to_owned()]),
         root: root.to_path_buf(),
         booked_by: vec![link("booker"), link("root")],
@@ -30,10 +31,29 @@ fn booked(root: &Path) -> TaskEntry {
     }
 }
 
-/// A booked row whose command is `words`.
+/// A booked row that launches `words`: an agent or team row when they are a `rimz agents` or
+/// `rimz teams` launch, else a shell row running them.
 fn launching(words: &[&str], root: &Path) -> TaskEntry {
+    use crate::config::LaunchKind;
+    let (kind, rest) = match words {
+        ["rimz", "agents", rest @ ..] => (LaunchKind::Agent, rest),
+        ["rimz", "teams", "launch", rest @ ..] | ["rimz", "teams", rest @ ..] => {
+            (LaunchKind::Team, rest)
+        }
+        _ => {
+            return TaskEntry {
+                kind: None,
+                target: None,
+                args: argv(words),
+                timeout: Some("1h".to_owned()),
+                ..booked(root)
+            };
+        }
+    };
     TaskEntry {
-        command: argv(words),
+        kind: Some(kind),
+        target: rest.first().map(|target| (*target).to_owned()),
+        args: argv(rest.get(1..).unwrap_or_default()),
         ..booked(root)
     }
 }
@@ -291,6 +311,11 @@ fn facts_name_the_team_branch_fire_and_end() {
         run: Some(run.clone()),
         scope: crate::store::workflow::ScopeKind::Project,
         result: None,
+        kind: None,
+        target: None,
+        manual: false,
+        opener: None,
+        child: None,
     };
     let readings = BTreeMap::from([(
         "lang".to_owned(),
@@ -653,6 +678,11 @@ fn ledger_of(task: &str, run: &crate::store::workflow::RunRecord) -> BTreeMap<St
             run: Some(run.id.clone()),
             scope: crate::store::workflow::ScopeKind::Worktree,
             result: None,
+            kind: None,
+            target: None,
+            manual: false,
+            opener: None,
+            child: None,
         },
     )])
 }
@@ -793,10 +823,7 @@ fn a_fresh_tree_fire_reads_its_branch_from_the_fire_checkout() {
     let dir = tempfile::tempdir().unwrap();
     let (root, runtime) = room(dir.path());
     let tree = marked_tree(dir.path(), "spike-1", "spike-20261113-100000", &root);
-    let entry = TaskEntry {
-        fresh_worktree: Some("spike".to_owned()),
-        ..booked(&root)
-    };
+    let entry = launching(&["rimz", "agents", "coder", "go", "-w"], &root);
     let tasks = BTreeMap::from([(
         "spike".to_owned(),
         LoadedTask::new("spike", entry, TaskSource::Config),
@@ -935,10 +962,7 @@ fn a_board_reopened_out_of_done_unfinishes_its_entry() {
     let (root, runtime) = room(dir.path());
     let tree = marked_tree(dir.path(), "spike-1", "spike-20261113-100000", &root);
     let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), Team::default())]));
-    let entry = TaskEntry {
-        fresh_worktree: Some("spike".to_owned()),
-        ..launching(&["rimz", "teams", "launch", "forge", "go"], &root)
-    };
+    let entry = launching(&["rimz", "teams", "launch", "forge", "go"], &root);
     let run = fire_run("spike", &root, &tree, true, None);
     let (tasks, readings) = team_fire("spike", entry, &run);
     let records = RoomRecords {
@@ -1295,8 +1319,14 @@ fn only_a_scheduled_launch_command_is_rebuilt() {
         std::fs::write(crate::disk::paths::workflow_spec_file(&definition), text).unwrap();
     };
     let sealed = |name: &str, words: &[&str]| {
-        let entry = launching(words, &root);
-        crate::harness::schedule::runner::command_definition(name, &entry, &entry.command)
+        let entry = TaskEntry {
+            kind: None,
+            target: None,
+            args: argv(words),
+            timeout: Some("1h".to_owned()),
+            ..booked(&root)
+        };
+        crate::harness::schedule::runner::command_definition(name, &entry, &entry.args)
             .unwrap()
             .text
     };

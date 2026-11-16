@@ -15,7 +15,7 @@ use super::run_log::{LoopRunRecord, LoopRunResult, QuietFires};
 use super::strikes::{self, Signal};
 use super::task_record::{self, Binding, FireMark, TaskRecord, TaskRecordErr};
 use super::task_record_store::{self, TaskStoreErr};
-use crate::ids::{FireId, WorkflowRunId};
+use crate::ids::{FireId, TaskId, WorkflowRunId};
 
 pub(super) type Result<T> = std::result::Result<T, TaskStoreErr>;
 
@@ -51,14 +51,23 @@ pub(super) struct Opening<'a> {
     pub(super) once: bool,
     pub(super) scope: crate::store::workflow::ScopeKind,
     pub(super) at: Timestamp,
+    pub(super) kind: crate::config::LaunchKind,
+    pub(super) target: Option<String>,
+    /// Whether the fire was made by hand, which the settle pass reads for a dead fire's row.
+    pub(super) manual: bool,
 }
 
-/// Bind the task, mint the fire's id and write its open mark for the checkout, in one write.
-/// Returns the mark it displaced, which [`withdraw`] puts back for a fire that publishes no run.
-pub(super) fn open(binding: &Binding, opening: Opening<'_>) -> Result<(FireId, Option<FireMark>)> {
+/// Mint the fire's id on task `task`, the id the fire cached at its start (its record bound to
+/// `binding` when it has none), and write its open mark for the checkout, in one write. Returns
+/// the mark it displaced, which [`withdraw`] puts back for a fire that publishes no run.
+pub(super) fn open(
+    task: &TaskId,
+    binding: &Binding,
+    opening: Opening<'_>,
+) -> Result<(FireId, Option<FireMark>)> {
     task_record_store::mutate(|records| {
-        let (task, record) = records.bind(binding);
-        let fire = FireId::new(&task);
+        let record = records.bind_id(task, binding);
+        let fire = FireId::new(task);
         let displaced = record.marks.insert(
             opening.checkout.to_owned(),
             FireMark {
@@ -69,6 +78,11 @@ pub(super) fn open(binding: &Binding, opening: Opening<'_>) -> Result<(FireId, O
                 run: None,
                 scope: opening.scope,
                 result: None,
+                kind: Some(opening.kind),
+                target: opening.target,
+                manual: opening.manual,
+                opener: Some(super::task_record::ProcessMark::current()),
+                child: None,
             },
         );
         (fire, displaced)
@@ -97,17 +111,32 @@ pub(super) fn withdraw(fire: &FireId, displaced: Option<FireMark>) -> Result<()>
     })
 }
 
-/// Note the run a fire published and, for a scheduled fire, stamp the task's launch proof.
+/// Write the launch child a fire spawned onto its mark, before the fire waits on it.
+pub(super) fn spawned(fire: &FireId, pid: u32) -> Result<()> {
+    task_record_store::mutate(|records| {
+        if let Some(mark) = records
+            .get_mut(&fire.task())
+            .and_then(|record| mark_of(record, fire))
+        {
+            mark.child = Some(super::task_record::ProcessMark::of(pid));
+        }
+    })
+}
+
+/// Note the run a fire published, when it names one, and, for a scheduled fire, stamp the
+/// task's launch proof.
 pub(super) fn launched(
     fire: &FireId,
-    run: &WorkflowRunId,
+    run: Option<&WorkflowRunId>,
     scheduled: Option<(Option<&Path>, Timestamp)>,
 ) -> Result<()> {
     task_record_store::mutate(|records| {
         let Some(record) = records.get_mut(&fire.task()) else {
             return;
         };
-        if let Some(mark) = mark_of(record, fire) {
+        if let Some(mark) = mark_of(record, fire)
+            && let Some(run) = run
+        {
             mark.run = Some(run.clone());
         }
         let Some((checkout, at)) = scheduled else {

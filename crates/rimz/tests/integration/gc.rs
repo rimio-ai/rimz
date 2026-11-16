@@ -1338,7 +1338,7 @@ fn gc_keeps_spawn_and_live_loop_schedules() {
         &config_path,
         format!(
             "[tasks.spawn]\n\
-             command = [\"true\"]\n\
+             args = [\"true\"]\n\
              timeout = \"1m\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n\
@@ -1386,7 +1386,7 @@ fn gc_keeps_loop_root_until_task_is_removed() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.nightly]\ncommand = ['true']\ntimeout = '1m'\nroot = '{}'\nevery = '1h'\n",
+            "[tasks.nightly]\nargs = ['true']\ntimeout = '1m'\nroot = '{}'\nevery = '1h'\n",
             worktree.display()
         ),
     )
@@ -1428,7 +1428,7 @@ fn gc_fanout_does_not_pin_its_arming_directory() {
         .assert()
         .success();
     let worktree = env.home_root.join("project-worktrees/followup");
-    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.fanout]\ncommand = ['true']\ntimeout = '1m'\nroot = '{}'\ndir = '{}'\nevery = '1h'\neach-worktree = true\n", env.project_root.display(), worktree.display())).unwrap();
+    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.fanout]\nargs = ['true']\ntimeout = '1m'\nroot = '{}'\ndir = '{}'\nevery = '1h'\neach-worktree = true\n", env.project_root.display(), worktree.display())).unwrap();
     env.rimz()
         .arg("gc")
         .assert()

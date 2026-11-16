@@ -1030,17 +1030,19 @@ Each role's ordered binding list, selectors, matches, and prompts together, ente
 ### Loop tasks
 
 ```toml
-default-timeout = "2h"   # the timeout `rimz loop add` writes when --timeout is absent
+default-timeout = "2h"   # the timeout `rimz loop add` writes on a shell task when --timeout is absent
 
 [tasks.morning]
-command = ["rimz", "agents", "claude", "--detach", "summarize what landed on main since yesterday"]
+kind = "agent"
+target = "claude"
+args = ["summarize what landed on main since yesterday"]
 root = "/home/you/code/app"
-timeout = "2h"
 at = "07:00"             # 24h time in the configured timezone
 every = "weekday"        # day | weekday | weekend | mon,wed,fri
 
 [tasks.watchdog]
-command = ["sh", "-c", "cargo test 2>&1 | tail -n 50"]
+kind = "shell"
+args = ["sh", "-c", "cargo test 2>&1 | tail -n 50"]
 root = "/home/you/code/app"
 timeout = "20m"
 every = "15m"
@@ -1049,18 +1051,18 @@ max-strikes = 3
 
 Loop tasks live in `~/.rimz/loop.toml` under `[tasks.<name>]`. Shared project tasks take the same shape in `<repo>/.rimz/config.toml`, enter the trust hash, and need both `rimz trust grant` and a machine-local `rimz loop enable <name>` before they run unattended. The scheduling model (the triggers, the commands, the strikes) is the [loops guide](./loops.md); this section is the field shape, and [`rimz loop add`](../reference/cli/loop.md#add-a-task) writes every field for you.
 
-`default-timeout` is the cap `rimz loop add` writes to a new task when you pass no `--timeout`. It takes a positive `s`, `m`, `h`, or `d` duration, defaults to `2h`, and `rimz config set loop.default-timeout 3h` writes it; `0s` is refused. Changing it changes later adds, never a stored task.
+`default-timeout` is the cap `rimz loop add` writes to a new shell task when you pass no `--timeout`; a workflow, agent, or team task takes no `timeout`, since its launch bounds itself. It takes a positive `s`, `m`, `h`, or `d` duration, defaults to `2h`, and `rimz config set loop.default-timeout 3h` writes it; `0s` is refused. Changing it changes later adds, never a stored task.
 
-A task is one trigger and one command:
+A task is one trigger and one launch:
 
-- `command` is the argv each fire runs, word for word with no shell, and `timeout` caps it. Both are required. Exit `0` ends the fire `completed`; any other exit, a signal, or the timeout ends it `failed`.
+- `kind` says what each fire launches: `shell` (the default when `args` is present and `kind` is not), `workflow`, `agent`, or `team`. A shell task's `args` is the argv each fire runs, word for word with no shell, and `timeout`, which it requires, caps it: exit `0` ends the fire `completed`; any other exit, a signal, or the timeout ends it `failed`. A workflow, agent or team task names its workflow, profile or team in `target`, and its `args` are the arguments each fire passes to `rimz workflow run`, `rimz agents` or `rimz teams launch`; such a task refuses `timeout`, and an agent or team task refuses `fresh-worktree`. What each kind's fire does is in [what a task launches](../reference/cli/loop.md#what-a-task-launches).
 - The trigger is `at`, `every`, `cron`, `signal` with `match`, or `when` with `for`; `repeat = true` keeps a `signal` or `when` task after it fires. `provider` and `account` name whose usage windows a `window.*` condition reads, and pick no login.
-- `root` is the project whose room hosts the task, `fresh-worktree = "<prefix>"` runs each fire's command in a fresh worktree, and `each-worktree = true` evaluates the trigger and fires in each RimZ-owned worktree. `label` is a short description.
-- `overlap` chooses what a busy repeating clock, signal, or condition task keeps: `skip` (default), `coalesce`, `queue`, or `replace` (cancels the active run and starts the newest trigger once that run has ended). `overlap-limit` bounds a queue, defaults to `10`, and must be at least `1`. Both are refused for one-shots. See [overlapping triggers](../reference/cli/loop.md#overlapping-triggers).
-- `once-per-checkout = true` makes scheduled fires succeed at most once per checkout: a fire whose command exited `0` is remembered until `rimz loop remove` clears the memory, and a failed or canceled one is not ([launch memory](../reference/cli/loop.md#launch-memory)). It defaults to `false`.
+- `root` is the project whose room hosts the task, `fresh-worktree = "<prefix>"` runs each fire's command or workflow in a fresh worktree, and `each-worktree = true` evaluates the trigger and fires in each RimZ-owned worktree. `label` is a short description.
+- `overlap` chooses what a busy repeating clock, signal, or condition task keeps: `skip` (default), `coalesce`, `queue`, or `replace` (stops the active run or launch and starts the newest trigger once nothing it launched is alive). `overlap-limit` bounds a queue, defaults to `10`, and must be at least `1`. Both are refused for one-shots. See [overlapping triggers](../reference/cli/loop.md#overlapping-triggers).
+- `once-per-checkout = true` makes scheduled fires succeed at most once per checkout: a fire that did not fail (a command that exited `0`, a workflow run that ended done, a `-p` run that completed, an agent or team that launched) is remembered until `rimz loop remove` clears the memory, and a failed or canceled one is not ([launch memory](../reference/cli/loop.md#launch-memory)). It defaults to `false`.
 - `max-strikes` disables the task after that many consecutive failed fires. It defaults to `3`, and `0` turns the strike gate off. `rimz loop enable` clears the counter, which is machine-local.
 
-A task takes no other key. A task holding one refuses alone, naming the key and the fix, which is to delete the task and add it again with `rimz loop add`; the other tasks in the file load and fire, and `rimz loop list` shows the refused one under NEEDS YOU.
+A task takes no other key. A task holding one refuses alone, naming the key and the fix, which is to delete the task and add it again with `rimz loop add`; the other tasks in the file load and fire, and `rimz loop list` shows the refused one under NEEDS YOU. A task an older RimZ wrote with a `command` key is refused the same way: add it again with `rimz loop add` and the kind flag it launches, and run `rimz trust grant` again for a project task, whose changed row changes the trust hash.
 
 Four rules apply when you edit the file by hand:
 
@@ -1117,8 +1119,9 @@ env = { CLAUDE_CODE_DISABLE_AGENT_VIEW = "1" }
 claude = "work"
 
 [tasks.morning-triage]
-command = ["rimz", "agents", "codex", "triage yesterday's failing CI runs and open one issue per distinct cause"]
-timeout = "2h"
+kind = "agent"
+target = "codex"
+args = ["triage yesterday's failing CI runs and open one issue per distinct cause"]
 at = "08:00"
 every = "day"
 ```

@@ -150,6 +150,11 @@ fn launched_counts_cover_the_marks_holding_a_checkout() {
         run,
         scope: rimz::store::workflow::ScopeKind::Worktree,
         result,
+        kind: None,
+        target: None,
+        manual: false,
+        opener: None,
+        child: None,
     };
     let record = TaskRecord {
         binding: Binding {
@@ -185,7 +190,7 @@ fn launched_counts_cover_the_marks_holding_a_checkout() {
         ]),
     };
     let mut entry = TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         once_per_checkout: Some(true),
         when: Some(vec!["pr=open".into()]),

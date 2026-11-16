@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use rimz::config::LaunchKind;
 use rimz::harness::schedule::catalog::TaskCatalog;
 use rimz::harness::workflow::ScopeKind;
 
@@ -57,7 +58,7 @@ impl Definition {
             .as_ref()
             .and_then(|catalog| catalog.visible().get(name))
             .and_then(|task| match task.action() {
-                Ok(rimz::harness::schedule::TaskAction::Command(argv)) => Some((task, argv)),
+                Ok(rimz::harness::schedule::TaskAction::Shell(argv)) => Some((task, argv)),
                 _ => None,
             });
         let (task, argv) = match (deployed, task) {
@@ -189,7 +190,14 @@ fn header(
         .visible()
         .iter()
         .filter_map(|(task_name, task)| {
-            if definition.task.is_none() || task_name != name {
+            let starts = match (&definition.task, task.action()) {
+                (Some(_), _) => task_name == name,
+                (None, Ok(rimz::harness::schedule::TaskAction::Launch(launch))) => {
+                    launch.kind == LaunchKind::Workflow && launch.target == name
+                }
+                (None, _) => false,
+            };
+            if !starts {
                 return None;
             }
             Some(format!(
@@ -205,9 +213,9 @@ fn header(
         let command = resolve::command("run", &[name], root, None, &[], flags);
         let rimz = resolve::rimz_prefix(root);
         let task = format!(
-            "{rimz} loop add '<task>'{} --every '<duration>' -- {rimz} workflow run {}",
-            if worktree { " --each-worktree" } else { "" },
+            "{rimz} loop add '<task>' --workflow {}{} --every '<duration>'",
             crate::cli::usage::shell_command([name]),
+            if worktree { " --each-worktree" } else { "" },
         );
         writeln!(
             out,

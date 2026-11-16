@@ -8,7 +8,7 @@ use std::path::PathBuf;
 fn task(root: &Path) -> TaskEntry {
     TaskEntry {
         root: root.to_owned(),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         every: Some("1h".into()),
         ..TaskEntry::default()
@@ -72,7 +72,7 @@ fn capacity_waits_reach_list_and_show_as_text_and_json() {
             "owed".into(),
             TaskEntry {
                 root: env.project_root.clone(),
-                command: vec!["true".to_owned()],
+                args: vec!["true".to_owned()],
                 timeout: Some("1m".to_owned()),
                 when: Some(vec!["team.stage=Done".into()]),
                 ..Default::default()
@@ -145,7 +145,7 @@ fn capacity_other_checkouts_stay_visible_while_one_checkout_runs() {
             "owed".into(),
             TaskEntry {
                 root: env.project_root.clone(),
-                command: vec!["true".to_owned()],
+                args: vec!["true".to_owned()],
                 timeout: Some("1m".to_owned()),
                 when: Some(vec!["team.stage=Done".into()]),
                 repeat: true,
@@ -574,7 +574,7 @@ fn show_resolves_worktree_names_and_lists_ambiguous_tasks_and_wakeups() {
         Tasks(BTreeMap::from([(
             "wake".into(),
             TaskEntry {
-                command: Vec::new(),
+                args: Vec::new(),
                 timeout: None,
                 wait: Some(TaskTarget {
                     kind: AgentKind::new_unchecked("claude"),
@@ -651,7 +651,7 @@ fn show_resolves_team_owners_and_disambiguates_exact_names_by_room() {
             session: "session".into(),
             handle: "@coder#lane".into(),
         }),
-        command: Vec::new(),
+        args: Vec::new(),
         timeout: None,
         ..task(&env.project_root)
     };
@@ -773,7 +773,7 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
                         session: "session".into(),
                         handle: "@coder".into(),
                     }),
-                    command: Vec::new(),
+                    args: Vec::new(),
                     timeout: None,
                     ..clock.clone()
                 },
@@ -787,7 +787,7 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
                         session: "session".into(),
                         handle: "@coder".into(),
                     }),
-                    command: Vec::new(),
+                    args: Vec::new(),
                     timeout: None,
                     ..clock
                 },
@@ -995,7 +995,7 @@ fn condition_counts_and_unhealthy_wake_ups_are_visible() {
                     session: "session".into(),
                     handle: "@coder".into(),
                 }),
-                command: Vec::new(),
+                args: Vec::new(),
                 timeout: None,
                 ..task(&env.project_root)
             },
@@ -1272,11 +1272,11 @@ fn other_room_hints_act_on_that_room() {
     );
     write_project_config(
         &env,
-        "[tasks.local]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+        "[tasks.local]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
     );
     write_project_config_at(
         &other,
-        "[tasks.blocked]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+        "[tasks.blocked]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
     );
     let instances = env
         .state_path_for(&other)
@@ -1615,7 +1615,7 @@ fn inactive_tasks_do_not_request_attention_for_old_failures() {
     );
     write_project_config(
         &env,
-        "[tasks.not-enabled]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+        "[tasks.not-enabled]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
     );
     loop_ok(&env, &["trust", "grant"]);
     write_loop_run_records(
@@ -1681,7 +1681,7 @@ fn malformed_task_record_warns_without_hiding_local_or_remote_tasks() {
             repeat: true,
             each_worktree: true,
             once_per_checkout: Some(true),
-            command: vec!["true".to_owned()],
+            args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             ..TaskEntry::default()
         };
@@ -2216,7 +2216,7 @@ fn every_cause_reads_alike_in_list_and_reader() {
             },
             "running-each" => TaskEntry {
                 root: root.clone(),
-                command: vec!["true".to_owned()],
+                args: vec!["true".to_owned()],
                 timeout: Some("1m".to_owned()),
                 each_worktree: true,
                 when: Some(vec!["pr=merged".into()]),
@@ -2232,7 +2232,7 @@ fn every_cause_reads_alike_in_list_and_reader() {
         if name == "blocked" {
             write_project_config_at(
                 root,
-                "[tasks.blocked]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+                "[tasks.blocked]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
             );
             continue;
         }
@@ -2728,7 +2728,7 @@ fn a_row_edited_mid_run_reads_its_run_alike_in_list_show_and_logs() {
         ..task(&root)
     };
     let wait = TaskEntry {
-        command: Vec::new(),
+        args: Vec::new(),
         timeout: None,
         wait: Some(TaskTarget {
             kind: AgentKind::new_unchecked("codex"),
@@ -2927,7 +2927,7 @@ fn closed_pull_requests_and_fired_gone_checkouts_read_alike_in_list_and_reader()
     );
     let booking = |when: &str, dir: Option<PathBuf>| TaskEntry {
         root: env.project_root.clone(),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         when: Some(vec![when.into()]),
         // Launch memory, which marks a booking fired, is kept only for once-per-checkout rows.
@@ -3301,7 +3301,7 @@ fn an_agent_booking_records_its_chain_and_shows_its_booker() {
     .unwrap();
     let shared = &project["tasks"]["shared"];
     assert!(
-        shared.get("command").is_some() && shared.get("booked-by").is_none(),
+        shared.get("args").is_some() && shared.get("booked-by").is_none(),
         "a project task is not stamped: {project}"
     );
     assert_eq!(stored_chain(&env, "shared"), None, "{project}");

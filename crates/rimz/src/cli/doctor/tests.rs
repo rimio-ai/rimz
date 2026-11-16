@@ -159,7 +159,7 @@ fn only_live_clock_tasks_without_a_scheduler_are_unscheduled() {
         ("every = 'invalid'", true, None, false, false, false),
     ] {
         let entry: TaskEntry = toml::from_str(&format!(
-            "command = ['true']\ntimeout = '1m'\nroot = '/tmp/project'\n{trigger}"
+            "args = ['true']\ntimeout = '1m'\nroot = '/tmp/project'\n{trigger}"
         ))
         .unwrap();
         let parsed = parse_trigger("morning", &entry);

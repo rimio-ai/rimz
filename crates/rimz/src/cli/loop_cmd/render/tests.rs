@@ -25,7 +25,7 @@ fn show_view(each_worktree: bool) -> ShowView {
     let now = Timestamp::from_second(100).unwrap();
     let entry = TaskEntry {
         root: "/repo".into(),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         when: Some(vec!["pr=open && ci=passed".into()]),
         once_per_checkout: Some(each_worktree),
@@ -150,6 +150,11 @@ fn with_runs(view: &mut ShowView, runs: &[(&str, &str, i64)]) {
                 run: Some(id.clone()),
                 scope: rimz::store::workflow::ScopeKind::Worktree,
                 result: None,
+                kind: None,
+                target: None,
+                manual: false,
+                opener: None,
+                child: None,
             },
         );
         view.worktrees.push(CheckoutCondition {
@@ -1525,7 +1530,7 @@ fn true_condition_without_hold_renders_due() {
     let entry = TaskEntry {
         root: root.path().to_owned(),
         when: Some(vec!["team.stage=Done".to_owned()]),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
@@ -1557,7 +1562,7 @@ fn closed_room_forge_condition_shows_unknown_on_unread_keys() {
     let entry = TaskEntry {
         root: root.path().to_owned(),
         when: Some(vec!["!ci=failed".to_owned()]),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
@@ -2164,7 +2169,7 @@ fn checkout_without_a_note_has_no_trailing_separator() {
 
 #[test]
 fn task_rules_use_action_specific_verbs() {
-    let command = TaskAction::Command(vec!["cargo".into(), "test".into()]);
+    let command = TaskAction::Shell(vec!["cargo".into(), "test".into()]);
     assert_eq!(task_run_rule(&command), "run `cargo test`");
     let wake = TaskAction::Deliver(TaskTarget {
         kind: rimz::ids::AgentKind::new_unchecked("claude"),
@@ -2588,7 +2593,7 @@ fn interval_timing(
     now: Timestamp,
 ) -> schedule::TaskTiming {
     let entry = TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         every: Some("15m".to_owned()),
         ..TaskEntry::default()

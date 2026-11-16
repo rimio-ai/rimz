@@ -4,10 +4,10 @@ use super::*;
 fn narrow_loop_matches_full_lenient_config() {
     for contents in [
         Some(
-            "default-timeout = '5m'\n[tasks.nightly]\ncommand = ['cargo', 'test']\ntimeout = '1h'\nevery = '1h'\n",
+            "default-timeout = '5m'\n[tasks.nightly]\nargs = ['cargo', 'test']\ntimeout = '1h'\nevery = '1h'\n",
         ),
         Some("[tasks.nightly\n"),
-        Some("[tasks.nightly]\ncommand = ['cargo', 'test']\nagent = 'codex'\n"),
+        Some("[tasks.nightly]\nargs = ['cargo', 'test']\nagent = 'codex'\n"),
         None,
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -388,12 +388,12 @@ fn default_timeout_rejects_a_zero_duration() {
 fn a_row_with_a_key_outside_the_row_refuses_alone_and_keeps_its_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("loop.toml");
-    let text = "[tasks.ok]\nroot = '/repo'\ncommand = ['true']\ntimeout = '1m'\nevery = '1h'\n\
+    let text = "[tasks.ok]\nroot = '/repo'\nargs = ['true']\ntimeout = '1m'\nevery = '1h'\n\
                 [tasks.old]\nroot = '/repo'\nagent = 'codex'\nprompt = 'fix'\nevery = '1h'\n";
     let loaded = super::super::parse_loop_text(&path, text).expect("the file still loads");
     let tasks = &loaded.tasks.0;
     assert_eq!(tasks["ok"].refused, None);
-    assert_eq!(tasks["ok"].command, ["true"]);
+    assert_eq!(tasks["ok"].args, ["true"]);
     let refused = tasks["old"].refused.as_ref().expect("the old row refuses");
     assert!(
         refused.detail.contains("unknown field `agent`"),

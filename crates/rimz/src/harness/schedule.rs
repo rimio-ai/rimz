@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 
-use crate::config::{TaskEntry, TaskTarget};
+use crate::config::{LaunchKind, TaskEntry, TaskTarget};
 use crate::harness::prose::{span, verbatim};
 use crate::harness::when;
 use crate::utils::time::{ClockTime, DurationUnit, parse_duration_units};
@@ -35,6 +35,7 @@ pub mod fanout;
 pub mod fire;
 mod fires;
 pub mod instances;
+mod launch;
 pub mod launches;
 pub mod pending;
 pub(crate) mod probe;
@@ -96,28 +97,76 @@ pub fn watch_lost(entry: &TaskEntry, watcher_live: bool, now: Timestamp) -> bool
 /// Executable action encoded by one loop task entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskAction {
-    /// The argv a fire runs in its checkout.
-    Command(Vec<String>),
+    /// The argv a shell fire runs in its checkout.
+    Shell(Vec<String>),
+    /// A workflow, agent or team launch a fire makes through its own command.
+    Launch(TaskLaunch),
     Deliver(TaskTarget),
 }
 
-/// Semantic action shape encoded by one loop task entry.
+/// A non-shell fire's launch: `rimz workflow run <target>`, `rimz agents <target>` or
+/// `rimz teams launch <target>`, each followed by `args` unchanged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskLaunch {
+    pub kind: LaunchKind,
+    pub target: String,
+    pub args: Vec<String>,
+}
+
+impl TaskLaunch {
+    /// The `rimz` argv the launch runs, without the program.
+    pub fn argv(&self) -> Vec<String> {
+        let head: &[&str] = match self.kind {
+            LaunchKind::Workflow => &["workflow", "run"],
+            LaunchKind::Agent => &["agents"],
+            LaunchKind::Team => &["teams", "launch"],
+            // A shell row is `TaskAction::Shell`; `from_entry` never builds a shell launch.
+            LaunchKind::Shell => &[],
+        };
+        head.iter()
+            .map(|word| (*word).to_owned())
+            .chain([self.target.clone()])
+            .chain(self.args.iter().cloned())
+            .collect()
+    }
+}
+
+/// Semantic action shape encoded by one loop task entry: the declared kind of a launch row, or a
+/// delivery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskActionKind {
-    /// Older RimZ records name the agent, workflow, and check-only shapes a fire ran.
-    #[serde(alias = "spawn", alias = "workflow", alias = "check_only")]
-    Command,
+    Shell,
+    Workflow,
+    Agent,
+    Team,
     Deliver,
 }
 
 impl TaskActionKind {
+    /// The word JSON views name the kind by.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::Workflow => "workflow",
+            Self::Agent => "agent",
+            Self::Team => "team",
+            Self::Deliver => "deliver",
+        }
+    }
+
+    /// Whether a fire of this kind launches something rather than delivering a message.
+    pub const fn launches(self) -> bool {
+        !matches!(self, Self::Deliver)
+    }
+
     /// What a fire of this kind does to `subject`, with the row's account, and ` (you)` when
     /// the reader is the delivery's target.
     pub fn text(self, subject: &str, entry: Option<&TaskEntry>, you: bool) -> String {
         let mut action = match self {
             Self::Deliver => subject.split('#').next().unwrap_or(subject).to_owned(),
-            Self::Command => format!("run {subject}"),
+            Self::Shell => format!("run {subject}"),
+            Self::Workflow | Self::Agent | Self::Team => format!("launch {subject}"),
         };
         if you {
             action.push_str(" (you)");
@@ -126,6 +175,17 @@ impl TaskActionKind {
             action.push_str(&format!(" · account {account}"));
         }
         action
+    }
+}
+
+impl From<LaunchKind> for TaskActionKind {
+    fn from(kind: LaunchKind) -> Self {
+        match kind {
+            LaunchKind::Shell => Self::Shell,
+            LaunchKind::Workflow => Self::Workflow,
+            LaunchKind::Agent => Self::Agent,
+            LaunchKind::Team => Self::Team,
+        }
     }
 }
 
@@ -143,8 +203,8 @@ pub enum TaskActionErr {
         field: &'static str,
         hint: &'static str,
     },
-    #[error("loop task `{name}` sets both `command` and `wait`; keep exactly one")]
-    ConflictingActions { name: String },
+    #[error("loop task `{name}` sets `{field}` beside `wait`; keep exactly one action")]
+    ConflictingActions { name: String, field: &'static str },
     #[error("loop task `{name}` sets `fresh-worktree` with `{field}`; {hint}")]
     FreshWorktreeField {
         name: String,
@@ -155,12 +215,21 @@ pub enum TaskActionErr {
         "loop task `{name}` sets `fresh-worktree` to `{prefix}`, which is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
     )]
     InvalidFreshWorktree { name: String, prefix: String },
-    #[error("loop task `{name}` has no `command`; {READD}")]
+    #[error("loop task `{name}` has no `args` and no `kind`; {READD}")]
     MissingAction { name: String },
     #[error(
-        "loop task `{name}` has a `command` without `timeout`; set `timeout = \"2h\"`, or {READD}"
+        "loop task `{name}` is a shell row without `timeout`; set `timeout = \"2h\"`, or {READD}"
     )]
     MissingTimeout { name: String },
+    #[error("loop task `{name}` of kind `{kind}` has no `target`; {READD}")]
+    MissingTarget { name: String, kind: &'static str },
+    #[error("loop task `{name}` of kind `{kind}` sets `{field}`; {hint}")]
+    KindField {
+        name: String,
+        kind: &'static str,
+        field: &'static str,
+        hint: String,
+    },
     #[error(
         "loop task `{name}` sets `each-worktree` on a trigger that fires once, which would remove the task after its first checkout; set `repeat = true` beside `when`, or fire on `every` or `cron`"
     )]
@@ -233,22 +302,80 @@ impl TaskAction {
                 name: name.to_owned(),
             });
         }
-        match (entry.command.is_empty(), entry.wait.as_ref()) {
-            (false, Some(_)) => Err(TaskActionErr::ConflictingActions {
-                name: name.to_owned(),
-            }),
-            (true, Some(target)) => Ok(Self::Deliver(target.clone())),
-            (true, None) => Err(TaskActionErr::MissingAction {
-                name: name.to_owned(),
-            }),
-            (false, None) if entry.prompt.is_some() => {
-                Err(refused("`prompt` belongs to a delivery row"))
+        if entry.wait.is_some() {
+            for (set, field) in [
+                (entry.kind.is_some(), "kind"),
+                (entry.target.is_some(), "target"),
+                (!entry.args.is_empty(), "args"),
+            ] {
+                if set {
+                    return Err(TaskActionErr::ConflictingActions {
+                        name: name.to_owned(),
+                        field,
+                    });
+                }
             }
-            (false, None) if entry.timeout.is_none() => Err(TaskActionErr::MissingTimeout {
-                name: name.to_owned(),
-            }),
-            (false, None) => Ok(Self::Command(entry.command.clone())),
         }
+        if let Some(target) = &entry.wait {
+            return Ok(Self::Deliver(target.clone()));
+        }
+        if entry.kind.is_none() && entry.args.is_empty() {
+            return Err(TaskActionErr::MissingAction {
+                name: name.to_owned(),
+            });
+        }
+        if entry.prompt.is_some() {
+            return Err(refused("`prompt` belongs to a delivery row"));
+        }
+        let kind = entry.kind.unwrap_or_default();
+        let field = |field: &'static str, hint: &str| TaskActionErr::KindField {
+            name: name.to_owned(),
+            kind: kind.as_str(),
+            field,
+            hint: hint.to_owned(),
+        };
+        if kind == LaunchKind::Shell {
+            if entry.target.is_some() {
+                return Err(field(
+                    "target",
+                    "a shell row runs `args` alone; re-add it with a kind flag",
+                ));
+            }
+            if entry.args.is_empty() {
+                return Err(TaskActionErr::MissingAction {
+                    name: name.to_owned(),
+                });
+            }
+            if entry.timeout.is_none() {
+                return Err(TaskActionErr::MissingTimeout {
+                    name: name.to_owned(),
+                });
+            }
+            return Ok(Self::Shell(entry.args.clone()));
+        }
+        let Some(target) = entry.target.clone().filter(|target| !target.is_empty()) else {
+            return Err(TaskActionErr::MissingTarget {
+                name: name.to_owned(),
+                kind: kind.as_str(),
+            });
+        };
+        if entry.timeout.is_some() {
+            return Err(field(
+                "timeout",
+                &format!("remove it; {}", kind.timeout_bound()),
+            ));
+        }
+        if entry.fresh_worktree.is_some() && matches!(kind, LaunchKind::Agent | LaunchKind::Team) {
+            return Err(field(
+                "fresh-worktree",
+                "remove it and put a bare `-w` in `args`; the launch cuts its own tree",
+            ));
+        }
+        Ok(Self::Launch(TaskLaunch {
+            kind,
+            target,
+            args: entry.args.clone(),
+        }))
     }
 
     fn refuse_fresh_worktree_companions(
@@ -283,17 +410,25 @@ impl TaskAction {
         Ok(())
     }
 
-    /// The command line as a shell would read it back, or the delivery's handle.
+    /// The command line as a shell would read it back, the launch as `rimz` would run it, or
+    /// the delivery's handle.
     pub fn subject(&self) -> String {
         match self {
-            Self::Command(argv) => command_line(argv),
+            Self::Shell(argv) => command_line(argv),
+            Self::Launch(launch) => format!("rimz {}", command_line(&launch.argv())),
             Self::Deliver(target) => target.handle.clone(),
         }
     }
 
     pub const fn kind(&self) -> TaskActionKind {
         match self {
-            Self::Command(_) => TaskActionKind::Command,
+            Self::Shell(_) => TaskActionKind::Shell,
+            Self::Launch(launch) => match launch.kind {
+                LaunchKind::Shell => TaskActionKind::Shell,
+                LaunchKind::Workflow => TaskActionKind::Workflow,
+                LaunchKind::Agent => TaskActionKind::Agent,
+                LaunchKind::Team => TaskActionKind::Team,
+            },
             Self::Deliver(_) => TaskActionKind::Deliver,
         }
     }

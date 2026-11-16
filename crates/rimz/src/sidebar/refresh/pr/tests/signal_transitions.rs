@@ -1484,7 +1484,7 @@ fn signal_and_condition_demand_read_a_branch_alike_through_the_poll() {
         when: when.map(|when| vec![when.to_owned()]),
         dir: when.map(|_| root.path().to_owned()),
         repeat: signal.is_some(),
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     };

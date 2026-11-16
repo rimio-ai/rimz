@@ -125,7 +125,7 @@ fn fresh_config_reports_untrusted() {
 #[test]
 fn birth_prompt_offers_current_hash_and_summary_for_untrusted_config() {
     let dir = project_with(
-        "[tasks.sync]\ncommand = [\"git\", \"pull\"]\ntimeout = \"5m\"\nevery = \"1h\"\n\n[profiles.planner]\nagent = \"claude\"\n\n[subagents.profiles.reviewer]\nagent = \"codex\"\n\n[agents.teams.review]\nlayout = \"planner\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
+        "[tasks.sync]\nargs = [\"git\", \"pull\"]\ntimeout = \"5m\"\nevery = \"1h\"\n\n[profiles.planner]\nagent = \"claude\"\n\n[subagents.profiles.reviewer]\nagent = \"codex\"\n\n[agents.teams.review]\nlayout = \"planner\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
     );
     let config = tempdir().expect("config root");
     let offer = birth_prompt_with_roots(dir.path(), config.path())
@@ -307,17 +307,17 @@ fn a_project_rows_command_enters_the_trust_hash() {
 
 #[test]
 fn a_mistyped_project_row_still_loads_trust_and_hashes_its_raw_command() {
-    let valid = "[tasks.good]\ncommand = ['true']\ntimeout = '1m'\nevery = '1h'\n";
+    let valid = "[tasks.good]\nargs = ['true']\ntimeout = '1m'\nevery = '1h'\n";
     for (bad, changed) in [
         ("command = 'cargo test'", "command = 'cargo check'"),
         ("command = 42", "command = 43"),
         (
-            "command = ['true']\ntimeout = 5",
-            "command = ['true']\ntimeout = 6",
+            "args = ['true']\ntimeout = 5",
+            "args = ['true']\ntimeout = 6",
         ),
         (
-            "command = ['true']\nfresh-worktree = true",
-            "command = ['true']\nfresh-worktree = false",
+            "args = ['true']\nfresh-worktree = true",
+            "args = ['true']\nfresh-worktree = false",
         ),
         (
             "command = ['true']\nrepeat = 'yes'",
@@ -408,7 +408,7 @@ fn smart_compact_role_and_profile_fields_do_not_enter_trust_hash() {
 
 #[test]
 fn loop_overlap_fields_do_not_enter_project_trust_hash() {
-    let base = "[tasks.x]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n";
+    let base = "[tasks.x]\nargs=['true']\ntimeout='1m'\nevery='1h'\n";
     let configured = format!("{base}overlap='queue'\noverlap-limit=3\n");
     let entry: crate::config::LoopConfig = toml::from_str(&configured).unwrap();
     let value = serde_json::to_value(&entry.tasks.0["x"]).unwrap();
@@ -422,7 +422,7 @@ fn loop_overlap_fields_do_not_enter_project_trust_hash() {
 
 #[test]
 fn loop_once_per_checkout_does_not_enter_project_trust_hash() {
-    let base = "[tasks.x]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n";
+    let base = "[tasks.x]\nargs=['true']\ntimeout='1m'\nevery='1h'\n";
     let configured = format!("{base}once-per-checkout=true\n");
     let entry: crate::config::LoopConfig = toml::from_str(&configured).unwrap();
     assert!(entry.tasks.0["x"].dedupes_checkout());
@@ -766,8 +766,14 @@ fn hash_covers_every_documented_surface_field() {
         "[agents.teams.review]\nconsensus = [\"reflect\", \"house\"]\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[tasks.x]\n",
         "[tasks.y]\n",
-        "[tasks.x]\ncommand = [\"cargo\", \"test\"]\n",
-        "[tasks.x]\ncommand = [\"cargo test\"]\n",
+        "[tasks.x]\nargs = [\"cargo\", \"test\"]\n",
+        "[tasks.x]\nargs = [\"cargo test\"]\n",
+        "[tasks.x]\nkind = \"workflow\"\n",
+        "[tasks.x]\nkind = \"agent\"\n",
+        "[tasks.x]\ntarget = \"review\"\n",
+        "[tasks.x]\ntarget = \"other\"\n",
+        "[tasks.x]\nargs = [\"-p\", \"go\"]\n",
+        "[tasks.x]\nargs = [\"-p go\"]\n",
         "[tasks.x]\nfresh-worktree = \"sync\"\n",
         "[tasks.x]\nrepeat = true\n",
         "[tasks.x]\ntimeout = \"2h\"\n",
@@ -893,7 +899,7 @@ fn project_accounts_apply_only_under_trust_and_leave_old_hashes_alone() {
     let hash = |text: &str| {
         executable_surface_hash(&toml::from_str::<ProjectConfig>(text).expect("parse task"))
     };
-    let row = "[tasks.x]\ncommand = [\"true\"]\ntimeout = \"1m\"\n";
+    let row = "[tasks.x]\nargs = [\"true\"]\ntimeout = \"1m\"\n";
     assert_eq!(hash(&format!("{row}account = \"work\"\n")), hash(row));
 }
 

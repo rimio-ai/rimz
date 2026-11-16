@@ -109,6 +109,9 @@ enum LoopSubcmd {
         #[arg(last = true, conflicts_with = "command")]
         argv: Vec<std::ffi::OsString>,
     },
+    /// Settle the room's open fires that no process still runs. The scheduler tick calls this.
+    #[command(hide = true)]
+    Settle,
     /// Run one scheduler pass for roots without an open room.
     #[command(hide = true)]
     Tick,
@@ -242,13 +245,25 @@ struct AddArgs {
     /// Maximum waiting triggers with --overlap queue; default 10, at least 1.
     #[arg(long, value_name = "N")]
     overlap_limit: Option<usize>,
-    /// Cap for the command; a command that outlives it fails. Default `loop.default-timeout`,
-    /// else 2h.
+    /// Cap for a shell task's command; a command that outlives it fails. Default
+    /// `loop.default-timeout`, else 2h. Refused beside the other kinds, which keep their own bound.
     #[arg(long, value_name = "DUR")]
     timeout: Option<String>,
-    /// The command each fire runs, word for word with no shell: `-- sh -c '...'` for one.
-    #[arg(last = true, required = true, value_name = "COMMAND")]
-    command: Vec<String>,
+    /// Each fire runs the tail as a command, word for word with no shell (the default kind).
+    #[arg(long, conflicts_with_all = ["workflow", "agent", "team"])]
+    shell: bool,
+    /// Each fire runs `rimz workflow run <NAME>` with the tail.
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["agent", "team"])]
+    workflow: Option<String>,
+    /// Each fire runs `rimz agents <SPEC>` with the tail.
+    #[arg(long, value_name = "SPEC", conflicts_with = "team")]
+    agent: Option<String>,
+    /// Each fire runs `rimz teams launch <TEAM[#LANE]>` with the tail.
+    #[arg(long, value_name = "TEAM[#LANE]")]
+    team: Option<String>,
+    /// The shell task's command (`-- sh -c '...'` for a shell), or the launch's own arguments.
+    #[arg(last = true, value_name = "ARGS")]
+    args: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -450,6 +465,12 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
             globals,
         ),
         LoopSubcmd::Run(args) => run_tasks::run_one(args, LoopRunMode::Scheduled, globals),
+        LoopSubcmd::Settle => {
+            if let Some(root) = project_root_for_globals(globals) {
+                rimz::harness::schedule::run_log::settle_open_fires(&root);
+            }
+            Ok(())
+        }
         LoopSubcmd::Tick => timer::tick(),
         LoopSubcmd::Timer(args) => timer::run(args.command),
     }
@@ -563,26 +584,6 @@ fn alive_launches(
     };
     let alive = schedule::launches::alive(id, &paths, rows.iter())?;
     Ok((alive, rows))
-}
-
-/// How to address an alive launch: a run's id, or an agent's `@handle#lane` among the room's
-/// open rows.
-fn launch_address(
-    launch: &schedule::launches::Launch,
-    rows: &[rimz::agents::AgentState],
-) -> String {
-    use schedule::launches::Launch;
-    match launch {
-        Launch::Workflow(run) => run.id.to_string(),
-        Launch::Supervised(run) => run.run_id.to_string(),
-        Launch::Agent(agent) => {
-            let peers = rows
-                .iter()
-                .filter(|row| !row.session_over())
-                .collect::<Vec<_>>();
-            rimz::address::agent_handle(agent, &peers, true)
-        }
-    }
 }
 
 /// The id of the record task `name` is bound to: its row's (live, else the newest retired one),

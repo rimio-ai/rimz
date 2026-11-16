@@ -72,10 +72,12 @@ mod agent;
 /// briefs name.
 pub enum DefinitionSource<'a> {
     /// A deployed workflow directory; its basename names the run.
+    /// `fire_tree` marks a task run whose checkout is its fire's own fresh worktree.
     Deployed {
         dir: &'a Path,
         task: Option<String>,
         loop_fire: Option<crate::ids::FireId>,
+        fire_tree: bool,
         surplus: Option<String>,
         surplus_after: Option<String>,
         fire: Option<RunFire>,
@@ -102,6 +104,29 @@ pub struct StartArgs {
     /// The run's give-up instant, for a capacity wait at a step without `admission.give-up`.
     pub give_up: Option<Timestamp>,
     pub capacity: workflow::StartCapacity,
+}
+
+/// What a workflow task's fire hands the `rimz workflow run` it spawns, as
+/// `--loop-fire-json`: the run that command starts is the task's own, reported to it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TaskStart {
+    /// The task's name at the fire, for briefs and display.
+    pub task: String,
+    pub loop_fire: crate::ids::FireId,
+    pub fire: RunFire,
+    /// The launch facts the fire seals into the run for its report row.
+    pub fire_facts: serde_json::Value,
+    /// Whether the run's checkout is the fire's own fresh worktree.
+    pub fire_tree: bool,
+    /// Whether the fire was made by hand (`rimz loop fire`).
+    pub manual: bool,
+}
+
+impl TaskStart {
+    /// The status a task's `rimz workflow run` exits with when a live run in its checkout
+    /// refuses it, after printing that run's id, which the fire records as `overlapped` naming
+    /// the run; beside the budget skip's 125.
+    pub const OVERLAP_EXIT_CODE: i32 = 122;
 }
 
 /// The detached `rimz workflow advance` a start or restart spawned.
@@ -144,6 +169,7 @@ pub fn create(
             dir,
             task,
             loop_fire,
+            fire_tree,
             surplus,
             surplus_after,
             fire,
@@ -160,7 +186,7 @@ pub fn create(
                 task: task.clone(),
                 loop_fire: loop_fire.clone(),
                 spec_dir: dir,
-                fire_tree: false,
+                fire_tree: *fire_tree,
                 surplus: surplus.clone(),
                 surplus_after: surplus_after.clone(),
                 fire: fire.clone(),

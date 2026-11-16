@@ -1062,6 +1062,7 @@ fn validate_and_create(
         &state,
         DefinitionSource::Deployed {
             loop_fire: None,
+            fire_tree: false,
             dir: &dir,
             task: None,
             surplus: None,
