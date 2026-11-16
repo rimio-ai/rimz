@@ -109,19 +109,18 @@ fn a_forwarded_signal_is_canceled_at_delivery_once_its_attempt_ends() {
             .unwrap()
             .parse()
             .unwrap();
-        let handle = shown["record"]["attempt"]["run"]["handle"]
-            .as_str()
-            .unwrap();
         let history = success(
             room.command(&["workflow", "show", &id, "--history"])
                 .env("NO_COLOR", "1")
                 .output()
                 .unwrap(),
         );
+        // The live leader is named as the headline names it.
+        let (_, agent) = history.lines().nth(1).unwrap().split_once(" · ").unwrap();
         assert_eq!(
             history
                 .lines()
-                .filter(|line| line.contains(&format!("signal review.ready → {handle}")))
+                .filter(|line| line.contains(&format!("signal review.ready → {agent}")))
                 .count(),
             1,
             "{history}"

@@ -25,14 +25,37 @@ mod show;
 use host::Host;
 pub(super) use receipt::restart;
 
+/// The current step's agent while it is still in the room, by its card address.
 fn workflow_agent(
     record: &RunRecord,
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     include_channel: bool,
+    bound: Option<&rimz::store::run::RunRecord>,
 ) -> Option<String> {
+    let attempt = record.session_attempt()?;
     let peers = rimz::address::addressable_agents(snapshot);
-    let agent = record.step_agent(&peers)?;
+    let agent = attempt_agent(record, &peers, attempt.seq, bound)?;
     Some(rimz::address::agent_handle(agent, &peers, include_channel))
+}
+
+/// The agent of attempt `seq` while it is still in the room. Once a hook has bound the
+/// attempt's supervised run (`bound`) to a session, the current row of that session's launch,
+/// whether or not a kept agent's detach cleared its workflow pin; before that, the root the
+/// run's current attempt pins as its step.
+fn attempt_agent<'a>(
+    record: &RunRecord,
+    peers: &[&'a rimz::agents::AgentState],
+    seq: u64,
+    bound: Option<&rimz::store::run::RunRecord>,
+) -> Option<&'a rimz::agents::AgentState> {
+    if let Some((kind, id)) = bound.and_then(|run| Some((&run.kind, run.agent_id.as_ref()?))) {
+        return rimz::address::launch_row(peers.iter().copied(), kind, id)
+            .filter(|agent| agent.ended_at.is_none());
+    }
+    record
+        .session_attempt()
+        .filter(|attempt| attempt.seq == seq)
+        .and_then(|_| record.step_agent(peers))
 }
 
 struct RoomView {
@@ -63,29 +86,75 @@ impl RoomView {
         include_channel: bool,
     ) -> Option<String> {
         let run = record.session_attempt()?.run.as_ref()?;
-        let snapshot = self.snapshot.get_or_init(|| {
-            let runtime = self.runtime.as_ref()?;
-            let workspace = rimz::workspace::record::read(&state.workspace_record).ok()?;
-            let store = rimz::Store::open_existing(state.clone(), runtime.clone())?;
-            let mut snapshot = rimz::sidebar::consumer::cached_alive_snapshot(
-                store.snapshot_with_context(|_, _| false).ok()?,
-                runtime,
-                &workspace.session_name,
-            );
-            if let Some(frame) = rimz::sidebar::cache::read_snapshot_cache(
-                &runtime.pane_frame_path(),
-                &workspace.session_name,
-            ) {
-                snapshot = snapshot.with_live_panes(frame.to_pane_refs(), None);
-            }
-            Some(snapshot)
-        });
+        let bound = rimz::harness::run::load(state, &run.run_id).ok();
         Some(
-            snapshot
-                .as_ref()
-                .and_then(|snapshot| workflow_agent(record, snapshot, include_channel))
+            self.snapshot(state)
+                .and_then(|snapshot| {
+                    workflow_agent(record, snapshot, include_channel, bound.as_ref())
+                })
                 .unwrap_or_else(|| run.handle.clone()),
         )
+    }
+
+    /// The run's step agents still in the room, each by the attempt's seq and its card address,
+    /// found as the run view finds its step agent: every attempt the journal ended with a
+    /// supervised run, and the live one.
+    fn attempt_agents(
+        &self,
+        state: &rimz::StatePaths,
+        record: &RunRecord,
+        journal: &[records::JournalEntry],
+    ) -> workflow_view::history::LiveAgents {
+        let Some(snapshot) = self.snapshot(state) else {
+            return workflow_view::history::LiveAgents::default();
+        };
+        let peers = rimz::address::addressable_agents(snapshot);
+        let ended = journal.iter().filter_map(|entry| match &entry.event {
+            records::JournalEvent::Attempt {
+                run_id: Some(run_id),
+                ..
+            } => Some((entry.seq?, run_id)),
+            _ => None,
+        });
+        let live = record.attempt.as_ref().and_then(|attempt| {
+            let run = attempt.run.as_ref()?;
+            Some((attempt.seq, &run.run_id))
+        });
+        workflow_view::history::LiveAgents::new(
+            ended
+                .chain(live)
+                .filter_map(|(seq, run_id)| {
+                    let bound = rimz::harness::run::load(state, run_id).ok();
+                    let agent = attempt_agent(record, &peers, seq, bound.as_ref())?;
+                    Some((seq, rimz::address::agent_handle(agent, &peers, true)))
+                })
+                .collect(),
+        )
+    }
+
+    fn snapshot(
+        &self,
+        state: &rimz::StatePaths,
+    ) -> Option<&rimz::store::snapshot::SidebarSnapshot> {
+        self.snapshot
+            .get_or_init(|| {
+                let runtime = self.runtime.as_ref()?;
+                let workspace = rimz::workspace::record::read(&state.workspace_record).ok()?;
+                let store = rimz::Store::open_existing(state.clone(), runtime.clone())?;
+                let mut snapshot = rimz::sidebar::consumer::cached_alive_snapshot(
+                    store.snapshot_with_context(|_, _| false).ok()?,
+                    runtime,
+                    &workspace.session_name,
+                );
+                if let Some(frame) = rimz::sidebar::cache::read_snapshot_cache(
+                    &runtime.pane_frame_path(),
+                    &workspace.session_name,
+                ) {
+                    snapshot = snapshot.with_live_panes(frame.to_pane_refs(), None);
+                }
+                Some(snapshot)
+            })
+            .as_ref()
     }
 }
 

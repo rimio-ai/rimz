@@ -16,6 +16,7 @@ fn terminal_history_dates_its_end_and_every_row_clock() {
         &spec,
         &[evaluation(1, 10, "done", None)],
         render::prose::Prose::Raw,
+        &workflow_view::history::LiveAgents::default(),
         &mut out,
     )
     .unwrap();

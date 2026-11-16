@@ -232,6 +232,95 @@ fn with_you_names_use_live_card_peers_not_the_raw_rollup() {
     }
 }
 
+#[test]
+fn run_view_and_history_name_a_live_agent_alike_and_a_gone_one_by_its_handle() {
+    use crate::common::tmux_pane;
+    use rimz::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
+    use rimz::disk::atomic::write_temp_then_rename_cache;
+    use rimz::sidebar::consumer::PublishedSnapshotReader;
+
+    let env = setup();
+    let checkout = env.home_root.join("lane");
+    let mut record = seed(&env, &env.project_root, &checkout, "active");
+    let now = record.entered_at;
+    record.attempt = Some(
+        serde_json::from_value(json!({
+            "kind":"agent", "lifecycle":"session", "seq":7, "node":"lead", "visit":2,
+            "started_at":now, "host":{"pid":1, "start":null},
+            "run":{"run_id":rimz::ids::RunId::new(), "handle":"@pet"},
+        }))
+        .unwrap(),
+    );
+    save(&env, &record);
+    let paths = env
+        .state_path_for(&record.project_root)
+        .workflow(&record.id);
+    let rows = [
+        json!({"event":"attempt", "node":"lead", "seq":3, "visit":1, "key":null,
+            "outcome":"ended", "started_at":now, "ended_at":now, "digests":{},
+            "handle":"@gone"}),
+        json!({"event":"signal", "node":"lead", "seq":7, "signal":"ci.done",
+            "message":rimz::ids::MessageId::new()}),
+    ];
+    let journal: String = rows
+        .iter()
+        .map(|row| {
+            let mut row = row.clone();
+            row["at"] = json!(now);
+            let _: rimz::store::workflow::JournalEntry =
+                serde_json::from_value(row.clone()).unwrap();
+            format!("{row}\n")
+        })
+        .collect();
+    fs::write(&paths.journal, journal).unwrap();
+    let store = env.store();
+    let runtime = store.runtime_paths();
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let pane = tmux_pane("%7", "codex", &checkout);
+    let mut agent = rimz::testkit::agent_state("codex", "leader", now);
+    agent.name = Some("pet".into());
+    agent.profile = Some("reviewer".into());
+    agent.worktree_path = Some(checkout.to_string_lossy().into_owned());
+    agent.pane = Some(pane.clone());
+    agent.workflow = Some(WorkflowAttemptRef {
+        run: record.id.clone(),
+        seq: 7,
+        role: WorkflowAttemptRole::Step,
+    });
+    let mut base = store.snapshot().unwrap();
+    base.agents = std::sync::Arc::new(vec![agent]);
+    write_temp_then_rename_cache(&store.paths().latest_snapshot().unwrap(), &base).unwrap();
+    let frame = rimz::sidebar::frame::assemble_frame(
+        vec![pane],
+        rimz::utils::time::unix_now_ms(),
+        &session,
+    );
+    write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
+    let card = PublishedSnapshotReader::new(runtime.clone(), session, None)
+        .read(store.paths())
+        .unwrap();
+    let peers = rimz::address::addressable_agents(&card);
+    let leader = peers
+        .iter()
+        .find(|agent| agent.agent_id == "leader")
+        .unwrap();
+    let live = rimz::address::agent_handle(leader, &peers, true);
+    assert_ne!(live, "@pet");
+    let view = success(command(&env, &["workflow", "show", record.id.as_str()]));
+    assert!(view.contains(&live), "{live}: {view}");
+    assert!(view.contains("2 attempts"), "{view}");
+    let history = success(command(
+        &env,
+        &["workflow", "show", record.id.as_str(), "--history"],
+    ));
+    assert!(
+        history.contains(&format!("signal ci.done → {live}")),
+        "{live}: {history}"
+    );
+    assert!(history.contains("@gone HEAD"), "{history}");
+    assert!(!history.contains("@pet"), "{history}");
+}
+
 fn json_show(env: &Env, target: &str) -> Value {
     show(env, target)
 }

@@ -69,12 +69,14 @@ pub(super) fn render(
             return unreadable(run, heading, dir, error, globals);
         }
     };
+    let room = RoomView::new(&run.record.project_root);
     if history && run.record.state.is_terminal() {
         return workflow_view::history::terminal(
             &run.record,
             &spec,
             &journal,
             render::prose::Prose::for_stdout(),
+            &room.attempt_agents(&run.state, &run.record, &journal),
             &mut render::out(),
         );
     }
@@ -86,9 +88,7 @@ pub(super) fn render(
         now: Timestamp::now(),
         commands: resolve::RunCommands::new(&run.record, globals),
     };
-    let room = RoomView::new(&run.record.project_root);
-    let agent = (!history
-        && run.record.state == RunState::Active
+    let agent = (run.record.state == RunState::Active
         && workflow_view::asking(&run.record).is_none())
     .then(|| room.agent(&run.state, &run.record, true))
     .flatten();
@@ -98,7 +98,10 @@ pub(super) fn render(
     let mut out = render::out();
     view.headline(&mut out, pr_number, agent.as_deref())?;
     if history {
-        return view.history(&mut out);
+        return view.history(
+            &room.attempt_agents(&run.state, &run.record, &journal),
+            &mut out,
+        );
     }
     if run.record.state == RunState::Active {
         view.readings(&mut out)?;
@@ -491,11 +494,21 @@ impl View<'_> {
     fn origin(&self, out: &mut impl Write) -> Result<()> {
         let record = self.record;
         let origin = run_origin(record);
-        let attempts = self
+        let settled = self
             .journal
             .iter()
-            .filter(|entry| matches!(entry.event, JournalEvent::Attempt { .. }))
-            .count();
+            .filter(|entry| matches!(entry.event, JournalEvent::Attempt { .. }));
+        // A step's attempt counts from its start; it reaches the journal only once it settles.
+        let running = record
+            .held
+            .as_ref()
+            .map(|held| &held.attempt)
+            .or(record.attempt.as_ref())
+            .filter(|attempt| {
+                attempt.visit.is_some()
+                    && !settled.clone().any(|entry| entry.seq == Some(attempt.seq))
+            });
+        let attempts = settled.count() + usize::from(running.is_some());
         let mut costs = self
             .journal
             .iter()

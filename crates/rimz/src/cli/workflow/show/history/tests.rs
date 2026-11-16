@@ -96,7 +96,8 @@ fn history_of(spec: &str, journal: &[JournalEntry]) -> String {
         commands: resolve::RunCommands::new(&record, &globals),
     };
     let mut out = Vec::new();
-    view.history(&mut out).unwrap();
+    view.history(&workflow_view::history::LiveAgents::default(), &mut out)
+        .unwrap();
     String::from_utf8(out).unwrap()
 }
 

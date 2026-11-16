@@ -464,8 +464,8 @@ mod tests {
                 Timestamp::UNIX_EPOCH,
             );
             (
-                workflow_agent(&record, &snapshot, false),
-                workflow_agent(&record, &snapshot, true),
+                workflow_agent(&record, &snapshot, false, None),
+                workflow_agent(&record, &snapshot, true, None),
             )
         });
         assert_eq!(
@@ -516,8 +516,8 @@ mod tests {
                 Timestamp::UNIX_EPOCH,
             );
             (
-                workflow_agent(&record, &snapshot, false),
-                workflow_agent(&record, &snapshot, true),
+                workflow_agent(&record, &snapshot, false, None),
+                workflow_agent(&record, &snapshot, true, None),
             )
         });
         assert_eq!(
