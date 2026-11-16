@@ -76,12 +76,13 @@ A watch receipt ends with `(check-in <DURATION>)` when the wait records a check-
 
 ### Refusals
 
-Each of these prints `error: ` and the message, exits 1, and arms nothing. An invalid `--label`, `--pid`, `--on`, or `--after-reset` value, an empty `--file`, or a duration that does not parse is an argument error instead (exit 2).
+Each of these prints `error: ` and the message, exits 1, and arms nothing. An invalid `--label`, `--pid`, `--on`, or `--after-reset` value, or a duration that does not parse, is an argument error instead (exit 2).
 
 | Error | Cause |
 | --- | --- |
 | `` `--timeout` is now `--check-in`: it sends one still-running notice and never stops the command `` | `--timeout` passed to `rimz wait`. |
 | `choose exactly one wait trigger: --in, --at, --after-reset, --when, --pid, --check, --file, or --run` | Arming flags without a trigger, or more than one trigger. |
+| `--file needs a path` | An empty `--file`. |
 | `--grep requires --file` | A pattern without a file trigger. |
 | `--grep needs a pattern` | An empty pattern. |
 | `--check needs a command` | An empty or whitespace-only check. |
@@ -277,7 +278,7 @@ When the caller's identity is set but no live session is visible, `list` refuses
 
 ## Cancel a wait
 
-`rimz wait cancel <name>` cancels one pending wait or subscription that targets the caller. `rimz wait cancel --all` cancels only the waits you armed with `rimz wait`, and leaves loop and team subscriptions in place. Give a name or `--all`: both, or neither, is an argument error. Flags: `--all`, `--json`.
+`rimz wait cancel <name>` cancels one pending wait or subscription that targets the caller. `rimz wait cancel --all` cancels only the waits you armed with `rimz wait`, and leaves loop and team subscriptions in place. Give a name or `--all`: both, or neither, is an argument error (exit 2) whose usage line reads `rimz wait cancel <NAME|--all>`. Flags: `--all`, `--json`.
 
 By the time of this cancel, the `cargo test` watch above had finished and retired:
 

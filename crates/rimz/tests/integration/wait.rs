@@ -1017,6 +1017,32 @@ fn wait_run_rejects_empty_commands() {
 }
 
 #[test]
+fn wait_empty_file_is_refused_by_rimz_and_cancel_usage_names_all() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    let output = agent_wait(&env)
+        .args(["wait", "--file", ""])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("--file needs a path"), "{stderr}");
+    assert!(!loop_instances_path(&env).exists());
+    for args in [
+        vec!["wait", "cancel"],
+        vec!["wait", "cancel", "build", "--all"],
+    ] {
+        let output = agent_wait(&env).args(&args).output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("Usage: rimz wait cancel <NAME|--all>"),
+            "{args:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn wait_rejects_retired_timeout_with_fix() {
     let env = Env::new();
     for extra in [vec![], vec!["--run", "true"], vec!["--in", "5m"]] {
