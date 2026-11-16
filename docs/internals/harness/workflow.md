@@ -32,7 +32,7 @@ Paths are under `crates/rimz/src/`.
 | `cli/workflow_view.rs`, `cli/workflow_view/` | Run phrases shared by workflow and loop inspection (`detail`, `glyph_role`), deployed-definition lookup, run selection (`crates/rimz/src/cli/workflow_view/resolve.rs::select`), and history rendering with the atomic `history.txt` copies (`history.rs`). |
 | `crates/rimz/src/harness/schedule/signal.rs::wake_workflows` | The signal edge: reads records and spawns the wake helper. |
 | `crates/rimz/src/harness/schedule/fire.rs::tick_workflows` | The clock edge: paces and spawns one `advance` per due run. |
-| `crates/rimz/src/harness/schedule/runner.rs::TaskFire::prepare_command` | The loop fire that starts a run of a command task's one-check graph. |
+| `crates/rimz/src/harness/schedule/runner/shell.rs::Fire::prepare_shell` | The loop fire that starts a run of a command task's one-check graph. |
 | `crates/rimz/src/store/gc/classes.rs::collect_owned` | Retention of finished run homes. |
 
 ## Terms
@@ -974,7 +974,7 @@ A shell task's fire starts a workflow run of the inline graph that `crates/rimz/
 
 ### What a fire puts on the record
 
-The fire ends in `engine::create` (`crates/rimz/src/harness/schedule/runner.rs::TaskFire::prepare_command`) with:
+The fire ends in `engine::create` (`crates/rimz/src/harness/schedule/runner/shell.rs::Fire::prepare_shell`) with:
 
 - `task = Some(<name>)`, and `manual` set only for `LoopRunMode::Manual`
 - the fire's `fire`, whose `evidence` is the fire's trigger evidence, read once the backlog reconcile has settled which trigger the run serves, and absent when the fire has none. The command reads it as `RIMZ_LOOP_TRIGGER`.
@@ -982,7 +982,7 @@ The fire ends in `engine::create` (`crates/rimz/src/harness/schedule/runner.rs::
 
 The fire takes no start-throttle turn, and an agent its command launches takes its own at that launch.
 
-`Exists` carries the holder's task and scope kind. The fire then follows the task's `overlap` policy against the run (`crates/rimz/src/harness/schedule/runner.rs::TaskFire::prepare_overlap`): a strike-neutral `overlapped` row naming the run under `skip` or for a manual fire, `deferred` under a retaining policy (`overlapped` when its queue is full), with `replace` also canceling the run. `NoRoom` records `start failed`. [Remembered checkouts](./loops.md#remembered-checkouts) owns the launch entries a fire writes after `create`.
+`Exists` carries the holder's task and scope kind. The fire then follows the task's `overlap` policy against the run (`crates/rimz/src/harness/schedule/runner.rs::Fire::prepare_overlap`): a strike-neutral `overlapped` row naming the run under `skip` or for a manual fire, `deferred` under a retaining policy (`overlapped` when its queue is full), with `replace` also canceling the run. `NoRoom` records `start failed`. [Remembered checkouts](./loops.md#remembered-checkouts) owns the launch entries a fire writes after `create`.
 
 ### The report
 
