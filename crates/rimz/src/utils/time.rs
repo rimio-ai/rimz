@@ -152,11 +152,23 @@ impl CalendarAt {
     }
 
     /// The instant in `now`'s zone: a daily or weekly time's first strictly after `now`, a
-    /// dated time as written, past or not.
+    /// dated time as written, past or not. A time that repeats when clocks fall back means its
+    /// earlier occurrence, or its later one when only the later is still ahead of `now`.
     pub(crate) fn resolve(self, now: &jiff::Zoned) -> Option<jiff::Timestamp> {
-        let at = |date: jiff::civil::Date, time: ClockTime| {
+        let civil = |date: jiff::civil::Date, time: ClockTime| {
             date.at(time.hour() as i8, time.minute() as i8, 0, 0)
+        };
+        let at = |date: jiff::civil::Date, time: ClockTime| {
+            civil(date, time)
                 .to_zoned(now.time_zone().clone())
+                .ok()
+                .map(|zoned| zoned.timestamp())
+        };
+        // In a fold `at` takes the earlier occurrence; elsewhere this equals `at`.
+        let later_at = |date: jiff::civil::Date, time: ClockTime| {
+            now.time_zone()
+                .to_ambiguous_zoned(civil(date, time))
+                .later()
                 .ok()
                 .map(|zoned| zoned.timestamp())
         };
@@ -171,6 +183,11 @@ impl CalendarAt {
                 let candidate = at(date, time)?;
                 if candidate > now.timestamp() {
                     return Some(candidate);
+                }
+                if let Some(later) = later_at(date, time)
+                    && later > now.timestamp()
+                {
+                    return Some(later);
                 }
             }
             date = date.tomorrow().ok()?;
@@ -416,5 +433,30 @@ mod tests {
         for raw in ["", "8", "24:00", "23:60", "noon"] {
             assert!(raw.parse::<ClockTime>().is_err(), "{raw}");
         }
+    }
+
+    #[test]
+    fn calendar_time_in_a_fall_back_fold_takes_the_occurrence_still_ahead() {
+        let zone = jiff::tz::TimeZone::get("America/New_York").unwrap();
+        let at = |instant: &str| {
+            instant
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+                .to_zoned(zone.clone())
+        };
+        let daily = CalendarAt::parse("01:30").unwrap();
+        let resolve = |now: &str| daily.resolve(&at(now)).unwrap().to_string();
+        // 01:30 EDT (05:30Z) is past and 01:30 EST (06:30Z) is ahead: take the second.
+        assert_eq!(resolve("2026-11-01T06:15:00Z"), "2026-11-01T06:30:00Z");
+        // Both occurrences ahead: take the first.
+        assert_eq!(resolve("2026-11-01T05:00:00Z"), "2026-11-01T05:30:00Z");
+        // Both occurrences past: the next day.
+        assert_eq!(resolve("2026-11-01T07:00:00Z"), "2026-11-02T06:30:00Z");
+        let weekly = CalendarAt::parse("sun 01:30").unwrap();
+        let now = at("2026-11-01T06:15:00Z");
+        assert_eq!(
+            weekly.resolve(&now).unwrap().to_string(),
+            "2026-11-01T06:30:00Z"
+        );
     }
 }
