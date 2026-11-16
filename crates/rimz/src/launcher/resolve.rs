@@ -47,6 +47,108 @@ pub fn resolve_finalized_layout(
     enforce_name_cardinality: bool,
     room: Option<(&crate::RuntimePaths, &crate::StatePaths)>,
 ) -> Result<FinalizedLaunch> {
+    let availability = room
+        .filter(|_| overrides.login.is_none())
+        .map(|(runtime, state)| {
+            crate::harness::plan::LaunchAvailability::read(
+                runtime,
+                state,
+                machine_config,
+                jiff::Timestamp::now(),
+            )
+        });
+    resolve_routed(
+        snapshot,
+        machine_config,
+        effective,
+        scope,
+        spec,
+        prompt,
+        overrides,
+        budget,
+        max_turns,
+        lane,
+        enforce_name_cardinality,
+        |kind, model| {
+            availability
+                .as_ref()
+                .and_then(|usage| usage.unavailable(kind, model))
+        },
+    )
+}
+
+/// Every agent kind a launch of `spec` can run on, each once, in layout order: the kinds its
+/// first pick names, then each kind a tier route falls back to while every kind found so far
+/// reads unavailable. A caller that must read one kind before any launch (a loop task's window
+/// provider) refuses more than one.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the same launch inputs `resolve_finalized_layout` takes, without a room"
+)]
+pub fn routable_kinds(
+    snapshot: Option<&SidebarSnapshot>,
+    machine_config: &MachineConfig,
+    effective: &LaunchAgents,
+    scope: ProfileScope,
+    spec: Option<&str>,
+    prompt: Option<&str>,
+    overrides: &LaunchOverrides,
+    budget: Option<BudgetSpec>,
+    max_turns: Option<u32>,
+    lane: Option<&LaneName>,
+    enforce_name_cardinality: bool,
+) -> Result<Vec<String>> {
+    let mut kinds = Vec::<String>::new();
+    loop {
+        let finalized = resolve_routed(
+            snapshot,
+            machine_config,
+            effective,
+            scope,
+            spec,
+            prompt,
+            overrides,
+            budget,
+            max_turns,
+            lane,
+            enforce_name_cardinality,
+            |kind, _| {
+                kinds
+                    .iter()
+                    .any(|seen| seen == kind)
+                    .then_some(crate::agents::TierSkipReason::LoggedOut)
+            },
+        )?;
+        let found = kinds.len();
+        for kind in finalized.resolved.layout.agent_kinds() {
+            if !kinds.iter().any(|seen| seen == kind) {
+                kinds.push(kind.to_owned());
+            }
+        }
+        if kinds.len() == found {
+            return Ok(kinds);
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared launch inputs keep typed overrides and the routing's availability explicit"
+)]
+fn resolve_routed(
+    snapshot: Option<&SidebarSnapshot>,
+    machine_config: &MachineConfig,
+    effective: &LaunchAgents,
+    scope: ProfileScope,
+    spec: Option<&str>,
+    prompt: Option<&str>,
+    overrides: &LaunchOverrides,
+    budget: Option<BudgetSpec>,
+    max_turns: Option<u32>,
+    lane: Option<&LaneName>,
+    enforce_name_cardinality: bool,
+    mut unavailable: impl FnMut(&str, &str) -> Option<crate::agents::TierSkipReason>,
+) -> Result<FinalizedLaunch> {
     // A bare role in a team's lane names that team's role, not a global profile.
     let mut qualified_spec = None;
     let mut inferred_lane = None;
@@ -68,16 +170,6 @@ pub fn resolve_finalized_layout(
     }
     let spec = qualified_spec.as_deref().or(spec);
     let mut effective = effective.clone();
-    let availability = room
-        .filter(|_| overrides.login.is_none())
-        .map(|(runtime, state)| {
-            crate::harness::plan::LaunchAvailability::read(
-                runtime,
-                state,
-                machine_config,
-                jiff::Timestamp::now(),
-            )
-        });
     let routed = effective.route(
         &machine_config.tiers,
         scope,
@@ -85,11 +177,7 @@ pub fn resolve_finalized_layout(
         overrides.tier,
         overrides.preset.model.as_deref(),
         overrides.agent.as_deref(),
-        |kind, model| {
-            availability
-                .as_ref()
-                .and_then(|usage| usage.unavailable(kind, model))
-        },
+        &mut unavailable,
     )?;
     let mut resolved = crate::harness::plan::resolve_launch(
         &effective,

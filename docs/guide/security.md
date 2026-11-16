@@ -69,7 +69,7 @@ The hash covers every field that can cause a process to run:
 - `[profiles.<name>]`: `agent`, `skills`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args`
 - `[subagents.profiles.<name>]`: the same command-running profile fields, for supervised children
 - `[agents.teams.<name>]`: `layout`, `consensus-file`, `consensus`, `append-system-prompt-files`, and each role's profile, signal bindings, and launch fields
-- `[tasks.<name>]`: what each fire runs or launches (`kind`, `target`, `args`), its `timeout`, and the schedule options (`at`, `every`, `cron`, `signal`, `match`, `repeat`). Every process a fire starts comes from the command these fields hold
+- `[tasks.<name>]`: what each fire runs or launches (`kind`, `target`, `args`), the worktree it runs in (`worktree`), its `timeout`, and the schedule options (`at`, `every`, `cron`, `signal`, `match`, `repeat`). Every process a fire starts comes from the command these fields hold
 - `[[hooks]]`: `event`, `command`
 - `[env]`: every key and value
 - `[lsp.servers.<name>]`: server name, executable `command`, `init-options`, and explicitly set `editor-check-on-save`; untrusted declarations warn at agent launch and stay inert, leaving same-named machine entries in effect, and the trust offer names their commands

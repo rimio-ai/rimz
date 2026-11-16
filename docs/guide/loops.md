@@ -36,7 +36,7 @@ no room is open there; start one with `rimz start`, or use `rimz loop timer inst
 
 The last two lines matter before your first task. A task belongs to the project you ran `add` in (`--root <path>` picks another). A clock task fires only while a room for that project is open, or while the [loop timer](#who-keeps-time) keeps time for it.
 
-A task's command runs at the project root, even when you add it from a linked worktree. For a fresh tree each fire, have the command make one with [`rimz worktree new`](./worktrees.md), or make the task an agent or team task with a bare `-w` in its arguments, [below](#start-an-agent-from-a-task). The name is optional: leave it out and the receipt prints the `loop-<petname>` name it chose.
+A task's command runs at the project root, even when you add it from a linked worktree. To keep its work off the tree you are editing, give the task `-w <name>`: every fire runs in the RimZ-owned worktree of that name, which the first fire creates when it is missing. For a fresh tree each fire, have the command make one with [`rimz worktree new`](./worktrees.md), or make the task an agent or team task with a bare `-w` in its arguments, [below](#start-an-agent-from-a-task). The name is optional: leave it out and the receipt prints the `loop-<petname>` name it chose.
 
 A clock repeats only with `--every` or `--cron`. A bare time (`--at 07:00`, `--at 'fri 09:30'`, `--in 30m`) fires once, and then the task removes itself. [Every schedule shape](#every-schedule-shape) lists them all.
 
@@ -71,7 +71,7 @@ A team whose lane already holds a closed cohort needs `--continue` or `--fresh` 
 
 To try one before its time, run `rimz loop fire sweep` ([See what a task did](#see-what-a-task-did) covers what it prints).
 
-A trailing `-w` gives each fire's launch a fresh worktree, as it does from a shell. The second example launches `recon`, a team you have defined or installed ([Teams](./teams.md) shows both); `loop add` refuses a team it cannot load.
+A bare `-w` among the arguments gives each fire's launch a fresh worktree, as it does from a shell; the task's own `-w <name>` reuses one named tree for every fire. `loop add` refuses the two together when they name different trees. The receipt reads the launch back on a `launch:` line (the worktree, whether a prompt was found, and a `-p` run's time limit), and warns when a repeating agent or team task leaves its agent idle with no `-p`, no `--overlap` policy and no `--once-per-checkout`, since that agent holds every later fire. The second example launches `recon`, a team you have defined or installed ([Teams](./teams.md) shows both); `loop add` refuses a team it cannot load.
 
 For an agent or team task, RimZ appends one line to the launched agent's prompt saying which task fired and why, such as ``Rule `ci-fix` fired here. ci.failed on feature #42 @88824c2``. An unattended agent then knows what happened without asking. A plain command reads the same line from the `RIMZ_LOOP_TRIGGER` environment variable, `RIMZ_LOOP_TASK` holds the task's name, and `RIMZ_LOOP_FIRE` the id of this one fire. A clock fire or a manual fire carries no such line, unless the manual fire names a signal with `--signal`.
 
@@ -186,15 +186,15 @@ A RimZ-owned worktree is one RimZ created, with `rimz worktree new` or a launch'
 A long refactor that starts in a nearly spent 5-hour usage window stalls halfway. Start it when the window has room instead. `window.5h.left` and `window.7d.left` read the percent left in a provider's 5-hour or 7-day window:
 
 ```sh
-rimz loop add big-refactor --when 'window.5h.left>=60' --provider claude --agent claude -- "Refactor the storage layer and leave the branch green."
+rimz loop add big-refactor --when 'window.5h.left>=60' --agent claude -- "Refactor the storage layer and leave the branch green."
 ```
 
-`--provider` names the agent kind whose windows the condition reads. `--account` picks one of its [named accounts](./accounts.md). Neither picks the account the command's own launches use. `add` reads the window first and refuses when it cannot, and the [conditions reference](../reference/cli/loop.md#conditions) lists those cases.
+An agent task reads the windows of the kind it launches, on the account its launch names, and the receipt says so on a `windows:` line. `--provider` names the agent kind whose windows the condition reads for any other task, or overrides that default. `--account` picks one of its [named accounts](./accounts.md). Neither picks the account the command's own launches use. `add` reads the window first and refuses when it cannot, and the [conditions reference](../reference/cli/loop.md#conditions) lists those cases.
 
 When the moment you want is the reset itself, `--after-reset 5h` (or `7d`) fires once when that window next resets, then removes the task. A window that has not started yet has no reset to wait for, so the task fires on the next tick:
 
 ```sh
-rimz loop add after-limit --after-reset 5h --provider claude --agent claude -- "The 5h window has reset. Pick the refactor back up."
+rimz loop add after-limit --after-reset 5h --agent claude -- "The 5h window has reset. Pick the refactor back up."
 ```
 
 The receipt shows the window's current percent left and when it resets, or that it has not started. [After a reset](../reference/cli/loop.md#after-a-reset) covers a reset that passes while nothing keeps time.
@@ -285,7 +285,7 @@ A task that fires once (`--at`, `--in`, `--after-reset`, or a `--signal` or `--w
 
 ### Where a fire runs
 
-A fire opens the room for the task's project, then runs its command or launch at the project root, in the worktree an `--each-worktree` fire selected, or in a worktree its launch's `-w` opens. Every agent a fire launches into the room opens in an unfocused tab of its own, so a fire never splits the tab you are working in. When the agent needs you, its tab and its sidebar card show it, as for any agent.
+A fire opens the room for the task's project, then runs its command or launch at the project root, in the worktree an `--each-worktree` fire selected, in the worktree the task's `-w` names, or in a worktree its launch's `-w` opens. Every agent a fire launches into the room opens in an unfocused tab of its own, so a fire never splits the tab you are working in. When the agent needs you, its tab and its sidebar card show it, as for any agent.
 
 ### What a fire leaves behind
 
@@ -330,7 +330,7 @@ Each task names one trigger and one command after `--`.
 | Raw cron | `--cron`, a five-field expression with names such as `mon-fri` and steps, or a macro such as `@daily` | per the expression | `--cron "*/15 * * * *"` |
 | Signal | `--signal <name-or-family>`, narrowed with `--match key=value` ([above](#fire-on-a-signal)) | once, or on every delivering signal with `--repeat` | `--signal ci.failed`, `--signal 'ci.*'` |
 | Condition | `--when <expr>`, held with `--for <duration>` ([above](#wait-for-done-and-green)) | once, or each time it turns true again with `--repeat` | `--when 'pr[feat-x]=merged'` |
-| After a reset | `--after-reset 5h` or `7d` with `--provider` ([above](#wait-for-room-in-a-usage-window)) | fires once, then the task removes itself | `--after-reset 5h --provider claude` |
+| After a reset | `--after-reset 5h` or `7d`, reading an agent task's kind or `--provider` ([above](#wait-for-room-in-a-usage-window)) | fires once, then the task removes itself | `--after-reset 5h --provider claude` |
 
 `--every 1d` is an interval: it fires a day after the last fire and drifts with it. `--every day --at 07:00` fires at 07:00 each day. Calendar times, `--at`, and cron use the top-level `timezone` setting, or the system zone when it is unset. Every command and flag is in the [loop CLI reference](../reference/cli/loop.md).
 

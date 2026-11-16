@@ -194,7 +194,7 @@ fn loop_add_resolves_a_bare_role_in_its_team_lane() {
 fn loop_add_refuses_what_a_launch_task_cannot_carry() {
     let env = live_room();
     kinds_fixture(&env);
-    let cases: [(&[&str], &str); 24] = [
+    let cases: [(&[&str], &str); 28] = [
         (
             &["--workflow", "smoke", "--each-worktree", "--", "-w", "x"],
             "loop task `t`: --workflow `smoke`: -w in the tail places the run, and --each-worktree places each fire",
@@ -297,6 +297,31 @@ fn loop_add_refuses_what_a_launch_task_cannot_carry() {
         (
             &["--workflow", "whole", "--each-worktree"],
             "loop task `t`: --workflow `whole`: whole has scope = project, so it runs at the project root; remove --each-worktree",
+        ),
+        (
+            &["-w", "deps", "--agent", "worker", "--", "-w", "other", "go"],
+            "loop task `t`: --agent `worker`: -w `deps` and the launch's worktree `other` differ; keep one\n",
+        ),
+        (
+            &["-w", "deps", "--team", "forge", "--", "-w"],
+            "loop task `t`: --team `forge`: -w `deps` and the launch's worktree (a generated name) differ; keep one\n",
+        ),
+        (
+            &["-w", "deps", "--workflow", "whole"],
+            "loop task `t`: --workflow `whole`: whole has scope = project, so it runs at the project root; remove -w\n",
+        ),
+        (
+            &[
+                "-w",
+                "deps",
+                "--agent",
+                "worker",
+                "--",
+                "--channel",
+                "x",
+                "go",
+            ],
+            "loop task `t`: --agent `worker`: the tail does not parse as `rimz agents`:",
         ),
         (
             &["--", "rimz", "teams", "launch", "forge", "go"],
@@ -1869,4 +1894,408 @@ fn loop_show_finds_a_consumed_print_one_off_by_its_live_run() {
         launches.is_some_and(|rest| rest.contains(run.run_id.as_str())),
         "{show}"
     );
+}
+
+/// `loop add -w` places a task of every kind in one RimZ-owned worktree, stored as the row's
+/// `worktree` beside an unchanged tail: an agent, team or workflow fire hands it to the launch as
+/// one `-w` before the tail, an equal tail `-w` is stored once in the tail, and a shell fire
+/// creates the tree and runs its command there.
+#[cfg(unix)]
+#[test]
+fn loop_add_w_places_every_kind_and_each_fire_runs_there() {
+    let env = live_room();
+    if !init_git_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    kinds_fixture(&env);
+    let (wrapper, seen, code) = launch_stand_in(&env);
+    let adds: [&[&str]; 6] = [
+        &[
+            "sh-task", "-w", "deps", "--every", "1h", "--", "sh", "-c", "pwd -P",
+        ],
+        // A tail flag that needs `-w` parses beside the loop's own.
+        &[
+            "trunk-task",
+            "--agent",
+            "worker",
+            "-w",
+            "deps",
+            "--every",
+            "1h",
+            "--",
+            "--from-trunk",
+            "go",
+        ],
+        &[
+            "wf-task",
+            "--workflow",
+            "smoke",
+            "-w",
+            "deps",
+            "--every",
+            "1h",
+        ],
+        &[
+            "agent-task",
+            "--agent",
+            "worker",
+            "-w",
+            "deps",
+            "--every",
+            "1h",
+            "--",
+            "go",
+        ],
+        &[
+            "team-task",
+            "--team",
+            "forge",
+            "-w",
+            "deps",
+            "--every",
+            "1h",
+            "--",
+            "go",
+        ],
+        &[
+            "same-task",
+            "--agent",
+            "worker",
+            "--worktree",
+            "deps",
+            "--every",
+            "1h",
+            "--",
+            "-w",
+            "deps",
+            "go",
+        ],
+    ];
+    for add in adds {
+        loop_ok(&env, &[&["loop", "add"][..], add].concat());
+    }
+    let rows = stored_rows(&env);
+    for name in [
+        "sh-task",
+        "trunk-task",
+        "wf-task",
+        "agent-task",
+        "team-task",
+    ] {
+        assert_eq!(
+            rows[name].get("worktree").and_then(toml::Value::as_str),
+            Some("deps"),
+            "{name}: {rows:?}"
+        );
+    }
+    assert_eq!(
+        rows["agent-task"]["args"],
+        toml::Value::try_from(["go"]).unwrap()
+    );
+    assert!(rows["same-task"].get("worktree").is_none(), "{rows:?}");
+
+    std::fs::write(&code, "7").unwrap();
+    for (task, argv) in [
+        ("agent-task", "agents worker -w deps go"),
+        ("trunk-task", "agents worker -w deps --from-trunk go"),
+        ("team-task", "teams launch forge -w deps go"),
+        ("same-task", "agents worker -w deps go"),
+        ("wf-task", "workflow run smoke -w deps"),
+    ] {
+        let output = env
+            .rimz()
+            .env("RIMZ_BIN", &wrapper)
+            .args(["loop", "run", task])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{task}: {output:?}");
+        let seen = std::fs::read_to_string(&seen).unwrap();
+        let line = seen.lines().find_map(|line| line.strip_prefix("argv="));
+        assert!(
+            line.is_some_and(|line| line == argv || line.starts_with(&format!("{argv} --"))),
+            "{task}: {seen}"
+        );
+    }
+
+    loop_ok(&env, &["loop", "fire", "sh-task"]);
+    let report = wait_for_loop_report(&env, "sh-task");
+    assert_eq!(report.result, LoopRunResult::Completed, "{report:?}");
+    let owned = rimz::worktree::discover_owned(&env.project_root).unwrap();
+    let tree = owned
+        .iter()
+        .find(|tree| tree.marker.name == "deps")
+        .unwrap_or_else(|| panic!("{owned:?}"));
+    // The tree carries the fire that made it, as an agent fire's tree does.
+    assert_eq!(tree.marker.loop_fire, report.fire, "{owned:?}");
+    // The fire's history keys at the project root, where its conditions and marks live.
+    assert_eq!(
+        report.checkout.as_deref().map(canonical),
+        Some(canonical(&env.project_root)),
+        "{report:?}"
+    );
+    let journal = loop_run_journal(&env, &env.project_root, &report);
+    let path = canonical(&tree.marker.worktree_path);
+    assert!(
+        journal.contains(&format!("{}\n", path.display())),
+        "{path:?}: {journal}"
+    );
+}
+
+/// A shell task's fire never adopts a directory at its worktree's path that RimZ does not own:
+/// the fire fails with the reason and asks nothing.
+#[test]
+fn a_shell_fire_refuses_a_tree_rimz_does_not_own() {
+    let env = live_room();
+    if !init_git_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    let config = rimz::config::MachineConfig::default();
+    let path =
+        rimz::worktree::worktree_path(&env.project_root, &config.agents.worktree, "plain").unwrap();
+    std::fs::create_dir_all(&path).unwrap();
+    loop_ok(
+        &env,
+        &[
+            "loop", "add", "plain", "-w", "plain", "--every", "1h", "--", "true",
+        ],
+    );
+    let _ = env
+        .rimz()
+        .args(["loop", "run", "plain"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let record = read_loop_run_records(&env)
+        .into_iter()
+        .rfind(|record| record.task == "plain")
+        .expect("the fire records its failure");
+    assert_eq!(record.result, LoopRunResult::Errored, "{record:?}");
+    assert!(
+        record
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("worktree `plain` is not a RimZ-managed worktree")),
+        "{record:?}"
+    );
+}
+
+/// A shell task's fire creates its worktree only after the admission an agent launch's `-w`
+/// gets: under an unreadable core config the fire fails with the fix and no tree exists.
+#[test]
+fn a_shell_fire_creates_no_tree_under_an_unreadable_core_config() {
+    let env = live_room();
+    if !init_git_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    loop_ok(
+        &env,
+        &[
+            "loop", "add", "guarded", "-w", "guarded", "--every", "1h", "--", "true",
+        ],
+    );
+    std::fs::write(env.rimz_home().join("config.toml"), "[agents\n").unwrap();
+    let _ = env
+        .rimz()
+        .args(["loop", "run", "guarded"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let record = read_loop_run_records(&env)
+        .into_iter()
+        .rfind(|record| record.task == "guarded")
+        .expect("the fire records its failure");
+    assert_eq!(record.result, LoopRunResult::Errored, "{record:?}");
+    assert!(
+        record
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("cannot create a worktree")),
+        "{record:?}"
+    );
+    assert!(
+        rimz::worktree::discover_owned(&env.project_root)
+            .unwrap()
+            .is_empty()
+    );
+    let config = rimz::config::MachineConfig::default();
+    let path = rimz::worktree::worktree_path(&env.project_root, &config.agents.worktree, "guarded")
+        .unwrap();
+    assert!(!path.exists(), "{path:?}");
+}
+
+/// The receipt reads the launch back: the worktree its arguments name (a one-word tail after a
+/// bare `-w` is that worktree, with no prompt), whether a prompt was found, a `-p` run's time
+/// limit, and for a repeating agent left idle, the note that it holds later fires.
+#[test]
+fn loop_add_reads_each_launch_back_in_its_receipt() {
+    let env = live_room();
+    kinds_fixture(&env);
+    let receipt = |add: &[&str]| loop_ok(&env, &[&["loop", "add"][..], add].concat());
+    let idle = "note: an agent left idle holds later fires; add `-p` for a run that ends itself, `--overlap replace` to stop the old agent at each fire, or `--overlap allow` to launch beside it";
+    let team_idle = "note: an agent left idle holds later fires; add `-p` for a run that ends itself, or `--overlap replace` to stop the old agent at each fire";
+    let trap = receipt(&[
+        "trap", "--agent", "worker", "--every", "1h", "--", "-w", "one-word",
+    ]);
+    assert!(
+        trap.lines()
+            .any(|line| line == "launch: worktree `one-word` · no prompt"),
+        "{trap}"
+    );
+    assert!(trap.lines().any(|line| line == idle), "{trap}");
+    let print = receipt(&[
+        "print",
+        "--agent",
+        "worker",
+        "--every",
+        "1h",
+        "--",
+        "-p",
+        "--timeout",
+        "30m",
+        "fix it",
+    ]);
+    assert!(
+        print
+            .lines()
+            .any(|line| line == "launch: prompt found · time limit 30m"),
+        "{print}"
+    );
+    assert!(!print.contains("note: an agent left idle"), "{print}");
+    let placed = receipt(&[
+        "placed",
+        "--agent",
+        "worker",
+        "-w",
+        "deps",
+        "--overlap",
+        "replace",
+        "--every",
+        "1h",
+        "--",
+        "go",
+    ]);
+    for line in [
+        "action: launches `rimz agents worker -w deps go` in worktree `deps` (created at the first fire if missing)",
+        "launch: worktree `deps` · prompt found",
+    ] {
+        assert!(placed.lines().any(|seen| seen == line), "{line}: {placed}");
+    }
+    assert!(!placed.contains("note: an agent left idle"), "{placed}");
+    let flow = receipt(&["flow", "--workflow", "smoke", "-w", "deps", "--every", "1h"]);
+    assert!(
+        flow.lines().any(|line| line == "launch: worktree `deps`"),
+        "{flow}"
+    );
+    let crew = receipt(&["crew", "--team", "forge", "--every", "1h", "--", "-w"]);
+    assert!(
+        crew.lines()
+            .any(|line| line == "launch: a new worktree each fire · no prompt"),
+        "{crew}"
+    );
+    assert!(crew.lines().any(|line| line == team_idle), "{crew}");
+}
+
+/// An agent task's window terms read the kind its launch runs on when the loop names no
+/// `--provider`; a team task resolves no kind and a shell task has none, so each refuses with
+/// the flag that names one, at exit 1.
+#[test]
+fn window_terms_default_to_the_kind_an_agent_task_launches() {
+    let env = live_room();
+    kinds_fixture(&env);
+    env.install_agent_hooks("claude");
+    crate::common::wait::publish_claude_5h(&env, 10);
+    let receipt = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "guard",
+            "--agent",
+            "worker",
+            "--when",
+            "window.5h.left >= 40",
+            "--",
+            "go",
+        ],
+    );
+    assert!(
+        receipt
+            .lines()
+            .any(|line| line == "windows: claude (from the launch), the room's account"),
+        "{receipt}"
+    );
+    assert_eq!(
+        read_loop_instances(&env).0["guard"].provider,
+        Some(AgentKind::new_unchecked("claude"))
+    );
+    // A tier route reads the kind every fire can launch: one whose fallbacks span kinds names
+    // none, while a route of one kind defaults like a plain profile.
+    crate::common::write_definition(&env, "agents", "codex", "description: Codex base", "Base.");
+    for (name, tier) in [("spread", "senior"), ("single", "principal")] {
+        crate::common::write_definition(
+            &env,
+            "agents",
+            name,
+            &format!("description: Tiered\ntier: {tier}\ntools: [Bash]"),
+            "Work.",
+        );
+    }
+    let single = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "single",
+            "--agent",
+            "single",
+            "--when",
+            "window.5h.left >= 40",
+            "--",
+            "go",
+        ],
+    );
+    assert!(
+        single
+            .lines()
+            .any(|line| line == "windows: claude (from the launch), the room's account"),
+        "{single}"
+    );
+    let spread = env
+        .rimz()
+        .args(["loop", "add", "spread", "--agent", "spread"])
+        .args(["--when", "window.5h.left >= 40", "--", "go"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&spread.stderr);
+    assert_eq!(spread.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(
+            "the launch runs claude and codex; name the provider whose windows to read with \
+             --provider <kind>"
+        ),
+        "{stderr}"
+    );
+    let refusals: [&[&str]; 2] = [
+        &["--team", "forge", "--when", "window.5h.left >= 40"],
+        &["--after-reset", "5h", "--", "true"],
+    ];
+    for flags in refusals {
+        let output = env
+            .rimz()
+            .args(["loop", "add", "t"])
+            .args(flags)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{flags:?}: {stderr}");
+        assert!(
+            stderr.contains(
+                "a window trigger reads a provider's windows; name it with --provider <kind>"
+            ),
+            "{flags:?}: {stderr}"
+        );
+    }
 }

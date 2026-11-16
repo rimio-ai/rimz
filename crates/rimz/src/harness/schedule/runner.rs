@@ -277,6 +277,8 @@ pub struct TaskFire<'a> {
     from_arrived_at: Option<Timestamp>,
     condition: Option<crate::harness::when::ConditionEvidence>,
     checkout: Option<PathBuf>,
+    /// A shell row's `worktree`, once this fire created or found it: where its command runs.
+    row_tree: Option<PathBuf>,
     started: Instant,
     run_lock: Option<RunLockGuard>,
     record_hold: Option<CheckSignalGuard>,
@@ -342,6 +344,7 @@ impl<'a> TaskFire<'a> {
             from_arrived_at: None,
             condition: None,
             checkout: None,
+            row_tree: None,
             started,
             run_lock: None,
             record_hold: None,
@@ -559,9 +562,79 @@ impl<'a> TaskFire<'a> {
             .unwrap_or_else(|| self.entry.run_dir())
     }
 
-    /// The run's scope: the launch checkout.
+    /// The run's scope: a shell row's worktree, else the launch checkout.
     fn fire_dir(&self) -> PathBuf {
-        self.launch_checkout()
+        self.row_tree
+            .clone()
+            .unwrap_or_else(|| self.launch_checkout())
+    }
+
+    /// Create a shell row's `worktree` from the configured base when it is missing, or reuse
+    /// it, and announce a created one when the room's store exists. The creation takes the
+    /// admission an agent launch's `-w` takes (a readable core config, the name's own checks),
+    /// and a refusal fails the fire with nothing made. A directory there that RimZ does not
+    /// own fails the fire too, which never asks. Returns whether the fire created the tree.
+    fn prepare_row_tree(&mut self) -> Result<bool> {
+        let Some(name) = self.entry.worktree.as_deref() else {
+            return Ok(false);
+        };
+        let root = self.entry.resolved_root();
+        let placing = || format!("placing loop task `{}` in worktree `{name}`", self.name);
+        self.config
+            .require_readable_core("create a worktree")
+            .with_context(placing)?;
+        let workspace = crate::workspace::WorkspaceResolver::resolve(&root, None)?;
+        let room = fire_tree_room(&root);
+        let agents = match &room {
+            Some((store, _)) => store.runtime_projection(crate::RuntimeScope::Audit)?.agents,
+            None => Vec::new(),
+        };
+        crate::harness::lanes::admit_launch_worktree_name(
+            &workspace,
+            &self.config.agents.worktree,
+            &agents,
+            Some(name),
+        )
+        .with_context(placing)?;
+        let checkout = crate::worktree::resolve_launch_checkout(
+            &workspace,
+            &self.config.agents.worktree,
+            Some(name),
+            None,
+            None,
+            None,
+            crate::worktree::LaunchBase::Configured,
+        )
+        .with_context(placing)?;
+        let created = checkout.created.is_some();
+        if let Some(marker) = &checkout.created {
+            match &room {
+                Some((store, workspace)) => {
+                    crate::worktree::emit_worktree_created(store, workspace, marker);
+                }
+                None => {
+                    tracing::debug!(task = %self.name, "skipping worktree signal: store unavailable")
+                }
+            }
+        }
+        self.row_tree = Some(checkout.cwd);
+        Ok(created)
+    }
+
+    /// Stamp the tree this fire created with the fire, so the task's record outlives its
+    /// retirement while the tree stands, as a launch's own tree does.
+    fn stamp_row_tree(&self, fire: &FireId) {
+        let Some(tree) = &self.row_tree else {
+            return;
+        };
+        if let Err(error) = crate::worktree::stamp_loop_fire(tree, fire) {
+            tracing::warn!(
+                %fire,
+                %error,
+                path = %tree.display(),
+                "the fire's tree carries no fire stamp"
+            );
+        }
     }
 
     pub fn prepare(
@@ -671,7 +744,11 @@ impl<'a> TaskFire<'a> {
         // run's prompt, which its command reads as `RIMZ_LOOP_TRIGGER`, names the one served.
         let trigger = self.effect_prompt(String::new());
         let prompt = || Ok((!trigger.is_empty()).then(|| trigger.clone()));
+        let created_tree = self.prepare_row_tree()?;
         let (fire, displaced) = self.open_fire()?;
+        if created_tree {
+            self.stamp_row_tree(&fire);
+        }
         let definition = crate::harness::workflow::DefinitionSource::Inline {
             task: self.name.clone(),
             loop_fire: fire.clone(),
@@ -970,7 +1047,23 @@ impl<'a> TaskFire<'a> {
         state: &StatePaths,
         name: &str,
     ) -> Result<Option<crate::store::workflow::RunRecord>> {
-        let checkout = self.launch_checkout().canonicalize()?;
+        // A row placed with `-w` runs its workflow in that tree, where no run can be live
+        // before the tree exists.
+        let checkout = match self.entry.worktree.as_deref() {
+            Some(name) => {
+                let tree = crate::worktree::worktree_path(
+                    &self.entry.resolved_root(),
+                    &self.config.agents.worktree,
+                    name,
+                )?;
+                match tree.canonicalize() {
+                    Ok(tree) => tree,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            None => self.launch_checkout().canonicalize()?,
+        };
         Ok(crate::store::workflow::live_runs(state)?
             .into_iter()
             .find(|run| {
@@ -1084,10 +1177,14 @@ impl<'a> TaskFire<'a> {
     }
 
     /// What this fire would log at its launch, sealed into its run for the run's one report row:
-    /// its trigger, waits, lock tenure and kind.
+    /// its trigger, waits, lock tenure and kind. A run placed in the row's tree also carries the
+    /// fire's checkout, which its rows key on rather than the tree.
     fn fire_facts(&self) -> serde_json::Value {
         let mut record = self.terminal_record(LoopRunResult::Launched);
         record.run_lock = self.run_lock.as_ref().map(|guard| guard.info);
+        if self.row_tree.is_some() {
+            record.checkout = Some(self.launch_checkout());
+        }
         run_log::fire_facts(&record)
     }
 
@@ -1846,6 +1943,15 @@ fn overlap_detail(info: Option<RunLockInfo>, suffix: &str) -> String {
         },
     );
     format!("{holder} — {suffix}")
+}
+
+/// The room a fire's created worktree is announced in, when its store exists.
+fn fire_tree_room(root: &Path) -> Option<(crate::Store, crate::ResolvedWorkspace)> {
+    let paths = StatePaths::for_project_root(root).ok()?;
+    let runtime = RuntimePaths::for_state(&paths).ok()?;
+    let store = crate::Store::open_existing(paths, runtime)?;
+    let workspace = crate::workspace::WorkspaceResolver::resolve(root, None).ok()?;
+    Some((store, workspace))
 }
 
 /// Why `rimz loop add` refuses a window trigger; each display carries its fix.

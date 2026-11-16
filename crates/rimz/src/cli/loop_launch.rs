@@ -17,27 +17,96 @@ use super::{Cli, ColorWhen, Subcmd};
 pub(super) struct LoopLaunchPlace<'a> {
     pub(super) project_root: &'a Path,
     pub(super) each_worktree: bool,
+    /// The loop's own `-w`, which the fire hands the launch unless the tail names it already.
+    pub(super) worktree: Option<&'a str>,
+}
+
+/// The launch a task's fires make, as its check parsed it: what `loop add` reads back in its
+/// receipt and defaults a window's provider and account from.
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct LoopLaunch {
+    /// The worktree the fire's launch arguments name, the loop's `-w` included; `Some("")` is
+    /// a bare `-w`, which generates a new name each fire.
+    pub(super) worktree: Option<String>,
+    /// The tail's own `-w` names the loop's, so the row stores none and the fire passes one.
+    pub(super) tail_names_worktree: bool,
+    pub(super) prompt: bool,
+    /// A `-p` run, with its `--timeout` when the tail gives one.
+    pub(super) print: Option<Option<std::time::Duration>>,
+    /// The tail's `--account`.
+    pub(super) account: Option<rimz::ids::LoginName>,
+    /// The agent kinds the target resolves to as the launch resolves it, each once, in layout
+    /// order; empty where the check resolves none (a team, a workflow).
+    pub(super) kinds: Vec<String>,
 }
 
 /// Check the launch a fire of `kind` makes with `target` and `args`. A shell task's argv is
-/// refused only when it is itself a `rimz` launch a kind flag declares.
+/// refused only when it is itself a `rimz` launch a kind flag declares. The loop's own `-w` is
+/// checked against the worktree the tail names, then handed to the launch as the fire will.
 pub(super) fn check(
     kind: LaunchKind,
     target: Option<&str>,
     args: &[String],
     place: &LoopLaunchPlace<'_>,
-) -> Result<()> {
+) -> Result<LoopLaunch> {
     let Some(target) = target else {
-        return check_shell(args);
+        check_shell(args)?;
+        return Ok(LoopLaunch::default());
     };
-    let launch = TaskLaunch {
+    let tail = TaskLaunch {
         kind,
         target: target.to_owned(),
+        worktree: None,
         args: args.to_vec(),
+    };
+    let alone = check_parsed(&tail, place);
+    let Some(loop_worktree) = place.worktree else {
+        return alone;
+    };
+    // A tail flag that needs a worktree (`--from-trunk`) parses only beside the loop's `-w`,
+    // so a tail that fails alone is checked as the fire will send it; a tail naming its own
+    // `-w` cannot parse there, so its own error stands.
+    let described = match alone {
+        Ok(described) => described,
+        Err(error) => {
+            let placed = TaskLaunch {
+                worktree: Some(loop_worktree.to_owned()),
+                ..tail
+            };
+            return check_parsed(&placed, place).map_err(|_| error);
+        }
+    };
+    match described.worktree.as_deref() {
+        None => check_parsed(
+            &TaskLaunch {
+                worktree: Some(loop_worktree.to_owned()),
+                ..tail
+            },
+            place,
+        ),
+        Some(named) if named == loop_worktree => Ok(LoopLaunch {
+            tail_names_worktree: true,
+            ..described
+        }),
+        Some("") => bail!(
+            "-w `{loop_worktree}` and the launch's worktree (a generated name) differ; keep one"
+        ),
+        Some(named) => {
+            bail!("-w `{loop_worktree}` and the launch's worktree `{named}` differ; keep one")
+        }
+    }
+}
+
+/// Parse `launch` as its fire's `rimz` child will and hand it to its command's check. A parse
+/// failure names the launching command, without the target or the loop's `-w`.
+fn check_parsed(launch: &TaskLaunch, place: &LoopLaunchPlace<'_>) -> Result<LoopLaunch> {
+    let written = TaskLaunch {
+        worktree: None,
+        ..launch.clone()
     }
     .argv();
-    let head = launch[..launch.len() - args.len() - 1].join(" ");
-    let argv = std::iter::once("rimz".to_owned()).chain(launch);
+    let head = written[..written.len() - launch.args.len() - 1].join(" ");
+    let argv = std::iter::once("rimz".to_owned()).chain(launch.argv());
     let cli = Cli::try_parse_from(argv).map_err(|err| {
         anyhow::anyhow!(
             "the tail does not parse as `rimz {head}`:\n{}",
@@ -45,7 +114,7 @@ pub(super) fn check(
         )
     })?;
     refuse_global_flags(&cli)?;
-    match (kind, cli.subcommand) {
+    match (launch.kind, cli.subcommand) {
         (LaunchKind::Agent, Some(Subcmd::Agents(parsed))) => {
             super::agents_cmd::check_loop_launch(&parsed, place)
         }

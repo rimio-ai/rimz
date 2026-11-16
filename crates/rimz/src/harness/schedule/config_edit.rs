@@ -337,6 +337,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             target: None,
             args: vec!["cargo".to_owned(), "test".to_owned()],
             each_worktree: false,
+            worktree: None,
             team: None,
             loop_task: None,
             wait: None,

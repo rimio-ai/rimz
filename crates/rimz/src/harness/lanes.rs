@@ -152,6 +152,30 @@ pub fn admit_worktree_name(agents: &[AgentState], name: &str, dir: &Path) -> Res
     Ok(())
 }
 
+/// Admit the worktree a launch's `-w` names before anything creates it: a valid name, never
+/// `main`, and no live agent holding that lane elsewhere. An existing tree is entered without
+/// either admission, and a bare `-w`, which generates its name, needs none. Every path that
+/// creates a named tree for a launch or a loop fire runs it.
+pub fn admit_launch_worktree_name(
+    workspace: &crate::ResolvedWorkspace,
+    config: &crate::config::WorktreeConfig,
+    agents: &[AgentState],
+    worktree: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(name) = worktree.map(str::trim).filter(|name| !name.is_empty()) else {
+        return Ok(());
+    };
+    let requested = crate::worktree::parse_requested_name(name)?;
+    let dir =
+        crate::worktree::worktree_path(workspace.launch_repo_root(), config, &requested.name)?;
+    if dir.exists() {
+        return Ok(());
+    }
+    crate::worktree::admit_fresh_name(&requested.name)?;
+    admit_worktree_name(agents, &requested.name, &dir)?;
+    Ok(())
+}
+
 /// A typed name's checks: it is flat, and admitted as a named lane at `own`'s
 /// checkout.
 fn admit_typed(request: &LaneRequest<'_>, own: &Lane, name: &str) -> Result<LaneName, LaneErr> {

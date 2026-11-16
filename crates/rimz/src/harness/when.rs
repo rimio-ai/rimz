@@ -996,7 +996,7 @@ impl WhenExpr {
     }
 
     /// The spans the expression's `window.*` terms read, in expression order.
-    pub(super) fn window_spans(&self) -> impl Iterator<Item = WindowSpan> {
+    pub fn window_spans(&self) -> impl Iterator<Item = WindowSpan> {
         self.terms().filter_map(|term| window_span(&term.key))
     }
 

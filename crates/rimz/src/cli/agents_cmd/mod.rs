@@ -1389,11 +1389,11 @@ fn validate_detach(launch: &AgentLaunchArgs) -> Result<()> {
 }
 
 /// `rimz loop add --agent`'s check: refuse what a fire's launch cannot carry, then resolve the
-/// spec the way the launch resolves it.
+/// spec the way the launch resolves it, and describe the launch for the add's receipt.
 pub(super) fn check_loop_launch(
     args: &AgentsArgs,
     place: &crate::cli::loop_launch::LoopLaunchPlace<'_>,
-) -> Result<()> {
+) -> Result<crate::cli::loop_launch::LoopLaunch> {
     if args.command.is_some() || !args.is_launch() {
         bail!("the target reads as a `rimz agents` verb or address, not a launch spec");
     }
@@ -1451,21 +1451,32 @@ pub(super) fn check_loop_launch(
         }
         _ => None,
     };
-    resolve_finalized_layout(
+    // A tier route can fall back to another kind at any fire, so the kinds are every one the
+    // route reaches, not the first a room-less resolve picks.
+    let kinds = rimz::launcher::resolve::routable_kinds(
         snapshot.as_ref(),
         &machine_config,
         &effective,
         rimz::config::effective::ProfileScope::Agents,
         launch.spec.as_deref(),
         launch.prompt.as_deref(),
-        &launch.overrides,
+        &launch_resolve::typed_overrides(&launch.overrides)?,
         launch.cohort.budget,
         launch.max_turns,
         lane.as_ref(),
         launch.name.is_some(),
-        None,
     )?;
-    Ok(())
+    Ok(crate::cli::loop_launch::LoopLaunch {
+        worktree: launch.cohort.worktree.clone(),
+        prompt: launch
+            .prompt
+            .as_deref()
+            .is_some_and(|prompt| !prompt.trim().is_empty()),
+        print: launch.print.then_some(launch.timeout),
+        account: launch.overrides.account.clone(),
+        kinds,
+        ..Default::default()
+    })
 }
 
 /// The tail flag that places a cohort launch itself, which `--each-worktree` refuses.

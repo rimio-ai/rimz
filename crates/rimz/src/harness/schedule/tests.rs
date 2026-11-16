@@ -643,6 +643,20 @@ fn task_action_from_entry_maps_field_combinations() {
             },
             "loop task `task` sets `overlap`; a one-shot fires once, so no later fire overlaps it",
         ),
+        (
+            TaskEntry {
+                worktree: Some(String::new()),
+                ..spawn_entry()
+            },
+            "loop task `task` is not a row this RimZ takes (`worktree`: invalid worktree name ``; use letters, numbers, `_`, `-`, with `/` separating branch-style segments; omit the channel's leading `#` (use `feat-a` for `#feat-a`)); delete the task and re-add it with `rimz loop add`",
+        ),
+        (
+            TaskEntry {
+                worktree: Some("a b".into()),
+                ..spawn_entry()
+            },
+            "loop task `task` is not a row this RimZ takes (`worktree`: invalid worktree name `a b`; use letters, numbers, `_`, `-`, with `/` separating branch-style segments; omit the channel's leading `#` (use `feat-a` for `#feat-a`)); delete the task and re-add it with `rimz loop add`",
+        ),
     ] {
         let err = TaskAction::from_entry("task", &entry).expect_err("invalid action");
         assert_eq!(err.to_string(), message);
@@ -703,6 +717,51 @@ fn a_fresh_worktree_row_refuses_with_the_re_add_message() {
         ) && message.ends_with("; delete the task and re-add it with `rimz loop add`"),
         "{message}"
     );
+}
+
+/// A launch row's `worktree` reaches its launch as one `-w` right after the target, ahead of
+/// the tail; a shell row keeps it for its own fire. A delivery row and an each-worktree row
+/// refuse it, since each is placed otherwise.
+#[test]
+fn a_rows_worktree_is_handed_to_its_launch_before_the_tail() {
+    for (kind, head) in [
+        ("agent", "agents worker"),
+        ("team", "teams launch forge"),
+        ("workflow", "workflow run worker"),
+    ] {
+        let target = if kind == "team" { "forge" } else { "worker" };
+        let entry: TaskEntry = toml::from_str(&format!(
+            "kind='{kind}'\ntarget='{target}'\nworktree='deps'\nargs=['go']\nroot='/r'\nevery='1h'"
+        ))
+        .unwrap();
+        let shape = TaskShape::compile("t", &entry);
+        let TaskAction::Launch(launch) = shape.action().unwrap() else {
+            panic!("{kind}: {shape:?}");
+        };
+        assert_eq!(
+            launch.argv().join(" "),
+            format!("{head} -w deps go"),
+            "{kind}"
+        );
+    }
+    let shell: TaskEntry =
+        toml::from_str("worktree='deps'\nargs=['true']\ntimeout='1m'\nroot='/r'\nevery='1h'")
+            .unwrap();
+    assert_eq!(
+        TaskShape::compile("t", &shell).action(),
+        Ok(&TaskAction::Shell(vec!["true".to_owned()]))
+    );
+    for fields in [
+        "each-worktree=true\nargs=['true']\ntimeout='1m'\nevery='1h'",
+        "wait={kind='codex', session='s', handle='@x'}\nsignal='deploy.done'",
+    ] {
+        let entry: TaskEntry =
+            toml::from_str(&format!("worktree='deps'\nroot='/r'\n{fields}")).unwrap();
+        let message = TaskAction::from_entry("t", &entry)
+            .expect_err(fields)
+            .to_string();
+        assert!(message.contains("`worktree`"), "{fields}: {message}");
+    }
 }
 
 #[test]

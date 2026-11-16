@@ -175,6 +175,10 @@ struct AddArgs {
     /// Evaluate the trigger in each RimZ-owned worktree and fire there.
     #[arg(long)]
     each_worktree: bool,
+    /// Run every fire in this RimZ-owned worktree, created at the first fire if missing. A
+    /// launch gets it as its own `-w`; a shell command runs there.
+    #[arg(long, short = 'w', value_name = "NAME")]
+    worktree: Option<String>,
     /// Auto-disable after N consecutive failed fires; default 3, 0 disables.
     #[arg(long, value_name = "N")]
     max_strikes: Option<u32>,
@@ -197,11 +201,11 @@ struct AddArgs {
         conflicts_with_all = ["at", "every", "cron", "signal"]
     )]
     in_after: Option<String>,
-    /// Fire once after the next reset of the --provider's 5h or 7d window.
+    /// Fire once after the next reset of a 5h or 7d window: --provider's, else the kind an
+    /// agent task's launch runs on.
     #[arg(
         long = "after-reset",
         value_name = "5h|7d",
-        requires = "provider",
         conflicts_with_all = ["at", "every", "cron", "in_after", "signal", "when", "until"]
     )]
     after_reset: Option<rimz::agents::WindowSpan>,
@@ -233,10 +237,12 @@ struct AddArgs {
     /// Write the task to the project's `.rimz/config.toml` instead of per-machine loop.toml.
     #[arg(long)]
     project: bool,
-    /// Provider whose usage windows a `window.*` condition or --after-reset reads.
+    /// Provider whose usage windows a `window.*` condition or --after-reset reads; an agent
+    /// task defaults to the kind its launch runs on.
     #[arg(long, value_name = "KIND")]
     provider: Option<String>,
-    /// Named account of --provider whose windows the condition reads; unset follows the room.
+    /// Named account whose windows the condition reads; an agent task defaults to its launch's
+    /// `--account`, else the room's.
     #[arg(long, value_name = "NAME")]
     account: Option<rimz::ids::LoginName>,
     /// Busy scheduled triggers: skip (default), coalesce, queue, replace (stop for newest), or
