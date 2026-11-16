@@ -149,13 +149,27 @@ pub(super) fn render(definition: &Definition, globals: &super::super::GlobalFlag
 
 pub(super) fn load(definition: &Definition) -> Result<workflow::Definition> {
     workflow::load(&definition.dir).map_err(|error| {
-        anyhow::anyhow!(
-            "{}: definition unavailable: {}; check with {}",
+        let unavailable = format!(
+            "{}: definition unavailable: {}",
             definition.name,
-            render::one_line(&error.to_string()),
+            render::one_line(&error.to_string())
+        );
+        if is_missing(&error) {
+            return anyhow::anyhow!(unavailable);
+        }
+        anyhow::anyhow!(
+            "{unavailable}; check with {}",
             resolve::command("validate", &[&definition.raw], None, None, &[], &[]),
         )
     })
+}
+
+/// A definition whose file is gone has nothing `rimz workflow validate` could check.
+fn is_missing(error: &workflow::SpecErr) -> bool {
+    let workflow::SpecErr::Io { source, .. } = error else {
+        return false;
+    };
+    source.kind() == std::io::ErrorKind::NotFound
 }
 
 fn header(

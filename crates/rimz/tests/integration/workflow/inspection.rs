@@ -515,6 +515,7 @@ fn bare_show_always_lists_live_runs_and_distinguishes_known_empty_from_unknown()
     fs::create_dir_all(known).unwrap();
     let text = success(command(&env, &["workflow", "show", "unused"]));
     assert!(text.contains("definition unavailable"), "{text}");
+    assert!(!text.contains("check with"), "{text}");
     assert!(
         text.ends_with("no active or parked runs of unused\n"),
         "{text}"
@@ -591,6 +592,7 @@ fn rooms_refuse_outside_and_prefer_the_callers_room_without_creating_state() {
             .unwrap(),
     );
     assert!(text.contains("definition unavailable"), "{text}");
+    assert!(!text.contains("check with"), "{text}");
     assert!(
         text.ends_with("no active or parked runs of review\n"),
         "{text}"
