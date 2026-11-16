@@ -28,7 +28,7 @@ The invariant matches module paths and type names, not kind strings, so it does 
 - `crates/rimz/src/sidebar/refresh/mod.rs::codex_origin_overrides` and `crates/rimz/src/sidebar/refresh/sessions.rs::codex_turn_death_retry_due` serve Codex alone.
 - `crates/rimz/src/sidebar/enrich.rs::RemoteControlServerHealth::for_kind` reads server health for Claude and Codex only, and `crates/rimz/src/pane.rs::command_is_claude_host` recognizes a `claude remote-control` host command line.
 - `crates/rimz/src/config/accounts.rs::AccountsConfig::named` lists the kinds that take named accounts (Claude, Codex, Pi).
-- `crates/rimz/src/harness/budget.rs` names Claude's and Codex's extra-usage surfaces in its subscription warning, and `crates/rimz/src/harness/workflow/validate.rs::validate_spec` words a Codex judge's retry warning.
+- `crates/rimz/src/harness/budget.rs` names Claude's and Codex's extra-usage surfaces in its subscription warning.
 
 A new adapter that needs one of those behaviours has to be added at that site. A new behaviour belongs on the spec or a trait, where every adapter answers it.
 

@@ -9,7 +9,8 @@ use jiff::Timestamp;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{Definition, Invocation, Kind, Node, SpecErr, spec};
+use super::spec::{self, Cause};
+use super::{Definition, Invocation, Kind, Node, SpecErr};
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::harness::check_run::{self, CheckEcho, WatchDeadline};
 use crate::store::workflow::{self, RunRecord, RunState};
@@ -83,7 +84,9 @@ impl<'a> Live<'a> {
 pub(super) struct Evaluation {
     pub object: Result<Value, String>,
     pub stderr_tail: Option<String>,
-    pub failure: &'static str,
+    /// The cause a script's error answer fails with. Other kinds leave it unset, and the
+    /// check's kind decides how their error settles (`Transition::finish_check`).
+    pub failure: Option<Cause>,
     /// The failure's detail: a dead script's exit code, when it had one, and its log.
     pub detail: Value,
     /// Why the poll interrupted the child, when it did.
@@ -91,7 +94,7 @@ pub(super) struct Evaluation {
 }
 
 impl Evaluation {
-    fn failed(failure: &'static str, reason: &str) -> Self {
+    fn failed(failure: Option<Cause>, reason: &str) -> Self {
         Self {
             object: Err(reason.into()),
             stderr_tail: None,
@@ -149,19 +152,19 @@ pub(super) fn evaluate(
 ) -> Evaluation {
     let spec = live.started;
     let Some(check) = spec.check(&record.node) else {
-        return Evaluation::failed("invalid", "check needs exactly one runner");
+        return Evaluation::failed(None, "check needs exactly one runner");
     };
     let run = match check.kind() {
         Some(Kind::Test(invocation)) => {
             return evaluate_test(state, paths, live, record, invocation);
         }
         Some(Kind::Condition(_)) => {
-            let mut result = Evaluation::failed("invalid", "condition evaluation interrupted");
+            let mut result = Evaluation::failed(None, "condition evaluation interrupted");
             result.object = condition::evaluate(state, check, record);
             return result;
         }
         Some(Kind::Sleep(_)) => {
-            let mut result = Evaluation::failed("invalid", "sleep evaluation interrupted");
+            let mut result = Evaluation::failed(None, "sleep evaluation interrupted");
             result.object =
                 condition_now(state, check, record, record.entered_at).map(|(object, _)| object);
             return result;
@@ -169,17 +172,17 @@ pub(super) fn evaluate(
         Some(Kind::Script(invocation)) => invocation,
         // A judge is an agent the engine launches, never a hosted evaluation.
         Some(Kind::Judge(_) | Kind::Command(_) | Kind::Agent(_) | Kind::Message(_)) | None => {
-            return Evaluation::failed("invalid", "check needs exactly one runner");
+            return Evaluation::failed(None, "check needs exactly one runner");
         }
     };
-    let mut result = Evaluation::failed("died", "evaluation interrupted");
+    let mut result = Evaluation::failed(Some(Cause::Died), "evaluation interrupted");
     // Evaluation follows a recorded live attempt.
     let attempt = record.attempt.as_ref().expect("prepared hosted evaluation");
     let log = paths.check_log(attempt.seq);
     let mut stderr = match std::fs::File::create(&log) {
         Ok(file) => file,
         Err(error) => {
-            return Evaluation::failed("died", &format!("{}: {error}", log.display()));
+            return Evaluation::failed(Some(Cause::Died), &format!("{}: {error}", log.display()));
         }
     };
     result.detail = json!({"log": log});
@@ -246,7 +249,7 @@ pub(super) fn evaluate(
             } else if !output.status.success() {
                 Err(exit_failure(label, output.status))
             } else {
-                result.failure = "invalid";
+                result.failure = Some(Cause::Invalid);
                 serde_json::from_slice(&output.stdout)
                     .map_err(|e| format!("invalid check stdout: {e}"))
             };
@@ -313,7 +316,7 @@ fn evaluate_test(
     record: &RunRecord,
     invocation: &Invocation,
 ) -> Evaluation {
-    let mut result = Evaluation::failed("invalid", "test evaluation interrupted");
+    let mut result = Evaluation::failed(None, "test evaluation interrupted");
     let mut logged = None;
     result.object = (|| {
         let mut digests = BTreeMap::new();

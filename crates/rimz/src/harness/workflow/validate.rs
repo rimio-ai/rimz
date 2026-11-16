@@ -423,18 +423,8 @@ pub(super) fn validate_spec(
             if row.agent.is_some() {
                 let message = if row.kind == "agent" {
                     "auto-continue is off; a step paused on a provider limit waits for you"
-                } else if row
-                    .agent
-                    .as_deref()
-                    .and_then(|agent| {
-                        crate::harness::spec::resolve_profile(agent, &definitions.agent_profiles)
-                            .ok()
-                    })
-                    .is_some_and(|profile| profile.kind.as_str() == "codex")
-                {
-                    "auto-continue is off; a failed Codex judge retries once, then fails invalid"
                 } else {
-                    "auto-continue is off; a provider limit mid-attempt ends the attempt as limited"
+                    "auto-continue is off; a judge paused on a provider limit waits for you"
                 };
                 let path = format!("{}.{}", row.kind, row.node);
                 report.warnings.push(issue(&path, message));
