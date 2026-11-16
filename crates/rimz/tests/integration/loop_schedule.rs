@@ -4844,16 +4844,12 @@ fn loop_enable_disable_pause_workflow() {
         "{timed}"
     );
     assert!(loop_ok(&env, &["loop", "show", "probe"]).contains("· paused"));
+    // Both fires are quiet, so only the quiet summary's run tells this fire's report from the
+    // first one's; until it lands, the report's settle can still rewrite the task record.
+    let mark = run_mark(&env, "probe");
     let fired = loop_ok(&env, &["loop", "fire", "probe"]);
     assert!(fired.contains("task is paused; firing anyway") && fired.contains("launched"));
-    wait_for_loop_report_after(
-        &env,
-        "probe",
-        RunMark {
-            rows: 2,
-            quiet: None,
-        },
-    );
+    wait_for_loop_report_after(&env, "probe", mark);
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("enabled"));
     assert!(!loop_ok(&env, &["loop", "list"]).contains("paused, resumes"));
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("already enabled"));
