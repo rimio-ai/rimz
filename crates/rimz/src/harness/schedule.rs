@@ -41,6 +41,7 @@ mod launch;
 pub mod launches;
 pub mod pending;
 pub(crate) mod probe;
+pub mod run_control;
 mod run_lock;
 pub mod run_log;
 pub mod runner;

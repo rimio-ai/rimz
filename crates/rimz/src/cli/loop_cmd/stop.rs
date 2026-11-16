@@ -3,7 +3,7 @@
 
 use super::*;
 use rimz::harness::schedule::launches::Launch;
-use rimz::harness::schedule::runner::StopOutcome;
+use rimz::harness::schedule::run_control::StopOutcome;
 
 pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
     let catalog = task_catalog(globals)?;

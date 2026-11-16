@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::disk::paths::logs_dir;
 use crate::harness::schedule::arming;
 use crate::harness::schedule::catalog::LoadedTask;
-use crate::harness::schedule::runner::RunLockInfo;
+use crate::harness::schedule::run_control::RunLockInfo;
 use crate::harness::schedule::strikes;
 use crate::harness::signal::WatchVerdict;
 use crate::ids::{FireId, MessageId, TaskId};

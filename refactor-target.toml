@@ -2257,7 +2257,7 @@ path = "crates/rimz/src/harness"
 # hook_drain::DrainerLease::{prepare_handoff, handover} share exec socket mechanics with the CLI (+1).
 # SingleResumeOptions, ResumeLaunchFacts, and plan_recorded_resume serve the single-session CLI (+3).
 # schedule::backlog's reader/schema and TaskFire::{take_backlog, release_run_lock} cross the CLI boundary (+9).
-# runner::discard_backlog lets the CLI drop an unrunnable task's triggers before constructing a fire (+1).
+# run_control::discard_backlog lets the CLI drop an unrunnable task's triggers before constructing a fire (+1).
 # check_run::CheckOutcome::terminated carries SIGTERM cancellation to supervised verify (+1).
 # runner::TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
 # check_run::cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
@@ -5981,15 +5981,15 @@ allowed-dependencies = [
 # The hidden runner accepts typed condition evidence alongside signal evidence.
 # The add-time window resolver and its refusals serve both `loop add` paths (+2).
 # `--after-reset` resolves its instant here for both `loop add` paths (+2).
-# `InFlightRun` carries the held lock's holder and run record to `loop show`/`logs` (+1).
+# `run_control` now owns `InFlightRun`, which carries the held lock's holder and run record to `loop show`/`logs`.
 # A task's account pin is a `LaunchLogin`, which `task_login::task_login` resolves for the runner and `loop add`.
 # Fan-out supplies its already-resolved marker checkout separately from task config.
 # A deduping task's run creation records its checkout in the workflow launch memory.
-# `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+3).
+# `run_control` now owns `RunLocks`, which lists a root's run locks once for `loop list`/`watch`.
 # The CLI hears hold reasons and reports a resident launch through the fire (+2).
 # `harness::signal` now owns signal_subject, the delivered headline the events list shares.
 # TaskFire::take_backlog and TaskFire::release_run_lock coordinate CLI drain gates and process exit (+2).
-# discard_backlog lets the CLI drop an unrunnable task's triggers before constructing a fire (+1).
+# `run_control` now owns discard_backlog, which lets the CLI drop an unrunnable task's triggers before constructing a fire.
 # TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
 # TaskFire::finish_record holds the `check_run::CheckSignalGuard` through terminal recording, with no accessor.
 # `check_run` now owns CheckOutcome, its accessors and `cancel_run_on_sigterm`, which this file exported.
@@ -6453,7 +6453,7 @@ reason = "A loop fire owns the action driver's SIGTERM guard across CLI cleanup 
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::runner::discard_backlog"
+key = "harness::schedule::run_control::discard_backlog"
 reason = "A drain whose task is missing or invalid discards its waiting triggers through the private locked writer."
 
 [[verdict]]
@@ -7433,7 +7433,7 @@ reason = "Uses the canonical live renderer when a peer exists, but preserves a r
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::runner::RunLockInfo"
+key = "harness::schedule::run_control::RunLockInfo"
 reason = "Read by inference through lock rendering in the binary and returned by signal::watcher_info; narrowing breaks the public interface (pass 14)."
 
 [[verdict]]

@@ -1,6 +1,12 @@
-//! The private-home re-exec the schedule's unit tests share.
+//! The private-home re-exec and the fire mark fixture the schedule's unit tests share.
 
 use std::process::Command;
+
+use jiff::Timestamp;
+
+use super::task_record::{self, FireMark};
+use crate::config::LaunchKind;
+use crate::ids::FireId;
 
 /// Runs test `name` again in a child process with private homes, for a test that writes the
 /// machine's loop state (a created run, the task record): every test process shares the
@@ -45,4 +51,24 @@ pub(super) fn reexec_with_private_homes(name: &str) -> bool {
         String::from_utf8_lossy(&output.stderr),
     );
     true
+}
+
+pub(super) fn dead_mark(fire: FireId, child: bool) -> FireMark {
+    FireMark {
+        fire,
+        at: Timestamp::now(),
+        booked_by: Vec::new(),
+        once: false,
+        run: None,
+        scope: crate::store::workflow::ScopeKind::Worktree,
+        result: None,
+        kind: Some(LaunchKind::Agent),
+        target: None,
+        manual: false,
+        opener: None,
+        child: child.then_some(task_record::ProcessMark {
+            pid: 1,
+            start: None,
+        }),
+    }
 }
