@@ -562,10 +562,14 @@ fn loop_task_env(record: &RunRecord) -> Vec<(String, String)> {
         crate::workspace::ENV_WORKTREE_PATH.to_owned(),
         record.scope.path.display().to_string(),
     ));
-    if let Some(trigger) = record.prompt.clone().filter(|text| !text.is_empty()) {
+    if let Some(evidence) = record
+        .fire
+        .as_ref()
+        .and_then(crate::store::workflow::RunFire::evidence)
+    {
         env.push((
             crate::harness::loop_task::LOOP_TRIGGER_ENV.to_owned(),
-            trigger,
+            evidence.to_owned(),
         ));
     }
     if let Some(fire) = record.fire.as_ref()

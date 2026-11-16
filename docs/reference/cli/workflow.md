@@ -244,7 +244,7 @@ An agent step requires `prompt-file` and `lifecycle`. A missing `lifecycle`, or 
 
 The layout opens in an unfocused new tab titled `run <leader kind>`. Every cell is pinned to the run and gets the workflow environment. Only the leader gets the composed prompt and owns the [supervised run](../../guide/scripting.md#what-a-run-does-on-your-machine). The leader's reporting hooks must be installed and trusted, its program on `PATH`, and its account must trust the checkout. An unset leader permission mode defaults to `auto`. Companions use the ordinary layout checks: an undecided folder warns, while a saved-untrusted folder or untrusted hooks refuse the launch. The room's turn, room, and account budgets apply to every cell. Attempt cost counts the leader only, and companion spend appears on their cards and in stats.
 
-The leader's prompt is the prompt file, then `signs/<step>.md` when that file exists, then the run's `--prompt`. RimZ does not expand variables in it.
+The leader's prompt is the prompt file, then `signs/<step>.md` when that file exists, then the run's `--prompt`, then, in a run a loop task's fire started, the fire's evidence line (the `RIMZ_LOOP_TRIGGER` its commands read) when the fire carried one. RimZ does not expand variables in it.
 
 #### The launch reminder
 
@@ -344,7 +344,7 @@ An agent step does not start until its admission passes, in this order: its usag
 
 ### Command steps
 
-A command step runs `run` or `shell` in the checkout, in a session and process group of its own with no controlling terminal, with stdin closed, the room's workspace environment, and the [workflow environment](#environment). Both output streams go to `work/<seq>.step.log`. It opens no pane, waits for no occupant or capacity, and takes no prompt: signs and `--prompt` compose only agent prompts and message-step messages, and a command reads `context.json` instead.
+A command step runs `run` or `shell` in the checkout, in a session and process group of its own with no controlling terminal, with stdin closed, the room's workspace environment, and the [workflow environment](#environment). Both output streams go to `work/<seq>.step.log`. It opens no pane, waits for no occupant or capacity, and takes no prompt: signs, `--prompt`, and a loop fire's evidence line compose only agent prompts and message-step messages, and a command reads `context.json` and `RIMZ_LOOP_TRIGGER` instead.
 
 On a `command`, `test`, or `script`:
 
@@ -369,7 +369,7 @@ A child that exited on its own keeps its exit outcome even if a bound fell due b
 
 A message step's `message` is an agent address, `@<handle>` or `@<handle>#<channel>`. `@user`, `@me`, a bare name, and a pane id refuse at `message.<name>.message`. `prompt-file` is optional and confined. A message never reads occupancy, windows, capacity, or the start throttle.
 
-Each visit composes a header line naming the workflow, step, and run, followed by the prompt file, signs, and run prompt, as an agent step's prompt is composed. Without any of them the message is the header alone. It resolves the address as `rimz message` does, from the run's checkout among living agents, and queues one automated `Type: WAIT` message from `@rimz` at gate `done`, sent at once to a resting agent. It records `ended` with the target's handle and follows `then` once queued, whether the agent is mid-turn or resting.
+Each visit composes a header line naming the workflow, step, and run, followed by the prompt file, signs, run prompt, and the loop fire's evidence line, as an agent step's prompt is composed. Without any of them the message is the header alone. It resolves the address as `rimz message` does, from the run's checkout among living agents, and queues one automated `Type: WAIT` message from `@rimz` at gate `done`, sent at once to a resting agent. It records `ended` with the target's handle and follows `then` once queued, whether the agent is mid-turn or resting.
 
 - No single match, or a prompt that cannot be composed, records `died` with the reason and fails the step with cause `undelivered`.
 - `session = "<agent session id>"` pins the step to one agent. A later session of that agent, after a restart or a molt to any provider, passes. When the address resolves to another agent (a handle since reused), the visit records `died` with `<address> is session <id>, not the pinned session <pin>` and fails with cause `undelivered`. A blank `session` refuses.

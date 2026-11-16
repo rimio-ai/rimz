@@ -319,6 +319,29 @@ fn reread_prompt_file_type_error_refuses_without_panicking() {
 }
 
 #[test]
+fn a_loop_fires_evidence_ends_the_agent_prompt_after_the_run_prompt() {
+    let (_dir, state, mut record) = setup(STEP);
+    record.task = Some("nightly".into());
+    record.fire = Some(records::RunFire::Scheduled {
+        task: "nightly".into(),
+        trigger: None,
+        evidence: Some("Rule `nightly` fired here. deploy.done".into()),
+        booked_by: Vec::new(),
+    });
+    update(&state, &record);
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        host.launched.borrow()[0].prompt,
+        "Build it\n\nRun request\n\nRule `nightly` fired here. deploy.done"
+    );
+    assert_eq!(
+        live.attempt.unwrap().digests["evidence"],
+        super::super::script::digest(b"Rule `nightly` fired here. deploy.done")
+    );
+}
+
+#[test]
 fn launch_counts_keyed_visits_and_composes_live_signs() {
     let (dir, state, mut record) = setup(STEP);
     record.key = Some(Key::Integer(7));

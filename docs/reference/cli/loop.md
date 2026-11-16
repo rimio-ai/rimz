@@ -341,7 +341,7 @@ A dequeued pull request never turns its own checks red, so `ci.failed` stays sil
 
 ### The trigger's evidence
 
-A fire hands its command one line of evidence, `RIMZ_LOOP_TRIGGER`, and a `rimz` launch in the command appends the same line to its prompt. The line holds the rule, then the signal's subject and fields joined by ` · `. A `smoke` task on `deploy.finished`, fired by `rimz events emit deploy.finished --json '{"env":"prod"}'`, reads:
+A fire hands its command one line of evidence, `RIMZ_LOOP_TRIGGER`, and a `rimz` launch in the command appends the same line to its prompt. A workflow task's fire hands the line to its run: each command and check of the run reads it as `RIMZ_LOOP_TRIGGER`, and each agent or message step gets it at the end of its prompt or message, after any `--prompt` the task passes. The line holds the rule, then the signal's subject and fields joined by ` · `. A `smoke` task on `deploy.finished`, fired by `rimz events emit deploy.finished --json '{"env":"prod"}'`, reads:
 
 ```text
 Rule `smoke` fired here. deploy.finished · env: prod

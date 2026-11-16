@@ -20,7 +20,8 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
         .expect("a step brief is composed at the current step");
     let mut origin = origin(record);
     origin.push_str(" Your prompt is the step's fixed text, not a message someone just typed.");
-    if record.prompt.is_some() {
+    let evidence = record.fire.as_ref().and_then(RunFire::evidence);
+    if record.prompt.is_some() || evidence.is_some() {
         origin.push_str(if record.fire.is_some() {
             " The loop fire's prompt ends it: the task's prompt, what fired it, or both."
         } else {

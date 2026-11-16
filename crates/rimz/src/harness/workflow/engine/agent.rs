@@ -50,6 +50,14 @@ pub(super) fn compose(
         digests.insert("prompt".into(), script::digest(prompt.as_bytes()));
         parts.push(prompt.clone());
     }
+    if let Some(evidence) = record
+        .fire
+        .as_ref()
+        .and_then(crate::store::workflow::RunFire::evidence)
+    {
+        digests.insert("evidence".into(), script::digest(evidence.as_bytes()));
+        parts.push(evidence.to_owned());
+    }
     Ok(parts.join("\n\n"))
 }
 
