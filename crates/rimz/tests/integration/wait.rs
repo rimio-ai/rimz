@@ -3537,8 +3537,7 @@ fn wait_receipts_name_the_clock_time_the_window_and_the_condition_reading() {
     );
     assert_eq!(
         forge[1],
-        "  now: unknown · pr: unknown · pr and ci are read by the room's sidebar, which is not \
-         running"
+        "  now: unknown · pr: readings paused (room closed)"
     );
     publish_claude_5h(&env, 92);
     let window = first_lines(&["--when", "window.5h.left >= 40"]);
@@ -3759,6 +3758,168 @@ fn forge_wait_fires_with_its_label_and_pr_reading() {
     );
     assert!(lines.contains(&"pr: merged"), "{}", wake.text);
     wait_for_no_wait_instances(&env);
+}
+
+/// A forge wait refuses at arming only when the room's reading already says its checkout has
+/// no supported forge, and once armed it says why its key is unread wherever it is shown.
+#[test]
+fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
+    const NO_FORGE: &str = "no supported forge for this checkout";
+    const NO_FORGE_FIX: &str = "RimZ reads a git checkout whose `origin` remote is on github.com (through `gh`) or on a host whose name contains gitea, forgejo or codeberg (through `tea`), so wait on something else here";
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let runtime = env.runtime_paths();
+    let root = env.project_root.to_string_lossy().to_string();
+    let cache = runtime.lane_path("pr-state.json");
+    std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    let publish = |repo: &str, detached: bool| {
+        std::fs::write(
+            &cache,
+            serde_json::json!({
+                "branch_ci": {},
+                "path_repos": {root.clone(): repo},
+                "repos": {
+                    "repo": {"ok": true, "refreshed_at_ms": 1_000},
+                    "<unsupported>": {"ok": true, "refreshed_at_ms": 1_000},
+                },
+                "states": {root.clone(): {"state": "open"}},
+                "detached": if detached { vec![root.clone()] } else { Vec::new() },
+            })
+            .to_string(),
+        )
+        .unwrap();
+    };
+    let now_line = |receipt: &str| receipt.lines().nth(1).unwrap_or_default().to_owned();
+    let listed = || -> Vec<serde_json::Value> {
+        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap()
+    };
+    // The clock pass's first sight of each wait, which a condition reads from.
+    let sight = || {
+        let stamps = runtime.lane_path("loop-fire.json");
+        std::fs::create_dir_all(stamps.parent().unwrap()).unwrap();
+        let names = listed()
+            .iter()
+            .map(|row| {
+                (
+                    row["name"].as_str().unwrap().to_owned(),
+                    "1970-01-01T00:00:00Z",
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        std::fs::write(stamps, serde_json::to_vec(&names).unwrap()).unwrap();
+    };
+    let loops = || -> (String, serde_json::Value) {
+        sight();
+        let text = env.rimz().args(["loop", "list", "--all"]).output().unwrap();
+        let json = env
+            .rimz()
+            .args(["loop", "list", "--json"])
+            .output()
+            .unwrap();
+        (
+            String::from_utf8(text.stdout).unwrap(),
+            serde_json::from_slice(&json.stdout).unwrap(),
+        )
+    };
+    let attention = |json: &serde_json::Value| -> Vec<serde_json::Value> {
+        json["rooms"][0]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|task| task["attention"].clone())
+            .collect()
+    };
+
+    // With the room closed nothing is known, so it arms and says why in the room-closed words.
+    let closed = wait_ok(&env, &["wait", "--when", "pr=merged"]);
+    assert_eq!(
+        now_line(&closed),
+        "  now: unknown · pr: readings paused (room closed)"
+    );
+    wait_ok(&env, &["wait", "cancel", "--all"]);
+
+    crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "no-forge",
+    );
+    // A scope never probed arms as well.
+    let unprobed = wait_ok(&env, &["wait", "--when", "pr=merged"]);
+    assert_eq!(now_line(&unprobed), "  now: unknown · pr: not checked yet");
+
+    // The next probe finds no supported forge: the armed wait says so and needs you.
+    publish("<unsupported>", false);
+    let rows = listed();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["unread"], serde_json::json!({"pr": NO_FORGE}));
+    let text = wait_ok(&env, &["wait", "list"]);
+    assert!(
+        text.contains(&format!("waiting · pr: {NO_FORGE}")),
+        "{text}"
+    );
+    let (text, json) = loops();
+    assert!(text.contains("· 1 need you"), "{text}");
+    assert!(!text.contains("all healthy"), "{text}");
+    assert_eq!(attention(&json), [serde_json::json!("no_forge")], "{json}");
+
+    // A known no-forge reading refuses before anything is stored.
+    let refused = agent_wait(&env)
+        .args(["wait", "--when", "ci=passed"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("`ci` cannot be read in ")
+            && stderr.contains(&format!("{NO_FORGE}; {NO_FORGE_FIX}")),
+        "{stderr}"
+    );
+    assert_eq!(listed().len(), 1, "the refused wait stored nothing");
+
+    // The reading comes back: the reason and the attention are gone.
+    publish("repo", false);
+    let rows = listed();
+    assert!(rows[0].get("unread").is_none(), "{rows:?}");
+    let (text, json) = loops();
+    assert!(text.contains("all healthy"), "{text}");
+    assert_eq!(attention(&json), [serde_json::Value::Null], "{json}");
+
+    // A detached HEAD reads unknown under its own reason, arms, and needs nothing.
+    publish("<unsupported>", true);
+    let detached = wait_ok(&env, &["wait", "--when", "ci=passed"]);
+    assert_eq!(
+        now_line(&detached),
+        "  now: unknown · ci: the checkout's HEAD is detached, so it has no branch to read"
+    );
+    let (text, json) = loops();
+    assert!(text.contains("all healthy"), "{text}");
+    assert_eq!(
+        attention(&json),
+        [serde_json::Value::Null, serde_json::Value::Null],
+        "{json}"
+    );
+
+    // A fresh probe that leaves a key unread (an open PR whose review the forge has not
+    // reported) says why on every surface, as `loop show` does.
+    const UNREPORTED: &str = "not reported for this checkout's open PR";
+    publish("repo", false);
+    let review = wait_ok(&env, &["wait", "--when", "pr.review=approved"]);
+    assert_eq!(
+        now_line(&review),
+        format!("  now: unknown · pr.review: {UNREPORTED}")
+    );
+    let unread = serde_json::json!({"pr.review": UNREPORTED});
+    let rows = listed();
+    let row = rows
+        .iter()
+        .find(|row| row["trigger"].as_str().unwrap().contains("pr.review"))
+        .unwrap();
+    assert_eq!(row["unread"], unread, "{rows:?}");
+    let (_, json) = loops();
+    let tasks = json["rooms"][0]["tasks"].as_array().unwrap();
+    assert!(tasks.iter().any(|task| task["unread"] == unread), "{json}");
 }
 
 #[test]

@@ -148,6 +148,16 @@ fn unread_forge_reasons_follow_probe_status_before_empty_rows() {
         source.unread_reason("pr", scope),
         Some(UnreadReason::NoForge)
     );
+    // A detached HEAD has no forge target either, and says so rather than "no forge".
+    source.0.detached.insert("/checkout".into());
+    for key in ["pr", "ci[main]"] {
+        assert_eq!(
+            source.unread_reason(key, scope),
+            Some(UnreadReason::Detached),
+            "{key}"
+        );
+    }
+    source.0.detached.clear();
     source.0.repos.insert(
         "<unsupported>".into(),
         RepoProbe {

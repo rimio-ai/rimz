@@ -107,6 +107,11 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         let stages = rimz::harness::when::condition::condition_stages(&ctx.workspace.project_root)?;
         let expr = WhenExpr::parse_with_stages(&args.when, Some(&stages))
             .map_err(|error| anyhow!("--when: {error}"))?;
+        super::super::wake_view::refuse_unreadable_forge(
+            &ctx.workspace.project_root,
+            &ctx.workspace.worktree_root,
+            &expr,
+        )?;
         let (runtime, login) = room_login()?;
         let provider = window_condition_provider(
             &args.when,
@@ -294,13 +299,7 @@ fn write_window(out: &mut impl Write, reset: &AfterReset) -> Result<()> {
 
 fn write_condition_now(out: &mut impl Write, entry: &TaskEntry, expr: &WhenExpr) -> Result<()> {
     let now = super::super::wake_view::condition_now(entry, expr, None);
-    let sidebar =
-        if expr.reads_forge() && !super::super::wake_view::room_open(&entry.resolved_root()) {
-            " · pr and ci are read by the room's sidebar, which is not running"
-        } else {
-            ""
-        };
-    writeln!(out, "  now: {now}{sidebar}")?;
+    writeln!(out, "  now: {now}")?;
     Ok(())
 }
 

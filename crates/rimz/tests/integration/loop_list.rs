@@ -3086,6 +3086,150 @@ fn closed_pull_requests_and_fired_gone_checkouts_read_alike_in_list_and_reader()
     assert!(!text.contains("fired-checkout is gone"), "{text}");
 }
 
+/// A loop condition on the forge refuses at `loop add` only when the room's reading already
+/// says its checkout has no supported forge; an armed one then needs you, with the reason, in
+/// `loop list` and the library reader alike, and a detached HEAD needs nothing.
+#[cfg(target_os = "linux")]
+#[test]
+fn forge_conditions_refuse_and_need_you_without_a_supported_forge() {
+    const NO_FORGE: &str = "no supported forge for this checkout";
+    const NO_FORGE_FIX: &str = "RimZ reads a git checkout whose `origin` remote is on github.com (through `gh`) or on a host whose name contains gitea, forgejo or codeberg (through `tea`), so wait on something else here";
+    let env = Env::new();
+    env.record(&env.project_root);
+    let state = env.state_path_for(&env.project_root);
+    let runtime = env.runtime_paths();
+    let root = env.project_root.to_string_lossy().to_string();
+    let publish = |detached: bool| {
+        let cache = runtime.lane_path("pr-state.json");
+        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        std::fs::write(
+            cache,
+            serde_json::to_vec(&json!({
+                "branch_ci": {},
+                "path_repos": {&root: "<unsupported>"},
+                "repos": {"<unsupported>": {"ok": true, "refreshed_at_ms": 1_000}},
+                "detached": if detached { vec![root.clone()] } else { Vec::new() },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    };
+    let add = |name: &str, when: &str| {
+        env.rimz()
+            .args(["loop", "add", name, "--when", when, "--", "true"])
+            .output()
+            .unwrap()
+    };
+    // The clock pass's first sight, which a condition reads from.
+    let sight = || {
+        let stamps = runtime.lane_path("loop-fire.json");
+        std::fs::create_dir_all(stamps.parent().unwrap()).unwrap();
+        let names = ["closed-room", "unprobed", "detached", "fan-out"]
+            .map(|name| (name, Timestamp::UNIX_EPOCH))
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        std::fs::write(stamps, serde_json::to_vec(&names).unwrap()).unwrap();
+    };
+    // Closed room, then an open room whose scope was never probed: both arm.
+    assert!(add("closed-room", "pr=merged").status.success());
+    crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "no-forge",
+    );
+    assert!(add("unprobed", "pr=merged || ci=passed").status.success());
+    // A fan-out task reads its worktrees, never the root, so the root's reading is not its.
+    let fan_out = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "fan-out",
+            "--each-worktree",
+            "--when",
+            "pr=open",
+        ])
+        .args(["--repeat", "--", "true"])
+        .output()
+        .unwrap();
+    assert!(
+        fan_out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fan_out.stderr)
+    );
+    let fan_out_row = || {
+        sight();
+        let (_, listed) = json_tasks(&loop_ok(&env, &["loop", "list", "--json"]));
+        listed["fan-out"].clone()
+    };
+    let unprobed_fan_out = fan_out_row();
+
+    publish(false);
+    let refused = add("refused", "ci=passed");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("`ci` cannot be read in ")
+            && stderr.contains(&format!("{NO_FORGE}; {NO_FORGE_FIX}")),
+        "{stderr}"
+    );
+
+    sight();
+    let (_, listed) = json_tasks(&loop_ok(&env, &["loop", "list", "--json"]));
+    assert!(!listed.contains_key("refused"), "nothing was stored");
+    let text = loop_ok(&env, &["loop", "list"]);
+    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let read = |name: &str| {
+        rimz::harness::schedule::attention::read_room(
+            &env.project_root,
+            &state,
+            &runtime,
+            rimz::harness::schedule::attention::ReadContext {
+                open: true,
+                stats: &BTreeMap::new(),
+                now: &now,
+            },
+        )
+        .remove(name)
+        .expect("the reader finds the task")
+        .attention
+        .map(|(cause, _)| serde_json::to_value(cause).unwrap())
+    };
+    for (name, key) in [("closed-room", "pr"), ("unprobed", "pr")] {
+        let row = &listed[name];
+        assert_eq!(
+            (row["attention"].as_str(), row["section"].as_str()),
+            (Some("no_forge"), Some("needs_you")),
+            "{name}: {row}"
+        );
+        assert_eq!(row["unread"][key], NO_FORGE, "{name}: {row}");
+        assert_eq!(read(name), Some(json!("no_forge")), "{name}: reader agrees");
+    }
+    assert!(text.contains(&format!("pr: {NO_FORGE}")), "{text}");
+    for row in [unprobed_fan_out, fan_out_row()] {
+        assert!(
+            row.get("unread").is_none() && row.get("attention").is_none(),
+            "a fan-out row carries no root reading: {row}"
+        );
+    }
+
+    publish(true);
+    assert!(add("detached", "ci=passed").status.success());
+    let (_, listed) = json_tasks(&loop_ok(&env, &["loop", "list", "--json"]));
+    for name in ["closed-room", "unprobed", "detached"] {
+        assert!(
+            listed[name].get("attention").is_none(),
+            "{name}: {listed:?}"
+        );
+        assert_eq!(read(name), None, "{name}");
+    }
+    assert_eq!(
+        listed["detached"]["unread"]["ci"],
+        "the checkout's HEAD is detached, so it has no branch to read"
+    );
+}
+
 /// The booking chain `loop add` stored for `name`, or `None` with no row.
 fn stored_chain(env: &Env, name: &str) -> Option<Vec<String>> {
     let config: LoopConfig =

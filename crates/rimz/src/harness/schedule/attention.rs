@@ -39,6 +39,7 @@ pub enum Attention {
     Strikes,
     Failing,
     PrClosed,
+    NoForge,
     Held,
     Blocked,
     Invalid,
@@ -103,7 +104,8 @@ pub struct TaskFacts<'a> {
 
 /// The cause that needs you and its reason, by priority: a hold that needs a fix, an
 /// unfired task's gone checkout, a blocked project, an invalid row, strikes, failing, a
-/// waiting one-off's pull request closed without merging, a lost watcher.
+/// waiting one-off's pull request closed without merging, a live condition key whose
+/// checkout has no supported forge, a lost watcher.
 pub fn decide(facts: &Facts<'_>, now: Timestamp) -> Option<(Attention, String)> {
     if let Some(hold) = facts
         .holds
@@ -157,6 +159,10 @@ pub fn decide(facts: &Facts<'_>, now: Timestamp) -> Option<(Attention, String)> 
     if let Some(key) = closed_pr(row) {
         return Some((Attention::PrClosed, format!("{key} closed without merging")));
     }
+    if let Some(key) = no_forge(row) {
+        let reason = when::condition::unread_reason(Some(when::UnreadReason::NoForge), None);
+        return Some((Attention::NoForge, format!("{key}: {reason}")));
+    }
     if super::watch_lost(task.entry(), row.watcher_alive, now) {
         let wake = task
             .entry()
@@ -192,6 +198,19 @@ fn closed_pr(row: &TaskFacts<'_>) -> Option<String> {
         return None;
     };
     expr.closed_pr_term(&readings).map(|term| term.key.clone())
+}
+
+/// The condition key a live, unfired task cannot read because its checkout has no
+/// supported forge. A closed room reads no forge, so it never names one.
+fn no_forge(row: &TaskFacts<'_>) -> Option<String> {
+    if row.fired || row.disabled {
+        return None;
+    }
+    let timing = row.timing?;
+    if timing.arm_state() != ArmState::Live {
+        return None;
+    }
+    timing.no_forge_key().map(ToOwned::to_owned)
 }
 
 /// Whether a parked run takes the row over: parked replaces only a lost watcher.
@@ -399,11 +418,33 @@ impl<'a> RoomReadings<'a> {
                 }
             }
         }
-        (
-            timing.with_condition(&verdict, self.states.get(name), now),
-            blocking,
-            unmet,
-        )
+        // A fan-out task reads its worktrees, never `scope`, so the root's reasons are not its.
+        let unread = if entry.each_worktree {
+            BTreeMap::new()
+        } else {
+            verdict.unread_reasons(expr, scope, self.source.as_ref(), Some(now))
+        };
+        let no_forge = self.no_forge(expr, &unread, scope);
+        let timing = timing
+            .with_condition(&verdict, self.states.get(name), now)
+            .with_unread(unread, no_forge);
+        (timing, blocking, unmet)
+    }
+
+    /// The first unread key, in the condition's order, whose probe says its checkout has no
+    /// supported forge.
+    fn no_forge(
+        &self,
+        expr: &WhenExpr,
+        unread: &BTreeMap<String, String>,
+        scope: &Path,
+    ) -> Option<String> {
+        let source = self.source.as_ref()?;
+        expr.terms()
+            .map(|term| &term.key)
+            .filter(|key| unread.contains_key(*key))
+            .find(|key| source.probe_unread_reason(key, scope) == Some(when::UnreadReason::NoForge))
+            .cloned()
     }
 }
 

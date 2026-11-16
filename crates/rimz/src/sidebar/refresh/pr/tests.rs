@@ -1286,8 +1286,13 @@ fn definitive_discovery_absences_stay_unsupported() {
         &mut super::super::ProducerRefreshState::default(),
     );
     assert!(discovered.targets.is_empty() && discovered.retryable.is_empty());
+    assert_eq!(
+        discovered.detached,
+        BTreeSet::from([needed[0].clone()]),
+        "only the detached checkout is marked detached"
+    );
 
-    let cache = reconcile_target_bookkeeping(
+    let mut cache = reconcile_target_bookkeeping(
         PrStateCache::default(),
         &needed,
         &DiffStatsCache::default(),
@@ -1306,6 +1311,12 @@ fn definitive_discovery_absences_stay_unsupported() {
         assert_eq!(cache.path_repos[path], UNSUPPORTED_REPO_KEY);
     }
     assert!(cache.discovery_failures.is_empty());
+    mark_detached(&mut cache, &discovered.detached);
+    assert_eq!(cache.detached, discovered.detached);
+    // A path that leaves detached HEAD, or that no longer maps to no forge, loses the mark.
+    cache.path_repos.insert(needed[0].clone(), "repo".into());
+    mark_detached(&mut cache, &discovered.detached);
+    assert!(cache.detached.is_empty());
 }
 
 #[test]

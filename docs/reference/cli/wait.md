@@ -50,14 +50,14 @@ Each arm mints a name of the form `wait-<adjective>-<noun>`, unique in the works
 
 ```console
 $ rimz wait --in 30m
-armed wait-handy-block: in 30m → @coder#probe
+armed wait-simple-route: in 30m → @coder#probe
 @coder#probe · 1 wait
-  wait-handy-block  pending · fires in 30m  once at 2026-11-15 04:32
+  wait-simple-route  pending · fires in 30m  once at 2026-11-16 00:19
 $ rimz wait --run 'cargo test'
-armed wait-civil-yard: watch: cargo test → @coder#probe
+armed wait-choice-cipher: watch: cargo test → @coder#probe
 @coder#probe · 2 waits
-  wait-civil-yard   starting                cargo test
-  wait-handy-block  pending · fires in 30m  once at 2026-11-15 04:32
+  wait-choice-cipher  starting                cargo test
+  wait-simple-route   pending · fires in 30m  once at 2026-11-16 00:19
 ```
 
 A new watch usually lists as `starting`, because its detached watcher has not yet taken its lock. The trigger text in the receipt is one of these:
@@ -98,6 +98,7 @@ Each of these prints `error: ` and the message, exits 1, and arms nothing. An in
 | `<kind> has no <span> window` | `--after-reset`, or a `window.*` term, when the account's reading has no window of that span. |
 | `<kind> is not enforcing its <span> window, so it has no reset to wait for; use --after-reset <other>` | `--after-reset` on a window the provider has lifted. |
 | `--when: clause <N>, position <M>: <fix>` | A `--when` expression that does not parse, or names a team stage no team defines. |
+| ``--when: `<key>` cannot be read in <checkout>: no supported forge for this checkout; RimZ reads a git checkout whose `origin` remote is on github.com (through `gh`) or on a host whose name contains gitea, forgejo or codeberg (through `tea`), so wait on something else here`` | A `pr` or `ci` term, when the open room's last reading of your checkout found no supported forge ([state expression](#state-expression---when)). |
 | `<flag> must be greater than zero` | Zero for `--in`, `--check-in`, or `--every`. |
 | `<flag> must be less than 24h` | `24h` or more for `--check-in` or `--every`. |
 | `arming a wait is only available to an agent RimZ can identify; run this command from an agent pane` | Run from a user shell, or from a process RimZ cannot trace to an agent. |
@@ -142,23 +143,27 @@ A timer fires once. RimZ adds the delay to the current time and rounds up to the
 
 The scheduler records the condition's first reading and fires on its next tick when the condition still holds, so a `window.*` or `team.stage` condition true at arm time fires on the second tick. A `pr` or `ci` key also waits for a sidebar probe at or after that first reading, so a pull request merged before the arm fires only after the sidebar probes it again ([forge freshness](./loop.md#forge-freshness)). A `window.*` term reads the room's current account for your provider kind, as `--after-reset` does. It is refused when that window cannot be read or its reading's reset has passed. Unlike `--after-reset`, it accepts a window the provider has lifted and a reading with no reset time.
 
-The receipt's `now:` line gives the current verdict (`true`, `false`, or `unknown`) and each key's reading:
+The receipt's `now:` line gives the condition's state, `waiting` while it reads false, `unknown` while an unread key leaves it undecided, or `due` when it already holds, then each key's reading, or for an unread `pr` or `ci` key the reason it is unread:
 
 ```console
 $ rimz wait --when pr=merged
-armed wait-bold-spark: when pr=merged → @coder#probe
-  now: unknown · pr: unknown
+armed wait-chief-arc: when pr=merged → @coder#probe
+  now: waiting · pr: open
 @coder#probe · 3 waits
-  wait-bold-spark   waiting                 when pr=merged
-  wait-civil-yard   watching 0s             cargo test
-  wait-handy-block  pending · fires in 30m  once at 2026-11-15 04:32
+  wait-chief-arc      waiting                 when pr=merged
+  wait-choice-cipher  watching 0s             cargo test
+  wait-simple-route   pending · fires in 30m  once at 2026-11-16 00:19
 ```
 
-`pr` and `ci` are read by the room's sidebar. With the room closed they read as unread, the wait stays armed until a sidebar reads them true, and the `now:` line says so. For the reason a key stays `unknown` while the room is open (no supported forge, a failing lookup, no pull request yet), run `rimz loop show <wait-name>`, which prints a reason for every missing reading:
+`pr` and `ci` are read by the room's sidebar. With the room closed they read as unread, the wait stays armed until a sidebar reads them true, and the `now:` line says so:
 
 ```text
-  now: unknown · pr: unknown · pr and ci are read by the room's sidebar, which is not running
+  now: unknown · pr: readings paused (room closed)
 ```
+
+While the room is open, the reason names why a key stays unread: `not checked yet`, `no supported forge for this checkout`, `the checkout's HEAD is detached, so it has no branch to read`, a failing lookup, or no pull request yet. `rimz wait list` shows the same reasons on a waiting condition row, and `rimz loop show <wait-name>` prints a reason for every missing reading.
+
+When the room's last reading already says your checkout has no supported forge (the scope is not in a git checkout or its repository is gone, the checkout has no `origin` remote or one RimZ cannot parse, or the `origin` host is neither `github.com` nor a host whose name contains `gitea`, `forgejo`, or `codeberg`; a supported host whose CLI, `gh` or `tea`, is missing or failing reads as a failing lookup instead), `--when` refuses to arm a condition with any `pr` or `ci` term, a term joined by `||` included, since that term can never be read. The error names the key, the checkout, and what RimZ reads: a git checkout whose `origin` remote is on `github.com` (through `gh`) or on a Gitea, Forgejo, or Codeberg host (through `tea`). A checkout the sidebar has not read yet, a detached HEAD, and a closed room arm as before. A wait whose checkout turns out to have no supported forge after it is armed stays armed and needs you in [`rimz loop list`](./loop.md#loop-list).
 
 Bare `pr` reads the pull request of your checkout's branch. In a RimZ worktree it ignores a merged or closed pull request opened more than five minutes before the worktree was created, so a branch name reused from older work does not read as `merged`. The pull request the worktree was created from, and one whose creation time the forge does not give, always count. `pr[<branch>]` has no such guard: it accepts whatever pull request the forge returns for that branch name.
 
@@ -227,9 +232,9 @@ A configuration change does not alter check-ins already armed. Keepalive pings s
 ```console
 $ rimz wait list
 @coder#probe · 3 waits
-  wait-bold-spark   waiting                 when pr=merged
-  wait-civil-yard   watching 0s             cargo test
-  wait-handy-block  pending · fires in 30m  once at 2026-11-15 04:32
+  wait-chief-arc      waiting                 when pr=merged
+  wait-choice-cipher  watching 0s             cargo test
+  wait-simple-route   pending · fires in 30m  once at 2026-11-16 00:19
 ```
 
 The header is `<handle> · N waits`, or `<handle> · no waits`. Each wait you armed is one line with its name, state, and subject, never clipped to the terminal width. Lost watches come first, then watches past their check-in, then the longest elapsed, with names breaking ties. The subject is the PID, command, check, or file, `once at YYYY-MM-DD HH:MM` for a timer, clock time, or window reset, or `when <expression>` for a condition. A label replaces a watch's subject and follows any other subject as ` · <label>`. A worktree suffix (`· in <worktree>`) appears only when the row belongs to a checkout other than the one the command runs in.
@@ -240,7 +245,7 @@ The header is `<handle> · N waits`, or `<handle> · no waits`. Each wait you ar
 | Watcher not started | `starting`, for up to 30 seconds after arming. |
 | Missing watcher after that grace | `lost · armed 41m ago`. The age is from arming, not from when the watcher vanished. |
 | Timer | `pending · fires in 28m`, or `pending` once past its minute. |
-| Clock time, window reset, or condition | `waiting`. |
+| Clock time, window reset, or condition | `waiting`. A condition with an unread `pr` or `ci` key adds each key's reason: `waiting · pr: no supported forge for this checkout`. |
 | Paused | `paused · resumes in 2h`, after [`rimz loop pause`](./loop.md#enable-disable-and-pause) on the wait's name. |
 | Disabled | `disabled`, after [`rimz loop disable`](./loop.md#enable-disable-and-pause) on the wait's name. |
 
@@ -264,6 +269,7 @@ From a user shell, the view is read-only and starts with `<home-relative project
 | `watcher_pid` | Present only while a live watcher holds the row's lock. |
 | `owner` | `self`, `loop:<task>`, or `team:<team instance>`. |
 | `parent` | The target's launched parent's full handle over the current addressable roster, or `null` for a root agent, or a target or parent that is not addressable. |
+| `unread` | A waiting condition's unread `pr` and `ci` keys, each mapped to its reason. Present only when some key is unread. |
 
 The arm and cancel receipts' `pending` arrays are this same list.
 
@@ -276,10 +282,10 @@ When the caller's identity is set but no live session is visible, `list` refuses
 By the time of this cancel, the `cargo test` watch above had finished and retired:
 
 ```console
-$ rimz wait cancel wait-bold-spark
-canceled wait-bold-spark
+$ rimz wait cancel wait-chief-arc
+canceled wait-chief-arc
 @coder#probe · 1 wait
-  wait-handy-block  pending · fires in 29m  once at 2026-11-15 04:32
+  wait-simple-route  pending · fires in 30m  once at 2026-11-16 00:19
 ```
 
 Cancel removes each selected row, then sends SIGTERM to its watcher's process group, which stops a watched command with it. If RimZ cannot write the wait's home-wide state, cancel refuses before it removes the row or stops the watcher. It prints `canceled <name>, ...` and then your list. `--all` that finds no wait you armed leaves out the `canceled` line and exits 0. `--json` prints `{"canceled": [...], "pending": [...]}`, where `pending` holds every remaining delivery, subscriptions included.

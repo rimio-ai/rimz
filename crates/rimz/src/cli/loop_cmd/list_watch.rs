@@ -143,7 +143,8 @@ fn held(row: &TaskRow) -> bool {
 }
 
 /// A row whose clock cannot fire. A closed pull request still waits on its condition,
-/// which a reopen or a merge can meet.
+/// which a reopen or a merge can meet, and a checkout with no supported forge on a remote
+/// that can gain one.
 fn blocked(row: &TaskRow) -> bool {
     let blocked = match row.attention {
         Some(Attention::CheckoutGone | Attention::Blocked | Attention::Invalid) => true,
@@ -151,6 +152,7 @@ fn blocked(row: &TaskRow) -> bool {
             Attention::Strikes
             | Attention::Failing
             | Attention::PrClosed
+            | Attention::NoForge
             | Attention::Held
             | Attention::Parked
             | Attention::Lost,
@@ -408,6 +410,7 @@ fn layout<'a>(tasks: &[&'a TaskRow], now: Timestamp, cols: usize) -> (Columns, V
                 Attention::CheckoutGone
                 | Attention::Strikes
                 | Attention::PrClosed
+                | Attention::NoForge
                 | Attention::Blocked
                 | Attention::Invalid
                 | Attention::Parked

@@ -21,12 +21,19 @@ pub fn condition_stages(
     Ok(stages)
 }
 
+/// Every forge key's reason while the room is closed, on every surface that shows one: no
+/// sidebar reads the forge then.
+pub const ROOM_CLOSED: &str = "readings paused (room closed)";
+
 /// Human-readable explanation shared by loop inspection and workflow condition answers.
 /// Pass a read-time timestamp to include probe ages, or `None` for ageless stored text.
 pub fn unread_reason(reason: Option<UnreadReason>, now: Option<Timestamp>) -> String {
     match reason {
         None | Some(UnreadReason::NotChecked) => "not checked yet".into(),
         Some(UnreadReason::NoForge) => "no supported forge for this checkout".into(),
+        Some(UnreadReason::Detached) => {
+            "the checkout's HEAD is detached, so it has no branch to read".into()
+        }
         Some(UnreadReason::LookupFailing { last_tried }) => {
             let Some(now) = now else {
                 return "forge lookup failing".into();
@@ -82,5 +89,9 @@ mod tests {
             "forge lookup failing, last tried 3m ago"
         );
         assert_eq!(unread_reason(reason, None), "forge lookup failing");
+        assert_eq!(
+            unread_reason(Some(UnreadReason::Detached), None),
+            "the checkout's HEAD is detached, so it has no branch to read"
+        );
     }
 }

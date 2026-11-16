@@ -214,13 +214,15 @@ fn needs_you(
             Attention::CheckoutGone | Attention::PrClosed | Attention::Lost => {
                 format!("{rimz} loop remove {}", names.join(" "))
             }
-            Attention::Strikes | Attention::Failing | Attention::Invalid | Attention::Parked => {
-                names
-                    .iter()
-                    .map(|name| format!("{rimz} loop show {name}"))
-                    .collect::<Vec<_>>()
-                    .join(" · ")
-            }
+            Attention::Strikes
+            | Attention::Failing
+            | Attention::NoForge
+            | Attention::Invalid
+            | Attention::Parked => names
+                .iter()
+                .map(|name| format!("{rimz} loop show {name}"))
+                .collect::<Vec<_>>()
+                .join(" · "),
             Attention::Blocked => format!("{rimz} trust grant"),
             Attention::Held => format!("{rimz} doctor"),
         };
@@ -574,7 +576,7 @@ fn wake_ups(
     current_root: Option<&Path>,
     mux: Option<rimz::ids::MuxName>,
 ) -> Result<()> {
-    use crate::cli::wake_view::{self, WakeRow};
+    use crate::cli::wake_view::{self, RoomSource, WakeRow};
 
     let rows = room
         .tasks
@@ -612,6 +614,7 @@ fn wake_ups(
         .iter()
         .flat_map(|audit| audit.iter())
         .collect::<Vec<_>>();
+    let source = RoomSource::read(&room.root);
     let wakes = rows
         .iter()
         .filter_map(|row| {
@@ -625,6 +628,7 @@ fn wake_ups(
                 row.watcher_pid,
                 snapshot.as_ref(),
                 &agents,
+                &source,
                 now,
             );
             Some((row.you, wake))
@@ -789,6 +793,7 @@ pub(super) fn reason_style(attention: Option<Attention>) -> anstyle::Style {
             | Attention::Strikes
             | Attention::Failing
             | Attention::PrClosed
+            | Attention::NoForge
             | Attention::Invalid
             | Attention::Lost,
         ) => role(StateRole::Failed),

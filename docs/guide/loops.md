@@ -297,7 +297,7 @@ rimz wait --run 'gh run watch --exit-status'
 
 An agent runs these from its own shell, and the wait wakes that agent alone. RimZ refuses a wait from a shell that is not an agent's. A watched command runs in a detached process, and the wake message gives its exit status, the elapsed time, and the path of a file holding its full output. While the agent sleeps, RimZ can send short keepalive pings so the provider's prompt cache is still warm at the wake. [Configuration](./configuration.md#idle-compaction) owns those settings.
 
-A wait lasts until it fires, is canceled, or its agent ends. `rimz agents restart` and `rimz agents molt` keep it. `rimz wait list` shows an agent's own waits, and `rimz loop list` folds every agent's waits under WAKE-UPS. The [wait reference](../reference/cli/wait.md) owns every flag and the exact message each trigger delivers.
+A wait lasts until it fires, is canceled, or its agent ends. `rimz agents restart` and `rimz agents molt` keep it. `rimz wait list` shows an agent's own waits, and `rimz loop list` folds every agent's waits under WAKE-UPS. A `pr` or `ci` wait needs the room's sidebar to read the forge: with the room closed it reads `readings paused (room closed)`, and in a checkout whose `origin` is on no forge RimZ reads (GitHub through `gh`, Gitea through `tea`) the wait refuses to arm, or, when that turns out only after arming, says `no supported forge for this checkout` and counts under NEEDS YOU. The [wait reference](../reference/cli/wait.md) owns every flag and the exact message each trigger delivers.
 
 To wake a teammate on a clock instead, make the task's command a [message](./messaging.md):
 
