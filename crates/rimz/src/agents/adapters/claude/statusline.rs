@@ -189,8 +189,10 @@ enum TranscriptScope<'a> {
 ///
 /// Scanning the bounded tail newest-first, the first conversation-bearing
 /// entry — `type` of `assistant`/`user`, not a sidechain, carrying a parseable
-/// `timestamp` — decides: flagged means the turn died at that instant;
-/// anything else means the newest turn is alive or recovered, so `None`.
+/// `timestamp` — decides: flagged means the turn died at that instant; a
+/// `user` tool result flagged `toolDenialEndsTurn` means an auto-mode refusal
+/// ended it (see [`turn_ending_denial`]); anything else means the newest turn
+/// is alive or recovered, so `None`.
 /// Non-conversation records (`system`, `file-history-snapshot`, `summary`),
 /// sidechain replay, and unparseable lines are passed over, never decisive.
 pub(crate) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
@@ -250,12 +252,48 @@ fn detect_resting_turn_outcome(
     tail: &str,
     scope: TranscriptScope<'_>,
 ) -> Option<RestingTurnOutcome> {
-    for line in tail.lines().rev() {
-        let line = line.trim();
+    let mut records = conversation_records(tail, scope);
+    // The first conversation-bearing, timestamped entry decides.
+    let (value, at) = records.next()?;
+    if denial_ends_turn(&value) {
+        return Some(RestingTurnOutcome::Died(turn_ending_denial(
+            &value, at, records,
+        )));
+    }
+    let entry_type = value.get("type").and_then(Value::as_str);
+    if entry_type == Some("assistant")
+        && value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
+    {
+        let label = turn_error_label(&value);
+        return Some(RestingTurnOutcome::Died(AgentTurnError {
+            ended_turn: false,
+            class: classify_api_error(
+                value.get("error").and_then(Value::as_str),
+                value.get("apiErrorStatus").and_then(Value::as_u64),
+                label.as_deref(),
+            ),
+            at,
+            label,
+        }));
+    }
+    if entry_type == Some("user")
+        && conversation_text(&value)
+            .is_some_and(|text| text.starts_with("[Request interrupted by user"))
+    {
+        return Some(RestingTurnOutcome::Interrupted(at));
+    }
+    None
+}
+
+/// The tail's in-scope `assistant`/`user` entries with their clocks,
+/// newest first. Everything else is passed over, never decisive.
+fn conversation_records<'a>(
+    tail: &'a str,
+    scope: TranscriptScope<'a>,
+) -> impl Iterator<Item = (Value, Timestamp)> + 'a {
+    tail.lines().rev().filter_map(move |line| {
         // A truncated leading line from the tail seek fails to parse; skip it.
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+        let value = serde_json::from_str::<Value>(line.trim()).ok()?;
         let in_scope = match scope {
             // Subagent replay never decides the parent's turn.
             TranscriptScope::Root => {
@@ -265,47 +303,89 @@ fn detect_resting_turn_outcome(
                 value.get("agentId").and_then(Value::as_str) == Some(agent_id)
             }
         };
-        if !in_scope {
-            continue;
-        }
-        let entry_type = value.get("type").and_then(Value::as_str);
-        if !matches!(entry_type, Some("assistant" | "user")) {
-            continue;
+        if !in_scope
+            || !matches!(
+                value.get("type").and_then(Value::as_str),
+                Some("assistant" | "user")
+            )
+        {
+            return None;
         }
         // A conversation entry with no clock cannot anchor the self-clear
         // guard the projection runs against `last_activity`; keep scanning.
-        let Some(at) = value
-            .get("timestamp")
+        let at = timestamp(&value)?;
+        Some((value, at))
+    })
+}
+
+/// The reason code Claude stamps on an auto-mode refusal whose safety check
+/// returned no verdict: an outage that clears by itself.
+const NO_VERDICT_REASON: &str = "classifier:auto-mode:no-verdict";
+
+/// A tool result Claude flagged as ending the turn: a refusal that stops the
+/// turn, or a sibling call's result written after that abort.
+fn denial_ends_turn(entry: &Value) -> bool {
+    entry.get("type").and_then(Value::as_str) == Some("user")
+        && entry.get("toolDenialEndsTurn").and_then(Value::as_bool) == Some(true)
+}
+
+/// The marker for a turn a refused tool call ended, stamped at the newest
+/// flagged result. Claude also flags the sibling results it writes after the
+/// abort and stamps each with its own call's `permissionDecision`, so the
+/// whole trailing run of flagged results is read: a no-verdict refusal
+/// anywhere in it pauses as an overloaded provider and labels the marker.
+/// Any other run fails, labelled by its oldest rejected result, the refusal
+/// that caused the abort.
+fn turn_ending_denial(
+    newest: &Value,
+    at: Timestamp,
+    older: impl Iterator<Item = (Value, Timestamp)>,
+) -> AgentTurnError {
+    let older: Vec<Value> = older
+        .map(|(entry, _)| entry)
+        .take_while(denial_ends_turn)
+        .collect();
+    let decision = |entry: &Value, field: &str| {
+        entry
+            .get("permissionDecision")
+            .and_then(|decision| decision.get(field))
             .and_then(Value::as_str)
-            .and_then(|ts| ts.parse::<Timestamp>().ok())
-        else {
-            continue;
-        };
-        // The first conversation-bearing, timestamped entry decides.
-        if entry_type == Some("assistant")
-            && value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
-        {
-            let label = turn_error_label(&value);
-            return Some(RestingTurnOutcome::Died(AgentTurnError {
-                ended_turn: false,
-                class: classify_api_error(
-                    value.get("error").and_then(Value::as_str),
-                    value.get("apiErrorStatus").and_then(Value::as_u64),
-                    label.as_deref(),
-                ),
-                at,
-                label,
-            }));
-        }
-        if entry_type == Some("user")
-            && conversation_text(&value)
-                .is_some_and(|text| text.starts_with("[Request interrupted by user"))
-        {
-            return Some(RestingTurnOutcome::Interrupted(at));
-        }
-        return None;
+            .map(str::to_owned)
+    };
+    let run = || std::iter::once(newest).chain(&older);
+    let outage =
+        run().find(|entry| decision(entry, "reasonCode").as_deref() == Some(NO_VERDICT_REASON));
+    let refusal = outage
+        .or_else(|| run().rfind(|entry| decision(entry, "decision").as_deref() == Some("reject")));
+    AgentTurnError {
+        ended_turn: false,
+        class: if outage.is_some() {
+            TurnErrorClass::PausedOverloaded
+        } else {
+            TurnErrorClass::Failed
+        },
+        at,
+        label: tool_result_label(refusal.unwrap_or(newest)),
     }
-    None
+}
+
+/// The first tool_result block's text, a flat string or its first text
+/// block, trimmed and capped.
+fn tool_result_label(entry: &Value) -> Option<String> {
+    let result = entry
+        .get("message")?
+        .get("content")?
+        .as_array()?
+        .iter()
+        .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))?;
+    let text = match result.get("content")? {
+        Value::String(text) => text.as_str(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .find_map(|block| block.get("text").and_then(Value::as_str))?,
+        _ => return None,
+    };
+    cap_turn_error_label(text)
 }
 
 /// Extract Claude's latest main-thread assistant message from a transcript

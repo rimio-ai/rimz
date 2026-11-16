@@ -176,8 +176,8 @@ Every card wears one state, and seven cover the life of a session:
 | `○` | idle | alive, nothing in flight | no |
 | `⢿` | running | working a turn, waiting on in-flight work, or running a background shell | no |
 | `?` | waiting | needs your answer: a permission, a plan approval, a question, or a raised question over a resting card | **yes** |
-| `!` | failed | a manually raised alert, or the turn errored, died on a provider API error, or tripped one of RimZ's safety nets | **yes** |
-| `⏸` | paused | stopped mid-turn on a provider rate limit or overload; the description quotes the reason | when it recovers |
+| `!` | failed | a manually raised alert, or the turn errored, died on a provider API error, ended on a refused tool call, or tripped one of RimZ's safety nets | **yes** |
+| `⏸` | paused | stopped mid-turn on a provider rate limit or overload, or on Claude's auto-mode safety check returning no verdict; the description quotes the reason | when it recovers |
 | `✓` | done | the turn finished cleanly and holds a result | a look, when convenient |
 | `☾` | sleeping | resting on a timer, signal, condition, or file watch, including through a child; the description names the wait | nothing yet |
 
@@ -204,7 +204,7 @@ A session's life traces one loop through those states:
 
 RimZ also derives states rather than waiting for an agent to report one.
 
-**Paused** keeps a card honest when the provider, not the agent, is the blocker. A turn that stops because the budget window is spent, the API is overloaded, or the connection dropped mid-response parks at `⏸` instead of reading as a failure, and with [auto-continue](./loops.md#keep-the-fleet-moving) enabled it resumes by itself once the window resets or the backoff clears.
+**Paused** keeps a card honest when the provider, not the agent, is the blocker. A turn that stops because the budget window is spent, the API is overloaded, the connection dropped mid-response, or Claude's auto-mode safety check returned no verdict parks at `⏸` instead of reading as a failure, and with [auto-continue](./loops.md#keep-the-fleet-moving) enabled it resumes by itself once the window resets or the backoff clears.
 
 **Failed** also covers two safety nets RimZ raises without a report: a running agent silent past the stall window (15 minutes by default), including any native or [launched child](./subagents.md#deadlines-stopping-and-cleanup), and a running agent that repeats one tool call with identical arguments 20 times, whose description then reads `loop: <tool> ×<count>` until a differing call clears the run. The same stall window covers a launched child given a task whose first turn has not started. A parent quietly waiting on its subagents is exempt from the stall check while a child is still displayed as working. A stalled native child also lifts the parent card's attention because it has no pane of its own. Either net can fire on an agent that is still executing, which is deliberate: silence that long, or a twentieth identical call, usually means something needs a look.
 

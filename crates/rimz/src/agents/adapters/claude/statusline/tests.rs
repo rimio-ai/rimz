@@ -620,3 +620,156 @@ fn resting_turn_scan_trims_unicode_space_around_an_entry() {
     let tail = format!("\u{2003}{INTERRUPTED_ENTRY}\u{2003}\n");
     assert_eq!(detect_turn_interrupted(&tail), Some(at));
 }
+
+/// Claude Code 2.1.325's auto-mode no-verdict stop, as one session wrote it:
+/// the refused call's `tool_use`, a sibling Edit result that finished first,
+/// the refusal flagged `toolDenialEndsTurn`, then two `system` records and no
+/// `Stop` hook.
+const DENIED_TOOL_USE_ENTRY: &str = r#"{"parentUuid":"87362d7d-7ea5-4e6d-a440-3b7cdc3ee14a","isSidechain":false,"message":{"model":"claude-opus-5-5","id":"msg_011Ch6EHYGEZk9h1coW571f1","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_01D98sqyHPSkpV95NdnPxSP4","name":"Bash","input":{"command":"cargo xtask test","description":"Run the carried misfit cost unit test","timeout":600000},"caller":{"type":"direct"}}],"stop_reason":"tool_use"},"type":"assistant","uuid":"97e66d3d-18df-4988-b305-a65292fe2dec","timestamp":"2026-11-16T07:41:36.485Z","version":"2.1.325"}"#;
+const SIBLING_RESULT_ENTRY: &str = r#"{"parentUuid":"87362d7d-7ea5-4e6d-a440-3b7cdc3ee14a","isSidechain":false,"promptId":"508d46c3-d1a3-4900-b5b6-293ce96cbf00","type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_015H6TwEhN52TxNSapNzGGwD","type":"tool_result","content":"The file docs/guide/configuration.md has been updated successfully."}]},"uuid":"f2de0bf0-5d65-4af3-85aa-f8197fc6c916","timestamp":"2026-11-16T07:41:37.457Z","sourceToolAssistantUUID":"87362d7d-7ea5-4e6d-a440-3b7cdc3ee14a","permissionDecision":{"decision":"accept","source":"config","reasonType":"mode"},"version":"2.1.325"}"#;
+const NO_VERDICT_DENIAL_ENTRY: &str = r#"{"parentUuid":"97e66d3d-18df-4988-b305-a65292fe2dec","isSidechain":false,"promptId":"508d46c3-d1a3-4900-b5b6-293ce96cbf00","type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"Auto mode is unavailable: the server returned no safety verdict for 10 responses in a row, so Bash was not run and this turn has ended. Wait for the user's next message before doing anything further.","is_error":true,"tool_use_id":"toolu_01D98sqyHPSkpV95NdnPxSP4"}]},"uuid":"9dd14655-4773-4fe3-8258-81bb79f22987","timestamp":"2026-11-16T07:41:37.485Z","toolUseResult":"Error: Auto mode is unavailable: the server returned no safety verdict for 10 responses in a row, so Bash was not run and this turn has ended. Wait for the user's next message before doing anything further.","toolDenialKind":"automode-unavailable","toolDenialEndsTurn":true,"sourceToolAssistantUUID":"97e66d3d-18df-4988-b305-a65292fe2dec","permissionDecision":{"decision":"reject","source":"config","reasonType":"classifier","reasonCode":"classifier:auto-mode:no-verdict"},"version":"2.1.325"}"#;
+const AUTO_MODE_WARNING_ENTRY: &str = r#"{"parentUuid":"9dd14655-4773-4fe3-8258-81bb79f22987","isSidechain":false,"type":"system","subtype":"informational","content":"Auto mode is unavailable — the server returned no safety verdict for the last 10 responses, so Claude stopped. Send a message to try again, or switch out of auto mode.","isMeta":false,"timestamp":"2026-11-16T07:41:37.489Z","uuid":"b1128a68-efb9-471e-adb4-806ec85d682d","level":"warning","version":"2.1.325"}"#;
+const DENIAL_TURN_DURATION_ENTRY: &str = r#"{"parentUuid":"b1128a68-efb9-471e-adb4-806ec85d682d","isSidechain":false,"type":"system","subtype":"turn_duration","durationMs":417487,"messageCount":1293,"timestamp":"2026-11-16T07:41:37.495Z","uuid":"d260ae6b-b7cd-4adc-a806-48199e6c6b90","isMeta":false,"version":"2.1.325"}"#;
+
+/// The recorded stop's tail with the refusal record reshaped by `edit`.
+fn denial_tail(edit: impl FnOnce(&mut serde_json::Value)) -> String {
+    let mut denial: serde_json::Value = serde_json::from_str(NO_VERDICT_DENIAL_ENTRY).unwrap();
+    edit(&mut denial);
+    format!(
+        "{DENIED_TOOL_USE_ENTRY}\n{SIBLING_RESULT_ENTRY}\n{denial}\n{AUTO_MODE_WARNING_ENTRY}\n{DENIAL_TURN_DURATION_ENTRY}\n"
+    )
+}
+
+/// A flagged result Claude writes for a sibling call after the abort, with
+/// no `permissionDecision` of its own.
+fn flagged_sibling(at: &str) -> String {
+    flagged_sibling_decided(at, None)
+}
+
+/// The same result stamped with its own call's decision, as Claude stamps
+/// every result of a call it decided.
+fn flagged_sibling_decided(at: &str, decision: Option<serde_json::Value>) -> String {
+    let mut sibling = json!({
+        "type": "user", "isSidechain": false, "timestamp": at,
+        "toolDenialKind": "interrupted", "toolDenialEndsTurn": true,
+        "message": {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "toolu_sibling", "is_error": true,
+            "content": [{"type": "text", "text": "Interrupted by a permission stop"}],
+        }]},
+    });
+    if let Some(decision) = decision {
+        sibling["permissionDecision"] = decision;
+    }
+    sibling.to_string()
+}
+
+fn no_verdict_label() -> Option<String> {
+    cap_turn_error_label(
+        "Auto mode is unavailable: the server returned no safety verdict for 10 responses in a row, so Bash was not run and this turn has ended. Wait for the user's next message before doing anything further.",
+    )
+}
+
+#[test]
+fn turn_ending_denial_pauses_on_no_verdict_and_fails_otherwise() {
+    let error = detect_turn_error(&denial_tail(|_| {})).expect("the stopped turn is detected");
+    assert_eq!(error.class, TurnErrorClass::PausedOverloaded);
+    assert_eq!(
+        error.at,
+        "2026-11-16T07:41:37.485Z".parse::<Timestamp>().unwrap(),
+        "the marker carries the refusal's own instant"
+    );
+    assert_eq!(error.label, no_verdict_label());
+    assert!(!error.ended_turn, "the row stays raw running");
+    assert!(detect_turn_interrupted(&denial_tail(|_| {})).is_none());
+
+    let other = denial_tail(|denial| {
+        denial["permissionDecision"]["reasonCode"] = json!("classifier:auto-mode:denied");
+    });
+    let error = detect_turn_error(&other).expect("another turn-ending refusal is detected");
+    assert_eq!(error.class, TurnErrorClass::Failed);
+    assert_eq!(error.label, no_verdict_label());
+}
+
+#[test]
+fn only_the_turn_ending_flag_makes_a_denial_a_stop() {
+    assert!(detect_turn_error(&denial_tail(|_| {})).is_some());
+    let unflagged = denial_tail(|denial| {
+        denial.as_object_mut().unwrap().remove("toolDenialEndsTurn");
+    });
+    assert!(detect_turn_error(&unflagged).is_none());
+    let cleared = denial_tail(|denial| denial["toolDenialEndsTurn"] = json!(false));
+    assert!(detect_turn_error(&cleared).is_none());
+    // The census's ordinary no-verdict denial: same kind and text, a turn
+    // that goes on.
+    let continuing = denial_tail(|denial| {
+        denial.as_object_mut().unwrap().remove("toolDenialEndsTurn");
+        denial["permissionDecision"]["reasonCode"] = json!("classifier:auto-mode:unavailable");
+    });
+    assert!(detect_turn_error(&continuing).is_none());
+
+    // Neither the kind nor the text decides the class: a flagged refusal of
+    // another kind with the outage code pauses.
+    let other_kind = denial_tail(|denial| {
+        denial["toolDenialKind"] = json!("user-rejected");
+        denial["message"]["content"][0]["content"] = json!("Rejected");
+    });
+    let error = detect_turn_error(&other_kind).expect("flagged");
+    assert_eq!(error.class, TurnErrorClass::PausedOverloaded);
+    assert_eq!(error.label.as_deref(), Some("Rejected"));
+}
+
+#[test]
+fn turn_ending_denial_is_found_inside_the_trailing_flagged_run() {
+    let sibling = flagged_sibling("2026-11-16T07:41:37.490Z");
+    let tail = format!("{}{sibling}\n", denial_tail(|_| {}));
+    let error = detect_turn_error(&tail).expect("the stopped turn is detected");
+    assert_eq!(error.class, TurnErrorClass::PausedOverloaded);
+    assert_eq!(
+        error.at,
+        "2026-11-16T07:41:37.490Z".parse::<Timestamp>().unwrap(),
+        "the newest flagged record stamps the marker"
+    );
+    assert_eq!(error.label, no_verdict_label(), "the refusal labels it");
+
+    // A sibling's own decision, allowed or aborted, never decides the class.
+    for decision in [
+        json!({"decision": "accept", "source": "config", "reasonType": "mode"}),
+        json!({"decision": "reject", "source": {"type": "user_abort"}}),
+    ] {
+        let sibling = flagged_sibling_decided("2026-11-16T07:41:37.490Z", Some(decision));
+        let tail = format!("{}{sibling}\n", denial_tail(|_| {}));
+        let error = detect_turn_error(&tail).expect("the stopped turn is detected");
+        assert_eq!(error.class, TurnErrorClass::PausedOverloaded);
+        assert_eq!(error.label, no_verdict_label(), "the refusal labels it");
+
+        // Behind another refusal it fails, labelled by that refusal.
+        let denied = denial_tail(|denial| {
+            denial["permissionDecision"]["reasonCode"] = json!("classifier:auto-mode:denied");
+        });
+        let error = detect_turn_error(&format!("{denied}{sibling}\n")).expect("flagged");
+        assert_eq!(error.class, TurnErrorClass::Failed);
+        assert_eq!(error.label, no_verdict_label(), "the refusal labels it");
+    }
+
+    // A flagged run with no refusal in it fails, even when an outage refusal
+    // sits behind an unflagged record.
+    let tail = format!(
+        "{NO_VERDICT_DENIAL_ENTRY}\n{SIBLING_RESULT_ENTRY}\n{}\n",
+        flagged_sibling("2026-11-16T07:41:38.000Z")
+    );
+    let error = detect_turn_error(&tail).expect("flagged");
+    assert_eq!(error.class, TurnErrorClass::Failed);
+    assert_eq!(
+        error.label.as_deref(),
+        Some("Interrupted by a permission stop")
+    );
+}
+
+#[test]
+fn a_later_prompt_clears_a_turn_ending_denial() {
+    assert!(detect_turn_error(&denial_tail(|_| {})).is_some());
+    let prompt = r#"{"type":"user","isSidechain":false,"timestamp":"2026-11-16T08:11:54.000Z","message":{"role":"user","content":"continue"}}"#;
+    let tail = format!("{}{prompt}\n", denial_tail(|_| {}));
+    assert!(detect_turn_error(&tail).is_none());
+    assert!(detect_turn_interrupted(&tail).is_none());
+}
