@@ -1042,3 +1042,31 @@ fn a_judges_answer_settles_against_the_definition_read_after_its_stop() {
         }
     }
 }
+
+/// A judge whose start groups cannot resolve, with a window or without, fails `died` with the
+/// error as its reason and takes the failure chain rather than erroring every advance.
+#[test]
+fn a_judge_whose_start_groups_fail_dies_with_the_error() {
+    const ERROR: &str = "project config is malformed";
+    for window in ["", "admission.window='5h.left>=40'\n"] {
+        let (_dir, state, record) = setup(&JUDGE.replace(
+            "timeout='1h'\non={pass",
+            &format!("{window}timeout='1h'\non={{pass"),
+        ));
+        let host = FakeHost::new();
+        *host.groups_error.borrow_mut() = Some(ERROR.into());
+        let ended = advanced(&state, &record, &host);
+        assert_eq!(ended.state, RunState::Failed, "{window}: {ended:#?}");
+        let journal = records::journal(&state.workflow(&record.id)).unwrap();
+        assert!(
+            journal.iter().any(|entry| matches!(
+                &entry.event,
+                JournalEvent::Route { outcome, input }
+                    if outcome == "died"
+                        && input["reason"].as_str().is_some_and(|r| r.contains(ERROR))
+            )),
+            "{window}: {journal:#?}"
+        );
+        assert!(host.launched.borrow().is_empty(), "{window}");
+    }
+}

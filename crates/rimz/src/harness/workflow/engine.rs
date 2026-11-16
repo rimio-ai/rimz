@@ -727,19 +727,37 @@ pub fn launch_groups(
     Ok(groups)
 }
 
-fn window_wait_for_launch(
+/// The reason the launcher's budget gate would refuse launching `groups` now: the room's and
+/// each group's account dollar budgets, which every launch path reads. The provider window gate
+/// needs a binding only a prepared launch resolves, so the launch itself answers for it.
+pub fn budget_refusal(
     record: &RunRecord,
-    agent: &str,
-    window: &Parsed<WhenExpr, SpecErr>,
-    windows: &WindowReadings<'_>,
-    host: &dyn AttemptHost,
+    groups: &[throttle::StartGroup],
 ) -> Result<Option<String>> {
-    window_wait_for_groups(
-        record,
-        &host.start_groups(record, agent, None)?,
-        window,
-        windows,
-    )
+    let state = StatePaths::for_project_root(&record.project_root)
+        .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+    let runtime = crate::disk::paths::RuntimePaths::for_state(&state)
+        .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+    let machine = crate::config::MachineConfig::load_lenient();
+    let now = Timestamp::now();
+    Ok(first_refusal(groups, |login| {
+        crate::harness::budget::scope_gate(&runtime, &state, login, &machine, now)
+    }))
+}
+
+/// The first refusal `gate` gives a group's login, in launch order; a group with no resolved
+/// account reads the room's budget alone.
+fn first_refusal(
+    groups: &[throttle::StartGroup],
+    gate: impl Fn(Option<&crate::ids::LoginKey>) -> Option<String>,
+) -> Option<String> {
+    groups.iter().find_map(|group| {
+        let login = group.account.clone().map(|name| crate::ids::LoginKey {
+            kind: group.kind.clone(),
+            name,
+        });
+        gate(login.as_ref())
+    })
 }
 
 fn window_wait_for_groups(
@@ -1416,6 +1434,23 @@ fn prepare(
                 persist(&mut t, &guard)?;
                 return Ok(Decision::Stop);
             }
+            // A resumed session runs on the room's current account, as the host launches it.
+            let resumes = t
+                .record
+                .restart
+                .as_ref()
+                .is_some_and(|r| r.resume.is_some());
+            let resumed = (launch_error.is_none() && resumes && step.account().is_some())
+                .then(|| host.start_groups(&t.record, agent, None))
+                .transpose()?;
+            if launch_error.is_none()
+                && let Some(reason) =
+                    host.budget_refusal(&t.record, resumed.as_deref().unwrap_or(&groups))?
+            {
+                t.step_wait("budget", Some(reason));
+                persist(&mut t, &guard)?;
+                return Ok(Decision::Stop);
+            }
             if launch_error.is_none() && step.occupancy() != Some(OccupancyPolicy::Share) {
                 // A step launched into a named worktree occupies that checkout, not the run's.
                 let destination = destination(&t.record, step)?;
@@ -1447,16 +1482,39 @@ fn prepare(
             }
         }
     } else if let Some(node) = spec.check(&t.record.node) {
-        if let (Some(window), Some(Kind::Judge(profile))) = (node.window(), node.kind())
-            && let Some(detail) = window_wait_for_launch(&t.record, profile, window, windows, host)?
+        let judge = match node.kind() {
+            Some(Kind::Judge(profile)) => Some(profile),
+            _ => None,
+        };
+        // A judge whose start cannot resolve fails `died` at its launch, as a step does.
+        let groups = match judge.map(|profile| host.start_groups(&t.record, profile, None)) {
+            Some(Ok(groups)) => Some(groups),
+            Some(Err(error)) => {
+                launch_error = Some(error.to_string());
+                None
+            }
+            None => None,
+        };
+        if let (Some(window), Some(groups)) = (node.window(), &groups)
+            && let Some(detail) = window_wait_for_groups(&t.record, groups, window, windows)?
         {
             t.step_wait("window", Some(detail));
             persist(&mut t, &guard)?;
             return Ok(Decision::Stop);
         }
-        // A judge launches past its window, or again after a launch that started nothing.
+        if let Some(groups) = &groups
+            && let Some(reason) = host.budget_refusal(&t.record, groups)?
+        {
+            t.step_wait("budget", Some(reason));
+            persist(&mut t, &guard)?;
+            return Ok(Decision::Stop);
+        }
+        // A judge launches past its window and budget, or again after a launch that started
+        // nothing; any other check's `budget` is an answer it waits on.
         if t.record.wait.as_ref().is_some_and(|wait| {
-            (node.window().is_some() && wait.outcome == "window") || wait.outcome == "retry"
+            (node.window().is_some() && wait.outcome == "window")
+                || wait.outcome == "retry"
+                || (judge.is_some() && wait.outcome == "budget")
         }) {
             t.close_wait();
         }

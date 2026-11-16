@@ -149,11 +149,12 @@ fn project(
                 .map_or_else(|| "holding".into(), |detail| format!("holding {detail}")),
             // A retried launch's reason is an error's text, which can span lines; the strip
             // is one line, so it reads as the CLI's waiting line does.
-            "retry" => wait.detail.as_deref().map_or_else(
-                || "retry".into(),
+            outcome @ ("retry" | "budget") => wait.detail.as_deref().map_or_else(
+                || outcome.into(),
                 |detail| {
                     format!(
-                        "retry: {}",
+                        "{outcome}{} {}",
+                        if outcome == "retry" { ":" } else { "" },
                         detail.split_whitespace().collect::<Vec<_>>().join(" ")
                     )
                 },
@@ -334,6 +335,7 @@ mod tests {
             ("takeover", "takeover"),
             ("hold", "holding checks"),
             ("retry", "retry: checks"),
+            ("budget", "budget checks"),
         ] {
             record.wait = Some(
                 serde_json::from_value(json!({

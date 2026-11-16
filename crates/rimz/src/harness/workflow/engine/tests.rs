@@ -1296,6 +1296,156 @@ fn a_judge_waits_out_its_window_before_it_launches_and_its_clock_counts_from_the
     );
 }
 
+#[test]
+fn a_judge_waits_out_a_budget_refusal_after_its_window_and_its_clock_counts_from_the_launch() {
+    use crate::agents::{ProviderCapacity, RateLimitWindow};
+    const REASON: &str = "fleet budget $5.00/day is spent";
+    let now = Timestamp::now();
+    let windows = |used| {
+        WindowReadings::fixed(
+            now,
+            BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+                ProviderCapacity::from_windows(vec![RateLimitWindow {
+                    used_percentage: Some(used),
+                    resets_at: Some(now + jiff::SignedDuration::from_hours(3)),
+                    duration_mins: Some(300),
+                    ..Default::default()
+                }]),
+            )]),
+        )
+    };
+    for window in [true, false] {
+        let (_home, state, record, spec) = timed_judge(window);
+        let host = super::super::tests::FakeHost::new();
+        let prepare_with = |windows: &WindowReadings<'_>| {
+            prepare(
+                &state,
+                &state.workflow(&record.id),
+                &spec,
+                &mut BTreeSet::new(),
+                &host,
+                windows,
+                &mut Admission::default(),
+            )
+            .unwrap()
+        };
+        let wait_of = || {
+            let current = workflow::load(&state.workflow(&record.id)).unwrap();
+            current.wait.map(|wait| (wait.outcome, wait.detail))
+        };
+        if window {
+            assert!(matches!(prepare_with(&windows(100)), Decision::Stop));
+            assert_eq!(wait_of().unwrap().0, "window");
+        }
+        *host.budget.borrow_mut() = Some(REASON.into());
+        assert!(matches!(prepare_with(&windows(10)), Decision::Stop));
+        assert_eq!(
+            wait_of(),
+            Some(("budget".into(), Some(REASON.into()))),
+            "window={window}: a window wait gives way to the budget's"
+        );
+        let waiting = workflow::load(&state.workflow(&record.id)).unwrap();
+        assert!(waiting.attempt.is_none());
+        assert_eq!(timeout_at(&spec, &waiting).unwrap(), None);
+        age_pause(&state, &record, jiff::SignedDuration::from_hours(2));
+        host.budget.borrow_mut().take();
+        assert!(
+            matches!(prepare_with(&windows(10)), Decision::Launch(_)),
+            "window={window}: two hours in the budget wait do not time out a one-hour judge"
+        );
+        let running = workflow::load(&state.workflow(&record.id)).unwrap();
+        assert!(running.wait.is_none(), "window={window}: the wait closes");
+        let judge = running.attempt.clone().unwrap();
+        assert_eq!(
+            timeout_at(&spec, &running).unwrap().unwrap(),
+            judge.started_at + jiff::SignedDuration::from_hours(1),
+            "window={window}: the clock counts from the launch"
+        );
+        let journal = workflow::journal(&state.workflow(&record.id)).unwrap();
+        let waits: Vec<_> = journal
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                workflow::JournalEvent::Wait { outcome, .. } => Some(outcome.as_str()),
+                _ => None,
+            })
+            .collect();
+        let expected: &[&str] = if window {
+            &["window", "budget"]
+        } else {
+            &["budget"]
+        };
+        assert_eq!(waits, expected);
+    }
+}
+
+/// A refused step stops before capacity admission whatever its stored capacity, and a failed
+/// budget read leaves the run as it was for the next tick.
+#[test]
+fn a_budget_refusal_asks_no_admission_and_a_failed_read_leaves_the_run_unchanged() {
+    for capacity in [workflow::StartCapacity::Wait, workflow::StartCapacity::Skip] {
+        let (_home, state, mut record, spec) = fixture(
+            "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nlifecycle='turn'\n\
+             agent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
+        );
+        record.task = Some("nightly".into());
+        record.capacity = capacity;
+        rewrite(&state, &record);
+        let host = super::super::tests::FakeHost::new();
+        let prepare = |host: &super::super::tests::FakeHost| {
+            prepare(
+                &state,
+                &state.workflow(&record.id),
+                &spec,
+                &mut BTreeSet::new(),
+                host,
+                &WindowReadings::fixed(Timestamp::now(), BTreeMap::new()),
+                &mut Admission::default(),
+            )
+        };
+        host.budget_error.set(true);
+        assert!(prepare(&host).is_err(), "{capacity:?}");
+        let unchanged = workflow::load(&state.workflow(&record.id)).unwrap();
+        assert!(
+            unchanged.attempt.is_none()
+                && unchanged.wait.is_none()
+                && unchanged.recheck_at.is_none(),
+            "{capacity:?}: {unchanged:#?}"
+        );
+        host.budget_error.set(false);
+        *host.budget.borrow_mut() = Some("account claude:work budget $3.00/day is spent".into());
+        assert!(
+            matches!(prepare(&host).unwrap(), Decision::Stop),
+            "{capacity:?}: a refused start asks no admission"
+        );
+        assert_eq!(
+            workflow::load(&state.workflow(&record.id))
+                .unwrap()
+                .wait
+                .map(|wait| wait.outcome),
+            Some("budget".into())
+        );
+    }
+}
+
+#[test]
+fn any_cells_refused_login_refuses_the_launch() {
+    let group = |kind: &str, account: Option<&str>| throttle::StartGroup {
+        kind: crate::ids::AgentKind::new_unchecked(kind),
+        account: account.map(|name| name.parse().unwrap()),
+        agents: 1,
+    };
+    let groups = [group("claude", None), group("codex", Some("work"))];
+    let asked = std::cell::RefCell::new(Vec::new());
+    let refusal = first_refusal(&groups, |login| {
+        asked.borrow_mut().push(login.map(ToString::to_string));
+        login.map(|login| format!("{login} is spent"))
+    });
+    assert_eq!(refusal.as_deref(), Some("codex@work is spent"));
+    assert_eq!(*asked.borrow(), [None, Some("codex@work".to_owned())]);
+    assert_eq!(first_refusal(&groups, |_| None), None);
+}
+
 const CHECK_ONLY: &str = "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\ntimeout='365d'\nrun='true'\non.ok='@done'\n";
 const ONE_TURN: &str = "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nagent='claude'\nprompt-file='prompts/fix.md'\nlifecycle='turn'\nthen='@done'\non.failed='@failed'\n";
 
