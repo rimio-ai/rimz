@@ -1,5 +1,6 @@
 use super::*;
 use crate::ids::AgentKind;
+use jiff::SignedDuration;
 
 #[test]
 fn usage_keys_round_trip_legacy_and_scoped_text_and_reject_ambiguous_shapes() {
@@ -478,7 +479,6 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
     assert!(ProviderCapacity::read(&runtime, &login_key("qwen")).is_none());
     assert!(ProviderCapacity::read_all(&runtime, &RoomLoginSet::native()).is_empty());
     let capacity = ProviderCapacity::read_bound(&runtime, &login_key("qwen"), &binding).unwrap();
-    assert!(capacity.longest_window_surplus(now).is_some());
     assert!(capacity.spent_window(now).is_some());
     assert!(ProviderCapacity::read_bound(&runtime, &login_key("qwen"), &other).is_none());
     let reason = provider_budget_gate(&runtime, &login_key("qwen"), &binding, now).unwrap();
@@ -498,105 +498,14 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
 }
 
 #[test]
-fn managed_launch_state_selects_only_applicable_capacity() {
-    let now = Timestamp::from_second(2_000_000_000).unwrap();
-    let kind_wide = |kind: &str| {
-        (
-            login_key(kind).into(),
-            RateLimitCacheEntry {
-                scope: ProviderAccountScope::KindWide,
-                limits: AgentRateLimits {
-                    windows: vec![window(now, Some(20), 3_600, Some(300))],
-                },
-                ..Default::default()
-            },
-        )
-    };
-    let mut cache = RateLimitsCache {
-        entries: BTreeMap::from([kind_wide("claude"), kind_wide("qwen")]),
-        ..Default::default()
-    };
-    let (_dir, runtime) = runtime();
-    write_cache(&runtime, &cache);
-
-    assert!(
-        ManagedLaunchState::Unsupported
-            .capacity(&runtime, &login_key("claude"))
-            .is_some()
-    );
-    assert!(
-        ManagedLaunchState::Unresolved
-            .capacity(&runtime, &login_key("qwen"))
-            .is_none()
-    );
-
-    let scope = ProviderAccountScope::sub_provider("alibaba", "international");
-    cache.entries.insert(
-        AccountUsageKey::new(login_key("qwen"), scope.clone()),
-        RateLimitCacheEntry {
-            scope: scope.clone(),
-            account_key: Some("cached".to_owned()),
-            limits: AgentRateLimits {
-                windows: vec![window(now, Some(20), 3_600, Some(300))],
-            },
-            ..Default::default()
-        },
-    );
-    write_cache(&runtime, &cache);
-    let other = ProviderAccountBinding::new(scope, "other".to_owned()).unwrap();
-    assert!(
-        ManagedLaunchState::Bound(other)
-            .capacity(&runtime, &login_key("qwen"))
-            .is_none()
-    );
-}
-
-#[test]
-fn capacity_selects_temporal_windows_and_measures_surplus() {
-    let now = Timestamp::from_second(1_000_000).unwrap();
-    let five_hours = 5 * 60;
-    let duration_mins = 7 * 24 * 60;
-    let capacity = ProviderCapacity::from_windows(vec![
-        window(now, Some(10), 2 * 3_600, Some(five_hours)),
-        window(now, Some(50), 2 * 86_400, Some(duration_mins)),
-    ]);
-    let reading = capacity.longest_window_surplus(now).unwrap();
-    assert_eq!(reading.duration_mins, duration_mins);
-    assert_eq!(reading.elapsed, SignedDuration::from_secs(5 * 86_400));
-    assert!((reading.headroom - 1.75).abs() < f64::EPSILON);
-}
-
-#[test]
 fn temporal_policy_fails_closed_for_incomplete_or_durationless_readings() {
     let now = Timestamp::from_second(1_000_000).unwrap();
-    let duration_mins = 7 * 24 * 60;
-    let readings = [
-        window(
-            now,
-            Some(1),
-            i64::from(duration_mins) * 60,
-            Some(duration_mins),
-        ),
-        window(now, Some(60), -60, Some(duration_mins)),
-        window(now, None, 2 * 86_400, Some(duration_mins)),
-        RateLimitWindow {
-            resets_at: None,
-            ..window(now, Some(50), 2 * 86_400, Some(duration_mins))
-        },
-        window(now, Some(50), 2 * 86_400, None),
-    ];
-    for reading in readings {
-        let capacity = ProviderCapacity::from_windows(vec![reading]);
-        assert_eq!(capacity.longest_window_surplus(now), None);
-    }
-
     let mut named = window(now, Some(100), 86_400, Some(60));
     named.scope = Some(crate::agents::RateLimitWindowScope {
         id: "build_minutes".to_owned(),
         label: "bld".to_owned(),
     });
     let capacity = ProviderCapacity::from_windows(vec![named]);
-    assert_eq!(capacity.longest_window_surplus(now), None);
     assert_eq!(capacity.latest_spent_window_reset(now), None);
     assert!(!capacity.subscription_budget_available(now));
 

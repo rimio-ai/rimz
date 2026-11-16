@@ -275,7 +275,7 @@ Standalone definitions and TOML profiles accept shorthand or a `max`-only block,
 
 [`rimz agents tune <AGENT> keep-warm <DURATION|off>`](./cli/agents.md#tune) replaces the complete configured rule for one session, including a pane-backed child; `reset` restores it.
 
-For Pi, an enabled declared horizon also requests the one-hour Anthropic prompt cache at the next launch or restart when cache keepalive is on, unless the user sets the retention. Headless launches and launched children do not request it. See [keep-warm configuration](../guide/configuration.md#keep-warm) for overrides, native-child inheritance, and cache-write pricing.
+For Pi, an enabled declared horizon also requests the one-hour Anthropic prompt cache at the next launch or restart when cache keepalive is on, unless the user sets the retention. Launched children do not request it. See [keep-warm configuration](../guide/configuration.md#keep-warm) for overrides, native-child inheritance, and cache-write pricing.
 
 ### Flip compaction
 

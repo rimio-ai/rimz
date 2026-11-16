@@ -66,11 +66,9 @@ Each adapter is a private unit struct under [`adapters/<kind>/`](../../../crates
 | Accounts and spend | `sub_providers` (the subscription providers whose budget the agent meters), `plan_capacities` (optional [weekly capacity table](./plans.md)), `thread_key` (fallback session grouping when neither a row nor its path supplies a native id: per file or immediate parent directory) |
 | Defaults | `default_model`, `default_context_window` |
 | Skills | `host_skills` (the provider's host-mode skill switch, or `Unsupported`), `tool_rules` (how a definition's tool rules render into provider settings, or `Unsupported`) |
-| Launch | `launch`: program, fixed args, prompt style, resume, picker, and fork argv, per-mode permission args and the default mode, max-turn flag, compact command, interrupt key, preset matchers, named launch variants (what `find_runtime` matches), optional headless form |
+| Launch | `launch`: program, fixed args, prompt style, resume, picker, and fork argv, per-mode permission args and the default mode, max-turn flag, compact command, interrupt key, preset matchers, named launch variants (what `find_runtime` matches) |
 
 The launch block is data, so one registry entry is enough to render `rimz agents restart`, resolved profiles, and the permission presets for a new agent. `<kind>-ask` and `<kind>-plan` always resolve. `<kind>-auto` and `<kind>-yolo` resolve only when the spec declares argv for that mode or declares a default permission mode (`crates/rimz/src/harness/spec.rs::supported_virtual_agent_args`), so a provider with neither an auto switch nor a default mode has no `-auto` preset.
-
-The optional `launch.headless` form is a [`HeadlessForm`](../../../crates/rimz/src/agents/headless.rs) with two methods. `render_argv` builds schema-enforced argv for a `HeadlessRequest`, and `read_result` normalizes captured output into a `HeadlessResult`: a JSON `verdict`, cost, tokens, and a typed error (`ProviderLimit` or `Other`, with text). The consumer is the [workflow judge](../harness/workflow.md#headless-judges), which checks the value against its own contract. Only Claude and Codex declare a form ([Claude](./adapter_claude.md#headless-form), [Codex](./adapter_codex.md#headless-form)). A headless request for any other kind fails at compile with `AgentProcessCompileErr::NoHeadless`, naming the kind (`crates/rimz/src/harness/launch.rs`).
 
 `capabilities` is operational policy that no coverage claim can derive:
 

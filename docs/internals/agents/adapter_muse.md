@@ -128,7 +128,6 @@ Some launch inputs never reach Muse:
 | a profile's `skills` list on the host | warns and runs unrestricted (`HostSkills::Unsupported`) |
 | a profile's `skills` list under scoped isolation | refused: Muse has no user-only skill marker (`ManualSkill::Unsupported`). The skill root is `<config home>/skills` |
 | launch reminders, system-prompt replacement, and presets other than model and effort | no Muse channel or spelling |
-| a headless command | none: `launch.headless` is unset, so Muse cannot run a headless judge or check |
 
 The spec declares no default model and no context window.
 

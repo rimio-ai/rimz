@@ -372,52 +372,21 @@ fn resume_at_moves_an_active_run() {
 #[test]
 fn a_handled_limited_then_a_death_reports_the_run_failed_not_budget() {
     let text = "[workflow]\nscope='worktree'\nstart='gate'\n\
-        [judge.gate]\ntimeout='365d'\nagent='codex'\nprompt-file='prompt.md'\non={ok='@done',limited='report'}\n\
+        [judge.gate]\ntimeout='365d'\nagent='codex'\nsummary='Gates the change'\nprompt-file='prompt.md'\non={ok='@done',limited='report'}\n\
         [script.report]\ntimeout='365d'\nshell='exit 1'\non.ok='@done'\n";
-    let (_dir, state, record) = setup(text);
-    let routed: Definition = toml::from_str(text).unwrap();
-    let unrouted: Definition = toml::from_str(&text.replace(",limited='report'", "")).unwrap();
-    let paths = state.workflow(&record.id);
-    let attempt = |kind: &str, seq: u64, node: &str| {
-        serde_json::from_value(json!({"kind":kind, "seq":seq, "node":node,
-            "started_at":record.entered_at, "host":{"pid":123, "start":null}}))
-        .unwrap()
-    };
     let mut handled = Vec::new();
     for route in [false, true] {
-        let mut t = state::Transition {
-            now: record.entered_at,
-            record: record.clone(),
-            spec: if route { &routed } else { &unrouted },
-            paths: &paths,
-            entries: Vec::new(),
-        };
-        t.record.attempt = Some(attempt("judge", 1, "gate"));
-        t.record.next_seq = 2;
-        let refusal = script::Evaluation {
-            object: Err("account codex:default budget $10.00/day is spent".into()),
-            failure: "budget",
-            stderr_tail: None,
-            limited: None,
-            cost_usd: None,
-            detail: json!({}),
-            interrupt: None,
-        };
-        t.finish_judge(1, refusal).unwrap();
-        if route {
-            assert_eq!(t.record.node, "report");
-            t.record.attempt = Some(attempt("script", 2, "report"));
-            t.check_failure(
-                2,
-                Some(spec::Cause::Died),
-                "exited 1".into(),
-                json!({}),
-                None,
-            )
-            .unwrap();
-        }
-        assert_eq!(t.record.state, RunState::Failed, "{:?}", t.entries);
-        let outcome = engine::outcome(&t.record, &t.entries, false);
+        let (_dir, state, record) = setup(&if route {
+            text.to_owned()
+        } else {
+            text.replace(",limited='report'", "")
+        });
+        let ended = budget_refused(&state, &record);
+        // The routed run goes on to its script, which exits 1 in the same advance.
+        assert_eq!(ended.node, if route { "report" } else { "gate" });
+        assert_eq!(ended.state, RunState::Failed, "{ended:#?}");
+        let journal = records::journal(&state.workflow(&record.id)).unwrap();
+        let outcome = engine::outcome(&ended, &journal, false);
         handled.push((route, outcome.ending, outcome.reason));
     }
     assert_eq!(
@@ -428,9 +397,19 @@ fn a_handled_limited_then_a_death_reports_the_run_failed_not_budget() {
                 records::RunEnding::Budget { turned: false },
                 Some("account codex:default budget $10.00/day is spent".into())
             ),
-            (true, records::RunEnding::Failed, Some("exited 1".into())),
+            (true, records::RunEnding::Failed, Some("sh exited 1".into())),
         ]
     );
+}
+
+/// The run after its judge's launch is refused on a spent budget.
+fn budget_refused(state: &crate::disk::paths::StatePaths, record: &RunRecord) -> RunRecord {
+    let host = FakeHost::new();
+    *host.failure.borrow_mut() = Some(LaunchFailure {
+        outcome: AttemptOutcome::Limited,
+        reason: "account codex:default budget $10.00/day is spent".into(),
+    });
+    advanced(state, &record.id, &host)
 }
 
 #[test]
@@ -488,42 +467,29 @@ fn a_start_that_can_never_fit_fails_the_run_where_an_expired_wait_gave_up() {
 #[test]
 fn a_handled_limited_then_a_spent_visit_cap_reports_the_run_failed_not_budget() {
     let text = "[workflow]\nscope='worktree'\nstart='gate'\n\
-        [judge.gate]\ntimeout='365d'\nagent='codex'\nprompt-file='prompt.md'\non={ok='@done',limited='fix'}\n\
+        [judge.gate]\ntimeout='365d'\nagent='codex'\nsummary='Gates the change'\nprompt-file='prompt.md'\non={ok='@done',limited='fix'}\n\
         [agent.fix]\nagent='codex'\nprompt-file='prompt.md'\nlifecycle='turn'\nmax-visits=1\n\
         then='@done'\n";
     let (_dir, state, record) = setup(text);
     let spec: Definition = toml::from_str(text).unwrap();
     let paths = state.workflow(&record.id);
+    let refused = budget_refused(&state, &record);
     let mut t = state::Transition {
-        now: record.entered_at,
-        record: record.clone(),
+        now: refused.entered_at,
+        record: refused,
         spec: &spec,
         paths: &paths,
         entries: Vec::new(),
     };
-    t.record.attempt = Some(
-        serde_json::from_value(json!({"kind":"judge", "seq":1, "node":"gate",
-            "started_at":record.entered_at, "host":{"pid":123, "start":null}}))
-        .unwrap(),
-    );
-    t.record.next_seq = 2;
-    let refusal = script::Evaluation {
-        object: Err("account codex:default budget $10.00/day is spent".into()),
-        failure: "budget",
-        stderr_tail: None,
-        limited: None,
-        cost_usd: None,
-        detail: json!({}),
-        interrupt: None,
-    };
-    t.finish_judge(1, refusal).unwrap();
     assert_eq!(t.record.node, "fix");
     // The step's cap raises `visits` before a launch: a newer route, and no newer evaluation.
     let route = t.visits_failure(1, 1);
     t.route(&Target::parse(&route.target), route.object, route.reason)
         .unwrap();
     assert_eq!(t.record.state, RunState::Failed, "{:?}", t.entries);
-    let outcome = engine::outcome(&t.record, &t.entries, false);
+    let mut journal = records::journal(&paths).unwrap();
+    journal.append(&mut t.entries);
+    let outcome = engine::outcome(&t.record, &journal, false);
     assert_eq!(
         (outcome.ending, outcome.reason),
         (

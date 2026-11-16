@@ -848,8 +848,6 @@ impl<'a> TaskFire<'a> {
             loop_fire: fire.clone(),
             definition,
             fire_tree: fresh,
-            surplus: None,
-            surplus_after: None,
             fire: Some(self.run_fire()),
             fire_facts: Some(self.fire_facts()),
         };

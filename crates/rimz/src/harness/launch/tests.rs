@@ -373,24 +373,6 @@ fn picker_argv_has_no_session_or_prompt_and_preserves_posture() {
     }
     let adapter = crate::agents::find_definition("grok").unwrap();
     assert!(compile_provider_argv(adapter, "grok", &action, Path::new("/repo")).is_err());
-    let adapter = crate::agents::find_definition("claude").unwrap();
-    let headless = crate::agents::HeadlessRequest {
-        schema_open: false,
-        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
-        schema_file: "/check/schema.json".into(),
-        verdict_file: "/check/verdict.json".into(),
-    };
-    assert!(matches!(
-        compile_provider_argv_with_headless(
-            adapter,
-            "claude",
-            &action,
-            Path::new("/repo"),
-            Some(&headless),
-            (Path::new("/repo"), &mut None),
-        ),
-        Err(AgentProcessCompileErr::NoHeadless { .. })
-    ));
     let mut request = request("claude", action);
     request.identity.launch_id = Some("launch_picker".into());
     assert!(matches!(
@@ -500,116 +482,6 @@ fn provider_compiler_preserves_action_and_trailing_argument_order() {
     }
 }
 
-#[test]
-fn headless_claude_provider_compiler_preserves_profile_and_schema_argv() {
-    headless_provider_argv("claude");
-}
-
-#[test]
-fn headless_codex_provider_compiler_preserves_profile_and_schema_argv() {
-    headless_provider_argv("codex");
-}
-
-fn headless_provider_argv(kind: &str) {
-    let root = tempfile::tempdir().unwrap();
-    let mut request = ExecRequest::bare_launch(
-        AgentKind::new_unchecked(kind),
-        vec!["--model".into(), "small".into()],
-    );
-    if let ExecAction::Launch { prompt, extra_args } = &mut request.action {
-        *prompt = Some("Decide now.".into());
-        if kind == "claude" {
-            extra_args.extend(["--settings".into(), r#"{"theme":"dark"}"#.into()]);
-        } else {
-            extra_args.push("--no-daemon".into());
-        }
-    }
-    request.headless = Some(crate::agents::HeadlessRequest {
-        schema_open: false,
-        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
-        schema_file: "/check/schema.json".into(),
-        verdict_file: "/check/verdict.json".into(),
-    });
-    let process = compile_agent_process_with_extra_env(
-        None,
-        root.path(),
-        &request,
-        root.path(),
-        &BTreeMap::new(),
-        &LaunchReminders::default(),
-    )
-    .unwrap();
-    let argv = process.provider_argv;
-    if kind == "claude" {
-        assert_eq!(argv.iter().filter(|arg| *arg == "--settings").count(), 1);
-        let settings =
-            crate::agents::PresetArgMatcher::Flag(vec!["--settings".into()]).occurrences(&argv);
-        let value: serde_json::Value = serde_json::from_str(&settings[0].value).unwrap();
-        assert_eq!(value["theme"], "dark");
-        assert_eq!(value["disableAllHooks"], true);
-        insta::assert_json_snapshot!(argv, @r###"
-            [
-              "claude",
-              "--model",
-              "small",
-              "--append-system-prompt",
-              "<system_reminder>\n### Skills\n\nWhen a skill's description matches the work in hand, invoke it, even when you know the commands by heart: each skill is built for its one task and does it better than you would by hand.\n</system_reminder>",
-              "--settings",
-              "{\"disableAllHooks\":true,\"theme\":\"dark\"}",
-              "-p",
-              "--output-format",
-              "json",
-              "--json-schema",
-              "{\"type\":\"object\",\"properties\":{\"outcome\":{\"type\":\"string\",\"enum\":[\"pass\",\"fail\"]},\"reason\":{\"type\":\"string\"}},\"required\":[\"outcome\",\"reason\"],\"additionalProperties\":false}",
-              "--",
-              "Decide now."
-            ]
-            "###);
-    } else {
-        insta::assert_json_snapshot!(argv, @r###"
-            [
-              "codex",
-              "--model",
-              "small",
-              "-c",
-              "developer_instructions=\"\"\"\n<system_reminder>\n### Skills\n\nWhen a skill's description matches the work in hand, invoke it, even when you know the commands by heart: each skill is built for its one task and does it better than you would by hand.\n</system_reminder>\"\"\"",
-              "-c",
-              "features.hooks=false",
-              "exec",
-              "--json",
-              "--output-schema",
-              "/check/schema.json",
-              "-o",
-              "/check/verdict.json",
-              "--",
-              "Decide now."
-            ]
-            "###);
-    }
-}
-
-#[test]
-fn headless_provider_compiler_refuses_unsupported_forms() {
-    let root = tempfile::tempdir().unwrap();
-    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("amp"), Vec::new());
-    request.headless = Some(crate::agents::HeadlessRequest {
-        schema_open: false,
-        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
-        schema_file: root.path().join("schema.json"),
-        verdict_file: root.path().join("verdict.json"),
-    });
-    let result = compile_agent_process_with_extra_env(
-        None,
-        root.path(),
-        &request,
-        root.path(),
-        &BTreeMap::new(),
-        &LaunchReminders::default(),
-    );
-    assert!(result.is_err(), "unsupported headless launch must refuse");
-    assert!(result.unwrap_err().to_string().contains("amp"));
-}
-
 fn request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
         isolation_default: None,
@@ -630,7 +502,6 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity::default(),
     }
 }
@@ -2754,7 +2625,6 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity {
             row_key: None,
             resume_model_override: false,

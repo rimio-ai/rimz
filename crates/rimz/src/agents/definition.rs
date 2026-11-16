@@ -180,7 +180,6 @@ pub struct LaunchSpec {
     pub presets: PresetMatchers,
     /// Provider env pair requesting long prompt-cache retention for a keep-warm launch.
     pub long_cache_env: Option<(&'static str, &'static str)>,
-    pub headless: Option<&'static dyn super::HeadlessForm>,
 }
 
 impl LaunchSpec {
@@ -202,7 +201,6 @@ impl LaunchSpec {
         confirm_interrupt: false,
         presets: PresetMatchers::EMPTY,
         long_cache_env: None,
-        headless: None,
     };
 
     /// Render argv that forks a prior session under a provider-assigned new id.

@@ -227,17 +227,6 @@ pub(super) fn validate_spec(
                 );
             }
             report.agent_fields(dir, &path, agent, check.prompt_file.as_deref(), definitions);
-            if !definitions.failed.contains_key(agent)
-                && let Ok(profile) =
-                    crate::harness::spec::resolve_profile(agent, &definitions.agent_profiles)
-                && let Some(adapter) = crate::agents::find_definition(profile.kind.as_str())
-                && adapter.spec().launch.headless.is_none()
-            {
-                report.error(
-                    &format!("{path}.agent"),
-                    format!("{agent} has no headless launch for judge checks"),
-                );
-            }
         }
         let edges = spec.edges(node);
         if !sleep {
@@ -600,6 +589,7 @@ impl Validation {
     /// The values a check's own fields must hold, beyond what its kind table admits.
     fn check_values(&mut self, path: &str, check: &spec::Check) {
         let condition = matches!(check.kind(), Some(CheckKind::Condition));
+        let judge = matches!(check.kind(), Some(CheckKind::Judge(_)));
         let sleep = check.is_sleep();
         self.summary(&format!("{path}.summary"), check.summary.as_deref());
         self.duration(&format!("{path}.timeout"), check.timeout.as_deref());
@@ -628,7 +618,9 @@ impl Validation {
             .chain(check.else_outcome.as_deref())
             .collect::<BTreeSet<_>>();
         for outcome in check.on.keys() {
+            // A judge is an agent, so its ask and its errored turn route like a step's.
             let raised = outcome == "failed"
+                || (judge && matches!(outcome.as_str(), "asked" | "errored"))
                 || Cause::parse(outcome)
                     .is_some_and(|cause| Cause::raised_by(check.table.word()).contains(&cause));
             let engine = spec::reserved(outcome) && !raised && !(condition && outcome == "unknown");

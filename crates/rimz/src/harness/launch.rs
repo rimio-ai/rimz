@@ -324,8 +324,6 @@ pub enum AgentProcessCompileErr {
     UnknownAgent { kind: String },
     #[error("agent `{kind}` has no launch command")]
     NoLaunch { kind: String },
-    #[error("agent `{kind}` has no headless launch command")]
-    NoHeadless { kind: String },
     #[error("agent `{kind}` has no resume command")]
     NoResume { kind: String },
     #[error("agent `{kind}` has no session picker")]
@@ -742,7 +740,6 @@ impl ProviderAccountState {
 #[serde(rename_all = "snake_case")]
 pub enum ReminderSection {
     Loop(String),
-    Judge(String),
     Workflow(String),
 }
 
@@ -791,8 +788,6 @@ pub struct ExecRequest {
     /// The reminder section composed or replayed for this launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reminder_section: Option<ReminderSection>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub headless: Option<crate::agents::HeadlessRequest>,
     #[serde(default)]
     pub identity: ExecIdentity,
 }
@@ -865,7 +860,6 @@ impl ExecRequest {
             follow_up_message: None,
             continue_session: false,
             reminder_section: None,
-            headless: None,
             identity: ExecIdentity::default(),
         }
     }
@@ -943,20 +937,6 @@ pub fn compile_provider_argv(
     action: &ExecAction,
     cwd: &Path,
 ) -> AgentProcessResult<Vec<String>> {
-    compile_provider_argv_with_headless(adapter, kind, action, cwd, None, (cwd, &mut None))
-}
-
-fn compile_provider_argv_with_headless(
-    adapter: &crate::agents::AgentDefinition,
-    kind: &str,
-    action: &ExecAction,
-    cwd: &Path,
-    headless: Option<&crate::agents::HeadlessRequest>,
-    settings: (
-        &Path,
-        &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
-    ),
-) -> AgentProcessResult<Vec<String>> {
     if let Some(rejected) = adapter.rejected_extra_arg(action.extra_args()) {
         return Err(AgentProcessCompileErr::RejectedArg {
             kind: kind.to_owned(),
@@ -991,26 +971,13 @@ fn compile_provider_argv_with_headless(
         });
     }
     let argv =
-        match (headless, action) {
-            (Some(request), ExecAction::Launch { prompt, extra_args }) => adapter
-                .spec()
-                .launch
-                .headless
-                .ok_or_else(|| AgentProcessCompileErr::NoHeadless {
-                    kind: kind.to_owned(),
-                })?
-                .render_argv(extra_args, prompt.as_deref(), request, cwd, settings)?,
-            (Some(_), _) => {
-                return Err(AgentProcessCompileErr::NoHeadless {
-                    kind: kind.to_owned(),
-                });
-            }
-            (None, ExecAction::Launch { prompt, extra_args }) => adapter
+        match action {
+            ExecAction::Launch { prompt, extra_args } => adapter
                 .launch_command(extra_args, prompt.as_deref())
                 .ok_or_else(|| AgentProcessCompileErr::NoLaunch {
                     kind: kind.to_owned(),
                 })?,
-            (None, ExecAction::Pick { extra_args }) => {
+            ExecAction::Pick { extra_args } => {
                 let picker = adapter.spec().launch.picker.ok_or_else(|| {
                     AgentProcessCompileErr::NoPicker {
                         kind: kind.to_owned(),
@@ -1022,13 +989,10 @@ fn compile_provider_argv_with_headless(
                     .chain(extra_args.iter().cloned())
                     .collect()
             }
-            (
-                None,
-                ExecAction::Resume {
-                    session_id,
-                    extra_args,
-                },
-            ) => {
+            ExecAction::Resume {
+                session_id,
+                extra_args,
+            } => {
                 let mut argv = adapter.resume_command(session_id, cwd).ok_or_else(|| {
                     AgentProcessCompileErr::NoResume {
                         kind: kind.to_owned(),
@@ -1037,13 +1001,10 @@ fn compile_provider_argv_with_headless(
                 argv.extend(extra_args.iter().cloned());
                 argv
             }
-            (
-                None,
-                ExecAction::Fork {
-                    session_id,
-                    extra_args,
-                },
-            ) => {
+            ExecAction::Fork {
+                session_id,
+                extra_args,
+            } => {
                 let mut argv = adapter
                     .spec()
                     .launch
@@ -1339,14 +1300,7 @@ fn compile_agent_process_with_extra_env(
         )?;
     }
     let frontend = adapter.take_frontend(action.extra_args_mut());
-    let mut provider_argv = compile_provider_argv_with_headless(
-        adapter,
-        kind,
-        &action,
-        cwd,
-        request.headless.as_ref(),
-        (artifact_dir, &mut settings_artifact),
-    )?;
+    let mut provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
     if let Some(subcommand) = frontend.subcommand {
         provider_argv.insert(1, subcommand.to_owned());
     }
@@ -1623,12 +1577,10 @@ pub(super) fn compile_agent_process_stage_with_extra_env(
 }
 
 fn model_session_step_argv(request: &ExecRequest, rimz_bin: &Path) -> Vec<String> {
-    if request.headless.is_some()
-        || matches!(
-            request.provider_account,
-            ProviderAccountState::Pending { .. }
-        )
-    {
+    if matches!(
+        request.provider_account,
+        ProviderAccountState::Pending { .. }
+    ) {
         return Vec::new();
     }
     if !crate::agents::spec_by_kind(request.kind.as_str())

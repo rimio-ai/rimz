@@ -126,7 +126,10 @@ pub fn resolve_finalized_layout(
             } else {
                 overrides.agent.as_deref()
             },
-            permission_mode: overrides.mode.map(PermissionModeChoice::Explicit),
+            permission_mode: overrides
+                .mode
+                .map(PermissionModeChoice::Explicit)
+                .or(overrides.default_mode.map(PermissionModeChoice::Default)),
             isolation: overrides.isolation,
             preset: &preset,
             passthrough: &overrides.passthrough,

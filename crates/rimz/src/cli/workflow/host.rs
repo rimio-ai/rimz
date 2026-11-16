@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
-use rimz::agents::{AgentState, ProviderCapacity};
+use rimz::agents::{AgentState, ProviderCapacity, WorkflowAttemptRole};
 use rimz::harness::takeover::{self, Takeover};
 use rimz::harness::workflow::{self, WorkflowErr};
 use rimz::ids::EventId;
@@ -87,8 +87,7 @@ impl<'a> Host<'a> {
         let Some(record) = super::live_record(self.state, &pin.run)? else {
             return Ok(());
         };
-        if let Some(push) = record
-            .session_attempt()
+        if let Some(push) = pushing_attempt(&record, pin)
             .filter(|current| current.seq == pin.seq)
             .and_then(|current| current.push.as_ref())
         {
@@ -110,7 +109,7 @@ impl<'a> Host<'a> {
         let Some(record) = super::live_record(self.state, &pin.run)? else {
             return Ok(false);
         };
-        Ok(record.session_attempt().is_some_and(|current| {
+        Ok(pushing_attempt(&record, pin).is_some_and(|current| {
             current.seq == pin.seq
                 && current.ending.is_none()
                 && current
@@ -118,6 +117,21 @@ impl<'a> Host<'a> {
                     .as_ref()
                     .is_some_and(|current| current.message == push.message)
         }))
+    }
+}
+
+/// The attempt that may own the push-back of the agent `pin` names: a step's session, or a
+/// judge's attempt, which its reminder reaches.
+fn pushing_attempt<'r>(
+    record: &'r rimz::store::workflow::RunRecord,
+    pin: &rimz::agents::WorkflowAttemptRef,
+) -> Option<&'r rimz::store::workflow::LiveAttempt> {
+    match pin.role {
+        WorkflowAttemptRole::Judge => record
+            .attempt
+            .as_ref()
+            .filter(|attempt| attempt.kind == rimz::store::workflow::AttemptKind::Judge),
+        WorkflowAttemptRole::Step => record.session_attempt(),
     }
 }
 
@@ -210,6 +224,9 @@ impl workflow::AttemptHost for Host<'_> {
         let overrides = launcher::LaunchOverrides {
             login: set.account.filter(|_| fresh),
             mode: set.mode,
+            // A judge answers unattended unless its profile says otherwise.
+            default_mode: (step.workflow.role == WorkflowAttemptRole::Judge)
+                .then_some(rimz::agents::PermissionMode::Auto),
             preset: rimz::agents::LaunchPreset {
                 effort: set.effort,
                 fast: set.fast,

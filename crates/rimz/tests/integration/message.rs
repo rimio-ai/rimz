@@ -7361,7 +7361,6 @@ fn assert_parent_follow_up_case(
         continue_session: false,
         follow_up_message: Some(message.message_id.clone()),
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity::default(),
     };
     request.identity.name = Some(child_name);

@@ -322,7 +322,6 @@ fn only_terminal_subagent_resumes_await_reopening() {
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: Default::default(),
     };
     let mut record = RunRecord::new(
@@ -479,7 +478,6 @@ pub(super) fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecReques
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity::default(),
     }
 }
@@ -612,7 +610,6 @@ fn bare_exec_args() -> ExecRequest {
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity {
             name: Some("lucid-atlas".to_owned()),
             launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),
@@ -706,7 +703,6 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
         continue_session: false,
         follow_up_message: None,
         reminder_section: None,
-        headless: None,
         identity: ExecIdentity {
             row_key: None,
             resume_model_override: false,

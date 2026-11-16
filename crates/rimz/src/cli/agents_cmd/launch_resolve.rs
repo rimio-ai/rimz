@@ -31,6 +31,7 @@ pub(super) fn typed_overrides(
         },
         isolation: overrides.isolation,
         passthrough: overrides.passthrough.clone(),
+        default_mode: None,
     })
 }
 

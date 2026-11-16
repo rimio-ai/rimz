@@ -1065,8 +1065,6 @@ fn validate_and_create(
             fire_tree: false,
             dir: &dir,
             task: None,
-            surplus: None,
-            surplus_after: None,
             fire: None,
             fire_facts: None,
         },

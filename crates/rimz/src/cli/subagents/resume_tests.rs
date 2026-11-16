@@ -114,7 +114,6 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 reminder_section: Some(rimz::harness::launch::ReminderSection::Loop(
                     "The original loop fire".into()
                 )),
-                headless: None,
                 identity: ExecIdentity {
                     row_key: None,
                     resume_model_override: false,

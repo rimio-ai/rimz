@@ -356,10 +356,10 @@ fn not_found(error: &records::WorkflowStoreErr) -> bool {
         if source.kind() == std::io::ErrorKind::NotFound)
 }
 
-/// An agent attempt counts once its run is written or it has ended: until then its launch can
-/// still be withdrawn into an occupancy wait. Other kinds publish no run.
+/// An agent or judge attempt counts once its run is written or it has ended: until then its
+/// launch can still be withdrawn into a wait. Other kinds publish no run.
 fn launched(attempt: &records::LiveAttempt) -> bool {
-    attempt.kind != records::AttemptKind::Agent || attempt.run.is_some() || attempt.ending.is_some()
+    !attempt.kind.owns_agent() || attempt.run.is_some() || attempt.ending.is_some()
 }
 
 /// The receipt's held line: the hold in front of the run's node, in the phrase

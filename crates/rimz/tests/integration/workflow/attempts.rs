@@ -1564,6 +1564,149 @@ fn timeout_still_settles_but_a_failed_turn_waits_for_a_clean_end() {
     );
 }
 
+/// `submit` answers only from a judge's own row: a step's agent and a judge's own child are
+/// refused with the run record untouched, while the judge itself is accepted.
+#[test]
+fn submit_refuses_a_steps_agent_and_a_judges_child_leaving_the_record_alone() {
+    let submit = |room: &Room, row: &rimz::agents::AgentState| {
+        room.command(&["workflow", "submit", "done"])
+            .env(rimz::harness::launch::ENV_AGENT_KIND, row.kind.as_str())
+            .env(
+                rimz::harness::launch::ENV_AGENT_ID,
+                row.launch_id.as_ref().unwrap_or(&row.agent_id).as_str(),
+            )
+            .env(
+                rimz::harness::launch::ENV_AGENT_NAME,
+                row.name.as_deref().unwrap(),
+            )
+            .output()
+            .unwrap()
+    };
+    let row = |room: &Room, run: &RunRecord| {
+        room.env
+            .store()
+            .snapshot()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|agent| agent.name == run.agent_name && agent.ended_at.is_none())
+            .cloned()
+            .unwrap()
+    };
+    let refused = |room: &Room, id: &str, caller: &rimz::agents::AgentState, reason: &str| {
+        #[cfg(target_os = "linux")]
+        rest::wait_for_advances_to_exit(&room.env, id);
+        let record = room
+            .env
+            .state_path_for(&room.env.project_root)
+            .workflow(&id.parse().unwrap())
+            .record;
+        let before = fs::read(&record).unwrap();
+        let output = submit(room, caller);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success() && stderr.contains(reason) && !stderr.contains("accepted"),
+            "{stderr}"
+        );
+        assert_eq!(fs::read(&record).unwrap(), before, "{stderr}");
+    };
+
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    let step = row(&room, &run);
+    assert_eq!(
+        step.workflow.as_ref().map(|pin| pin.role),
+        Some(rimz::agents::WorkflowAttemptRole::Step)
+    );
+    refused(
+        &room,
+        &id,
+        &step,
+        "error: caller is a workflow step's agent, not a judge; a step ends by finishing its \
+         turn\n",
+    );
+
+    let room = Room::new("");
+    fs::write(
+        room.env.rimz_home().join("workflows/review/workflow.toml"),
+        format!(
+            "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\ntimeout = '1h'\non.go = 'build'\n\
+             [judge.build]\ntimeout = '1h'\nsummary = 'Review the work'\nagent = 'codex'\n\
+             prompt-file = 'prompt.md'\non.done = '@done'\n"
+        ),
+    )
+    .unwrap();
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    let judge = row(&room, &run);
+    assert_eq!(
+        judge.workflow.as_ref().map(|pin| pin.role),
+        Some(rimz::agents::WorkflowAttemptRole::Judge)
+    );
+    // The judge launches a child through `rimz subagents`, whose pane registers by its hooks.
+    let store = room.env.store();
+    let mut launch = room.command(&["subagents", "codex", "look closer"]);
+    launch
+        .env(rimz::harness::launch::ENV_AGENT_KIND, judge.kind.as_str())
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            judge.launch_id.as_ref().unwrap_or(&judge.agent_id).as_str(),
+        )
+        .env(
+            rimz::harness::launch::ENV_AGENT_NAME,
+            judge.name.as_deref().unwrap(),
+        );
+    let output = crate::common::CommandTimeoutExt::bounded_output(&mut launch).unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let child_run = rimz::harness::run::list(store.paths())
+        .unwrap()
+        .into_iter()
+        .find(|record| record.subagent)
+        .unwrap();
+    // A real child's hooks carry its own pane and no workflow run: its launch clears that key.
+    room.list_pane(62, "codex");
+    let mut hook = room.hook_command("codex");
+    hook.env("RIMZ_AGENT_PID", room.owner("child").to_string())
+        .env("RIMZ_RUN_ID", child_run.run_id.as_str())
+        .env("RIMZ_AGENT_NAME", child_run.agent_name.as_deref().unwrap())
+        .env("ZELLIJ", "1")
+        .env("ZELLIJ_PANE_ID", "62");
+    let payload = json!({"hook_event_name":"SessionStart", "session_id":"child-session",
+                         "cwd":room.env.project_root});
+    success(
+        room.env
+            .spawn_payload(hook, &payload.to_string())
+            .wait_with_output()
+            .unwrap(),
+    );
+    room.env.drain_hooks();
+    let child = row(&room, &child_run);
+    assert!(child.parent_is(&judge), "{child:#?}");
+    assert_eq!(
+        child.workflow, None,
+        "a judge's child carries no pin: {child:#?}"
+    );
+    refused(
+        &room,
+        &id,
+        &child,
+        "error: caller is not a workflow judge; rimz workflow submit answers a check from its \
+         judge's own pane\n",
+    );
+    // The same command from the judge's own row is accepted.
+    let output = submit(&room, &judge);
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .starts_with(&format!("accepted done for workflow run {id}")),
+        "{output:?}"
+    );
+}
+
 #[test]
 fn closed_window_merges_without_visits_then_reopens() {
     use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};

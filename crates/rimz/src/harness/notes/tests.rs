@@ -125,7 +125,7 @@ fn empty_launch_variables_and_a_plain_shell_write_no_field() {
 }
 
 #[test]
-fn a_headless_check_names_its_workflow_run_and_no_author() {
+fn a_caller_with_only_a_workflow_run_names_it_and_no_author() {
     let env = BTreeMap::from([("RIMZ_WORKFLOW_RUN", "wr_7")]);
     let facts = caller_facts(
         |key| env.get(key).map(|value| (*value).to_owned()),

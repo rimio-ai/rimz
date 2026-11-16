@@ -1,6 +1,6 @@
 # Workflow engine
 
-A workflow is a durable run through a flat graph of nodes, defined in `workflow.toml` and read live: a deployed run reads its deployed directory at every engine read, and a loop task's inline run reads the definition its fire generated. Checks decide where the run goes next: a test or script command, a condition over loop facts, a sleep, or a headless judge. Steps act: an agent step launches a layout with one supervised leader, a command step runs a command, and a message step queues a message for a living agent. A loop task can start runs, and the scheduler tick drives every active run so its clock bounds fire on time.
+A workflow is a durable run through a flat graph of nodes, defined in `workflow.toml` and read live: a deployed run reads its deployed directory at every engine read, and a loop task's inline run reads the definition its fire generated. Checks decide where the run goes next: a test or script command, a condition over loop facts, a sleep, or a judge (an agent in a pane that answers through `rimz workflow submit`). Steps act: an agent step launches a layout with one supervised leader, a command step runs a command, and a message step queues a message for a living agent. A loop task can start runs, and the scheduler tick drives every active run so its clock bounds fire on time.
 
 Three rules hold the engine together. The run record is the only truth: every transition reads it again under the room's workspace lock and publishes through one function, `engine::persist`. The journal beside the record is evidence. No route reads it, though the engine reads it to classify a terminal outcome, to build an agent's brief, and to tell whether a late message result was already delivered. A wake carries no state: it only spawns an `advance`, which reads the record. Record writes that are not transitions skip `persist`, and each is named where it happens: a hosted child's identity ([Hosted children](#hosted-children)), the loop-report mark and a task rename ([Loop tasks](#loop-tasks)), and the stranded-run ending ([The workflow pass](#the-workflow-pass)). Start reading the code at `crates/rimz/src/harness/workflow/engine.rs::advance`.
 
@@ -22,7 +22,7 @@ Paths are under `crates/rimz/src/`.
 | `harness/workflow/engine/rest.rs` | A session's rest-check moves: holding a session aside at its turn end (`begin`), the held preflight (`prepare`), restoring it, pushing back (`push`), and interrupting it. |
 | `harness/workflow/engine/accounting.rs` | `transition` and `step`: the assist and diagnostic records for each persisted transition. |
 | `harness/workflow/state.rs` | `Transition`: locked routing, the one failure entry (`Transition::failure`), waits and holds, bounds, agent-end staging, step settlement, non-agent end recording (`finish_script`), and the hosted-child kill. |
-| `harness/workflow/script.rs` | `evaluate` and `execute_step`: host checks and command steps behind one interruptible child-publication boundary (`with_child`). Dispatches to `script/condition.rs` and `script/judge.rs`. `condition_now` is the read-only condition preview for inspection. |
+| `harness/workflow/script.rs` | `evaluate` and `execute_step`: host checks and command steps behind one interruptible child-publication boundary (`with_child`). Dispatches to `script/condition.rs`; a judge is an agent attempt, not a hosted child ([Judges](#judges)). `condition_now` is the read-only condition preview for inspection. |
 | `harness/workflow/observe.rs` | The attempt-observation rules the host calls. `observe` projects the leader's run record and a room snapshot into `Observed`: the blocking ask, the stop that wins, the limit, the children. `stop_cohort` and `detach_cohort` decide which agents a stop or detach reaches, and `orphan` finds the unpublished supervised run of a dead launcher. The host applies each effect. |
 | `harness/workflow/inspect.rs` | Read-only journal hops (`hops`, `reached`) and the timeout instants (`timeout_at`, `session_timeout_at`) shared by inspection and transitions. |
 | `harness/workflow/brief.rs` | The `### Workflow` launch-reminder section for a step leader (`step`), the push-back message (`push`), and the shorter judge section (`judge`). |
@@ -74,7 +74,7 @@ Compiling never fails. It parses each node's kind, route targets and edges, cond
 
 - Stage names checked outside a workspace.
 - A turn step, or a session with a `rest-check`, whose leader adapter cannot report background work (`do_background`).
-- Machine auto-continue off, for agent steps and judges. The judge warning for a Codex profile says a failed Codex judge "retries once, then fails invalid". The warning is wrong: a Codex judge whose output is not one object fails `died` ([Headless judges](#headless-judges)).
+- Machine auto-continue off, for agent steps and judges. The judge warning for a Codex profile says a failed Codex judge "retries once, then fails invalid". The warning is wrong: a Codex judge whose output is not one object fails `died` ([Judges](#judges)).
 
 `rimz workflow validate [dir] [--json]` loads agent profiles through the machine definition catalog and never creates a room. Its argument is a directory anywhere, a deployed workflow name, or a command loop task, whose one-check graph it writes to a scratch directory (`crates/rimz/src/cli/workflow/definition.rs::Definition::resolve`). A name that is both a deployed workflow and a task refuses until it is written `workflow:<name>` or `task:<name>`. Without an argument it validates every directory in the definitions home except dot directories. `rimz workflow run` (`crates/rimz/src/cli/workflow.rs::start`, through `crates/rimz/src/cli/workflow_view.rs::deployed_definition`) refuses a directory outside the definitions home.
 
@@ -183,7 +183,7 @@ A new cause touches every place below. The compiler stops you at only some of th
 2. Add it to `Cause::raised_by` for each kind that raises it. Each list is in display order, so the position you choose is where the edge appears in `workflow validate` and inspection. Edge compile, the dead-route check in `validate_spec`, and the return check (`returning_failures`, step 7) all read this table.
 3. For a step kind, a test, or a sleep, add an `Option<String>` field to that kind's `*Edges` struct in `crates/rimz/src/harness/workflow/spec/kinds.rs` (`AgentEdges`, `CommandEdges`, `MessageEdges`, `TestEdges`, `SleepEdges`), and add an entry to the `routes([...])` list in that kind's arm of `WorkflowFile::lower`. Without the field, `deny_unknown_fields` refuses the author's `on.<cause>`. Without the lowering entry, the route parses and is dropped without a word. Script, judge, and condition nodes take their `on` table as a map, so they need no field. The test `every_kind_table_names_exactly_the_causes_its_kind_raises` in `crates/rimz/src/harness/workflow/tests/failures.rs` compares each `*Edges` schema table with `raised_by`, and fails until the two agree. The new field also changes `crates/rimz/src/harness/workflow/snapshots/rimz__harness__workflow__tests__schema.snap`: review the change and accept it with `cargo insta accept`. Tests pin the edge lists too: `crates/rimz/src/harness/workflow/tests/graph.rs` for the agent kind, and the `workflow validate --json` golden in `crates/rimz/tests/integration/workflow.rs` (`validate_json_shape_errors_and_exit_status`) for a test node.
 4. Raise it through `Transition::failure` or `Transition::fail`, with a reason and a `detail` object that holds the cause's facts. Never build the failure input by hand. Where the cause comes from depends on the kind:
-   - A script check answers a failure word through `Evaluation::failed` in `crates/rimz/src/harness/workflow/script.rs`, and `crates/rimz/src/harness/workflow/engine.rs::advance` parses it. A judge's word comes from its `FailureKind`, and `Transition::finish_judge` parses it. Both parse with `Cause::parse(..).unwrap_or(Cause::Invalid)`, so a word you forgot to add raises `invalid` without an error.
+   - A script check answers a failure word through `Evaluation::failed` in `crates/rimz/src/harness/workflow/script.rs`, and `crates/rimz/src/harness/workflow/engine.rs::advance` parses it. A judge's settlement passes its `Cause` to `Transition::check_failure` typed. A script's word parses with `Cause::parse(..).unwrap_or(Cause::Invalid)`, so a word you forgot to add raises `invalid` without an error.
    - A test check carries no failure word. `crates/rimz/src/harness/workflow/script.rs::evaluate_test` starts from `Evaluation::failed("invalid", ..)` and never sets the word, `advance` parses the word only for a script, and a test's error goes to `crates/rimz/src/harness/workflow/state.rs::Transition::finish_check`, whose match picks the cause by kind alone (`test` raises `died`, the other kinds `invalid`). A second test cause therefore needs three changes: `evaluate_test` sets the new word where the condition arises, the word reaches `check_failure` (the script arm in `advance` extended to tests, or a cause passed into `finish_check`), and every existing test error path sets `died`. Without that last change, routing tests through the script arm turns every current test death into `invalid` without an error.
    - A step attempt reaches a cause through `Definition::ending_cause`, which maps `died` and `canceled` and otherwise parses the outcome word, so an outcome whose word is the cause's word needs no case there. A new `crates/rimz/src/store/workflow.rs::AttemptOutcome` variant changes the record format (step 9). The compiler asks for its arms in accounting, rest checks, and the brief, but `crates/rimz/src/harness/workflow/inspect.rs::attempt_superseded` ends in `_ => false` and needs its arm by hand.
 5. For a step, decide the default reason text in `Transition::settle_step` (its match on the cause). A check's reason is the error text its evaluator returns. For every kind, decide the `crates/rimz/src/store/workflow.rs::ParkReason` in `Transition::failure`'s match. Both fall back silently (`the attempt ended <outcome>`, `ParkReason::Invalid`). The park reason feeds only the unreachable park path ([Terms](#terms)).
@@ -209,7 +209,7 @@ Validation enforces each of these, and the engine the last. Each row says why th
 | A resolved `visits` or `capacity` route cannot lead back to its node (`returning_failures`). | Neither failure counts a visit, so a route back repeats the same failure without end. Counting a visit at entry, before the capacity wait, would let the cap end the loop, but a held start would then spend visits doing nothing. |
 | `max-visits` exists only on steps. | A check-only cycle is bounded by its `@wait` rule instead, so check entries are not counted. |
 | `rest-check` and `subscribe` exist only on a session, and a team runs only in a session without a `rest-check`. | A turn ends at its first clean turn end, so there is nothing to recheck or subscribe for. A team has no single turn end or rest to judge. |
-| Two built-in retries exist: a judge's one retry after `died` or `invalid`, and one retry of a launch that started nothing. No `retries` field exists. | Neither retried attempt has acted on the checkout: a judge is read-only there, and an unstarted launch launched no agent. |
+| One built-in retry exists: a step launch that started nothing runs once more. A judge's launch never evicts, so it never reports one, and a judge launch that fails dies at once. No `retries` field exists. | The retried attempt has not acted on the checkout: an unstarted launch launched no agent. |
 | `give-up` and `--skip-capacity` cover the capacity wait only. | The window and occupancy waits have no bound of their own. A run that must not wait on them without end sets a `deadline`. |
 | The deadline fires once per grant, at the node the run is at. | The handler it routes to (often through `[workflow] on.failed`) must be able to run. Firing again at every later node would fail that handler too. `resume --extend deadline=<when>` re-arms it. |
 | A condition waits during a `for` hold without a route saying so. | `hold` is reserved, so no check answers it. Only the engine writes it, as the wait's outcome, and the held case's own outcome routes once the hold has run its length. |
@@ -252,7 +252,7 @@ An optional cancel reason travels through `Ending` to settlement and the `Cancel
 
 `resume` (`crates/rimz/src/harness/workflow/engine.rs::resume`) refuses a terminal run, and an active run with neither `--at` nor `--extend`.
 
-- A parked run re-enters its current node, or `--at <node>`, with a fresh `entered_at` (so a fresh timeout clock) and a cleared judge retry, keeping its input, key, and every visit count.
+- A parked run re-enters its current node, or `--at <node>`, with a fresh `entered_at` (so a fresh timeout clock), keeping its input, key, and every visit count.
 - `--at` on an active run moves it too (`move_live_attempt`). A live agent attempt stages a `canceled` end with `EndCause::Resume` and a saved route to the destination. A hosted child is killed and its attempt settled. The run journals `Resume` at the destination.
 - While an agent attempt at the current node is already ending and its host is live, `--at` refuses with `the attempt at <node> is settling; retry resume after it finishes`. `--extend` alone is still accepted.
 - `--extend visits=+N` adds a run-wide `visit_grant` to every step's `max-visits`. Restarts leave the grant as it is.
@@ -313,13 +313,12 @@ work/              RIMZ_WORKFLOW_DIR, writable by nodes
   notes/           link to kept automation notes (runs without notes: scratch directory)
   signs/           live step guidance, created with the run
   <seq>.check.log  script stderr, or a test's combined output
-  <seq>.check.json judge's whole saved answer
   <seq>.step.log   command-step stdout and stderr
 ```
 
 The record, an inline run's `definition/`, and the journal sit outside the node-writable `work/`. Notes are reached through the link in `work/`. Signs and step claims live under `work/`, and the engine reads only `signs/<step>.md`, never notes or claims.
 
-Every evaluation and attempt takes a fresh `seq`, a judge retry and a re-run after a dead host included. The one exception is a message step's re-send after a dead host, which keeps its attempt's `seq` and message id so the queue takes the notice once. A node therefore keys a `notes/` write by the item it records: keying it by `seq` would not make a repeat a no-op.
+Every evaluation and attempt takes a fresh `seq`, a re-run after a dead host included. The one exception is a message step's re-send after a dead host, which keeps its attempt's `seq` and message id so the queue takes the notice once. A node therefore keys a `notes/` write by the item it records: keying it by `seq` would not make a repeat a no-op.
 
 Only the live directory answers "what is running". `crates/rimz/src/store/workflow.rs::live_runs` and every census, listing, and protection read walk `owned/workflows/` alone, and a run found by id through `crates/rimz/src/store/workflow.rs::find` says which directory held it. Soft reset keeps run homes in both directories, and hard reset removes both. A home without `record.json` is a crash during creation (or while an inline run's definition is written), which every reader skips.
 
@@ -370,9 +369,8 @@ The record (`crates/rimz/src/store/workflow.rs::RunRecord`) stores:
 Optional fields carry:
 
 - `origin`, the source, and `restart`, a staged restart
-- `check_retry` and `check_retry_context`, the judge retry, and `paused_since` and `paused_ms`, the judge's timeout pause
+- `abandoned`, the runs of judges whose evaluation ended while their agent ran, owed a stop ([Judges](#judges))
 - two start arguments: `give_up`, the run's give-up instant for an agent step that sets no `admission.give-up` (`rimz workflow run --give-up`, and no loop fire sets one), and `capacity`, `skip` for a `--skip-capacity` run and omitted for the default `wait`
-- `surplus` and `surplus_after`, surplus values the run's judges gate on, which no loop fire sets
 - the loop facts: `task` (the starting loop task), `manual` (true only for a run `rimz loop fire` created, omitted when false), `loop_report`, `fire_tree`, and `fire`, what the fire tells its briefs, frozen at creation: `manual` with the task's name for `rimz loop fire`, or `scheduled` with the task's name and the brief's trigger clause (none for a watch trigger)
 - `outcome`, the typed run outcome, written with the terminal state ([Loop tasks](#loop-tasks))
 
@@ -446,7 +444,7 @@ Another advance leaves a live host alone while no bound is due. A check host tha
 
 Any advance or cancel kills the recorded group under the lock before it withdraws the attempt, including when the host is stalled or dead (`Transition::kill_child`). It signals only when the leader's start token still matches, or, once the leader's token is unreadable, when a live member of that group carries this run's `RIMZ_WORKFLOW_RUN` marker. Membership is checked again after reading the marker and liveness. A missing or changed token alone never authorizes a signal. A hosted leader stays unreaped until its pipes close, so the published PID and token stay a valid kill handle. A surviving host reaps its child when it resumes, and its stale sequence cannot settle again.
 
-A hosted child runs in the scope checkout with null stdin, the room workspace pin, `RIMZ_WORKFLOW_RUN`, `RIMZ_WORKFLOW_DIR`, and `RIMZ_WORKFLOW_DEFINITION`. Its `context.json` holds `run`, `prompt`, `node`, `seq`, `key`, `input`, `step_visits`, `key_visits`, `output_path` (`work/<seq>.check.json` for a judge, null otherwise), `retry`, `signs_path`, and `prev_attempt`. A session with a `rest-check` also publishes `live_attempt` ([Rest checks](#rest-checks-judging-an-open-session)).
+A hosted child runs in the scope checkout with null stdin, the room workspace pin, `RIMZ_WORKFLOW_RUN`, `RIMZ_WORKFLOW_DIR`, and `RIMZ_WORKFLOW_DEFINITION`. Its `context.json` holds `run`, `prompt`, `node`, `seq`, `key`, `input`, `step_visits`, `key_visits`, `signs_path`, and `prev_attempt`. A session with a `rest-check` also publishes `live_attempt` ([Rest checks](#rest-checks-judging-an-open-session)).
 
 A step's context adds `visit` (its visit count at admission, this launch or push-back included) and `visits` (its count now, since the last reset). The live attempt stamps `visit` at launch and at each admitted push-back. The context, `live_attempt.visit`, `prev_attempt.visit`, and the attempt journal row keep that latest number through resets alone, and an attempt without a stamp uses the current count. `prev_attempt` exposes the step, attempt outcome, `routed_by`, sequence, visit, key, start and end, claim path, handle, supervised run id, HEAD pair, stopped and surviving children, ask or limit evidence, cost, exit `code`, and `log`, with null for whatever was not observed. Signs and the run prompt compose only agent prompts and message-step messages.
 
@@ -491,11 +489,11 @@ A script check saves its complete stderr to `work/<seq>.check.log`, creating the
 
 A script or a judge answers exactly one JSON object: a required string `outcome`, an optional string `reason`, an RFC 3339 `recheck_at`, and a string or integer `key`. Other fields stay in the object as payload. The full normalized object (`crates/rimz/src/harness/workflow/state.rs::normalize_object`) becomes the next node's input, and a missing key inherits the run's current key. A sleep journals its own answers but forwards its incoming input and key on `then`, so the next step's `routed_by` still names the incoming outcome. A sleep's `deadline` failure supplies the failure input instead, keeping the inherited key.
 
-For a script, a nonzero exit, a signal, a process that could not spawn, and a `run` file that no longer resolves raise `died`. Stdout that is not one object, a wrong field type, an unrouted or reserved outcome, and a bad `recheck_at` raise `invalid`. A failure once `.check.log` exists carries `log` in `detail`, plus `code` once the process exited. A test or script whose process could not spawn carries `log` alone. A refused answer settles through `Transition::finish_check`, which takes the same detail. A judge's failures settle differently ([Headless judges](#headless-judges)).
+For a script, a nonzero exit, a signal, a process that could not spawn, and a `run` file that no longer resolves raise `died`. Stdout that is not one object, a wrong field type, an unrouted or reserved outcome, and a bad `recheck_at` raise `invalid`. A failure once `.check.log` exists carries `log` in `detail`, plus `code` once the process exited. A test or script whose process could not spawn carries `log` alone. A refused answer settles through `Transition::finish_check`, which takes the same detail. A judge's failures settle differently ([Judges](#judges)).
 
 `recheck_at` only delays a `@wait`. `Transition::bounded_recheck` clamps it to the earliest of the check's timeout, a held session's timeout, and the run's unfired deadline, so the tick cannot sleep past any of them. A judge's provider-limit reset is clamped the same way.
 
-The push-back brief looks backward for the `TurnEnd {pushed}` matching `attempt.push.message`, then for that check's preceding evaluation. It names that check and measures its `.check.log` (test or script) or `.check.json` (judge) with `FileSummary`. The reason comes before the output path, and an empty or missing file says `no output`. No file content is copied. Without a matching row it falls back to the step's first check and leaves out the output line.
+The push-back brief looks backward for the `TurnEnd {pushed}` matching `attempt.push.message`, then for that check's preceding evaluation. It names that check and, for a test or script, measures its `.check.log` with `FileSummary`. A judge's push-back has no output line: its answer is the whole account. The reason comes before the output path, and an empty or missing file says `no output`. No file content is copied. Without a matching row it falls back to the step's first check and leaves out the output line.
 
 ### Test checks and command steps
 
@@ -559,7 +557,7 @@ Every advance checks bounds before routing. An agent observation first updates i
 | Bound | Fires when | Detail and reason | Cause |
 | --- | --- | --- | --- |
 | Deadline | Once, when the unfired deadline passes. It stops gating until `--extend deadline` re-arms it. | `{deadline: T}`, `the run's deadline <T> passed` | `deadline`, at the node the run is at |
-| Check timeout | The check's `timeout` after `entered_at`, less a judge's closed pause (`paused_ms`). Never due while that pause is open (`paused_since`). It spans every evaluation and every other wait at the node. | `{}`, `<C> ran past its timeout <S>` | `timeout` |
+| Check timeout | The check's `timeout` after `entered_at`, spanning every evaluation and every other wait at the node. A judge's runs from its attempt's start instead, less held time, and is never due before its launch or while it is held. | `{}`, `<C> ran past its timeout <S>` | `timeout` |
 | Step timeout | An agent step's `timeout` after the attempt started, less closed hold time (`asked_ms`). Never due while a hold is open (`held_since`) (`crates/rimz/src/harness/workflow/inspect.rs::timeout_at`). | The attempt's evidence, `the step's timeout passed` | Ends the attempt as `timeout`, which raises `timeout` |
 | Session timeout | The same clock on a session held at its rest check, read from `held.attempt` (`crates/rimz/src/harness/workflow/inspect.rs::session_timeout_at`). Held preflight (`crates/rimz/src/harness/workflow/engine/rest.rs::prepare`) checks it after the deadline and before the check's own timeout, so the session's timeout wins when both are due. | The attempt's evidence, `the step's timeout passed` | Abandons the check and ends the session as `timeout`, which raises `timeout` at the step |
 | Visits | Before launch, the step's visits since the last reset reach `max-visits + visit_grant`. Nothing launches, and no visit or sequence is spent. | `{visits: N, max: M}`, `<S> has used N of M visits`, with the grant included in `max` | `visits`, at the step |
@@ -693,7 +691,7 @@ An unreadable required room or stagger record holds a scheduled start as `store`
 - The rail follows `Definition::walk`, groups returning steps beside their check, and draws arrows only for live non-deadline routes. Unreachable nodes stay out even after an explicit resume there. Visit bounds include resume grants.
 - The leader's check descriptions follow the step's `rest-check` order, then its `then` check, each once. Conditions keep their cases, scripts and shells show the command plus an optional summary and their execution and path rules, and judges show only a summary. Script and shell descriptions explicitly allow the agent to run the command itself.
 
-`StepLaunch.workflow_note` travels through the leader's supervised request as `ReminderSection::Workflow`, never as a loop section. Companions get no section, and a step's subscriptions are its own `subscribe` wakes. `crates/rimz/src/harness/workflow/script/judge.rs::run` sets the shorter `brief::judge` section on its headless request without changing the prompt's JSON contract. The notes point models at workflow views, not raw context files. Ordinary agent resume refuses current workflow pins, and rebirth skips them. A workflow restart, `agents restart` of a current step included, recomposes the note for its fresh or resumed leader.
+`StepLaunch.workflow_note` travels through the leader's supervised request as `ReminderSection::Workflow`, never as a loop section. Companions get no section, and a step's subscriptions are its own `subscribe` wakes. `crates/rimz/src/harness/workflow/engine/agent.rs::step_launch` gives a judge the shorter `brief::judge` section. The notes point models at workflow views, not raw context files. Ordinary agent resume refuses current workflow pins, and rebirth skips them. A workflow restart, `agents restart` of a current step included, recomposes the note for its fresh or resumed leader.
 
 ### How an attempt ends
 
@@ -767,7 +765,7 @@ A session's `rest-check` is a nonempty list of check names (`Node::rest_check`, 
 
 #### Holding the session
 
-An eligible leader turn end moves the agent attempt into `RunRecord.held = {attempt, entered_at, verdict?}` and enters the first rest check, with no visit and no input or key change. `RunRecord.node` then names the check, while the views still show the session's step. The held attempt is a session agent attempt with a run, a `judged` turn identity, and no ending, and the slot is empty or holds that check's script or judge attempt. The ordinary check engine owns windows, sequences, publication, retries, limits, timeouts, dead-host reclaim, and CAS while the session is aside. Routing saves `{node, entered_at, at, target, object, reason}` in `held.verdict` instead of applying it, where `at` is the evaluation's journal instant. A held session never survives restoration, staging an ending, parking, or terminal settlement.
+An eligible leader turn end moves the agent attempt into `RunRecord.held = {attempt, entered_at, verdict?}` and enters the first rest check, with no visit and no input or key change. `RunRecord.node` then names the check, while the views still show the session's step. The held attempt is a session agent attempt with a run, a `judged` turn identity, and no ending, and the slot is empty or holds that check's script or judge attempt. The ordinary check engine owns windows, sequences, publication, timeouts, and CAS while the session is aside, with dead-host reclaim for a script and the agent-attempt lifecycle for a judge ([Judges](#judges)). Routing saves `{node, entered_at, at, target, object, reason}` in `held.verdict` instead of applying it, where `at` is the evaluation's journal instant. A held session never survives restoration, staging an ending, parking, or terminal settlement.
 
 #### Which turn ends are eligible
 
@@ -783,11 +781,11 @@ Pending ingress blocks rest only when its `RIMZ_WORKFLOW_RUN` names this workflo
 
 Before any other preparation, a held preflight observes the session and folds its hold, then checks the deadline and provider exit or budget-exceeded status before it considers a verdict.
 
-A same-step verdict (a push-back) closes any wait, restores the session, and applies its input and key. It checks the visit bound before it bumps once and stamps `LiveAttempt.visit`. An answer past the bound raises `visits` at the step and closes the session with a Lifecycle ending, so a `keep = true` agent is detached. Otherwise it publishes `LiveAttempt.push = {message, queued: false}` and `TurnEnd {action: pushed, visit, message}` under the workspace lock, then calls `AttemptHost::push` off-lock. The host composes a System/Done synthetic message and enqueues it atomically only when the id is in neither the live queue nor any retained history, and delivery uses the ordinary message pipeline. A failed or interrupted push retries the same id without recounting. The host's enqueue acknowledgment is persisted only when the sequence and message id still match. Restoration keeps the session's sequence, run, and step entry time, clears check retry state and `seen`, and rewrites the context to the step view.
+A same-step verdict (a push-back) closes any wait, restores the session, and applies its input and key. It checks the visit bound before it bumps once and stamps `LiveAttempt.visit`. An answer past the bound raises `visits` at the step and closes the session with a Lifecycle ending, so a `keep = true` agent is detached. Otherwise it publishes `LiveAttempt.push = {message, queued: false}` and `TurnEnd {action: pushed, visit, message}` under the workspace lock, then calls `AttemptHost::push` off-lock. The host composes a System/Done synthetic message and enqueues it atomically only when the id is in neither the live queue nor any retained history, and delivery uses the ordinary message pipeline. A failed or interrupted push retries the same id without recounting. The host's enqueue acknowledgment is persisted only when the sequence and message id still match. Restoration keeps the session's sequence, run, and step entry time, clears `seen`, and rewrites the context to the step view.
 
 A `@wait` answer leaves the session held at the check, clears its saved verdict, merges an ordinary rechecking wait, and writes `TurnEnd {kept}` without a visit. A new wait's `first` and every merge's `last` use the answer's `at`. Subscribed signals and the minute tick re-sample the held wait. When the leader no longer rests on its judged turn, preflight closes the wait, abandons any check in flight, and restores the session with `TurnEnd {discarded, reason: "leader turn moved on"}`, and the next clean rest is judged.
 
-A move to another listed check requires the same eligible judged turn as a push or a close. It closes the source wait, clears the saved verdict and check retry, updates the node and entry, and evaluates the destination in the same advance. The key stays. The input stays too, unless the verdict object is a failure (`outcome: failed`), which replaces it (`Transition::hand_on`). It writes `TurnEnd {action: kept, check: source, target: destination}`, and history, hop, and assist readers project the route from that row. Every decision names its actual check, a discard or interruption before a verdict exists included.
+A move to another listed check requires the same eligible judged turn as a push or a close. It closes the source wait, clears the saved verdict, updates the node and entry, and evaluates the destination in the same advance. The key stays. The input stays too, unless the verdict object is a failure (`outcome: failed`), which replaces it (`Transition::hand_on`). It writes `TurnEnd {action: kept, check: source, target: destination}`, and history, hop, and assist readers project the route from that row. Every decision names its actual check, a discard or interruption before a verdict exists included.
 
 #### Closing the session
 
@@ -805,7 +803,7 @@ Provider exit and the deadline abandon any live check, restore the session, reco
 
 Each judged end or held-wait answer has a `turn_end` decision (`kept`, `pushed`, `closed`, `discarded`, or `interrupted`) carrying the session sequence, step, turn identity, check, and an optional verdict outcome and target or an explanatory reason. [Accounting](#accounting) owns which of them book an assist.
 
-`context.json` has `live_attempt = {step, seq, visit, visits, key, started_at, handle, run_id, claim_path, head_start, turn_end}` while a session with a `rest-check` has no staged ending, held or in the slot. Its turn end is `judged` or null, and it has no outcome, ending timestamp, or ending commit. `prev_attempt` stays the last ended attempt. Check publications keep the check's top-level sequence, output, and retry fields without step visit fields. A push-back or discard restores the step view, a held wait keeps the check view, and a close leaves the next publication to replace it.
+`context.json` has `live_attempt = {step, seq, visit, visits, key, started_at, handle, run_id, claim_path, head_start, turn_end}` while a session with a `rest-check` has no staged ending, held or in the slot. Its turn end is `judged` or null, and it has no outcome, ending timestamp, or ending commit. `prev_attempt` stays the last ended attempt. Check publications keep the check's top-level sequence without step visit fields. A push-back or discard restores the step view, a held wait keeps the check view, and a close leaves the next publication to replace it.
 
 #### Accepted limits
 
@@ -825,7 +823,7 @@ Every end publishes `ending` and saves the observation into `prev_attempt` under
 
 No successor launches before the stop or detach returns. Attempt cost comes from the leader run after the stop or detach. Companion spend stays on cards and in stats, and unstamped spend stays null.
 
-For `keep = true`, `StepLaunch.keep` disables the leader wrapper's completion cleanup, and a Lifecycle ending whose outcome is `ended` or `asked` calls `AttemptHost::detach` instead of stop (`crates/rimz/src/harness/workflow/engine/agent.rs::detaches`). A `died`, `limited`, or `canceled` attempt stops the layout like a forced ending. A push-back past `max-visits` ends as `ended` and detaches like any other natural ending. Detach cancels a nonterminal supervised run and clears each matching leader and companion pin that `harness::workflow::detach_cohort` selects, through `crates/rimz/src/store/writer.rs::Store::clear_workflow_pin`, and stops nothing. Its `agent.workflow_cleared` event compares the complete expected `{run, seq, role}` again in the reducer, and a mismatch keeps its pin. The event changes no card field. Cleared cards are ordinary recovery candidates. `agents resume` refuses a current pin with the workflow-restart fix, clears a former pin only after preflight, and keeps it with a warning when the workflow record cannot be read.
+For `keep = true`, `StepLaunch.keep` disables the leader wrapper's completion cleanup, and a Lifecycle ending whose outcome is `ended`, `asked`, or `errored` calls `AttemptHost::detach` instead of stop (`crates/rimz/src/harness/workflow/engine/agent.rs::detaches`). A `died`, `limited`, or `canceled` attempt stops the layout like a forced ending. A push-back past `max-visits` ends as `ended` and detaches like any other natural ending. Detach cancels a nonterminal supervised run and clears each matching leader and companion pin that `harness::workflow::detach_cohort` selects, through `crates/rimz/src/store/writer.rs::Store::clear_workflow_pin`, and stops nothing. Its `agent.workflow_cleared` event compares the complete expected `{run, seq, role}` again in the reducer, and a mismatch keeps its pin. The event changes no card field. Cleared cards are ordinary recovery candidates. `agents resume` refuses a current pin with the workflow-restart fix, clears a former pin only after preflight, and keeps it with a warning when the workflow record cannot be read.
 
 Settlement rechecks a forced ending after an off-lock detach, so a cancel that replaced the Lifecycle ending still stops the layout before settling. Stop can recover already-detached, unpinned cells from the leader's original launch group, and a card pinned to a different attempt is never selected by that fallback.
 
@@ -836,53 +834,42 @@ Settlement rechecks a forced ending after an off-lock detach, so a cancel that r
 
 Stops use the shared cascade and add no workflow-specific lifecycle events. The next visit's occupancy read skips a stopped attempt whose owner has exited, even while its cached row remains.
 
-## Headless judges
+## Judges
 
-A judge (`crates/rimz/src/harness/workflow/script/judge.rs::run`) runs through the shared headless profile resolver and the judge core (`crates/rimz/src/harness/headless/judge.rs::prepare`). It runs in automatic permission mode unless its profile sets another mode. Its profile must resolve to exactly one agent cell, or the evaluation fails (`crates/rimz/src/harness/headless.rs::HeadlessProfile::resolve`). Folder-trust and adapter minimum-version checks run before the judge takes the workspace lock to spawn.
+A judge evaluation is an agent attempt: `engine::prepare` gives it a fresh `seq` and a session-lifecycle attempt of kind `judge`, and it launches through the step's launch seam (`crates/rimz/src/harness/workflow/engine/agent.rs::step_launch`) with the Judge role and the check's profile. It takes no keep, resume, overrides, takeover, or eviction, counts no visit, and writes no step-launch assist. The CLI host launches a Judge-role pin in automatic permission mode unless its profile sets another (`LaunchOverrides.default_mode`). Folder trust, the adapter's minimum version, and the budget gates are the launch's own: a budget refusal fails the judge `limited` and any other launch failure `died` at once. A launch the host reports as having started nothing (`NotLaunched::Unstarted`) is a failed eviction, and a judge never evicts, so the step's one `retry` wait never reaches a judge.
 
 ### The answer channel
 
-The judge's section names `rimz workflow show $RIMZ_WORKFLOW_RUN --history`, and its prompt names `RIMZ_WORKFLOW_DIR` and `output_path` and demands exactly one JSON object with the check fields, with no prose or Markdown fence. The schema stays open, so extra fields stay in the routed input.
+`crates/rimz/src/harness/workflow/engine/agent.rs::compose_judge` composes the prompt: the check's prompt file and the `submit` contract (`crates/rimz/src/harness/workflow/brief.rs::judge_prompt`). The judge answers with `rimz workflow submit`, which resolves the calling agent's workflow pin, refuses any caller but the current Judge-role attempt, and calls `crates/rimz/src/harness/workflow/engine.rs::submit`. That normalizes the answer as a script's stdout is normalized (`crates/rimz/src/harness/workflow/state.rs::normalize_object`), resolves `--recheck-at` from now in the `timezone` setting, and stores it on `attempt.answer` under the workspace lock, refusing a second answer. Nothing reads the judge's last message.
 
-- Claude receives the schema as its schema argument (`crates/rimz/src/agents/adapters/claude/headless.rs::ClaudeHeadless::render_argv`).
-- Codex omits its strict structured-output switch for an open schema and reads the prompt-shaped last message from its output file. Closed schemas, loop verdicts among them, keep Codex schema enforcement.
+The next advance reads the answer in `prepare_end`, ends the attempt through the stop protocol, and `Transition::settle_judge` settles it through `Transition::finish_check`, the cost patched onto the evaluation. Settlement reads the definition again after the off-lock stop, falling back to the one the advance read when that read fails, as a script check does after its child (`crates/rimz/src/harness/workflow/engine/agent.rs::finish`). It runs `fit::misfit` on that definition first, so an edit during the stop that the run no longer fits ends it as a misfit. An answer that a definition edit made unroutable before settlement, the stop included, raises `invalid`. A judge marked `woken` whose answer settles into a wait clears the wait's and the record's `recheck_at` and evaluates again with a fresh judge. A held session's rest-check judge leaves that to held preflight. The deadline wins a tie with an answer.
 
-The provider's structured value is saved to `output_path`. When there is none, the engine reads that file. The value goes through the same normalizer as a script's stdout.
+### Rest, holds, and endings
+
+| Ending | Result |
+| --- | --- |
+| First clean rest (`rest::eligible`) without an answer | One reminder (`brief::judge_reminder`), recorded as `attempt.reminded`. Later rests wait for the timeout. |
+| A question, a provider error, a provider limit, or a budget park | The shared hold of an agent step: `held_since` and `held_on`, the timeout paused. `on.asked` or `on.errored` routes the question or error instead, through an engine-origin evaluation and route carrying the staged `evidence`. |
+| The session ends without an accepted answer | `died` (`the judge's session ended without an answer`). |
+| A provider limit or budget stopped it | `limited`. |
+| Its session closed under it (`canceled`) | `Transition::abandon_check`: the next pass evaluates the check afresh. |
+| Timeout or deadline | `timeout` or `deadline`, after the stop. |
+
+A judge's ending stages its evidence on its own attempt (`attempt.evidence`, `crates/rimz/src/harness/workflow/state.rs::judge_evidence`) and never replaces `prev_attempt`, which stays the last step's. Its timeout runs from the attempt's start, less held time, and is not due before the launch or while it is held (`inspect::timeout_at`), so an `admission.window` wait spends none of it.
+
+An interrupt of a held session abandons the rest-check judge evaluating it: `abandon_check` journals an engine `canceled` evaluation and pushes the judge's run onto `record.abandoned`. The next engine pass and `agent::finish` take that list, persist, and stop each run off the lock (`agent::stop_abandoned`). `workflow restart` and `cancel` stop a live judge through the same stop protocol as a step's agent.
 
 ### Isolation
 
-A judge is read-only on the scope checkout and its Git admin and common directories. Scoped isolation overlays them read-only after all reach rebinds, and host isolation enforces the rule only through the prompt. The root view and the required-path rebinds leave `work/` writable, a room home under host `/tmp` included. A judge evaluation never produces `asked`: nothing reads asks from a headless child, and what the provider does with a permission request in automatic mode is provider behaviour.
+A judge is read-only on the scope checkout and its Git admin and common directories. Scoped isolation overlays them read-only for a Judge-role launch after all reach rebinds, and host isolation enforces the rule only through the prompt. The root view and the required-path rebinds leave `work/` writable, a room home under host `/tmp` included. A judge gets no subagent catalog and keeps native delegation.
 
-### Budget gates
+### Budget endings
 
-Before it prepares the child, `crates/rimz/src/harness/workflow/script/judge.rs::budget_refusal` reads three gates in order:
+`engine::failure` classifies a failed run as `Budget` only when the failure that ended it is an agent attempt that ended at its budget, or a `limited` failure evaluation (a judge's). Its scan stops at a newer route of another cause or a newer evaluation, so a refusal an `on.limited` route handled, followed by another failure, reports `failed`. `run_log` writes a `Budget` ending whose agent never turned as `budget skipped`.
 
-1. `harness::budget::scope_gate` on the judge's resolved account: the fleet and account daily caps and the park.
-2. `agents::provider_budget_gate` on the account binding `crates/rimz/src/harness/workflow/script/judge.rs::managed_launch` resolves for the run's checkout.
-3. The surplus gate the record carries (`surplus`, `surplus_after`), through `crates/rimz/src/harness/surplus.rs::surplus_refusal`. A record with neither field, a loop fire's run included, has no surplus gate.
+### Declines
 
-A refusal raises `limited`, which `Transition::finish_judge` routes through the failure chain. `engine::failure` classifies a failed run as `Budget` only when the failure that ended it is that refusal, or an agent attempt that ended at its budget. Its scan stops at a newer route of another cause or a newer evaluation, so a refusal an `on.limited` route handled, followed by another failure, reports `failed`. `run_log` writes a `Budget` ending whose agent never turned as `budget skipped`.
-
-### How a judge fails
-
-The judge core classes a failed attempt, and `Transition::finish_judge` asks its one retry rule (`FailureKind::retry_owed`) whether the attempt is owed a second run:
-
-| Failure | Result |
-| --- | --- |
-| Engine-decided `canceled` (dead host) | Re-runs free. |
-| Typed provider limit | Spends no retry and opens the judge's pause (`paused_since`). Waits until the known reset, clamped like `recheck_at`, or until a subscribed wake or the tick when the reset is unknown. A matching wake clears a known reset's backoff. |
-| `died`: a launch refusal, a nonzero exit, no object, or an output file that is not JSON | One immediate retry with `context.retry = {outcome, reason}`, then `died` raised with the failure input (`detail` empty). A launch refusal carries its text as `reason`. |
-| `invalid`: an object the normalizer rejects | One immediate retry, then `invalid` raised the same way. |
-| `timeout` | Raises `timeout` at once. |
-| A budget refusal | Raises `limited` at once, with no retry. |
-
-Claude classifies provider limits in its adapter. Codex supplies no typed limit result, so a limited Codex judge fails as `died`.
-
-The record stores `check_retry` and `check_retry_context`, so retry evidence survives a dead host without reading the journal. Both reset on node entry and on a parked resume.
-
-A judge's timeout pauses while it cannot work. `paused_since` opens when it waits for its `admission.window` (`engine::prepare`) or a provider limit's reset (`Transition::finish_judge`), and `Transition::unpause` folds the interval into `paused_ms` just before the next attempt takes its sequence. `Transition::enter` clears both on every node entry, so a node's pause never carries into another. The run deadline never pauses, and the clamp keeps a wake armed at the reset. A failed try's rerun starts inside the same clock.
-
-A fresh judge decline in a task-started run appends a `JudgeDecline` assist (`crates/rimz/src/harness/workflow/script/judge.rs::record_decline`): a verdict whose route leads to no step or agent check while the opposite verdict's route leads to one. Only a run that names a task records one. A loop fire's command row compiles no judge, so a fire's own run never reaches it.
+A fresh judge decline in a task-started run appends a `JudgeDecline` assist (`crates/rimz/src/harness/workflow/engine/agent.rs::record_decline`, after `agent::finish` persists): a verdict whose route leads to no step or agent check while the opposite verdict's route leads to one. Only a run that names a task records one. A loop fire's command row compiles no judge, so a fire's own run never reaches it.
 
 ## Wakes
 
@@ -894,7 +881,7 @@ Every signal routed through the scheduler's shared firing entry spawns one room 
 
 The helper (`engine::wake`) takes the workspace lock per run, reloads each active run and its definition, and matches the current check's subscriptions and the live session's step subscriptions, through the same delivery matcher as loop triggers. A sibling skip does not wake. A run where neither matches gets no write, journal entry, or spawn. A run where either matches is admitted before anything else ([Engine reads](#engine-reads)). A run that fails to load or is refused warns without blocking the others.
 
-On a check match the helper clears the record's and the wait's `recheck_at`, journals the signal name, and marks a live evaluation and a held session `woken`. Publishing a new held check request clears the session flag before reading its inputs. When a wake arrives during that check, or before its saved `@wait` merges, the merge clears the new backoff and re-evaluates at once, once, bypassing the hot-loop guard for that wake. Ordinary evaluation settlement does the same for a woken `@wait`. Wakes during the retry can ask for another pass, and without one the ordinary guard applies. The helper spawns one `advance` per matched run, so one slow script cannot hold back another run.
+On a check match the helper clears the record's and the wait's `recheck_at`, journals the signal name, and marks a live evaluation and a held session `woken`. Publishing a new held check request clears the session flag before reading its inputs. When a wake arrives during that check, or before its saved `@wait` merges, the merge clears the new backoff and re-evaluates at once, once, bypassing the hot-loop guard for that wake. Ordinary evaluation settlement does the same for a woken `@wait`, and so does a judge's settlement after its stop. Wakes during the retry can ask for another pass, and without one the ordinary guard applies. The helper spawns one `advance` per matched run, so one slow script cannot hold back another run.
 
 A step subscription forwards to the leader of `RunRecord::session_attempt` (`engine::subscribers`) only while that attempt is not a turn, has no staged `ending`, and has a supervised run. The held session counts, so a check and its held step can both take one signal.
 
@@ -994,7 +981,7 @@ The fire ends in `engine::create` (`crates/rimz/src/harness/schedule/runner.rs::
 
 - `task = Some(<name>)`, and `manual` set only for `LoopRunMode::Manual`
 - the fire's `fire_tree` and `fire`
-- default start arguments (no `give_up`, `capacity` wait), and no `surplus` or `surplus_after`
+- default start arguments (no `give_up`, `capacity` wait)
 - the fire's trigger evidence as the run prompt, read once the backlog reconcile has settled which trigger the run serves, and absent when the fire has none. The command reads it as `RIMZ_LOOP_TRIGGER`.
 
 The fire takes no start-throttle turn, and an agent its command launches takes its own at that launch.
@@ -1045,15 +1032,14 @@ The same record scan projects live runs into frame-backed worktree groups, inclu
 | Check-origin evaluation | One `workflow_route`, unless the record now waits, holds a session, an explicit route accounts for it, or the transition carries `turn_end`. |
 | Engine-origin `canceled`, run active | `workflow_rerun` diagnostic, no assist. |
 | Engine-origin `limited`, or run canceled | No assist. |
-| Other engine-origin evaluation, active with retry context | `workflow_retry` diagnostic, no assist. |
-| Other engine-origin evaluation | One `workflow_route` (a judge's failure after its retry included), unless the record holds a session, an explicit route accounts for it, or the transition carries `turn_end`. |
+| Other engine-origin evaluation | One `workflow_route` (a judge's failure or routed ask or error included), unless the record holds a session, an explicit route accounts for it, or the transition carries `turn_end`. |
 | Attempt end | One `workflow_route`, unless the run was canceled, an explicit route accounts for it, or the transition carries `turn_end`. |
 | `turn_end` | One `workflow_route` at the check for a push-back, a close, or a kept move between listed checks. None for a kept `@wait`, a discard, or an interrupt. |
 | Closed `Wait` | One `workflow_route` to `@wait` at the wait's own node and the summary's timestamp, with `count` set to the final merged count, even on cancel. |
 | Park or terminal | `workflow_park` or `workflow_end`. |
 | Signal `Wake` or forwarded `signal` | None. |
 
-Held evaluations keep ordinary retry and rerun diagnostics without route assists unless a verdict is saved, and then engine-origin evaluations book nothing and raise no `WorkflowRetry` or `WorkflowRerun`.
+Held evaluations keep ordinary rerun diagnostics without route assists unless a verdict is saved, and then engine-origin evaluations book nothing and raise no `WorkflowRerun`. No writer raises `WorkflowRetry`; the variant stays so older diagnostic records still read.
 
 An open wait has no route assist yet: `list` and `show` carry its live state, and the sidebar raises notices only for holds that need a fix. Closing a window, takeover, occupied, or capacity wait follows the same summary rule. Route records outside waits omit `count`.
 

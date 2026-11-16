@@ -68,7 +68,6 @@ use crate::pane::RuntimeOwnerKind;
 use crate::pane::keys::NamedKey;
 use crate::transcript::{AskOption, AskQuestion};
 
-pub(crate) use account::WindowSurplus;
 #[doc(hidden)]
 pub use account::provider_budget_gate;
 pub use account::{
@@ -105,10 +104,7 @@ pub use folder_trust::{
     FolderTrust, FolderTrustErr, FolderTrustGap, FolderTrustPreview, FolderTrustRow,
     folder_trust_rows, grant_folder_trust,
 };
-pub use headless::{
-    HeadlessError, HeadlessErrorKind, HeadlessForm, HeadlessRequest, HeadlessResult,
-    HeadlessVerdict,
-};
+pub use headless::HeadlessVerdict;
 pub use hook_types::{HookOutput, HookReply, HookRouting};
 use identity::{RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity};
 use lifecycle::LifecycleState;
@@ -190,6 +186,7 @@ const ROUTINE_RIMZ_PREFIXES: &[&str] = &[
     "rimz workflow cancel",
     "rimz workflow resume",
     "rimz workflow restart",
+    "rimz workflow submit",
     "rimz workflow validate",
     "rimz workflow schema",
     "rimz packs list",
@@ -1270,7 +1267,7 @@ fn trust_key_note(kind: &str, key: Option<&Path>) -> String {
     })
 }
 
-/// Check the working directory for supervised panes or headless execution.
+/// Check the working directory for supervised panes.
 /// The login's `$HOME` is refused for every kind, ahead of folder trust: no
 /// one answers an unattended run's trust prompt, and Claude never saves trust
 /// there. Added directories may name `$HOME` because the agent does not start there.
@@ -1290,13 +1287,8 @@ pub fn preflight_launch_dir(
             dir: cwd.to_path_buf(),
         });
     }
-    if mode == LaunchDirMode::Headless && !adapter.headless_requires_folder_trust() {
-        return Ok(());
-    }
     match adapter.folder_trust(cwd, repo_root, login_env) {
-        Some(FolderTrust::Undecided(gap))
-            if matches!(mode, LaunchDirMode::Supervised | LaunchDirMode::Headless) =>
-        {
+        Some(FolderTrust::Undecided(gap)) if mode == LaunchDirMode::Supervised => {
             Err(LaunchDirRefusal::Undecided {
                 kind: adapter.spec().kind,
                 dir: cwd.to_path_buf(),
@@ -1311,16 +1303,14 @@ pub fn preflight_launch_dir(
                 },
             })
         }
-        Some(FolderTrust::Restricted { key }) if mode != LaunchDirMode::Headless => {
-            Err(LaunchDirRefusal::Restricted {
-                kind: adapter.spec().kind,
-                dir: key,
-                fix: format!(
-                    "{}; RimZ leaves the saved decision alone",
-                    FolderTrust::RESTRICTED_FIX
-                ),
-            })
-        }
+        Some(FolderTrust::Restricted { key }) => Err(LaunchDirRefusal::Restricted {
+            kind: adapter.spec().kind,
+            dir: key,
+            fix: format!(
+                "{}; RimZ leaves the saved decision alone",
+                FolderTrust::RESTRICTED_FIX
+            ),
+        }),
         _ => Ok(()),
     }
 }
@@ -1328,7 +1318,6 @@ pub fn preflight_launch_dir(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LaunchDirMode {
     Supervised,
-    Headless,
     /// File access only: allow home and undecided trust, but refuse saved-untrusted decisions.
     Added,
     /// A checkout displaced by empty-dir placement: allow undecided trust, but refuse home
@@ -1394,20 +1383,19 @@ mod tests {
     }
 
     #[test]
-    fn unattended_home_refuses_every_builtin_in_both_modes() {
+    fn unattended_home_refuses_every_builtin() {
         let home = tempfile::tempdir().unwrap();
         let login_env = BTreeMap::from([("HOME".into(), home.path().display().to_string())]);
+        let mode = LaunchDirMode::Supervised;
         for adapter in registry::BUILTINS {
-            for mode in [LaunchDirMode::Supervised, LaunchDirMode::Headless] {
-                assert!(
-                    matches!(
-                        preflight_launch_dir(adapter, home.path(), None, &login_env, mode),
-                        Err(LaunchDirRefusal::Home { dir }) if dir == home.path()
-                    ),
-                    "{} {mode:?} must refuse home",
-                    adapter.spec().kind
-                );
-            }
+            assert!(
+                matches!(
+                    preflight_launch_dir(adapter, home.path(), None, &login_env, mode),
+                    Err(LaunchDirRefusal::Home { dir }) if dir == home.path()
+                ),
+                "{} {mode:?} must refuse home",
+                adapter.spec().kind
+            );
         }
     }
 
@@ -1433,25 +1421,24 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let sub = home.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
+        let mode = LaunchDirMode::Supervised;
         for adapter in registry::BUILTINS {
-            for mode in [LaunchDirMode::Supervised, LaunchDirMode::Headless] {
-                let mut login_env =
-                    BTreeMap::from([("HOME".into(), home.path().display().to_string())]);
-                assert!(!matches!(
-                    preflight_launch_dir(adapter, &sub, Some(home.path()), &login_env, mode),
-                    Err(LaunchDirRefusal::Home { .. })
-                ));
-                login_env.remove("HOME");
-                assert!(!matches!(
-                    preflight_launch_dir(adapter, home.path(), None, &login_env, mode),
-                    Err(LaunchDirRefusal::Home { .. })
-                ));
-                login_env.insert("HOME".into(), String::new());
-                assert!(!matches!(
-                    preflight_launch_dir(adapter, home.path(), None, &login_env, mode),
-                    Err(LaunchDirRefusal::Home { .. })
-                ));
-            }
+            let mut login_env =
+                BTreeMap::from([("HOME".into(), home.path().display().to_string())]);
+            assert!(!matches!(
+                preflight_launch_dir(adapter, &sub, Some(home.path()), &login_env, mode),
+                Err(LaunchDirRefusal::Home { .. })
+            ));
+            login_env.remove("HOME");
+            assert!(!matches!(
+                preflight_launch_dir(adapter, home.path(), None, &login_env, mode),
+                Err(LaunchDirRefusal::Home { .. })
+            ));
+            login_env.insert("HOME".into(), String::new());
+            assert!(!matches!(
+                preflight_launch_dir(adapter, home.path(), None, &login_env, mode),
+                Err(LaunchDirRefusal::Home { .. })
+            ));
         }
     }
 
@@ -1480,12 +1467,16 @@ mod tests {
             adapter.folder_trust(home.path(), None, &login_env),
             Some(FolderTrust::Decided)
         ));
-        for mode in [LaunchDirMode::Supervised, LaunchDirMode::Headless] {
-            assert!(matches!(
-                preflight_launch_dir(adapter, home.path(), None, &login_env, mode),
-                Err(LaunchDirRefusal::Home { .. })
-            ));
-        }
+        assert!(matches!(
+            preflight_launch_dir(
+                adapter,
+                home.path(),
+                None,
+                &login_env,
+                LaunchDirMode::Supervised
+            ),
+            Err(LaunchDirRefusal::Home { .. })
+        ));
     }
 
     #[test]

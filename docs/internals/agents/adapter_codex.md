@@ -12,7 +12,6 @@ This page maps Codex onto RimZ's internal types: which hook carries which signal
 | `install.rs` | the `config.toml` hook merge, uninstall, installed-hook trust, the routine rules file, and `codex_config_path` |
 | `project_trust.rs` | read-only `[projects]` directory trust for the launch preflight |
 | `model_alias.rs` | model alias resolution against the account's catalog |
-| `headless.rs` | the headless check form |
 | `rollout.rs` | the rollout JSONL decoder: header, messages, usage, terminal records |
 | `transcript.rs` | rollout lookup, the tail scan, the local context refresh, and turn-death confirmation |
 | `session_index.rs` | `session_index.jsonl` thread names |
@@ -108,7 +107,7 @@ Codex gates each installed hook behind its own per-hash trust state and silently
 
 It reports every installed but untrusted event, outdated trust included, to `rimz start` and `rimz doctor`. Hook-driven launch preflights (`untrusted_preflight_hooks`) require the same set minus `Interrupt`, which is `optional_for_preflight` because older Codex versions ignore the key and the rollout marker covers them.
 
-Codex opts into `InstallationCapability::hook_trust_choice`: its startup review comes before any hook-dependent event and offers **Trust all and continue**. `ProviderLogin::health` still reports untrusted hooks, for account rows, doctor, account selection, and headless refusals. The CLI's `folder_trust::preflight_hooks` then decides by launch class ([the account check at launch](../../reference/cli/agents.md#the-account-check-at-launch) defines the classes):
+Codex opts into `InstallationCapability::hook_trust_choice`: its startup review comes before any hook-dependent event and offers **Trust all and continue**. `ProviderLogin::health` still reports untrusted hooks, for account rows, doctor, and account selection. The CLI's `folder_trust::preflight_hooks` then decides by launch class ([the account check at launch](../../reference/cli/agents.md#the-account-check-at-launch) defines the classes):
 
 | Launch | Untrusted Codex hooks |
 | --- | --- |
@@ -151,7 +150,7 @@ Rules are applied before the hook config is written, so a rules failure cannot l
 | Max turns | unsupported |
 | Compaction | bare `/compact`; Codex accepts no summary brief, so the configured brief is never sent |
 
-`--no-daemon` keeps the session inside the pane, so its hooks come from the in-pane process. It needs Codex 0.163.0 or newer (`MIN_MANAGED_LAUNCH`) for embedded sessions and Guardian review. The version check runs before the pane opens when the launch `PATH` is known, otherwise in the exec wrapper, and headless loop and workflow judges check the resolved binary before spawning. An unreadable version passes. `tui.question_esc_back=false` makes Escape interrupt the turn instead of collapsing an expanded question editor, and a later user override wins. Headless exec does not inherit these TUI args.
+`--no-daemon` keeps the session inside the pane, so its hooks come from the in-pane process. It needs Codex 0.163.0 or newer (`MIN_MANAGED_LAUNCH`) for embedded sessions and Guardian review. The version check runs before the pane opens when the launch `PATH` is known, otherwise in the exec wrapper. An unreadable version passes. `tui.question_esc_back=false` makes Escape interrupt the turn instead of collapsing an expanded question editor, and a later user override wins.
 
 The descriptor also sets `registers_lazily`, `daemon_hooked_sessions`, `ThreadKey::PerFile`, the `KeepPrimary` same-pane policy, and process names `codex` and `node` (Codex commonly runs as a `node` bundle).
 
@@ -226,26 +225,14 @@ An Undecided message names both fixes: `rimz trust grant --agents codex`, or ans
 | Launcher | Undecided | Restricted | Check |
 | --- | --- | --- | --- |
 | human `rimz agents` command | warns | warns | `crates/rimz/src/launcher/trust.rs::preflight` |
-| team command, workflow agent step (a loop task's included) | warns | refuses | `crates/rimz/src/launcher/trust.rs::preflight` |
+| team command, workflow agent step or judge (a loop task's included) | warns | refuses | `crates/rimz/src/launcher/trust.rs::preflight` |
 | fresh agent-started launch | refuses, asking the user to grant or name a trusted directory to relaunch in | refuses, asking the user to trust the folder in Codex or relaunch from a trusted directory, since no pane opens | `crates/rimz/src/launcher/trust.rs::preflight` |
 | supervised `rimz agents -p` launch, subagent resume | refuses | refuses | `agents::preflight_launch_dir`, `LaunchDirMode::Supervised` |
 | fresh subagent with an explicit cwd | starts in its own empty directory with the target added, without trusting the target | refuses, also when displaced by explicit `--empty-dir` or passed with `--add-dir` | `launcher::supervised::prepare`, then `agents::preflight_launch_dir` |
-| headless loop or workflow judge | refuses | passes, because `codex exec` has no folder screen | `agents::preflight_launch_dir`, `LaunchDirMode::Headless` |
 
 RimZ reads the one resolved config file, not Codex's merged layer stack. Provider passthrough `--cd`/`-C`, `-c` overrides, and launch-specific environment changes are not modeled.
 
 The preview edits TOML through `toml_edit`, keeping existing comments and order, and sets only `projects.<key>.trust_level` to `trusted`. Its key is the main repository root when one is supplied, otherwise the nearest marker root. The neutral [`grant_folder_trust`](../../../crates/rimz/src/agents/folder_trust.rs) writer compares the current bytes with the preview's original before it publishes through the symlink-following provider-file writer. That is a freshness check before replacement, not a transaction against an upstream process writing at the same time. Detection never grants trust, and callers own consent.
-
-### Headless form
-
-`CodexHeadless` ([`codex/headless.rs`](../../../crates/rimz/src/agents/adapters/codex/headless.rs)) is the [headless form](./adapter.md#the-spec) that loop and workflow judges run. Its argv keeps the profile args except `--no-daemon`, then appends `-c features.hooks=false exec --json`, then `--output-schema <schema file>` unless the request's schema is open, then `-o <verdict file>` and `-- <prompt>`. Hooks are off, so the check fires no RimZ hook.
-
-`read_result` reads two places:
-
-- Usage comes from the `turn.completed` events on stdout, the last one winning, and lines that do not parse are skipped. Input tokens include cached input. These events carry no rate-limit snapshot, so the cost stays at list price for the launch model, at its fast multiplier when the launch posture had fast on ([cost](#cost)). A model name that is not priceable, or has no price, leaves the cost unknown.
-- The value is the verdict file `-o` wrote. A file that cannot be read or does not hold JSON is an `Other` error, and the usage read from stdout still lands.
-
-The Codex form never reports `ProviderLimit`.
 
 ## Session registration and launch quirks
 
@@ -491,8 +478,7 @@ Prompt-cache defaults use this billing classification: a metered subscription ge
 - A forked or subagent rollout can open with a copy of the parent's history. `probe_replay` detects it only when a `thread_spawn` or `forked_from_id` marker sits in the file's first 16 KiB and the first qualifying usage records share one timestamp second. The parser then suppresses that prefix and keeps its last cumulative total as the baseline for the first new delta. A paginated fork that references the inherited history through `history_base` copies no prefix ([codex-reference.md](../../externals/agent-adapter/codex-reference.md#rollout-files)).
 - A fingerprint of `codex:`, the timestamp, the model, and the token split collapses events copied across files, while keeping events that differ at subsecond precision.
 - Each `CodexTokenEvent` is priced per model: fresh input (input minus cache reads and writes) at the input rate, cache writes at the cache-create rate, cache reads at the cache-read rate when the price book states one and at the input rate otherwise, and output (which includes reasoning) at the output rate ([token pricing](./spending.md#token-pricing)).
-- Each usage-bearing `token_count` reads its own `rate_limits` into a `CodexPricingBasis`, stamped on `CodexTokenEvent` without adding cursor state. A nonempty `plan_type` selects `IncludedAllowance`: Standard base rates, Fast x2.5, no long-context surcharge. With `credits.has_credits == true` and either `primary.used_percent >= 100` or `secondary.used_percent >= 100`, it selects `PurchasedCredits`: base rates, Fast x2.0, no long-context surcharge. Otherwise `List` keeps the price book's Fast multiplier and long-context tiers. Missing, null, malformed, or plan-less snapshots and flat headless usage stay at list. Team snapshots with null credits use included allowance. A ChatGPT session that only received HTTP rate-limit headers can lack `plan_type` and therefore stays at list, an accepted miss ([upstream snapshot](../../externals/agent-adapter/codex-reference.md#responses-rate-limit-headers)). RimZ carries no basis between lines; `rate_limit_reached_type` does not select credits.
+- Each usage-bearing `token_count` reads its own `rate_limits` into a `CodexPricingBasis`, stamped on `CodexTokenEvent` without adding cursor state. A nonempty `plan_type` selects `IncludedAllowance`: Standard base rates, Fast x2.5, no long-context surcharge. With `credits.has_credits == true` and either `primary.used_percent >= 100` or `secondary.used_percent >= 100`, it selects `PurchasedCredits`: base rates, Fast x2.0, no long-context surcharge. Otherwise `List` keeps the price book's Fast multiplier and long-context tiers. Missing, null, malformed, or plan-less snapshots stay at list. Team snapshots with null credits use included allowance. A ChatGPT session that only received HTTP rate-limit headers can lack `plan_type` and therefore stays at list, an accepted miss ([upstream snapshot](../../externals/agent-adapter/codex-reference.md#responses-rate-limit-headers)). RimZ carries no basis between lines; `rate_limit_reached_type` does not select credits.
 - A token event is Fast when the latest `thread_settings_applied` before it carried `service_tier` `priority` (or `fast`); its basis supplies the multiplier. Codex writes that record at start, at resume, and on `/fast`, while `token_count` names no tier. An absent or other tier (`default`, `flex`) bills at the standard rate. The tier rides the spend cursor beside the tracked model, so a resumed parse keeps it. The live card's cost and its `AgentContext.fast` reading come from the same fold: before any settings record the reading is unknown and the badge falls back to the launch posture, and a standard settings record clears it. A cursor written without the standard tier stays unknown until the next settings record.
-- A headless judge (`codex exec --json`) reports usage with no tier or rate-limit snapshot, so it stays at list price and bills at the model's fast multiplier when the judge's launch posture had fast on (`LaunchParams::fast`).
 - The fallback model is `gpt-5`. A model with no price keeps its tokens at zero dollars while the pricing refresh looks for a rate.
 - Tool calls come from `function_call`, `custom_tool_call`, `local_shell_call`, and `web_search_call` records and attach to the next token event, or to the last one for calls that trail it, so tools that bypass hooks still count.

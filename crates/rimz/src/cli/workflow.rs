@@ -274,6 +274,26 @@ enum Command {
         #[arg(long = "continue")]
         continued: bool,
     },
+    /// Answer the workflow check this agent judges, from the judge's own pane.
+    Submit {
+        /// The answer's outcome: one the check routes.
+        #[arg(value_name = "OUTCOME")]
+        outcome: String,
+        /// Why, in one line.
+        #[arg(long, allow_hyphen_values = true, value_name = "TEXT")]
+        reason: Option<String>,
+        /// The item the answer is about, as text; without it the run keeps its current item.
+        #[arg(long, allow_hyphen_values = true, value_name = "KEY")]
+        key: Option<String>,
+        /// Look again at this time, for an outcome that waits; takes what `run --deadline`
+        /// takes.
+        #[arg(long, value_name = "WHEN", value_parser = workflow::parse_when)]
+        recheck_at: Option<workflow::When>,
+        /// A JSON object whose fields, beneath the flags', are carried to the next node as its
+        /// input.
+        #[arg(long, value_name = "OBJECT", value_parser = answer_object)]
+        json: Option<serde_json::Map<String, serde_json::Value>>,
+    },
     #[command(hide = true)]
     Advance {
         #[arg(required_unless_present = "wake_signal")]
@@ -340,6 +360,22 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         Command::Cancel { id, reason } => receipt::cancel(&id, reason.as_deref(), globals),
         Command::Resume { id, at, extend } => receipt::resume(&id, at.as_deref(), &extend, globals),
         Command::Restart { id, continued } => restart(&id, continued, globals),
+        Command::Submit {
+            outcome,
+            reason,
+            key,
+            recheck_at,
+            json,
+        } => {
+            let mut answer = json.unwrap_or_default();
+            answer.insert("outcome".into(), outcome.into());
+            for (field, value) in [("reason", reason), ("key", key)] {
+                if let Some(value) = value {
+                    answer.insert(field.into(), value.into());
+                }
+            }
+            submit(answer, recheck_at, globals)
+        }
         Command::Advance {
             id: Some(id),
             woken_by,
@@ -488,6 +524,47 @@ fn move_home(
     }
 }
 
+/// A `submit --json` value: one JSON object.
+fn answer_object(raw: &str) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    match serde_json::from_str(raw) {
+        Ok(serde_json::Value::Object(object)) => Ok(object),
+        _ => Err("expected one JSON object".into()),
+    }
+}
+
+/// Hand the calling judge's answer to its run. The judge is the calling agent's own row, with
+/// no walk to a parent, so a judge's child cannot answer for it.
+fn submit(
+    answer: serde_json::Map<String, serde_json::Value>,
+    recheck_at: Option<workflow::When>,
+    globals: &super::GlobalFlags,
+) -> Result<()> {
+    let outside = || {
+        anyhow::anyhow!(
+            "caller is not a workflow judge; rimz workflow submit answers a check from its judge's own pane"
+        )
+    };
+    let workspace = resolve::caller(globals).ok_or_else(outside)?;
+    let state = paths::StatePaths::for_project_root(&workspace.project_root)?;
+    let store = super::open_existing_store_at(state.clone())?.ok_or_else(outside)?;
+    let snapshot = store.snapshot()?;
+    let agent =
+        rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents).map_err(|_| outside())?;
+    let pin = agent.workflow.as_ref().ok_or_else(outside)?;
+    if pin.role != rimz::agents::WorkflowAttemptRole::Judge {
+        bail!("caller is a workflow step's agent, not a judge; a step ends by finishing its turn");
+    }
+    refuse_unwritable_home("submitted")?;
+    let outcome = answer["outcome"].as_str().unwrap_or_default().to_owned();
+    workflow::submit(&state, &pin.run, pin.seq, answer, recheck_at)?;
+    writeln!(
+        render::out(),
+        "accepted {outcome} for workflow run {}; this pane closes once the run settles it",
+        pin.run
+    )?;
+    Ok(())
+}
+
 /// Refuses before `action` changes anything when the detached engine could not open the
 /// home-wide start lock its first launch takes. It checks RimZ's own needs only.
 fn refuse_unwritable_home(action: &str) -> Result<()> {
@@ -545,8 +622,6 @@ fn start(
             task: Some(task.task),
             loop_fire: Some(task.loop_fire),
             fire_tree,
-            surplus: None,
-            surplus_after: None,
             fire: Some(task.fire),
             fire_facts: Some(task.fire_facts),
         },
@@ -555,8 +630,6 @@ fn start(
             task: None,
             loop_fire: rimz::harness::loop_task::read_fire_env().map(|fire| fire.fire),
             fire_tree: false,
-            surplus: None,
-            surplus_after: None,
             fire: None,
             fire_facts: None,
         },

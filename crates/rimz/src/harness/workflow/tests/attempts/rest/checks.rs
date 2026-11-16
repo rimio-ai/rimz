@@ -1,5 +1,4 @@
 use super::*;
-use crate::harness::workflow::state::Transition;
 
 #[test]
 fn kept_waits_merge_the_saved_answers_instant_instead_of_the_later_advance() {
@@ -151,102 +150,185 @@ fn a_held_checks_timeout_closes_through_the_same_verdict_gate() {
     assert_eq!(rows[0]["outcome"], "timeout");
 }
 
-#[test]
-fn held_judges_retry_and_back_off_before_resolving_their_verdict() {
-    judge(false);
-}
-
-#[test]
-fn held_judges_keep_the_session_during_limit_backoff() {
-    judge(true);
-}
-
-fn judge(limited: bool) {
-    let text = SESSION.replace(
+/// A session held at its rest check `pr`, which the definition `text` makes a judge, with the
+/// judge the check launched still running.
+fn judging_rest(text: &str) -> (tempfile::TempDir, StatePaths, FakeHost, RunRecord) {
+    let text = text.replace(
         "[script.pr]\nrun='sh check.sh'",
         "[judge.pr]\nagent='claude'\nsummary='Review the work'\nprompt-file='prompt.md'",
     );
-    let (_dir, state, record) = setup(&text);
+    let (dir, state, record) = setup(&text);
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
     host.observed.borrow_mut().turn = Some(turn());
-    let mut pending = held(&live, false);
-    let mut check = live.attempt.unwrap();
-    check.node = "pr".into();
-    check.kind = records::AttemptKind::Judge;
-    check.lifecycle = StepLifecycle::Turn;
-    check.judged = None;
-    check.seq = pending.next_seq;
-    pending.next_seq += 1;
-    pending.attempt = Some(check.clone());
-    let paths = state.workflow(&record.id);
-    let spec: Definition = toml::from_str(&text).unwrap();
-    let mut t = Transition {
-        record: pending,
-        spec: &spec,
-        paths: &paths,
-        now: Timestamp::now(),
-        entries: Vec::new(),
-    };
-    let mut result = evaluation(
-        Err("judge failed".into()),
-        if limited { "limited" } else { "died" },
+    update(&state, &held(&live, false));
+    let judging = advance_ok(&state, &record.id, &host);
+    let judge = judging
+        .attempt
+        .as_ref()
+        .expect("the rest check launches its judge");
+    assert_eq!(judge.kind, records::AttemptKind::Judge);
+    assert!(
+        judging.held.is_some(),
+        "the session is held while its judge runs"
     );
-    let reset = Timestamp::now() + std::time::Duration::from_secs(1800);
-    if limited {
-        result.limited = Some(records::Limited {
-            reset_at: Some(reset),
-        });
-    }
-    let retry = t.finish_judge(check.seq, result).unwrap();
-    assert_eq!(retry, !limited);
-    assert_eq!(t.record.check_retry, u8::from(!limited));
-    assert!(t.record.held.is_some());
-    if limited {
-        assert_eq!(t.record.recheck_at, Some(reset));
-        update(&state, &t.record);
-        let deferred = advance_ok(&state, &record.id, &host);
-        assert!(deferred.held.is_some());
-        assert_eq!(host.stops.get(), 0);
-    }
-    t.record.attempt = Some(check.clone());
-    t.finish_judge(
-        check.seq,
-        if limited {
-            evaluation(Ok(json!({"outcome":"pending"})), "invalid")
-        } else {
-            evaluation(Err("judge failed again".into()), "died")
-        },
+    assert_eq!(host.launched.borrow().len(), 2);
+    (dir, state, host, judging)
+}
+
+/// The supervised runs of a judging rest's session and of its judge.
+fn rest_runs(judging: &RunRecord) -> (crate::ids::RunId, crate::ids::RunId) {
+    let run = |attempt: &records::LiveAttempt| attempt.run.as_ref().unwrap().run_id.clone();
+    (
+        run(&judging.held.as_ref().unwrap().attempt),
+        run(judging.attempt.as_ref().unwrap()),
     )
-    .unwrap();
-    assert_eq!(
-        (
-            t.record.state,
-            t.record
-                .held
-                .as_ref()
-                .and_then(|held| held.verdict.as_ref())
-                .map(|verdict| verdict.target.clone())
-        ),
-        (
-            RunState::Active,
-            Some(if limited { "build" } else { "@failed" }.into())
-        )
+}
+
+#[test]
+fn a_held_session_stays_held_while_its_rest_check_judge_is_held_on_a_limit() {
+    let (_dir, state, host, judging) = judging_rest(SESSION);
+    let judge = judging.attempt.as_ref().unwrap();
+    // Only the judge's own run shows the limit; the session still rests on its judged turn.
+    let mut observed = host.observed.borrow().clone();
+    observed.status = RunStatus::Pending;
+    observed.stopped = Some(crate::harness::workflow::Stopped {
+        since: Timestamp::now(),
+        kind: crate::harness::workflow::StopKind::Limit,
+        handle: Some("@judge".into()),
+        class: None,
+        text: Some("usage limit".into()),
+    });
+    let judge_run = judge.run.clone().unwrap().run_id;
+    host.observed_runs.borrow_mut().insert(judge_run, observed);
+    let limited = advance_ok(&state, &judging.id, &host);
+    assert_eq!(limited.state, RunState::Active, "{limited:#?}");
+    assert!(
+        limited.attempt.as_ref().unwrap().held_since.is_some(),
+        "{limited:#?}"
     );
-    if t.record.held.is_some() {
-        update(&state, &t.record);
-        host.observed.borrow_mut().turn = Some(turn());
-        let resolved = advance_ok(&state, &record.id, &host);
-        assert_eq!(
-            resolved.state,
-            if limited {
-                RunState::Active
-            } else {
-                RunState::Failed
-            }
-        );
-        assert_eq!(host.stops.get(), usize::from(!limited));
+    assert!(
+        limited.held.is_some(),
+        "the session stays held behind its judge"
+    );
+    assert_eq!(host.stops.get(), 0);
+}
+
+#[test]
+fn a_session_that_opens_a_turn_while_its_rest_check_judge_runs_stops_only_the_judge() {
+    // A stop that fails is dropped from the debt as well, so it never holds the run.
+    for failing in [false, true] {
+        let (_dir, state, host, judging) = judging_rest(SESSION);
+        let (session, judge) = rest_runs(&judging);
+        host.observed.borrow_mut().turn.as_mut().unwrap().at_rest = false;
+        host.stop_error.set(failing);
+        let after = advance_ok(&state, &judging.id, &host);
+        let stopped = if failing { vec![] } else { vec![judge] };
+        assert_eq!(*host.stopped.borrow(), stopped, "failing stop: {failing}");
+        let attempt = after.attempt.as_ref().unwrap();
+        assert_eq!(attempt.kind, records::AttemptKind::Agent);
+        assert_eq!(attempt.run.as_ref().unwrap().run_id, session);
+        assert!(after.held.is_none(), "{after:#?}");
+        assert!(after.abandoned.is_empty(), "{after:#?}");
     }
+}
+
+#[test]
+fn a_pass_that_dies_before_an_abandoned_judges_stop_leaves_the_stop_to_the_next_pass() {
+    let (_dir, state, host, judging) = judging_rest(SESSION);
+    let (session, judge) = rest_runs(&judging);
+    host.observed.borrow_mut().turn.as_mut().unwrap().at_rest = false;
+    *host.on_stop.borrow_mut() = Some(Box::new(|| panic!("the pass dies before its stop")));
+    let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        advance(&state, &judging.id, &host)
+    }));
+    assert!(died.is_err());
+    let stored = records::load(&state.workflow(&judging.id)).unwrap();
+    assert!(stored.held.is_none(), "{stored:#?}");
+    let owed = stored.abandoned.iter().map(|run| &run.run_id);
+    assert_eq!(owed.collect::<Vec<_>>(), vec![&judge]);
+    *host.on_stop.borrow_mut() = None;
+    let after = advance_ok(&state, &judging.id, &host);
+    assert_eq!(*host.stopped.borrow(), vec![judge]);
+    assert_eq!(after.attempt.unwrap().run.unwrap().run_id, session);
+    assert!(after.abandoned.is_empty());
+}
+
+#[test]
+fn a_sessions_timeout_passing_at_its_running_judge_rest_check_stops_both_agents() {
+    let text = SESSION.replace("rest-check=['pr']\n", "rest-check=['pr']\ntimeout='1h'\n");
+    let (_dir, state, host, mut judging) = judging_rest(&text);
+    let (session, judge) = rest_runs(&judging);
+    judging.held.as_mut().unwrap().attempt.started_at =
+        Timestamp::now() - std::time::Duration::from_secs(7200);
+    update(&state, &judging);
+    let ended = advance_ok(&state, &judging.id, &host);
+    assert_eq!(ended.state, RunState::Failed, "{ended:#?}");
+    assert_eq!(*host.stopped.borrow(), vec![session, judge]);
+    assert!(ended.abandoned.is_empty());
+}
+
+#[test]
+fn cancel_and_restart_of_a_session_held_at_a_running_judge_stop_the_judge() {
+    for restarting in [false, true] {
+        let (_dir, state, host, judging) = judging_rest(SESSION);
+        let (session, judge) = rest_runs(&judging);
+        // Every stop, the abandoned judge's included, lands before a write ends the run.
+        let (stop_state, id) = (state.clone(), judging.id.clone());
+        *host.on_stop.borrow_mut() = Some(Box::new(move || {
+            let stored = records::load(&stop_state.workflow(&id)).unwrap();
+            assert_eq!(stored.state, RunState::Active, "{stored:#?}");
+        }));
+        let after = if restarting {
+            restart(&state, &judging.id, None, &host).unwrap();
+            advance_ok(&state, &judging.id, &host)
+        } else {
+            cancel(&state, &judging.id, &host, None).unwrap();
+            records::load(&state.workflow(&judging.id)).unwrap()
+        };
+        let stopped = host.stopped.borrow();
+        assert!(
+            stopped.contains(&judge),
+            "restart {restarting}: {stopped:?}"
+        );
+        assert!(
+            stopped.contains(&session),
+            "restart {restarting}: {stopped:?}"
+        );
+        assert!(after.abandoned.is_empty(), "restart {restarting}");
+        if !restarting {
+            assert_eq!(after.state, RunState::Canceled);
+        }
+    }
+}
+
+#[test]
+fn a_dead_pass_that_staged_an_ending_owing_a_judges_stop_is_repaid_and_finished_by_one_advance() {
+    let (_dir, state, host, judging) = judging_rest(SESSION);
+    let (session, judge) = rest_runs(&judging);
+    *host.on_stop.borrow_mut() = Some(Box::new(|| panic!("the cancel dies at its first stop")));
+    let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cancel(&state, &judging.id, &host, None)
+    }));
+    assert!(died.is_err());
+    let mut staged = records::load(&state.workflow(&judging.id)).unwrap();
+    assert_eq!(staged.state, RunState::Active);
+    let attempt = staged.attempt.as_mut().unwrap();
+    assert!(attempt.ending.is_some(), "{staged:#?}");
+    attempt.host = Host {
+        pid: u32::MAX,
+        start: None,
+    };
+    let owed = staged.abandoned.iter().map(|run| &run.run_id);
+    assert_eq!(owed.collect::<Vec<_>>(), vec![&judge]);
+    update(&state, &staged);
+    *host.on_stop.borrow_mut() = None;
+    let ended = advance_ok(&state, &judging.id, &host);
+    let stopped = host.stopped.borrow();
+    assert!(stopped.contains(&judge), "{stopped:?}");
+    assert!(stopped.contains(&session), "{stopped:?}");
+    assert_eq!(ended.state, RunState::Canceled, "{ended:#?}");
+    assert!(ended.abandoned.is_empty());
 }
 
 /// A session with a one-hour clock held at its rest check `pr`, whose check runs under this

@@ -1139,7 +1139,7 @@ fn limited_and_continued_restart_launch_failures_are_not_retried() {
     host.unstarted.set(true);
     *host.failure.borrow_mut() = Some(LaunchFailure {
         outcome: AttemptOutcome::Limited,
-        reason: "budget".into(),
+        reason: "the day cap refused the launch".into(),
     });
     let limited = advance_ok(&state, &record.id, &host);
     assert_eq!(
@@ -1521,114 +1521,6 @@ fn judge_fixture() -> (Definition, crate::disk::paths::WorkflowPaths, RunRecord)
     (spec, state.workflow(&record.id), record)
 }
 
-fn evaluation(
-    object: Result<Value, String>,
-    failure: &'static str,
-) -> super::super::script::Evaluation {
-    super::super::script::Evaluation {
-        object,
-        failure,
-        stderr_tail: None,
-        limited: None,
-        cost_usd: Some(0.1),
-        detail: serde_json::json!({}),
-        interrupt: None,
-    }
-}
-
-#[test]
-fn judge_routes_valid_objects_and_retries_died_or_invalid_once_then_routes_invalid() {
-    for failure in ["ok", "died", "invalid", "canceled", "limited"] {
-        let (spec, paths, record) = judge_fixture();
-        let mut t = super::super::state::Transition {
-            now: record.entered_at,
-            record,
-            spec: &spec,
-            paths: &paths,
-            entries: Vec::new(),
-        };
-        let reset = "2026-01-02T00:00:00Z".parse().unwrap();
-        for turn in 0..2 {
-            let mut result = evaluation(
-                match failure {
-                    "ok" => Ok(json!({"outcome":"ok"})),
-                    "invalid" => Ok(json!({"outcome":"not-routed"})),
-                    _ => Err("judge failed".into()),
-                },
-                failure,
-            );
-            if failure == "limited" {
-                result.limited = Some(records::Limited {
-                    reset_at: Some(reset),
-                });
-            }
-            t.finish_judge(1, result).unwrap();
-            let evaluation = t
-                .entries
-                .iter()
-                .rev()
-                .find(|entry| matches!(entry.event, JournalEvent::Evaluation { .. }))
-                .unwrap();
-            assert_eq!(
-                serde_json::to_value(&evaluation.event).unwrap()["origin"],
-                if failure == "ok" { "check" } else { "engine" }
-            );
-            if failure == "ok" {
-                assert_eq!(
-                    t.record.state,
-                    RunState::Done,
-                    "judge objects route through check edges"
-                );
-                break;
-            }
-            assert!(
-                t.record.attempt.is_none(),
-                "the hosted evaluation must settle"
-            );
-            if failure == "limited" {
-                assert_eq!(t.record.recheck_at, Some(reset));
-                assert_eq!(t.record.check_retry, 0);
-            } else if failure == "canceled" {
-                assert_eq!(t.record.check_retry, 0);
-            } else if turn == 0 {
-                assert_eq!(t.record.check_retry, 1);
-                assert_eq!(t.record.state, RunState::Active);
-                assert_eq!(
-                    t.record.check_retry_context.as_ref().unwrap()["outcome"],
-                    failure
-                );
-                assert!(t.record.check_retry_context.as_ref().unwrap()["reason"].is_string());
-            } else {
-                assert_eq!(t.record.state, RunState::Failed);
-                assert!(t.record.park.is_none());
-            }
-            t.record.attempt = Some(serde_json::from_value(json!({"kind":"judge","seq":1,"node":"judge","started_at":t.now,"host":{"pid":123,"start":null},"retry":{"outcome":failure,"reason":"judge failed"}})).unwrap());
-        }
-    }
-    let (mut spec, paths, mut record) = judge_fixture();
-    spec.edit(|spec| {
-        let judge = spec.checks.get_mut("judge").unwrap();
-        judge.on.insert("again".into(), "@wait".into());
-        judge.timeout = Some("1d".into());
-    });
-    record.check_retry = 1;
-    record.check_retry_context = Some(json!({"outcome":"died", "reason":"no object"}));
-    let mut t = super::super::state::Transition {
-        now: record.entered_at,
-        record,
-        spec: &spec,
-        paths: &paths,
-        entries: Vec::new(),
-    };
-    t.finish_judge(1, evaluation(Ok(json!({"outcome":"again"})), "invalid"))
-        .unwrap();
-    assert_eq!(t.record.check_retry, 1, "a wait stays at the same check");
-    assert!(
-        t.record.check_retry_context.is_none(),
-        "a successful object ends retry context"
-    );
-}
-
 #[test]
 fn abandoned_checks_record_engine_origin() {
     for outcome in ["canceled", "timeout"] {
@@ -1637,10 +1529,8 @@ fn abandoned_checks_record_engine_origin() {
             let attempt = record.attempt.as_mut().unwrap();
             if published {
                 attempt.digests.insert("judge.md".into(), "digest".into());
-                attempt.retry = Some(json!({"outcome":"died", "reason":"no object"}));
             }
             let digests = attempt.digests.clone();
-            let retry = attempt.retry.clone();
             let mut t = super::super::state::Transition {
                 now: record.entered_at,
                 record,
@@ -1654,7 +1544,6 @@ fn abandoned_checks_record_engine_origin() {
             assert_eq!(entry["outcome"], outcome);
             assert_eq!(entry["origin"], "engine");
             assert_eq!(entry["digests"], json!(digests));
-            assert_eq!(entry["retry"], json!(retry));
         }
     }
 }

@@ -159,7 +159,6 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
             continue_session: false,
             follow_up_message: None,
             reminder_section: None,
-            headless: None,
             identity: crate::harness::launch::ExecIdentity {
                 launch_id: Some(id.to_owned()),
                 params: crate::agents::LaunchParams {

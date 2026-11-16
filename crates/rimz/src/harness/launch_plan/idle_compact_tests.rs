@@ -72,32 +72,15 @@ fn native_idle_compaction_follows_the_resolved_seat_floor() {
     )
     .unwrap();
     let cases = [
-        ("default", "100k", None, None, (false, false), false, true),
-        (
-            "harness off",
-            "off",
-            None,
-            None,
-            (false, false),
-            false,
-            false,
-        ),
-        (
-            "profile",
-            "off",
-            Some("warm"),
-            None,
-            (false, false),
-            false,
-            true,
-        ),
+        ("default", "100k", None, None, (false, false), true),
+        ("harness off", "off", None, None, (false, false), false),
+        ("profile", "off", Some("warm"), None, (false, false), true),
         (
             "profile chain",
             "off",
             Some("inherited"),
             None,
             (false, false),
-            false,
             true,
         ),
         (
@@ -107,7 +90,6 @@ fn native_idle_compaction_follows_the_resolved_seat_floor() {
             None,
             (false, false),
             false,
-            false,
         ),
         (
             "role",
@@ -115,7 +97,6 @@ fn native_idle_compaction_follows_the_resolved_seat_floor() {
             Some("cold"),
             Some("warm"),
             (false, false),
-            false,
             true,
         ),
         (
@@ -125,7 +106,6 @@ fn native_idle_compaction_follows_the_resolved_seat_floor() {
             Some("cold"),
             (false, false),
             false,
-            false,
         ),
         (
             "role profile",
@@ -133,7 +113,6 @@ fn native_idle_compaction_follows_the_resolved_seat_floor() {
             Some("inherited"),
             Some("inherited"),
             (false, false),
-            false,
             true,
         ),
         (
@@ -143,7 +122,6 @@ fn native_idle_compaction_follows_the_resolved_seat_floor() {
             Some("warm"),
             (true, true),
             false,
-            false,
         ),
         (
             "peer",
@@ -151,23 +129,13 @@ fn native_idle_compaction_follows_the_resolved_seat_floor() {
             Some("warm"),
             Some("warm"),
             (false, true),
-            false,
             true,
         ),
-        (
-            "parent only",
-            "100k",
-            None,
-            None,
-            (true, false),
-            false,
-            true,
-        ),
-        ("headless", "100k", None, None, (false, false), true, false),
+        ("parent only", "100k", None, None, (true, false), true),
     ];
     let mut actual = Vec::new();
     let mut expected = Vec::new();
-    for (label, floor, profile, role, (parent, depth), headless, covered) in cases {
+    for (label, floor, profile, role, (parent, depth), covered) in cases {
         machine.harness.idle_compact = floor.parse().unwrap();
         let effective =
             crate::config::effective::load_with_roots(&machine, project.path(), config.path())
@@ -179,12 +147,6 @@ fn native_idle_compaction_follows_the_resolved_seat_floor() {
         request.identity.params.parent_agent_id = parent.then(|| "parent".into());
         request.identity.params.launch_depth = depth.then_some(1);
         request.subagent = parent && depth;
-        request.headless = headless.then(|| crate::agents::HeadlessRequest {
-            schema_open: false,
-            schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
-            schema_file: "/check/schema.json".into(),
-            verdict_file: "/check/verdict.json".into(),
-        });
         for effective in [None, Some(&effective)] {
             let plan = compile_seat(project.path(), &request, &machine, effective);
             actual.push((label, native_idle_compaction(&plan)));

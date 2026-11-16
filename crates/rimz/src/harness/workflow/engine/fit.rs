@@ -8,8 +8,8 @@ use crate::store::workflow::{EvaluationOrigin, Verdict};
 /// when its node is in the definition; each live or held attempt sits at a node of the class
 /// it was published as, an agent step keeping its lifecycle; a held session, or a session with
 /// a push-back pending, sits at a step with rest checks; a held session's judging check is
-/// still in its step's `rest-check` list; a staged asked ending sits at a step that routes
-/// `asked`; and a held wait verdict names a case its check still has.
+/// still in its step's `rest-check` list; a staged asked or errored ending sits at a step or
+/// judge check that routes it; and a held wait verdict names a case its check still has.
 pub(super) fn misfit(spec: &Definition, record: &RunRecord) -> Option<String> {
     let changed = |node: &str, what: &str| {
         Some(format!(
@@ -55,6 +55,29 @@ pub(super) fn misfit(spec: &Definition, record: &RunRecord) -> Option<String> {
                 changed(node, &format!("it is no longer {was}"))
             };
         }
+        let routed = attempt
+            .ending
+            .as_ref()
+            .filter(|_| {
+                matches!(
+                    attempt.kind,
+                    AttemptKind::Agent | AttemptKind::Team | AttemptKind::Judge
+                )
+            })
+            .filter(|ending| {
+                ending.route.is_none()
+                    && ending.cause == EndCause::Lifecycle
+                    && matches!(
+                        ending.outcome,
+                        AttemptOutcome::Asked | AttemptOutcome::Errored
+                    )
+            })
+            .map(|ending| ending.outcome.as_str());
+        if let Some(outcome) = routed
+            && !spec.edges(node).iter().any(|edge| edge.outcome == outcome)
+        {
+            return changed(node, &format!("it no longer routes {outcome}"));
+        }
         let Some(step) = spec
             .step(node)
             .filter(|_| attempt.kind != AttemptKind::Workflow)
@@ -88,23 +111,6 @@ pub(super) fn misfit(spec: &Definition, record: &RunRecord) -> Option<String> {
                 &format!("it is no longer a rest check of {node}"),
             );
         }
-        let routed = attempt
-            .ending
-            .as_ref()
-            .filter(|ending| {
-                ending.route.is_none()
-                    && ending.cause == EndCause::Lifecycle
-                    && matches!(
-                        ending.outcome,
-                        AttemptOutcome::Asked | AttemptOutcome::Errored
-                    )
-            })
-            .map(|ending| ending.outcome.as_str());
-        if let Some(outcome) = routed
-            && !spec.edges(node).iter().any(|edge| edge.outcome == outcome)
-        {
-            return changed(node, &format!("it no longer routes {outcome}"));
-        }
     }
     let verdict = held.and_then(|held| held.verdict.as_ref())?;
     let case = (verdict.object["outcome"] == "hold")
@@ -131,17 +137,17 @@ fn lifecycle_word(lifecycle: workflow::StepLifecycle) -> &'static str {
 pub(super) enum Closing<'r> {
     /// `workflow cancel`, with its reason.
     Cancel(Option<&'r str>),
-    /// Failed, with the reason its outcome carries and the cost of a judge the misfit settled.
-    Fail(String, Option<f64>),
+    /// Failed, with the reason its outcome carries.
+    Fail(String),
 }
 
 /// End the run reading only its record, as `workflow cancel` does: a held session is
-/// interrupted, a live agent attempt is staged canceled and stopped off-lock (or left to the
-/// host still launching it), a step's child is killed and its attempt settled, and a check's
-/// evaluation is abandoned. A `Fail` first journals an engine fault naming the node and its
-/// reason, which the run's outcome reads, and ends the run failed through no route. An agent
-/// attempt a close already staged is closed: a later close only finishes the stop, as the
-/// first one meant it.
+/// interrupted, a live agent or judge attempt is staged canceled and stopped off-lock (or left
+/// to the host still launching it), a step's child is killed and its attempt settled, and a
+/// check's evaluation is abandoned. A `Fail` first journals an engine fault naming the node and
+/// its reason, which the run's outcome reads, and ends the run failed through no route. An
+/// agent attempt a close already staged is closed: a later close only finishes the stop, as
+/// the first one meant it.
 pub(super) fn close(
     state: &StatePaths,
     paths: &WorkflowPaths,
@@ -151,7 +157,7 @@ pub(super) fn close(
     closing: Closing<'_>,
 ) -> Result<()> {
     if let Some(attempt) = &t.record.attempt
-        && attempt.kind == AttemptKind::Agent
+        && attempt.kind.owns_agent()
         && attempt
             .ending
             .as_ref()
@@ -177,7 +183,7 @@ pub(super) fn close(
     t.close_wait();
     let (reason, route) = match &closing {
         Closing::Cancel(reason) => (reason.map(str::to_owned), None),
-        Closing::Fail(reason, cost_usd) => {
+        Closing::Fail(reason) => {
             let node = t.record.node.clone();
             let object = t.engine_object(json!({"outcome":"fault", "node":node, "reason":reason}));
             t.push(
@@ -185,8 +191,7 @@ pub(super) fn close(
                 JournalEvent::Evaluation {
                     origin: EvaluationOrigin::Engine,
                     outcome: "fault".into(),
-                    cost_usd: *cost_usd,
-                    retry: None,
+                    cost_usd: None,
                     object: object.clone(),
                     digests: BTreeMap::new(),
                     started_at: t.now,
@@ -213,7 +218,7 @@ pub(super) fn close(
     };
     let spec = t.spec;
     if let Some(attempt) = &t.record.attempt
-        && attempt.kind == AttemptKind::Agent
+        && attempt.kind.owns_agent()
     {
         let busy = (attempt.ending.is_some() || attempt.run.is_none())
             && crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref());
@@ -253,7 +258,7 @@ pub(super) fn close(
     let orphan = orphaned_notice(&t.record);
     let settled = match &closing {
         Closing::Cancel(_) => None,
-        Closing::Fail(reason, _) => Some(reason.clone()),
+        Closing::Fail(reason) => Some(reason.clone()),
     };
     if !t.finish_script(ending, None, None, settled)? {
         match closing {
@@ -268,7 +273,7 @@ pub(super) fn close(
                     },
                 );
             }
-            Closing::Fail(reason, _) => t.fault(reason)?,
+            Closing::Fail(reason) => t.fault(reason)?,
         }
     }
     persist(&mut t, &guard)?;

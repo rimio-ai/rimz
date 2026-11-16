@@ -225,11 +225,6 @@ pub trait InstallationCapability: CoreCapability {
         Ok(None)
     }
 
-    /// Whether folder-trust onboarding also blocks headless launches.
-    fn headless_requires_folder_trust(&self) -> bool {
-        false
-    }
-
     /// A modeled folder-trust decision, or no model for this provider.
     fn folder_trust(
         &self,

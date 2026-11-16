@@ -313,16 +313,6 @@ fn codex_config_path_honors_codex_home_and_override() {
         )
         .unwrap_err();
         assert!(added_error.to_string().contains("saved untrusted"));
-        assert!(
-            crate::agents::preflight_launch_dir(
-                adapter,
-                cwd,
-                None,
-                &login_env,
-                LaunchDirMode::Headless
-            )
-            .is_ok()
-        );
         let error = crate::agents::preflight_launch_dir(
             adapter,
             cwd,

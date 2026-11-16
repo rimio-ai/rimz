@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
-use super::Definition;
 use super::definition::{Parsed, Target};
 use super::spec::Cause;
+use super::{Definition, Kind};
 use crate::store::workflow::{
     AttemptOutcome, EvaluationOrigin, HeldSession, JournalEntry, JournalEvent, LiveAttempt,
     ParkReason, RunRecord, RunState, TurnEndAction,
@@ -473,8 +473,8 @@ pub(super) fn first_bound(
         .min_by_key(|(at, _, _)| *at))
 }
 
-/// The current node's timeout: a check's from its entry, less a judge's paused time, and an
-/// agent step's from its launch, less its held time; none while either clock is paused.
+/// The current node's timeout: a check's from its entry, and an agent step's or a judge's from
+/// its launch, less its held time; none while that attempt is held or before a judge launches.
 pub fn timeout_at(
     spec: &Definition,
     record: &RunRecord,
@@ -485,10 +485,13 @@ pub fn timeout_at(
             None => Ok(None),
         };
     };
-    if record.paused_since.is_some() {
-        return Ok(None);
+    if matches!(check.kind(), Some(Kind::Judge(_))) {
+        return match &record.attempt {
+            Some(judge) => step_timeout_at(spec, judge),
+            None => Ok(None),
+        };
     }
-    clock(check.timeout(), record.entered_at, record.paused_ms)
+    clock(check.timeout(), record.entered_at, 0)
 }
 
 /// The timeout of a session held at its rest check, which runs beside the check's own.
@@ -511,7 +514,7 @@ fn step_timeout_at(
         return Ok(None);
     }
     clock(
-        spec.step(&attempt.node).and_then(|step| step.timeout()),
+        spec.node(&attempt.node).and_then(|node| node.timeout()),
         attempt.started_at,
         attempt.asked_ms,
     )
@@ -520,11 +523,11 @@ fn step_timeout_at(
 fn clock(
     timeout: Option<&Parsed<std::time::Duration, TimeInputErr>>,
     start: Timestamp,
-    paused_ms: u64,
+    held_ms: u64,
 ) -> Result<Option<Timestamp>, TimeInputErr> {
     let (Some(timeout), Ok(start)) = (
         timeout,
-        start.checked_add(std::time::Duration::from_millis(paused_ms)),
+        start.checked_add(std::time::Duration::from_millis(held_ms)),
     ) else {
         return Ok(None);
     };

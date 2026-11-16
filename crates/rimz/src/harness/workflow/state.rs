@@ -5,28 +5,12 @@ use super::Definition;
 use super::definition::Target;
 use super::spec::{self, Cause};
 use crate::disk::paths::WorkflowPaths;
-use crate::harness::headless::judge::FailureKind;
 use crate::store::workflow::{
     AttemptKind, AttemptOutcome, Children, EndCause, Ending, EvaluationOrigin, JournalEntry,
     JournalEvent, Key, KeyVisits, LiveAttempt, Park, ParkReason, PreviousAttempt, RunRecord,
     RunState, TurnEndAction, Verdict, Wait,
 };
 use crate::utils::time::TimeInputErr;
-
-/// What a failed judge evaluation does next, decided once in `Transition::finish_judge`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum JudgeFailure {
-    /// The evaluation was canceled.
-    Canceled,
-    /// A provider limit held the judge; it rechecks after the reset.
-    Limited,
-    /// The judge's account may not spend: the check fails `limited`.
-    Budget,
-    /// The first failure; the judge runs once more.
-    Retry,
-    /// A second failure, routed through the failure chain under its own cause.
-    Route,
-}
 
 pub(super) struct Transition<'a> {
     pub record: RunRecord,
@@ -37,107 +21,6 @@ pub(super) struct Transition<'a> {
 }
 
 impl Transition<'_> {
-    pub(super) fn finish_judge(
-        &mut self,
-        seq: u64,
-        result: super::script::Evaluation,
-    ) -> Result<bool, TimeInputErr> {
-        if !self.current(seq) {
-            return Ok(false);
-        }
-        let attempt = self
-            .record
-            .attempt
-            .as_ref()
-            .expect("current judge attempt")
-            .clone();
-        let (object, failure) = match result.object {
-            Ok(object) => (
-                normalize_object(
-                    object,
-                    self.spec
-                        .check(&self.record.node)
-                        .expect("current judge check"),
-                    self.record.key.as_ref(),
-                    &self.spec.edges(&self.record.node),
-                ),
-                "invalid",
-            ),
-            Err(reason) => (Err(reason), result.failure),
-        };
-        if let Ok(object) = object {
-            self.record.check_retry_context = None;
-            self.finish_check(seq, Ok(object), json!({}), result.stderr_tail)?;
-            for entry in &mut self.entries {
-                if entry.seq == Some(seq)
-                    && let JournalEvent::Evaluation {
-                        cost_usd, retry, ..
-                    } = &mut entry.event
-                {
-                    *cost_usd = result.cost_usd;
-                    *retry = attempt.retry.clone();
-                }
-            }
-            return Ok(false);
-        }
-        // The successful case returned above.
-        let reason = object.expect_err("failed judge evaluation");
-        let kind = FailureKind::from_label(failure);
-        let disposition = match kind {
-            _ if failure == "budget" => JudgeFailure::Budget,
-            Some(FailureKind::Canceled) => JudgeFailure::Canceled,
-            Some(FailureKind::Limited) => JudgeFailure::Limited,
-            Some(kind) if kind.retry_owed(self.record.check_retry > 0) => JudgeFailure::Retry,
-            _ => JudgeFailure::Route,
-        };
-        let cause = match disposition {
-            JudgeFailure::Budget => Some(Cause::Limited),
-            JudgeFailure::Route => Some(Cause::parse(failure).unwrap_or(Cause::Invalid)),
-            _ => None,
-        };
-        let node = self.record.node.clone();
-        let object = match cause {
-            Some(cause) => self.failure_input(&node, cause, &reason, &json!({})),
-            None => self.engine_object(json!({"outcome":failure, "reason":reason})),
-        };
-        self.close_wait();
-        self.push(
-            Some(seq),
-            JournalEvent::Evaluation {
-                origin: EvaluationOrigin::Engine,
-                outcome: cause.map_or(failure, Cause::word).into(),
-                object,
-                digests: attempt.digests,
-                started_at: attempt.started_at,
-                ended_at: self.now,
-                stderr_tail: result.stderr_tail,
-                cost_usd: result.cost_usd,
-                retry: attempt.retry,
-            },
-        );
-        self.record.attempt = None;
-        self.record.recheck_at = None;
-        if let Some(cause) = cause {
-            self.fail(Some(seq), &node, cause, reason, json!({}))?;
-            return Ok(false);
-        }
-        match disposition {
-            JudgeFailure::Limited => {
-                // A limit stops the judge's clock until it starts again after the reset.
-                self.record.paused_since = Some(self.now);
-                self.record.recheck_at =
-                    self.bounded_recheck(result.limited.and_then(|limited| limited.reset_at))?;
-                Ok(false)
-            }
-            JudgeFailure::Retry => {
-                self.record.check_retry = 1;
-                self.record.check_retry_context = Some(json!({"outcome":failure,"reason":reason}));
-                Ok(true)
-            }
-            _ => Ok(true),
-        }
-    }
-
     pub(super) fn current(&self, seq: u64) -> bool {
         self.record.state == RunState::Active
             && self.record.attempt.as_ref().is_some_and(|a| a.seq == seq)
@@ -206,7 +89,6 @@ impl Transition<'_> {
                 origin: EvaluationOrigin::Check,
                 outcome,
                 cost_usd: None,
-                retry: None,
                 object: object.clone(),
                 digests: attempt.digests,
                 started_at: attempt.started_at,
@@ -244,7 +126,6 @@ impl Transition<'_> {
                 origin: EvaluationOrigin::Engine,
                 outcome: cause.map_or("fault", Cause::word).into(),
                 cost_usd: None,
-                retry: None,
                 object,
                 digests: attempt.digests,
                 started_at: attempt.started_at,
@@ -304,10 +185,6 @@ impl Transition<'_> {
         self.record.node = held.attempt.node.clone();
         self.record.entered_at = held.entered_at;
         self.record.attempt = Some(held.attempt);
-        self.record.check_retry = 0;
-        self.record.check_retry_context = None;
-        self.record.paused_since = None;
-        self.record.paused_ms = 0;
         self.record.launch_retry = false;
         self.record.recheck_at = None;
     }
@@ -517,19 +394,7 @@ impl Transition<'_> {
     pub(super) fn enter(&mut self, node: String) {
         self.record.node = node;
         self.record.entered_at = self.now;
-        self.record.check_retry = 0;
-        self.record.check_retry_context = None;
-        self.record.paused_since = None;
-        self.record.paused_ms = 0;
         self.record.launch_retry = false;
-    }
-
-    /// Run a paused judge's clock again from now, counting the pause to this entry.
-    pub(super) fn unpause(&mut self) {
-        if let Some(since) = self.record.paused_since.take() {
-            let paused = u64::try_from(self.now.duration_since(since).as_millis()).unwrap_or(0);
-            self.record.paused_ms = self.record.paused_ms.saturating_add(paused);
-        }
     }
 
     /// Hand a route's `object` to the next node as its input and key. A failure always does;
@@ -738,6 +603,10 @@ impl Transition<'_> {
         attempt.held_since = None;
         attempt.held_on = None;
         attempt.ending = Some(ending);
+        if attempt.kind == AttemptKind::Judge {
+            attempt.evidence = judge_evidence(outcome, observed);
+            return;
+        }
         let mut previous = self.previous_attempt(outcome);
         previous.children = Some(observed.children.clone());
         previous.limited = (outcome == AttemptOutcome::Limited)
@@ -792,6 +661,9 @@ impl Transition<'_> {
     ) -> Result<(), TimeInputErr> {
         // stage_agent_end durably saves observations before stop can erase asks or limits.
         let attempt = self.record.attempt.take().expect("staged agent attempt");
+        if attempt.kind == AttemptKind::Judge {
+            return self.settle_judge(attempt, cost_usd, reason);
+        }
         let ending = attempt.ending.clone().expect("staged agent ending");
         let previous = self
             .record
@@ -908,22 +780,7 @@ impl Transition<'_> {
             return Ok(());
         }
         if ending.cause == EndCause::Cancel {
-            self.close_wait();
-            self.record.restart = None;
-            self.record.state = RunState::Canceled;
-            self.record.terminal_at = Some(self.now);
-            self.push(
-                None,
-                JournalEvent::Cancel {
-                    reason: ending.reason,
-                },
-            );
-            self.push(
-                None,
-                JournalEvent::Terminal {
-                    state: RunState::Canceled,
-                },
-            );
+            self.cancel_run(ending.reason);
             return Ok(());
         }
         if ending.cause == EndCause::Deadline {
@@ -992,6 +849,136 @@ impl Transition<'_> {
             _ => format!("the attempt ended {}", ending.outcome.as_str()),
         });
         self.fail(None, &attempt.node, cause, reason, detail)
+    }
+
+    /// Settle a judge whose ending was staged and whose agent was stopped: by its answer, by
+    /// the failure or engine route its ending raises, or by the route, cancel or deadline that
+    /// ended it. The Evaluation entries it writes carry the judge's cost.
+    fn settle_judge(
+        &mut self,
+        attempt: LiveAttempt,
+        cost_usd: Option<f64>,
+        reason: Option<String>,
+    ) -> Result<(), TimeInputErr> {
+        // stage_agent_end staged the ending this settles.
+        let ending = attempt.ending.clone().expect("staged judge ending");
+        let (seq, node) = (attempt.seq, attempt.node.clone());
+        let answer = attempt.answer.clone();
+        let evidence = attempt.evidence.clone().unwrap_or_else(|| json!({}));
+        // Its agent was stopped before this settlement, so abandoning it owes no stop.
+        self.record.attempt = Some(LiveAttempt {
+            run: None,
+            ..attempt
+        });
+        let from = self.entries.len();
+        if let Some(verdict) = ending.route {
+            self.abandon_check("canceled");
+            self.record.node = verdict.node;
+            self.record.entered_at = verdict.entered_at;
+            self.route(
+                &Target::parse(&verdict.target),
+                verdict.object,
+                verdict.reason,
+            )?;
+            if ending.cause == EndCause::Resume {
+                self.push(
+                    None,
+                    JournalEvent::Resume {
+                        visit_grant: self.record.visit_grant,
+                        deadline: self.record.deadline,
+                    },
+                );
+            }
+        } else if ending.cause == EndCause::Cancel {
+            self.abandon_check("canceled");
+            self.cancel_run(ending.reason);
+        } else if ending.cause == EndCause::Deadline {
+            self.abandon_check("canceled");
+            self.deadline_failure(&node)?;
+        } else if ending.cause == EndCause::Timeout {
+            let timeout = self
+                .spec
+                .check(&node)
+                .and_then(super::Node::timeout)
+                .map(super::definition::Parsed::text);
+            self.check_failure(
+                seq,
+                Some(Cause::Timeout),
+                format!(
+                    "{node} ran past its timeout {}",
+                    timeout.unwrap_or_default()
+                ),
+                json!({}),
+                None,
+            )?;
+        } else if let Some(answer) = answer.filter(|_| ending.outcome == AttemptOutcome::Ended) {
+            self.finish_check(seq, Ok(answer), json!({}), None)?;
+        } else if matches!(
+            ending.outcome,
+            AttemptOutcome::Asked | AttemptOutcome::Errored
+        ) {
+            let outcome = ending.outcome.as_str();
+            // The staged ending is this judge's own, checked above.
+            let attempt = self.record.attempt.take().expect("current judge attempt");
+            let object = self.engine_object(evidence);
+            self.push(
+                Some(seq),
+                JournalEvent::Evaluation {
+                    origin: EvaluationOrigin::Engine,
+                    outcome: outcome.into(),
+                    cost_usd: None,
+                    object: object.clone(),
+                    digests: attempt.digests,
+                    started_at: attempt.started_at,
+                    ended_at: self.now,
+                    stderr_tail: None,
+                },
+            );
+            // As a step's: admission refuses `@user` on these routes, so neither parks.
+            self.engine_route(
+                outcome,
+                object,
+                &self.spec.engine_target(&node, outcome),
+                ParkReason::Asked,
+            )?;
+        } else if ending.outcome == AttemptOutcome::Canceled {
+            // Its session was closed under it: the next pass evaluates the check afresh.
+            self.abandon_check("canceled");
+        } else {
+            let cause = if ending.outcome == AttemptOutcome::Limited {
+                Cause::Limited
+            } else {
+                Cause::Died
+            };
+            let reason = reason.unwrap_or_else(|| match cause {
+                Cause::Limited => "a provider limit or budget stopped the judge".into(),
+                _ => "the judge's session ended without an answer".into(),
+            });
+            self.check_failure(seq, Some(cause), reason, evidence, None)?;
+        }
+        for entry in &mut self.entries[from..] {
+            if entry.seq == Some(seq)
+                && let JournalEvent::Evaluation { cost_usd: cost, .. } = &mut entry.event
+            {
+                *cost = cost_usd;
+            }
+        }
+        Ok(())
+    }
+
+    /// End the run canceled, journaling `reason`.
+    pub(super) fn cancel_run(&mut self, reason: Option<String>) {
+        self.close_wait();
+        self.record.restart = None;
+        self.record.state = RunState::Canceled;
+        self.record.terminal_at = Some(self.now);
+        self.push(None, JournalEvent::Cancel { reason });
+        self.push(
+            None,
+            JournalEvent::Terminal {
+                state: RunState::Canceled,
+            },
+        );
     }
 
     /// The deadline fails the node the run is at, once per grant.
@@ -1103,15 +1090,21 @@ impl Transition<'_> {
         )
     }
 
+    /// Abandon the live check's evaluation. A judge's agent is left owed a stop, which the
+    /// next pass, or the run's close, makes off the lock.
     pub(super) fn abandon_check(&mut self, outcome: &str) {
         self.kill_child();
         if let Some(attempt) = self.record.attempt.take() {
+            if attempt.kind == AttemptKind::Judge
+                && let Some(run) = &attempt.run
+            {
+                self.record.abandoned.push(run.clone());
+            }
             self.push(
                 Some(attempt.seq),
                 JournalEvent::Evaluation {
                     origin: EvaluationOrigin::Engine,
                     cost_usd: None,
-                    retry: attempt.retry,
                     outcome: outcome.into(),
                     object: Value::Null,
                     digests: attempt.digests,
@@ -1148,7 +1141,7 @@ impl Transition<'_> {
             .record
             .attempt
             .as_ref()
-            .is_some_and(|attempt| attempt.kind == AttemptKind::Agent)
+            .is_some_and(|attempt| attempt.kind.owns_agent())
             || self.host_owes_exit()
         {
             return Ok(false);
@@ -1258,6 +1251,28 @@ impl Transition<'_> {
     }
 }
 
+/// What a judge's staged ending hands its settlement: the input its `asked` or `errored`
+/// route carries, or the reset a limit named.
+fn judge_evidence(outcome: AttemptOutcome, observed: &super::Observed) -> Option<Value> {
+    match outcome {
+        AttemptOutcome::Asked => observed
+            .ask
+            .as_ref()
+            .map(|asking| json!({"outcome":"asked", "reason":asking.ask.text, "asked":asking.ask})),
+        AttemptOutcome::Errored => observed
+            .errored
+            .as_ref()
+            .and_then(super::Stopped::errored)
+            .map(|errored| json!({"outcome":"errored", "reason":errored.text, "errored":errored})),
+        AttemptOutcome::Limited => observed
+            .limited
+            .as_ref()
+            .and_then(|limited| limited.reset_at)
+            .map(|reset_at| json!({"reset_at":reset_at})),
+        _ => None,
+    }
+}
+
 fn case_index(object: &Value) -> Option<u32> {
     object
         .get("case")
@@ -1265,7 +1280,7 @@ fn case_index(object: &Value) -> Option<u32> {
         .and_then(|case| u32::try_from(case).ok())
 }
 
-fn normalize_object(
+pub(super) fn normalize_object(
     object: Value,
     check: &super::Node,
     key: Option<&Key>,

@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{AgentAccount, RoomLoginSet, find_definition};
@@ -242,18 +242,6 @@ impl ManagedLaunchState {
         match self {
             Self::Bound(binding) => Some(binding),
             Self::PendingResolution | Self::Unsupported | Self::Unresolved => None,
-        }
-    }
-
-    pub(crate) fn capacity(
-        &self,
-        runtime: &RuntimePaths,
-        key: &LoginKey,
-    ) -> Option<ProviderCapacity> {
-        match self {
-            Self::Unsupported => ProviderCapacity::read(runtime, key),
-            Self::Bound(binding) => ProviderCapacity::read_bound(runtime, key, binding),
-            Self::PendingResolution | Self::Unresolved => None,
         }
     }
 
@@ -545,27 +533,6 @@ impl ProviderCapacity {
         has_known_available
     }
 
-    /// Forward budget headroom in the longest running window.
-    pub(crate) fn longest_window_surplus(&self, now: Timestamp) -> Option<WindowSurplus> {
-        let window = self.duration_window()?.clone().projected_at(now);
-        let used_percentage = window.used_percentage?;
-        let resets_at = window.resets_at?;
-        let duration_mins = window.duration_mins.filter(|mins| *mins > 0)?;
-        if resets_at <= now || window.not_started(now) {
-            return None;
-        }
-
-        let duration_secs = f64::from(duration_mins) * 60.0;
-        let until_reset_secs = resets_at.duration_since(now).as_secs_f64();
-        let elapsed_secs = (duration_secs - until_reset_secs).max(0.0);
-        let remaining_time_share = (until_reset_secs / duration_secs).clamp(f64::MIN_POSITIVE, 1.0);
-        Some(WindowSurplus {
-            duration_mins,
-            elapsed: SignedDuration::from_secs(elapsed_secs as i64),
-            headroom: (1.0 - f64::from(used_percentage) / 100.0) / remaining_time_share,
-        })
-    }
-
     /// Earliest future reset among currently exhausted authoritative windows.
     fn spent_window(&self, now: Timestamp) -> Option<RateLimitWindow> {
         self.windows
@@ -662,14 +629,6 @@ impl std::str::FromStr for WindowSpan {
             other => Err(format!("unknown window span `{other}`; use 5h or 7d")),
         }
     }
-}
-
-/// Forward budget headroom in one provider's longest running window.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct WindowSurplus {
-    pub duration_mins: u32,
-    pub elapsed: SignedDuration,
-    pub headroom: f64,
 }
 
 fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {

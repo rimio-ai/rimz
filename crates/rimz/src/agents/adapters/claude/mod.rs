@@ -20,7 +20,6 @@
 mod account;
 mod ask;
 mod folder_trust;
-mod headless;
 mod install;
 mod json_edit;
 mod local_context;
@@ -177,7 +176,6 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
     launch: super::LaunchSpec {
         long_cache_env: None,
         picker: Some(&["claude", "--resume"]),
-        headless: Some(&headless::ClaudeHeadless),
         definitions: DEFINITIONS,
         program: Some("claude"),
         fixed_args: &[],

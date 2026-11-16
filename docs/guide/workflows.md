@@ -174,7 +174,7 @@ Keep the room open while a run works. The room checks every unfinished run about
 
 - `record.json` holds the run's current position. It is the truth the engine reads.
 - `journal.jsonl` is the append-only history behind `show --history`.
-- `work/` is the work directory. It holds `context.json`, the logs of each check and command, judges' answers, `signs/`, and a `notes/` link to the run's kept notes.
+- `work/` is the work directory. It holds `context.json`, the logs of each check and command, `signs/`, and a `notes/` link to the run's kept notes.
 - `history.txt` appears when the run ends: the `--history` view, saved.
 
 The run keeps no copy of your definition. It reads `~/.rimz/workflows/<name>/` every time it moves, so an edit there reaches every live run of that workflow at its next step: a changed route is the one taken, and the next prompt, script, or command reads the files as they are then. Agent profiles are read at each launch too. What the run decided at its start stays decided: its scope, its deadline, and its visit grants. The one exception is the small run behind each [loop task](./loops.md) fire, which has no workflow folder: it holds a `definition/` folder, the definition the fire generated, and reads that instead.
@@ -379,9 +379,11 @@ Answer "revise" with a one-line reason when any comment asks for a code
 change that is not already on the branch. Otherwise answer "approve".
 ```
 
-A judge runs headless in the checkout, with no pane. RimZ adds the answer contract to its prompt: its final message is one JSON object of the same shape a script prints. Its permission mode is automatic unless its profile sets one, so it does not stop on prompts. A judge must leave the checkout alone. Under [scoped isolation](./security.md#scoped-isolation) RimZ mounts the checkout read-only for it, and under the default host isolation only the prompt says so. A judge needs `summary`, and `validate` refuses one whose agent has no headless mode.
+Each evaluation launches a fresh agent in a pane of the run's checkout, as a step does, so you can watch it work. RimZ adds the answer contract to its prompt: the judge answers by running `rimz workflow submit <outcome> --reason '...'`, which refuses an outcome the check does not route and says why, so the judge can correct it and submit again. Its final message is not read. Once an answer is accepted, RimZ closes the pane and routes the run. A judge that rests without answering is reminded once; one that exits without answering fails with `died`.
 
-A judge whose process fails, or that writes no answer or a bad one, runs once more. `admission.window` holds the judge until its provider's usage window has room: `5h.left>=40` waits until at least 40 percent of the five-hour window is left, read as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window).
+Its permission mode is automatic unless its profile sets one. A question or provider error holds the judge in its pane like a step's agent, and its `timeout` pauses while it is held; set `on.asked` or `on.errored` to route those instead. A judge must leave the checkout alone. Under [scoped isolation](./security.md#scoped-isolation) RimZ mounts the checkout read-only for it, and under the default host isolation only the prompt says so. A judge needs `summary`, and runs on any agent.
+
+`admission.window` holds the judge until its provider's usage window has room: `5h.left>=40` waits until at least 40 percent of the five-hour window is left, read as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window). The judge's `timeout` starts when it launches, so the wait spends none of it.
 
 Put the cheap case in a script and the unclear case in a judge. A script that answers `unsure`, routed to a judge, pays for a model only when it has to.
 
@@ -400,9 +402,9 @@ With none set, the run ends as failed. A failure never follows `then`. Each kind
 | `died` | An agent fails to start or exits early, or a command or script exits nonzero. |
 | `timeout` | The node's `timeout` passed. |
 | `visits` | A step would pass its `max-visits`. Nothing launches. |
-| `limited` | A budget refused an agent's launch or stopped it, or a judge's account could not spend or hit a provider limit. |
+| `limited` | A budget refused an agent's launch or stopped it. |
 | `capacity` | A step gave up waiting for room to start. |
-| `invalid` | A script or judge gave an answer the run cannot use, such as an outcome its `on` does not name. |
+| `invalid` | A script gave an answer the run cannot use, such as an outcome its `on` does not name, or a definition edit left a judge's accepted answer unroutable. |
 | `undelivered` | A message step found no single agent to receive it. |
 | `deadline` | The run's deadline passed. |
 
@@ -564,7 +566,7 @@ A `summary` is one line describing the workflow (under `[workflow]`) or a node. 
 
 ### The check answer
 
-A script prints exactly one JSON object, and a judge gives one as its final message:
+A script prints exactly one JSON object, and a judge sends one through `rimz workflow submit`, whose flags set its fields:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
@@ -573,7 +575,7 @@ A script prints exactly one JSON object, and a judge gives one as its final mess
 | `recheck_at` | no | An RFC 3339 time. On `@wait`, the check does not run again before it, unless a subscribed signal arrives. |
 | `key` | no | A string or integer naming the item the run now works on, such as an issue number. Later nodes see it. An answer without `key` keeps the current one. |
 
-Any other field travels too: the whole object becomes the next node's input. A script must exit 0. A nonzero exit fails it with cause `died`, and an answer it cannot use (not one object, or an outcome its `on` does not name) fails it with `invalid`. So a script that uses `set -e` must catch the failures it expects. The outcome words `failed`, `asked`, `errored`, `unknown`, `hold`, and the eight causes are reserved, and a script that answers one fails with `invalid`.
+Any other field travels too: the whole object becomes the next node's input. A script must exit 0. A nonzero exit fails it with cause `died`, and an answer it cannot use (not one object, or an outcome its `on` does not name) fails it with `invalid`. So a script that uses `set -e` must catch the failures it expects. The outcome words `failed`, `asked`, `errored`, `unknown`, `hold`, and the eight causes are reserved, and a script that answers one fails with `invalid`, while `submit` refuses one and says why.
 
 Scripts and command steps read their input from `$RIMZ_WORKFLOW_DIR/context.json`, which RimZ rewrites before every check and attempt. It carries `input` (the answer that routed here), `key`, the step's `visit` count, every step's visit count (`step_visits`) and its split by item key (`key_visits`), and `prev_attempt` (how the last attempt ended, its exit code, and the commits before and after). The [context file reference](../reference/cli/workflow.md#the-context-file) lists every field. Agents read the same facts through `rimz workflow show`.
 

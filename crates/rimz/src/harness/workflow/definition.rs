@@ -191,7 +191,7 @@ pub enum Kind {
     Script(Invocation),
     /// A command step.
     Command(Invocation),
-    /// A judge check, under this headless profile.
+    /// A judge check, under this profile.
     Judge(String),
     Condition(Vec<Case>),
     Sleep(Sleep),
