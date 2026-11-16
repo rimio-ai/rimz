@@ -38,7 +38,7 @@ pub(super) fn attach(snapshot: &mut SidebarSnapshot, cache: &BookingsCache) {
             fire: facts
                 .fire
                 .as_ref()
-                .map(|fire| (fire, launched(snapshot, &rows, facts, fire))),
+                .map(|fire| (fire, launched(snapshot, &rows, fire))),
             adopted,
         });
     }
@@ -134,18 +134,17 @@ fn answers_link(
     })
 }
 
-/// The living rows a fire launched: its living leader with a row here, then its team
-/// cohort.
+/// The living rows a fire launched: its living leader (the first living row carrying the
+/// fire's id) with a row here, then its team cohort.
 fn launched<'s>(
     snapshot: &'s SidebarSnapshot,
     rows: &HashMap<(&str, &str), RowAt>,
-    facts: &BookingFacts,
     fire: &FireFacts,
 ) -> Vec<&'s AgentState> {
     let Some(leader) = snapshot.agents.iter().find(|agent| {
         agent.ended_at.is_none()
             && agent_row(rows, agent).is_some()
-            && launched_by(agent, &facts.task, fire.run.as_ref(), fire.at)
+            && launched_by(agent, &fire.fire)
     }) else {
         return Vec::new();
     };
@@ -173,28 +172,21 @@ impl Entry<'_> {
         match &self.fire {
             None => SiblingState::Waiting,
             Some((_, live)) if !live.is_empty() => SiblingState::Running,
-            Some((fire, _)) if starting(snapshot, self.facts, fire, false) => {
-                SiblingState::Starting
-            }
+            Some((fire, _)) if starting(snapshot, fire, false) => SiblingState::Starting,
             Some(_) => SiblingState::Ended,
         }
     }
 }
 
-/// A fire is starting while nothing it launched is alive or has a row, and the records hold
-/// no end of its agent step.
-fn starting(
-    snapshot: &SidebarSnapshot,
-    facts: &BookingFacts,
-    fire: &FireFacts,
-    alive: bool,
-) -> bool {
+/// A fire is starting while nothing it launched is alive or carries its id, and the records
+/// hold no end of its launch.
+fn starting(snapshot: &SidebarSnapshot, fire: &FireFacts, alive: bool) -> bool {
     !alive
         && fire.ended_at.is_none()
         && !snapshot
             .agents
             .iter()
-            .any(|agent| launched_by(agent, &facts.task, fire.run.as_ref(), fire.at))
+            .any(|agent| launched_by(agent, &fire.fire))
 }
 
 /// The sibling on the card whose destination branch the forge term `key` reads.
@@ -319,7 +311,7 @@ fn fired(
     depended_on: bool,
 ) -> BookingFire {
     let live = live(snapshot, rows, facts, members);
-    let starting = starting(snapshot, facts, fire, live.is_some());
+    let starting = starting(snapshot, fire, live.is_some());
     let done = fire.team_done == Some(true)
         || live
             .as_ref()

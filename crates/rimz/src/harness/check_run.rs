@@ -264,7 +264,7 @@ impl CheckSignals {
     }
 }
 
-/// Cancel a loop-owned run on SIGTERM until the returned guard is dropped.
+/// Cancel a fire-stamped run on SIGTERM until the returned guard is dropped.
 pub fn cancel_run_on_sigterm(cancellation: RunCancellation) -> std::io::Result<CheckSignalGuard> {
     let (handler, mut guard) = CheckSignalGuard::register(|| {
         signal_hook::flag::register(signal_hook::consts::SIGTERM, cancellation.signal_flag())

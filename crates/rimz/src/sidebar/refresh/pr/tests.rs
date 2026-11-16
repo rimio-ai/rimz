@@ -2927,7 +2927,7 @@ fn a_booking_branch_demand_reads_through_to_merged_and_none() {
             timing: None,
             fire: Some(FireFacts {
                 at: jiff::Timestamp::UNIX_EPOCH,
-                run: None,
+                fire: crate::ids::FireId::new(&crate::ids::TaskId::new()),
                 ended_at: None,
                 pr: BookingPr::Unread,
                 team_done: None,
