@@ -282,11 +282,11 @@ fn missing_or_broken_definition_keeps_the_runs_visible_and_json_unchanged() {
         }
         let text = success(command(&env, &["workflow", "show", "review"]));
         assert!(text.contains("definition unavailable"), "{text}");
-        assert!(
-            text.lines()
-                .next()
-                .unwrap()
-                .contains("rimz workflow validate review"),
+        let first = text.lines().next().unwrap();
+        // A missing file has nothing to validate, so only a broken one names the fix.
+        assert_eq!(
+            first.contains("; check with rimz workflow validate review"),
+            broken,
             "{text}"
         );
         assert!(text.contains("NEEDS YOU"), "{text}");
@@ -532,6 +532,10 @@ fn node_view_missing_definition_and_unknown_node_name_the_fix() {
         }
         let text = refusal(command(&env, &["workflow", "show", "review", "fix"]));
         assert!(text.contains("definition unavailable"), "{text}");
-        assert!(text.contains("rimz workflow validate review"), "{text}");
+        assert_eq!(
+            text.contains("rimz workflow validate review"),
+            broken,
+            "{text}"
+        );
     }
 }

@@ -675,7 +675,7 @@ Route rules read the definition as written:
 - The footer states the uniform turn-end, invalid-check, and unset-deadline defaults once, only when used, then names the source file and a command for one node in full.
 - The live-runs table follows the definition.
 
-A missing or unloadable definition prints `<workflow>: definition unavailable: <error>; check with rimz workflow validate <workflow>`, then still lists its runs and exits 0. An unknown workflow with neither a definition directory nor runs refuses. `show <WORKFLOW> --json` prints the live-runs array ([JSON shapes](#json-shapes)) and no rail.
+A missing or unloadable definition prints `<workflow>: definition unavailable: <error>`, then still lists its runs and exits 0. An unloadable one adds `; check with rimz workflow validate <workflow>`; a missing `workflow.toml` has nothing to validate, so it adds no hint. An unknown workflow with neither a definition directory nor runs refuses. `show <WORKFLOW> --json` prints the live-runs array ([JSON shapes](#json-shapes)) and no rail.
 
 ### One node
 
@@ -688,7 +688,7 @@ A missing or unloadable definition prints `<workflow>: definition unavailable: <
 5. Every resolved edge with its source and fireability mark, including never-firing edges and a default `capacity` edge. A sleep's view leaves out its default `sleeping → @wait` and `unknown → @wait` edges, which `validate` lists.
 6. The configured fields: command text (in full, multiple lines included), message target, agent layout, prompt path, lifecycle, `rest-check` (joined by `, `), occupancy, keep, window, throttle, limit, give-up, visit bounds, timeout, provider, and account. A limit reads `max-parallel=N · stagger=<duration>`, omitting unset fields. The definition header prints its workflow limit in the same form.
 
-The two-positional form takes a workflow name only. A run address or run id is a usage error (exit 2), except that a finished run's id or address refuses with exit 1, saying the run is finished and naming the `rimz workflow show <run>` that prints its saved history. It conflicts with `--json` and `--history`. An unknown node refuses with the definition's node names (exit 1). A missing or unloadable definition refuses with its validation command (exit 1), with no runs-table fallback.
+The two-positional form takes a workflow name only. A run address or run id is a usage error (exit 2), except that a finished run's id or address refuses with exit 1, saying the run is finished and naming the `rimz workflow show <run>` that prints its saved history. It conflicts with `--json` and `--history`. An unknown node refuses with the definition's node names (exit 1). A missing or unloadable definition refuses with the same text (exit 1), with no runs-table fallback.
 
 ### Loop task graphs
 
