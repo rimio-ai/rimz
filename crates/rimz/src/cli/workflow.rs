@@ -533,20 +533,23 @@ fn start(
         false,
         args,
     )?;
+    writeln!(render::out(), "{}", record.id)?;
+    let paths = ctx.store.paths().workflow(&record.id);
+    let passed = receipt::first_pass(ctx.store.paths(), &record.id, Some(&advance))?;
+    // A run that ended in its first pass has its home moved to the finished directory.
+    let work = if paths.work.is_dir() {
+        paths.work.clone()
+    } else {
+        ctx.store.paths().finished_workflow(&record.id).work
+    };
     writeln!(
         render::out(),
-        "{}\n{}",
-        record.id,
-        ctx.store.paths().workflow(&record.id).work.display()
-    )?;
-    writeln!(
-        render::out(),
-        "→ {}",
+        "{}\n→ {}",
+        work.display(),
         resolve::run_command(&record, "show", globals, None, &[], &[])
     )?;
-    let paths = ctx.store.paths().workflow(&record.id);
-    match receipt::first_pass(&paths, Some(&advance))? {
-        Some(record) => receipt::write_held(&paths, &record, ""),
+    match passed {
+        Some(passed) => receipt::write_held(&paths, &passed, ""),
         None => Ok(()),
     }
 }

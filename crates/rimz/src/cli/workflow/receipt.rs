@@ -245,7 +245,8 @@ pub(in crate::cli) fn restart(
     run_log::collect_run(&run.state, &run.record.id);
     let (restarted, advance) = restarted?;
     // A run that ended meanwhile may already have left the live directory.
-    let record = first_pass(&run.paths, advance.as_ref())?.unwrap_or_else(|| restarted.clone());
+    let record = first_pass(&run.state, &run.record.id, advance.as_ref())?
+        .unwrap_or_else(|| restarted.clone());
     let record = finish_run(&run.state, &run.record.id)?
         .record
         .unwrap_or(record);
@@ -298,23 +299,36 @@ pub(in crate::cli) fn restart(
     write_held(&run.paths, &record, "")
 }
 
-/// The run's record once the advance a start or restart spawned has had its first pass: it
-/// shows a wait, a launched attempt, or a run no longer active, or no process that could
-/// decide (the spawned advance, a live attempt's host) still runs. Bounded at 30 s, after
-/// which the record is returned as it stands. None once the run has left the live directory:
-/// it ended and was moved to the finished directory or forgotten.
+/// The run's record once the advance a start or restart spawned has had its first pass: a run
+/// not yet ended shows a wait, a launched attempt, or a state other than active, or no process
+/// that could decide (the spawned advance, a live attempt's host) still runs. An ended run waits
+/// for its advance, which moves its home once the engine returns. Bounded at 30 s, after which
+/// the record is returned as it stands. Once the run has left the live directory, the record last
+/// read there when it says how the run ended, else the record in its finished home; None only
+/// when neither home had one to read.
 pub(in crate::cli) fn first_pass(
-    paths: &paths::WorkflowPaths,
+    state: &paths::StatePaths,
+    id: &rimz::ids::WorkflowRunId,
     advance: Option<&workflow::Advance>,
 ) -> Result<Option<RunRecord>> {
+    let paths = &state.workflow(id);
     let deadline = std::time::Instant::now().checked_add(std::time::Duration::from_secs(30));
+    let mut last = None;
     loop {
         let record = match records::load(paths) {
             Ok(record) => record,
-            Err(records::WorkflowStoreErr::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound =>
-            {
-                return Ok(None);
+            Err(error) if not_found(&error) => {
+                if last
+                    .as_ref()
+                    .is_some_and(|last: &RunRecord| last.state.is_terminal())
+                {
+                    return Ok(last);
+                }
+                return match records::load(&state.finished_workflow(id)) {
+                    Ok(finished) => Ok(Some(finished)),
+                    Err(error) if not_found(&error) => Ok(last),
+                    Err(error) => Err(error.into()),
+                };
             }
             Err(error) => return Err(error.into()),
         };
@@ -322,16 +336,24 @@ pub(in crate::cli) fn first_pass(
             || record.attempt.as_ref().is_some_and(|attempt| {
                 rimz::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref())
             });
-        if record.wait.is_some()
-            || record.state != RunState::Active
-            || (record.restart.is_none() && record.attempt.as_ref().is_some_and(launched))
+        let ended = record.state.is_terminal();
+        if (!ended
+            && (record.wait.is_some()
+                || record.state != RunState::Active
+                || (record.restart.is_none() && record.attempt.as_ref().is_some_and(launched))))
             || !deciding
             || deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline)
         {
             return Ok(Some(record));
         }
+        last = Some(record);
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+}
+
+fn not_found(error: &records::WorkflowStoreErr) -> bool {
+    matches!(error, records::WorkflowStoreErr::Io { source, .. }
+        if source.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// An agent attempt counts once its run is written or it has ended: until then its launch can
@@ -477,6 +499,7 @@ mod tests {
         records::initialize(&state, &record, &guard).unwrap();
         drop(guard);
         let paths = state.workflow(&record.id);
+        let record_id = record.id.clone();
         let writer = {
             let (state, paths) = (state.clone(), paths.clone());
             std::thread::spawn(move || {
@@ -490,13 +513,56 @@ mod tests {
                 records::write(&paths, &record, &guard).unwrap();
             })
         };
-        let seen = first_pass(&paths, None).unwrap().unwrap();
+        let seen = first_pass(&state, &record_id, None).unwrap().unwrap();
         writer.join().unwrap();
         assert!(
             seen.attempt
                 .as_ref()
                 .is_some_and(|attempt| attempt.run.is_some()),
             "an attempt published without a run is still preparing its launch: {seen:#?}"
+        );
+    }
+
+    #[test]
+    fn first_pass_reads_the_finished_home_when_the_run_left_before_it_read_its_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = paths::StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
+        let now = jiff::Timestamp::now();
+        let mut record: RunRecord = serde_json::from_value(serde_json::json!({
+            "version":rimz::store::workflow::VERSION,"id":rimz::ids::WorkflowRunId::new(),
+            "workflow":"review","spec_dir":dir.path(),
+            "project_root":dir.path(),"scope":{"kind":"worktree","path":dir.path()},
+            "state":"active","node":"build","created_at":now,"entered_at":now,"visits":{},
+            "visit_grant":0,"deadline_fired":false,"next_seq":2,
+            "attempt":{"kind":"agent","seq":1,"node":"build","started_at":now,
+                "host":{"pid":std::process::id(),"start":null}},
+        }))
+        .unwrap();
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        records::initialize(&state, &record, &guard).unwrap();
+        drop(guard);
+        let id = record.id.clone();
+        // The run ends and its home moves between two polls, so no poll reads the ended record
+        // in the live directory.
+        let mover = {
+            let (state, aside) = (state.clone(), dir.path().join("moved-aside"));
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                record.state = RunState::Failed;
+                let finished = state.finished_workflow(&record.id);
+                std::fs::create_dir_all(&finished.home).unwrap();
+                let guard =
+                    rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+                records::write(&finished, &record, &guard).unwrap();
+                std::fs::rename(&state.workflow(&record.id).home, aside).unwrap();
+            })
+        };
+        let seen = first_pass(&state, &id, None).unwrap().unwrap();
+        mover.join().unwrap();
+        assert_eq!(
+            seen.state,
+            RunState::Failed,
+            "the ended record from the finished home"
         );
     }
 }

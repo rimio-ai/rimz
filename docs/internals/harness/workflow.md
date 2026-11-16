@@ -238,7 +238,7 @@ The order is deliberate:
 
 `rimz workflow run` resolves `-w` to an existing RimZ-owned worktree before it calls `create`, and never creates one. Without `-w` the checkout is the current one. A worktree-scoped run runs in that checkout. A project-scoped run always runs at the root, so `-w` on a project-scope workflow refuses with `<name> has scope = project, so it runs at <project root>; start it without -w`, and a loop fire never passes it. Run ids are `wf_` identities.
 
-`create` writes no transition, so `rimz workflow run` learns what happened from the record. Its receipt waits up to 30 seconds for the first advance's decision and says when the run is held (`crates/rimz/src/cli/workflow/receipt.rs::first_pass`).
+`create` writes no transition, so `rimz workflow run` learns what happened from the record. Its receipt prints the run id, then waits up to 30 seconds for the first advance's decision and says when the run is held (`crates/rimz/src/cli/workflow/receipt.rs::first_pass`). A run that ended in that pass is waited for until its advance exits, since the advance's CLI moves the home after the engine returns (`crates/rimz/src/cli/workflow.rs::finish_run`); the receipt then names the finished home's work directory, and a restart's receipt says how the run ended from the record that pass last read in the live home, or, when the home moved before a read saw the run end, from the record in the finished home.
 
 ## Moving a live run
 

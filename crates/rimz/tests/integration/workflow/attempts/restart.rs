@@ -387,6 +387,31 @@ fn fresh_restart_replaces_the_step_and_receipts_its_first_visit() {
 }
 
 #[test]
+fn a_restart_whose_advance_ends_the_run_receipts_how_it_ended() {
+    let room = Room::new("");
+    let (id, _) = room.launch();
+    // A deadline already passed fails the run in the restart's own advance.
+    let state = room.env.state_path_for(&room.env.project_root);
+    let paths = state.workflow(&id.parse().unwrap());
+    {
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        let mut record = records::load(&paths).unwrap();
+        record.deadline = Some("2000-01-01T00:00:00Z".parse().unwrap());
+        records::write(&paths, &record, &guard).unwrap();
+    }
+    let receipt = success(
+        room.command(&["workflow", "restart", &id])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        receipt.contains("run is failed; no live replacement") && !receipt.contains("awaiting"),
+        "{receipt}"
+    );
+    settled(&room.env, &id, "failed");
+}
+
+#[test]
 fn continue_without_a_conversation_refuses_before_stopping() {
     let room = Room::new("");
     let (id, old) = room.launch();

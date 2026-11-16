@@ -1171,6 +1171,29 @@ fn run_receipt_hint_keeps_the_started_runs_room() {
 }
 
 #[test]
+fn run_receipt_names_the_finished_home_of_a_run_that_ends_in_its_first_pass() {
+    // A passed deadline fails the run before its first check starts, so its home has moved to
+    // the finished directory by the time the receipt names it.
+    let spec = format!(
+        "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\n{WAIT}"
+    );
+    let (env, _) = fixture(&spec, PENDING);
+    let text = success(
+        env.rimz()
+            .args(["workflow", "run", "review"])
+            .output()
+            .unwrap(),
+    );
+    let lines: Vec<_> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "{text}");
+    let id: rimz::ids::WorkflowRunId = lines[0].parse().unwrap();
+    let finished = env.state_path_for(&env.project_root).finished_workflow(&id);
+    assert_eq!(Path::new(lines[1]), finished.work, "{text}");
+    assert!(Path::new(lines[1]).is_dir(), "{text}");
+    assert_eq!(lines[2], "→ rimz workflow show 'review#main'", "{text}");
+}
+
+#[test]
 fn run_receipt_preserves_id_and_directory_then_adds_the_address_hint() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
     let started = std::time::Instant::now();
