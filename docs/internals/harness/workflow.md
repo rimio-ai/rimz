@@ -970,7 +970,7 @@ A run is announced by the pass whose move of its home succeeds, with its cause r
 
 ## Loop tasks
 
-A shell task's fire starts a workflow run of the inline graph that `crates/rimz/src/harness/schedule/runner.rs::command_definition` builds from the row: one `test` check named `command` that runs the row's argv under its `timeout` ([loops.md § The compiled graph](./loops.md#the-compiled-graph)). A workflow task's fire runs `rimz workflow run <target> --loop-fire-json` in a launch child, which publishes a run of the deployed workflow carrying the fire (its `evidence` included, so the run's commands read the same `RIMZ_LOOP_TRIGGER` and its agent and message steps get the line after the run's `--prompt`), and an agent or team task's fire publishes no run of its own. [loops.md § One fire](./loops.md#one-fire) owns the gates in front of the run.
+A shell task's fire starts a workflow run of the inline graph that `crates/rimz/src/harness/schedule/shell_task.rs::command_definition` builds from the row: one `test` check named `command` that runs the row's argv under its `timeout` ([loops.md § The compiled graph](./loops.md#the-compiled-graph)). A workflow task's fire runs `rimz workflow run <target> --loop-fire-json` in a launch child, which publishes a run of the deployed workflow carrying the fire (its `evidence` included, so the run's commands read the same `RIMZ_LOOP_TRIGGER` and its agent and message steps get the line after the run's `--prompt`), and an agent or team task's fire publishes no run of its own. [loops.md § One fire](./loops.md#one-fire) owns the gates in front of the run.
 
 ### What a fire puts on the record
 
