@@ -200,7 +200,9 @@ impl workflow::AttemptHost for Host<'_> {
         let resume = step.resume.clone();
         let workflow_id = step.workflow.run.clone();
         let evict = step.evict;
-        // A resumed session keeps the account, system prompt, and checkout it was launched with.
+        // A resumed session drops the step's account, system prompt, and worktree overrides and
+        // runs in the run's scope: the launcher picks the room's current account, and a resume
+        // across history pools refuses there.
         let fresh = step.resume.is_none();
         let set = step.overrides;
         let worktree = set.worktree.filter(|_| fresh);
