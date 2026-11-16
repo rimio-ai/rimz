@@ -67,10 +67,9 @@ A launch task's fire starts its launch as a separate process in the fire's check
 | Kind | Outcome |
 | --- | --- |
 | workflow | the run's own outcome, recorded when it ends; a launch refused by a live run of the workflow in its checkout (another task's, or one started by hand) is `overlapped`, which is neutral and names that run, and the trigger is not held; any other launch that exits nonzero without starting a run is `error` |
-| agent with a `-p` run | the run's ending (`completed` resets strikes; `failed`, `verify_failed`, `timed_out` and `budget_exceeded` strike; `canceled` is neutral), recorded once the launch process is gone and the run has ended |
-| agent without one, and team | exit `0` is `launched`, which resets strikes; exit `125` is the neutral budget skip; any other exit is `error`, a strike, with the launch's error text on the row; a launch ended by a signal is `canceled`. A `launched` fire's receipt and its `loop logs` block (`launched: …`) name what it launched that is alive then: each agent's `@<handle>#<lane>`, or the `-p` run's id |
+| agent and team | a published `-p` run or exit `0` is `launched`, which resets strikes, and the `-p` run's own ending is never recorded; exit `125` is the neutral budget skip; any other exit is `error`, a strike, with the launch's error text on the row; a launch ended by a signal is `canceled`. A `launched` fire's receipt and its `loop logs` block (`launched: …`) name what it launched that is alive then: each agent's `@<handle>#<lane>`, or the `-p` run's id |
 
-The outcomes recorded after the fire are written by the settle pass the tick runs once a minute, and before every `rimz loop run`. A fire whose `rimz loop run` died before its launch was settled is recorded by the same pass, `launched` when an agent carries its fire id and `error` when nothing does.
+A workflow run's outcome, recorded after the fire, is written by the settle pass the tick runs once a minute, and before every `rimz loop run`. A fire whose `rimz loop run` died before its launch was settled is recorded by the same pass, `launched` when an agent or a `-p` run carries its fire id and `error` when nothing does.
 
 ### The command
 
@@ -386,13 +385,13 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | Run result | Effect on strikes |
 | --- | --- |
 | `failed` (the command exited non-zero, died by a signal, or outlived its timeout), `error` | Strike. |
-| `completed`, `delivered` | Resets the count. |
-| `launched` with a run id | Neutral: the run's own outcome decides once it ends. Each run counts once, however often its outcome is reported. |
+| `completed`, `delivered`, an agent or team fire's `launched` (a `-p` launch included) | Resets the count. |
+| a workflow fire's `launched`, which carries its run id | Neutral: the run's own outcome decides once it ends. Each run counts once, however often its outcome is reported. |
 | `skipped` (a sibling signal, or a watch verdict `on` filters out) | Neutral. |
 | `overlapped`, `deferred`, `canceled`, `expired`, `target gone`, `budget skipped` | Neutral. |
 | `start failed`: the fire left no run behind, either the runner was never spawned, or it exited before it could record anything. An interval, calendar, or cron occurrence is spent without a run; a one-shot (`--in`, `--at`, `--after-reset`) stays and is dispatched again five minutes later, as is a one-shot condition (and `rimz wait --when`) that still reads true | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
 
-History an older RimZ wrote can also hold `timed out`, `verify failed`, and `budget exceeded`, which strike, and `launched` without a run id, which resets the count; `surplus skipped`, `account skipped`, `throttle skipped`, `capacity held`, `takeover blocked`, and `replaced` are neutral.
+History an older RimZ wrote can also hold `timed out`, `verify failed`, and `budget exceeded`, which strike; `surplus skipped`, `account skipped`, `throttle skipped`, `capacity held`, `takeover blocked`, and `replaced` are neutral.
 
 ## Enable, disable, and pause
 
@@ -421,7 +420,7 @@ For an untrusted or stale project task on a terminal, `fire` asks `grant trust a
 
 | `loop fire` exit | When |
 | --- | --- |
-| `0` | The fire started a run or recorded its launch's outcome, a gate or overlap skipped it, or a delivery row delivered. The run's own outcome reaches `loop show` and `loop logs` once it ends. |
+| `0` | The fire started a run or recorded its launch's outcome, a gate or overlap skipped it, or a delivery row delivered. A shell or workflow run's own outcome reaches `loop show` and `loop logs` once it ends; a `-p` run's never does. |
 | `130` | Ctrl-C interrupted a watched command's check. |
 | `1` | An error, or a trust refusal. |
 | `2` | A usage error, such as a selector given to `--signal` or a `--json` payload that is not a JSON object. |
@@ -438,7 +437,7 @@ A row that sets `once-per-checkout = true`, which `loop add --once-per-checkout`
 
 | The run | Remembered after it ends |
 | --- | --- |
-| Done: a shell command exited `0`, a workflow run ended done, a `-p` run completed, or an agent or team launched | Yes |
+| Done: a shell command exited `0`, a workflow run ended done, or an agent or team launched, a `-p` run included whatever it does after | Yes |
 | Failed: a command exited non-zero, died, or timed out; a run failed; a launch ended in `error` | No |
 | Canceled, or a neutral skip | No |
 

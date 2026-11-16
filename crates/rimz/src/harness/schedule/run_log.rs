@@ -171,18 +171,15 @@ pub(super) fn record_stopped(root: &Path, record: &LoopRunRecord, kind: Option<s
     record.kind = kind;
     // A stopped launch fire's runner never closes its mark: the stop's row is that fire's one
     // outcome, written only when it settles the mark first.
-    let launch = (record.run_id.is_none())
-        .then(|| open_marks(root).ok())
-        .flatten()
-        .and_then(|fires| {
-            fires.into_iter().find(|(fire, binding, mark)| {
-                let task = match &record.task_id {
-                    Some(id) => fire.task() == *id,
-                    None => binding.name == record.task,
-                };
-                task && mark.child.is_some()
-            })
-        });
+    let launch = open_marks(root).ok().and_then(|fires| {
+        fires.into_iter().find(|(fire, binding, mark)| {
+            let task = match &record.task_id {
+                Some(id) => fire.task() == *id,
+                None => binding.name == record.task,
+            };
+            task && mark.child.is_some()
+        })
+    });
     if let Some((fire, binding, _)) = launch {
         record.task_id = Some(fire.task());
         record.fire = Some(fire);
@@ -617,8 +614,8 @@ pub fn collect_task_runs(root: &Path, task: &str) -> bool {
 /// its own outcome (neither the process that made it nor its launch child runs) the one outcome
 /// its launches show, retired tasks' marks included. A workflow or shell fire is its run's: a
 /// finished run that owes its report is collected, a live one is left, and a fire that published
-/// none is `error`. An agent or team fire is its supervised runs' newest status once all are
-/// terminal, else `launched` when it stamped an agent, else `error`. Returns how many it settled.
+/// none is `error`. An agent or team fire is `launched` when it published a `-p` run or stamped
+/// an agent, else `error`. Returns how many it settled.
 pub fn settle_open_fires(root: &Path) -> usize {
     let settled = (|| -> anyhow::Result<usize> {
         let state = crate::StatePaths::for_project_root(root)?;
@@ -719,8 +716,8 @@ fn open_marks(root: &Path) -> anyhow::Result<Vec<OpenFire>> {
         .collect())
 }
 
-/// The row a dead fire's launches give it; `None` while one of them is alive or its run's own
-/// collection reports it.
+/// The row a dead fire's launches give it; `None` while its workflow run's own collection
+/// reports it. An agent or team fire that launched anything, a `-p` run included, is `launched`.
 fn dead_fire_row(
     state: &crate::StatePaths,
     fire: &FireId,
@@ -757,18 +754,10 @@ fn dead_fire_row(
         }
         return Ok(None);
     }
-    let runs: Vec<_> = crate::harness::run::list(state)?
-        .into_iter()
-        .filter(|run| run.loop_fire.as_ref() == Some(fire))
-        .collect();
-    if runs.iter().any(|run| !run.status.is_terminal()) {
-        return Ok(None);
-    }
-    if let Some(newest) = runs.iter().max_by_key(|run| run.started_at) {
-        let mut record = row(newest.status.into(), None);
-        record.run_id = Some(newest.run_id.to_string());
-        return Ok(Some(record));
-    }
+    // An agent fire's published `-p` run is its launch, whatever the run does after.
+    let published = crate::harness::run::list(state)?
+        .iter()
+        .any(|run| run.loop_fire.as_ref() == Some(fire));
     let runtime = crate::disk::paths::RuntimePaths::for_state(state)?;
     let rows = crate::Store::open_existing(state.clone(), runtime)
         .map(|store| store.audit_rows())
@@ -778,7 +767,7 @@ fn dead_fire_row(
     let stamped = rows
         .iter()
         .any(|agent| agent.loop_fire.as_ref() == Some(fire));
-    Ok(Some(if stamped {
+    Ok(Some(if published || stamped {
         let mut record = row(LoopRunResult::Launched, None);
         record.target = super::launches::launched(fire, state, &rows).ok().flatten();
         record
@@ -1419,20 +1408,6 @@ impl LoopRunResult {
             Self::StartFailed => "start failed",
             Self::Overlapped => "overlapped",
             Self::TakeoverBlocked => "takeover blocked",
-        }
-    }
-}
-
-impl From<RunStatus> for LoopRunResult {
-    fn from(status: RunStatus) -> Self {
-        match status {
-            RunStatus::Completed => Self::Completed,
-            RunStatus::Failed => Self::Failed,
-            RunStatus::VerifyFailed => Self::VerifyFailed,
-            RunStatus::TimedOut => Self::TimedOut,
-            RunStatus::BudgetExceeded => Self::BudgetExceeded,
-            RunStatus::Canceled => Self::Canceled,
-            RunStatus::Pending | RunStatus::Running => Self::Failed,
         }
     }
 }

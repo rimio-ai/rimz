@@ -994,13 +994,13 @@ impl<'a> TaskFire<'a> {
     }
 
     /// The fire's outcome by its kind: a workflow run carrying the fire reports through its own
-    /// collection, as does an agent fire's supervised run on the settle pass; otherwise the
-    /// child's exit decides at the fire (0 `launched`, 125 the neutral budget skip, else
-    /// `error` with the child's words). A workflow launch that exited 0 published its run, which
-    /// may already have left the live directory: its id is the one the child printed. One
-    /// refused by a live run in its checkout (exit 122) is the neutral `overlapped` naming that
-    /// run, as a hand-started run's skip is; no run of this fire will report, so the backlog
-    /// drains at release.
+    /// collection; otherwise the fire is `launched` once an agent fire's `-p` run is published
+    /// (the run's own end is not the fire's outcome), and else the child's exit decides at the
+    /// fire (0 `launched`, 125 the neutral budget skip, else `error` with the child's words). A
+    /// workflow launch that exited 0 published its run, which may already have left the live
+    /// directory: its id is the one the child printed. One refused by a live run in its checkout
+    /// (exit 122) is the neutral `overlapped` naming that run, as a hand-started run's skip is; no
+    /// run of this fire will report, so the backlog drains at release.
     fn launch_outcome(
         &mut self,
         kind: LaunchKind,
@@ -1118,15 +1118,12 @@ impl<'a> TaskFire<'a> {
         let launched = (result == LoopRunResult::Launched)
             .then(|| launched_addresses(state, &fire))
             .flatten();
-        // A supervised run's outcome lands on the settle pass, keyed by the fire: a launch row
-        // with a run id writes nothing now.
         Ok(TaskFirePlan::Done(self.record_terminal_with(
             result,
             LoopRunPresentation::default(),
             TaskFireNotice::None,
             None,
             |record| {
-                record.run_id = run.map(|run| run.to_string());
                 record.fire = Some(fire);
                 record.target = launched;
                 record.error = error;

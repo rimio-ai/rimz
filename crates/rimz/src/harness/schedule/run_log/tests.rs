@@ -685,11 +685,7 @@ fn terminal_records_keep_durable_and_presentation_fields_separate() {
 }
 
 #[test]
-fn verify_failed_run_status_keeps_its_distinct_loop_result() {
-    assert_eq!(
-        LoopRunResult::from(RunStatus::VerifyFailed),
-        LoopRunResult::VerifyFailed
-    );
+fn verify_failed_keeps_its_distinct_label() {
     assert_eq!(LoopRunResult::VerifyFailed.label(), "verify failed");
 }
 
@@ -1416,6 +1412,38 @@ fn only_a_done_run_keeps_its_checkout_held() {
             records.get(&task).unwrap().marks[&checkout].holds_checkout(),
             kept,
             "{run_state} acted={acted}"
+        );
+    }
+}
+
+/// A dead agent fire that published a supervised run settles `launched` at once, naming no
+/// run, whatever the run's state: the run's end is not the fire's outcome.
+#[test]
+fn a_dead_print_fire_settles_launched_without_waiting_on_its_run() {
+    use crate::store::run::{RunRecord, RunStatus};
+    let home = tempfile::tempdir().unwrap();
+    let state = crate::StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    let task = TaskId::new();
+    let mut mark = FireMark::open(&task, crate::store::workflow::ScopeKind::Worktree);
+    mark.kind = Some(crate::config::LaunchKind::Agent);
+    for status in [RunStatus::Running, RunStatus::Failed] {
+        let mut run = RunRecord::new(
+            crate::ids::WorkspaceId::from_project_root(home.path()),
+            crate::ids::AgentKind::new_unchecked("codex"),
+            crate::agents::PermissionMode::Auto,
+            "task".into(),
+            home.path().to_path_buf(),
+        );
+        run.loop_fire = Some(mark.fire.clone());
+        run.status = status;
+        crate::harness::run::create(&state, &run).unwrap();
+        let row = dead_fire_row(&state, &mark.fire, "print", &mark)
+            .unwrap()
+            .expect("the fire settles now");
+        assert_eq!(
+            (row.result, row.run_id.as_deref()),
+            (LoopRunResult::Launched, None),
+            "{status:?}"
         );
     }
 }
