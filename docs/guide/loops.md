@@ -46,8 +46,8 @@ A clock repeats only with `--every` or `--cron`. A bare time (`--at 07:00`, `--a
 
 What you choose is how the fire ends:
 
-- **A launch without `-p` is recorded once it is placed.** The agent or team keeps running in its pane, unfocused, so a fire never takes the screen from you. The fire records `launched`, or `error` with the launch's own message when it failed. Use this when the agent should stay: a team that works a branch, an agent that waits for your review.
-- **A `-p` launch is recorded when its run ends.** `rimz loop fire` returns once the run has started; the run's success resets the [strikes](#strikes) and its failure counts one. Use this when the turn is the job: a nightly sweep, a report, a fix. `-p` takes its own `--timeout` and `--keep`, and has no timeout unless you give one.
+- **An agent or team launch is recorded once it is placed.** The agent or team keeps running in its pane, unfocused, so a fire never takes the screen from you. The fire records `launched`, or `error` with the launch's own message when it failed. Use this when the agent should stay: a team that works a branch, an agent that waits for your review.
+- **A `-p` launch is recorded once its run has started, the same way.** `rimz loop fire` returns then, and the fire records `launched`; how the run ends later changes neither the row nor the [strikes](#strikes), so read the run itself (`rimz agents history`) for its outcome. Use this when the turn is the job: a nightly sweep, a report, a fix. `-p` takes its own `--timeout` and `--keep`, and has no timeout unless you give one.
 - **A workflow's fire is recorded with its run's outcome.** The run is the task's own: `loop show` lists it and `loop stop` cancels it.
 
 What a fire launched stays the task's while it is alive, and an agent idle in its pane is alive. Under the default `skip` [overlap](../reference/cli/loop.md#overlapping-triggers) a later fire therefore skips until you close that agent; `--overlap replace` stops it and launches anew once it has ended. [`rimz loop show`](#see-what-a-task-did) lists each such agent, run or team member, and [`rimz loop stop`](#stop-pause-and-remove-a-task) stops them.

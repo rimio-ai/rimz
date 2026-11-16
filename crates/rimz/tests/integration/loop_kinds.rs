@@ -738,12 +738,12 @@ fn an_agent_fire_launches_unfocused_and_stamped_and_records_launched() {
     );
 }
 
-/// An agent fire with `-p` returns once its supervised run is published, and the settle pass
-/// records the run's own outcome once the run is terminal and the launch child is gone: one
-/// row, one strike for a failed run.
+/// An agent fire with `-p` returns once its supervised run is published and is recorded as any
+/// agent fire is: one `launched` row without a run id, written then. The run's own end, a
+/// failure included, changes neither the row nor the task's strikes.
 #[cfg(unix)]
 #[test]
-fn an_agent_print_fire_returns_at_its_run_and_settles_the_runs_outcome() {
+fn an_agent_print_fire_returns_at_its_run_and_records_its_launch_alone() {
     let env = live_room();
     assert!(init_git_repo(&env.project_root));
     env.install_agent_hooks("codex");
@@ -795,11 +795,16 @@ fn an_agent_print_fire_returns_at_its_run_and_settles_the_runs_outcome() {
     assert!(!run.status.is_terminal(), "{run:?}");
     let fire = run.loop_fire.clone().expect("the run carries the fire");
     assert_eq!(fire.task(), task_id(&env, "print"));
+    let launched = read_loop_run_records(&env);
     assert_eq!(
-        read_loop_run_records(&env).len(),
-        before,
-        "no row before the run ends"
+        launched.len(),
+        before + 1,
+        "one row at the fire: {launched:?}"
     );
+    let row = launched.last().unwrap().clone();
+    assert_eq!(row.result, LoopRunResult::Launched, "{row:?}");
+    assert_eq!(row.run_id, None, "the row names no run: {row:?}");
+    assert_eq!(row.fire.as_ref(), Some(&fire), "{row:?}");
 
     let shown: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "show", "print", "--json"])).unwrap();
@@ -813,13 +818,6 @@ fn an_agent_print_fire_returns_at_its_run_and_settles_the_runs_outcome() {
         .unwrap_or_else(|| panic!("the waiting launch child is listed: {shown}"));
     rimz::harness::run::fail_if_nonterminal(&paths, &env.runtime_paths(), &run.run_id, "boom")
         .unwrap();
-    loop_ok(&env, &["loop", "settle"]);
-    assert_eq!(
-        read_loop_run_records(&env).len(),
-        before,
-        "the outcome waits for the launch child: {:?}",
-        read_loop_run_records(&env)
-    );
     nix::sys::signal::kill(
         nix::unistd::Pid::from_raw(child as i32),
         nix::sys::signal::Signal::SIGKILL,
@@ -839,14 +837,13 @@ fn an_agent_print_fire_returns_at_its_run_and_settles_the_runs_outcome() {
     assert_eq!(
         records.len(),
         before + 1,
-        "one row for the fire: {records:?}"
+        "the run's end adds no row: {records:?}"
     );
-    let row = records.last().unwrap();
-    assert_eq!(row.result, LoopRunResult::Failed, "{row:?}");
-    assert_eq!(row.fire.as_ref(), Some(&fire), "{row:?}");
+    assert_eq!(records.last(), Some(&row), "{records:?}");
     assert_eq!(
         read_loop_strikes(&env).get(&machine_task_key("print")),
-        Some(&1)
+        None,
+        "a failed run strikes nothing"
     );
 }
 
