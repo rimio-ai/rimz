@@ -4458,7 +4458,8 @@ path = "crates/rimz/src/store"
 # and Hold::needs_you and Hold::label decide NEEDS YOU and name the hold for every view (+5).
 # AttemptKind::owns_agent names the attempts that end through the stop protocol, an agent step's or a judge's (+1).
 # SidebarAwaitedAgent is one agent a card's subagent wait awaits beyond its own children (+1).
-surface-budget = 658
+# RunFire::evidence hands a run's command steps and agent prompts the fire's trigger evidence (+1).
+surface-budget = 659
 
 [[verdict]]
 kind = "item"

@@ -8,7 +8,7 @@ fn workflow_definition_and_loop_task_reach_command_run_and_shell_children() {
 scope='worktree'
 start='command'
 [command.command]
-shell='printf "%s|%s" "$RIMZ_WORKFLOW_DEFINITION" "$RIMZ_LOOP_TASK"'
+shell='printf "%s|%s|%s" "$RIMZ_WORKFLOW_DEFINITION" "$RIMZ_LOOP_TASK" "$RIMZ_LOOP_TRIGGER"'
 timeout='1m'
 then='run'
 [script.run]
@@ -26,6 +26,7 @@ on={pass='@done',fail='@failed'}
     fs::write(crate::disk::paths::workflow_spec_file(&deployed), text).unwrap();
     record.spec_dir = Some(deployed.clone());
     record.task = Some("nightly".into());
+    record.prompt = Some("the task's prompt".into());
     let booker = crate::agents::LaunchedBy {
         kind: crate::ids::AgentKind::new_unchecked("claude"),
         agent_id: "booker".into(),
@@ -33,6 +34,7 @@ on={pass='@done',fail='@failed'}
     record.fire = Some(records::RunFire::Scheduled {
         task: "nightly".into(),
         trigger: None,
+        evidence: Some("Rule `nightly` fired here. deploy.done".into()),
         booked_by: vec![booker],
     });
     fs::write(
@@ -47,7 +49,11 @@ on={pass='@done',fail='@failed'}
     advance(&state, &record.id, &FakeHost::new()).unwrap();
     let definition = deployed.display().to_string();
     let seen = format!("{definition}|nightly");
-    assert_eq!(fs::read_to_string(paths.step_log(1)).unwrap(), seen);
+    assert_eq!(
+        fs::read_to_string(paths.step_log(1)).unwrap(),
+        format!("{seen}|Rule `nightly` fired here. deploy.done"),
+        "a command reads the fire's evidence as its trigger, not the run's prompt"
+    );
     assert_eq!(
         fs::read_to_string(paths.work.join("shell-definition")).unwrap(),
         seen

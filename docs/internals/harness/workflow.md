@@ -125,7 +125,7 @@ The engine rules behind the agent-only fields:
 
 A command step's `run` resolves the same way as a test's or a script's ([`run` and `shell`](#run-and-shell)), and its `shell` text must be nonempty.
 
-A message step's `then` names one node, `@done`, or `@failed` (`crates/rimz/src/harness/workflow/validate.rs::message_then`). Its `message` must be an `@` address without a pane id that `address::parse_selector` accepts and that is neither `@user` nor `@me` (`crates/rimz/src/harness/workflow/validate.rs::message_target`). Its optional `session` pins the agent by launch: the session given, or the session a restart or molt of that launch replaced it with (`crates/rimz/src/cli/workflow/host.rs::pin_names`). A handle that another launch took over goes undelivered. `prompt-file` is optional and confined. `agent::compose` joins the prompt file when set, the node's sign, and the run prompt, and `engine::Notice::text` writes a header line before them. [Message steps](#message-steps) owns how one runs.
+A message step's `then` names one node, `@done`, or `@failed` (`crates/rimz/src/harness/workflow/validate.rs::message_then`). Its `message` must be an `@` address without a pane id that `address::parse_selector` accepts and that is neither `@user` nor `@me` (`crates/rimz/src/harness/workflow/validate.rs::message_target`). Its optional `session` pins the agent by launch: the session given, or the session a restart or molt of that launch replaced it with (`crates/rimz/src/cli/workflow/host.rs::pin_names`). A handle that another launch took over goes undelivered. `prompt-file` is optional and confined. `agent::compose` joins the prompt file when set, the node's sign, the run prompt, and the fire's evidence, and `engine::Notice::text` writes a header line before them. [Message steps](#message-steps) owns how one runs.
 
 ### `run` and `shell`
 
@@ -445,7 +445,7 @@ Any advance or cancel kills the recorded group under the lock before it withdraw
 
 A hosted child runs in the scope checkout with null stdin, the room workspace pin, `RIMZ_WORKFLOW_RUN`, `RIMZ_WORKFLOW_DIR`, and `RIMZ_WORKFLOW_DEFINITION`. Its `context.json` holds `run`, `prompt`, `node`, `seq`, `key`, `input`, `step_visits`, `key_visits`, `signs_path`, and `prev_attempt`. A session with a `rest-check` also publishes `live_attempt` ([Rest checks](#rest-checks-judging-an-open-session)).
 
-A step's context adds `visit` (its visit count at admission, this launch or push-back included) and `visits` (its count now, since the last reset). The live attempt stamps `visit` at launch and at each admitted push-back. The context, `live_attempt.visit`, `prev_attempt.visit`, and the attempt journal row keep that latest number through resets alone, and an attempt without a stamp uses the current count. `prev_attempt` exposes the step, attempt outcome, `routed_by`, sequence, visit, key, start and end, claim path, handle, supervised run id, HEAD pair, stopped and surviving children, ask or limit evidence, cost, exit `code`, and `log`, with null for whatever was not observed. Signs and the run prompt compose only agent prompts and message-step messages.
+A step's context adds `visit` (its visit count at admission, this launch or push-back included) and `visits` (its count now, since the last reset). The live attempt stamps `visit` at launch and at each admitted push-back. The context, `live_attempt.visit`, `prev_attempt.visit`, and the attempt journal row keep that latest number through resets alone, and an attempt without a stamp uses the current count. `prev_attempt` exposes the step, attempt outcome, `routed_by`, sequence, visit, key, start and end, claim path, handle, supervised run id, HEAD pair, stopped and surviving children, ask or limit evidence, cost, exit `code`, and `log`, with null for whatever was not observed. Signs, the run prompt, and the fire's evidence compose only agent prompts and message-step messages; a command reads the evidence as `RIMZ_LOOP_TRIGGER`.
 
 ### Command-step settlement
 
@@ -683,7 +683,7 @@ An unreadable required room or stagger record holds a scheduled start as `store`
 
 ### Prompt composition
 
-`crates/rimz/src/harness/workflow/engine/agent.rs::compose` joins three texts with blank lines at every launch: the prompt file, `signs/<step>.md` when present, and the run prompt. A sign's canonical path must stay inside `work/`. The digests are keyed by the spec's prompt-file spelling, `signs/<step>.md`, and `prompt`, and absent optional text has no digest. A relaunch can find a dirty checkout left by a stopped attempt, and the step's prompt must handle it.
+`crates/rimz/src/harness/workflow/engine/agent.rs::compose` joins four texts with blank lines at every launch: the prompt file, `signs/<step>.md` when present, the run prompt, and the fire's evidence (`RunFire::evidence`) when the run's fire carries one. A sign's canonical path must stay inside `work/`. The digests are keyed by the spec's prompt-file spelling, `signs/<step>.md`, `prompt`, and `evidence`, and absent optional text has no digest. A relaunch can find a dirty checkout left by a stopped attempt, and the step's prompt must handle it.
 
 `crates/rimz/src/harness/workflow/brief.rs::step` composes a separate `### Workflow` launch-reminder body off-lock in `engine::agent::launch`, from the definition the launch read and the published, bumped run record.
 
@@ -970,16 +970,15 @@ A run is announced by the pass whose move of its home succeeds, with its cause r
 
 ## Loop tasks
 
-A shell task's fire starts a workflow run of the inline graph that `crates/rimz/src/harness/schedule/runner.rs::command_definition` builds from the row: one `test` check named `command` that runs the row's argv under its `timeout` ([loops.md § The compiled graph](./loops.md#the-compiled-graph)). A workflow task's fire runs `rimz workflow run <target> --loop-fire-json` in a launch child, which publishes a run of the deployed workflow carrying the fire, and an agent or team task's fire publishes no run of its own. [loops.md § One fire](./loops.md#one-fire) owns the gates in front of the run.
+A shell task's fire starts a workflow run of the inline graph that `crates/rimz/src/harness/schedule/runner.rs::command_definition` builds from the row: one `test` check named `command` that runs the row's argv under its `timeout` ([loops.md § The compiled graph](./loops.md#the-compiled-graph)). A workflow task's fire runs `rimz workflow run <target> --loop-fire-json` in a launch child, which publishes a run of the deployed workflow carrying the fire (its `evidence` included, so the run's commands read the same `RIMZ_LOOP_TRIGGER` and its agent and message steps get the line after the run's `--prompt`), and an agent or team task's fire publishes no run of its own. [loops.md § One fire](./loops.md#one-fire) owns the gates in front of the run.
 
 ### What a fire puts on the record
 
 The fire ends in `engine::create` (`crates/rimz/src/harness/schedule/runner.rs::TaskFire::prepare_command`) with:
 
 - `task = Some(<name>)`, and `manual` set only for `LoopRunMode::Manual`
-- the fire's `fire`
-- default start arguments (no `give_up`, `capacity` wait)
-- the fire's trigger evidence as the run prompt, read once the backlog reconcile has settled which trigger the run serves, and absent when the fire has none. The command reads it as `RIMZ_LOOP_TRIGGER`.
+- the fire's `fire`, whose `evidence` is the fire's trigger evidence, read once the backlog reconcile has settled which trigger the run serves, and absent when the fire has none. The command reads it as `RIMZ_LOOP_TRIGGER`.
+- default start arguments (no `give_up`, `capacity` wait) and no run prompt
 
 The fire takes no start-throttle turn, and an agent its command launches takes its own at that launch.
 

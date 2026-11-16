@@ -741,9 +741,9 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::Done(done));
         }
         // The run lock and the reconcile may have switched the trigger this fire serves; the
-        // run's prompt, which its command reads as `RIMZ_LOOP_TRIGGER`, names the one served.
+        // run's fire evidence, which its command reads as `RIMZ_LOOP_TRIGGER`, names the one
+        // served.
         let trigger = self.effect_prompt(String::new());
-        let prompt = || Ok((!trigger.is_empty()).then(|| trigger.clone()));
         let created_tree = self.prepare_row_tree()?;
         let (fire, displaced) = self.open_fire()?;
         if created_tree {
@@ -753,7 +753,7 @@ impl<'a> TaskFire<'a> {
             task: self.name.clone(),
             loop_fire: fire.clone(),
             definition,
-            fire: Some(self.run_fire()),
+            fire: Some(self.run_fire(&trigger)),
             fire_facts: Some(self.fire_facts()),
         };
         let checkout = self.fire_dir();
@@ -766,7 +766,7 @@ impl<'a> TaskFire<'a> {
                 checkout,
                 project: root,
             },
-            prompt,
+            || Ok(None),
             self.mode == LoopRunMode::Manual,
             crate::harness::workflow::StartArgs::default(),
         );
@@ -849,7 +849,7 @@ impl<'a> TaskFire<'a> {
         let start = workflow.then(|| crate::harness::workflow::TaskStart {
             task: self.name.clone(),
             loop_fire: fire.clone(),
-            fire: self.run_fire(),
+            fire: self.run_fire(&trigger),
             fire_facts: self.fire_facts(),
             manual: self.mode == LoopRunMode::Manual,
         });
@@ -1188,18 +1188,25 @@ impl<'a> TaskFire<'a> {
         run_log::fire_facts(&record)
     }
 
-    /// What this fire tells its run's briefs, frozen into the run at its creation: the task, and
-    /// for a scheduled fire the trigger; a manual fire's brief names the command instead. The
-    /// task's booking chain rides along for the agents the run launches.
-    fn run_fire(&self) -> RunFire {
+    /// What this fire tells its run's briefs, frozen into the run at its creation: the task, the
+    /// served trigger's `evidence` when it has any, and for a scheduled fire the trigger; a
+    /// manual fire's brief names the command instead. The task's booking chain rides along for
+    /// the agents the run launches.
+    fn run_fire(&self, evidence: &str) -> RunFire {
         let task = self.name.clone();
+        let evidence = (!evidence.is_empty()).then(|| evidence.to_owned());
         let booked_by = self.task.entry().booked_by.clone();
         if self.mode == LoopRunMode::Manual {
-            return RunFire::Manual { task, booked_by };
+            return RunFire::Manual {
+                task,
+                evidence,
+                booked_by,
+            };
         }
         RunFire::Scheduled {
             task,
             trigger: super::trigger_clause(&self.task),
+            evidence,
             booked_by,
         }
     }

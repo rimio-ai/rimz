@@ -1483,10 +1483,10 @@ enum TriggerSwitch {
     Reconcile,
 }
 
-/// Fires a command row on a `deploy.done {"env":"b"}` arrival and checks that the run's prompt,
-/// which its command reads as `RIMZ_LOOP_TRIGGER`, names the trigger its record names: `env` is
-/// the payload the fire serves.
-fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwitch, env: &str) {
+/// Fires a command row on a `deploy.done {"env":"b"}` arrival and checks that the run's fire
+/// evidence, which its command reads as `RIMZ_LOOP_TRIGGER`, names the trigger its record names:
+/// `env` is the payload the fire serves.
+fn assert_sealed_evidence_names_the_served_trigger(name: &str, switch: TriggerSwitch, env: &str) {
     let root = tempfile::tempdir().unwrap();
     record_room(root.path()).unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
@@ -1551,9 +1551,15 @@ fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwit
         .into_iter()
         .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))
         .expect("created workflow run");
-    let prompt = run.prompt.clone().unwrap_or_default();
+    assert_eq!(run.prompt, None, "the evidence is the fire's, not a prompt");
+    let evidence = run
+        .fire
+        .as_ref()
+        .and_then(|fire| fire.evidence())
+        .unwrap_or_default()
+        .to_owned();
     let signal = done.record.signal.as_ref().unwrap();
-    let shown = format!("sealed prompt:\n{prompt}\nrecord signal: {signal:?}");
+    let shown = format!("sealed evidence:\n{evidence}\nrecord signal: {signal:?}");
     assert_eq!(signal.payload["env"], env, "{shown}");
     assert_eq!(
         done.record.absorbed,
@@ -1561,37 +1567,37 @@ fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwit
         "{shown}"
     );
     assert_eq!(
-        prompt,
+        evidence,
         format!("Rule `{name}` fired here. deploy.done · env: {env}"),
         "{shown}"
     );
 }
 
 #[test]
-fn a_queued_fire_seals_the_prompt_of_the_waiting_trigger_it_serves() {
-    let name = "harness::schedule::runner::tests::a_queued_fire_seals_the_prompt_of_the_waiting_trigger_it_serves";
+fn a_queued_fire_seals_the_evidence_of_the_waiting_trigger_it_serves() {
+    let name = "harness::schedule::runner::tests::a_queued_fire_seals_the_evidence_of_the_waiting_trigger_it_serves";
     if super::super::test_homes::reexec_with_private_homes(name) {
         return;
     }
-    assert_sealed_prompt_names_the_served_trigger("queued", TriggerSwitch::RunLock, "a");
+    assert_sealed_evidence_names_the_served_trigger("queued", TriggerSwitch::RunLock, "a");
 }
 
 #[test]
-fn a_coalesced_fire_seals_the_prompt_of_the_newer_trigger_it_serves() {
-    let name = "harness::schedule::runner::tests::a_coalesced_fire_seals_the_prompt_of_the_newer_trigger_it_serves";
+fn a_coalesced_fire_seals_the_evidence_of_the_newer_trigger_it_serves() {
+    let name = "harness::schedule::runner::tests::a_coalesced_fire_seals_the_evidence_of_the_newer_trigger_it_serves";
     if super::super::test_homes::reexec_with_private_homes(name) {
         return;
     }
-    assert_sealed_prompt_names_the_served_trigger("coalesced", TriggerSwitch::Reconcile, "c");
+    assert_sealed_evidence_names_the_served_trigger("coalesced", TriggerSwitch::Reconcile, "c");
 }
 
 #[test]
-fn a_fire_with_nothing_waiting_seals_the_prompt_of_its_arrival() {
-    let name = "harness::schedule::runner::tests::a_fire_with_nothing_waiting_seals_the_prompt_of_its_arrival";
+fn a_fire_with_nothing_waiting_seals_the_evidence_of_its_arrival() {
+    let name = "harness::schedule::runner::tests::a_fire_with_nothing_waiting_seals_the_evidence_of_its_arrival";
     if super::super::test_homes::reexec_with_private_homes(name) {
         return;
     }
-    assert_sealed_prompt_names_the_served_trigger("arrival", TriggerSwitch::None, "b");
+    assert_sealed_evidence_names_the_served_trigger("arrival", TriggerSwitch::None, "b");
 }
 
 /// Every fire's mark names its run and who booked the row, so the sidebar's bookings lane can

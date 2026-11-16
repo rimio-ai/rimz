@@ -517,6 +517,47 @@ fn a_workflow_fire_publishes_the_tasks_run_and_a_hand_started_run_overlaps_it() 
     std::fs::write(&release, "").unwrap();
 }
 
+/// A workflow task's steps read the fire's evidence as `RIMZ_LOOP_TRIGGER`, never the run's
+/// `--prompt`, and still get it when the task passes no prompt.
+#[cfg(unix)]
+#[test]
+fn a_workflow_fires_steps_read_its_evidence_as_the_trigger() {
+    let env = live_room();
+    let seen = env.home_root.join("seen");
+    deploy_workflow(
+        &env,
+        "smoke",
+        "worktree",
+        &format!(
+            r#"printf %s "$RIMZ_LOOP_TRIGGER" > {:?}/"$RIMZ_LOOP_TASK""#,
+            seen.display().to_string()
+        ),
+    );
+    std::fs::create_dir_all(&seen).unwrap();
+    let signal = r#"{"name":"deploy.done","source":"cli","payload":{"env":"prod"}}"#;
+    for (task, tail) in [
+        ("prompted", &["--", "--prompt", "fix it"][..]),
+        ("bare", &[]),
+    ] {
+        let add = [
+            &["loop", "add", task, "--workflow", "smoke"][..],
+            &["--signal", "deploy.done", "--repeat"],
+            tail,
+        ]
+        .concat();
+        loop_ok(&env, &add);
+        let before = run_mark(&env, task);
+        loop_ok(&env, &["loop", "run", task, "--signal-json", signal]);
+        let report = wait_for_loop_report_after(&env, task, before);
+        assert_eq!(report.result, LoopRunResult::Completed, "{report:?}");
+        assert_eq!(
+            std::fs::read_to_string(seen.join(task)).unwrap(),
+            format!("Rule `{task}` fired here. deploy.done · env: prod"),
+            "task {task}"
+        );
+    }
+}
+
 /// A fire typed in a pane of another room launches into the task's room: the launch child
 /// drops the firing shell's room pin, so it resolves the room from the fire's checkout, as a
 /// fire from the timer, which carries no pin, does.

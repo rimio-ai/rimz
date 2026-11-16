@@ -655,7 +655,10 @@ pub enum RunEnding {
     },
 }
 
-/// The loop fire that started a run, as the run's briefs name it. `booked_by` is the
+/// The loop fire that started a run, as the run's briefs name it. `evidence` is the fire's one
+/// line naming what fired it (a signal's subject and fields, a condition's readings), which the
+/// run's commands read as `RIMZ_LOOP_TRIGGER` and its agent steps get after the run's prompt;
+/// a clock fire, or a manual one without `--signal`, has none. `booked_by` is the
 /// fired task row's booking chain as the fire read it, which every agent the run launches
 /// carries; a fire of a row with no chain, or of a record written before the field, has none.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -664,6 +667,8 @@ pub enum RunFire {
     /// `rimz loop fire <task>` started the run by hand.
     Manual {
         task: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         booked_by: Vec<crate::agents::LaunchedBy>,
     },
@@ -673,12 +678,21 @@ pub enum RunFire {
         task: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         booked_by: Vec<crate::agents::LaunchedBy>,
     },
 }
 
 impl RunFire {
+    /// The fire's evidence line, when it carried one.
+    pub fn evidence(&self) -> Option<&str> {
+        match self {
+            Self::Manual { evidence, .. } | Self::Scheduled { evidence, .. } => evidence.as_deref(),
+        }
+    }
+
     /// The fired task row's booking chain, nearest booker first.
     pub fn booked_by(&self) -> &[crate::agents::LaunchedBy] {
         match self {

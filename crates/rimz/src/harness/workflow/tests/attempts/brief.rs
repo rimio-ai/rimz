@@ -73,6 +73,7 @@ fn task(record: &mut RunRecord, manual: bool) {
     record.fire = Some(if manual {
         records::RunFire::Manual {
             task,
+            evidence: None,
             booked_by: Vec::new(),
         }
     } else {
@@ -83,6 +84,7 @@ fn task(record: &mut RunRecord, manual: bool) {
                  for 3m"
                     .into(),
             ),
+            evidence: None,
             booked_by: Vec::new(),
         }
     });
@@ -406,6 +408,7 @@ fn missing_enrichment_never_prevents_a_launch_or_invents_a_sender() {
     record.fire = Some(records::RunFire::Scheduled {
         task: "missing-task".into(),
         trigger: None,
+        evidence: None,
         booked_by: Vec::new(),
     });
     update(&state, &record);

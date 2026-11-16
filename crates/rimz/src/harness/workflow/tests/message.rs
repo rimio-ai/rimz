@@ -24,7 +24,14 @@ fn attempt_rows(paths: &WorkflowPaths) -> Vec<(AttemptOutcome, Option<String>, O
 
 #[test]
 fn a_message_step_queues_one_notice_and_follows_then_without_agent_host_operations() {
-    let (_dir, state, record) = super::attempts::setup(TELL);
+    let (_dir, state, mut record) = super::attempts::setup(TELL);
+    record.fire = Some(records::RunFire::Scheduled {
+        task: "nightly".into(),
+        trigger: None,
+        evidence: Some("Rule `nightly` fired here. deploy.done".into()),
+        booked_by: Vec::new(),
+    });
+    super::attempts::update(&state, &record);
     let host = FakeHost::new();
     *host.occupancy.borrow_mut() = Occupancy::Blocked(vec![]);
     let paths = state.workflow(&record.id);
@@ -49,7 +56,7 @@ fn a_message_step_queues_one_notice_and_follows_then_without_agent_host_operatio
     assert_eq!(
         text,
         &format!(
-            "Workflow `test` step `tell` sends you this message (run {id}; `rimz workflow show {id}`).\n\nBuild it\n\nMerged as #42\n\nRun request",
+            "Workflow `test` step `tell` sends you this message (run {id}; `rimz workflow show {id}`).\n\nBuild it\n\nMerged as #42\n\nRun request\n\nRule `nightly` fired here. deploy.done",
             id = record.id
         )
     );
