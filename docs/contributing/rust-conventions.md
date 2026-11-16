@@ -28,6 +28,7 @@ struct Cli {
 - Follow the [CLI layer contract](../../crates/rimz/src/cli/AGENTS.md) for the boundary between handlers and library-owned workflows.
 - `bin_name = "rimz"` keeps help text stable when the executable is invoked via a platform-specific path.
 - Subcommands are a flat `enum Subcmd { ... }`. Use `#[clap(visible_alias = "<short>")]` for discoverable shorthand and `#[clap(hide = true)]` for hooks-only or internal subcommands.
+- A clap `value_parser` refusal quotes the whole rejected value and prints only the error's own text, not its source. Parse a value that can be large or whose cause matters (a JSON payload, a file's text) in the command, and refuse with `cli::usage::UsageError` so the exit code stays 2.
 
 ## Stdout and tracing
 
