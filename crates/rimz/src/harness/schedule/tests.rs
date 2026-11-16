@@ -1229,6 +1229,72 @@ fn signal_selectors_observe_only_matching_family_payloads() {
 }
 
 #[test]
+fn a_signal_trigger_names_why_it_would_not_deliver_a_carried_signal() {
+    let signal = |name: &str, payload: serde_json::Value| crate::harness::signal::Signal {
+        name: name.parse().unwrap(),
+        payload: payload.as_object().unwrap().clone(),
+        source: crate::store::event::SignalSource::Cli,
+        watch: None,
+    };
+    let trigger = |entry: TaskEntry| ParsedTrigger {
+        trigger: parse_trigger("task", &entry).unwrap().trigger,
+        once: false,
+    };
+    let subscription = |selector: &str, matches: &[(&str, &str)]| {
+        trigger(TaskEntry {
+            signal: Some(selector.to_owned()),
+            matches: Some(
+                matches
+                    .iter()
+                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                    .collect(),
+            ),
+            repeat: true,
+            ..spawn_entry()
+        })
+    };
+    let prod = serde_json::json!({"env": "prod", "region": "eu"});
+    for (row, carried, expected) in [
+        (
+            subscription("deploy.*", &[("env", "prod")]),
+            signal("deploy.done", prod.clone()),
+            None,
+        ),
+        (
+            subscription("deploy.done", &[("env", "prod")]),
+            signal("deploy.started", prod.clone()),
+            Some(SignalMiss::Outside("deploy.done".to_owned())),
+        ),
+        (
+            subscription("deploy.done", &[("env", "dev")]),
+            signal("ci.failed", prod.clone()),
+            Some(SignalMiss::Outside("deploy.done".to_owned())),
+        ),
+        (
+            subscription(
+                "deploy.*",
+                &[("env", "dev"), ("owner", "*"), ("region", "eu")],
+            ),
+            signal("deploy.done", prod.clone()),
+            Some(SignalMiss::Unmatched(vec![
+                "env=dev".to_owned(),
+                "owner=*".to_owned(),
+            ])),
+        ),
+        (
+            trigger(TaskEntry {
+                every: Some("1h".to_owned()),
+                ..spawn_entry()
+            }),
+            signal("deploy.done", prod.clone()),
+            None,
+        ),
+    ] {
+        assert_eq!(row.signal_miss(&carried), expected, "{}", row.describe());
+    }
+}
+
+#[test]
 fn a_branch_row_signal_without_a_path_fires_only_branch_subscriptions() {
     use crate::harness::signal::SignalResolution::{Deliver, Excluded};
     let signal = crate::harness::signal::Signal {

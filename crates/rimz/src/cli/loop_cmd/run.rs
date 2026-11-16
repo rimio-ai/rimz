@@ -53,7 +53,34 @@ fn write_condition_notice(
     )
 }
 
-pub(super) fn run_one(args: RunArgs, mode: LoopRunMode, globals: &GlobalFlags) -> Result<()> {
+/// The notice for a manual fire's pretend signal that the task's own trigger would not deliver.
+fn write_signal_notice(
+    out: &mut impl Write,
+    trigger: Option<&schedule::ParsedTrigger>,
+    signal: &rimz::harness::signal::Signal,
+) -> std::io::Result<()> {
+    let reason = match trigger.and_then(|trigger| trigger.signal_miss(signal)) {
+        None => return Ok(()),
+        Some(schedule::SignalMiss::Outside(selector)) => format!(
+            "signal `{}` is outside this task's trigger `{selector}`",
+            signal.name
+        ),
+        Some(schedule::SignalMiss::Unmatched(fields)) => format!(
+            "signal payload fails this task's --match {}",
+            fields.join(", ")
+        ),
+    };
+    writeln!(out, "{reason}; running anyway, task stays armed")
+}
+
+/// Run one task: a scheduled fire, or a manual one, which may carry a pretend `signal` that is
+/// never emitted.
+pub(super) fn run_one(
+    args: RunArgs,
+    mode: LoopRunMode,
+    pretend: Option<rimz::harness::signal::Signal>,
+    globals: &GlobalFlags,
+) -> Result<()> {
     let name = args.name.as_str();
     let signal = args
         .signal_json
@@ -62,7 +89,7 @@ pub(super) fn run_one(args: RunArgs, mode: LoopRunMode, globals: &GlobalFlags) -
         .transpose()
         .context("decoding loop trigger signal")?;
     let arrived_at = signal.as_ref().and_then(|signal| signal.arrived_at);
-    let signal = signal.map(|signal| signal.signal);
+    let signal = signal.map(|signal| signal.signal).or(pretend);
     let condition = args
         .condition_json
         .as_deref()
@@ -148,6 +175,9 @@ pub(super) fn run_one(args: RunArgs, mode: LoopRunMode, globals: &GlobalFlags) -
         );
         let timing = condition::observe((&loaded.key(name), name), &observed_entry, timing, now);
         write_condition_notice(&mut ui::out(), &timing)?;
+        if let Some(signal) = &signal {
+            write_signal_notice(&mut ui::out(), loaded.trigger().as_ref().ok(), signal)?;
+        }
     }
     let mut fire = rimz::harness::schedule::runner::TaskFire::new(
         name,

@@ -73,7 +73,7 @@ To try one before its time, run `rimz loop fire sweep` ([See what a task did](#s
 
 A trailing `-w` gives each fire's launch a fresh worktree, as it does from a shell. The second example launches `recon`, a team you have defined or installed ([Teams](./teams.md) shows both); `loop add` refuses a team it cannot load.
 
-For an agent or team task, RimZ appends one line to the launched agent's prompt saying which task fired and why, such as ``Rule `ci-fix` fired here. ci.failed on feature #42 @88824c2``. An unattended agent then knows what happened without asking. A plain command reads the same line from the `RIMZ_LOOP_TRIGGER` environment variable, `RIMZ_LOOP_TASK` holds the task's name, and `RIMZ_LOOP_FIRE` the id of this one fire. A clock fire or a manual fire carries no such line.
+For an agent or team task, RimZ appends one line to the launched agent's prompt saying which task fired and why, such as ``Rule `ci-fix` fired here. ci.failed on feature #42 @88824c2``. An unattended agent then knows what happened without asking. A plain command reads the same line from the `RIMZ_LOOP_TRIGGER` environment variable, `RIMZ_LOOP_TASK` holds the task's name, and `RIMZ_LOOP_FIRE` the id of this one fire. A clock fire or a manual fire carries no such line, unless the manual fire names a signal with `--signal`.
 
 A [workflow](./workflows.md) task (`--workflow <name>`) starts the deployed workflow's run as the task's own, and the fire's outcome is the run's. A `rimz workflow run` that a shell task's script runs starts an ordinary run instead, which carries the fire's id and reports to nobody.
 
@@ -221,7 +221,13 @@ To test a task before its trigger comes, fire it by hand:
 rimz loop fire ci-fix
 ```
 
-`fire` starts a run now and leaves the schedule and the trigger as they were. For a condition that is not true yet, it says so and runs anyway. An agent, team, or workflow task prints its launch's [outcome](../reference/cli/loop.md#what-a-task-launches) once the launch has placed its agents or published its run. A shell task prints `launched` and the `rimz workflow show` command that follows the run, since a shell fire runs its command as a one-step workflow run. `launched` means the run started, and a run that then fails still prints it: `rimz loop show` prints the failed step's error inline.
+`fire` starts a run now and leaves the schedule and the trigger as they were. To see the line a signal would hand the task, fire it as if that signal had come; nothing is emitted, so no other task wakes:
+
+```sh
+rimz loop fire ci-fix --signal ci.failed --json '{"branch":"feature"}'
+```
+
+If the task's own trigger would not take that signal, the fire says why and runs anyway. For a condition that is not true yet, it says so and runs anyway. An agent, team, or workflow task prints its launch's [outcome](../reference/cli/loop.md#what-a-task-launches) once the launch has placed its agents or published its run. A shell task prints `launched` and the `rimz workflow show` command that follows the run, since a shell fire runs its command as a one-step workflow run. `launched` means the run started, and a run that then fails still prints it: `rimz loop show` prints the failed step's error inline.
 
 Exact screen layouts, sections, and JSON fields are in the reference for [`loop list`](../reference/cli/loop.md#loop-list), [`loop show`](../reference/cli/loop.md#loop-show), and [`loop logs`](../reference/cli/loop.md#loop-logs).
 

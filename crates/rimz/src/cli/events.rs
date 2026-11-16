@@ -11,7 +11,6 @@ use jiff::Timestamp;
 use rimz::harness::signal::SignalSelector;
 use rimz::store::event::{SignalName, SignalSource};
 use rimz::store::follow::{FollowEvent, SignalEvent};
-use serde_json::{Map, Value};
 
 use super::{GlobalFlags, render};
 
@@ -270,7 +269,7 @@ fn poll_interval() -> Duration {
 fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFlags) -> Result<()> {
     let name = name.parse::<SignalName>().map_err(anyhow::Error::msg)?;
     let source = validate_emit_source(&name, source)?;
-    let payload = parse_payload(raw_payload)?;
+    let payload = rimz::harness::signal::parse_payload(raw_payload)?;
     let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let store = super::require_existing_store(&workspace)?;
@@ -343,20 +342,6 @@ fn validate_emit_source(name: &SignalName, source: &str) -> Result<SignalSource>
     }
 }
 
-fn parse_payload(raw: Option<&str>) -> Result<Map<String, Value>> {
-    let Some(raw) = raw else {
-        return Ok(Map::new());
-    };
-    if raw.len() > 64 * 1024 {
-        anyhow::bail!("--json payload exceeds 64 KiB");
-    }
-    serde_json::from_str::<Value>(raw)
-        .context("parsing --json payload")?
-        .as_object()
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("--json payload must be a JSON object"))
-}
-
 fn write_json_line(
     writer: &mut impl Write,
     event: &rimz::store::follow::FollowEvent,
@@ -380,6 +365,7 @@ fn write_json_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn now() -> Timestamp {
         "2026-06-01T12:00:00Z".parse().unwrap()

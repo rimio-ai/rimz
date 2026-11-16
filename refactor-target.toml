@@ -5829,6 +5829,8 @@ surface-budget = 2
 [[module]]
 path = "crates/rimz/src/harness/signal.rs"
 # Neutral signal vocabulary; the emit, arming and fire side stays in the scheduler.
+# parse_payload and PayloadErr hold the one `--json` payload rule `events emit` and `loop fire --signal` share (+2).
+# holds_match lets a manual fire's notice name the `--match` fields a pretend signal fails (+1).
 allowed-dependencies = [
     "(crate)",
     "disk::summary",
@@ -5836,7 +5838,7 @@ allowed-dependencies = [
     "store::event",
     "theme::fmt",
 ]
-surface-budget = 22
+surface-budget = 25
 
 [[module]]
 path = "crates/rimz/src/harness/takeover"
@@ -6377,6 +6379,26 @@ reason = "Loop triggers and workflow wakes share signal delivery and sibling-ski
 kind = "item"
 key = "harness::signal::SignalResolution"
 reason = "Loop triggers and workflow wakes distinguish delivery from sibling skips."
+
+[[verdict]]
+kind = "item"
+key = "harness::signal::parse_payload"
+reason = "Events emit and loop fire --signal share the signal payload rule: an object of at most 64 KiB."
+
+[[verdict]]
+kind = "item"
+key = "harness::signal::PayloadErr"
+reason = "Events emit and loop fire --signal refuse a bad payload with the same typed causes."
+
+[[verdict]]
+kind = "item"
+key = "harness::signal::holds_match"
+reason = "Subscription resolution and a manual fire's would-not-deliver notice share one match test."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::SignalMiss"
+reason = "A manual loop fire names why its task's own signal trigger would not deliver its pretend signal."
 
 [[verdict]]
 kind = "item"

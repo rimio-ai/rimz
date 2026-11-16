@@ -110,6 +110,138 @@ fn an_argv_word_with_space_quote_dollar_and_glob_reaches_the_process_unchanged_b
     assert_eq!(evidence, "Rule `words` fired here. deploy.done · env: prod");
 }
 
+/// A shell row that writes its `RIMZ_LOOP_TRIGGER` (empty when absent) to `<home>/<name>`.
+#[cfg(unix)]
+fn add_trigger_writer(env: &Env, name: &str, trigger: &[&str]) -> std::path::PathBuf {
+    let seen = env.home_root.join(name);
+    let argv = [
+        &["loop", "add", name][..],
+        trigger,
+        &["--", "sh", "-c", r#"printf %s "$RIMZ_LOOP_TRIGGER" > "$1""#],
+        &["sh", seen.to_str().unwrap()],
+    ]
+    .concat();
+    loop_ok(env, &argv);
+    seen
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_fire_with_a_pretend_signal_hands_its_evidence_to_the_fire_alone() {
+    let env = live_room();
+    let subscribed = ["--signal", "deploy.done", "--repeat", "--match", "env=prod"];
+    let seen = add_trigger_writer(&env, "words", &subscribed);
+    let clock = add_trigger_writer(&env, "clock", &["--every", "1h"]);
+    let sibling = env.home_root.join("sibling");
+    let sibling_arg = sibling.to_str().unwrap();
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "sibling",
+            "--signal",
+            "deploy.done",
+            "--repeat",
+            "--",
+            "touch",
+            sibling_arg,
+        ],
+    );
+    let events = || loop_ok(&env, &["events", "list", "--json"]);
+    let events_before = events();
+    let fire = |name: &str, flags: &[&str]| {
+        let before = run_mark(&env, name);
+        let argv = [&["loop", "fire", name][..], flags].concat();
+        let out = loop_ok(&env, &argv);
+        (out, wait_for_loop_report_after(&env, name, before))
+    };
+
+    let (out, record) = fire(
+        "words",
+        &["--signal", "deploy.done", "--json", r#"{"env":"prod"}"#],
+    );
+    assert_eq!(record.result, LoopRunResult::Completed, "{out}");
+    assert!(!out.contains("running anyway"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&seen).unwrap(),
+        "Rule `words` fired here. deploy.done · env: prod"
+    );
+    assert_eq!(record.mode, Some(LoopRunMode::Manual));
+    let signal = record
+        .signal
+        .as_ref()
+        .expect("the pretend signal is recorded");
+    assert_eq!(signal.name.as_str(), "deploy.done");
+    assert_eq!(
+        serde_json::Value::Object(signal.payload.clone()),
+        json!({"env": "prod"})
+    );
+    assert_eq!(events(), events_before, "nothing is emitted");
+    let records = read_loop_run_records(&env);
+    assert!(
+        !sibling.exists() && records.iter().all(|record| record.task != "sibling"),
+        "no other subscriber wakes: {records:?}"
+    );
+
+    // A signal the task's own trigger would not deliver says why and runs anyway.
+    for (flags, notice) in [
+        (
+            &["--signal", "deploy.other"][..],
+            "signal `deploy.other` is outside this task's trigger `deploy.done`; running anyway, \
+             task stays armed",
+        ),
+        (
+            &["--signal", "deploy.done", "--json", r#"{"env":"dev"}"#],
+            "signal payload fails this task's --match env=prod; running anyway, task stays armed",
+        ),
+    ] {
+        let (out, record) = fire("words", flags);
+        assert_eq!(out.matches(notice).count(), 1, "{out}");
+        assert_eq!(record.result, LoopRunResult::Completed, "{out}");
+    }
+    assert!(stored_rows(&env).contains_key("words"));
+
+    // A clock row carries the signal line too; without the flag it carries none.
+    fire(
+        "clock",
+        &["--signal", "ci.failed", "--json", r#"{"branch":"feature"}"#],
+    );
+    assert_eq!(
+        std::fs::read_to_string(&clock).unwrap(),
+        "Rule `clock` fired here. ci.failed on feature"
+    );
+    let (out, _) = fire("clock", &[]);
+    assert!(!out.contains("running anyway"), "{out}");
+    assert_eq!(std::fs::read_to_string(&clock).unwrap(), "");
+
+    // Bad input refuses at parse, before any run starts.
+    let runs = read_loop_run_records(&env).len();
+    let oversize = format!(r#"{{"a":"{}"}}"#, "x".repeat(64 * 1024));
+    for (flags, expected) in [
+        (vec!["--json", "{}"], "--signal <NAME>"),
+        (
+            vec!["--signal", "deploy.*"],
+            "invalid signal name `deploy.*`",
+        ),
+        (
+            vec!["--signal", "deploy.done", "--json", "[]"],
+            "--json payload must be a JSON object",
+        ),
+        (
+            vec!["--signal", "deploy.done", "--json", &oversize],
+            "--json payload exceeds 64 KiB",
+        ),
+    ] {
+        let argv = [&["loop", "fire", "words"][..], &flags].concat();
+        let output = env.rimz().args(&argv).output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{flags:?}: {stderr}");
+        assert!(stderr.contains(expected), "{flags:?}: {stderr}");
+    }
+    assert_eq!(read_loop_run_records(&env).len(), runs);
+}
+
 #[cfg(unix)]
 #[test]
 fn exit_zero_ends_done_and_a_failure_or_timeout_ends_failed_with_a_strike() {

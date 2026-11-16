@@ -804,7 +804,38 @@ pub struct ParsedTrigger {
     pub once: bool,
 }
 
+/// Why a task's own signal trigger would not deliver the signal a manual fire carries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SignalMiss {
+    /// The name is outside the trigger's selector, written as the selector.
+    Outside(String),
+    /// The payload fails these `--match` fields, each written `key=value`.
+    Unmatched(Vec<String>),
+}
+
 impl ParsedTrigger {
+    /// Why this trigger would not deliver `signal`: `None` when it would, and on a trigger that
+    /// is not a signal subscription.
+    pub fn signal_miss(&self, signal: &crate::harness::signal::Signal) -> Option<SignalMiss> {
+        use crate::harness::signal::SignalResolution::{Deliver, Excluded};
+        let Trigger::Signal { selector, matches } = &self.trigger else {
+            return None;
+        };
+        match crate::harness::signal::resolve_subscription(selector, matches, signal) {
+            Deliver => None,
+            Excluded => Some(SignalMiss::Unmatched(
+                matches
+                    .iter()
+                    .filter(|(key, expected)| {
+                        !crate::harness::signal::holds_match(signal, key, expected)
+                    })
+                    .map(|(key, expected)| format!("{key}={expected}"))
+                    .collect(),
+            )),
+            _ => Some(SignalMiss::Outside(selector.to_string())),
+        }
+    }
+
     pub fn next_after(&self, now: &Zoned) -> Option<Timestamp> {
         let Trigger::Schedule(parsed) = &self.trigger else {
             return None;

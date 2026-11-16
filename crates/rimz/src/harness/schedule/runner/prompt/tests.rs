@@ -772,6 +772,19 @@ fn delay_ends_with_name() {
         ),
         "waited 30m [wait-test]"
     );
+    // A `loop fire --signal` of the same wait names the pretend signal in place of the delay.
+    let pretend = signal("deploy.done", serde_json::json!({"env": "prod"}));
+    assert_eq!(
+        compose_wait(
+            "wait-test",
+            &task(),
+            Some(&meta),
+            Evidence::Signal(&pretend),
+            "",
+            now()
+        ),
+        "waited on deploy.done\nfired after 18m [wait-test]\nenv: prod"
+    );
 }
 
 #[test]

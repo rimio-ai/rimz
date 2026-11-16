@@ -394,13 +394,13 @@ A terminal `Watch` outcome takes a separate path with the watch already evaluate
 
 `resolve_effect_prompt` builds the delivered text. A delivery row's base is its `prompt`, which team arming writes. A command row has none. Nothing is substituted: `{{key}}` is delivered as typed.
 
-A `Command` row with no `watch` goes through `compose_launch` (`runner::TaskFire::effect_prompt` picks the composer), filled after the backlog reconcile (`runner::TaskFire::prepare_command`) from the trigger the fire serves, which the run lock or the reconcile may have switched. The text becomes the run prompt, which the command reads as `RIMZ_LOOP_TRIGGER`. A fire with no event hands nothing:
+A `Command` row with no `watch` goes through `compose_launch` (`runner::TaskFire::effect_prompt` picks the composer), filled after the backlog reconcile (`runner::TaskFire::prepare_command`) from the trigger the fire serves, which the run lock or the reconcile may have switched. The text becomes the run prompt, which the command reads as `RIMZ_LOOP_TRIGGER`. A fire with no event hands nothing. A manual fire with `--signal` is handed that signal (`TaskFire::new`), so it composes the signal row below whatever the task's trigger:
 
 | Evidence | Message |
 | --- | --- |
 | condition | ``Rule `<name>` fired here. <key>: <reading> · <key>: <reading>``, the readings in evidence order with `unknown` for one with no value |
 | signal | ``Rule `<name>` fired here. <subject>``, the `signal_headline` subject followed by each `signal_details` entry after ` · ` |
-| none (a clock fire, any hand fire) | nothing |
+| none (a clock fire, a hand fire without `--signal`) | nothing |
 
 Every delivery to a running agent (a self wait, a team role binding) and every watch row goes through `compose_wait`: the wait line, the verdict, the evidence, then the loop or team prompt verbatim after a blank line. Durations are elapsed time, not wall-clock.
 
@@ -412,7 +412,7 @@ Every delivery to a running agent (a self wait, a team role binding) and every w
 | watch | `WatchSpec::headline`, `WatchVerdict::label`, the name, and `output: <host path> (<FileSummary::label>)` when a path is present and the file is non-empty. Only command watches say `no output` for an empty file. The tail is never inlined. A file pattern match includes its matched-line preview. |
 | signal | `waited on <subject>` and `fired [<name>]`, or `fired after <elapsed> [<name>]` on a self wait (a row with `wait_meta`). `signal_headline` builds the subject per name from the payload, dropping a segment whose key is absent or mistyped. The [subject table](../../reference/cli/loop.md#signals) is the contract. A built-in family adds no line, except `pr.dequeued`'s `queue checks:` line. Any other family adds one `key: value` line per top-level payload field. No line is the payload as JSON. |
 | condition | `waited on <expr>`, `held <hold> [<name>]` or `fired [<name>]` (`fired after <elapsed> [<name>]` on a self wait), then one `key: value` line per reading, `unknown` for one with no value |
-| a signal, watch, or condition row fired by hand | `fired by hand` (a clock row fired by hand reads as a scheduled timer) |
+| a signal, watch, or condition row fired by hand without `--signal` | `fired by hand` (a clock row fired by hand reads as a scheduled timer) |
 
 On a self wait (a row with `wait_meta`), a set label follows the first line's subject as ` · <label>`, before any ` [<name>]` on that line. Self waits carry no note and no armer line. A check-in appends its stop and next-alarm commands.
 
