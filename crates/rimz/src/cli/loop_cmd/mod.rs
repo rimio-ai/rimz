@@ -233,9 +233,6 @@ struct AddArgs {
     /// Write the task to the project's `.rimz/config.toml` instead of per-machine loop.toml.
     #[arg(long)]
     project: bool,
-    /// Run each fire's command in a fresh worktree `<PREFIX>-<time>`, branched from trunk.
-    #[arg(long, value_name = "PREFIX")]
-    fresh_worktree: Option<String>,
     /// Provider whose usage windows a `window.*` condition or --after-reset reads.
     #[arg(long, value_name = "KIND")]
     provider: Option<String>,

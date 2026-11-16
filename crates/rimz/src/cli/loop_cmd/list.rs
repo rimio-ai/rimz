@@ -380,8 +380,6 @@ pub(super) struct TaskRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     worktree: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    fresh_worktree: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     owner: Option<Owner>,
     you: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -812,7 +810,6 @@ impl TaskRow {
             action,
             dir,
             worktree,
-            fresh_worktree: entry.fresh_worktree.clone(),
             owner,
             you: false,
             booked_by: entry.booked_by.clone(),
@@ -936,7 +933,6 @@ impl TaskRow {
             action: None,
             dir: None,
             worktree: None,
-            fresh_worktree: None,
             owner: None,
             you: false,
             booked_by: Vec::new(),

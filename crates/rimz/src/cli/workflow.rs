@@ -591,10 +591,7 @@ fn start(
 ) -> Result<()> {
     let dir = workflow_view::deployed_definition(&name, validation_root(globals).as_deref())?;
     let ctx = super::ctx::Ctx::open(globals)?;
-    let fire_tree = worktree.is_none() && task.as_ref().is_some_and(|task| task.fire_tree);
-    if (worktree.is_some() || fire_tree)
-        && workflow::load(&dir)?.scope() == workflow::ScopeKind::Project
-    {
+    if worktree.is_some() && workflow::load(&dir)?.scope() == workflow::ScopeKind::Project {
         bail!(
             "{} has scope = project, so it runs at {}; start it without -w",
             dir.file_name().unwrap_or(dir.as_os_str()).to_string_lossy(),
@@ -621,7 +618,6 @@ fn start(
             dir: &dir,
             task: Some(task.task),
             loop_fire: Some(task.loop_fire),
-            fire_tree,
             fire: Some(task.fire),
             fire_facts: Some(task.fire_facts),
         },
@@ -629,7 +625,6 @@ fn start(
             dir: &dir,
             task: None,
             loop_fire: rimz::harness::loop_task::read_fire_env().map(|fire| fire.fire),
-            fire_tree: false,
             fire: None,
             fire_facts: None,
         },
@@ -829,21 +824,16 @@ pub(super) fn check_loop_launch(
             name.display()
         );
     }
-    if worktree.is_some() {
-        if place.each_worktree {
-            bail!("-w in the tail places the run, and --each-worktree places each fire");
-        }
-        if place.fresh_worktree {
-            bail!("-w in the tail places the run, and --fresh-worktree places each fire");
-        }
+    if worktree.is_some() && place.each_worktree {
+        bail!("-w in the tail places the run, and --each-worktree places each fire");
     }
     let dir = workflow_view::deployed_definition(name, Some(place.project_root))?;
     if workflow::load(&dir)?.scope() != workflow::ScopeKind::Project {
         return Ok(());
     }
-    if place.fresh_worktree || place.each_worktree {
+    if place.each_worktree {
         bail!(
-            "{} has scope = project, so it runs at the project root; remove --fresh-worktree and --each-worktree",
+            "{} has scope = project, so it runs at the project root; remove --each-worktree",
             name.display()
         );
     }

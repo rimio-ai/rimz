@@ -89,6 +89,25 @@ fn record_version_fence_refuses_every_other_version_before_decoding() {
     assert!(matches!(load(&paths), Err(WorkflowStoreErr::Json { .. })));
 }
 
+/// A run a loop fire started in the fire's own fresh tree, before loop tasks stopped cutting a
+/// tree each fire, carries `fire_tree`: the record still decodes at this version, and its run
+/// now keys on its own scope.
+#[test]
+fn a_fire_tree_record_still_decodes_at_this_version() {
+    let mut value = serde_json::to_value(record()).unwrap();
+    value["fire_tree"] = json!(true);
+    value["scope"]["path"] = json!("/project-worktrees/night-20260101-000000");
+    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(decoded.version, VERSION);
+    assert_eq!(
+        decoded.scope.path,
+        Path::new("/project-worktrees/night-20260101-000000")
+    );
+    let header = RunHeader::read(value.as_object().unwrap());
+    assert_eq!(header.version, Some(u64::from(VERSION)));
+    assert_eq!(header.node.as_deref(), Some("pr"));
+}
+
 #[test]
 fn the_pass_awaits_a_finished_run_only_once_it_owes_no_report() {
     let pass = |state: RunState, report: LoopReport| {

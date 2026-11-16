@@ -657,7 +657,6 @@ fn marked_tree(dir: &Path, name: &str, branch: &str, root: &Path) -> PathBuf {
         repo_root: root.to_path_buf(),
         worktree_path: tree.clone(),
         created_at: "2026-11-13T10:00:00Z".parse().unwrap(),
-        loop_task: Some("timed".to_owned()),
     };
     std::fs::write(
         admin.join("rimz-worktree.json"),

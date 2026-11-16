@@ -207,16 +207,6 @@ pub enum TaskActionErr {
     },
     #[error("loop task `{name}` sets `{field}` beside `wait`; keep exactly one action")]
     ConflictingActions { name: String, field: &'static str },
-    #[error("loop task `{name}` sets `fresh-worktree` with `{field}`; {hint}")]
-    FreshWorktreeField {
-        name: String,
-        field: &'static str,
-        hint: &'static str,
-    },
-    #[error(
-        "loop task `{name}` sets `fresh-worktree` to `{prefix}`, which is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
-    )]
-    InvalidFreshWorktree { name: String, prefix: String },
     #[error("loop task `{name}` has no `args` and no `kind`; {READD}")]
     MissingAction { name: String },
     #[error(
@@ -299,15 +289,6 @@ impl TaskAction {
                 }
             }
         }
-        if let Some(prefix) = &entry.fresh_worktree {
-            if crate::worktree::parse_requested_name(prefix).is_err() {
-                return Err(TaskActionErr::InvalidFreshWorktree {
-                    name: name.to_owned(),
-                    prefix: prefix.clone(),
-                });
-            }
-            Self::refuse_fresh_worktree_companions(name, entry)?;
-        }
         if entry.each_worktree && !repeats(entry) {
             return Err(TaskActionErr::OneShotFanOut {
                 name: name.to_owned(),
@@ -379,12 +360,6 @@ impl TaskAction {
                 &format!("remove it; {}", kind.timeout_bound()),
             ));
         }
-        if entry.fresh_worktree.is_some() && matches!(kind, LaunchKind::Agent | LaunchKind::Team) {
-            return Err(field(
-                "fresh-worktree",
-                "remove it and put a bare `-w` in `args`; the launch cuts its own tree",
-            ));
-        }
         Ok(Self::Launch(TaskLaunch {
             kind,
             target,
@@ -414,38 +389,6 @@ impl TaskAction {
             field: "overlap",
             hint,
         })
-    }
-
-    fn refuse_fresh_worktree_companions(
-        name: &str,
-        entry: &TaskEntry,
-    ) -> Result<(), TaskActionErr> {
-        for (set, field, hint) in [
-            (
-                entry.each_worktree,
-                "each-worktree",
-                "remove `fresh-worktree`; a fan-out runs in each matching owned worktree",
-            ),
-            (
-                entry.wait.is_some(),
-                "wait",
-                "remove `fresh-worktree`; a wait delivers to a live session and launches nothing",
-            ),
-            (
-                entry.dir.is_some(),
-                "dir",
-                "remove `dir`; a fresh-worktree task runs its command in the fire's tree",
-            ),
-        ] {
-            if set {
-                return Err(TaskActionErr::FreshWorktreeField {
-                    name: name.to_owned(),
-                    field,
-                    hint,
-                });
-            }
-        }
-        Ok(())
     }
 
     /// The command line as a shell would read it back, the launch as `rimz` would run it, or

@@ -29,7 +29,7 @@ The pin covers the surface itself because agents in the room can write `.rimz/co
 | `[profiles.<name>]` | `agent`, `skills`, `mode`, `model`, `effort`, `fast`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
 | `[subagents.profiles.<name>]` | the same keys as `[profiles.<name>]`, in the child-launch namespace |
 | `[agents.teams.<name>]` | `layout`, `consensus-file`, `consensus` (the piece names), `append-system-prompt-files`. Per role: `role`, `profile`, `signals`, `mode`, `model`, `effort`, `fast`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
-| `[tasks.<name>]` | `kind`, `target` and `args` (what each fire runs or launches), the old `command` key, `fresh-worktree`, `timeout`, `at`, `every`, `cron`, `signal`, `match`, `repeat`. A shell fire runs the hashed argv as the one check of an inline workflow run ([loops.md](./loops.md#the-compiled-graph)); a workflow, agent or team fire launches the hashed target with the hashed arguments. `kind`, `target`, `args`, `command`, `fresh-worktree`, `timeout` and `repeat` are hashed as written, so a value of the wrong type still changes the hash and leaves the rest of the file loading; the loop loader refuses that row alone |
+| `[tasks.<name>]` | `kind`, `target` and `args` (what each fire runs or launches), the old `command` key, `timeout`, `at`, `every`, `cron`, `signal`, `match`, `repeat`. A shell fire runs the hashed argv as the one check of an inline workflow run ([loops.md](./loops.md#the-compiled-graph)); a workflow, agent or team fire launches the hashed target with the hashed arguments. `kind`, `target`, `args`, `command`, `timeout` and `repeat` are hashed as written, so a value of the wrong type still changes the hash and leaves the rest of the file loading; the loop loader refuses that row alone |
 | `[[hooks]]` | `event`, `command` |
 | `[env]` | every key and value |
 | `[lsp.servers.<name>]` | `command` argv, `init-options` as canonical JSON with every object's keys sorted, and `editor-check-on-save` when set |
@@ -45,7 +45,7 @@ A field added to the projection after grants existed is left out of the JSON whi
 | profile and subagent profile | `skills`, `auto_compact`, and `fast` are unset |
 | team | `consensus_file` is unset, or `consensus` or `append_system_prompt_files` is empty |
 | team role | `signals` is empty, or `auto_compact` and `fast` are unset |
-| task | `fresh_worktree` and `repeat` are unset |
+| task | `repeat` is unset |
 | language server | `editor_check_on_save` is unset |
 
 A profile's and a role's `append-system-prompt-files` serialize under the singular key `append_system_prompt_file`. A team's list keeps the plural key. An explicit `fast = false` hashes differently from an unset `fast`, because it shapes provider argv and cost.

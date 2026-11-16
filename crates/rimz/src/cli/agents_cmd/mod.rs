@@ -1434,7 +1434,7 @@ pub(super) fn check_loop_launch(
         .as_deref()
         .map(rimz::ids::LaneName::dashed)
         .or_else(|| {
-            (!place.each_worktree && !place.fresh_worktree).then(|| {
+            (!place.each_worktree).then(|| {
                 rimz::harness::lanes::directory_channel(place.project_root, place.project_root)
             })?
         });

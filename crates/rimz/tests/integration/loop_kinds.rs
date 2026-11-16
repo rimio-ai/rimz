@@ -194,18 +194,10 @@ fn loop_add_resolves_a_bare_role_in_its_team_lane() {
 fn loop_add_refuses_what_a_launch_task_cannot_carry() {
     let env = live_room();
     kinds_fixture(&env);
-    let cases: [(&[&str], &str); 25] = [
+    let cases: [(&[&str], &str); 24] = [
         (
-            &[
-                "--workflow",
-                "smoke",
-                "--fresh-worktree",
-                "night",
-                "--",
-                "-w",
-                "x",
-            ],
-            "loop task `t`: --workflow `smoke`: -w in the tail places the run, and --fresh-worktree places each fire",
+            &["--workflow", "smoke", "--each-worktree", "--", "-w", "x"],
+            "loop task `t`: --workflow `smoke`: -w in the tail places the run, and --each-worktree places each fire",
         ),
         (
             &["--workflow", "whole", "--", "-w", "x"],
@@ -275,10 +267,6 @@ fn loop_add_refuses_what_a_launch_task_cannot_carry() {
             "loop task `t`: --team `forge`: --timeout bounds a shell task's command; remove it: loop does not time a team task's launch\n",
         ),
         (
-            &["--agent", "worker", "--fresh-worktree", "night"],
-            "loop task `t`: --agent `worker`: --fresh-worktree cannot be used with --agent; put a bare `-w` in the tail and the launch cuts its own tree",
-        ),
-        (
             &[
                 "--agent",
                 "worker",
@@ -307,8 +295,8 @@ fn loop_add_refuses_what_a_launch_task_cannot_carry() {
             "loop task `t`: --team `forge#lane`: --channel cannot be used with team#worktree addressing",
         ),
         (
-            &["--workflow", "whole", "--fresh-worktree", "night"],
-            "loop task `t`: --workflow `whole`: whole has scope = project, so it runs at the project root; remove --fresh-worktree and --each-worktree",
+            &["--workflow", "whole", "--each-worktree"],
+            "loop task `t`: --workflow `whole`: whole has scope = project, so it runs at the project root; remove --each-worktree",
         ),
         (
             &["--", "rimz", "teams", "launch", "forge", "go"],
@@ -1504,7 +1492,6 @@ fn gc_keeps_a_retired_task_record_while_anything_still_shows_it() {
         repo_root: canonical(&env.project_root),
         worktree_path: canonical(&tree),
         created_at: Timestamp::now(),
-        loop_task: None,
         loop_fire: row.fire.clone(),
     };
     std::fs::write(&marker, serde_json::to_vec(&fired).unwrap()).unwrap();

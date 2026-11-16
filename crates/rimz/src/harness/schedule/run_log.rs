@@ -217,9 +217,6 @@ pub struct LoopRunRecord {
     pub kind: Option<super::TaskKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<PathBuf>,
-    /// The fresh worktree this fire created, apart from `checkout`, which keys lock attribution.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<FireWorktree>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<PathBuf>,
     /// When the fire started for a gate refusal (`TaskFire::record_gate`), and when the record
@@ -310,15 +307,6 @@ impl QuietFires {
     }
 }
 
-/// The fresh worktree one fire of a `fresh-worktree` task created.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct FireWorktree {
-    pub path: PathBuf,
-    /// Why the trunk fetch fell back to the last fetched tip, when it did.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_fallback: Option<String>,
-}
-
 impl LoopRunRecord {
     /// Whether this row is a workflow run's terminal report rather than a fire.
     fn is_report(&self) -> bool {
@@ -326,7 +314,7 @@ impl LoopRunRecord {
     }
 
     /// Merge what the fire recorded at launch and a report cannot know: the trigger, the lock
-    /// tenure that attributes refused fires, the fire's own waits, its tree and its kind.
+    /// tenure that attributes refused fires, the fire's own waits and its kind.
     fn with_fire_facts(&mut self, fire: Self) {
         if self.absorbed == 0 {
             self.absorbed = fire.absorbed;
@@ -340,7 +328,6 @@ impl LoopRunRecord {
         self.watch = self.watch.take().or(fire.watch);
         self.message_id = self.message_id.take().or(fire.message_id);
         self.target = self.target.take().or(fire.target);
-        self.worktree = self.worktree.take().or(fire.worktree);
         self.kind = self.kind.or(fire.kind);
     }
 
@@ -388,7 +375,6 @@ impl LoopRunRecord {
             fire: None,
             kind: None,
             checkout: None,
-            worktree: None,
             root: None,
             at: Timestamp::now(),
             result,
@@ -524,11 +510,6 @@ fn report_header(
         reason: header.reason.clone(),
         quiet: false,
     };
-    let checkout = if header.fire_tree {
-        Some(&root)
-    } else {
-        header.scope_path.as_ref()
-    };
     let facts = ReportFacts {
         task,
         fire: header.loop_fire.as_ref(),
@@ -539,7 +520,7 @@ fn report_header(
             .or(header.terminal_at)
             .unwrap_or_else(Timestamp::now),
         terminal_at: header.terminal_at,
-        checkout: checkout.unwrap_or(&root),
+        checkout: header.scope_path.as_ref().unwrap_or(&root),
         fire_facts: header.fire_facts.as_ref(),
     };
     report_neutral(&facts, &outcome, &root)
@@ -871,7 +852,7 @@ impl<'a> ReportFacts<'a> {
             manual: run.manual,
             created_at: run.created_at,
             terminal_at: run.terminal_at,
-            checkout: run.firing_checkout(),
+            checkout: &run.scope.path,
             fire_facts: run.fire_facts.as_ref(),
         }
     }
@@ -959,7 +940,6 @@ pub(in crate::harness) fn report_run(
         report_neutral(&ReportFacts::of(run, task), outcome, &run.project_root)?;
         return Ok(Collected::Reported(RunTransition::Recorded));
     };
-    super::runner::settle_fire_tree(run);
     let records = super::task_record::load().map_err(ReportFailure::from)?;
     let bound = records.get(&fire.task());
     // The task's current name: a rename since the fire moved the binding, not the run.
@@ -1794,7 +1774,7 @@ fn launch_row(
         .and_then(|facts| LoopRunRecord::deserialize(facts).ok())
         .unwrap_or_else(|| {
             let mut row = LoopRunRecord::new(&task, LoopRunResult::Launched, mode, 0);
-            row.checkout = Some(run.firing_checkout().to_path_buf());
+            row.checkout = Some(run.scope.path.clone());
             row
         });
     row.task = task;

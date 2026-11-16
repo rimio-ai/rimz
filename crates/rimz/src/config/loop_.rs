@@ -230,10 +230,6 @@ pub struct TaskEntry {
     /// Directory the launch or watch runs in; the arming worktree, or `root` when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dir: Option<PathBuf>,
-    /// The name prefix of the fresh worktree each fire creates and launches in (shell and
-    /// workflow rows).
-    #[serde(rename = "fresh-worktree", skip_serializing_if = "Option::is_none")]
-    pub fresh_worktree: Option<String>,
     /// How long a shell row's command may run; a watch's check-in interval on a delivery row.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<String>,

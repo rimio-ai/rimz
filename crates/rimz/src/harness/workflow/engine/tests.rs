@@ -387,7 +387,6 @@ fn create_validates_the_spec_it_reads_before_publication() {
     let error = create(
         &state,
         DefinitionSource::Deployed {
-            fire_tree: false,
             loop_fire: None,
             dir: &dir,
             task: None,
@@ -483,7 +482,6 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
         let error = create(
             &state,
             DefinitionSource::Deployed {
-                fire_tree: false,
                 loop_fire: None,
                 dir: &dir,
                 task: None,
@@ -540,7 +538,6 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
         let error = create(
             &state,
             DefinitionSource::Deployed {
-                fire_tree: false,
                 loop_fire: None,
                 dir: &dir,
                 task: None,
@@ -1324,7 +1321,6 @@ fn inline(task: &str, text: &str, assets: &[(&str, &str)]) -> DefinitionSource<'
                 .map(|(name, body)| ((*name).to_owned(), body.as_bytes().to_vec()))
                 .collect(),
         },
-        fire_tree: false,
         fire: None,
         fire_facts: None,
     }
@@ -1393,7 +1389,6 @@ fn an_inline_run_seals_its_assets_and_reads_prompts_from_its_own_root() {
 
 fn deployed(dir: &Path) -> DefinitionSource<'_> {
     DefinitionSource::Deployed {
-        fire_tree: false,
         loop_fire: None,
         dir,
         task: None,
@@ -1452,7 +1447,6 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
         &state,
         home.path(),
         DefinitionSource::Deployed {
-            fire_tree: false,
             loop_fire: None,
             dir: &dir,
             task: None,
@@ -1470,7 +1464,6 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
     assert_eq!(blocker(inline("nightly", CHECK_ONLY, &[])), task.id);
     assert_eq!(
         blocker(DefinitionSource::Deployed {
-            fire_tree: false,
             loop_fire: task
                 .loop_fire
                 .as_ref()
@@ -1485,7 +1478,6 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
     );
     assert_eq!(
         blocker(DefinitionSource::Deployed {
-            fire_tree: false,
             loop_fire: None,
             dir: &dir,
             task: None,
@@ -1524,7 +1516,6 @@ fn a_task_started_run_needs_a_room_even_with_only_checks() {
     fs::create_dir(&dir).unwrap();
     fs::write(crate::disk::paths::workflow_spec_file(&dir), CHECK_ONLY).unwrap();
     let deployed = DefinitionSource::Deployed {
-        fire_tree: false,
         loop_fire: None,
         dir: &dir,
         task: None,
@@ -1537,5 +1528,25 @@ fn a_task_started_run_needs_a_room_even_with_only_checks() {
             .notes
             .is_some(),
         "a deployed run in a room keeps its notes and history"
+    );
+}
+
+/// A workflow task's fire written before loop tasks stopped cutting a tree each fire passed
+/// `fire_tree` in its `--loop-fire-json`: such a payload still decodes.
+#[test]
+fn an_older_task_start_payload_with_fire_tree_still_decodes() {
+    let fire = crate::ids::FireId::new(&crate::ids::TaskId::new());
+    let start: TaskStart = serde_json::from_value(serde_json::json!({
+        "task": "nightly",
+        "loop_fire": fire.as_str(),
+        "fire": {"kind": "manual", "task": "nightly"},
+        "fire_facts": null,
+        "fire_tree": true,
+        "manual": true,
+    }))
+    .expect("older payload");
+    assert_eq!(
+        (start.task.as_str(), start.loop_fire, start.manual),
+        ("nightly", fire, true)
     );
 }

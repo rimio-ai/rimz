@@ -14,9 +14,9 @@
 # `timeout`, which a hand-written shell task must set: exit 0 ends the fire done,
 # anything else, or the timeout, failed. A `workflow`, `agent` or `team` task
 # launches `rimz workflow run`, `rimz agents` or `rimz teams launch` with its
-# `target` and `args`; those kinds take no `timeout`, and agent and team tasks
-# take no `fresh-worktree`. `rimz loop add [name] <trigger> [--workflow|--agent|--team
-# <target>] -- <args>` writes an entry; edit entries here as well.
+# `target` and `args`; those kinds take no `timeout`. `rimz loop add [name]
+# <trigger> [--workflow|--agent|--team <target>] -- <args>` writes an entry; edit
+# entries here as well.
 # [tasks]
 ## [tasks.morning]
 ## kind = "team"
@@ -38,7 +38,6 @@
 ## [tasks.deployed]
 ## kind = "workflow"
 ## target = "smoke"
-## fresh-worktree = "smoke"            # optional prefix: a fresh worktree from trunk each fire
 ## root = "/home/you/code/app"
 ## signal = "deploy.done"
 ## repeat = true                       # signal and when tasks fire once unless they repeat

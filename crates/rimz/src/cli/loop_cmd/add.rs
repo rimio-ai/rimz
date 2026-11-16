@@ -84,7 +84,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
         finish_project_mutation(&mut out, &project_root, true, pre_state)?;
     }
     write_add_feedback(&mut out, &entry, action, parsed, after_reset.as_ref())?;
-    write_linked_add_note(&mut out, &entry, &workspace)?;
+    write_linked_add_note(&mut out, &workspace)?;
     writeln!(
         out,
         "live while a room for {} is open",
@@ -139,7 +139,6 @@ fn check_launch(args: &AddArgs, name: &str, project_root: &Path) -> Result<()> {
     let place = crate::cli::loop_launch::LoopLaunchPlace {
         project_root,
         each_worktree: args.each_worktree,
-        fresh_worktree: args.fresh_worktree.is_some(),
     };
     check_kind_flags(args, kind)
         .and_then(|()| crate::cli::loop_launch::check(kind, target, &args.args, &place))
@@ -154,19 +153,12 @@ fn check_launch(args: &AddArgs, name: &str, project_root: &Path) -> Result<()> {
         })
 }
 
-/// The add flags a launch kind refuses: a launch bounds and places itself.
+/// The add flags a launch kind refuses: a launch bounds itself.
 fn check_kind_flags(args: &AddArgs, kind: rimz::config::LaunchKind) -> Result<()> {
-    use rimz::config::LaunchKind;
-    if kind != LaunchKind::Shell && args.timeout.is_some() {
+    if kind != rimz::config::LaunchKind::Shell && args.timeout.is_some() {
         bail!(
             "--timeout bounds a shell task's command; remove it: {}",
             kind.timeout_bound()
-        );
-    }
-    if args.fresh_worktree.is_some() && matches!(kind, LaunchKind::Agent | LaunchKind::Team) {
-        bail!(
-            "--fresh-worktree cannot be used with --{}; put a bare `-w` in the tail and the launch cuts its own tree",
-            kind.as_str()
         );
     }
     Ok(())
@@ -273,13 +265,6 @@ fn validate_add_args(args: &AddArgs) -> Result<()> {
     if !args.matches.is_empty() && args.signal.is_none() {
         bail!("--match requires --signal");
     }
-    if let Some(prefix) = &args.fresh_worktree
-        && rimz::worktree::parse_requested_name(prefix).is_err()
-    {
-        bail!(
-            "--fresh-worktree `{prefix}` is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
-        );
-    }
     if let Some(kind) = &args.provider
         && rimz::agents::find_definition(kind).is_none()
     {
@@ -356,7 +341,6 @@ fn build_task_entry(
         }),
         overlap_limit: args.overlap_limit,
         root: workspace.project_root.clone(),
-        fresh_worktree: args.fresh_worktree.clone(),
         at: timing.at,
         fire_at: timing.fire_at,
         every: args.every.clone(),
@@ -561,28 +545,22 @@ fn resolve_add_timing(args: &AddArgs, name: &str) -> Result<AddTiming> {
 
 /// Where each fire's command runs, as its receipt names it.
 fn fire_place(entry: &TaskEntry) -> String {
-    match entry.fresh_worktree.as_deref() {
-        Some(prefix) => format!("a fresh worktree `{prefix}-<time>` per fire, branched from trunk"),
-        None if entry.each_worktree => {
-            "each RimZ-owned worktree where the trigger holds".to_owned()
-        }
-        None => entry.run_dir().display().to_string(),
+    if entry.each_worktree {
+        "each RimZ-owned worktree where the trigger holds".to_owned()
+    } else {
+        entry.run_dir().display().to_string()
     }
 }
 
-/// The receipt line for a task added from a linked worktree without `--fresh-worktree`: it
-/// runs at the project root, not there.
-fn write_linked_add_note(
-    out: &mut impl Write,
-    entry: &TaskEntry,
-    workspace: &rimz::ResolvedWorkspace,
-) -> Result<()> {
-    if entry.fresh_worktree.is_some() || workspace.worktree_root == workspace.project_root {
+/// The receipt line for a task added from a linked worktree: it runs at the project root, not
+/// there.
+fn write_linked_add_note(out: &mut impl Write, workspace: &rimz::ResolvedWorkspace) -> Result<()> {
+    if workspace.worktree_root == workspace.project_root {
         return Ok(());
     }
     writeln!(
         out,
-        "note: runs at the project root {}, not {}; pass --fresh-worktree <prefix> for a fresh worktree per fire",
+        "note: runs at the project root {}, not {}",
         workspace.project_root.display(),
         workspace.worktree_root.display()
     )?;

@@ -353,7 +353,6 @@ mod tests {
             repo_root: dir.path().to_path_buf(),
             worktree_path: checkout.clone(),
             created_at: jiff::Timestamp::from_second(100).unwrap(),
-            loop_task: None,
         };
         let marker_path = git_dir.join("rimz-worktree.json");
         crate::disk::atomic::write_temp_then_rename(&marker_path, &marker).unwrap();

@@ -182,28 +182,8 @@ fn project_rows_must_repeat_and_account_needs_a_provider() {
 }
 
 #[test]
-fn fresh_worktree_takes_a_name_prefix_and_receipts_name_the_fire_tree() {
-    let root = tempfile::tempdir().unwrap();
-    let workspace = rimz::WorkspaceResolver::resolve(root.path(), None).unwrap();
-    let argv = ["--every", "1h", "--fresh-worktree", "nightly", "--", "true"];
-    let entry = build_task_entry(&args(&argv), "task", &workspace).unwrap();
-    assert_eq!(entry.fresh_worktree.as_deref(), Some("nightly"));
-    assert_eq!(entry.dir, None);
-    for prefix in ["", "v1.2"] {
-        let bad = args(&["--every", "1h", "--fresh-worktree", prefix, "--", "true"]);
-        assert_eq!(
-            validate_add_args(&bad).unwrap_err().to_string(),
-            format!(
-                "--fresh-worktree `{prefix}` is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
-            )
-        );
-    }
-
+fn receipts_name_where_each_fire_runs() {
     for (toml, expected) in [
-        (
-            "args=['true']\ntimeout='2h'\nevery='1h'\nfresh-worktree='nightly'",
-            "action: runs `true` in a fresh worktree `nightly-<time>` per fire, branched from trunk · timeout 2h",
-        ),
         (
             "args=['cargo', 'test']\ntimeout='10m'\nevery='1h'\nroot='/repo'",
             "action: runs `cargo test` in /repo · timeout 10m",

@@ -584,7 +584,6 @@ fn pr_marker_provenance(
         base_branch,
         base_ref,
         from_pr: Some(pr_number),
-        loop_task: None,
     }
 }
 

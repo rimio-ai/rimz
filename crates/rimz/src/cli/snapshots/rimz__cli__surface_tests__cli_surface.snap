@@ -1832,7 +1832,6 @@ rimz loop add
     --cron <CRON>  [action=set takes=1..=1]
     --each-worktree  [action=set-true takes=0..=0]
     --every <EVERY>  [action=set takes=1..=1]
-    --fresh-worktree <PREFIX>  [action=set takes=1..=1]
     -h, --help  [action=help takes=0..=0]
     --for <DUR>  [action=set takes=1..=1]
     --in <DUR>  [action=set takes=1..=1]

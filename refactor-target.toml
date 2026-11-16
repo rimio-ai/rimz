@@ -2318,7 +2318,7 @@ path = "crates/rimz/src/harness"
 # headless::judge, its loop answer contract, Failure::timed_out and FailureKind::from_label are gone; their slack stays.
 # Verdict::freshen and Verdict.unread share the loop forge-freshness hold with CLI condition displays (+1).
 # Workflow steps carry `share`, `message`, and `undelivered`, with `Node::subscriptions` and `Node::subscription_labels` and `NodeRow::message`, from the spec to validation, the engine, and CLI views; three of the six sat in slack.
-# run_log::FireWorktree carries a fire's per-fire tree and trunk fallback from the runner's record to loop logs (+1).
+# A fire's per-fire tree record left with `--fresh-worktree`; its slot stays under the budget.
 # Workflow `LaunchOverrides` carries an agent step's account, mode, effort, fast, budget, system prompt, and worktree to the CLI host's launch (+1).
 # Workflow `DefinitionSource` and `InlineDefinition` let `create` start a deployed directory or a loop task's compiled definition (+2).
 # `LoadedTask::new` builds a task for workflow's compiled-graph tests.
@@ -2879,16 +2879,6 @@ reason = "Launch and relaunch callers share trust verdicts while consent UI stay
 kind = "item"
 key = "worktree::emit_worktree_created"
 reason = "Explicit worktree creation and launch checkout creation share the same signal."
-
-[[verdict]]
-kind = "item"
-key = "worktree::create_for_loop_fire"
-reason = "The loop runner creates each fresh-worktree fire's tree under one stamped, collision-free name with the task in its marker."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::run_log::FireWorktree"
-reason = "A fire's per-fire tree and its trunk fallback travel from the runner's record to loop logs."
 
 [[verdict]]
 kind = "item"
@@ -4427,7 +4417,7 @@ path = "crates/rimz/src/store"
 # SkippedSettings carries the skipped-settings count and list digest to the renderer (+1).
 # workflow::RunOrigin and workflow::seal_definition record and seal an inline run's definition (+2).
 # workflow::LoopReport and RunRecord::owes_loop_report mark a task-started run's outcome report for the engine, the tick backstop, and GC (+2).
-# RunRecord::firing_checkout keys a fire-tree run's overlap, backlog and history at the project root (+1).
+# A fire-tree run's checkout key left with `--fresh-worktree`; a run keys on its scope path, and its slot stays under the budget.
 # store::run::LimitHold records a limit-parked child's hold on its run, for the harness and the park-notice helper (+1).
 # Store::hook_ingress_at lets the run fold tell a delayed hook from one after a limit park (+1).
 # RunRecord::superseded_in names the panes a handed-over run no longer answers to (+1).
@@ -4913,7 +4903,7 @@ path = "crates/rimz/src/worktree"
 # CheckoutKind and classify_checkout expose metadata-only room-relative labels (+2).
 # WorkflowRunHolder and ProtectionSet::insert_workflow_run carry caller-gathered run pins (+2).
 # emit_worktree_created moves here from launcher::checkout so the harness can signal creation (+1).
-# create_for_loop_fire names and marks a loop fire's fresh tree for the scheduler (+1).
+# A loop fire's own tree creator left with `--fresh-worktree`; its slot stays under the budget.
 # worktree_paths shares the lossless `git worktree list` decoder with the sidebar (+1).
 # admit_fresh_name gives the launcher, CLI and palette the create branch's `main` refusal (+1).
 # own_lane moves here from harness::lanes as the one checkout classifier, so the sidebar producer can fill its own-lane table (+1).
@@ -5962,8 +5952,6 @@ allowed-dependencies = [
     "theme",
     "utils::time",
     "workspace",
-    # A fresh-worktree fire creates, signals and force-removes its own per-fire tree.
-    "worktree",
     "address",
 ]
 # Check-launch conversion shares ownership lookup and supervised-run shaping.

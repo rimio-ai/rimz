@@ -70,23 +70,18 @@ mod agent;
 /// Where a new run's definition comes from, with the `fire` its briefs name.
 pub enum DefinitionSource<'a> {
     /// A deployed workflow directory; its basename names the run.
-    /// `fire_tree` marks a task run whose checkout is its fire's own fresh worktree.
     Deployed {
         dir: &'a Path,
         task: Option<String>,
         loop_fire: Option<crate::ids::FireId>,
-        fire_tree: bool,
         fire: Option<RunFire>,
         fire_facts: Option<serde_json::Value>,
     },
     /// A loop task's compiled definition, sealed into the run's own root and named for the task.
-    /// `fire_tree` marks a checkout that is the fire's own fresh worktree: overlap then keys on
-    /// the project root, where the task fired.
     Inline {
         task: String,
         loop_fire: crate::ids::FireId,
         definition: InlineDefinition,
-        fire_tree: bool,
         fire: Option<RunFire>,
         fire_facts: Option<serde_json::Value>,
     },
@@ -112,8 +107,6 @@ pub struct TaskStart {
     pub fire: RunFire,
     /// The launch facts the fire seals into the run for its report row.
     pub fire_facts: serde_json::Value,
-    /// Whether the run's checkout is the fire's own fresh worktree.
-    pub fire_tree: bool,
     /// Whether the fire was made by hand (`rimz loop fire`).
     pub manual: bool,
 }
@@ -165,7 +158,6 @@ pub fn create(
             dir,
             task,
             loop_fire,
-            fire_tree,
             fire,
             fire_facts,
         } => {
@@ -180,7 +172,6 @@ pub fn create(
                 task: task.clone(),
                 loop_fire: loop_fire.clone(),
                 spec_dir: dir,
-                fire_tree: *fire_tree,
                 fire: fire.clone(),
                 fire_facts: fire_facts.clone(),
             }
@@ -188,7 +179,6 @@ pub fn create(
         DefinitionSource::Inline {
             task,
             loop_fire,
-            fire_tree,
             fire,
             fire_facts,
             ..
@@ -198,7 +188,6 @@ pub fn create(
             task: Some(task.clone()),
             loop_fire: Some(loop_fire.clone()),
             spec_dir: std::path::PathBuf::new(),
-            fire_tree: *fire_tree,
             fire: fire.clone(),
             fire_facts: fire_facts.clone(),
         },
@@ -215,7 +204,6 @@ pub fn create(
             .filter(|_| start.task.is_some())
             .map(crate::ids::FireId::task)
             .as_ref(),
-        start.fire_tree,
         &roots,
     )?;
     let prompt = prompt().map_err(WorkflowErr::Refused)?;
@@ -249,7 +237,6 @@ struct RunStart {
     task: Option<String>,
     loop_fire: Option<crate::ids::FireId>,
     spec_dir: std::path::PathBuf,
-    fire_tree: bool,
     fire: Option<RunFire>,
     fire_facts: Option<serde_json::Value>,
 }
@@ -320,7 +307,6 @@ fn publish(
         spec_dir: (start.origin == RunOrigin::Deployed).then_some(start.spec_dir),
         prompt,
         scope,
-        fire_tree: start.fire_tree,
         give_up: args.give_up.map(at).transpose()?,
         capacity: args.capacity,
         fire: start.fire,
@@ -365,7 +351,6 @@ fn publish(
         record.origin,
         &record.workflow,
         task.as_ref(),
-        record.fire_tree,
         &roots,
     )?;
     if keeps_notes {
@@ -397,24 +382,17 @@ fn agent_definitions() -> crate::config::definitions::LoadedDefinitions {
 }
 
 /// A live run blocks a new one on the same scope when it shares the new run's origin and name,
-/// or its task, so a task cannot dodge overlap by changing what it runs. A run in its loop fire's
-/// own tree holds the project root it fired from, so each fire's fresh tree still overlaps.
+/// or its task, so a task cannot dodge overlap by changing what it runs.
 fn refuse_existing(
     state: &StatePaths,
     origin: RunOrigin,
     name: &str,
     task: Option<&crate::ids::TaskId>,
-    fire_tree: bool,
     roots: &ScopeRoots,
 ) -> Result<()> {
     match workflow::live_runs(state)?.into_iter().find(|r| {
-        let checkout = if fire_tree {
-            &roots.project
-        } else {
-            roots.path(r.scope.kind)
-        };
         !r.state.is_terminal()
-            && r.firing_checkout() == checkout
+            && r.scope.path == roots.path(r.scope.kind)
             && ((r.origin == origin && r.workflow == name)
                 || task.is_some_and(|task| r.ran_for(task)))
     }) {

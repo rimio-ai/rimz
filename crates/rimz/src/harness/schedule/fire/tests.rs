@@ -1317,7 +1317,6 @@ fn worktree_inspection_holds_a_forge_condition_probed_before_its_fire_stamp() {
         repo_root: repo.clone(),
         worktree_path: checkout.clone(),
         created_at: Timestamp::now(),
-        loop_task: None,
     };
     let git_dir = PathBuf::from(git(&checkout, &["rev-parse", "--absolute-git-dir"]));
     std::fs::write(
