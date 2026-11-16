@@ -541,7 +541,6 @@ fn task_action_from_entry_maps_field_combinations() {
             TaskEntry {
                 kind: Some(LaunchKind::Workflow),
                 target: Some("review".into()),
-                fresh_worktree: Some("night".into()),
                 ..TaskEntry::default()
             },
             TaskActionKind::Workflow,
@@ -603,16 +602,6 @@ fn task_action_from_entry_maps_field_combinations() {
                 ..spawn_entry()
             },
             "loop task `task` of kind `workflow` sets `timeout`; remove it; a workflow task's run is bounded by its workflow's deadline",
-        ),
-        (
-            TaskEntry {
-                kind: Some(LaunchKind::Team),
-                target: Some("forge".into()),
-                timeout: None,
-                fresh_worktree: Some("night".into()),
-                ..spawn_entry()
-            },
-            "loop task `task` of kind `team` sets `fresh-worktree`; remove it and put a bare `-w` in `args`; the launch cuts its own tree",
         ),
         (
             TaskEntry {
@@ -699,70 +688,21 @@ fn on_belongs_to_a_watch_and_refuses_on_a_command_or_signal_delivery_row() {
     assert!(TaskAction::from_entry("task", &watch).is_ok());
 }
 
+/// `fresh-worktree` is no longer a row key: a row an older RimZ wrote with it refuses alone,
+/// as any key outside the row does.
 #[test]
-fn fresh_worktree_prefix_must_be_a_worktree_name() {
-    for prefix in ["", "v1.2", "a b"] {
-        let entry: TaskEntry = toml::from_str(&format!(
-            "fresh-worktree={prefix:?}\nroot='/r'\nargs=['true']\ntimeout='1m'"
-        ))
-        .unwrap();
-        let error = TaskAction::from_entry("task", &entry).unwrap_err();
-        assert_eq!(
-            error,
-            TaskActionErr::InvalidFreshWorktree {
-                name: "task".to_owned(),
-                prefix: prefix.to_owned(),
-            }
-        );
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "loop task `task` sets `fresh-worktree` to `{prefix}`, which is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
-            )
-        );
-    }
+fn a_fresh_worktree_row_refuses_with_the_re_add_message() {
     let entry: TaskEntry =
-        toml::from_str("fresh-worktree='night/fix_1'\nroot='/r'\nargs=['true']\ntimeout='1m'")
-            .unwrap();
-    assert!(TaskAction::from_entry("task", &entry).is_ok());
-}
-
-#[test]
-fn fresh_worktree_is_refused_beside_each_placement_it_replaces() {
-    for (fields, field) in [
-        (
-            "args=['true']\ntimeout='1m'\neach-worktree=true",
-            "each-worktree",
-        ),
-        ("wait={kind='codex', session='s', handle='@x'}", "wait"),
-        ("args=['true']\ntimeout='1m'\ndir='/tmp/elsewhere'", "dir"),
-    ] {
-        let entry: TaskEntry =
-            toml::from_str(&format!("fresh-worktree='p'\nroot='/r'\n{fields}")).unwrap();
-        let error = TaskAction::from_entry("task", &entry).unwrap_err();
-        assert!(
-            matches!(&error, TaskActionErr::FreshWorktreeField { field: got, .. } if *got == field),
-            "{fields}: {error:?}"
-        );
-        assert!(
-            error.to_string().starts_with(&format!(
-                "loop task `task` sets `fresh-worktree` with `{field}`; "
-            )),
-            "{error}"
-        );
-    }
-    let error = TaskAction::from_entry(
-        "task",
-        &toml::from_str("fresh-worktree='p'\nargs=['true']\ntimeout='1m'\ndir='/d'").unwrap(),
-    )
-    .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "loop task `task` sets `fresh-worktree` with `dir`; remove `dir`; a fresh-worktree task runs its command in the fire's tree"
+        toml::from_str("fresh-worktree='night'\nroot='/r'\nargs=['true']\ntimeout='1m'").unwrap();
+    let message = TaskAction::from_entry("night", &entry)
+        .expect_err("old row refuses")
+        .to_string();
+    assert!(
+        message.starts_with(
+            "loop task `night` is not a row this RimZ takes (unknown field `fresh-worktree`"
+        ) && message.ends_with("; delete the task and re-add it with `rimz loop add`"),
+        "{message}"
     );
-    let entry: TaskEntry =
-        toml::from_str("fresh-worktree='p'\nroot='/r'\nargs=['true']\ntimeout='1m'").unwrap();
-    assert!(TaskAction::from_entry("task", &entry).is_ok());
 }
 
 #[test]

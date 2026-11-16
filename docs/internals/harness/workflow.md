@@ -220,7 +220,7 @@ Validation enforces each of these, and the engine the last. Each row says why th
 
 `engine::create` admits a run in this order:
 
-1. Compare every nonterminal run against the candidate. A run blocks when its firing checkout (`RunRecord::firing_checkout`) is the path `ScopeRoots::path` gives for that run's own scope kind, and it shares the candidate's origin and name, or its task. A match is the typed `WorkflowErr::Exists`.
+1. Compare every nonterminal run against the candidate. A run blocks when its scope path (`RunRecord.scope.path`) is the path `ScopeRoots::path` gives for that run's own scope kind, and it shares the candidate's origin and name, or its task. A match is the typed `WorkflowErr::Exists`.
 2. Read the prompt. An inline definition is written into the new run's `definition/` here (`seal_definition`, which creates the run's directory). A deployed run copies nothing. No record exists yet.
 3. Read the definition bytes, load them through `spec::parse`, and validate the lowered spec with `validate_spec` against the run's project, as every later advance read, `resume`, `restart`, and the signal wake do.
 4. Require the room's workspace record when the graph has an agent step, a message step, or an agent check, or when a loop task starts the run (`WorkflowErr::NoRoom`). `rimz start` creates the room. The library needs the room only in those cases, but `rimz workflow run` opens the room before it calls `create`, so a run a person starts always needs one.
@@ -232,7 +232,6 @@ The order is deliberate:
 - Step 1 runs before the prompt or definition bytes are read, so a held run wins over a broken definition, a prompt-file error, or a scope-kind edit.
 - Comparing each existing run by its own scope kind keeps a worktree run at the project root from blocking a different worktree.
 - Matching by task means a task whose row changes what it runs still overlaps its own live run.
-- A run whose loop fire cut its own fresh worktree (`RunRecord.fire_tree`) has the project root as its firing checkout, so each fire's fresh tree still overlaps the last.
 - A failure after step 2 removes the run's directory, an inline run's `definition/` included, since no record exists to keep it.
 
 `rimz workflow run` validates the definition directory before it calls `create`, so a manual start of a broken definition refuses on the definition even while another run holds the slot. The CLI prints `Exists` as a refusal. A loop fire that reaches `create` follows its task's `overlap` policy instead ([Loop tasks](#loop-tasks)).
@@ -372,7 +371,7 @@ Optional fields carry:
 - `origin`, the source, and `restart`, a staged restart
 - `abandoned`, the runs of judges whose evaluation ended while their agent ran, owed a stop ([Judges](#judges))
 - two start arguments: `give_up`, the run's give-up instant for an agent step that sets no `admission.give-up` (`rimz workflow run --give-up`, and no loop fire sets one), and `capacity`, `skip` for a `--skip-capacity` run and omitted for the default `wait`
-- the loop facts: `task` (the starting loop task), `manual` (true only for a run `rimz loop fire` created, omitted when false), `loop_report`, `fire_tree`, and `fire`, what the fire tells its briefs, frozen at creation: `manual` with the task's name for `rimz loop fire`, or `scheduled` with the task's name and the brief's trigger clause (none for a watch trigger)
+- the loop facts: `task` (the starting loop task), `manual` (true only for a run `rimz loop fire` created, omitted when false), `loop_report`, and `fire`, what the fire tells its briefs, frozen at creation: `manual` with the task's name for `rimz loop fire`, or `scheduled` with the task's name and the brief's trigger clause (none for a watch trigger)
 - `outcome`, the typed run outcome, written with the terminal state ([Loop tasks](#loop-tasks))
 
 Each step's visits serialize as one integer under the step's name. Keys keep integer versus string identity. Unknown `Wait.hold` strings load as absent, and the shared [hold-kind contract](./loops.md#holds-and-their-kinds) covers workflow and condition waits alike.
@@ -982,7 +981,7 @@ A shell task's fire starts a workflow run of the inline graph that `crates/rimz/
 The fire ends in `engine::create` (`crates/rimz/src/harness/schedule/runner.rs::TaskFire::prepare_command`) with:
 
 - `task = Some(<name>)`, and `manual` set only for `LoopRunMode::Manual`
-- the fire's `fire_tree` and `fire`
+- the fire's `fire`
 - default start arguments (no `give_up`, `capacity` wait)
 - the fire's trigger evidence as the run prompt, read once the backlog reconcile has settled which trigger the run serves, and absent when the fire has none. The command reads it as `RIMZ_LOOP_TRIGGER`.
 

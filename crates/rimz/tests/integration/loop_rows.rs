@@ -422,60 +422,6 @@ fn once_per_checkout_does_not_refire_after_exit_zero_and_does_after_a_failure() 
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn a_fresh_worktree_fire_that_leaves_an_agent_keeps_its_tree() {
-    let env = live_room();
-    if origin_ahead_of_local_main(&env).is_none() {
-        crate::common::skip("git unavailable");
-        return;
-    }
-    let seen = env.home_root.join("seen");
-    let release = env.home_root.join("release");
-    let command = format!(
-        "pwd -P > {seen:?}; while [ ! -e {release:?} ]; do sleep 0.05; done",
-        seen = seen.display().to_string(),
-        release = release.display().to_string()
-    );
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "nightly",
-            "--fresh-worktree",
-            "night",
-            "--every",
-            "1h",
-            "--",
-            "sh",
-            "-c",
-            &command,
-        ],
-    );
-    let before = run_mark(&env, "nightly");
-    loop_ok(&env, &["loop", "fire", "nightly"]);
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    let tree = loop {
-        if let Ok(path) = std::fs::read_to_string(&seen)
-            && path.ends_with('\n')
-        {
-            break std::path::PathBuf::from(path.trim_end());
-        }
-        assert!(Instant::now() < deadline, "the fire never started");
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    seed_agent_launch(&env, &tree, "detached", Default::default(), None);
-    std::fs::write(&release, "").unwrap();
-    assert_eq!(
-        wait_for_loop_report_after(&env, "nightly", before).result,
-        LoopRunResult::Completed
-    );
-    #[cfg(target_os = "linux")]
-    wait_for_fire_tree_helpers(&env);
-    assert!(tree.exists(), "a tree an agent still holds is kept");
-}
-
 #[test]
 fn a_strict_row_refusal_stands_alone_in_each_of_the_three_stores() {
     let env = live_room();
@@ -597,6 +543,43 @@ fn a_mistyped_project_row_refuses_alone_beside_trust_and_its_siblings() {
         run_and_report(&env, "shared").result,
         LoopRunResult::Completed
     );
+}
+
+/// A row stored with the retired `fresh-worktree` key refuses alone as an unknown key, naming
+/// the re-add, while the row beside it still loads and fires.
+#[test]
+fn a_stored_fresh_worktree_row_refuses_alone_beside_its_neighbour() {
+    let env = live_room();
+    let fired = env.home_root.join("fired");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.nightly]\nroot = {root:?}\nevery = '1h'\ntimeout = '1m'\nargs = ['true']\n\
+             fresh-worktree = 'night'\n\
+             [tasks.good]\nroot = {root:?}\nevery = '1h'\ntimeout = '1m'\nargs = ['touch', {fired:?}]\n",
+            root = env.project_root,
+            fired = fired.display().to_string()
+        ),
+    );
+    let list = env.rimz().args(["loop", "list"]).output().unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&list.stdout),
+        String::from_utf8_lossy(&list.stderr)
+    );
+    assert!(list.status.success(), "{text}");
+    assert!(
+        text.contains(
+            "loop task `nightly` is not a row this RimZ takes (unknown field `fresh-worktree`"
+        ) && text.contains("delete the task and re-add it with `rimz loop add`"),
+        "{text}"
+    );
+    assert!(text.contains("good"), "{text}");
+    assert_eq!(
+        run_and_report(&env, "good").result,
+        LoopRunResult::Completed
+    );
+    assert!(fired.exists(), "the neighbour of a refused row still fires");
 }
 
 /// The exec request of the agent pane a launch under a fire opened, from its traced layout.

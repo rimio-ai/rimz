@@ -148,8 +148,6 @@ struct ShowView {
     worktrees: Vec<schedule::fanout::CheckoutCondition>,
     worktrees_error: Option<String>,
     workflow_runs: Vec<list::WorkflowRunRow>,
-    /// The task's per-fire trees a fire kept, newest first.
-    kept_worktrees: Vec<rimz::worktree::ManagedWorktree>,
     /// The task's fires start workflow runs, named or compiled from its row.
     runs_workflows: bool,
     /// What the task's fires launched that is still alive.
@@ -193,11 +191,7 @@ impl LaunchView {
         use schedule::launches::Launch;
         let address = launch.launch.address(rows);
         let (name, state, destination) = match &launch.launch {
-            Launch::Workflow(run) => (
-                None,
-                run.state.as_str(),
-                Some(run.firing_checkout().to_path_buf()),
-            ),
+            Launch::Workflow(run) => (None, run.state.as_str(), Some(run.scope.path.clone())),
             Launch::Supervised(run) => (
                 run.agent_name.clone(),
                 run.status.as_str(),
@@ -1001,7 +995,6 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         write_subscriptions(out, &view.subscriptions)?;
     }
     write_launches(out, &view.launches)?;
-    write_kept_worktrees(out, &view.kept_worktrees, now)?;
     writeln!(out)?;
     write_show_facts(out, view)?;
     write_workflow_runs(out, view, now, runs)?;
@@ -1517,11 +1510,6 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         Vec::new()
     });
     let view = ShowView {
-        kept_worktrees: if entry.fresh_worktree.is_some() {
-            kept_worktrees(&entry.resolved_root(), &args.name)
-        } else {
-            Vec::new()
-        },
         capacity,
         strike_count: task_records
             .live(&key)
@@ -1572,19 +1560,9 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             })
         });
         #[derive(serde::Serialize)]
-        struct KeptWorktreeJson<'a> {
-            name: &'a str,
-            branch: &'a str,
-            path: &'a Path,
-            created_at: Timestamp,
-        }
-        #[derive(serde::Serialize)]
         struct ShowJson<'a> {
             #[serde(flatten)]
             facts: serde_json::Value,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            fresh_worktree: Option<&'a str>,
-            kept_worktrees: Vec<KeptWorktreeJson<'a>>,
             worktrees: Vec<WorktreeJson<'a>>,
             capacity_wait: Option<list::CapacityWaitView>,
             #[serde(skip_serializing_if = "<[_]>::is_empty")]
@@ -1593,17 +1571,6 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         }
         let json = ShowJson {
             facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "runs": view.records, "quiet": view.quiet, "heard": view.heard, "running": running, "workflow_runs": view.workflow_runs, "backlog": backlog }),
-            fresh_worktree: view.entry.fresh_worktree.as_deref(),
-            kept_worktrees: view
-                .kept_worktrees
-                .iter()
-                .map(|tree| KeptWorktreeJson {
-                    name: &tree.marker.name,
-                    branch: tree.branch.as_deref().unwrap_or(&tree.marker.branch),
-                    path: &tree.path,
-                    created_at: tree.marker.created_at,
-                })
-                .collect(),
             worktrees: worktrees_json(&view),
             capacity_wait: (!view.entry.each_worktree)
                 .then(|| {
@@ -1734,42 +1701,6 @@ fn load_subscriptions(
             }
         })
         .collect())
-}
-
-/// The owned trees of `root`'s repository whose marker names task `name`, newest first.
-fn kept_worktrees(root: &Path, name: &str) -> Vec<rimz::worktree::ManagedWorktree> {
-    let mut kept = rimz::worktree::discover_owned(root)
-        .unwrap_or_else(|error| {
-            tracing::debug!(%error, "kept loop worktrees unavailable");
-            Vec::new()
-        })
-        .into_iter()
-        .filter(|tree| tree.marker.loop_task.as_deref() == Some(name))
-        .collect::<Vec<_>>();
-    kept.sort_by_key(|tree| std::cmp::Reverse(tree.marker.created_at));
-    kept
-}
-
-fn write_kept_worktrees(
-    out: &mut impl Write,
-    kept: &[rimz::worktree::ManagedWorktree],
-    now: Timestamp,
-) -> Result<()> {
-    if kept.is_empty() {
-        return Ok(());
-    }
-    writeln!(out, "\nKEPT WORKTREES")?;
-    let mut table = ui::Table::new(["WORKTREE", "BRANCH", "AGE"]).indent(2);
-    for tree in kept {
-        let age = now.duration_since(tree.marker.created_at).as_secs().max(0) as u64;
-        table.row([
-            ui::cell(&tree.marker.name),
-            ui::cell(tree.branch.as_deref().unwrap_or(&tree.marker.branch)),
-            ui::cell(ui::age_label(age)),
-        ]);
-    }
-    table.render(out)?;
-    Ok(())
 }
 
 fn write_subscriptions(out: &mut impl Write, subscriptions: &[SubscriptionView]) -> Result<()> {

@@ -36,7 +36,7 @@ no room is open there; start one with `rimz start`, or use `rimz loop timer inst
 
 The last two lines matter before your first task. A task belongs to the project you ran `add` in (`--root <path>` picks another). A clock task fires only while a room for that project is open, or while the [loop timer](#who-keeps-time) keeps time for it.
 
-A task's command runs at the project root, even when you add it from a linked worktree, unless `--fresh-worktree` gives each fire a new worktree. The name is optional: leave it out and the receipt prints the `loop-<petname>` name it chose.
+A task's command runs at the project root, even when you add it from a linked worktree. For a fresh tree each fire, have the command make one with [`rimz worktree new`](./worktrees.md), or make the task an agent or team task with a bare `-w` in its arguments, [below](#start-an-agent-from-a-task). The name is optional: leave it out and the receipt prints the `loop-<petname>` name it chose.
 
 A clock repeats only with `--every` or `--cron`. A bare time (`--at 07:00`, `--at 'fri 09:30'`, `--in 30m`) fires once, and then the task removes itself. [Every schedule shape](#every-schedule-shape) lists them all.
 
@@ -256,7 +256,7 @@ rimz loop timer remove           # stop the machine-wide timer
 
 Pause, disable, and enable belong to this machine and never edit the task's definition. When a hold lifts, the schedule starts fresh from that moment, so fires missed while held never replay.
 
-`remove` deletes the task from the file that holds it. `rimz loop logs <name>` still reads its history. For a [project task](#what-a-task-does-on-your-machine), that file is the committed `.rimz/config.toml`, so the removal reaches everyone who pulls your commit, and RimZ prints the project's trust result. A `--fresh-worktree` tree that held work when its run ended stays on disk: `rimz loop show <name>` lists it under `KEPT WORKTREES`, and you merge or remove it as any [worktree](./worktrees.md). `rimz loop timer remove` stops future ticks, but rooms the timer already opened stay open. `rimz uninstall` removes the timer too.
+`remove` deletes the task from the file that holds it. `rimz loop logs <name>` still reads its history. For a [project task](#what-a-task-does-on-your-machine), that file is the committed `.rimz/config.toml`, so the removal reaches everyone who pulls your commit, and RimZ prints the project's trust result. `rimz loop timer remove` stops future ticks, but rooms the timer already opened stay open. `rimz uninstall` removes the timer too.
 
 ## What a task does on your machine
 
@@ -285,9 +285,7 @@ A task that fires once (`--at`, `--in`, `--after-reset`, or a `--signal` or `--w
 
 ### Where a fire runs
 
-A fire opens the room for the task's project, then runs its command or launch at the project root, in the worktree an `--each-worktree` fire selected, or in a fresh worktree. Every agent a fire launches into the room opens in an unfocused tab of its own, so a fire never splits the tab you are working in. When the agent needs you, its tab and its sidebar card show it, as for any agent.
-
-A `--fresh-worktree` task gets a new tree for each fire: the same `git worktree add` from trunk that `rimz worktree new` runs, named `<prefix>-<yyyymmdd-hhmmss>` in UTC. When the run ends, the [worktree cleanup](./worktrees.md) removes the tree if it holds no changes, no commits that have not landed, and no open agent pane. Otherwise the tree stays for you. `rimz loop logs <name>` names each fire's tree on its `worktree:` line.
+A fire opens the room for the task's project, then runs its command or launch at the project root, in the worktree an `--each-worktree` fire selected, or in a worktree its launch's `-w` opens. Every agent a fire launches into the room opens in an unfocused tab of its own, so a fire never splits the tab you are working in. When the agent needs you, its tab and its sidebar card show it, as for any agent.
 
 ### What a fire leaves behind
 
@@ -412,12 +410,12 @@ A task's agent runs inside the room, so its prompt can use every other RimZ comm
 
 ```sh
 # 02:00 every night: a triage that fans out and opens PRs
-rimz loop add nightly --every day --at 02:00 --fresh-worktree nightly --timeout 4h -- \
-    rimz agents claude --timeout 4h --budget 5 "Scan the repository for bugs and cheap improvements. For each one worth fixing, \
-run a codex -p subagent in its own worktree, review its diff, and open a PR."
+rimz loop add nightly --agent claude --every day --at 02:00 -- -p --timeout 4h --budget 5 \
+    "Scan the repository for bugs and cheap improvements. For each one worth fixing, \
+run a codex -p subagent in its own worktree, review its diff, and open a PR." -w
 ```
 
-That is one scheduled turn, capped at four hours and five dollars. Its agent fans work out with [subagents](./subagents.md) and isolates each fix in a [worktree](./worktrees.md). It could as easily launch a [team](./teams.md) and brief it with [messages](./messaging.md).
+That is one scheduled turn in a fresh worktree, capped at four hours and five dollars. Its agent fans work out with [subagents](./subagents.md) and isolates each fix in a [worktree](./worktrees.md). It could as easily launch a [team](./teams.md) and brief it with [messages](./messaging.md).
 
 Leave the room open, detached on your workstation or on a server you reach with [`rimz remote`](./remote.md). [Auto-continue](#auto-continue) carries runs over rate limits, and a question or failure trips a [notification handler](./notifications.md) that reaches your phone. In the morning, `rimz loop list` and the PR queue show what the night produced.
 

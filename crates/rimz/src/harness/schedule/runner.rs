@@ -196,104 +196,6 @@ pub fn discard_backlog(name: &str, root: &Path) -> Result<()> {
 /// spawn time, so two minutes or more means no clock saw the instant.
 const LATE_FIRE_MS: u64 = 120_000;
 
-/// The room a fire tree's signals go to, when its store exists.
-fn fire_tree_room(root: &Path) -> Option<(crate::Store, crate::ResolvedWorkspace)> {
-    let paths = StatePaths::for_project_root(root).ok()?;
-    let runtime = RuntimePaths::for_state(&paths).ok()?;
-    let store = crate::Store::open_existing(paths, runtime)?;
-    let workspace = crate::workspace::WorkspaceResolver::resolve(root, None).ok()?;
-    Some((store, workspace))
-}
-
-/// The worktree one fire of a `fresh-worktree` task cut as its run's scope.
-struct FireTree {
-    name: String,
-    path: PathBuf,
-    base_fallback: Option<String>,
-    /// A run took it over, so the fire never force-removes it; the run's report settles it.
-    handed_over: bool,
-}
-
-/// Force-remove the fresh tree a loop fire cut, then retire its sessions and archive its channel.
-fn remove_fire_tree(
-    task: &str,
-    root: &Path,
-    config: &crate::config::WorktreeConfig,
-    name: &str,
-    path: &Path,
-) {
-    let memo = crate::worktree::LandedMemo::load(root);
-    match crate::worktree::remove(
-        root,
-        config,
-        name,
-        path,
-        true,
-        &crate::worktree::ProtectionSet::default(),
-        &memo,
-    ) {
-        Ok(removed) => {
-            if let Some((store, workspace)) = fire_tree_room(root) {
-                let retirement = crate::worktree::retire_removal(
-                    &store,
-                    &removed,
-                    crate::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
-                    &workspace.session_name,
-                );
-                for (step, result) in [
-                    ("retire its sessions", retirement.session_retirement),
-                    ("archive its channel", retirement.message_archival),
-                ] {
-                    if let Err(error) = result {
-                        tracing::warn!(task, worktree = %path.display(), %error, "failed to {step} after removing the fire's unused worktree");
-                    }
-                }
-            }
-        }
-        Err(error) => {
-            tracing::warn!(task, worktree = %path.display(), error = %format!("{error:#}"), "failed to remove the fire's unused worktree");
-        }
-    }
-    memo.save();
-}
-
-/// Settle the fresh tree a reported run worked in, through a detached `rimz`: collection reports
-/// under the workspace lock, which the removal's store writes take. Whatever the command did,
-/// `worktree cleanup` keeps a tree that holds work or an agent its command launched there, and
-/// removes it otherwise.
-pub(super) fn settle_fire_tree(run: &crate::store::workflow::RunRecord) {
-    let Some(task) = run.task.as_deref().filter(|_| run.fire_tree) else {
-        return;
-    };
-    let path = &run.scope.path;
-    match crate::worktree::read_marker_for_worktree(path) {
-        Ok(Some(_)) => {}
-        Ok(None) => return,
-        Err(error) => {
-            tracing::warn!(task, worktree = %path.display(), %error, "fire tree marker unreadable; tree kept");
-            return;
-        }
-    }
-    let args: Vec<std::ffi::OsString> = vec![
-        "--root".into(),
-        run.project_root.clone().into_os_string(),
-        "worktree".into(),
-        "cleanup".into(),
-        path.clone().into_os_string(),
-        "--non-interactive".into(),
-    ];
-    let spawned = StatePaths::for_project_root(&run.project_root)
-        .and_then(|paths| RuntimePaths::for_state(&paths))
-        .map_err(anyhow::Error::from)
-        .and_then(|runtime| {
-            crate::child_process::spawn_detached_rimz(&runtime, &args, "loop-fire-tree")
-                .map_err(anyhow::Error::from)
-        });
-    if let Err(error) = spawned {
-        tracing::warn!(task, worktree = %path.display(), error = %format!("{error:#}"), "fire tree cleanup not started; gc reclaims a clean tree");
-    }
-}
-
 /// What a fire overlaps: the task's live workflow run, or the alive launch of an earlier fire.
 enum Blocker {
     Run(crate::ids::WorkflowRunId),
@@ -375,9 +277,6 @@ pub struct TaskFire<'a> {
     from_arrived_at: Option<Timestamp>,
     condition: Option<crate::harness::when::ConditionEvidence>,
     checkout: Option<PathBuf>,
-    /// The fresh tree of a `fresh-worktree` fire. It is never `checkout`, which
-    /// keys the run lock, capacity and declines at the project root.
-    fire_tree: Option<FireTree>,
     started: Instant,
     run_lock: Option<RunLockGuard>,
     record_hold: Option<CheckSignalGuard>,
@@ -443,7 +342,6 @@ impl<'a> TaskFire<'a> {
             from_arrived_at: None,
             condition: None,
             checkout: None,
-            fire_tree: None,
             started,
             run_lock: None,
             record_hold: None,
@@ -661,67 +559,9 @@ impl<'a> TaskFire<'a> {
             .unwrap_or_else(|| self.entry.run_dir())
     }
 
-    /// The run's scope: the fire's fresh tree, else the launch checkout.
+    /// The run's scope: the launch checkout.
     fn fire_dir(&self) -> PathBuf {
-        self.fire_tree
-            .as_ref()
-            .map_or_else(|| self.launch_checkout(), |tree| tree.path.clone())
-    }
-
-    /// Cut a `fresh-worktree` fire's tree from trunk and announce it when the room's
-    /// store exists.
-    fn prepare_fire_tree(&mut self) -> Result<()> {
-        let Some(prefix) = self.entry.fresh_worktree.as_deref() else {
-            return Ok(());
-        };
-        if self.fire_tree.is_some() {
-            return Ok(());
-        }
-        let root = self.entry.resolved_root();
-        let created = crate::worktree::create_for_loop_fire(
-            &root,
-            &self.config.agents.worktree,
-            prefix,
-            &self.name,
-            self.now,
-        )
-        .with_context(|| format!("creating the fresh worktree for loop task `{}`", self.name))?;
-        self.fire_tree = Some(FireTree {
-            name: created.marker.name.clone(),
-            path: created.marker.worktree_path.clone(),
-            base_fallback: created.trunk_fetch.as_ref().map(ToString::to_string),
-            handed_over: false,
-        });
-        match fire_tree_room(&root) {
-            Some((store, workspace)) => {
-                crate::worktree::emit_worktree_created(&store, &workspace, &created.marker);
-            }
-            None => {
-                tracing::debug!(task = %self.name, "skipping worktree signal: store unavailable")
-            }
-        }
-        Ok(())
-    }
-
-    /// From `create` on, the run owns the tree and its report settles it.
-    fn hand_over_fire_tree(&mut self) {
-        if let Some(tree) = self.fire_tree.as_mut() {
-            tree.handed_over = true;
-        }
-    }
-
-    /// Remove a fire's tree that no run took over, forced: nothing ran in it.
-    fn remove_unlaunched_fire_tree(&mut self) {
-        let Some(tree) = self.fire_tree.take_if(|tree| !tree.handed_over) else {
-            return;
-        };
-        remove_fire_tree(
-            &self.name,
-            &self.entry.resolved_root(),
-            &self.config.agents.worktree,
-            &tree.name,
-            &tree.path,
-        );
+        self.launch_checkout()
     }
 
     pub fn prepare(
@@ -827,27 +667,15 @@ impl<'a> TaskFire<'a> {
         if let Some(done) = self.reconcile_backlog()? {
             return Ok(TaskFirePlan::Done(done));
         }
-        let fresh = self.entry.fresh_worktree.is_some();
-        if fresh && let Some(blocker) = self.live_task_run(&state)? {
-            return self.prepare_overlap(&Blocker::Run(blocker.id));
-        }
-        // The last rung: a fresh task's run works in a tree cut for this fire alone.
-        self.prepare_fire_tree()?;
         // The run lock and the reconcile may have switched the trigger this fire serves; the
         // run's prompt, which its command reads as `RIMZ_LOOP_TRIGGER`, names the one served.
         let trigger = self.effect_prompt(String::new());
         let prompt = || Ok((!trigger.is_empty()).then(|| trigger.clone()));
         let (fire, displaced) = self.open_fire()?;
-        if let Some(tree) = &self.fire_tree
-            && let Err(error) = crate::worktree::stamp_loop_fire(&tree.path, &fire)
-        {
-            tracing::warn!(task = %self.name, %fire, %error, "the fire's tree carries no fire stamp");
-        }
         let definition = crate::harness::workflow::DefinitionSource::Inline {
             task: self.name.clone(),
             loop_fire: fire.clone(),
             definition,
-            fire_tree: fresh,
             fire: Some(self.run_fire()),
             fire_facts: Some(self.fire_facts()),
         };
@@ -879,12 +707,6 @@ impl<'a> TaskFire<'a> {
             }
         };
         self.saw_run = true;
-        // The run owns its tree now; its report removes it, or keeps it while it holds work.
-        self.hand_over_fire_tree();
-        let worktree = self.fire_tree.as_ref().map(|tree| run_log::FireWorktree {
-            path: tree.path.clone(),
-            base_fallback: tree.base_fallback.clone(),
-        });
         let error = self.note_launched(&fire, Some(&run.id), run.created_at);
         // A poll-until row lives until a run acts, which the run's report decides.
         if self.entry.deadline.is_none() {
@@ -899,7 +721,6 @@ impl<'a> TaskFire<'a> {
             |record| {
                 record.run_id = Some(run.id.to_string());
                 record.fire = Some(fire);
-                record.worktree = worktree;
                 record.error = error;
             },
         )))
@@ -945,23 +766,14 @@ impl<'a> TaskFire<'a> {
         if workflow && let Some(run) = self.hand_started_run(&state, &launch.target)? {
             return Ok(TaskFirePlan::Done(self.record_hand_started(&run)));
         }
-        if workflow {
-            self.prepare_fire_tree()?;
-        }
         let trigger = self.effect_prompt(String::new());
         let (fire, displaced) = self.open_fire()?;
-        if let Some(tree) = &self.fire_tree
-            && let Err(error) = crate::worktree::stamp_loop_fire(&tree.path, &fire)
-        {
-            tracing::warn!(task = %self.name, %fire, %error, "the fire's tree carries no fire stamp");
-        }
         let checkout = self.fire_dir();
         let start = workflow.then(|| crate::harness::workflow::TaskStart {
             task: self.name.clone(),
             loop_fire: fire.clone(),
             fire: self.run_fire(),
             fire_facts: self.fire_facts(),
-            fire_tree: self.fire_tree.is_some(),
             manual: self.mode == LoopRunMode::Manual,
         });
         let booked_by = self.entry.booked_by.clone();
@@ -1028,11 +840,6 @@ impl<'a> TaskFire<'a> {
         };
         if let Some((run, at)) = published {
             self.saw_run = true;
-            self.hand_over_fire_tree();
-            let worktree = self.fire_tree.as_ref().map(|tree| run_log::FireWorktree {
-                path: tree.path.clone(),
-                base_fallback: tree.base_fallback.clone(),
-            });
             let error = self.note_launched(&fire, run.as_ref(), at);
             if self.entry.deadline.is_none() {
                 self.consume_ephemeral()?;
@@ -1045,7 +852,6 @@ impl<'a> TaskFire<'a> {
                 |record| {
                     record.run_id = run.map(|run| run.to_string());
                     record.fire = Some(fire);
-                    record.worktree = worktree;
                     record.error = error;
                 },
             )));
@@ -1171,7 +977,7 @@ impl<'a> TaskFire<'a> {
                 !run.state.is_terminal()
                     && run.task.is_none()
                     && run.workflow == name
-                    && run.firing_checkout() == checkout
+                    && run.scope.path == checkout
             }))
     }
 
@@ -1278,14 +1084,10 @@ impl<'a> TaskFire<'a> {
     }
 
     /// What this fire would log at its launch, sealed into its run for the run's one report row:
-    /// its trigger, waits, lock tenure, fresh tree and kind.
+    /// its trigger, waits, lock tenure and kind.
     fn fire_facts(&self) -> serde_json::Value {
         let mut record = self.terminal_record(LoopRunResult::Launched);
         record.run_lock = self.run_lock.as_ref().map(|guard| guard.info);
-        record.worktree = self.fire_tree.as_ref().map(|tree| run_log::FireWorktree {
-            path: tree.path.clone(),
-            base_fallback: tree.base_fallback.clone(),
-        });
         run_log::fire_facts(&record)
     }
 
@@ -1303,18 +1105,6 @@ impl<'a> TaskFire<'a> {
             trigger: super::trigger_clause(&self.task),
             booked_by,
         }
-    }
-
-    /// The task's live run keyed on its firing checkout, read before a fresh tree is cut so
-    /// a fire that would overlap cuts none; `create` still decides under the workspace lock.
-    fn live_task_run(
-        &self,
-        state: &StatePaths,
-    ) -> Result<Option<crate::store::workflow::RunRecord>> {
-        let checkout = self.launch_checkout().canonicalize()?;
-        Ok(crate::store::workflow::live_runs(state)?
-            .into_iter()
-            .find(|run| run.started_by(&self.task_id) && run.firing_checkout() == checkout))
     }
 
     /// The live run or launch this fire overlaps: `skip` records an overlap naming it;
@@ -2034,7 +1824,6 @@ impl<'a> TaskFire<'a> {
 
 impl Drop for TaskFire<'_> {
     fn drop(&mut self) {
-        self.remove_unlaunched_fire_tree();
         if let Err(error) = self.release_run_lock() {
             tracing::warn!(task = %self.name, error = %format!("{error:#}"), "failed to release loop run and start its backlog drain");
         }

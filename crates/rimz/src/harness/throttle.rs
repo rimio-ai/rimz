@@ -20,7 +20,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentState, AgentStatus};
-use crate::config::{MachineConfig, TaskEntry, ThrottleConfig, WorktreeConfig};
+use crate::config::{MachineConfig, TaskEntry, ThrottleConfig};
 use crate::disk::atomic::AtomicErr;
 use crate::disk::lock::{LockErr, WorkspaceLock};
 use crate::disk::paths::{self, RuntimePaths, StatePaths};
@@ -1312,7 +1312,7 @@ pub fn readings(
         task: name.to_owned(),
         fire: None,
         root,
-        disk: disk_at(entry, &config.agents.worktree, checkout.clone()),
+        disk: checkout.clone(),
         checkout,
         workspace: state.workspace_id,
         groups: Vec::new(),
@@ -1357,7 +1357,7 @@ fn diagnostic_holds_in(
         let paths = tasks
             .iter()
             .flat_map(|(_, entry)| {
-                let checkouts = if entry.each_worktree {
+                if entry.each_worktree {
                     crate::worktree::discover_owned(&entry.resolved_root())
                         .unwrap_or_default()
                         .into_iter()
@@ -1367,10 +1367,7 @@ fn diagnostic_holds_in(
                         .collect()
                 } else {
                     vec![entry.run_dir()]
-                };
-                checkouts
-                    .into_iter()
-                    .map(move |checkout| disk_at(entry, &config.agents.worktree, checkout))
+                }
             })
             .collect::<std::collections::BTreeSet<_>>();
         for path in paths {
@@ -1391,26 +1388,6 @@ fn diagnostic_agent_count(host: &dyn Host, config: &ThrottleConfig) -> Result<()
         machine_counts(host)?;
     }
     Ok(())
-}
-
-/// Where a launch of `entry` into `checkout` writes, for the free-disk floor: a
-/// fresh worktree's target, at its nearest existing ancestor, else `checkout`.
-pub(super) fn disk_at(entry: &TaskEntry, worktrees: &WorktreeConfig, checkout: PathBuf) -> PathBuf {
-    if entry.fresh_worktree.is_none() {
-        return checkout;
-    }
-    // The launch takes the task root as its repo root, as `--root` does.
-    let root = entry.resolved_root();
-    let repo_root = root.canonicalize().unwrap_or(root);
-    crate::worktree::worktree_parent(&repo_root, worktrees)
-        .ok()
-        .and_then(|target| {
-            target
-                .ancestors()
-                .find(|dir| dir.exists())
-                .map(Path::to_path_buf)
-        })
-        .unwrap_or(checkout)
 }
 
 fn readings_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Vec<(&'static str, String)> {

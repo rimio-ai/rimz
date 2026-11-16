@@ -1463,57 +1463,6 @@ fn git_in(dir: &Path, args: &[&str]) {
     );
 }
 
-/// A fresh task's fire cuts its tree just before `create`, and a tree no run took over goes with
-/// the fire: every return before `hand_over_fire_tree`, a refused `create` among them.
-#[test]
-fn a_fresh_tree_no_run_took_over_is_removed_with_the_fire() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("repo");
-    std::fs::create_dir(&root).unwrap();
-    git_in(&root, &["init", "-q", "-b", "main"]);
-    git_in(&root, &["commit", "-q", "--allow-empty", "-m", "base"]);
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    let entry = TaskEntry {
-        args: vec!["true".to_owned()],
-        timeout: Some("1m".to_owned()),
-        every: Some("1h".to_owned()),
-        root: root.clone(),
-        fresh_worktree: Some("night".to_owned()),
-        ..TaskEntry::default()
-    };
-    let mut kept = None;
-    for launched in [false, true] {
-        let mut fire = TaskFire::new(
-            "nightly",
-            LoadedTask::new("nightly", entry.clone(), catalog::TaskSource::Config),
-            &catalog,
-            LoopRunMode::Scheduled,
-            "2026-01-02T03:04:05Z".parse().unwrap(),
-            Arc::new(MachineConfig::default()),
-            None,
-            Instant::now(),
-        )
-        .unwrap();
-        fire.prepare_fire_tree().unwrap();
-        let tree = fire.fire_dir();
-        assert_eq!(fire.launch_checkout(), root, "loop's keys stay at the root");
-        let name = tree.file_name().unwrap().to_str().unwrap().to_owned();
-        assert!(name.starts_with("night-20260102-030405"), "{name}");
-        if launched {
-            fire.hand_over_fire_tree();
-        }
-        drop(fire);
-        assert_eq!(tree.exists(), launched, "{name}");
-        if launched {
-            kept = Some(tree);
-        }
-    }
-    let marker = crate::worktree::read_marker_for_worktree(&kept.unwrap())
-        .unwrap()
-        .unwrap();
-    assert_eq!(marker.loop_task.as_deref(), Some("nightly"));
-}
-
 fn seed_deploy_trigger(root: &Path, task: &TaskId, env: &str, arrived_at: Timestamp) {
     let paths = StatePaths::for_project_root(root).unwrap();
     crate::disk::atomic::write_temp_then_rename(
@@ -1849,7 +1798,7 @@ fn dead_mark(fire: FireId, child: bool) -> FireMark {
 
 /// A workflow fire whose launch child exited 0 published its run (`rimz workflow run` returns
 /// only after `create`), even when the run has left the live directory before the fire reads:
-/// `launched` with the run the child printed, and the fresh tree is the run's.
+/// `launched` with the run the child printed.
 #[test]
 fn a_workflow_launch_that_exited_0_is_launched_wherever_its_run_is() {
     let dir = tempfile::tempdir().unwrap();
@@ -1866,13 +1815,10 @@ fn a_workflow_launch_that_exited_0_is_launched_wherever_its_run_is() {
         TaskEntry {
             kind: Some(LaunchKind::Workflow),
             target: Some("smoke".to_owned()),
-            fresh_worktree: Some("night".to_owned()),
             ..TaskEntry::default()
         },
         LoopRunMode::Scheduled,
     );
-    fire.prepare_fire_tree().unwrap();
-    let tree = fire.fire_dir();
     let (fire_id, _) = fire.open_fire().unwrap();
     let state = StatePaths::for_project_root(&root).unwrap();
     let run = crate::ids::WorkflowRunId::new();
@@ -1898,8 +1844,6 @@ fn a_workflow_launch_that_exited_0_is_launched_wherever_its_run_is() {
         done.record
     );
     assert_eq!(done.record.run_id.as_deref(), Some(run.as_str()));
-    drop(fire);
-    assert!(tree.exists(), "the run's tree is handed over, not removed");
 }
 
 /// The `canceled` row a stop appends carries the task id its key binds, and settles that

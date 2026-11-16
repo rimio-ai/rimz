@@ -774,9 +774,6 @@ fn signal_names(mut signals: Vec<String>) -> String {
 }
 
 pub(super) fn worktree_name(entry: &TaskEntry, run_dir: &Path) -> Option<String> {
-    if let Some(prefix) = entry.fresh_worktree.as_deref() {
-        return Some(format!("{prefix}-*"));
-    }
     (entry.wait.is_some() || entry.dir.is_some()).then(|| {
         entry
             .dir

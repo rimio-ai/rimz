@@ -1675,7 +1675,6 @@ fn loop_tasks_parse_and_default_empty() {
              root = \"/home/me/app\"\n\
              at = \"07:00\"\n\
              every = \"weekdays\"\n\
-             fresh-worktree = \"main\"\n\
              timeout = \"5m\"\n\
              [tasks.self_wait]\n\
              wait = { kind = \"claude\", session = \"sess-1\", handle = \"@planner\" }\n\
@@ -1691,7 +1690,6 @@ fn loop_tasks_parse_and_default_empty() {
     assert_eq!(entry.root, std::path::Path::new("/home/me/app"));
     assert_eq!(entry.at.as_deref(), Some("07:00"));
     assert_eq!(entry.every.as_deref(), Some("weekdays"));
-    assert_eq!(entry.fresh_worktree.as_deref(), Some("main"));
     assert_eq!(entry.timeout.as_deref(), Some("5m"));
     assert_eq!(entry.cron, None);
 

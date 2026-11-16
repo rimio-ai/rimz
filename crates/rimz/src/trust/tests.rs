@@ -316,8 +316,8 @@ fn a_mistyped_project_row_still_loads_trust_and_hashes_its_raw_command() {
             "args = ['true']\ntimeout = 6",
         ),
         (
-            "args = ['true']\nfresh-worktree = true",
-            "args = ['true']\nfresh-worktree = false",
+            "args = ['true']\nkind = true",
+            "args = ['true']\nkind = false",
         ),
         (
             "command = ['true']\nrepeat = 'yes'",
@@ -774,7 +774,6 @@ fn hash_covers_every_documented_surface_field() {
         "[tasks.x]\ntarget = \"other\"\n",
         "[tasks.x]\nargs = [\"-p\", \"go\"]\n",
         "[tasks.x]\nargs = [\"-p go\"]\n",
-        "[tasks.x]\nfresh-worktree = \"sync\"\n",
         "[tasks.x]\nrepeat = true\n",
         "[tasks.x]\ntimeout = \"2h\"\n",
         "[tasks.x]\nat = \"08:00\"\n",

@@ -523,8 +523,8 @@ fn an_ended_launch_with_no_branch_to_read_is_finished() {
     branched.fire.as_mut().unwrap().pr = BookingPr::None;
     let mut treeless = fired("treeless", &["booker"], "wf_t", ago(100));
     treeless.fire.as_mut().unwrap().ended_at = Some(ago(50));
-    // A fresh tree per fire whose branch the records lost: it has a worktree, so it is
-    // not finished for lacking a branch.
+    // A launch's own tree whose branch the records lost: it has a worktree, so it is not
+    // finished for lacking a branch.
     let mut fresh = fired("fresh", &["booker"], "wf_f", ago(100));
     fresh.worktree = true;
     fresh.fire.as_mut().unwrap().ended_at = Some(ago(50));

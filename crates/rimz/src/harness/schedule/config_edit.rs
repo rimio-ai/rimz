@@ -347,7 +347,6 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             on: Some(CheckOn::Success),
             root: PathBuf::from("/repo"),
             dir: Some(PathBuf::from("/linked")),
-            fresh_worktree: Some("fire".to_owned()),
             timeout: Some("20m".to_owned()),
             at: Some("07:00".to_owned()),
             every: Some("1h".to_owned()),
@@ -379,7 +378,6 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
         let machine_text = doc.to_string();
         assert!(machine.contains_key("root"));
         assert!(machine.contains_key("dir"));
-        assert!(machine_text.contains("fresh-worktree = \"fire\""));
         assert!(machine.contains_key("max-strikes"));
         assert!(machine_text.contains("args = [\"cargo\", \"test\"]"));
         assert!(machine_text.contains("repeat = true"));
@@ -399,7 +397,6 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
         let project = task_entry_table(&entry, false).expect("serialize project");
         assert!(!project.contains_key("root"));
         assert!(!project.contains_key("dir"));
-        assert_eq!(project["fresh-worktree"].as_str(), Some("fire"));
         let mut project_round =
             toml_edit::de::from_document::<TaskEntry>(DocumentMut::from(project))
                 .expect("project round trip");

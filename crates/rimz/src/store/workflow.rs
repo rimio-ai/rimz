@@ -727,10 +727,6 @@ pub struct RunRecord {
     pub spec_dir: Option<PathBuf>,
     pub prompt: Option<String>,
     pub scope: Scope,
-    /// A loop fire cut `scope` as its own fresh worktree, so loop keys the run on
-    /// `project_root`, through [`RunRecord::firing_checkout`].
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub fire_tree: bool,
     /// The run's give-up instant, a start argument: a capacity wait at an agent step that sets
     /// no `admission.give-up` gives up then, however late in the run its first hold comes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -876,16 +872,6 @@ impl RunRecord {
     /// The shared predicate for a live run of a loop task.
     pub fn started_by(&self, task: &crate::ids::TaskId) -> bool {
         !self.state.is_terminal() && self.ran_for(task)
-    }
-
-    /// The checkout a loop task fired from: the project root for a run in its fire's own tree,
-    /// else the run's scope. Overlap, the backlog and the task's history key on it.
-    pub fn firing_checkout(&self) -> &Path {
-        if self.fire_tree {
-            &self.project_root
-        } else {
-            &self.scope.path
-        }
     }
 
     /// Whether this run is loop task `task`'s own, live or finished: a fire of the task started
@@ -1314,7 +1300,6 @@ pub struct RunHeader {
     pub project_root: Option<PathBuf>,
     pub scope_kind: Option<ScopeKind>,
     pub scope_path: Option<PathBuf>,
-    pub fire_tree: bool,
     pub created_at: Option<Timestamp>,
     pub state: Option<RunState>,
     pub node: Option<String>,
@@ -1345,7 +1330,6 @@ impl RunHeader {
             project_root: field(record.get("project_root")),
             scope_kind: field(record.get("scope").and_then(|scope| scope.get("kind"))),
             scope_path: field(record.get("scope").and_then(|scope| scope.get("path"))),
-            fire_tree: field(record.get("fire_tree")).unwrap_or(false),
             created_at: field(record.get("created_at")),
             state: field(record.get("state")),
             node: field(record.get("node")),
@@ -1514,7 +1498,6 @@ impl RunRecord {
             project_root: Some(self.project_root.clone()),
             scope_kind: Some(self.scope.kind),
             scope_path: Some(self.scope.path.clone()),
-            fire_tree: self.fire_tree,
             created_at: Some(self.created_at),
             state: Some(self.state),
             node: Some(self.node.clone()),

@@ -17,7 +17,6 @@ use super::{Cli, ColorWhen, Subcmd};
 pub(super) struct LoopLaunchPlace<'a> {
     pub(super) project_root: &'a Path,
     pub(super) each_worktree: bool,
-    pub(super) fresh_worktree: bool,
 }
 
 /// Check the launch a fire of `kind` makes with `target` and `args`. A shell task's argv is
