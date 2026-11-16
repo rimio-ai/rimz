@@ -8763,7 +8763,7 @@ fn explain_json_outside_a_room_reports_unknown_and_usage_errors() {
 }
 
 #[test]
-fn explain_from_a_linked_worktree_reads_the_project_root() {
+fn explain_from_a_linked_worktree_reads_that_checkout() {
     let env = Env::new();
     if !init_git_repo(&env.project_root) {
         crate::common::skip("git unavailable");
@@ -8789,21 +8789,34 @@ fn explain_from_a_linked_worktree_reads_the_project_root() {
         )
         .unwrap();
     }
-    let output = env
-        .rimz()
-        .current_dir(&linked)
-        .args(["loop", "explain", "team.stage=Done"])
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        text.contains(&format!(
-            "scope: {}\n",
-            canonical(&env.project_root).display()
-        )),
-        "{text}"
-    );
-    assert!(text.contains("now: false"), "{text}");
+    let scope = canonical(&linked);
+    let linked_root = linked.to_str().unwrap();
+    for (cwd, root) in [(&linked, "."), (&env.project_root, linked_root)] {
+        let explain = |json: &[&str]| {
+            let output = env
+                .rimz()
+                .current_dir(cwd)
+                .args(["loop", "explain", "team.stage=Done", "--root", root])
+                .args(json)
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&output.stdout).into_owned();
+            (output.status.success(), text)
+        };
+        let (met, text) = explain(&[]);
+        assert!(
+            text.contains(&format!("scope: {}\n", scope.display())),
+            "{root}: {text}"
+        );
+        assert!(met && text.contains("now: true"), "{root}: {text}");
+        let (_, json) = explain(&["--json"]);
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            (json["scope"].as_str(), &json["now"]),
+            (scope.to_str(), &json!(true)),
+            "{root}: {json}"
+        );
+    }
 }
 
 #[test]

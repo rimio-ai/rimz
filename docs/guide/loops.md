@@ -162,7 +162,7 @@ To see what a condition reads now without adding a task, run `rimz loop explain`
 rimz loop explain 'ci=passed && pr=open'
 ```
 
-It prints each term's reading and the overall result, and exits `0` when the condition is true.
+It prints each term's reading and the overall result, and exits `0` when the condition is true. Run from a linked worktree, it reads that worktree's board and pull request, as a wait you arm there does.
 
 ### One task for every worktree
 

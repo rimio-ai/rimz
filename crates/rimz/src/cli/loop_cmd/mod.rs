@@ -134,8 +134,8 @@ struct ExplainArgs {
     /// Print structured readings and truth.
     #[arg(long)]
     json: bool,
-    /// A path in the project whose board and forge readings to inspect; the readings are the
-    /// project root's, even from a linked checkout.
+    /// A path in the checkout whose board and forge readings to inspect; a linked checkout reads
+    /// its own, as a wait armed there does.
     #[arg(long, default_value = ".")]
     root: PathBuf,
     /// Provider kind for window readings.

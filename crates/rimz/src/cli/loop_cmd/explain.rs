@@ -1,4 +1,5 @@
-//! Read-only condition inspection, using the same scope and readings as tasks.
+//! Read-only condition inspection, scoped as a wait armed in the caller's checkout: a linked
+//! checkout reads its own board and forge readings, under its project root's room.
 
 use super::*;
 use rimz::harness::when::WhenExpr;
@@ -27,6 +28,8 @@ pub(super) fn run(args: ExplainArgs) -> Result<()> {
         args.provider.is_none() && expr.terms().any(|term| term.key.starts_with("window."));
     let entry = TaskEntry {
         root: workspace.project_root.clone(),
+        dir: (workspace.worktree_root != workspace.project_root)
+            .then(|| workspace.worktree_root.clone()),
         provider: args.provider.map(rimz::ids::AgentKind::new_unchecked),
         account: args.account,
         ..Default::default()

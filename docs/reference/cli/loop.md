@@ -133,7 +133,7 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 
 ### `loop explain`
 
-`rimz loop explain <EXPR>... [--json] [--root <PATH>] [--provider <KIND>] [--account <NAME>]` evaluates the current readings without adding a task, starting probes, or writing state. Repeat positional clauses to AND them together, just like repeated `--when`. Scope is the project root of the caller's checkout, or of `--root`, as a task reads it; a wait armed from a linked worktree reads that worktree instead. Use `--` before a positional value that is exactly a flag, including `-h` or `--help`.
+`rimz loop explain <EXPR>... [--json] [--root <PATH>] [--provider <KIND>] [--account <NAME>]` evaluates the current readings without adding a task, starting probes, or writing state. Repeat positional clauses to AND them together, just like repeated `--when`. Scope is the caller's checkout, or the checkout `--root` names: a linked worktree is read as a wait armed there reads it, and the project root otherwise. The room whose sidebar source and caches it reads is the project root's. Use `--` before a positional value that is exactly a flag, including `-h` or `--help`.
 
 Output shape:
 
