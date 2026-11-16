@@ -43,6 +43,8 @@ fn stack_attachment_is_shared_and_carries_on_failure() {
             targets: group.targets.clone(),
             states,
             branch_ci: BTreeMap::new(),
+            branch_heads: BTreeMap::new(),
+            unread_ci: BTreeSet::new(),
             failed: BTreeSet::new(),
         };
         let mut diff = DiffStatsCache::default();
@@ -634,6 +636,7 @@ fn github_projection_carries_only_owned_same_pr_settled_mergeability() {
         let plan = plan_github_queries(&group).remove(0);
         let response = forge::GhBulkResponse {
             refs: BTreeMap::new(),
+            ref_heads: BTreeMap::new(),
             open: None,
             prs: vec![Some(forge::GhBulkPr {
                 open: Some(OpenPrFacts {
@@ -737,6 +740,7 @@ fn github_projection_refreshes_pr_and_branch_verdicts_from_one_response() {
     let plan = plans.remove(0);
     let response = forge::GhBulkResponse {
         refs: BTreeMap::new(),
+        ref_heads: BTreeMap::new(),
         open: None,
         prs: vec![
             Some(forge::GhBulkPr {
@@ -852,6 +856,7 @@ fn github_projection_rejects_terminal_prs_from_an_old_incarnation() {
     let plan = plans.remove(0);
     let response = forge::GhBulkResponse {
         refs: BTreeMap::new(),
+        ref_heads: BTreeMap::new(),
         open: None,
         prs: vec![
             Some(forge::GhBulkPr {
@@ -1638,6 +1643,8 @@ fn branch_ci_cache_round_trips_and_defaults_for_old_files() {
                 BranchRow {
                     pr: None,
                     ci: Some(WorktreeCi::Passing),
+                    ci_sha: None,
+                    unread: false,
                 },
             )]),
         )]),
@@ -2378,6 +2385,7 @@ fn target(path: &str, branch: &str) -> Target {
         worktree: PathBuf::from("/repo"),
         head_sha: Some("sha".to_owned()),
         inherited_head: false,
+        trunk_row: false,
         marker_created_at: None,
         from_pr: None,
     }
@@ -2430,7 +2438,8 @@ fn branch_results_are_separate_and_failed_rows_carry_forward() {
         oids: vec!["sha".into()],
     };
     let response = forge::parse_github_bulk_response(false, &raw.to_string(), 2, 1).unwrap();
-    let (states, branch_ci) = project_github_group(&group, &[(plan, response)], &BTreeMap::new());
+    let batches = [(plan, response)];
+    let (states, branch_ci) = project_github_group(&group, &batches, &BTreeMap::new());
     let mut cache = PrStateCache::default();
     apply_repo_probe(
         &mut cache,
@@ -2441,6 +2450,8 @@ fn branch_results_are_separate_and_failed_rows_carry_forward() {
             targets: group.targets.clone(),
             states,
             branch_ci,
+            branch_heads: github_branch_heads(&group, &batches),
+            unread_ci: BTreeSet::new(),
             failed: BTreeSet::new(),
         },
         1000,
@@ -2461,6 +2472,11 @@ fn branch_results_are_separate_and_failed_rows_carry_forward() {
         cache.branches[&branch.repo_key]["feat/x"].ci,
         Some(WorktreeCi::Pending)
     );
+    assert_eq!(
+        cache.branches[&branch.repo_key]["feat/x"].ci_sha.as_deref(),
+        Some("head"),
+        "the row keeps the branch head its CI was read at"
+    );
     assert_eq!(cache.branch_ci[&checkout.path], WorktreeCi::Passing);
     for paths in [&cache.head_seen, &cache.path_repos] {
         assert_eq!(paths.keys().collect::<Vec<_>>(), vec![&checkout.path]);
@@ -2477,6 +2493,8 @@ fn branch_results_are_separate_and_failed_rows_carry_forward() {
             targets: vec![branch.clone()],
             states: BTreeMap::new(),
             branch_ci: BTreeMap::new(),
+            branch_heads: BTreeMap::new(),
+            unread_ci: BTreeSet::new(),
             failed: BTreeSet::from([branch.path.clone()]),
         },
         2000,
@@ -2530,6 +2548,8 @@ fn demanded_branches_are_uncached_then_hot_and_pruned_on_the_fast_path() {
         BranchRow {
             pr: None,
             ci: Some(WorktreeCi::Pending),
+            ci_sha: None,
+            unread: false,
         },
     );
     assert_eq!(due(&cache, &demand, 1001), Some(BTreeSet::new()));
@@ -2599,7 +2619,13 @@ fn failed_first_branch_probe_obeys_retry_backoff_on_both_due_paths() {
         );
         assert_eq!((due, cached_due), (expected.clone(), Some(expected)));
     }
-    assert_eq!(cache.branches[&repo]["feature"], BranchRow::default());
+    assert_eq!(
+        cache.branches[&repo]["feature"],
+        BranchRow {
+            unread: true,
+            ..BranchRow::default()
+        }
+    );
 }
 
 #[test]

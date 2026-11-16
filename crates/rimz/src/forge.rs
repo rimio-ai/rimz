@@ -120,6 +120,8 @@ pub(crate) struct GhBulkPr {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GhBulkResponse {
     pub(crate) refs: BTreeMap<usize, Option<WorktreeCi>>,
+    /// The commit each answered branch ref points at, keyed as `refs` is.
+    pub(crate) ref_heads: BTreeMap<usize, String>,
     pub(crate) open: Option<Vec<OpenPr>>,
     pub(crate) prs: Vec<Option<GhBulkPr>>,
     pub(crate) commits: Vec<Option<WorktreeCi>>,
@@ -968,12 +970,16 @@ pub(crate) fn parse_github_bulk_response(
         None
     };
     let mut refs = BTreeMap::new();
+    let mut ref_heads = BTreeMap::new();
     for index in 0..branch_count {
         if let Some(value) = repository.get(&format!("ref{index}")) {
             let reference: Option<BranchRef> =
                 serde_json::from_value(value.clone()).map_err(|err| err.to_string())?;
-            let ci = reference
-                .and_then(|reference| reference.target)
+            let target = reference.and_then(|reference| reference.target);
+            if let Some(head) = target.as_ref().and_then(|commit| nonempty(&commit.oid)) {
+                ref_heads.insert(index, head);
+            }
+            let ci = target
                 .and_then(|commit| commit.status_check_rollup)
                 .and_then(|rollup| rollup.state)
                 .as_deref()
@@ -986,6 +992,7 @@ pub(crate) fn parse_github_bulk_response(
         commits,
         open,
         refs,
+        ref_heads,
     })
 }
 

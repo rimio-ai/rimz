@@ -1,11 +1,14 @@
-//! Pure forge-signal derivation from consecutive PR cache publications.
+//! Pure forge-signal derivation from consecutive PR cache publications: checkout rows, and the
+//! branch rows that live signal subscriptions and conditions demand.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
 use super::{RepoGroup, Target};
-use crate::forge::pr_state::{PrLink, PrQueueFact, PrStateCache, SettledMergeability, TargetStamp};
+use crate::forge::pr_state::{
+    BranchRow, PrLink, PrQueueFact, PrStateCache, SettledMergeability, TargetStamp,
+};
 use crate::forge::{ForgeSignal, RemoteRepo};
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
@@ -31,78 +34,25 @@ pub(super) fn transitions(
             continue;
         }
         let prior_link = prior.states.get(path).filter(|link| stamp.owns_link(link));
-        if next_link.state == WorktreePrState::Open
-            && !prior_link.is_some_and(|link| {
-                link.state == WorktreePrState::Open && link.number == next_link.number
-            })
-        {
+        let source = Source {
+            path: Some(path),
+            branch: &stamp.branch,
+            repo,
+            remote,
+        };
+        for signal in pr_moves(prior_link, next_link) {
             signals.push((
-                ForgeSignal::PrOpened.as_str(),
-                payload(
-                    next,
-                    path,
-                    stamp,
-                    repo,
-                    Some(next_link),
-                    Some(ForgeSignal::PrOpened),
-                    remote,
-                ),
+                signal.as_str(),
+                payload(next, &source, Some(next_link), Some(signal)),
             ));
-        }
-        for signal in [
-            ForgeSignal::PrBehind,
-            ForgeSignal::PrConflicted,
-            ForgeSignal::PrQueued,
-            ForgeSignal::PrDequeued,
-        ] {
-            if let Some(key) = open_key(Some(next_link), signal)
-                && Some(key) != open_key(prior_link, signal)
-            {
-                signals.push((
-                    signal.as_str(),
-                    payload(
-                        next,
-                        path,
-                        stamp,
-                        repo,
-                        Some(next_link),
-                        Some(signal),
-                        remote,
-                    ),
-                ));
-            }
         }
         let Some(prior_link) = prior_link else {
             continue;
         };
-        if prior_link.state == WorktreePrState::Open {
-            let signal = match next_link.state {
-                WorktreePrState::Merged => Some(ForgeSignal::PrMerged),
-                WorktreePrState::Closed => Some(ForgeSignal::PrClosed),
-                WorktreePrState::Open => None,
-            };
-            if let Some(signal) = signal {
-                signals.push((
-                    signal.as_str(),
-                    payload(
-                        next,
-                        path,
-                        stamp,
-                        repo,
-                        Some(next_link),
-                        Some(signal),
-                        remote,
-                    ),
-                ));
-            }
-        }
         if let Some(name) = final_verdict_name(next_link.ci)
             && prior_link.ci != next_link.ci
         {
-            signals.push((
-                name,
-                payload(next, path, stamp, repo, Some(next_link), None, remote),
-            ));
+            signals.push((name, payload(next, &source, Some(next_link), None)));
         }
     }
 
@@ -129,10 +79,153 @@ pub(super) fn transitions(
         if target.is_some_and(|target| !target.trunk && target.inherited_head) {
             continue;
         }
-        let remote = target.map(|target| &target.remote);
-        signals.push((name, payload(next, path, stamp, repo, None, None, remote)));
+        let source = Source {
+            path: Some(path),
+            branch: &stamp.branch,
+            repo,
+            remote: target.map(|target| &target.remote),
+        };
+        signals.push((name, payload(next, &source, None, None)));
+    }
+
+    for (repo, rows) in &next.branches {
+        for (branch, row) in rows {
+            branch_row_signals(prior, next, groups, repo, branch, row, &mut signals);
+        }
     }
     signals
+}
+
+/// A demanded branch's own changes, for the subscriptions its payload matches. Only a row read
+/// successfully in both passes emits. A signal a checkout on the same repository and branch
+/// already emitted this pass for the same change (the same pull request, or the same verdict
+/// at the same commit) shadows the row's, so each change fires once; a checkout reading
+/// another commit, or whose reading failed, shadows nothing. A row commit that is unknown
+/// proves no shadow, since a signal fired twice costs less than one never fired.
+fn branch_row_signals(
+    prior: &PrStateCache,
+    next: &PrStateCache,
+    groups: &BTreeMap<String, RepoGroup>,
+    repo: &str,
+    branch: &str,
+    row: &BranchRow,
+    signals: &mut Vec<(&'static str, Map<String, Value>)>,
+) {
+    let Some(prior_row) = prior
+        .branches
+        .get(repo)
+        .and_then(|rows| rows.get(branch))
+        .filter(|prior_row| !prior_row.unread && !row.unread)
+    else {
+        return;
+    };
+    let Some(target) = groups.get(repo).and_then(|group| {
+        group
+            .targets
+            .iter()
+            .find(|target| target.branch_only && target.branch == branch)
+    }) else {
+        return;
+    };
+    let source = Source {
+        path: None,
+        branch,
+        repo,
+        remote: Some(&target.remote),
+    };
+    if !target.trunk_row
+        && let Some(link) = &row.pr
+    {
+        for signal in pr_moves(prior_row.pr.as_ref(), link) {
+            let number = link.number.map(Value::from);
+            if !checkout_emitted(signals, &source, signal.as_str(), "number", number) {
+                signals.push((
+                    signal.as_str(),
+                    payload(next, &source, Some(link), Some(signal)),
+                ));
+            }
+        }
+    }
+    let (verdict_link, ci) = branch_ci(row);
+    if let Some(name) = final_verdict_name(ci)
+        && branch_ci(prior_row).1 != ci
+    {
+        let head = match verdict_link {
+            Some(link) => link.ci_sha.as_ref(),
+            None => row.ci_sha.as_ref(),
+        };
+        let head = head
+            .filter(|head| !head.is_empty())
+            .cloned()
+            .map(Value::from);
+        if !checkout_emitted(signals, &source, name, "head", head) {
+            signals.push((name, payload(next, &source, verdict_link, None)));
+        }
+    }
+}
+
+/// Whether a checkout on `source`'s repository and branch already emitted `name` this pass
+/// with payload `key` equal to `value`; an unknown `value` matches nothing.
+fn checkout_emitted(
+    signals: &[(&'static str, Map<String, Value>)],
+    source: &Source<'_>,
+    name: &str,
+    key: &str,
+    value: Option<Value>,
+) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    signals.iter().any(|(emitted, payload)| {
+        *emitted == name
+            && payload.contains_key("path")
+            && payload.get("repo").and_then(Value::as_str) == Some(source.repo)
+            && payload.get("branch").and_then(Value::as_str) == Some(source.branch)
+            && payload.get(key) == Some(&value)
+    })
+}
+
+/// The CI verdict a `ci[branch]` condition reads: an open or merged pull request's, then the
+/// branch head's, with the link that carries it.
+fn branch_ci(row: &BranchRow) -> (Option<&PrLink>, Option<WorktreeCi>) {
+    let link = row.pr.as_ref().filter(|link| {
+        matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged) && link.ci.is_some()
+    });
+    match link {
+        Some(link) => (Some(link), link.ci),
+        None => (None, row.ci),
+    }
+}
+
+/// The pull request signals a reading moved into since the last successful one.
+fn pr_moves(prior: Option<&PrLink>, next: &PrLink) -> Vec<ForgeSignal> {
+    let mut moves = Vec::new();
+    if next.state == WorktreePrState::Open
+        && !prior
+            .is_some_and(|link| link.state == WorktreePrState::Open && link.number == next.number)
+    {
+        moves.push(ForgeSignal::PrOpened);
+    }
+    for signal in [
+        ForgeSignal::PrBehind,
+        ForgeSignal::PrConflicted,
+        ForgeSignal::PrQueued,
+        ForgeSignal::PrDequeued,
+    ] {
+        if let Some(key) = open_key(Some(next), signal)
+            && Some(key) != open_key(prior, signal)
+        {
+            moves.push(signal);
+        }
+    }
+    if prior.is_some_and(|link| link.state == WorktreePrState::Open) {
+        match next.state {
+            WorktreePrState::Merged => moves.push(ForgeSignal::PrMerged),
+            WorktreePrState::Closed => moves.push(ForgeSignal::PrClosed),
+            WorktreePrState::Open => {}
+        }
+    }
+    moves
 }
 
 /// What an open-PR signal re-emits on: the head it was read at for an adverse
@@ -188,20 +281,28 @@ fn final_verdict_name(ci: Option<WorktreeCi>) -> Option<&'static str> {
     }
 }
 
+/// Where a signal's reading came from: a checkout `path`, or a branch row without one.
+struct Source<'a> {
+    path: Option<&'a str>,
+    branch: &'a str,
+    repo: &'a str,
+    remote: Option<&'a RemoteRepo>,
+}
+
 fn payload(
     cache: &PrStateCache,
-    path: &str,
-    stamp: &TargetStamp,
-    repo: &str,
+    source: &Source<'_>,
     link: Option<&PrLink>,
     signal: Option<ForgeSignal>,
-    remote: Option<&RemoteRepo>,
 ) -> Map<String, Value> {
+    let remote = source.remote;
     let mut payload = Map::from_iter([
-        ("path".to_owned(), Value::String(path.to_owned())),
-        ("branch".to_owned(), Value::String(stamp.branch.clone())),
-        ("repo".to_owned(), Value::String(repo.to_owned())),
+        ("branch".to_owned(), Value::String(source.branch.to_owned())),
+        ("repo".to_owned(), Value::String(source.repo.to_owned())),
     ]);
+    if let Some(path) = source.path {
+        payload.insert("path".to_owned(), Value::String(path.to_owned()));
+    }
     if let Some(link) = link {
         if let Some(number) = link.number {
             payload.insert("number".to_owned(), Value::Number(number.into()));
@@ -214,7 +315,7 @@ fn payload(
         (Some(link), None | Some(ForgeSignal::CiPassed | ForgeSignal::CiFailed)) => {
             link.ci_sha.as_ref()
         }
-        _ => cache.head_seen.get(path),
+        _ => source.path.and_then(|path| cache.head_seen.get(path)),
     };
     if let Some(head) = head.filter(|head| !head.is_empty()) {
         payload.insert("head".to_owned(), Value::String(head.clone()));

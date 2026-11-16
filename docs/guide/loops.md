@@ -102,7 +102,7 @@ A clock is a guess about when something will happen. A signal is the event itsel
 
 The [loop reference](../reference/cli/loop.md#built-in-signals) gives the exact moment each one fires and the payload fields it carries.
 
-Subscribe to one name, or to a whole family with `'ci.*'`. A task on `ci.failed` hears `ci.passed` too: it records the signal as heard, runs nothing, and stays armed, so `rimz loop show` can tell you the branch went green while the task waited for red. Narrow a subscription with `--match key=value` on a payload field. A signal that fails the match is ignored.
+Subscribe to one name, or to a whole family with `'ci.*'`. A task on `ci.failed` hears `ci.passed` too: it records the signal as heard, runs nothing, and stays armed, so `rimz loop show` can tell you the branch went green while the task waited for red. Narrow a subscription with `--match key=value` on a payload field. A signal that fails the match is ignored. A `ci` or `pr` task that matches a branch by name, as below, has the sidebar read that branch from the forge even when no checkout in the room is on it, so it fires for a branch that lives only on the forge, such as a teammate's pull request.
 
 ```sh
 rimz loop add ci-fix --signal ci.failed --match branch=feature --repeat -- rimz agents codex -w ci-fix "Fix the failing checks."

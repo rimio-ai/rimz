@@ -55,6 +55,15 @@ pub(crate) struct BranchRow {
     pub(crate) pr: Option<PrLink>,
     #[serde(default)]
     pub(crate) ci: Option<WorktreeCi>,
+    /// The commit `ci` was read at, the branch head on the forge; `None` while unknown, as in
+    /// a row an older RimZ wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ci_sha: Option<String>,
+    /// Set on the placeholder a failed first lookup leaves, so the row's first successful
+    /// reading is a first sight and emits no signal. A reader older than this field reads
+    /// the placeholder as a reading of no pull request and no CI, as it did before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) unread: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -401,6 +401,8 @@ struct Target {
     worktree: PathBuf,
     head_sha: Option<String>,
     inherited_head: bool,
+    /// A branch-only row for the scope checkout's trunk branch, which emits CI signals only.
+    trunk_row: bool,
     marker_created_at: Option<jiff::Timestamp>,
     from_pr: Option<u64>,
 }
@@ -583,6 +585,10 @@ fn build_targets(
                 continue;
             }
         };
+        let trunk_ref = diff_cache
+            .entries
+            .get(path)
+            .and_then(|entry| entry.trunk.as_deref());
         for branch in branch_demand.get(path).into_iter().flatten() {
             if !seen_branches.insert((target.repo_key.clone(), branch.clone())) {
                 continue;
@@ -595,6 +601,7 @@ fn build_targets(
                 trunk: false,
                 head_sha: None,
                 inherited_head: false,
+                trunk_row: is_trunk_branch(branch, trunk_ref),
                 marker_created_at: None,
                 from_pr: None,
                 ..target.clone()
@@ -715,6 +722,7 @@ fn discover_target(
         worktree: worktree.to_path_buf(),
         head_sha: head_sha.map(str::to_owned),
         inherited_head,
+        trunk_row: false,
         marker_created_at: marker.as_ref().map(|marker| marker.created_at),
         from_pr: marker.and_then(|marker| marker.from_pr),
     })))
@@ -1012,6 +1020,11 @@ struct RepoGroupProbe {
     targets: Vec<Target>,
     states: BTreeMap<String, PrLink>,
     branch_ci: BTreeMap<String, WorktreeCi>,
+    /// The commit each branch-only target's `branch_ci` was read at, where the forge said.
+    branch_heads: BTreeMap<String, String>,
+    /// Branch-only targets whose CI read failed this pass while the rest of their reading
+    /// succeeded: their rows keep the last successful reading, as a failed target's do.
+    unread_ci: BTreeSet<String>,
     /// Targets whose reading failed this pass. They republish their prior
     /// entries, and the repository probe succeeded only when this is empty.
     failed: BTreeSet<String>,
@@ -1045,10 +1058,12 @@ fn apply_repo_probe(
     for target in &result.targets {
         let failed = result.failed.contains(&target.path);
         if target.branch_only {
-            let row = if !failed {
+            let row = if !failed && !result.unread_ci.contains(&target.path) {
                 BranchRow {
                     pr: result.states.remove(&target.path),
                     ci: result.branch_ci.remove(&target.path),
+                    ci_sha: result.branch_heads.remove(&target.path),
+                    unread: false,
                 }
             } else {
                 prior
@@ -1056,7 +1071,10 @@ fn apply_repo_probe(
                     .get(&target.repo_key)
                     .and_then(|rows| rows.get(&target.branch))
                     .cloned()
-                    .unwrap_or_default()
+                    .unwrap_or(BranchRow {
+                        unread: true,
+                        ..BranchRow::default()
+                    })
             };
             cache
                 .branches
@@ -1256,14 +1274,36 @@ fn probe_github_repo_group(
         batches.push((plan, response));
     }
     let (states, branch_ci) = project_github_group(group, &batches, prior);
+    let branch_heads = github_branch_heads(group, &batches);
     RepoGroupProbe {
         open: batches.into_iter().find_map(|(_, response)| response.open),
         repo_key: repo_key.to_owned(),
         targets: group.targets.clone(),
         states,
         branch_ci,
+        branch_heads,
+        unread_ci: BTreeSet::new(),
         failed: BTreeSet::new(),
     }
+}
+
+/// The commit each branch-only target's ref CI was read at.
+fn github_branch_heads(
+    group: &RepoGroup,
+    batches: &[(GhQueryPlan, forge::GhBulkResponse)],
+) -> BTreeMap<String, String> {
+    let mut heads = BTreeMap::new();
+    for (plan, response) in batches {
+        for (alias_index, target_index) in plan.pr_targets.iter().enumerate() {
+            let target = &group.targets[*target_index];
+            if let Some(head) = response.ref_heads.get(&alias_index)
+                && target.branch_only
+            {
+                heads.insert(target.path.clone(), head.clone());
+            }
+        }
+    }
+    heads
 }
 
 fn project_github_group(
@@ -1361,6 +1401,8 @@ fn failed_repo_group_probe(repo_key: &str, group: &RepoGroup) -> RepoGroupProbe 
         targets: group.targets.clone(),
         states: BTreeMap::new(),
         branch_ci: BTreeMap::new(),
+        branch_heads: BTreeMap::new(),
+        unread_ci: BTreeSet::new(),
         failed: group
             .targets
             .iter()
@@ -1419,18 +1461,30 @@ fn probe_tea_repo_group_with(
         }
     }
     let mut branch_ci = BTreeMap::new();
+    let mut branch_heads = BTreeMap::new();
+    let mut unread_ci = BTreeSet::new();
     if let Some(repo_slug) = group.repo_slug.as_deref() {
         for target in &group.targets {
             if failed.contains(&target.path) {
                 continue;
             }
             if let Some(link) = states.get_mut(&target.path) {
-                if link.state == WorktreePrState::Open
-                    && let Ok((ci, ci_sha)) =
-                        probe_tea_ci_with(&group.worktree, repo_slug, &target.branch, &mut command)
-                {
-                    link.ci = ci;
-                    link.ci_sha = ci_sha;
+                if link.state == WorktreePrState::Open {
+                    match probe_tea_ci_with(
+                        &group.worktree,
+                        repo_slug,
+                        &target.branch,
+                        &mut command,
+                    ) {
+                        Ok((ci, ci_sha)) => {
+                            link.ci = ci;
+                            link.ci_sha = ci_sha;
+                        }
+                        Err(_) if target.branch_only => {
+                            unread_ci.insert(target.path.clone());
+                        }
+                        Err(_) => {}
+                    }
                 }
                 if !target.branch_only || link.state == WorktreePrState::Open {
                     continue;
@@ -1442,10 +1496,19 @@ fn probe_tea_repo_group_with(
                 target.head_sha.as_deref()
             };
             let Some(head) = head else { continue };
-            if let Ok((Some(ci), _)) =
-                probe_tea_ci_with(&group.worktree, repo_slug, head, &mut command)
-            {
-                branch_ci.insert(target.path.clone(), ci);
+            match probe_tea_ci_with(&group.worktree, repo_slug, head, &mut command) {
+                Ok((ci, sha)) => {
+                    if let Some(ci) = ci {
+                        branch_ci.insert(target.path.clone(), ci);
+                    }
+                    if let Some(sha) = sha.filter(|_| target.branch_only) {
+                        branch_heads.insert(target.path.clone(), sha);
+                    }
+                }
+                Err(_) if target.branch_only => {
+                    unread_ci.insert(target.path.clone());
+                }
+                Err(_) => {}
             }
         }
     }
@@ -1454,6 +1517,8 @@ fn probe_tea_repo_group_with(
         targets: group.targets.clone(),
         states,
         branch_ci,
+        branch_heads,
+        unread_ci,
         failed,
         open: Some(open),
     }

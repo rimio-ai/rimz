@@ -127,8 +127,8 @@ Every signal name, by who produces it. The families in the second column are [re
 | Names | Family | `source` | Produced by |
 | --- | --- | --- | --- |
 | Any valid name outside the reserved families | yours | `cli` | `rimz events emit` |
-| `ci.passed`, `ci.failed` | `ci` | `forge` | The room's sidebar, when a watched checkout's CI changes state |
-| `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted`, `pr.queued`, `pr.dequeued` | `pr` | `forge` | The room's sidebar, when a watched checkout's pull request changes state |
+| `ci.passed`, `ci.failed` | `ci` | `forge` | The room's sidebar, when a watched checkout's or a held branch's CI changes state |
+| `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted`, `pr.queued`, `pr.dequeued` | `pr` | `forge` | The room's sidebar, when a watched checkout's or a held branch's pull request changes state |
 | `trunk.moved` | `trunk` | `git` | The room's sidebar, when the project trunk ref moves |
 | `worktree.created`, `worktree.removed` | `worktree` | `worktree` | A successful managed worktree creation or removal |
 | `team.idle`, `team.waiting`, `team.failed`, `team.ended` | `team` | `lifecycle` | The agent lifecycle hook, when a team member's transition changes its cohort |

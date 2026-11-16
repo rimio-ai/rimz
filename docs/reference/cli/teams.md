@@ -260,7 +260,7 @@ The receipt records what was launched. Members start asynchronously and may not 
 
 A role's declared `signals` become live subscriptions when its member registers: at launch, resume, restart, and when the role is re-added. Subagents do not inherit them. Ending, losing, or stopping the session removes its subscriptions, and signals missed in between are not replayed. The binding list is part of project trust.
 
-A launch from the root checkout with no named worktree (`-w NAME` or `team#NAME`) and no `--from-pr` refuses any `ci.*` or `pr.*` binding that lacks `match.branch` or `match.path`, before it creates panes or worktrees: the root checkout requires an explicit scope. Launch with `-w NAME`, launch from a linked worktree, or add an explicit branch or path match. `match.branch = "*"` accepts every checkout RimZ watches; see [signal matching](./loop.md#signals).
+A launch from the root checkout with no named worktree (`-w NAME` or `team#NAME`) and no `--from-pr` refuses any `ci.*` or `pr.*` binding that lacks `match.branch` or `match.path`, before it creates panes or worktrees: the root checkout requires an explicit scope. Launch with `-w NAME`, launch from a linked worktree, or add an explicit branch or path match. `match.branch = "*"` accepts every checkout RimZ watches and every branch a task holds; see [signal matching](./loop.md#signals).
 
 ## Resume a team
 

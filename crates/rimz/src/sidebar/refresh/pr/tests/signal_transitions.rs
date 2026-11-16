@@ -989,6 +989,559 @@ fn continuity_spans_a_failed_pass_only_under_the_same_identity() {
     }
 }
 
+const BRANCH: &str = "feat/x";
+
+fn branch_target(trunk: bool) -> Target {
+    let mut target = super::target(&format!("\0{BRANCH}"), BRANCH);
+    target.branch_only = true;
+    target.head_sha = None;
+    target.trunk_row = trunk;
+    target
+}
+
+fn with_row(mut cache: PrStateCache, pr: Option<PrLink>, ci: Option<WorktreeCi>) -> PrStateCache {
+    let row = BranchRow {
+        pr,
+        ci,
+        ci_sha: ci.map(|_| REMOTE_HEAD.to_owned()),
+        unread: false,
+    };
+    cache
+        .branches
+        .entry(REPO.to_owned())
+        .or_default()
+        .insert(BRANCH.to_owned(), row);
+    cache
+}
+
+fn branch_link(state: WorktreePrState, ci: Option<WorktreeCi>) -> PrLink {
+    let mut link = branch_target(false).pr_link(state, 7, ci, None, None);
+    link.ci_sha = ci.map(|_| "branch-ci".to_owned());
+    link
+}
+
+fn branch_transitions(
+    prior: &PrStateCache,
+    next: &PrStateCache,
+    trunk: bool,
+) -> Vec<(&'static str, Map<String, Value>)> {
+    branch_transitions_failing(prior, next, trunk, &[])
+}
+
+fn branch_transitions_failing(
+    prior: &PrStateCache,
+    next: &PrStateCache,
+    trunk: bool,
+    failed: &[&str],
+) -> Vec<(&'static str, Map<String, Value>)> {
+    let groups = group_targets(vec![super::target(PATH, "feature"), branch_target(trunk)]);
+    let failed = failed.iter().map(|path| (*path).to_owned()).collect();
+    super::super::transitions::transitions(prior, next, &groups, &failed)
+}
+
+/// The commit the forge's branch head sits at, which every `with_row` CI is read at.
+const REMOTE_HEAD: &str = "remote-head";
+const ON_BRANCH: &str = "/repo/on-branch";
+
+/// `cache` with a checkout on `BRANCH` that read `link` and, without one, `ci` at its local
+/// `head`.
+fn on_branch(
+    mut cache: PrStateCache,
+    link: Option<PrLink>,
+    ci: Option<WorktreeCi>,
+    head: &str,
+) -> PrStateCache {
+    cache
+        .path_repos
+        .insert(ON_BRANCH.to_owned(), REPO.to_owned());
+    cache
+        .head_seen
+        .insert(ON_BRANCH.to_owned(), head.to_owned());
+    cache.target_seen.insert(
+        ON_BRANCH.to_owned(),
+        TargetStamp {
+            branch: BRANCH.to_owned(),
+            incarnation: None,
+        },
+    );
+    if let Some(link) = link {
+        cache.states.insert(ON_BRANCH.to_owned(), link);
+    }
+    if let Some(ci) = ci {
+        cache.branch_ci.insert(ON_BRANCH.to_owned(), ci);
+    }
+    cache
+}
+
+/// Each signal's name and whether it came from the checkout (`path`) or the branch row.
+type Sources = Vec<(&'static str, bool)>;
+
+fn sources(signals: &[(&'static str, Map<String, Value>)]) -> Sources {
+    signals
+        .iter()
+        .map(|(name, payload)| (*name, payload.contains_key("path")))
+        .collect()
+}
+
+#[test]
+fn branch_rows_emit_their_own_changes_without_a_path() {
+    let pending = with_row(base_cache(), None, Some(WorktreeCi::Pending));
+    let passed = with_row(base_cache(), None, Some(WorktreeCi::Passing));
+    let signals = branch_transitions(&pending, &passed, false);
+    assert_eq!(signal_names(&signals), vec!["ci.passed"]);
+    assert_eq!(
+        Value::Object(signals[0].1.clone()),
+        json!({"branch": BRANCH, "repo": REPO})
+    );
+
+    let open = |ci| {
+        with_row(
+            base_cache(),
+            Some(branch_link(WorktreePrState::Open, ci)),
+            None,
+        )
+    };
+    let signals = branch_transitions(
+        &open(Some(WorktreeCi::Pending)),
+        &open(Some(WorktreeCi::Failing)),
+        false,
+    );
+    assert_eq!(signal_names(&signals), vec!["ci.failed"]);
+    assert_eq!(
+        Value::Object(signals[0].1.clone()),
+        json!({
+            "branch": BRANCH, "repo": REPO, "number": 7,
+            "url": "https://github.com/org/repo/pull/7", "head": "branch-ci",
+            "checks_url": "https://github.com/org/repo/commit/branch-ci/checks",
+        })
+    );
+    let merged = with_row(
+        base_cache(),
+        Some(branch_link(
+            WorktreePrState::Merged,
+            Some(WorktreeCi::Pending),
+        )),
+        None,
+    );
+    let signals = branch_transitions(&open(Some(WorktreeCi::Pending)), &merged, false);
+    assert_eq!(signal_names(&signals), vec!["pr.merged"]);
+    assert!(!signals[0].1.contains_key("path"));
+    assert_eq!(
+        signal_names(&branch_transitions(&passed, &open(None), false)),
+        vec!["pr.opened"]
+    );
+
+    // A first reading, and a prior row that only a failed lookup wrote, emit nothing.
+    let mut failed_first = pending.clone();
+    failed_first
+        .branches
+        .get_mut(REPO)
+        .unwrap()
+        .get_mut(BRANCH)
+        .unwrap()
+        .unread = true;
+    for prior in [base_cache(), failed_first, passed.clone()] {
+        assert!(branch_transitions(&prior, &passed, false).is_empty());
+    }
+}
+
+/// A branch row's CI change fires once: from the row, unless a checkout on the branch emits
+/// the same verdict at the same commit in this pass.
+#[test]
+fn a_branch_rows_ci_change_fires_once_whatever_checkout_sits_on_it() {
+    let row = |ci| with_row(base_cache(), None, Some(ci));
+    let (pending, passing) = (WorktreeCi::Pending, WorktreeCi::Passing);
+    // The case, the checkout's CI before and after, its local head, the checkouts whose
+    // reading failed, and each expected signal's source.
+    type Case = (
+        &'static str,
+        Option<WorktreeCi>,
+        WorktreeCi,
+        &'static str,
+        &'static [&'static str],
+        Sources,
+    );
+    let cases: [Case; 4] = [
+        // The root on a stale `main`: its local head's CI does not move.
+        (
+            "stale",
+            Some(passing),
+            passing,
+            "local-head",
+            &[],
+            vec![("ci.passed", false)],
+        ),
+        // The checkout reads the same change at the same commit: it alone fires.
+        (
+            "agreeing",
+            Some(pending),
+            passing,
+            REMOTE_HEAD,
+            &[],
+            vec![("ci.passed", true)],
+        ),
+        // The checkout's own change at another commit is its own signal.
+        (
+            "other commit",
+            Some(pending),
+            passing,
+            "local-head",
+            &[],
+            vec![("ci.passed", true), ("ci.passed", false)],
+        ),
+        // A checkout whose reading failed this pass emits nothing, so it shadows nothing.
+        (
+            "failed",
+            Some(pending),
+            passing,
+            REMOTE_HEAD,
+            &[ON_BRANCH],
+            vec![("ci.passed", false)],
+        ),
+    ];
+    for (case, prior_ci, next_ci, head, failed, expected) in cases {
+        let signals = branch_transitions_failing(
+            &on_branch(row(pending), None, prior_ci, head),
+            &on_branch(row(passing), None, Some(next_ci), head),
+            false,
+            failed,
+        );
+        assert_eq!(sources(&signals), expected, "{case}: {signals:?}");
+    }
+
+    // A checkout of another repository's branch of the same name is not the same change.
+    let fork = |ci| {
+        let mut cache = on_branch(row(ci), None, Some(ci), REMOTE_HEAD);
+        cache
+            .path_repos
+            .insert(ON_BRANCH.to_owned(), "gh:github.com:org/fork".to_owned());
+        cache
+    };
+    assert_eq!(
+        sources(&branch_transitions(&fork(pending), &fork(passing), false)),
+        vec![("ci.passed", true), ("ci.passed", false)]
+    );
+
+    // A row whose head commit is unknown (written by an older RimZ) proves no shadow: a double
+    // signal is the lesser fault than a missed one.
+    let unknown = |ci| {
+        let mut cache = row(ci);
+        cache
+            .branches
+            .get_mut(REPO)
+            .unwrap()
+            .get_mut(BRANCH)
+            .unwrap()
+            .ci_sha = None;
+        on_branch(cache, None, Some(ci), REMOTE_HEAD)
+    };
+    assert_eq!(
+        sources(&branch_transitions(
+            &unknown(pending),
+            &unknown(passing),
+            false
+        )),
+        vec![("ci.passed", true), ("ci.passed", false)]
+    );
+}
+
+/// The pull request variants: a checkout shadows the row's PR signal only when it emits it for
+/// the same pull request, and the row's PR CI only at the same commit.
+#[test]
+fn a_branch_rows_pr_change_fires_once_whatever_checkout_sits_on_it() {
+    let open = branch_link(WorktreePrState::Open, Some(WorktreeCi::Pending));
+    let merged = branch_link(WorktreePrState::Merged, Some(WorktreeCi::Pending));
+    let row = |link: &PrLink| with_row(base_cache(), Some(link.clone()), None);
+    let mut other = merged.clone();
+    other.number = Some(8);
+    // The case, the checkout's link before and after, the checkouts whose reading failed, and
+    // each expected signal's source.
+    type Case<'a> = (
+        &'static str,
+        Option<&'a PrLink>,
+        Option<&'a PrLink>,
+        &'static [&'static str],
+        Sources,
+    );
+    let cases: [Case; 4] = [
+        ("stale", None, None, &[], vec![("pr.merged", false)]),
+        (
+            "agreeing",
+            Some(&open),
+            Some(&merged),
+            &[],
+            vec![("pr.merged", true)],
+        ),
+        (
+            "failed",
+            Some(&open),
+            Some(&merged),
+            &[ON_BRANCH],
+            vec![("pr.merged", false)],
+        ),
+        (
+            "other pull request",
+            Some(&open),
+            Some(&other),
+            &[],
+            vec![("pr.merged", true), ("pr.merged", false)],
+        ),
+    ];
+    for (case, prior_link, next_link, failed, expected) in cases {
+        let signals = branch_transitions_failing(
+            &on_branch(row(&open), prior_link.cloned(), None, "local-head"),
+            &on_branch(row(&merged), next_link.cloned(), None, "local-head"),
+            false,
+            failed,
+        );
+        assert_eq!(sources(&signals), expected, "{case}: {signals:?}");
+    }
+
+    // The pull request's CI: shadowed at the same commit, its own signal at another.
+    let failing = branch_link(WorktreePrState::Open, Some(WorktreeCi::Failing));
+    let mut elsewhere = failing.clone();
+    elsewhere.ci_sha = Some("older-push".to_owned());
+    for (case, checkout, expected) in [
+        ("agreeing", &failing, vec![("ci.failed", true)]),
+        (
+            "other commit",
+            &elsewhere,
+            vec![("ci.failed", true), ("ci.failed", false)],
+        ),
+    ] {
+        let signals = branch_transitions(
+            &on_branch(row(&open), Some(open.clone()), None, "local-head"),
+            &on_branch(row(&failing), Some(checkout.clone()), None, "local-head"),
+            false,
+        );
+        assert_eq!(sources(&signals), expected, "{case}: {signals:?}");
+    }
+}
+
+#[test]
+fn a_trunk_branch_row_emits_ci_signals_only() {
+    let prior = with_row(
+        base_cache(),
+        Some(branch_link(
+            WorktreePrState::Open,
+            Some(WorktreeCi::Pending),
+        )),
+        None,
+    );
+    let next = with_row(
+        base_cache(),
+        Some(branch_link(
+            WorktreePrState::Merged,
+            Some(WorktreeCi::Passing),
+        )),
+        None,
+    );
+    assert_eq!(
+        signal_names(&branch_transitions(&prior, &next, false)),
+        vec!["pr.merged", "ci.passed"]
+    );
+    assert_eq!(
+        signal_names(&branch_transitions(&prior, &next, true)),
+        vec!["ci.passed"]
+    );
+}
+
+#[test]
+fn a_branch_row_reads_once_per_pass_and_signals_only_after_a_successful_reading() {
+    let mut target = super::tea_target("\0featx", "featx");
+    target.branch_only = true;
+    target.head_sha = None;
+    let sequence: [(Option<&str>, &str, &[&str]); 4] = [
+        (None, "success", &[]),
+        (Some("[]"), "pending", &[]),
+        (None, "success", &[]),
+        (Some("[]"), "success", &["ci.passed"]),
+    ];
+    let mut prior = PrStateCache::default();
+    for (pass, (open, status, expected)) in sequence.into_iter().enumerate() {
+        let mut calls = Vec::new();
+        let (next, signals) = tea_pass(&prior, vec![target.clone()], |args| {
+            calls.push(args.join(" "));
+            match args {
+                ["pr", "list", ..] => open.map(str::to_owned),
+                ["api", endpoint] if endpoint.ends_with("/status") => {
+                    Some(json!({"state": status}).to_string())
+                }
+                _ => None,
+            }
+        });
+        assert_eq!(signal_names(&signals), expected.to_vec(), "pass {pass}");
+        assert!(
+            signals
+                .iter()
+                .all(|(_, payload)| !payload.contains_key("path"))
+        );
+        let statuses = calls
+            .iter()
+            .filter(|call| call.ends_with("/status"))
+            .count();
+        assert_eq!(
+            statuses,
+            usize::from(open.is_some()),
+            "pass {pass}: {calls:?}"
+        );
+        assert_eq!(
+            next.branches[TEA_REPO]["featx"].unread,
+            pass == 0,
+            "pass {pass}: only a failed first lookup leaves the row unread"
+        );
+        prior = next;
+    }
+}
+
+/// A branch row's CI read that errors is no reading: the row keeps its last successful one
+/// (or stays unread before any), so the next good read emits only a change since then.
+#[test]
+fn a_branch_rows_failed_ci_read_is_no_reading() {
+    let mut target = super::tea_target("\0featx", "featx");
+    target.branch_only = true;
+    target.head_sha = None;
+    // Each pass's combined status (`None`: the read errors), its signals, and whether the
+    // row is still unread.
+    let sequence: [(Option<&str>, &[&str], bool); 5] = [
+        (None, &[], true),
+        (Some("success"), &[], false),
+        (None, &[], false),
+        (Some("success"), &[], false),
+        (Some("failure"), &["ci.failed"], false),
+    ];
+    let mut prior = PrStateCache::default();
+    for (pass, (status, expected, unread)) in sequence.into_iter().enumerate() {
+        let mut statuses = 0;
+        let (next, signals) = tea_pass(&prior, vec![target.clone()], |args| match args {
+            ["pr", "list", ..] => Some("[]".to_owned()),
+            ["api", endpoint] if endpoint.ends_with("/status") => {
+                statuses += 1;
+                status.map(|state| json!({"state": state, "sha": "featx-head"}).to_string())
+            }
+            _ => None,
+        });
+        assert_eq!(statuses, 1, "pass {pass}");
+        assert_eq!(signal_names(&signals), expected.to_vec(), "pass {pass}");
+        let row = &next.branches[TEA_REPO]["featx"];
+        assert_eq!(row.unread, unread, "pass {pass}: {row:?}");
+        assert_eq!(
+            row.ci_sha.as_deref(),
+            (pass > 0).then_some("featx-head"),
+            "pass {pass}: {row:?}"
+        );
+        prior = next;
+    }
+}
+
+/// A branch a signal task demands costs the same `tea` reads, endpoint by endpoint, as one a
+/// condition demands, and both demanding it cost one read.
+#[test]
+fn signal_and_condition_demand_read_a_branch_alike_through_the_poll() {
+    use crate::config::{TaskEntry, Tasks};
+
+    let root = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(root.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&[
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "base",
+    ]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "git@gitea.example.test:org/repo.git",
+    ]);
+    let state = crate::StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+    let catalog = crate::StatePaths::class_path(
+        &state.root,
+        crate::disk::paths::Class::Records,
+        "loop-instances.json",
+    );
+    std::fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    let task = |signal: Option<&str>, when: Option<&str>| TaskEntry {
+        root: root.path().to_owned(),
+        signal: signal.map(str::to_owned),
+        matches: signal.map(|_| BTreeMap::from([("branch".to_owned(), BRANCH.to_owned())])),
+        when: when.map(|when| vec![when.to_owned()]),
+        dir: when.map(|_| root.path().to_owned()),
+        repeat: signal.is_some(),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
+        ..TaskEntry::default()
+    };
+    let signal = ("signal".to_owned(), task(Some("ci.passed"), None));
+    let condition = (
+        "condition".to_owned(),
+        task(None, Some(&format!("ci[{BRANCH}]=passed"))),
+    );
+    let mut reads = Vec::new();
+    for tasks in [
+        vec![signal.clone()],
+        vec![condition.clone()],
+        vec![signal, condition],
+        Vec::new(),
+    ] {
+        std::fs::write(
+            &catalog,
+            serde_json::to_vec(&Tasks(BTreeMap::from_iter(tasks))).unwrap(),
+        )
+        .unwrap();
+        let demand = crate::harness::schedule::probe::probe_demand(&runtime, Some(root.path()));
+        let needed = vec![root.path().display().to_string()];
+        let mut producer = super::super::super::ProducerRefreshState::default();
+        let targets = build_targets(&demand, &needed, &DiffStatsCache::default(), &mut producer);
+        let groups = group_targets(targets.targets);
+        let (repo, group) = groups.first_key_value().unwrap();
+        let mut calls = BTreeMap::<String, usize>::new();
+        probe_tea_repo_group_with(repo, group, &BTreeMap::new(), |_, _, args| {
+            let (endpoint, answer) = match args {
+                ["pr", "list", ..] => ("pr list", "[]".to_owned()),
+                ["api", endpoint] if endpoint.ends_with("/status") => (
+                    "status",
+                    json!({"state": "success", "sha": "head"}).to_string(),
+                ),
+                _ => ("other", String::new()),
+            };
+            *calls.entry(endpoint.to_owned()).or_default() += 1;
+            (endpoint != "other").then_some(answer)
+        });
+        reads.push(calls);
+    }
+    assert_eq!(reads[0], reads[1], "a signal's branch costs a condition's");
+    assert_eq!(
+        reads[1], reads[2],
+        "both demanding one branch cost one read"
+    );
+    let mut without = reads[3].clone();
+    for endpoint in ["pr list", "status"] {
+        *without.entry(endpoint.to_owned()).or_default() += 1;
+    }
+    assert_eq!(
+        reads[0], without,
+        "the demanded branch adds one all-states PR list and one status read to the room's own: \
+         {reads:?}"
+    );
+}
+
 /// One pass's target branch, open list (`None` fails it), PR detail, combined
 /// status, and the signals it emits.
 type TeaPassSpec<'a> = (
