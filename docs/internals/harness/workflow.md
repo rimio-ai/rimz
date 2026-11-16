@@ -114,7 +114,7 @@ The engine rules behind the agent-only fields:
 - `crates/rimz/src/harness/workflow/spec/kinds.rs::AgentNode` gives `lifecycle` no default, so a missing or other value is a parse error. `Step::lifecycle` reads the written value, and command steps stay turn-shaped.
 - `rest-check` refuses a sleep because a rest check samples leader turn ends, and a sleep runs its own timer.
 - A step's `timeout` runs from its launch (`crates/rimz/src/harness/workflow/inspect.rs::timeout_at`).
-- `on.asked` may not target `@wait`, and validation refuses it with `only checks can wait`.
+- `on.asked` and `on.errored` may not target `@wait`, and validation refuses either with `only checks can wait`.
 - `admission.max-parallel` and `admission.stagger` lower into the step's limit, the same shape as `workflow.limit` ([Admission](#admission)).
 
 `crates/rimz/src/harness/workflow/definition.rs::Node::launch_overrides` resolves the launch settings, `engine::agent::launch` passes them in `StepLaunch.overrides`, and the CLI host maps them onto the launcher's overrides and cohort request as a fresh launch applies them (`crates/rimz/src/cli/workflow/host.rs::Host::launch`). A `--continue` restart resumes the provider session, and the host drops `account`, `system-prompt-file`, and `worktree` there. The relaunch takes the room's current login for the kind when it shares a history pool with the session's (`crates/rimz/src/harness/resume.rs::relaunch_login`), and otherwise refuses. It runs in the run's scope checkout. `account` also pins every cell's start group for capacity admission, which then skips availability routing. The engine asks the host for those groups (`AttemptHost::start_groups`), and both hosts resolve them through `harness::workflow::launch_groups`.
@@ -201,7 +201,7 @@ Validation enforces each of these, and the engine the last. Each row says why th
 
 | Rule | Why |
 | --- | --- |
-| The eight causes, `failed`, `asked`, `unknown`, and `hold` are reserved (`crates/rimz/src/harness/workflow/spec.rs::reserved`). No case or `else` uses one, and no check answers one, except a condition's or conditional sleep's `unknown`. | The engine produces them for its own routes. A script that answers a reserved word has given an answer no outcome names, which is `invalid`. |
+| The eight causes, `failed`, `asked`, `errored`, `unknown`, and `hold` are reserved (`crates/rimz/src/harness/workflow/spec.rs::reserved`). No case or `else` uses one, and no check answers one, except a condition's or conditional sleep's `unknown`. | The engine produces them for its own routes. A script that answers a reserved word has given an answer no outcome names, which is `invalid`. |
 | A `command`, `test`, `script`, `judge`, or `condition` needs a `timeout` (`Validation::requires_timeout`). An agent's is optional, and `message` and `sleep` take none. | Every node without an agent pane is bounded. A sleep has its own finite duration, a message send does not wait, and an agent's clock pauses while it cannot work. |
 | A cycle through steps needs a `max-visits` on one of them. Every route counts as an edge except a `deadline` route. | Otherwise the run can revisit its steps without end. |
 | A check-only cycle needs a `@wait` edge. A hold is not an edge and does not count. | Otherwise one advance would loop without pause. |
@@ -708,14 +708,15 @@ An unreadable required room or stagger record holds a scheduled start as `store`
 | `canceled` | `canceled` | raises `died` |
 | `budget_exceeded` | `limited`, with no known reset | raises `limited` |
 | Run `pending` or `running`, a blocking ask, and an explicit `on.asked` (turn or session, whatever else is observed) | `asked` | `on.asked` |
-| Run `pending` or `running` with an observed provider limit, error, interrupt, or budget park | Keep the attempt live | None |
+| Run `pending` or `running`, the leader's own errored turn (`Observed::errored`), and an explicit `on.errored` | `errored` | `on.errored` |
+| Run `pending` or `running` with any other observed provider limit, error, interrupt, or budget park | Keep the attempt live, holding it on that stop (`LiveAttempt::held_on`) | None |
 | No supervised run, and the launch host is dead | `canceled` | raises `died` |
 | Session with a `rest-check`, new eligible leader turn end | Hold the session aside and evaluate its first rest check | The saved verdict decides keep or close |
 | Otherwise | Keep the attempt live, and persist only a changed hold | None |
 
 The Route column is one rule, `Definition::ending_cause` under `Definition::target`. Settlement (`Transition::settle_step`) and the views both read it.
 
-The terminal-status and explicit-ask mapping is one pure function, `crates/rimz/src/harness/workflow/engine/agent.rs::observed_outcome`, which takes no lifecycle, so a session ends on a blocking ask only when the step routes `on.asked`, as a turn does. Timeout and deadline stay outside it. Live provider limits never end an attempt. A pending ask therefore beats the step timeout even with `on.asked`, but not the deadline or cancel. A completed run still ends `ended` even when an ask is still visible. `prev_attempt.asked` is set only for an `asked` ending.
+The terminal-status and explicit-ask mapping is one pure function, `crates/rimz/src/harness/workflow/engine/agent.rs::observed_outcome`, which takes no lifecycle, so a session ends on a blocking ask only when the step routes `on.asked`, and on an errored turn only when it routes `on.errored`, as a turn does. Timeout and deadline stay outside it. Live provider limits and overloads never end an attempt. The errored turn is read from the leader's own row and its supervised run's `stopped_turn` (`crates/rimz/src/harness/workflow/observe.rs::observe`), never from the merged stop, so a companion's error or an earlier limit cannot end the leader's attempt. A routed ask wins over a routed errored turn. A pending ask therefore beats the step timeout even with `on.asked`, but not the deadline or cancel. A completed run still ends `ended` even when an ask is still visible. `prev_attempt.asked` is set only for an `asked` ending, and `prev_attempt.errored` only for an `errored` one. An `errored` route parks with `ParkReason::Asked` if it ever reaches `@user`, which admission refuses on every route.
 
 A route through `then` forwards the run's routed input unchanged, with the current key: the attempt's outcome and evidence go to `prev_attempt`, never into the input. A launch refusal ends the attempt `died`, or `limited` for a budget refusal, with the refusal text as the attempt's reason. A queued asynchronous question does not end an attempt.
 

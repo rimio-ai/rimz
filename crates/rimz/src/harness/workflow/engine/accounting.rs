@@ -100,6 +100,7 @@ pub(super) fn transition(t: &Transition<'_>, latched: bool) {
                         AttemptOutcome::Died => "died",
                         AttemptOutcome::Timeout => "timeout",
                         AttemptOutcome::Asked => "asked",
+                        AttemptOutcome::Errored => "errored",
                         AttemptOutcome::Limited => "limited",
                         AttemptOutcome::Canceled => "canceled",
                     }

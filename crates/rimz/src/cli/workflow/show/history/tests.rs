@@ -289,6 +289,7 @@ fn attempts_keep_individual_rows_and_their_detail_lines() {
             children: None,
             limited: None,
             asked: None,
+            errored: None,
             reason: None,
             message: None,
         },

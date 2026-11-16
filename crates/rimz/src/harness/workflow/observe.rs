@@ -2,8 +2,9 @@
 //!
 //! The attempt host reads the facts (the leader's supervised run record, a room snapshot, an
 //! agent's open ask, a provider window's reset) and these rules project them: the ask that
-//! blocks the attempt, the provider, budget, or turn stop that holds it, and its cohort. `orphan`
-//! finds the unpublished supervised run a dead launcher left, the run its stop then reaches.
+//! blocks the attempt, the provider, budget, or turn stop that holds it, the leader's own errored
+//! turn, and its cohort. `orphan` finds the unpublished supervised run a dead launcher left, the
+//! run its stop then reaches.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -12,9 +13,7 @@ use jiff::Timestamp;
 
 use super::{Observation, Observed, StopKind, Stopped, WorkflowErr, leader_turn};
 use crate::Store;
-use crate::agents::{
-    AgentState, AskDelivery, AskKind, OpenAskDetail, TurnErrorClass, WorkflowAttemptRef,
-};
+use crate::agents::{AgentState, AskDelivery, AskKind, OpenAskDetail, WorkflowAttemptRef};
 use crate::disk::paths::StatePaths;
 use crate::ids::EventId;
 use crate::store::StoreErr;
@@ -29,7 +28,9 @@ use crate::store::workflow::{Asked, Asking, AttemptRun, ChildRef, Children, Limi
 /// until a blocking ask is found, and never for an agent reviewing a permission; its error fails
 /// the observation. `reset_at` is called for the first provider-limited agent only. A
 /// leader-turn observation of a pinned run also reads the leader's closed turn, the advance's
-/// waking frame `woken_by` excluded from the ingress that defers rest.
+/// waking frame `woken_by` excluded from the ingress that defers rest. `Observed::errored` is set
+/// only from the leader's own row, when its run recorded a failed turn end and the row shows an
+/// error that waiting will not clear, never from the merged stop.
 pub fn observe<E: From<StoreErr>>(
     store: &Store,
     run: &RunRecord,
@@ -49,7 +50,11 @@ pub fn observe<E: From<StoreErr>>(
                 StoppedTurnDisposition::Failed => StopKind::Error,
                 StoppedTurnDisposition::Canceled => StopKind::Interrupt,
             },
+            handle: None,
+            class: None,
+            text: None,
         }),
+        errored: None,
         children: Children::default(),
         cost_usd: run.cost_usd,
         turn: None,
@@ -60,6 +65,10 @@ pub fn observe<E: From<StoreErr>>(
     let stopped = descendants(&snapshot.agents, root);
     observed.children = children(snapshot, root, &stopped);
     let peers = crate::address::addressable_agents(snapshot);
+    let turn_failed = run
+        .stopped_turn
+        .as_ref()
+        .is_some_and(|stopped| stopped.disposition == StoppedTurnDisposition::Failed);
     for current in std::iter::once(root).chain(stopped) {
         if observed.ask.is_none()
             && !current.is_reviewing_permission(snapshot.now)
@@ -68,30 +77,30 @@ pub fn observe<E: From<StoreErr>>(
         {
             observed.ask = Some(asking(current, ask, &peers));
         }
-        let error = current
-            .displayed_turn_error(snapshot.now)
-            .map(|(class, error)| {
-                let limited = matches!(
-                    class,
-                    TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
-                );
-                if limited && observed.limited.is_none() {
-                    observed.limited = Some(Limited {
-                        reset_at: reset_at(current),
-                    });
-                }
-                Stopped {
-                    since: error.at,
-                    kind: if limited {
-                        StopKind::Limit
-                    } else {
-                        StopKind::Error
-                    },
-                }
+        let error = row_error(current, snapshot.now, &peers);
+        if let Some(error) = &error
+            && error.kind == StopKind::Limit
+            && observed.limited.is_none()
+        {
+            observed.limited = Some(Limited {
+                reset_at: reset_at(current),
             });
+        }
+        if std::ptr::eq(current, root)
+            && turn_failed
+            && error
+                .as_ref()
+                .and_then(|error| error.class)
+                .is_some_and(|class| !class.pauses_turn())
+        {
+            observed.errored = error.clone();
+        }
         let budget = current.budget_park.as_ref().map(|park| Stopped {
             since: park.at,
             kind: StopKind::Budget,
+            handle: Some(crate::address::agent_handle(current, &peers, true)),
+            class: None,
+            text: None,
         });
         for stopped in error.into_iter().chain(budget) {
             if observed.stopped.as_ref().is_none_or(|previous| {
@@ -107,6 +116,23 @@ pub fn observe<E: From<StoreErr>>(
         observed.turn = leader_turn(store, root, &workflow.run, &run.run_id, woken_by)?;
     }
     Ok(observed)
+}
+
+/// `agent`'s displayed turn error as a stop: a rate or spend limit stops as a limit, any other
+/// class as an error, each with its class, the provider's text, and the agent's handle.
+fn row_error(agent: &AgentState, now: Timestamp, peers: &[&AgentState]) -> Option<Stopped> {
+    let (class, error) = agent.displayed_turn_error(now)?;
+    Some(Stopped {
+        since: error.at,
+        kind: if class.is_limit() {
+            StopKind::Limit
+        } else {
+            StopKind::Error
+        },
+        handle: Some(crate::address::agent_handle(agent, peers, true)),
+        class: Some(class),
+        text: error.label.clone(),
+    })
 }
 
 /// A blocking ask as the attempt holds it: a reviewing permission counts from the end of its

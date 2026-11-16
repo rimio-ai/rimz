@@ -19,7 +19,7 @@ fn step_timeout_holds_for_limits_errors_and_budgets() {
             };
             live.attempt.as_mut().unwrap().started_at = start;
             update(&state, &live);
-            host.observed.borrow_mut().stopped = Some(Stopped { since, kind });
+            host.observed.borrow_mut().stopped = Some(Stopped::bare(since, kind));
             let held = advance_ok(&state, &record.id, &host);
             assert_eq!(held.state, RunState::Active, "{kind:?}");
             let attempt = held.attempt.as_ref().unwrap();
@@ -77,10 +77,7 @@ fn overlapping_ask_and_limit_credit_one_hold_from_the_earliest_evidence() {
                 handle: "@child".into(),
             },
         });
-        observed.stopped = Some(Stopped {
-            since,
-            kind: StopKind::Limit,
-        });
+        observed.stopped = Some(Stopped::bare(since, StopKind::Limit));
     }
     let held = advance_ok(&state, &record.id, &host);
     assert_eq!(held.attempt.unwrap().held_since, Some(since));
@@ -105,10 +102,8 @@ fn interrupt_and_silence_do_not_hold_the_step_timeout() {
         let mut live = advance_ok(&state, &record.id, &host);
         live.attempt.as_mut().unwrap().started_at = Timestamp::now() - Duration::from_secs(7200);
         update(&state, &live);
-        host.observed.borrow_mut().stopped = kind.map(|kind| Stopped {
-            since: Timestamp::now() - Duration::from_secs(5400),
-            kind,
-        });
+        host.observed.borrow_mut().stopped =
+            kind.map(|kind| Stopped::bare(Timestamp::now() - Duration::from_secs(5400), kind));
         let ended = advance_ok(&state, &record.id, &host);
         assert_eq!(ended.prev_attempt.unwrap().outcome, AttemptOutcome::Timeout);
         assert_eq!(host.stops.get(), 1);

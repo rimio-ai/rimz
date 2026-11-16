@@ -1523,6 +1523,45 @@ fn timeout_still_settles_but_a_failed_turn_waits_for_a_clean_end() {
             assert!(success(command(&room.env, &["workflow", "show", &id])).contains("$0.42"));
         }
     }
+    // With `on.errored`, the leader's own failed turn on an error no wait clears ends the step.
+    let room = Room::with_kind("on.errored='after'\n", "claude");
+    crate::common::trust_claude_project(&room.env, &room.env.project_root);
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    room.hook(
+        &id,
+        &run,
+        json!({"hook_event_name":"UserPromptSubmit", "prompt":"work"}),
+    );
+    room.hook(
+        &id,
+        &run,
+        json!({"hook_event_name":"StopFailure", "error":"billing_error",
+               "last_assistant_message":"Credit balance is too low"}),
+    );
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let value = settled(&room.env, &id, "done");
+    let previous = &value["record"]["prev_attempt"];
+    assert_eq!(previous["outcome"], "errored", "{value:#}");
+    assert_eq!(previous["routed_by"], "go", "{value:#}");
+    assert_eq!(previous["errored"]["class"], "not_entitled", "{value:#}");
+    let attempt = events(&value, "attempt");
+    assert_eq!(attempt.len(), 1, "{attempt:#?}");
+    assert_eq!(attempt[0]["outcome"], "errored", "{attempt:#?}");
+    assert_eq!(attempt[0]["errored"], previous["errored"], "{attempt:#?}");
+    assert!(
+        events(&value, "route")
+            .iter()
+            .any(|route| route["outcome"] == "errored"
+                && route["input"]["outcome"] == "errored"
+                && route["input"]["errored"] == previous["errored"]
+                && route["input"]["key"] == 7),
+        "{value:#}"
+    );
 }
 
 #[test]

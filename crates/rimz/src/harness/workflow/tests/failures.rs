@@ -246,6 +246,19 @@ fn unknown_failure_fields_and_reserved_outcomes_refuse() {
                 .replace("then='gate'", "then='pick'"),
             "script.pick.on.limited",
         ),
+        (
+            format!("{head}{agent}[script.pick]\ntimeout='365d'\nrun='checks/pick.py'\non={{errored='@done'}}\n")
+                .replace("then='gate'", "then='pick'"),
+            "script.pick.on.errored",
+        ),
+        (
+            format!("{head}{agent}on.errored='@wait'\n"),
+            "agent.build.on.errored",
+        ),
+        (
+            format!("{head}{agent}[command.lint]\nrun=['true']\nthen='@done'\non.errored='@failed'\n"),
+            "command.lint.on.errored",
+        ),
     ];
     for (text, path) in cases {
         let (_home, dir) = super::fixture();
@@ -257,7 +270,7 @@ fn unknown_failure_fields_and_reserved_outcomes_refuse() {
             .map(|issue| issue.path.as_str())
             .collect();
         assert_eq!(paths, [path], "{text}\n{:?}", report.errors);
-        if ["on-break", "on.deadline", "on.cap"]
+        if ["on-break", "on.deadline", "on.cap", "lint.on.errored"]
             .iter()
             .any(|field| path.ends_with(field))
         {
@@ -320,7 +333,7 @@ fn a_visits_or_capacity_route_that_reaches_its_node_again_refuses() {
 fn every_kind_table_names_exactly_the_causes_its_kind_raises() {
     let schema = serde_json::to_value(schema()).unwrap();
     for (kind, extra) in [
-        ("AgentEdges", &["asked"][..]),
+        ("AgentEdges", &["asked", "errored"][..]),
         ("CommandEdges", &[][..]),
         ("MessageEdges", &[][..]),
         ("TestEdges", &["pass", "fail"][..]),

@@ -272,7 +272,7 @@ fn deadlines_require_a_sealed_or_granted_deadline_not_just_a_route() {
 fn edge_order_follows_cases_then_else_then_explicit_then_engine_triggers() {
     let spec = spec(
         "cases=[{when=['pr=merged'],outcome='zeta'},{when=['ci=passed'],outcome='alpha'},{when=['ci=failed'],outcome='zeta'}]\nelse='pending'\non={alpha='@done',zeta='work',pending='@wait',unknown='@wait'}\ntimeout='1d'",
-        "agent='claude'\nlifecycle='turn'\nthen='gate'\non={asked='gate',visits='@failed',capacity='@failed'}",
+        "agent='claude'\nlifecycle='turn'\nthen='gate'\non={errored='@failed',asked='gate',visits='@failed',capacity='@failed'}",
     );
     let outcomes = |node| {
         spec.edges(node)
@@ -287,7 +287,8 @@ fn edge_order_follows_cases_then_else_then_explicit_then_engine_triggers() {
     assert_eq!(
         outcomes("work"),
         [
-            "then", "asked", "died", "timeout", "limited", "visits", "capacity", "deadline"
+            "then", "asked", "errored", "died", "timeout", "limited", "visits", "capacity",
+            "deadline"
         ]
     );
     let spec = self::spec(

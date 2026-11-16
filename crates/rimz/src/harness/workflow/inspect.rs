@@ -404,6 +404,7 @@ fn attempt_superseded(
             | AttemptOutcome::Canceled,
         ) => Cause::parse(outcome).is_some(),
         (JournalEvent::Route { outcome, .. }, AttemptOutcome::Asked) => outcome == "asked",
+        (JournalEvent::Route { outcome, .. }, AttemptOutcome::Errored) => outcome == "errored",
         (
             JournalEvent::TurnEnd {
                 action: TurnEndAction::Closed,

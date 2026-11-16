@@ -388,10 +388,13 @@ pub(super) fn validate_spec(
                 }
             }
         }
-        if let Some(target) = &step.on.asked {
-            report.target(spec, &format!("{path}.on.asked"), target);
+        for (outcome, target) in [("asked", &step.on.asked), ("errored", &step.on.errored)] {
+            let Some(target) = target else {
+                continue;
+            };
+            report.target(spec, &format!("{path}.on.{outcome}"), target);
             if target == "@wait" {
-                report.error(&format!("{path}.on.asked"), "only checks can wait");
+                report.error(&format!("{path}.on.{outcome}"), "only checks can wait");
             }
         }
         let failures = step.on.failed.iter().map(|target| ("failed", target));

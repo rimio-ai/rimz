@@ -161,6 +161,7 @@ A definition is `workflow.toml`: one `[workflow]` table and any number of nodes,
 | `notes` | `false` omits the notes instruction. Default true. |
 | `subscribe` | Signals forwarded to a session's leader. A `turn` step refuses it. |
 | `on.asked` | Where a blocking question goes (either lifecycle). |
+| `on.errored` | Where the leader's own errored turn goes (either lifecycle): a turn end the provider failed, with an error waiting will not clear ([below](#how-an-attempt-ends)). |
 | `on.died`, `on.timeout`, `on.limited`, `on.visits`, `on.capacity`, `on.deadline`, `on.failed` | Failure routes. |
 | `admission` | `window`, `occupancy`, `max-parallel`, `stagger`, `throttle`, `give-up` ([admission](#admission)). |
 | `account`, `mode`, `effort`, `fast`, `budget`, `system-prompt-file`, `worktree` | Launch settings ([launch settings](#launch-settings)). |
@@ -275,7 +276,7 @@ A restart that resumes a session ignores `account`, `system-prompt-file`, and `w
 
 #### How an attempt ends
 
-Only a clean end follows `then`. Every other ending is a [failure](#failures).
+Only a clean end follows `then`. A blocking ask with `on.asked` set, and an errored turn with `on.errored` set, follow their own edge. Every other ending is a [failure](#failures).
 
 | Lifecycle | Clean end | `died` |
 | --- | --- | --- |
@@ -284,9 +285,9 @@ Only a clean end follows `then`. Every other ending is a [failure](#failures).
 
 A session's exit is at rest when the leader had ended a turn and has no turn open, no blocking ask, no errored turn end, no background work or pending `rimz wait`, and no budget park on its card. A message still waiting for the leader, or a child's result it has not collected, does not count against an exit at rest. A session never reads `then` at a turn end. A molt of the leader keeps the step: the replaced session's exit ends nothing, and the exit of the new session decides.
 
-On both lifecycles, failed or interrupted turns, live provider limits, and budget parks keep the agent open, and a later clean turn completes the attempt. Some providers report an interrupt as a clean end, and RimZ follows that report. A Claude Console API usage cap (`You have reached your specified API usage limits`) leaves the leader's card reading `failed` and keeps the step open. A budget refusal before launch ends the attempt as `limited`. A companion's question or limit does not end the leader's attempt. A peer or team launched later by a cell keeps running until stopped.
+On both lifecycles, failed or interrupted turns, live provider limits, and budget parks keep the agent open, and a later clean turn completes the attempt. Some providers report an interrupt as a clean end, and RimZ follows that report. The one exception is an errored turn on a step that sets `on.errored`: the leader's own turn ended failed, and its card shows a provider error, an unknown error, or a lapsed plan. The attempt then ends `errored` and routes `on.errored` with the input `{"outcome": "errored", "reason": <the error>, "errored": {"text", "class", "handle"}}` and the run's key. A blocking ask wins when the step routes both. A rate or spend limit or an overload never ends the attempt, nor does a companion's error. A Claude Console API usage cap (`You have reached your specified API usage limits`) leaves the leader's card reading `failed`, ends the attempt through `on.errored` when the step sets it, and otherwise keeps the step open. A budget refusal before launch ends the attempt as `limited`. A companion's question or limit does not end the leader's attempt. A peer or team launched later by a cell keeps running until stopped.
 
-`workflow list` reads a live session as `with you in @<handle>`, and `show` as `<step> is with you`, or `<step> is asking you` while a blocking ask is open.
+`workflow list` reads a live session as `with you in @<handle>`, and `show` as `<step> is with you`, or `<step> is asking you` while a blocking ask is open. A step of either lifecycle held on a stop reads `<handle> held <age>: <stop>` in `list` and `<step> is held <age> · <handle>: <stop>` in `show`, where the stop is `provider error`, `unknown error`, or `plan lapsed` (an errored turn, with its text when known), `rate limit`, `spend limit`, `provider overloaded`, or `budget park`. The leader's own errored turn names the hold over a companion's stop.
 
 #### Timeouts and asks
 
@@ -564,7 +565,7 @@ A script prints, and a judge gives as its final message, exactly one JSON object
 
 Any other field travels too: the whole object becomes the next node's `input`. `null` is not a valid value for `reason`, `recheck_at`, or `key`, so an answer cannot clear the key. A script must also exit 0: a nonzero exit fails it with `died`, and an answer it cannot use fails it with `invalid`.
 
-Reserved outcome words: the eight causes (`died`, `invalid`, `timeout`, `limited`, `undelivered`, `visits`, `capacity`, `deadline`), `failed`, `asked`, `unknown`, and `hold`. A case or `else` that names one refuses, and a script or judge that answers one fails with `invalid`. In an `on` table they are the engine's routes. A check's route refuses when the check cannot answer it (`dead route: this check cannot answer that outcome`), and `on.hold` is always a dead route.
+Reserved outcome words: the eight causes (`died`, `invalid`, `timeout`, `limited`, `undelivered`, `visits`, `capacity`, `deadline`), `failed`, `asked`, `errored`, `unknown`, and `hold`. A case or `else` that names one refuses, and a script or judge that answers one fails with `invalid`. In an `on` table they are the engine's routes. A check's route refuses when the check cannot answer it (`dead route: this check cannot answer that outcome`), and `on.hold` is always a dead route.
 
 A step's `limited` failure routed to a script names `cause: "limited"` in its input, and `context.json` carries `prev_attempt.limited.reset_at` (also `input.detail.reset_at` when known), so the script can answer a waiting outcome with that time as `recheck_at`. The [sample `pr.py`](../../../crates/rimz/tests/fixtures/workflows/babysit-pr/checks/pr.py) does this.
 
@@ -610,7 +611,7 @@ RimZ rewrites `$RIMZ_WORKFLOW_DIR/context.json` before every check and every att
 
 | Field | Meaning |
 | --- | --- |
-| `outcome` | `ended`, `died`, `timeout`, `asked`, `limited`, or `canceled`. `asked` occurs only with `on.asked` set. A command step ends `ended`, `died`, `timeout`, or `canceled`. |
+| `outcome` | `ended`, `died`, `timeout`, `asked`, `errored`, `limited`, or `canceled`. `asked` occurs only with `on.asked` set, and `errored` only with `on.errored` set. A command step ends `ended`, `died`, `timeout`, or `canceled`. |
 | `routed_by` | The outcome that admitted the attempt, or the cause when a failure route did. Null for a start step. |
 | `key`, `visit` | The attempt's key, and the visit count stamped when its launch or push-back was admitted. |
 | `started_at`, `ended_at` | The attempt's start and end times. |
@@ -618,6 +619,7 @@ RimZ rewrites `$RIMZ_WORKFLOW_DIR/context.json` before every check and every att
 | `head_start`, `head_end` | The commit before and after. A command's `head_end` is null when another process, rather than the host that reaped the child, settles the attempt. |
 | `cost_usd` | The leader's known cost. Null for a command step. |
 | `asked` | The question it asked, when it ended on `on.asked`. |
+| `errored` | `{text, class, handle}` of the leader's errored turn, when it ended on `on.errored`: the error's text, its class (`failed`, `unknown`, or `not_entitled`), and the leader's handle. |
 | `limited.reset_at` | The provider's reset time, when known. |
 | `code`, `log` | A command step's exit code (null after a signal or an unobserved exit) and its output file when one exists. Null for agent attempts. |
 
@@ -644,7 +646,7 @@ An edge's `source` is `explicit`, `on.failed` (the node's catch-all), `workflow.
 | `never: no max-visits` | The step sets no `max-visits`. |
 | `only with a deadline` | The definition sets no `[workflow].deadline`: the edge fires on a run started with `run --deadline` or granted one by `resume --extend deadline=`. |
 
-Rows follow the graph from `start`, with a returning step immediately below the earlier check that sends it. Unreachable nodes come last in name order. A check's edges follow case order without repeats, then `else`, then other explicit outcomes in name order. A step's edges start with `then`, then `asked`. One edge per cause the node's kind raises follows, in the order of the [cause table](#failures), each with the target its chain resolves to. A session's `rest-check` edges come last, in list order. Command rows list `then`, `died`, `timeout`, `visits`, and `deadline`. Message rows list `then`, `undelivered`, `visits`, and `deadline`. An agent step's `capacity` edge always fires: a start wider than a machine cap raises `capacity` on any run, a `--skip-capacity` run included. A sleep's edges are explicit `then → <then>`, default `sleeping → @wait`, default `unknown → @wait` only with `when`, and `deadline`, in that order, with no timeout edge.
+Rows follow the graph from `start`, with a returning step immediately below the earlier check that sends it. Unreachable nodes come last in name order. A check's edges follow case order without repeats, then `else`, then other explicit outcomes in name order. A step's edges start with `then`, then `asked`, then `errored`. One edge per cause the node's kind raises follows, in the order of the [cause table](#failures), each with the target its chain resolves to. A session's `rest-check` edges come last, in list order. Command rows list `then`, `died`, `timeout`, `visits`, and `deadline`. Message rows list `then`, `undelivered`, `visits`, and `deadline`. An agent step's `capacity` edge always fires: a start wider than a machine cap raises `capacity` on any run, a `--skip-capacity` run included. A sleep's edges are explicit `then → <then>`, default `sleeping → @wait`, default `unknown → @wait` only with `when`, and `deadline`, in that order, with no timeout edge.
 
 Below the table, each error prints as `<workflow>: <path>: <message>`, then each warning as `warning: <workflow>: <path>: <reason>`, all on stdout. Any error exits 1 and adds `error: N workflow error(s)` on stderr. Warnings alone exit 0. Marks explain edges: they add no warnings and relax no admission rule.
 
@@ -718,7 +720,7 @@ The two-positional form takes a workflow name only. A run address or run id is a
 
 `rimz workflow list [--json]` prints every unfinished run across rooms, without column headers. With none, it prints `no active or parked runs; start one with rimz workflow run <name>`, and `--json` prints `[]`.
 
-NEEDS YOU comes first: parked runs, active runs with a blocking ask, and capacity holds needing a fix (`check_failed`, `disk`, `store`), longest waiting first, with full addresses and a `workflow show` hint for the first run. The other runs group by workflow name, each heading reading `<workflow> · N active[ · M held]`. Self-clearing capacity holds sort last in their group, and each part sorts by address. Several rooms get headings (the home-relative project root), the caller's room first, and hints for other rooms carry `--root`.
+NEEDS YOU comes first: parked runs, active runs with a blocking ask, active runs held on an error that waiting will not clear (a provider error, an unknown error, a lapsed plan, or a failed turn with no error on the card), and capacity holds needing a fix (`check_failed`, `disk`, `store`), longest waiting first, with full addresses and a `workflow show` hint for the first run. The other runs group by workflow name, each heading reading `<workflow> · N active[ · M held]`. Self-clearing capacity holds sort last in their group, and each part sorts by address. Several rooms get headings (the home-relative project root), the caller's room first, and hints for other rooms carry `--root`.
 
 | Row | Form |
 | --- | --- |
@@ -733,13 +735,14 @@ NEEDS YOU comes first: parked runs, active runs with a blocking ask, and capacit
 | `⢿` | A with-you session or active work. |
 | `☾` | Another active wait. |
 
-Glyphs come from the configured glyph set ([theme roles](../../guide/theme.md#glyphs)). A group names `started by <origin>` when all its runs share the loop task and manual-fire flag. Otherwise each row adds ` · by <origin>`. An origin is `hand` or `loop task <task>[, fired by hand]`. Age starts at the park, at the opening of an ask, at the first capacity hold, or at node entry otherwise. Detail truncates before age at narrow terminal widths. Each row whose definition loads is followed by the horizontal rail ([the rail](#the-horizontal-rail)).
+Glyphs come from the configured glyph set ([theme roles](../../guide/theme.md#glyphs)). A group names `started by <origin>` when all its runs share the loop task and manual-fire flag. Otherwise each row adds ` · by <origin>`. An origin is `hand` or `loop task <task>[, fired by hand]`. Age starts at the park, at the opening of an ask, at the start of a step's hold, at the first capacity hold, or at node entry otherwise. Detail truncates before age at narrow terminal widths. Each row whose definition loads is followed by the horizontal rail ([the rail](#the-horizontal-rail)).
 
 Detail is one of:
 
 - `asking you: <handle> (<kind>): <one-line text>` for a blocking ask.
 - `with you in @<handle>` for a live session, with ` · checking <check>` while held at a rest check and `: <wait phrase>` at that check, or ` · <check>: <wait phrase>` after it when waiting. The handle matches the agent card, without the channel the row already names, and falls back to the recorded pet name.
 - `waits on its definition: <first error>` for a run whose definition cannot be read, does not parse, or is refused by validation ([live definitions](#live-definitions)). It comes ahead of a capacity hold. JSON keeps its usual `detail`.
+- `<handle> held <age>: <stop>` for a step held on a stop ([above](#how-an-attempt-ends)), with a session's check and wait suffix.
 - `held · <reason>` for a capacity hold.
 - Otherwise the [wait phrase](#the-waiting-line), `running` (with ` · visit <n> of <max>` when capped), or `checking`.
 
@@ -768,6 +771,7 @@ The headline:
 | --- | --- |
 | Running step | The step, its visit limit, and the agent's full card handle (channel included, recorded pet name as fallback). |
 | Session | `<step> is with you`, plus the same check and wait suffix as `list`, not repeated below. |
+| Held | `<step> is held <age> · <handle>: <stop>` for a step of either lifecycle held on an error, a limit, an overload, or a budget park. The headline takes the waiting tone when the hold needs you. |
 | Asking | `<step> is asking you · <handle> (<kind>)`, with an instruction to answer in the pane or with `rimz answer`. The step's timeout pauses while asking. |
 | Waiting | The wait phrase with its node, elapsed time, recheck, and the next bound's time and target. A hold names its outcome, duration, and the next bound. |
 | Judge waiting | Adds `the judge waits for its window or a limit's reset · the judge timeout is paused`. |

@@ -14,7 +14,7 @@ struct Row<'a> {
     address: String,
     glyph: String,
     state: RunState,
-    asking: bool,
+    calls_you: bool,
     detail: String,
     age: String,
     since: Timestamp,
@@ -23,7 +23,7 @@ struct Row<'a> {
 impl Row<'_> {
     fn needs_you(&self) -> bool {
         self.state == RunState::Parked
-            || self.asking
+            || self.calls_you
             || capacity_wait(self.record)
                 .is_some_and(|wait| wait.hold.is_some_and(rimz::ids::HoldKind::needs_fix))
     }
@@ -93,11 +93,11 @@ pub(super) fn render(
         let view = views
             .entry(&record.project_root)
             .or_insert_with(|| RoomView::new(&record.project_root));
-        let asking = workflow_view::asking(record).is_some();
-        let capacity = capacity_wait(record).filter(|_| !asking);
+        let calls_you = workflow_view::calls_you(record);
+        let capacity = capacity_wait(record).filter(|_| !calls_you);
         let role = workflow_view::glyph_role(record);
         let since = capacity.map_or_else(|| workflow_view::since(record), |wait| wait.first);
-        let agent = (workflow_view::with_you(record) && !asking)
+        let agent = (workflow_view::with_you(record) && !calls_you)
             .then(|| view.agent(&run.state, record, false))
             .flatten();
         let refusal =
@@ -125,7 +125,7 @@ pub(super) fn render(
                 address: record.address().to_string(),
                 glyph: glyph(role),
                 state: record.state,
-                asking,
+                calls_you,
                 detail,
                 age: render::age_short(since, now),
                 since,
@@ -349,7 +349,7 @@ mod tests {
             }
             .into(),
             state: record.state,
-            asking: false,
+            calls_you: false,
             detail: if capacity_wait(record).is_some() {
                 "held · queued"
             } else {
@@ -581,7 +581,7 @@ mod tests {
                 workflow_view::glyph_role(&record),
             ),
             state: RunState::Parked,
-            asking: false,
+            calls_you: false,
             detail: "user: This decision needs a long explanation".repeat(3),
             age: "47m".into(),
             since: Timestamp::UNIX_EPOCH,

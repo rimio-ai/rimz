@@ -3,7 +3,7 @@
 use jiff::Timestamp;
 use rimz::config::GlyphRole;
 use rimz::harness::workflow::{Definition, Target};
-use rimz::store::workflow::{Asking, ParkReason, RunRecord, RunState};
+use rimz::store::workflow::{Asking, Hold, ParkReason, RunRecord, RunState};
 
 use super::render;
 
@@ -115,13 +115,45 @@ pub(super) fn asking(record: &RunRecord) -> Option<&Asking> {
     record.session_attempt()?.asking.as_ref()
 }
 
+/// The stop the run's live agent attempt is held on: the current attempt's, else a session's
+/// held under its rest check.
+pub(super) fn held(record: &RunRecord) -> Option<&Hold> {
+    if record.state != RunState::Active {
+        return None;
+    }
+    record
+        .attempt
+        .iter()
+        .chain(record.held.as_ref().map(|held| &held.attempt))
+        .find_map(|attempt| attempt.held_on.as_ref())
+}
+
+/// Whether the active run waits on the user: an agent asking, or held on an error no wait
+/// recovers from.
+pub(super) fn calls_you(record: &RunRecord) -> bool {
+    asking(record).is_some() || held(record).is_some_and(Hold::needs_you)
+}
+
 pub(super) fn since(record: &RunRecord) -> Timestamp {
     if record.state == RunState::Parked
         && let Some(park) = &record.park
     {
         return park.at;
     }
-    asking(record).map_or(record.entered_at, |asking| asking.since)
+    if let Some(asking) = asking(record) {
+        return asking.since;
+    }
+    held(record).map_or(record.entered_at, |hold| hold.since)
+}
+
+/// `<handle> held <age>: <what holds it>`, the hold as one phrase.
+pub(super) fn hold_phrase(hold: &Hold, now: Timestamp) -> String {
+    format!(
+        "{} held {}: {}",
+        hold.handle.as_deref().unwrap_or("agent"),
+        render::age_short(hold.since, now),
+        render::one_line(&hold.label()),
+    )
 }
 
 pub(super) fn wait(
@@ -243,6 +275,14 @@ pub(super) fn detail(
             render::one_line(&ask.text),
         );
     }
+    if let Some(hold) = held(record) {
+        let suffix = if with_you(record) {
+            with_you_suffix(record, spec, now)
+        } else {
+            String::new()
+        };
+        return format!("{}{suffix}", hold_phrase(hold, now));
+    }
     if with_you(record) {
         let agent = agent.map_or_else(String::new, |agent| format!(" in {agent}"));
         return format!("with you{agent}{}", with_you_suffix(record, spec, now));
@@ -291,7 +331,7 @@ pub(super) fn glyph_role(record: &RunRecord) -> GlyphRole {
         RunState::Parked => return GlyphRole::WorkflowHeld,
         RunState::Active => {}
     }
-    if asking(record).is_some() {
+    if calls_you(record) {
         return GlyphRole::StatusWaiting;
     }
     if let Some(wait) = record
@@ -446,6 +486,66 @@ mod tests {
             detail(&record, None, Timestamp::UNIX_EPOCH, agent)
         });
         assert_eq!(actual, cases.map(|(_, _, _, expected)| expected.to_owned()));
+    }
+
+    #[test]
+    fn a_hold_names_its_stop_and_calls_you_only_when_no_wait_clears_it() {
+        let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(2);
+        let error = json!({"stop":"error", "class":"failed", "text":"API Error: 500"});
+        let cases = [
+            (
+                false,
+                error.clone(),
+                "@fox held 2m: errored turn (provider error): API Error: 500",
+                true,
+            ),
+            (
+                false,
+                json!({"stop":"error"}),
+                "@fox held 2m: errored turn",
+                true,
+            ),
+            (
+                false,
+                json!({"stop":"error", "class":"paused_rate_limit"}),
+                "@fox held 2m: rate limit",
+                false,
+            ),
+            (
+                false,
+                json!({"stop":"budget"}),
+                "@fox held 2m: budget park",
+                false,
+            ),
+            (
+                true,
+                error,
+                "@fox held 2m: errored turn (provider error): API Error: 500 · checking ruled",
+                true,
+            ),
+        ];
+        let actual = cases.clone().map(|(held, stop, _, _)| {
+            let mut record = record();
+            session(&mut record, held);
+            let mut hold = json!({"since":Timestamp::UNIX_EPOCH, "handle":"@fox"});
+            hold.as_object_mut()
+                .unwrap()
+                .extend(stop.as_object().unwrap().clone());
+            let attempt = match record.held.as_mut() {
+                Some(held) => &mut held.attempt,
+                None => record.attempt.as_mut().unwrap(),
+            };
+            attempt.held_on = Some(serde_json::from_value(hold).unwrap());
+            (
+                detail(&record, None, now, Some("@yagni")),
+                calls_you(&record),
+                since(&record),
+            )
+        });
+        assert_eq!(
+            actual,
+            cases.map(|(_, _, detail, calls)| (detail.to_owned(), calls, Timestamp::UNIX_EPOCH))
+        );
     }
 
     #[test]
