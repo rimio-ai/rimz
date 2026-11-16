@@ -15,7 +15,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The run record's own shape version, raised when a binary on either side of a change would
 /// misread the other's record; `load` refuses a record of any other version before decoding it.
 /// A change to what a definition means raises nothing: every run reads its definition as it is.
-pub const VERSION: u32 = 14;
+pub const VERSION: u32 = 15;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
