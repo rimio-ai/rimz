@@ -4,6 +4,10 @@ use crate::sidebar_pane::app::fixtures::{serve_config, workspace};
 use crate::sidebar_pane::app::plane::DataPlane;
 use std::cell::Cell;
 
+/// How long a test waits on a thread it drives. It stands in for the product's paint wait in
+/// tests that hold the clock still, so a host that stalls the test slows it instead of failing it.
+const SETTLE: Duration = Duration::from_secs(10);
+
 #[test]
 fn local_focus_dispatch_never_waits_for_a_peer_paint() {
     let rig = TraceRig::new();
@@ -337,17 +341,14 @@ fn stale_release_and_unwinding_cannot_leave_or_clear_the_wrong_lease() {
         .take_push()
         .expect("a full ordinary inbox cannot lose the priority slot")
         .finish(PushVerdict::NotDestination, Instant::now());
-    let report = ack.recv_timeout(PAINT_WAIT).expect("priority push receipt");
+    let report = ack
+        .try_recv()
+        .expect("push receipt must not wait for the lease deadline");
     assert_eq!(report.verdict, Some(PushVerdict::NotDestination));
-    assert!(
-        report.finished_ms.unwrap() < duration_millis(PAINT_WAIT),
-        "push receipt must not wait for the lease deadline"
-    );
 }
 
 #[test]
 fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
-    const SETTLE: Duration = Duration::from_secs(10);
     for (outcome, stale) in ["painted", "released", "capped", "superseded"]
         .into_iter()
         .flat_map(|outcome| [false, true].map(|stale| (outcome, stale)))
@@ -409,6 +410,7 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
         let session = anchor.session_name.clone();
         let (painted_tx, painted_rx) = std::sync::mpsc::channel();
         let (dispatched_tx, dispatched_rx) = std::sync::mpsc::channel();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
         let peer_runtime = runtime.clone();
         let started = Instant::now();
         let peers = peers.arm(anchor.pane_id.clone(), started);
@@ -444,13 +446,19 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
                     Instant::now(),
                 ),
                 "capped" => {
+                    held_tx.send(()).unwrap();
                     dispatched_rx.recv_timeout(SETTLE).unwrap();
                     drop(push);
                 }
                 _ => drop(push),
             }
         });
-        peers.dispatch(anchor, started, || {
+        // The clock moves only when the capped destination holds its push past the paint
+        // wait; every other case waits as long as the destination thread takes, so a stalled
+        // host cannot cap it first.
+        let capped = outcome == "capped";
+        let clock = Cell::new(started);
+        let dispatch = || {
             assert!(
                 painted_rx.try_recv().is_ok(),
                 "dispatch must follow destination paint, release, or cap"
@@ -460,8 +468,8 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
                 Err(std::sync::mpsc::TryRecvError::Empty),
                 "the source must not receive its own push"
             );
-            if outcome == "capped" {
-                assert!(started.elapsed() >= Duration::from_millis(500));
+            if capped {
+                assert!(clock.get() >= started + Duration::from_millis(500));
                 dispatched_tx.send(()).unwrap();
             }
             if outcome == "superseded" {
@@ -479,7 +487,21 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
                     "the post-wait nonce check must still prevent dispatch"
                 );
             }
-        });
+        };
+        peers.dispatch_with(
+            anchor,
+            started,
+            dispatch,
+            || clock.get(),
+            |rx, timeout| {
+                if capped && clock.get() < started + PAINT_WAIT {
+                    held_rx.recv_timeout(SETTLE).unwrap();
+                    clock.set(clock.get() + timeout);
+                    return Err(RecvTimeoutError::Timeout);
+                }
+                rx.recv_timeout(SETTLE)
+            },
+        );
         destination.join().unwrap();
     }
 }
@@ -765,7 +787,7 @@ fn dispatch_records_click_lead_and_the_landing_paint_instead_of_receipt_time() {
                         assert_eq!(rx.try_recv().unwrap(), Wakeup::Tick);
                         let mut push = rig.plane.take_focus_push(&destination.instance_id).unwrap();
                         push.peer.received_ms = Some(30);
-                        push.finish_painted(verdict, painted, Instant::now());
+                        push.finish_painted(verdict, painted, sent);
                         ack.try_recv().map_err(|_| RecvTimeoutError::Disconnected)
                     },
                 );
@@ -811,7 +833,7 @@ fn dispatch_records_empty_and_failed_deliveries_only_after_the_jump() {
                         assert!(rig.records().is_empty(), "recording must follow the jump");
                         17
                     },
-                    Instant::now,
+                    || clicked,
                     |ack, timeout| {
                         drop(target.take_push());
                         ack.recv_timeout(timeout)
@@ -868,17 +890,23 @@ fn dispatch_records_a_successful_paint_after_the_jump() {
     let target = rig
         .plane
         .focus_peers(destination.instance_id.clone(), DiagSink::disabled());
+    let clicked = Instant::now();
     let destination_thread = std::thread::spawn(move || {
         assert_eq!(rx.recv().unwrap(), Wakeup::Tick);
         let mut push = target.take_push().unwrap();
-        push.peer.received_ms = Some(push.elapsed_ms(Instant::now()));
-        push.finish(PushVerdict::Painted, Instant::now());
+        push.peer.received_ms = Some(push.elapsed_ms(clicked));
+        push.finish(PushVerdict::Painted, clicked);
     });
     let anchor = rig.anchor();
-    let clicked = Instant::now();
     rig.peers
         .arm(anchor.pane_id.clone(), clicked)
-        .dispatch(anchor, clicked, || assert!(rig.records().is_empty()));
+        .dispatch_with(
+            anchor,
+            clicked,
+            || assert!(rig.records().is_empty()),
+            || clicked,
+            |rx, _| rx.recv_timeout(SETTLE),
+        );
     destination_thread.join().unwrap();
     let rows = rig.records();
     assert_eq!(rows.len(), 1, "successful handshakes are recorded too");
@@ -897,16 +925,22 @@ fn dispatch_records_a_displaced_paint_after_the_jump() {
     let target = rig
         .plane
         .focus_peers(destination.instance_id.clone(), DiagSink::disabled());
+    let clicked = Instant::now();
     let destination_thread = std::thread::spawn(move || {
         assert_eq!(rx.recv().unwrap(), Wakeup::Tick);
         let push = target.take_push().unwrap();
-        push.finish(PushVerdict::Displaced, Instant::now());
+        push.finish(PushVerdict::Displaced, clicked);
     });
     let anchor = rig.anchor();
-    let clicked = Instant::now();
     rig.peers
         .arm(anchor.pane_id.clone(), clicked)
-        .dispatch(anchor, clicked, || assert!(rig.records().is_empty()));
+        .dispatch_with(
+            anchor,
+            clicked,
+            || assert!(rig.records().is_empty()),
+            || clicked,
+            |rx, _| rx.recv_timeout(SETTLE),
+        );
     destination_thread.join().unwrap();
     let rows = rig.records();
     assert_eq!(rows.len(), 1);
@@ -953,26 +987,36 @@ fn dispatch_collects_reports_sent_after_the_budget_but_before_the_horizon() {
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let _subscription = rig.plane.subscribe(&destination, tx);
     rig.place_target(&[&destination.own_pane]);
-    let (go_tx, go_rx) = channel();
     let target = rig
         .plane
         .focus_peers(destination.instance_id.clone(), DiagSink::disabled());
-    let destination_thread = std::thread::spawn(move || {
-        assert_eq!(rx.recv().unwrap(), Wakeup::Tick);
-        let mut push = target.take_push().unwrap();
-        push.peer.received_ms = Some(push.elapsed_ms(Instant::now()));
-        go_rx.recv().unwrap();
-        push.finish(PushVerdict::Expired, Instant::now());
-    });
     let anchor = rig.anchor();
     let clicked = Instant::now();
+    let clock = Cell::new(clicked);
+    let taken = Cell::new(None);
     rig.peers
         .arm(anchor.pane_id.clone(), clicked)
-        .dispatch(anchor, clicked, || {
-            assert!(rig.records().is_empty());
-            go_tx.send(()).unwrap();
-        });
-    destination_thread.join().unwrap();
+        .dispatch_with(
+            anchor,
+            clicked,
+            || {
+                assert!(rig.records().is_empty());
+                let push: FocusPush = taken.take().expect("the destination took the push");
+                push.finish(PushVerdict::Expired, clock.get());
+            },
+            || clock.get(),
+            |ack, timeout| {
+                // The destination takes the push and holds it past the paint wait.
+                if let Some(mut push) = target.take_push() {
+                    assert_eq!(rx.try_recv().unwrap(), Wakeup::Tick);
+                    push.peer.received_ms = Some(push.elapsed_ms(clock.get()));
+                    taken.set(Some(push));
+                    clock.set(clock.get() + timeout);
+                    return Err(RecvTimeoutError::Timeout);
+                }
+                ack.try_recv().map_err(|_| RecvTimeoutError::Disconnected)
+            },
+        );
     let rows = rig.records();
     assert_eq!(rows.len(), 1, "a source must write the collected report");
     let event = &rows[0]["event"];
@@ -995,38 +1039,46 @@ fn dispatch_keeps_timely_buffered_reports_after_a_slow_jump() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let _subscription = rig.plane.subscribe(&destination, tx);
         rig.place_target(&[&destination.own_pane]);
-        let (go_tx, go_rx) = channel();
-        let (done_tx, done_rx) = channel();
         let target = rig
             .plane
             .focus_peers(destination.instance_id.clone(), DiagSink::disabled());
-        let destination_thread = std::thread::spawn(move || {
-            assert_eq!(rx.recv().unwrap(), Wakeup::Tick);
-            let mut push = target.take_push().unwrap();
-            push.peer.received_ms = Some(push.elapsed_ms(Instant::now()));
-            go_rx.recv().unwrap();
-            if !within_horizon {
-                std::thread::sleep(REPORT_HORIZON);
-            }
-            push.finish(PushVerdict::Expired, Instant::now());
-            done_tx.send(()).unwrap();
-        });
         let anchor = rig.anchor();
         let clicked = Instant::now();
+        let clock = Cell::new(clicked);
+        let taken = Cell::new(None);
         rig.peers
             .arm(anchor.pane_id.clone(), clicked)
-            .dispatch(anchor, clicked, || {
-                go_tx.send(()).unwrap();
-                done_rx.recv().unwrap();
-                if within_horizon {
-                    std::thread::sleep(REPORT_HORIZON);
-                }
-                assert!(
-                    rig.records().is_empty(),
-                    "no logging while the mux dispatch is running"
-                );
-            });
-        destination_thread.join().unwrap();
+            .dispatch_with(
+                anchor,
+                clicked,
+                || {
+                    let push: FocusPush = taken.take().expect("the destination took the push");
+                    let late = if within_horizon {
+                        Duration::ZERO
+                    } else {
+                        REPORT_HORIZON
+                    };
+                    push.finish(PushVerdict::Expired, clock.get() + late);
+                    // The mux dispatch outlasts the report horizon.
+                    clock.set(clock.get() + REPORT_HORIZON);
+                    assert!(
+                        rig.records().is_empty(),
+                        "no logging while the mux dispatch is running"
+                    );
+                },
+                || clock.get(),
+                |ack, timeout| {
+                    // The destination takes the push and holds it past the paint wait.
+                    if let Some(mut push) = target.take_push() {
+                        assert_eq!(rx.try_recv().unwrap(), Wakeup::Tick);
+                        push.peer.received_ms = Some(push.elapsed_ms(clock.get()));
+                        taken.set(Some(push));
+                        clock.set(clock.get() + timeout);
+                        return Err(RecvTimeoutError::Timeout);
+                    }
+                    ack.try_recv().map_err(|_| RecvTimeoutError::Disconnected)
+                },
+            );
         let rows = rig.records();
         assert_eq!(rows.len(), 1);
         let peer = &rows[0]["event"]["peers"][0];
@@ -1257,7 +1309,7 @@ fn a_push_reaches_only_the_sidebar_in_the_targets_tab() {
         rig.anchor_to(&target),
         clicked,
         || 17,
-        Instant::now,
+        || clicked,
         |ack, timeout| {
             if !std::mem::replace(&mut checked, true) {
                 for (index, peer) in peers.iter().enumerate() {
@@ -1284,7 +1336,7 @@ fn a_push_reaches_only_the_sidebar_in_the_targets_tab() {
         event_peers[0]["instance_id"],
         peers[1].config.instance_id.as_str()
     );
-    assert!(rig.peers.lands_on(peers[1].pane(), Instant::now()));
+    assert!(rig.peers.lands_on(peers[1].pane(), clicked));
     assert_eq!(rig.stages("owner_unresolved"), 0);
 }
 
@@ -1332,7 +1384,7 @@ fn a_push_with_no_resolved_owner_is_offered_to_nobody_and_dispatches_at_once() {
             rig.anchor_to(&target),
             clicked,
             || 17,
-            Instant::now,
+            || clicked,
             |ack, timeout| {
                 assert!(
                     peer.take(&rig).is_none(),
@@ -1378,7 +1430,7 @@ fn two_sidebars_in_the_targets_tab_both_take_the_push_and_the_first_lands() {
     let clicked = Instant::now();
     let jump = rig.peers.arm(target.clone(), clicked);
     let (_, _, _, _ack, traces) = jump
-        .push(&rig.anchor_to(&target), clicked, Instant::now)
+        .push(&rig.anchor_to(&target), clicked, || clicked)
         .unwrap();
     assert_eq!(
         offered(&traces),
@@ -1391,8 +1443,8 @@ fn two_sidebars_in_the_targets_tab_both_take_the_push_and_the_first_lands() {
     assert!(first.take(&rig).is_some());
     assert!(second.take(&rig).is_some());
     assert!(other.take(&rig).is_none());
-    assert!(rig.peers.lands_on(first.pane(), Instant::now()));
-    assert!(!rig.peers.lands_on(second.pane(), Instant::now()));
+    assert!(rig.peers.lands_on(first.pane(), clicked));
+    assert!(!rig.peers.lands_on(second.pane(), clicked));
 }
 
 #[test]
