@@ -590,7 +590,7 @@ impl<'a> TaskFire<'a> {
             Ok(backlog) => backlog,
             Err(error)
                 if self.mode != LoopRunMode::Scheduled
-                    || self.entry.overlap.unwrap_or_default() == OverlapPolicy::Skip =>
+                    || !self.entry.overlap.unwrap_or_default().retains_triggers() =>
             {
                 tracing::warn!(task = %self.name, %error, "failed to read loop stop mark; continuing without it");
                 return Ok(None);
@@ -906,8 +906,8 @@ impl<'a> TaskFire<'a> {
     }
 
     /// A workflow, agent or team fire: the ladder of a command fire, overlap by whether the
-    /// checkout's last fire's launch is alive, then the launch child and the outcome its kind
-    /// gives.
+    /// checkout's last fire's launch is alive (`allow` passes it), then the launch child and the
+    /// outcome its kind gives.
     fn prepare_launch(
         &mut self,
         launch: &TaskLaunch,
@@ -936,7 +936,9 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::Done(done));
         }
         let state = StatePaths::for_project_root(&root)?;
-        if let Some(blocker) = self.alive_launch(&state, launch.kind)? {
+        if self.entry.overlap != Some(OverlapPolicy::Allow)
+            && let Some(blocker) = self.alive_launch(&state, launch.kind)?
+        {
             return self.prepare_overlap(&blocker);
         }
         let workflow = launch.kind == LaunchKind::Workflow;
@@ -1317,6 +1319,7 @@ impl<'a> TaskFire<'a> {
 
     /// The live run or launch this fire overlaps: `skip` records an overlap naming it;
     /// `coalesce`, `queue` and `replace` keep the trigger waiting for it, and `replace` stops it.
+    /// An `allow` fire never reaches it: it launches beside what is alive.
     /// A drained trigger whose blocker still runs goes back to the head of its queue.
     fn prepare_overlap(&mut self, blocker: &Blocker) -> Result<TaskFirePlan> {
         self.saw_run = true;
@@ -1561,7 +1564,7 @@ impl<'a> TaskFire<'a> {
         }
         let path = self.fire_run_lock_path()?;
         let policy = self.entry.overlap.unwrap_or_default();
-        if policy != OverlapPolicy::Skip {
+        if policy.retains_triggers() {
             let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
             let mut backlog = LockedBacklog::acquire(&paths)?;
             match acquire_run_lock_file(
@@ -2237,11 +2240,20 @@ pub fn parse_task_timeout(raw: &str) -> std::result::Result<Duration, String> {
     parse_duration_units(raw, TASK_TIMEOUT_UNITS).map_err(|err| err.to_string())
 }
 
-/// Newest durable supervised run still active for one loop task.
-fn newest_active_run(paths: &StatePaths, name: &str) -> Result<Option<RunRecord>> {
+/// Newest durable supervised run still active for one loop task, started at or after its run
+/// lock holder took the lock: an earlier fire's run (an `allow` task's, or one a fire is about
+/// to record as overlapped) is never the holder's.
+fn newest_active_run(
+    paths: &StatePaths,
+    name: &str,
+    holder: Option<RunLockInfo>,
+) -> Result<Option<RunRecord>> {
     let mut records = crate::harness::run::list(paths)?;
-    records
-        .retain(|record| !record.status.is_terminal() && record.loop_task.as_deref() == Some(name));
+    records.retain(|record| {
+        !record.status.is_terminal()
+            && record.loop_task.as_deref() == Some(name)
+            && holder.is_none_or(|holder| record.started_at >= holder.started_at)
+    });
     records.sort_by_key(|record| std::cmp::Reverse(record.started_at));
     Ok(records.into_iter().next())
 }
@@ -2259,7 +2271,7 @@ pub fn in_flight_run(name: &str, root: &Path) -> Result<Option<InFlightRun>> {
         return Ok(None);
     };
     let (_, project_root) = stop_workspace(root)?;
-    let run = newest_active_run(&StatePaths::for_project_root(&project_root)?, name)?;
+    let run = newest_active_run(&StatePaths::for_project_root(&project_root)?, name, holder)?;
     Ok(Some(InFlightRun { holder, run }))
 }
 
@@ -2328,7 +2340,7 @@ pub fn stop_task(
     }
     let waiting = waiting.triggers.len();
     backlog.save()?;
-    let run = newest_active_run(&paths, name);
+    let run = newest_active_run(&paths, name, Some(info));
     drop(backlog);
     cancel(
         workspace.as_ref(),

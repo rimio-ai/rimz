@@ -115,10 +115,7 @@ pub(super) fn run_one(
         && loaded.as_ref().is_none_or(|task| {
             task.action().is_err()
                 || task.entry().each_worktree
-                || matches!(
-                    task.entry().overlap,
-                    None | Some(rimz::config::OverlapPolicy::Skip)
-                )
+                || !task.entry().overlap.unwrap_or_default().retains_triggers()
         })
     {
         if let Some(root) = project_root_for_globals(globals)

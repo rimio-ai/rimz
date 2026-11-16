@@ -50,7 +50,7 @@ What you choose is how the fire ends:
 - **A `-p` launch is recorded once its run has started, the same way.** `rimz loop fire` returns then, and the fire records `launched`; how the run ends later changes neither the row nor the [strikes](#strikes), so read the run itself (`rimz agents history`) for its outcome. Use this when the turn is the job: a nightly sweep, a report, a fix. `-p` takes its own `--timeout` and `--keep`, and has no timeout unless you give one.
 - **A workflow's fire is recorded with its run's outcome.** The run is the task's own: `loop show` lists it and `loop stop` cancels it.
 
-What a fire launched stays the task's while it is alive, and an agent idle in its pane is alive. Under the default `skip` [overlap](../reference/cli/loop.md#overlapping-triggers) a later fire therefore skips until you close that agent; `--overlap replace` stops it and launches anew once it has ended. [`rimz loop show`](#see-what-a-task-did) lists each such agent, run or team member, and [`rimz loop stop`](#stop-pause-and-remove-a-task) stops them.
+What a fire launched stays the task's while it is alive, and an agent idle in its pane is alive. Under the default `skip` [overlap](../reference/cli/loop.md#overlapping-triggers) a later fire therefore skips until you close that agent; `--overlap replace` stops it and launches anew once it has ended, and on an agent task `--overlap allow` launches anyway and leaves it open beside the new one. A spec of two or more agents in a reused worktree is one cohort, so there an `allow` fire prompts the live cohort's leader instead of opening a second cohort. [`rimz loop show`](#see-what-a-task-did) lists each such agent, run or team member, and [`rimz loop stop`](#stop-pause-and-remove-a-task) stops them.
 
 A shell command can still launch agents itself, from a script: those launches carry the fire's id too, and a script hands one off by removing `RIMZ_LOOP_FIRE` from its environment, after which the loop neither lists nor stops it.
 
@@ -138,7 +138,7 @@ A task subscribes to your own names as it does to RimZ's. The `smoke` task that 
 rimz loop add smoke --signal deploy.finished --match env=prod --repeat -- ./scripts/smoke-test.sh
 ```
 
-When a signal arrives while the task's previous run is still going, the default drops the new trigger, so two copies never run at once. `--overlap coalesce` keeps the newest waiting trigger, `--overlap queue` keeps each one up to `--overlap-limit` (default 10), and `--overlap replace` cancels the live run for the newest. [Overlapping triggers](../reference/cli/loop.md#overlapping-triggers) gives the rules.
+When a signal arrives while the task's previous run is still going, the default drops the new trigger, so two copies never run at once. `--overlap coalesce` keeps the newest waiting trigger, `--overlap queue` keeps each one up to `--overlap-limit` (default 10), `--overlap replace` cancels the live run for the newest, and `--overlap allow` (agent tasks only) launches a new agent at every trigger and leaves the earlier ones open. [Overlapping triggers](../reference/cli/loop.md#overlapping-triggers) gives the rules.
 
 ## Wait for Done and green
 

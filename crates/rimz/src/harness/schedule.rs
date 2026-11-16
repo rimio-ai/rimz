@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 
-use crate::config::{LaunchKind, TaskEntry, TaskTarget};
+use crate::config::{LaunchKind, OverlapPolicy, TaskEntry, TaskTarget};
 use crate::harness::prose::{span, verbatim};
 use crate::harness::when;
 use crate::utils::time::{
@@ -266,7 +266,8 @@ impl TaskAction {
                 });
             }
         }
-        if entry.overlap.is_some() {
+        if let Some(policy) = entry.overlap {
+            let allow = policy == OverlapPolicy::Allow;
             for (set, hint) in [
                 (
                     entry.wait.is_some(),
@@ -274,11 +275,19 @@ impl TaskAction {
                 ),
                 (
                     entry.each_worktree,
-                    "waiting triggers are kept per task, and an each-worktree task fires per checkout",
+                    if allow {
+                        "an each-worktree task takes no overlap policy, since it fires per checkout"
+                    } else {
+                        "waiting triggers are kept per task, and an each-worktree task fires per checkout"
+                    },
                 ),
                 (
                     ephemeral_lifetime(entry),
-                    "a one-shot has no task left to drain",
+                    if allow {
+                        "a one-shot fires once, so no later fire overlaps it"
+                    } else {
+                        "a one-shot has no task left to drain"
+                    },
                 ),
             ] {
                 if set {
@@ -336,6 +345,9 @@ impl TaskAction {
             field,
             hint: hint.to_owned(),
         };
+        if entry.overlap == Some(OverlapPolicy::Allow) {
+            Self::refuse_allow(name, entry, kind)?;
+        }
         if kind == LaunchKind::Shell {
             if entry.target.is_some() {
                 return Err(field(
@@ -378,6 +390,30 @@ impl TaskAction {
             target,
             args: entry.args.clone(),
         }))
+    }
+
+    /// Refuses `overlap = 'allow'` on a row whose fires cannot run side by side.
+    fn refuse_allow(name: &str, entry: &TaskEntry, kind: LaunchKind) -> Result<(), TaskActionErr> {
+        let hint = match kind {
+            LaunchKind::Shell => {
+                "`allow` needs fires that run side by side, and a shell task holds one unfinished run per checkout"
+            }
+            LaunchKind::Workflow => {
+                "`allow` needs fires that run side by side, and a workflow task holds one unfinished run per checkout"
+            }
+            LaunchKind::Team => {
+                "`allow` needs fires that run side by side, and a team task's fires launch the same team into one lane"
+            }
+            LaunchKind::Agent if entry.dedupes_checkout() => {
+                "`allow` launches later fires beside earlier ones, and `once-per-checkout` starts nothing more in a checkout this task launched in"
+            }
+            LaunchKind::Agent => return Ok(()),
+        };
+        Err(TaskActionErr::OverlapField {
+            name: name.to_owned(),
+            field: "overlap",
+            hint,
+        })
     }
 
     fn refuse_fresh_worktree_companions(

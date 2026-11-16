@@ -200,7 +200,12 @@ fn validate_add_args(args: &AddArgs) -> Result<()> {
         );
         anyhow::ensure!(limit > 0, "--overlap-limit must be at least 1");
     }
-    if args.overlap.is_some() {
+    // `TaskShape::compile` refuses `allow` below, with the stored row's reasons.
+    if args
+        .overlap
+        .as_deref()
+        .is_some_and(|policy| policy != "allow")
+    {
         for (used, reason) in [
             (
                 args.each_worktree,
@@ -346,6 +351,7 @@ fn build_task_entry(
             "coalesce" => rimz::config::OverlapPolicy::Coalesce,
             "queue" => rimz::config::OverlapPolicy::Queue,
             "replace" => rimz::config::OverlapPolicy::Replace,
+            "allow" => rimz::config::OverlapPolicy::Allow,
             _ => rimz::config::OverlapPolicy::Skip,
         }),
         overlap_limit: args.overlap_limit,

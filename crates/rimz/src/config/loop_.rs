@@ -125,7 +125,8 @@ pub enum ThrottleSwitch {
     Off,
 }
 
-/// What a scheduled trigger does when its task already holds the run lock.
+/// What a trigger does when its task is busy: it holds the run lock, or an earlier fire's
+/// launch is still alive.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum OverlapPolicy {
@@ -134,6 +135,17 @@ pub enum OverlapPolicy {
     Coalesce,
     Queue,
     Replace,
+    /// An agent task launches beside its earlier fires' alive launches, keeping no trigger;
+    /// a run-lock collision still records `overlapped`.
+    Allow,
+}
+
+impl OverlapPolicy {
+    /// Whether a busy task keeps its trigger waiting: `coalesce`, `queue` and `replace` do,
+    /// while `skip` and `allow` keep none.
+    pub const fn retains_triggers(self) -> bool {
+        !matches!(self, Self::Skip | Self::Allow)
+    }
 }
 
 /// Named loop tasks, ordered by name. A map keeps `rimz loop add/remove/run`

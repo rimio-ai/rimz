@@ -787,6 +787,52 @@ fn loaded_machine_and_project_tasks_refuse_invalid_overlap_fields() {
             "{text}"
         );
     }
+    let side_by_side = "`allow` needs fires that run side by side";
+    for (row, reason) in [
+        (
+            "args=['true']\ntimeout='1m'",
+            format!("{side_by_side}, and a shell task holds one unfinished run per checkout"),
+        ),
+        (
+            "kind='workflow'\ntarget='smoke'",
+            format!("{side_by_side}, and a workflow task holds one unfinished run per checkout"),
+        ),
+        (
+            "kind='team'\ntarget='forge'",
+            format!("{side_by_side}, and a team task's fires launch the same team into one lane"),
+        ),
+        (
+            "kind='agent'\ntarget='claude'\nonce-per-checkout=true",
+            "`allow` launches later fires beside earlier ones, and `once-per-checkout` starts \
+             nothing more in a checkout this task launched in"
+                .to_owned(),
+        ),
+    ] {
+        for project in [false, true] {
+            let env = Env::new();
+            env.record(&env.project_root);
+            let fields = format!("[tasks.busy]\n{row}\nevery='1h'\noverlap='allow'\n");
+            if project {
+                std::fs::create_dir_all(env.project_root.join(".rimz")).unwrap();
+                std::fs::write(env.project_root.join(".rimz/config.toml"), fields).unwrap();
+            } else {
+                write_loop_config(&env, &format!("{fields}root={:?}\n", env.project_root));
+            }
+            let text = loop_ok(&env, &["loop", "show", "busy"]);
+            assert!(
+                text.contains(&format!("loop task `busy` sets `overlap`; {reason}")),
+                "{row}: {text}"
+            );
+            let fired = env.rimz().args(["loop", "fire", "busy"]).output().unwrap();
+            assert!(!fired.status.success(), "{row}: {fired:?}");
+            assert!(
+                read_loop_run_records(&env)
+                    .iter()
+                    .all(|record| record.result != LoopRunResult::Launched),
+                "{row}: an invalid row never launches"
+            );
+        }
+    }
 }
 
 #[test]

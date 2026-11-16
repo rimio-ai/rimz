@@ -242,8 +242,13 @@ struct AddArgs {
     /// Named account of --provider whose windows the condition reads; unset follows the room.
     #[arg(long, value_name = "NAME")]
     account: Option<rimz::ids::LoginName>,
-    /// Busy scheduled triggers: skip (default), coalesce, queue, or replace (stop for newest).
-    #[arg(long, value_name = "POLICY", value_parser = ["skip", "coalesce", "queue", "replace"])]
+    /// Busy scheduled triggers: skip (default), coalesce, queue, replace (stop for newest), or
+    /// allow (agent tasks: launch beside the earlier fires' agents).
+    #[arg(
+        long,
+        value_name = "POLICY",
+        value_parser = ["skip", "coalesce", "queue", "replace", "allow"]
+    )]
     overlap: Option<String>,
     /// Maximum waiting triggers with --overlap queue; default 10, at least 1.
     #[arg(long, value_name = "N")]
