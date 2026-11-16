@@ -473,6 +473,93 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
 }
 
 #[test]
+fn live_forge_signal_tasks_hold_their_literal_branch_under_the_project_root() {
+    use crate::config::{TaskEntry, Tasks};
+    use crate::harness::schedule::{arming, probe};
+
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::for_project_root(root.path()).unwrap();
+    let runtime =
+        crate::RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path())
+            .unwrap();
+    let signal = |selector: &str, matches: &[(&str, &str)]| TaskEntry {
+        root: root.path().to_owned(),
+        signal: Some(selector.to_owned()),
+        matches: Some(
+            matches
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        ),
+        repeat: true,
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
+        ..TaskEntry::default()
+    };
+    let tasks = Tasks(BTreeMap::from([
+        (
+            "exact".to_owned(),
+            signal("ci.passed", &[("branch", "sig/a")]),
+        ),
+        ("family".to_owned(), signal("pr.*", &[("branch", "sig/b")])),
+        (
+            "condition".to_owned(),
+            TaskEntry {
+                signal: None,
+                matches: None,
+                repeat: false,
+                when: Some(vec!["ci[sig/a]=passed".to_owned()]),
+                dir: Some(root.path().to_owned()),
+                ..signal("", &[])
+            },
+        ),
+        ("wildcard".to_owned(), signal("ci.*", &[("branch", "*")])),
+        ("path".to_owned(), signal("ci.failed", &[("path", "/repo")])),
+        (
+            "other".to_owned(),
+            signal("deploy.done", &[("branch", "sig/c")]),
+        ),
+        (
+            "paused".to_owned(),
+            signal("ci.passed", &[("branch", "sig/d")]),
+        ),
+        (
+            "disabled".to_owned(),
+            signal("pr.merged", &[("branch", "sig/e")]),
+        ),
+    ]));
+    let catalog_path = crate::StatePaths::class_path(
+        &paths.root,
+        crate::disk::paths::Class::Records,
+        "loop-instances.json",
+    );
+    std::fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
+    std::fs::write(&catalog_path, serde_json::to_vec(&tasks).unwrap()).unwrap();
+    let catalog = crate::harness::schedule::catalog::TaskCatalog::load_lenient(Some(root.path()));
+    arming::disable(&catalog.visible()["disabled"].key("disabled"), None).unwrap();
+    let paused = &catalog.visible()["paused"];
+    arming::pause(
+        &paused.key("paused"),
+        paused.source(),
+        Timestamp::now()
+            .checked_add(std::time::Duration::from_secs(3600))
+            .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        probe::probe_demand(&runtime, Some(root.path())),
+        BTreeMap::from([(
+            root.path().display().to_string(),
+            BTreeSet::from(["sig/a".to_owned(), "sig/b".to_owned()])
+        )]),
+        "a signal and a condition on one branch share one demand entry"
+    );
+    std::fs::remove_file(catalog_path).unwrap();
+    assert!(probe::probe_demand(&runtime, Some(root.path())).is_empty());
+}
+
+#[test]
 fn active_workflows_supply_pane_free_forge_scopes_and_branches() {
     use crate::config::{TaskEntry, Tasks};
     use crate::harness::schedule::probe;

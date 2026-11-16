@@ -1168,6 +1168,36 @@ fn signal_selectors_observe_only_matching_family_payloads() {
 }
 
 #[test]
+fn a_branch_row_signal_without_a_path_fires_only_branch_subscriptions() {
+    use crate::harness::signal::SignalResolution::{Deliver, Ignore};
+    let signal = crate::harness::signal::Signal {
+        name: "ci.passed".parse().unwrap(),
+        payload: serde_json::Map::from_iter([
+            ("branch".to_owned(), serde_json::json!("feat/x")),
+            (
+                "repo".to_owned(),
+                serde_json::json!("gh:github.com:org/repo"),
+            ),
+        ]),
+        source: crate::store::event::SignalSource::Forge,
+        watch: None,
+    };
+    for (key, value, expected) in [
+        ("branch", "feat/x", Deliver),
+        ("branch", "*", Deliver),
+        ("branch", "other", Ignore),
+        ("path", "/worktree", Ignore),
+        ("path", "*", Ignore),
+    ] {
+        let trigger = Trigger::Signal {
+            selector: "ci.*".parse().unwrap(),
+            matches: std::collections::BTreeMap::from([(key.to_owned(), value.to_owned())]),
+        };
+        assert_eq!(trigger.resolve("task", &signal), expected, "{key}={value}");
+    }
+}
+
+#[test]
 fn obsolete_ci_finished_subscription_is_rejected_with_replacement() {
     for (selector, conclusion) in [("ci.finished", false), ("ci.failed", true), ("ci.*", true)] {
         let task = TaskEntry {

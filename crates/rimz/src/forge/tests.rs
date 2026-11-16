@@ -1437,20 +1437,23 @@ fn github_branch_refs_query_and_read_head_ci() {
         query.contains("ref0: ref(qualifiedName: \"refs/heads/feat/x\")"),
         "{query}"
     );
-    for (reference, expected) in [
+    for (reference, expected, head) in [
         (
             serde_json::json!({"target": {"oid": "head", "statusCheckRollup": {"state": "SUCCESS"}}}),
             Some(WorktreeCi::Passing),
+            Some("head"),
         ),
-        (serde_json::Value::Null, None),
+        (serde_json::Value::Null, None, None),
         (
             serde_json::json!({"target": {"oid": "head", "statusCheckRollup": null}}),
             None,
+            Some("head"),
         ),
     ] {
         let raw = serde_json::json!({"data": {"repository": {"pr0": {"nodes": []}, "facts0": {"nodes": []}, "ref0": reference}}});
         let response = parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
         assert_eq!(response.refs.get(&0), Some(&expected));
+        assert_eq!(response.ref_heads.get(&0).map(String::as_str), head);
     }
 }
 

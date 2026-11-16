@@ -1,5 +1,5 @@
-//! Which checkouts and branches the room's condition tasks and active workflow runs ask the
-//! forge about, read by the sidebar's heavy-lane refresh.
+//! Which checkouts and branches the room's condition tasks, forge signal tasks and active
+//! workflow runs ask the forge about, read by the sidebar's heavy-lane refresh.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -22,13 +22,29 @@ fn probe_paths(
         .collect()
 }
 
-/// Checkout scopes and branch selectors needed by live loops and Active workflows.
+/// The branch a `ci` or `pr` subscription names by a literal `branch` match.
+fn signal_branch(
+    selector: &crate::harness::signal::SignalSelector,
+    matches: &BTreeMap<String, String>,
+) -> Option<String> {
+    if !matches!(selector.family(), "ci" | "pr") {
+        return None;
+    }
+    matches
+        .get("branch")
+        .filter(|branch| !crate::harness::signal::is_match_wildcard(branch))
+        .cloned()
+}
+
+/// Checkout scopes and branch selectors needed by live loops and Active workflows. A live
+/// forge signal task holds the branch its `branch` match names under the project root.
 pub(crate) fn probe_demand(
     runtime: &crate::RuntimePaths,
     project_root: Option<&Path>,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let arming = super::arming::load();
     let now = Timestamp::now();
+    let mut signal_branches = BTreeSet::new();
     let mut tasks: Vec<_> = super::fire::runnable_tasks_for(runtime, project_root)
         .into_iter()
         .filter_map(|(name, task)| {
@@ -37,11 +53,16 @@ pub(crate) fn probe_demand(
             {
                 return None;
             }
-            let super::Trigger::Condition { expr, .. } = &task.trigger().as_ref().ok()?.trigger
-            else {
-                return None;
-            };
-            expr.reads_forge().then_some((name, task))
+            match &task.trigger().as_ref().ok()?.trigger {
+                super::Trigger::Condition { expr, .. } => {
+                    expr.reads_forge().then_some((name, task))
+                }
+                super::Trigger::Signal { selector, matches } => {
+                    signal_branches.extend(signal_branch(selector, matches));
+                    None
+                }
+                super::Trigger::Schedule(_) | super::Trigger::Watch(_) => None,
+            }
         })
         .collect();
     let remembers = |task: &super::catalog::LoadedTask| {
@@ -100,6 +121,12 @@ pub(crate) fn probe_demand(
         tracing::warn!("workflow probe demand has no project root");
         return demand;
     };
+    if !signal_branches.is_empty() && project_root.is_dir() {
+        demand
+            .entry(project_root.to_string_lossy().into_owned())
+            .or_default()
+            .extend(signal_branches);
+    }
     let state = match crate::StatePaths::for_project_root(project_root) {
         Ok(state) => state,
         Err(error) => {
