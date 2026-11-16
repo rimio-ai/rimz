@@ -313,7 +313,7 @@ pub(in crate::cli) fn header_only(
     text.into_bytes()
 }
 
-/// `<workflow>#<lane>` from a header, as `RunRecord::address` derives it.
+/// `<workflow>#<checkout>` from a header, as `RunRecord::address` derives it.
 pub(in crate::cli) fn address(header: &records::RunHeader) -> Option<String> {
     header.address().map(|address| address.to_string())
 }

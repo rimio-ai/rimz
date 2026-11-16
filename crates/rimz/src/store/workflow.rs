@@ -78,7 +78,7 @@ pub struct RunAddress {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("run address must be <workflow>#<lane> with nonempty parts and no `#` in the lane")]
+#[error("run address must be <workflow>#<checkout> with nonempty parts and no `#` in the checkout")]
 pub struct RunAddressErr;
 
 impl std::fmt::Display for RunAddress {

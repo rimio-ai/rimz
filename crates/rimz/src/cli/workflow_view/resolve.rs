@@ -353,7 +353,7 @@ impl Target {
         }
         let address = raw.parse().map_err(|_| {
             UsageError::new(format!(
-                "run address `{raw}` must be <workflow>#<lane>; workflow and lane must be nonempty, and the lane holds no `#`"
+                "run address `{raw}` must be <workflow>#<checkout>; workflow and checkout must be nonempty, and the checkout holds no `#`"
             ))
         })?;
         Ok(Self::Address(address))
