@@ -16,6 +16,11 @@ fn mark(scope: crate::store::workflow::ScopeKind, result: Option<LoopRunResult>)
         run: None,
         scope,
         result,
+        kind: None,
+        target: None,
+        manual: false,
+        opener: None,
+        child: None,
     }
 }
 

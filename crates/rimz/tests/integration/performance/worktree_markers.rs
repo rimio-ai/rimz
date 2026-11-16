@@ -64,7 +64,7 @@ fn refresh_case(count: usize, test: &str) {
         "marker-demand".to_owned(),
         TaskEntry {
             root: env.project_root.clone(),
-            command: vec!["true".to_owned()],
+            args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             once_per_checkout: Some(true),
             each_worktree: true,

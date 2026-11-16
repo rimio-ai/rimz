@@ -117,7 +117,7 @@ Read a definition's routes as a graph before you start a larger one. `show` with
 ```console
 $ rimz workflow show fix-tests
 fix-tests
-one run per worktree · no loop task starts it; from a loop: rimz loop add '<task>' --each-worktree --every '<duration>' -- rimz workflow run fix-tests · by hand: rimz workflow run fix-tests -w '<worktree>'
+one run per worktree · no loop task starts it; from a loop: rimz loop add '<task>' --workflow fix-tests --each-worktree --every '<duration>' · by hand: rimz workflow run fix-tests -w '<worktree>'
 
 ◇ tests  check  sh: cargo test · waits ≤30m, then @failed
 │   fail → fix · pass @done
@@ -540,7 +540,7 @@ Finished run directories age out on their own. The notes folders stay after them
 A loop task can start the runs for you: its command is the `rimz workflow run` you would type. This one starts a `babysit-pr` run in every RimZ worktree of the project once its PR has been open for three minutes:
 
 ```sh
-rimz loop add babysit-pr --each-worktree --when pr=open --for 3m --repeat -- rimz workflow run babysit-pr
+rimz loop add babysit-pr --each-worktree --when pr=open --for 3m --repeat --workflow babysit-pr
 ```
 
 Each fire runs `rimz workflow run` in the checkout that met the condition. The fire ends `completed` as soon as the run exists, and the run goes on as its own: `rimz loop stop` does not cancel it ([loop tasks reference](../reference/cli/workflow.md#loop-tasks)). `--repeat` fires a checkout again only after its condition turns false and then true again. A fire whose `rimz workflow run` finds a live run already in that checkout fails and counts a [strike](./loops.md#strikes), so give a repeating task a trigger that does not outpace its runs. Follow the runs with `rimz workflow list`.

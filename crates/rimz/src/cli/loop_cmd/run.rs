@@ -70,10 +70,16 @@ pub(super) fn run_one(args: RunArgs, mode: LoopRunMode, globals: &GlobalFlags) -
         .transpose()
         .context("decoding loop condition evidence")?;
     let mut catalog = task_catalog(globals)?;
-    // The task's runs that ended uncollected are collected before the fire decides, so it reads
-    // the strikes, the consumed `--until` row and the launch memory they leave.
+    // The task's runs that ended uncollected are collected, and the room's dead fires settled,
+    // before the fire decides, so it reads the strikes, the consumed `--until` row and the launch
+    // memory they leave.
     if let Some(task) = catalog.for_run(name)
-        && rimz::harness::schedule::run_log::collect_task_runs(&task.entry().resolved_root(), name)
+        && (rimz::harness::schedule::run_log::collect_task_runs(
+            &task.entry().resolved_root(),
+            name,
+        ) | (rimz::harness::schedule::run_log::settle_open_fires(
+            &task.entry().resolved_root(),
+        ) > 0))
     {
         catalog = task_catalog(globals)?;
     }

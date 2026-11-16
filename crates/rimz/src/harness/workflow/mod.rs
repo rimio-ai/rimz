@@ -25,8 +25,8 @@ mod validate;
 pub use definition::{Condition, Definition, Invocation, Kind, Limit, Node, Target};
 pub(crate) use engine::hears_lifecycle;
 pub use engine::{
-    Advance, DefinitionSource, InlineDefinition, StartArgs, WorkflowErr, advance, cancel, create,
-    launch_groups, restart, resume, wake, wake_run,
+    Advance, DefinitionSource, InlineDefinition, StartArgs, TaskStart, WorkflowErr, advance,
+    cancel, create, launch_groups, restart, resume, wake, wake_run,
 };
 pub(crate) use engine::{reassign_task, unacted_task_runs};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};

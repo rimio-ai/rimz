@@ -40,10 +40,15 @@ struct ActionWords {
 
 fn action_words(action: &TaskAction) -> ActionWords {
     match action {
-        TaskAction::Command(argv) => ActionWords {
-            subject: format!("`{}`", schedule::command_line(argv)),
+        TaskAction::Shell(_) => ActionWords {
+            subject: format!("`{}`", action.subject()),
             base: "run",
             untouched: "not run",
+        },
+        TaskAction::Launch(_) => ActionWords {
+            subject: format!("`{}`", action.subject()),
+            base: "launch",
+            untouched: "not launched",
         },
         TaskAction::Deliver(target) => ActionWords {
             subject: target.handle.clone(),
@@ -155,9 +160,9 @@ struct ShowView {
 /// One alive launch of the task's fires, as `loop show` lists it and its `--json` names it.
 #[derive(Clone, Debug, serde::Serialize)]
 struct LaunchView {
-    /// `workflow run`, `supervised run` or `agent`.
+    /// `workflow run`, `supervised run`, `agent` or `launch process`.
     what: &'static str,
-    /// The id or `@handle#lane` its own stop takes.
+    /// The id or `@handle#lane` its own stop takes; a launch process's pid.
     address: String,
     /// A supervised run's agent pet name.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,6 +173,15 @@ struct LaunchView {
     /// The checkout or worktree it works in.
     #[serde(skip_serializing_if = "Option::is_none")]
     destination: Option<PathBuf>,
+    /// Whether it is a workflow run, whose stop command the view offers only while it executes.
+    #[serde(skip)]
+    workflow: bool,
+}
+
+/// Whether an alive launch the view offers `rimz loop stop` for: an agent, a team's agents, a
+/// supervised run or a launch process; a workflow run follows its own executing state.
+fn offers_stop(launches: &[LaunchView]) -> bool {
+    launches.iter().any(|launch| !launch.workflow)
 }
 
 impl LaunchView {
@@ -177,22 +191,20 @@ impl LaunchView {
         now: Timestamp,
     ) -> Self {
         use schedule::launches::Launch;
-        let address = launch_address(&launch.launch, rows);
-        let (what, name, state, destination) = match &launch.launch {
+        let address = launch.launch.address(rows);
+        let (name, state, destination) = match &launch.launch {
             Launch::Workflow(run) => (
-                "workflow run",
                 None,
                 run.state.as_str(),
                 Some(run.firing_checkout().to_path_buf()),
             ),
             Launch::Supervised(run) => (
-                "supervised run",
                 run.agent_name.clone(),
                 run.status.as_str(),
                 Some(run.worktree_path.clone()),
             ),
+            Launch::Child { checkout, .. } => (None, "running", Some(checkout.clone())),
             Launch::Agent(agent) => (
-                "agent",
                 None,
                 agent.effective_status(now).as_str(),
                 agent
@@ -203,7 +215,8 @@ impl LaunchView {
             ),
         };
         Self {
-            what,
+            what: launch.launch.what(),
+            workflow: matches!(launch.launch, Launch::Workflow(_)),
             address,
             name,
             fire: launch.fire.clone(),
@@ -941,7 +954,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             )
         )?;
     }
-    if view.in_progress.as_ref().is_some_and(InProgress::executing) {
+    if view.in_progress.as_ref().is_some_and(InProgress::executing) || offers_stop(&view.launches) {
         writeln!(out, "  stop with `rimz loop stop {}`", view.name)?;
     }
     if let Ok(parsed) = view.timing.parsed()
@@ -1118,7 +1131,13 @@ fn resolve_show(args: &mut ShowArgs, caller: Option<&Path>) -> Result<ShowTarget
         .collect::<Vec<_>>();
     let roots = rowless
         .iter()
-        .filter(|view| view.in_flight.is_some() || view.history.is_retired_one_off())
+        .filter(|view| {
+            view.in_flight.is_some()
+                || view.history.is_retired_one_off()
+                || view.id.as_ref().is_some_and(|id| {
+                    alive_launches(id, &view.root).is_ok_and(|(alive, _)| !alive.is_empty())
+                })
+        })
         .map(|view| view.root.as_path())
         .collect::<Vec<_>>();
     if !roots.is_empty() {
@@ -1274,8 +1293,19 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 attention::run_in_progress(None, &records, view.id.as_ref(), &view.root, acting_at)
                     .and_then(|run| in_progress_text(&run, Timestamp::now()));
             let runs = workflow_log_runs(&paths, &view.root, &view.history.fires, globals);
+            let launches = launch_views(view.id.as_ref(), &view.root, Timestamp::now())
+                .unwrap_or_else(|error| {
+                    let _ = writeln!(
+                        ui::err(),
+                        "{} cannot read what `{}`'s fires launched, so none is listed: {error:#}",
+                        ui::paint(ui::palette::warn().bold(), "warning:"),
+                        args.name
+                    );
+                    Vec::new()
+                });
             let state = match &running {
                 Some(running) => ui::paint(ui::palette::cool(), running),
+                None if offers_stop(&launches) => "launched".to_owned(),
                 None => runs
                     .iter()
                     .filter(|run| run.live)
@@ -1289,9 +1319,10 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 "{} — one-shot fired · {state}",
                 ui::paint(ui::palette::header(), &args.name)
             )?;
-            if running.is_some() {
+            if running.is_some() || offers_stop(&launches) {
                 writeln!(out, "  stop with `rimz loop stop {}`", args.name)?;
             }
+            write_launches(&mut out, &launches)?;
             writeln!(out)?;
             let attribution = refused_fire_attribution(&view.history.fires);
             write_log_records(
@@ -2260,9 +2291,15 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-/// Whether a task's fires start workflow runs: a command row's one-node run.
+/// Whether a task's fires start workflow runs: a shell row's one-node run, or a workflow
+/// row's run of its workflow.
 fn runs_workflows(task: &LoadedTask) -> bool {
-    matches!(task.action(), Ok(TaskAction::Command(_)))
+    task.action().is_ok_and(|action| {
+        matches!(
+            action.kind(),
+            TaskActionKind::Shell | TaskActionKind::Workflow
+        )
+    })
 }
 
 fn launched_run_failed(record: &LoopRunRecord, runs: &[list::WorkflowRunRow]) -> bool {

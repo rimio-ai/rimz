@@ -273,6 +273,18 @@ pub fn cancel_run_on_sigterm(cancellation: RunCancellation) -> std::io::Result<C
     Ok(guard)
 }
 
+/// Remove the room channel and the calling agent's identity from a fire's child, so what it
+/// launches resolves its lane from its directory and no caller: a fire's command and a fire's
+/// launch child alike.
+pub(crate) fn drop_room_identity(command: &mut Command) {
+    command.env_remove(crate::workspace::ENV_CHANNEL);
+    for (key, _) in
+        std::env::vars_os().filter(|(key, _)| key.as_encoded_bytes().starts_with(b"RIMZ_AGENT_"))
+    {
+        command.env_remove(key);
+    }
+}
+
 pub(crate) fn run_command(
     dir: &Path,
     cmd: &str,
@@ -332,12 +344,7 @@ pub(crate) fn run_command(
         ),
     };
     if env.contains_key(LOOP_TASK_ENV) {
-        command.env_remove(crate::workspace::ENV_CHANNEL);
-        for (key, _) in std::env::vars_os()
-            .filter(|(key, _)| key.as_encoded_bytes().starts_with(b"RIMZ_AGENT_"))
-        {
-            command.env_remove(key);
-        }
+        drop_room_identity(&mut command);
     }
     let mut child = command
         .current_dir(dir)

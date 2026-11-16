@@ -33,9 +33,7 @@ fn run_and_report(env: &Env, name: &str) -> LoopRunRecord {
 fn a_when_add_stores_the_trigger_command_timeout_and_generated_name() {
     let env = Env::new();
     env.record(&env.project_root);
-    let command = [
-        "rimz", "teams", "launch", "forge", "-w", "y", "--detach", "p",
-    ];
+    let command = ["sh", "-c", "echo 'a b'"];
     let argv = [
         &["loop", "add", "--when", "pr[x]=merged", "--"][..],
         &command,
@@ -54,10 +52,11 @@ fn a_when_add_stores_the_trigger_command_timeout_and_generated_name() {
     let row = row.as_object().unwrap();
     assert_eq!(
         row.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["command", "root", "timeout", "when"],
+        ["args", "kind", "root", "timeout", "when"],
         "{row:?}"
     );
-    assert_eq!(row["command"], json!(command));
+    assert_eq!(row["kind"], "shell");
+    assert_eq!(row["args"], json!(command));
     assert_eq!(row["timeout"], "2h");
     assert_eq!(row["when"], json!(["pr[x]=merged"]));
 
@@ -228,7 +227,7 @@ fn once_per_checkout_does_not_refire_after_exit_zero_and_does_after_a_failure() 
     write_loop_config(
         &env,
         &format!(
-            "[tasks.once]\nroot = {:?}\nevery = '1h'\ntimeout = '1m'\nonce-per-checkout = true\ncommand = ['sh', '-c', 'echo fired >> \"$1\"; exit \"$(cat \"$2\")\"', 'sh', {:?}, {:?}]\n",
+            "[tasks.once]\nroot = {:?}\nevery = '1h'\ntimeout = '1m'\nonce-per-checkout = true\nargs = ['sh', '-c', 'echo fired >> \"$1\"; exit \"$(cat \"$2\")\"', 'sh', {:?}, {:?}]\n",
             env.project_root,
             fired.display().to_string(),
             code.display().to_string()
@@ -317,7 +316,7 @@ fn a_strict_row_refusal_stands_alone_in_each_of_the_three_stores() {
         &env,
         &format!(
             "[tasks.old-machine]\nroot = {root:?}\nevery = '1h'\nagent = 'codex'\nprompt = 'fix'\n\
-             [tasks.good]\nroot = {root:?}\nevery = '1h'\ntimeout = '1m'\ncommand = ['touch', {fired:?}]\n",
+             [tasks.good]\nroot = {root:?}\nevery = '1h'\ntimeout = '1m'\nargs = ['touch', {fired:?}]\n",
             root = env.project_root,
             fired = fired.display().to_string()
         ),
@@ -326,7 +325,7 @@ fn a_strict_row_refusal_stands_alone_in_each_of_the_three_stores() {
     std::fs::write(
         env.project_root.join(".rimz/config.toml"),
         "[tasks.old-project]\nevery = '1h'\ncheck = 'true'\n\
-         [tasks.shared]\nevery = '1h'\ntimeout = '1m'\ncommand = ['true']\n",
+         [tasks.shared]\nevery = '1h'\ntimeout = '1m'\nargs = ['true']\n",
     )
     .unwrap();
     grant_project_trust(&env);
@@ -410,7 +409,7 @@ fn a_mistyped_project_row_refuses_alone_beside_trust_and_its_siblings() {
     std::fs::write(
         env.project_root.join(".rimz/config.toml"),
         "[tasks.typo]\nevery = '1h'\ntimeout = '1m'\ncommand = 'cargo test'\n\
-         [tasks.shared]\nevery = '1h'\ntimeout = '1m'\ncommand = ['true']\n",
+         [tasks.shared]\nevery = '1h'\ntimeout = '1m'\nargs = ['true']\n",
     )
     .unwrap();
     let status = loop_ok(&env, &["trust", "status"]);
@@ -434,7 +433,7 @@ fn a_mistyped_project_row_refuses_alone_beside_trust_and_its_siblings() {
 
 /// The exec request of the agent pane a launch under a fire opened, from its traced layout.
 #[cfg(unix)]
-fn launched_pane_request(
+pub(super) fn launched_pane_request(
     env: &Env,
     task: &str,
     trace: &Path,
@@ -530,6 +529,10 @@ fn a_fired_launch_carries_the_booking_chain(flags: &[&str]) -> rimz::harness::la
         "--timeout",
         "30s",
         "--",
+        "sh",
+        "-c",
+        r#"exec "$@""#,
+        "sh",
     ];
     book.extend([
         rimz_bin.to_str().unwrap(),
@@ -733,6 +736,10 @@ fn loop_stop_cancels_a_print_launch_a_fire_made() {
             "--timeout",
             "10m",
             "--",
+            "sh",
+            "-c",
+            r#"exec "$@""#,
+            "sh",
             rimz_bin.to_str().unwrap(),
             "--mux",
             "zellij",

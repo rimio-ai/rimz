@@ -107,8 +107,8 @@ pub use harness::{
 pub(crate) use logo::{parse_logo_svg, read_logo_file};
 pub(crate) use loop_::WaitMeta;
 pub use loop_::{
-    CapacityWait, CapacityWaitErr, CheckOn, FileMark, LoopConfig, OverlapPolicy, RefusedRow,
-    TaskEntry, TaskTarget, Tasks, ThrottleSwitch, WatchSpec, has_absolute_task_root,
+    CapacityWait, CapacityWaitErr, CheckOn, FileMark, LaunchKind, LoopConfig, OverlapPolicy,
+    RefusedRow, TaskEntry, TaskTarget, Tasks, ThrottleSwitch, WatchSpec, has_absolute_task_root,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
 pub use mux::{MultiplexerConfig, MuxStatusBar, RoomStyle};

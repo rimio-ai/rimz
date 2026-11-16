@@ -463,12 +463,8 @@ fn action(row: &TaskRow) -> String {
     let Some(spec) = &row.action else {
         return String::new();
     };
-    let kind = match spec.kind {
-        ActionKind::Wake => TaskActionKind::Deliver,
-        ActionKind::Command => TaskActionKind::Command,
-    };
     crate::cli::wake_view::action_text(
-        kind,
+        spec.kind.into(),
         &spec.subject,
         row.task.as_ref().map(LoadedTask::entry),
         row.you,

@@ -1901,6 +1901,11 @@ pub fn loops_dir() -> PathBuf {
     rimz_home().join("loops")
 }
 
+/// The output logs of loop fires' launch children, one `<fire id>.log` each.
+pub fn loop_launch_logs_dir() -> PathBuf {
+    loops_dir().join("launches")
+}
+
 /// The loop start throttle's queue: one ticket per admitted or launched start,
 /// shared by every room of this home.
 pub(crate) fn loop_throttle_queue_dir() -> PathBuf {

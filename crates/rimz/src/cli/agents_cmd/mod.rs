@@ -630,6 +630,18 @@ impl AgentsArgs {
         }
     }
 
+    /// Whether this parse launches: the `launch` verb, or no verb and a launch spec.
+    pub(super) fn is_launch(&self) -> bool {
+        match &self.command {
+            Some(AgentsSubcmd::Launch(_)) => true,
+            Some(_) => false,
+            None => self.launch.spec.as_deref().is_some_and(|spec| {
+                !spec.trim().is_empty()
+                    && top_level_spec_route(spec.trim()) == TopLevelSpecRoute::Launch
+            }),
+        }
+    }
+
     /// `rimz agents launch <SPEC>`: the explicit verb, whose refusal of an
     /// unresolved name leaves the scene's verbs out of its suggestions.
     pub(crate) fn launch_verb(launch: AgentLaunchArgs) -> Self {
@@ -1374,6 +1386,72 @@ fn validate_detach(launch: &AgentLaunchArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// `rimz loop add --agent`'s check: refuse what a fire's launch cannot carry, then resolve the
+/// spec the way the launch resolves it.
+pub(super) fn check_loop_launch(
+    args: &AgentsArgs,
+    place: &crate::cli::loop_launch::LoopLaunchPlace<'_>,
+) -> Result<()> {
+    if args.command.is_some() || !args.is_launch() {
+        bail!("the target reads as a `rimz agents` verb or address, not a launch spec");
+    }
+    let launch = &args.launch;
+    let refusals = [
+        (
+            launch.cohort.detach,
+            "--detach drops the report a launch owes",
+        ),
+        (launch.stdin, "--stdin reads a fire's stdin, which is empty"),
+        (
+            launch.input_format == Some(InputFormat::StreamJson),
+            "--input-format stream-json reads a fire's stdin, which is empty",
+        ),
+        (
+            matches!(launch.resume, Some(None)),
+            "a bare --resume opens a picker no fire can answer; give the session id",
+        ),
+    ];
+    if let Some((_, refusal)) = refusals.into_iter().find(|(set, _)| *set) {
+        bail!("{refusal}; remove it from the tail");
+    }
+    if launch.print {
+        validate_supervised_output(args, launch.output_format.unwrap_or_default())?;
+    }
+    if place.each_worktree
+        && let Some(flag) = cohort_place_flag(&launch.cohort)
+    {
+        bail!("{flag} in the tail places the launch, and --each-worktree places each fire");
+    }
+    let machine_config = crate::cli::machine_config();
+    let effective = rimz::config::effective::load(&machine_config, place.project_root)?;
+    resolve_finalized_layout(
+        None,
+        &machine_config,
+        &effective,
+        rimz::config::effective::ProfileScope::Agents,
+        launch.spec.as_deref(),
+        launch.prompt.as_deref(),
+        &launch.overrides,
+        launch.cohort.budget,
+        launch.max_turns,
+        None,
+        launch.name.is_some(),
+        None,
+    )?;
+    Ok(())
+}
+
+/// The tail flag that places a cohort launch itself, which `--each-worktree` refuses.
+pub(super) fn cohort_place_flag(cohort: &CohortLaunchArgs) -> Option<&'static str> {
+    [
+        (cohort.worktree.is_some(), "-w"),
+        (cohort.channel.is_some(), "--channel"),
+        (cohort.from_pr.is_some(), "--from-pr"),
+    ]
+    .into_iter()
+    .find_map(|(set, flag)| set.then_some(flag))
 }
 
 pub(in crate::cli) struct BackgroundLaunch {

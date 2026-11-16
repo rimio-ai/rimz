@@ -701,7 +701,7 @@ fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
     write_named(
         &dir,
         LOOP_FILE,
-        "[tasks.nightly]\ncommand = [\"true\"]\nroot = \"/tmp\"\nfuture = true\n",
+        "[tasks.nightly]\nargs = [\"true\"]\nroot = \"/tmp\"\nfuture = true\n",
     );
 
     let config = MachineConfig::load_from(&config_path, agents_home.path()).expect("load");
@@ -1671,7 +1671,7 @@ fn loop_tasks_parse_and_default_empty() {
         &dir,
         "loop.toml",
         "[tasks.morning]\n\
-             command = [\"rimz\", \"agents\", \"claude\", \"triage\"]\n\
+             args = [\"rimz\", \"agents\", \"claude\", \"triage\"]\n\
              root = \"/home/me/app\"\n\
              at = \"07:00\"\n\
              every = \"weekdays\"\n\
@@ -1685,7 +1685,7 @@ fn loop_tasks_parse_and_default_empty() {
     ))
     .expect("load");
     let entry = config.r#loop.tasks.0.get("morning").expect("morning task");
-    assert_eq!(entry.command, ["rimz", "agents", "claude", "triage"]);
+    assert_eq!(entry.args, ["rimz", "agents", "claude", "triage"]);
     assert_eq!(entry.wait, None);
     assert_eq!(entry.refused, None);
     assert_eq!(entry.root, std::path::Path::new("/home/me/app"));
@@ -1696,7 +1696,7 @@ fn loop_tasks_parse_and_default_empty() {
     assert_eq!(entry.cron, None);
 
     let bound = config.r#loop.tasks.0.get("self_wait").expect("bind task");
-    assert!(bound.command.is_empty());
+    assert!(bound.args.is_empty());
     let target = bound.wait.as_ref().expect("target");
     assert_eq!(target.kind, "claude");
     assert_eq!(target.session, "sess-1");
@@ -1709,12 +1709,12 @@ fn loop_loads_skip_machine_tasks_without_absolute_roots() {
     let path = write_named(
         &dir,
         LOOP_FILE,
-        "[tasks.missing]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.empty]\nroot=''\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.relative]\nroot='nowhere/x'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.dot]\nroot='.'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.home]\nroot='~/x'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.absolute]\nroot='/repo'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n",
+        "[tasks.missing]\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.empty]\nroot=''\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.relative]\nroot='nowhere/x'\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.dot]\nroot='.'\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.home]\nroot='~/x'\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.absolute]\nroot='/repo'\nargs=['true']\ntimeout='1m'\nevery='1h'\n",
     );
     let configs = [
         load_no_fragments(&path).unwrap(),

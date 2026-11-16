@@ -55,6 +55,7 @@ fn alive_lists_the_tasks_stamped_launches_until_each_ends() {
             Launch::Supervised(run) => (run.agent_id.clone().unwrap().to_string(), &launch.fire),
             Launch::Agent(row) => (row.agent_id.to_string(), &launch.fire),
             Launch::Workflow(run) => (run.id.to_string(), &launch.fire),
+            Launch::Child { .. } => unreachable!("no fire mark carries a launch child here"),
         })
         .collect::<Vec<_>>();
     assert_eq!(

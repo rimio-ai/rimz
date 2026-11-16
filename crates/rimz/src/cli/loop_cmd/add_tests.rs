@@ -36,7 +36,6 @@ fn repeat_with_every_refuses_and_repeat_needs_a_signal_or_condition() {
 fn removed_flags_and_wait_are_unknown_to_loop_add() {
     for flag in [
         "--wait",
-        "--agent",
         "--prompt",
         "--stay",
         "--takeover",
@@ -62,16 +61,17 @@ fn removed_flags_and_wait_are_unknown_to_loop_add() {
 
 #[test]
 fn the_command_is_required_and_kept_word_for_word() {
-    let error = parse(&["--every", "1h"]).unwrap_err();
     assert_eq!(
-        error.kind(),
-        clap::error::ErrorKind::MissingRequiredArgument
+        validate_add_args(&args(&["--every", "1h"]))
+            .unwrap_err()
+            .to_string(),
+        "a shell task needs its command after `--`: `rimz loop add <name> ... -- <command>`"
     );
     let words = ["sh", "-c", "echo 'a b' \"$HOME\" *.rs", "--every"];
     let argv = [&["nightly", "--every", "1h", "--"][..], &words].concat();
     let parsed = args(&argv);
     assert_eq!(parsed.name.as_deref(), Some("nightly"));
-    assert_eq!(parsed.command, words);
+    assert_eq!(parsed.args, words);
 }
 
 #[test]
@@ -99,7 +99,8 @@ fn an_added_row_stores_the_trigger_command_timeout_and_root_only() {
         TaskEntry {
             root: workspace.project_root.clone(),
             when: Some(vec!["pr[x]=merged".into()]),
-            command: argv[5..].iter().map(|word| (*word).to_owned()).collect(),
+            kind: Some(rimz::config::LaunchKind::Shell),
+            args: argv[5..].iter().map(|word| (*word).to_owned()).collect(),
             timeout: Some("45m".into()),
             ..TaskEntry::default()
         }
@@ -161,26 +162,33 @@ fn fresh_worktree_takes_a_name_prefix_and_receipts_name_the_fire_tree() {
 
     for (toml, expected) in [
         (
-            "command=['true']\ntimeout='2h'\nevery='1h'\nfresh-worktree='nightly'",
+            "args=['true']\ntimeout='2h'\nevery='1h'\nfresh-worktree='nightly'",
             "action: runs `true` in a fresh worktree `nightly-<time>` per fire, branched from trunk · timeout 2h",
         ),
         (
-            "command=['cargo', 'test']\ntimeout='10m'\nevery='1h'\nroot='/repo'",
+            "args=['cargo', 'test']\ntimeout='10m'\nevery='1h'\nroot='/repo'",
             "action: runs `cargo test` in /repo · timeout 10m",
         ),
         (
-            "command=['true']\ntimeout='1h'\nevery='1h'\neach-worktree=true",
+            "args=['true']\ntimeout='1h'\nevery='1h'\neach-worktree=true",
             "action: runs `true` in each RimZ-owned worktree where the trigger holds · timeout 1h",
         ),
         (
-            "command=['true']\ntimeout='1h'\nsignal='deploy.done'\nrepeat=true",
+            "args=['true']\ntimeout='1h'\nsignal='deploy.done'\nrepeat=true",
             "trigger: fires on deploy.done; repeats after each fire",
         ),
     ] {
         let entry: TaskEntry = toml::from_str(toml).unwrap();
         let shape = schedule::TaskShape::compile("task", &entry);
         let mut out = Vec::new();
-        write_add_feedback(&mut out, &entry, shape.trigger().as_ref().unwrap(), None).unwrap();
+        write_add_feedback(
+            &mut out,
+            &entry,
+            shape.action().unwrap(),
+            shape.trigger().as_ref().unwrap(),
+            None,
+        )
+        .unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.lines().any(|line| line == expected), "{text}");
     }

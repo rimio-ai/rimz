@@ -214,6 +214,9 @@ enum Command {
         /// attempt.
         #[arg(long)]
         skip_capacity: bool,
+        /// The fire of a workflow loop task starting this run as the task's own.
+        #[arg(long, hide = true, value_name = "JSON")]
+        loop_fire_json: Option<String>,
     },
     /// List active and parked workflow runs across rooms.
     List {
@@ -303,6 +306,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             prompt,
             give_up,
             skip_capacity,
+            loop_fire_json,
         } => {
             let args = workflow::StartArgs {
                 give_up,
@@ -312,7 +316,12 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
                     records::StartCapacity::Wait
                 },
             };
-            start(name, worktree, prompt, args, globals)
+            let task = loop_fire_json
+                .as_deref()
+                .map(serde_json::from_str::<workflow::TaskStart>)
+                .transpose()
+                .context("decoding --loop-fire-json")?;
+            start(name, worktree, prompt, args, task, globals)
         }
         Command::List { json } => list::run(json, globals),
         Command::Show {
@@ -493,11 +502,15 @@ fn start(
     worktree: Option<String>,
     prompt: Option<String>,
     args: workflow::StartArgs,
+    task: Option<workflow::TaskStart>,
     globals: &super::GlobalFlags,
 ) -> Result<()> {
     let dir = workflow_view::deployed_definition(&name, validation_root(globals).as_deref())?;
     let ctx = super::ctx::Ctx::open(globals)?;
-    if worktree.is_some() && workflow::load(&dir)?.scope() == workflow::ScopeKind::Project {
+    let fire_tree = worktree.is_none() && task.as_ref().is_some_and(|task| task.fire_tree);
+    if (worktree.is_some() || fire_tree)
+        && workflow::load(&dir)?.scope() == workflow::ScopeKind::Project
+    {
         bail!(
             "{} has scope = project, so it runs at {}; start it without -w",
             dir.file_name().unwrap_or(dir.as_os_str()).to_string_lossy(),
@@ -515,31 +528,62 @@ fn start(
         ctx.workspace.worktree_root.clone()
     };
     refuse_unwritable_home("started")?;
-    // A run started under a loop fire carries the fire: listed and stopped by its task, owned
-    // by no task and reported to nobody.
-    let loop_fire = rimz::harness::loop_task::read_fire_env().map(|fire| fire.fire);
-    let (record, advance) = workflow::create(
-        ctx.store.paths(),
-        workflow::DefinitionSource::Deployed {
+    // A workflow task's fire names its run as the task's own. Any other run started under a
+    // loop fire carries the fire: listed and stopped by its task, reported to nobody.
+    let manual = task.as_ref().is_some_and(|task| task.manual);
+    let owned = task.is_some();
+    let source = match task {
+        Some(task) => workflow::DefinitionSource::Deployed {
+            dir: &dir,
+            task: Some(task.task),
+            loop_fire: Some(task.loop_fire),
+            fire_tree,
+            surplus: None,
+            surplus_after: None,
+            fire: Some(task.fire),
+            fire_facts: Some(task.fire_facts),
+        },
+        None => workflow::DefinitionSource::Deployed {
             dir: &dir,
             task: None,
-            loop_fire,
+            loop_fire: rimz::harness::loop_task::read_fire_env().map(|fire| fire.fire),
+            fire_tree: false,
             surplus: None,
             surplus_after: None,
             fire: None,
             fire_facts: None,
         },
+    };
+    let created = workflow::create(
+        ctx.store.paths(),
+        source,
         workflow::ScopeRoots {
             checkout: scope.clone(),
             project: ctx.workspace.project_root.clone(),
         },
         || Ok(prompt),
-        false,
+        manual,
         args,
-    )?;
+    );
+    let (record, advance) = match created {
+        Err(ref error @ workflow::WorkflowErr::Exists { ref run, .. }) if owned => {
+            writeln!(render::out(), "{run}")?;
+            return Err(super::ExitCodeError {
+                code: workflow::TaskStart::OVERLAP_EXIT_CODE,
+                message: error.to_string(),
+            }
+            .into());
+        }
+        created => created?,
+    };
     writeln!(render::out(), "{}", record.id)?;
     let paths = ctx.store.paths().workflow(&record.id);
-    let passed = receipt::first_pass(ctx.store.paths(), &record.id, Some(&advance))?;
+    // A task's fire returns once its run is published; the run's report says how it went.
+    let passed = if owned {
+        None
+    } else {
+        receipt::first_pass(ctx.store.paths(), &record.id, Some(&advance))?
+    };
     // A run that ended in its first pass has its home moved to the finished directory.
     let work = if paths.work.is_dir() {
         paths.work.clone()
@@ -672,6 +716,64 @@ fn show(
         resolve::Selection::Run(run) => show::render(&run, json, history, globals),
         resolve::Selection::Other(other) => show::render_other(&other, json, history),
     }
+}
+
+impl WorkflowArgs {
+    /// Whether this parse is `rimz workflow run`.
+    pub(super) fn is_run(&self) -> bool {
+        matches!(self.command, Command::Run { .. })
+    }
+}
+
+/// `rimz loop add --workflow`'s check: the target is a deployed workflow's name that validates,
+/// and the placement flags fit the workflow's scope.
+pub(super) fn check_loop_launch(
+    args: &WorkflowArgs,
+    place: &super::loop_launch::LoopLaunchPlace<'_>,
+) -> Result<()> {
+    let Command::Run {
+        name,
+        worktree,
+        loop_fire_json,
+        ..
+    } = &args.command
+    else {
+        bail!("the tail does not parse as `rimz workflow run`");
+    };
+    if loop_fire_json.is_some() {
+        bail!("--loop-fire-json is the fire's own; remove it from the tail");
+    }
+    if name.components().count() != 1 {
+        bail!(
+            "`{}` is a path; --workflow takes a deployed workflow's name",
+            name.display()
+        );
+    }
+    if worktree.is_some() {
+        if place.each_worktree {
+            bail!("-w in the tail places the run, and --each-worktree places each fire");
+        }
+        if place.fresh_worktree {
+            bail!("-w in the tail places the run, and --fresh-worktree places each fire");
+        }
+    }
+    let dir = workflow_view::deployed_definition(name, Some(place.project_root))?;
+    if workflow::load(&dir)?.scope() != workflow::ScopeKind::Project {
+        return Ok(());
+    }
+    if place.fresh_worktree || place.each_worktree {
+        bail!(
+            "{} has scope = project, so it runs at the project root; remove --fresh-worktree and --each-worktree",
+            name.display()
+        );
+    }
+    if worktree.is_some() {
+        bail!(
+            "{} has scope = project, so it runs at the project root; remove -w from the tail",
+            name.display()
+        );
+    }
+    Ok(())
 }
 
 fn validation_root(globals: &super::GlobalFlags) -> Option<PathBuf> {

@@ -18,6 +18,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
     let catalog = TaskCatalog::load(Some(&project_root))?;
     let name = args.name.clone().unwrap_or_else(|| catalog.mint_name());
     let mut entry = build_task_entry(&args, &name, &workspace)?;
+    check_launch(&args, &name, &workspace.project_root)?;
     let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
     let provider = args.provider.clone();
     let login = provider
@@ -60,7 +61,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
     // Compile once before writing, so validation and feedback share one shape.
     let shape = schedule::TaskShape::compile(&name, &entry);
     let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
-    shape.action().map_err(Clone::clone)?;
+    let action = shape.action().map_err(Clone::clone)?;
     crate::cli::wake_view::refuse_unreadable_forge_task(&entry)?;
     let project_pre_state = args
         .project
@@ -82,7 +83,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
     if let Some(pre_state) = project_pre_state {
         finish_project_mutation(&mut out, &project_root, true, pre_state)?;
     }
-    write_add_feedback(&mut out, &entry, parsed, after_reset.as_ref())?;
+    write_add_feedback(&mut out, &entry, action, parsed, after_reset.as_ref())?;
     write_linked_add_note(&mut out, &entry, &workspace)?;
     writeln!(
         out,
@@ -118,9 +119,66 @@ fn booking_chain(workspace: &rimz::ResolvedWorkspace) -> Vec<rimz::agents::Launc
     rimz::harness::ancestry::booking_chain(&rows.agents, booker)
 }
 
+/// The declared kind and its target: `--workflow`, `--agent`, `--team`, else shell.
+fn launch_kind(args: &AddArgs) -> (rimz::config::LaunchKind, Option<&str>) {
+    use rimz::config::LaunchKind;
+    [
+        (LaunchKind::Workflow, args.workflow.as_deref()),
+        (LaunchKind::Agent, args.agent.as_deref()),
+        (LaunchKind::Team, args.team.as_deref()),
+    ]
+    .into_iter()
+    .find_map(|(kind, target)| target.map(|target| (kind, Some(target))))
+    .unwrap_or((LaunchKind::Shell, None))
+}
+
+/// The tail checked as the fire's launch will parse it, each refusal naming the task and the
+/// kind flag.
+fn check_launch(args: &AddArgs, name: &str, project_root: &Path) -> Result<()> {
+    let (kind, target) = launch_kind(args);
+    let place = crate::cli::loop_launch::LoopLaunchPlace {
+        project_root,
+        each_worktree: args.each_worktree,
+        fresh_worktree: args.fresh_worktree.is_some(),
+    };
+    check_kind_flags(args, kind)
+        .and_then(|()| crate::cli::loop_launch::check(kind, target, &args.args, &place))
+        .map_err(|err| match target {
+            Some(target) => {
+                anyhow::anyhow!(
+                    "loop task `{name}`: --{} `{target}`: {err:#}",
+                    kind.as_str()
+                )
+            }
+            None => anyhow::anyhow!("loop task `{name}`: {err:#}"),
+        })
+}
+
+/// The add flags a launch kind refuses: a launch bounds and places itself.
+fn check_kind_flags(args: &AddArgs, kind: rimz::config::LaunchKind) -> Result<()> {
+    use rimz::config::LaunchKind;
+    if kind != LaunchKind::Shell && args.timeout.is_some() {
+        bail!(
+            "--timeout bounds a shell task's command; remove it: {}",
+            kind.timeout_bound()
+        );
+    }
+    if args.fresh_worktree.is_some() && matches!(kind, LaunchKind::Agent | LaunchKind::Team) {
+        bail!(
+            "--fresh-worktree cannot be used with --{}; put a bare `-w` in the tail and the launch cuts its own tree",
+            kind.as_str()
+        );
+    }
+    Ok(())
+}
+
 fn validate_add_args(args: &AddArgs) -> Result<()> {
     if let Some(name) = &args.name {
         rimz::harness::name::validate_name(name)?;
+    }
+    let (kind, _) = launch_kind(args);
+    if kind == rimz::config::LaunchKind::Shell && args.args.is_empty() {
+        bail!("a shell task needs its command after `--`: `rimz loop add <name> ... -- <command>`");
     }
     if args.until.is_some() {
         bail!("--until is no longer accepted; fire on a condition with --when");
@@ -272,10 +330,16 @@ fn build_task_entry(
 ) -> Result<TaskEntry> {
     let matches = parse_matches(&args.matches)?;
     let timing = resolve_add_timing(args, name)?;
+    let (kind, target) = launch_kind(args);
+    let shell = kind == rimz::config::LaunchKind::Shell;
     Ok(TaskEntry {
         label: args.label.clone(),
-        command: args.command.clone(),
-        timeout: Some(task_timeout(args.timeout.as_deref())?),
+        kind: Some(kind),
+        target: target.map(str::to_owned),
+        args: args.args.clone(),
+        timeout: shell
+            .then(|| task_timeout(args.timeout.as_deref()))
+            .transpose()?,
         each_worktree: args.each_worktree,
         max_strikes: args.max_strikes,
         overlap: args.overlap.as_deref().map(|value| match value {
@@ -513,16 +577,24 @@ fn write_linked_add_note(
 fn write_add_feedback(
     out: &mut impl Write,
     entry: &TaskEntry,
+    action: &TaskAction,
     parsed: &schedule::ParsedTrigger,
     after_reset: Option<&AfterReset>,
 ) -> Result<()> {
-    writeln!(
-        out,
-        "action: runs `{}` in {} · timeout {}",
-        schedule::command_line(&entry.command),
-        fire_place(entry),
-        entry.timeout.as_deref().unwrap_or_default()
-    )?;
+    match entry.timeout.as_deref() {
+        Some(timeout) => writeln!(
+            out,
+            "action: runs `{}` in {} · timeout {timeout}",
+            action.subject(),
+            fire_place(entry),
+        )?,
+        None => writeln!(
+            out,
+            "action: launches `{}` in {}",
+            action.subject(),
+            fire_place(entry),
+        )?,
+    }
     let suffix = if parsed.once {
         "; then removed"
     } else if entry.repeat {

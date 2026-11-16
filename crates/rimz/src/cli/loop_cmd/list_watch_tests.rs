@@ -382,6 +382,11 @@ fn mark(at: Timestamp) -> rimz::harness::schedule::task_record::FireMark {
         run: None,
         scope: rimz::store::workflow::ScopeKind::Worktree,
         result: None,
+        kind: None,
+        target: None,
+        manual: false,
+        opener: None,
+        child: None,
     }
 }
 

@@ -531,6 +531,56 @@ fn list_profiles(json: bool, path: bool) -> Result<()> {
     )
 }
 
+impl TeamsArgs {
+    /// Whether this parse launches a team: the `launch` verb, or a bare team name.
+    pub(super) fn is_launch(&self) -> bool {
+        match &self.command {
+            Some(TeamsSubcmd::Launch(_)) => true,
+            Some(_) => false,
+            None => self
+                .name
+                .as_deref()
+                .is_some_and(|name| !name.trim().is_empty()),
+        }
+    }
+}
+
+/// `rimz loop add --team`'s check: refuse what a fire's launch cannot carry, then resolve the
+/// team the way the launch resolves it.
+pub(super) fn check_loop_launch(
+    args: &TeamsArgs,
+    place: &crate::cli::loop_launch::LoopLaunchPlace<'_>,
+) -> Result<()> {
+    let Some(TeamsSubcmd::Launch(launch)) = &args.command else {
+        bail!("the tail does not parse as a `rimz teams launch`");
+    };
+    if launch.launch.detach {
+        bail!("--detach drops the report a launch owes; remove it from the tail");
+    }
+    let (team, lane) = launch
+        .name
+        .split_once('#')
+        .map_or((launch.name.as_str(), None), |(team, lane)| {
+            (team, Some(lane))
+        });
+    if place.each_worktree {
+        let flag = lane
+            .map(|_| "a `#lane` on the team")
+            .or_else(|| agents_cmd::cohort_place_flag(&launch.launch));
+        if let Some(flag) = flag {
+            bail!("{flag} places the launch, and --each-worktree places each fire");
+        }
+    }
+    let globals = GlobalFlags {
+        mux: None,
+        zellij: false,
+        tmux: false,
+        root: Some(place.project_root.to_path_buf()),
+        color: super::ColorWhen::Auto,
+    };
+    ensure_defined(team, &globals).map(|_| ())
+}
+
 fn ensure_defined(name: &str, globals: &GlobalFlags) -> Result<rimz::config::TeamsConfig> {
     let (teams, profiles) = list::effective_catalog(globals)?;
     if !teams.0.contains_key(name)

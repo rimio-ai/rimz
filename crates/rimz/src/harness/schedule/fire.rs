@@ -228,6 +228,45 @@ pub fn fire_due_tasks(
         tick_backlog_with(runtime, root, now.timestamp(), |name| {
             spawn_loop_drain(runtime, root, name, host)
         });
+        spawn_settle(runtime, root, now.timestamp(), host);
+    }
+}
+
+/// Spawn the room's settle pass when an open fire mark no process still runs waits for it, at
+/// most once per tick interval: the pace stamp is published before the spawn.
+fn spawn_settle(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, host: LoopRunHost) {
+    let path = runtime.lane_path("loop-settle.json");
+    let last: Option<Timestamp> = crate::disk::atomic::read_json_cache(&path);
+    if last.is_some_and(|last| now.duration_since(last).as_secs() < WORKFLOW_TICK_SECS)
+        || !super::run_log::has_open_fires(project_root)
+    {
+        return;
+    }
+    if let Err(error) = write_temp_then_rename_cache(&path, &Some(now)) {
+        tracing::warn!(%error, "loop tick could not publish the settle pace");
+        return;
+    }
+    if cfg!(test) {
+        return;
+    }
+    let args: Vec<OsString> = vec![
+        "--root".into(),
+        project_root.as_os_str().into(),
+        "loop".into(),
+        "settle".into(),
+    ];
+    let (program, args) = loop_run_command(host, &crate::proc::rimz_exe(), &args, "loop settle");
+    let spawned = if host == LoopRunHost::Detached {
+        crate::child_process::spawn_detached_rimz(runtime, &args, "loop-settle").map(|()| None)
+    } else {
+        crate::child_process::spawn_detached_program(&program, &args, runtime, "loop-settle")
+    };
+    match spawned {
+        Ok(Some(pid)) if host == LoopRunHost::TransientScope => {
+            wait_for_scope(pid, "loop settle");
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "loop tick could not spawn the settle pass"),
     }
 }
 

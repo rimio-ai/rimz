@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::WatchSpec;
+use crate::config::{LaunchKind, WatchSpec};
 use jiff::civil::date;
 
 use jiff::civil::Weekday::{Friday, Monday, Wednesday};
@@ -452,7 +452,7 @@ fn after(now: &Zoned, seconds: i64) -> Timestamp {
 
 fn entry(at: Option<&str>, every: Option<&str>, cron: Option<&str>) -> TaskEntry {
     TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         at: at.map(ToOwned::to_owned),
         every: every.map(ToOwned::to_owned),
@@ -463,7 +463,7 @@ fn entry(at: Option<&str>, every: Option<&str>, cron: Option<&str>) -> TaskEntry
 
 fn spawn_entry() -> TaskEntry {
     TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     }
@@ -515,13 +515,39 @@ fn weekday_masks_preserve_aliases_sorting_and_wrapped_ranges() {
 #[test]
 fn task_action_from_entry_maps_field_combinations() {
     for (entry, kind) in [
-        (spawn_entry(), TaskActionKind::Command),
+        (spawn_entry(), TaskActionKind::Shell),
         (
             TaskEntry {
                 wait: Some(wait_target()),
                 ..TaskEntry::default()
             },
             TaskActionKind::Deliver,
+        ),
+        (
+            TaskEntry {
+                kind: Some(LaunchKind::Workflow),
+                target: Some("review".into()),
+                fresh_worktree: Some("night".into()),
+                ..TaskEntry::default()
+            },
+            TaskActionKind::Workflow,
+        ),
+        (
+            TaskEntry {
+                kind: Some(LaunchKind::Agent),
+                target: Some("claude".into()),
+                args: vec!["-p".into(), "fix".into()],
+                ..TaskEntry::default()
+            },
+            TaskActionKind::Agent,
+        ),
+        (
+            TaskEntry {
+                kind: Some(LaunchKind::Team),
+                target: Some("forge#lane".into()),
+                ..TaskEntry::default()
+            },
+            TaskActionKind::Team,
         ),
     ] {
         let action = TaskAction::from_entry("task", &entry).expect("valid action");
@@ -534,18 +560,51 @@ fn task_action_from_entry_maps_field_combinations() {
                 wait: Some(wait_target()),
                 ..spawn_entry()
             },
-            "loop task `task` sets both `command` and `wait`; keep exactly one",
+            "loop task `task` sets `args` beside `wait`; keep exactly one action",
         ),
         (
             TaskEntry {
                 timeout: None,
                 ..spawn_entry()
             },
-            "loop task `task` has a `command` without `timeout`; set `timeout = \"2h\"`, or delete the task and re-add it with `rimz loop add`",
+            "loop task `task` is a shell row without `timeout`; set `timeout = \"2h\"`, or delete the task and re-add it with `rimz loop add`",
         ),
         (
             TaskEntry::default(),
-            "loop task `task` has no `command`; delete the task and re-add it with `rimz loop add`",
+            "loop task `task` has no `args` and no `kind`; delete the task and re-add it with `rimz loop add`",
+        ),
+        (
+            TaskEntry {
+                kind: Some(LaunchKind::Agent),
+                timeout: None,
+                ..TaskEntry::default()
+            },
+            "loop task `task` of kind `agent` has no `target`; delete the task and re-add it with `rimz loop add`",
+        ),
+        (
+            TaskEntry {
+                kind: Some(LaunchKind::Workflow),
+                target: Some("review".into()),
+                ..spawn_entry()
+            },
+            "loop task `task` of kind `workflow` sets `timeout`; remove it; a workflow task's run is bounded by its workflow's deadline",
+        ),
+        (
+            TaskEntry {
+                kind: Some(LaunchKind::Team),
+                target: Some("forge".into()),
+                timeout: None,
+                fresh_worktree: Some("night".into()),
+                ..spawn_entry()
+            },
+            "loop task `task` of kind `team` sets `fresh-worktree`; remove it and put a bare `-w` in `args`; the launch cuts its own tree",
+        ),
+        (
+            TaskEntry {
+                target: Some("review".into()),
+                ..spawn_entry()
+            },
+            "loop task `task` of kind `shell` sets `target`; a shell row runs `args` alone; re-add it with a kind flag",
         ),
     ] {
         let err = TaskAction::from_entry("task", &entry).expect_err("invalid action");
@@ -574,7 +633,7 @@ fn a_row_with_a_key_outside_the_row_refuses_with_the_re_add_message() {
 #[test]
 fn on_belongs_to_a_watch_and_refuses_on_a_command_or_signal_delivery_row() {
     for row in [
-        "command=['true']\ntimeout='1m'\nevery='1h'\non='success'",
+        "args=['true']\ntimeout='1m'\nevery='1h'\non='success'",
         "wait={kind='codex', session='s', handle='@x'}\nsignal='deploy.done'\non='success'",
     ] {
         let entry: TaskEntry = toml::from_str(row).unwrap();
@@ -596,7 +655,7 @@ fn on_belongs_to_a_watch_and_refuses_on_a_command_or_signal_delivery_row() {
 fn fresh_worktree_prefix_must_be_a_worktree_name() {
     for prefix in ["", "v1.2", "a b"] {
         let entry: TaskEntry = toml::from_str(&format!(
-            "fresh-worktree={prefix:?}\nroot='/r'\ncommand=['true']\ntimeout='1m'"
+            "fresh-worktree={prefix:?}\nroot='/r'\nargs=['true']\ntimeout='1m'"
         ))
         .unwrap();
         let error = TaskAction::from_entry("task", &entry).unwrap_err();
@@ -615,7 +674,7 @@ fn fresh_worktree_prefix_must_be_a_worktree_name() {
         );
     }
     let entry: TaskEntry =
-        toml::from_str("fresh-worktree='night/fix_1'\nroot='/r'\ncommand=['true']\ntimeout='1m'")
+        toml::from_str("fresh-worktree='night/fix_1'\nroot='/r'\nargs=['true']\ntimeout='1m'")
             .unwrap();
     assert!(TaskAction::from_entry("task", &entry).is_ok());
 }
@@ -624,14 +683,11 @@ fn fresh_worktree_prefix_must_be_a_worktree_name() {
 fn fresh_worktree_is_refused_beside_each_placement_it_replaces() {
     for (fields, field) in [
         (
-            "command=['true']\ntimeout='1m'\neach-worktree=true",
+            "args=['true']\ntimeout='1m'\neach-worktree=true",
             "each-worktree",
         ),
         ("wait={kind='codex', session='s', handle='@x'}", "wait"),
-        (
-            "command=['true']\ntimeout='1m'\ndir='/tmp/elsewhere'",
-            "dir",
-        ),
+        ("args=['true']\ntimeout='1m'\ndir='/tmp/elsewhere'", "dir"),
     ] {
         let entry: TaskEntry =
             toml::from_str(&format!("fresh-worktree='p'\nroot='/r'\n{fields}")).unwrap();
@@ -649,7 +705,7 @@ fn fresh_worktree_is_refused_beside_each_placement_it_replaces() {
     }
     let error = TaskAction::from_entry(
         "task",
-        &toml::from_str("fresh-worktree='p'\ncommand=['true']\ntimeout='1m'\ndir='/d'").unwrap(),
+        &toml::from_str("fresh-worktree='p'\nargs=['true']\ntimeout='1m'\ndir='/d'").unwrap(),
     )
     .unwrap_err();
     assert_eq!(
@@ -657,7 +713,7 @@ fn fresh_worktree_is_refused_beside_each_placement_it_replaces() {
         "loop task `task` sets `fresh-worktree` with `dir`; remove `dir`; a fresh-worktree task runs its command in the fire's tree"
     );
     let entry: TaskEntry =
-        toml::from_str("fresh-worktree='p'\nroot='/r'\ncommand=['true']\ntimeout='1m'").unwrap();
+        toml::from_str("fresh-worktree='p'\nroot='/r'\nargs=['true']\ntimeout='1m'").unwrap();
     assert!(TaskAction::from_entry("task", &entry).is_ok());
 }
 
@@ -665,8 +721,8 @@ fn fresh_worktree_is_refused_beside_each_placement_it_replaces() {
 fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
     // Repeating clock and condition tasks overlap on their live run.
     for fields in [
-        "command=['true']\ntimeout='1m'\nevery='1h'",
-        "command=['true']\ntimeout='1m'\nwhen=['team.stage=Done']\nrepeat=true",
+        "args=['true']\ntimeout='1m'\nevery='1h'",
+        "args=['true']\ntimeout='1m'\nwhen=['team.stage=Done']\nrepeat=true",
     ] {
         let entry: crate::config::TaskEntry =
             toml::from_str(&format!("overlap='coalesce'\n{fields}")).unwrap();
@@ -677,13 +733,13 @@ fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
         );
     }
     for (fields, reason) in [
-        ("command=['true']\ntimeout='1m'\nat='07:00'", "one-shot"),
+        ("args=['true']\ntimeout='1m'\nat='07:00'", "one-shot"),
         (
-            "command=['true']\ntimeout='1m'\nwhen=['team.stage=Done']",
+            "args=['true']\ntimeout='1m'\nwhen=['team.stage=Done']",
             "one-shot",
         ),
         (
-            "command=['true']\ntimeout='1m'\nevery='1h'\ndeadline='2030-01-01T00:00:00Z'",
+            "args=['true']\ntimeout='1m'\nevery='1h'\ndeadline='2030-01-01T00:00:00Z'",
             "one-shot",
         ),
         (
@@ -691,11 +747,11 @@ fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
             "no run to overlap",
         ),
         (
-            "command=['true']\ntimeout='1m'\nevery='1h'\noverlap-limit=2",
+            "args=['true']\ntimeout='1m'\nevery='1h'\noverlap-limit=2",
             "queue",
         ),
         (
-            "command=['true']\ntimeout='1m'\neach-worktree=true\nwhen=['team.stage=Done']\nrepeat=true",
+            "args=['true']\ntimeout='1m'\neach-worktree=true\nwhen=['team.stage=Done']\nrepeat=true",
             "per checkout",
         ),
     ] {
@@ -707,7 +763,7 @@ fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
     }
     for fields in ["overlap-limit=2", "overlap='queue'\noverlap-limit=0"] {
         let entry: crate::config::TaskEntry = toml::from_str(&format!(
-            "command=['true']\ntimeout='1m'\nevery='1h'\n{fields}"
+            "args=['true']\ntimeout='1m'\nevery='1h'\n{fields}"
         ))
         .unwrap();
         assert!(
@@ -726,14 +782,14 @@ fn task_shape_compiles_action_and_timing_independently() {
         &TaskEntry {
             cron: Some("0 7 * * *".to_owned()),
             every: Some("weekday".to_owned()),
-            command: vec!["true".to_owned()],
+            args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             ..TaskEntry::default()
         },
     );
     assert_eq!(
         shape.action(),
-        Ok(&TaskAction::Command(vec!["true".to_owned()]))
+        Ok(&TaskAction::Shell(vec!["true".to_owned()]))
     );
     assert!(matches!(
         shape.trigger(),
@@ -1852,7 +1908,7 @@ fn cron_next_after_matches_a_minute_walk_across_zone_shifts() {
 fn trigger_clauses_word_each_trigger_as_a_runs_brief_names_it() {
     let clause = |row: &str| {
         let entry: TaskEntry =
-            toml::from_str(&format!("command=['true']\ntimeout='1m'\n{row}")).unwrap();
+            toml::from_str(&format!("args=['true']\ntimeout='1m'\n{row}")).unwrap();
         trigger_clause(&catalog::LoadedTask::new(
             "land",
             entry,
@@ -1992,7 +2048,7 @@ pub(super) fn swapped_store_with(
 #[test]
 fn an_each_worktree_row_that_fires_once_is_refused_with_the_fix() {
     let entry: TaskEntry =
-        toml::from_str("command=['true']\ntimeout='1m'\neach-worktree=true\nwhen=['pr=merged']")
+        toml::from_str("args=['true']\ntimeout='1m'\neach-worktree=true\nwhen=['pr=merged']")
             .unwrap();
     let error = TaskAction::from_entry("yagni", &entry).unwrap_err();
     assert_eq!(
@@ -2013,7 +2069,7 @@ fn an_each_worktree_row_that_fires_once_is_refused_with_the_fix() {
         "cron='0 * * * *'",
     ] {
         let entry: TaskEntry = toml::from_str(&format!(
-            "command=['true']\ntimeout='1m'\neach-worktree=true\n{fields}"
+            "args=['true']\ntimeout='1m'\neach-worktree=true\n{fields}"
         ))
         .unwrap();
         assert!(

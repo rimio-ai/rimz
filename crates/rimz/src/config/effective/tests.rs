@@ -1633,7 +1633,7 @@ fn trusted_project_tasks_load_with_project_root() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\ncommand = [\"rimz\", \"agents\", \"codex\", \"triage\"]\ntimeout = \"1h\"\naccount = \"work\"\nevery = \"day\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nargs = [\"rimz\", \"agents\", \"codex\", \"triage\"]\ntimeout = \"1h\"\naccount = \"work\"\nevery = \"day\"\nat = \"08:00\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
 
@@ -1644,7 +1644,7 @@ fn trusted_project_tasks_load_with_project_root() {
     assert_eq!(loaded.config_path, project.path().join(".rimz/config.toml"));
     assert_eq!(wait.root, project.path());
     assert_eq!(wait.account, Some("work".parse().expect("login name")));
-    assert_eq!(wait.command, ["rimz", "agents", "codex", "triage"]);
+    assert_eq!(wait.args, ["rimz", "agents", "codex", "triage"]);
     assert_eq!(wait.timeout.as_deref(), Some("1h"));
 }
 
@@ -1659,7 +1659,7 @@ fn dependabot_repair_is_a_command_row_and_loads() {
     let task = &loaded.tasks.0["dependabot-repair"];
     assert_eq!(task.refused, None);
     assert_eq!(
-        task.command,
+        task.args,
         [
             "uv",
             "run",
@@ -1681,7 +1681,7 @@ fn untrusted_project_tasks_stay_visible_with_state() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"day\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"day\"\nat = \"08:00\"\n",
     );
 
     let loaded = load_project_tasks(project.path(), config.path()).expect("project tasks");
@@ -1694,35 +1694,35 @@ fn untrusted_project_tasks_stay_visible_with_state() {
 fn project_tasks_reject_machine_local_fields() {
     let cases = [
         (
-            "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\nwhen = [\"team.stage=Done\"]\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nwhen = [\"team.stage=Done\"]\n",
             "when",
         ),
         (
-            "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\nfor = \"30m\"\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\nfor = \"30m\"\n",
             "for",
         ),
         (
-            "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\ndir = \"/tmp/linked\"\nevery = \"day\"\nat = \"08:00\"\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\ndir = \"/tmp/linked\"\nevery = \"day\"\nat = \"08:00\"\n",
             "dir",
         ),
         (
-            "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"/tmp/other\"\nevery = \"day\"\nat = \"08:00\"\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"/tmp/other\"\nevery = \"day\"\nat = \"08:00\"\n",
             "root",
         ),
         (
-            "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\nwait = { kind = \"codex\", session = \"sess\", handle = \"@codex\" }\nevery = \"day\"\nat = \"08:00\"\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nwait = { kind = \"codex\", session = \"sess\", handle = \"@codex\" }\nevery = \"day\"\nat = \"08:00\"\n",
             "wait",
         ),
         (
-            "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\ndeadline = \"2026-07-01T12:00:00Z\"\nevery = \"day\"\nat = \"08:00\"\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\ndeadline = \"2026-07-01T12:00:00Z\"\nevery = \"day\"\nat = \"08:00\"\n",
             "deadline",
         ),
         (
-            "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\nsignal = \"ci.failed\"\nwait-meta = { armed_by = { kind = \"human\" }, armed_at = \"2026-07-01T12:00:00Z\" }\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nsignal = \"ci.failed\"\nwait-meta = { armed_by = { kind = \"human\" }, armed_at = \"2026-07-01T12:00:00Z\" }\n",
             "wait-meta",
         ),
         (
-            "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"day\"\nat = \"08:00\"\nbooked-by = [{ kind = \"claude\", agent_id = \"launch_lead\" }]\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"day\"\nat = \"08:00\"\nbooked-by = [{ kind = \"claude\", agent_id = \"launch_lead\" }]\n",
             "booked-by",
         ),
     ];
@@ -1749,7 +1749,7 @@ fn project_tasks_validate_schedule_shape() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"weekday\"\n",
+        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"weekday\"\n",
     );
 
     let err = project_tasks(project.path(), config.path()).expect_err("invalid schedule");
@@ -1769,7 +1769,7 @@ fn project_tasks_must_repeat() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nat = \"08:00\"\n",
     );
 
     let err = project_tasks(project.path(), config.path()).expect_err("one-shot project task");
@@ -1789,7 +1789,7 @@ fn project_tasks_accept_signals_and_reject_machine_only_trigger_fields() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\nsignal = \"ci.failed\"\nrepeat = true\nmatch = { branch = \"feature\" }\n",
+        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nsignal = \"ci.failed\"\nrepeat = true\nmatch = { branch = \"feature\" }\n",
     );
 
     let loaded = load_project_tasks(project.path(), config.path()).expect("signal project task");
@@ -1807,7 +1807,7 @@ fn project_tasks_accept_signals_and_reject_machine_only_trigger_fields() {
         write_project_config(
             &project,
             &format!(
-                "[tasks.wait]\ncommand = [\"true\"]\ntimeout = \"1m\"\nsignal = \"ci.failed\"\nrepeat = true\n{field} = {value}\n"
+                "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nsignal = \"ci.failed\"\nrepeat = true\n{field} = {value}\n"
             ),
         );
         let err = project_tasks(project.path(), config.path()).expect_err(field);
@@ -2544,7 +2544,7 @@ fn a_project_row_with_a_key_outside_the_row_refuses_alone() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.ok]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n\
+        "[tasks.ok]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n\
          [tasks.old]\nagent = \"codex\"\nprompt = \"wait\"\nevery = \"1h\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");

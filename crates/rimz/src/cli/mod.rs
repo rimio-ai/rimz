@@ -28,6 +28,7 @@ mod list;
 mod list_pets;
 mod list_themes;
 mod loop_cmd;
+mod loop_launch;
 mod loop_timer;
 mod lsp;
 mod message;

@@ -1557,7 +1557,8 @@ allowed-dependencies = [
 # StatePaths::{finished_workflow, finished_workflow_runs} and disk::paths::recorded_rooms_under place and find finished run homes (+3).
 # WorkflowPaths::{history, relocate} name a run's saved history and map its journal's live paths onto its current home (+2).
 # RuntimePaths::bookings_path classes the sidebar's loop-bookings lane cache (+1).
-surface-budget = 342
+# loop_launch_logs_dir names the per-fire launch-child log directory beside the other loop paths (+1).
+surface-budget = 343
 
 [[verdict]]
 kind = "item"
@@ -2365,7 +2366,8 @@ path = "crates/rimz/src/harness"
 # TaskTiming::{unread, condition_label}, TaskTimingState::condition_label_with, Verdict::unread_reasons and when::condition::ROOM_CLOSED give the CLI the reason an unread forge key shows in place of `unknown` (+5).
 # task_record (Scope, Binding, FireMark, TaskRecord, TaskRecords, TaskRecordErr, load), TaskStoreErr, attention::stamp, LoadedTask::binding and LOOP_FIRE_ENV replace launch memory and the overlay store with one task record by id (+10 net).
 # loop_task::{FireEnv, read_fire_env}, the one reader of a fire's environment, and schedule::launches (the module, AliveLaunch, Launch, alive), what a task's fires launched that is alive, replace the four removed loop-check env readers and request shaper (+2 net).
-surface-budget = 1254
+# A loop task's launch (TaskLaunch with argv, as_str, launches), its launch child's ProcessMark and FireMark::launching, the settle pass (settle_open_fires, has_open_fires, and open_fire_roots for the external tick), workflow::TaskStart for `workflow run --loop-fire-json`, and check_run::drop_room_identity shared by the launch child, counted from the ratchet (+12).
+surface-budget = 1266
 
 [[verdict]]
 kind = "item"
@@ -4986,7 +4988,8 @@ path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # env, as restart and molt do (+1).
 # The workflow attempt stop passes its run, and the idle stop its re-check, through
 # StopTerms and stop_resolved_with (+2).
-surface-budget = 31
+# Command::is_launch, check_loop_launch and cohort_place_flag let `loop add` check an agent or team tail through the launch's own parser (+3).
+surface-budget = 34
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"
@@ -5349,6 +5352,7 @@ allowed-dependencies = [
     "mux",
     "pane",
     "proc",
+    "harness::loop_task",
 ]
 # `check_launch_room` shares the pure pinned-room decision with the CLI launch entries.
 # `LaunchFocus` shares caller-aware focus policy across interactive launch doors.
@@ -5798,7 +5802,8 @@ allowed-dependencies = [
     "proc",
     "workspace",
 ]
-surface-budget = 17
+# drop_room_identity scrubs the room identity from a loop launch child as from a check (+1).
+surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/harness/duration.rs"
@@ -5983,6 +5988,7 @@ allowed-dependencies = [
     "workspace",
     # A fresh-worktree fire creates, signals and force-removes its own per-fire tree.
     "worktree",
+    "address",
 ]
 # Check-launch conversion shares ownership lookup and supervised-run shaping.
 # The hidden runner accepts typed condition evidence alongside signal evidence.

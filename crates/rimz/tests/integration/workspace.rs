@@ -38,7 +38,7 @@ fn loop_read_commands_without_a_room_are_quiet_and_create_nothing() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.probe]\nroot = {:?}\nevery = \"1h\"\ncommand = [\"true\"]\ntimeout = \"1m\"\n",
+            "[tasks.probe]\nroot = {:?}\nevery = \"1h\"\nargs = [\"true\"]\ntimeout = \"1m\"\n",
             env.project_root
         ),
     )

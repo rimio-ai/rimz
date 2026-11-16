@@ -192,12 +192,13 @@ fn write_scheduled_run_summary(
 fn success_result_label(record: &LoopRunRecord) -> String {
     match (record.result, record.target.as_deref()) {
         (LoopRunResult::Delivered, Some(target)) => format!("delivered to {target}"),
+        (LoopRunResult::Launched, Some(launched)) => format!("launched {launched}"),
         _ => record.result.label().to_owned(),
     }
 }
 
 fn manual_result_label(action_kind: TaskActionKind, summary: &RunSummary<'_>) -> String {
-    if action_kind == TaskActionKind::Command
+    if action_kind.launches()
         && let Some(error) = &summary.record.error
     {
         return format!("{}: {error}", summary.record.result.label());
@@ -516,9 +517,9 @@ pub(super) fn write_record_forensics(
         )?;
     }
     if record.result == LoopRunResult::Launched
-        && let Some(leader) = &record.target
+        && let Some(launched) = &record.target
     {
-        write_detail_link(out, "leader", leader)?;
+        write_detail_link(out, "launched", launched)?;
     }
     let evidence = workflow_run(record.run_id.as_deref(), workflow_runs)
         .and_then(|run| run.evidence.as_deref());
@@ -1074,7 +1075,7 @@ mod tests {
     #[test]
     fn stored_judge_forensics_name_every_tier_in_order() {
         use super::*;
-        let entry: TaskEntry = toml::from_str("command=['false']\ntimeout='1m'\n").unwrap();
+        let entry: TaskEntry = toml::from_str("args=['false']\ntimeout='1m'\n").unwrap();
         let mut record = LoopRunRecord::new(
             "guard",
             LoopRunResult::CheckSkipped,

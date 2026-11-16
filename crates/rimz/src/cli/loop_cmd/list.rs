@@ -270,15 +270,33 @@ impl TaskState {
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ActionKind {
-    Command,
+    Shell,
+    Workflow,
+    Agent,
+    Team,
     Wake,
 }
 
 impl From<&TaskAction> for ActionKind {
     fn from(action: &TaskAction) -> Self {
-        match action {
-            TaskAction::Command(_) => Self::Command,
-            TaskAction::Deliver(_) => Self::Wake,
+        match action.kind() {
+            TaskActionKind::Shell => Self::Shell,
+            TaskActionKind::Workflow => Self::Workflow,
+            TaskActionKind::Agent => Self::Agent,
+            TaskActionKind::Team => Self::Team,
+            TaskActionKind::Deliver => Self::Wake,
+        }
+    }
+}
+
+impl From<ActionKind> for TaskActionKind {
+    fn from(kind: ActionKind) -> Self {
+        match kind {
+            ActionKind::Shell => Self::Shell,
+            ActionKind::Workflow => Self::Workflow,
+            ActionKind::Agent => Self::Agent,
+            ActionKind::Team => Self::Team,
+            ActionKind::Wake => Self::Deliver,
         }
     }
 }
@@ -762,10 +780,7 @@ impl TaskRow {
         let (head, continuation) = trigger_text(entry, run_dir, &timing, state, now);
         let action = task.action().ok().map(|action| Action {
             kind: ActionKind::from(action),
-            subject: match action {
-                TaskAction::Command(argv) => schedule::command_line(argv),
-                TaskAction::Deliver(target) => target.handle.clone(),
-            },
+            subject: action.subject(),
         });
         let dir = entry.dir.as_ref().map(|_| run_dir.to_owned());
         let worktree = worktree_name(entry, run_dir);

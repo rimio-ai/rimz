@@ -187,6 +187,7 @@ fn task_roots() -> BTreeSet<PathBuf> {
         .map(|task| task.entry().resolved_root())
         .collect::<BTreeSet<_>>();
     roots.extend(rimz::harness::schedule::catalog::workspace_instance_roots());
+    roots.extend(rimz::harness::schedule::run_log::open_fire_roots());
     match workflow_roots() {
         Ok(workflow) => roots.extend(workflow),
         Err(error) => tracing::warn!(%error, "loop tick could not enumerate workflow roots"),

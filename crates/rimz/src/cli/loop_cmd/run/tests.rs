@@ -203,7 +203,7 @@ fn an_error_recorded_as_a_skip_succeeds_and_any_other_error_propagates() {
 
 fn command_entry() -> TaskEntry {
     TaskEntry {
-        command: vec!["true".to_owned()],
+        args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     }

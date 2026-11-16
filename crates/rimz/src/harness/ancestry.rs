@@ -14,8 +14,10 @@ pub enum LaunchFocus {
 }
 
 impl LaunchFocus {
+    /// A background launch, one an agent makes, and one a loop fire makes keep the user's focus:
+    /// automation never moves it.
     pub fn resolve(background: bool, caller: Option<&CallerIdentity>) -> Self {
-        if background || caller.is_some() {
+        if background || caller.is_some() || crate::harness::loop_task::read_fire_env().is_some() {
             Self::Keep
         } else {
             Self::Take

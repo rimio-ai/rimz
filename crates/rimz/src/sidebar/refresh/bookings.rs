@@ -362,8 +362,8 @@ pub(super) struct RoomRecords<'a> {
 }
 
 /// A loop task of the machine tier or the room's state tier (the two that record
-/// `booked_by`; a timed `--in` add lands in the state tier) that is a one-off whose command
-/// is an agent or team launch (`read_fire_launch`), and was booked by an agent. Any trigger
+/// `booked_by`; a timed `--in` add lands in the state tier) that is a one-off whose declared
+/// kind is agent or team, and was booked by an agent. Any trigger
 /// qualifies; the room filter is `read_catalog`'s. Every wake-me or session-pinned state-tier
 /// row carries `wait`, which no booking does.
 fn is_booking(task: &LoadedTask) -> bool {
@@ -372,7 +372,24 @@ fn is_booking(task: &LoadedTask) -> bool {
         && task.kind() == TaskKind::OneOff
         && entry.wait.is_none()
         && !entry.booked_by.is_empty()
-        && read_fire_launch(&entry.command).is_some()
+        && booked_launch(task).is_some()
+}
+
+/// The launch an agent or team task's fire runs, read as the argv it spawns.
+fn booked_launch(task: &LoadedTask) -> Option<FireLaunch> {
+    let Ok(crate::harness::schedule::TaskAction::Launch(launch)) = task.action() else {
+        return None;
+    };
+    if !matches!(
+        launch.kind,
+        crate::config::LaunchKind::Agent | crate::config::LaunchKind::Team
+    ) {
+        return None;
+    }
+    let argv: Vec<String> = std::iter::once("rimz".to_owned())
+        .chain(launch.argv())
+        .collect();
+    read_fire_launch(&argv)
 }
 
 pub(super) fn collect(
@@ -388,7 +405,7 @@ pub(super) fn collect(
         .filter_map(|(name, task)| {
             let reading = readings.get(name)?;
             let entry = task.entry();
-            let launch = read_fire_launch(&entry.command)?;
+            let launch = booked_launch(task)?;
             let team = teams.0.get(&launch.target);
             let record = reading
                 .launch

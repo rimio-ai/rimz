@@ -6,7 +6,7 @@ fn task_env(name: &str) -> Env {
     let env = Env::new();
     env.record(&env.project_root);
     let row = format!(
-        "[tasks.{name}]\ncommand = ['cargo', 'test', 'a b']\ntimeout = '10m'\nevery = '1h'\nroot = {:?}\n",
+        "[tasks.{name}]\nargs = ['cargo', 'test', 'a b']\ntimeout = '10m'\nevery = '1h'\nroot = {:?}\n",
         env.project_root.display().to_string()
     );
     fs::write(env.rimz_home().join("loop.toml"), row).unwrap();

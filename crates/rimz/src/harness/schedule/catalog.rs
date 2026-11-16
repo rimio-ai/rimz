@@ -16,6 +16,7 @@ use super::{
 use crate::Store;
 use crate::config::{LoopConfig, MachineConfig, TaskEntry, Tasks};
 use crate::disk::paths::{RuntimePaths, StatePaths, rimz_home, workspaces_dir};
+use crate::ids::TaskId;
 use crate::trust::TrustState;
 use crate::workspace::WorkspaceResolver;
 
@@ -580,25 +581,31 @@ impl TaskCatalog {
 
     /// Prune the task record: retire a live record of the catalog's scopes whose row is gone,
     /// drop a settled mark whose checkout is gone, and delete a retired record once every fire it
-    /// marked is recorded. Also removes the files the task record replaced.
+    /// marked is recorded, each only once nothing shows it (`Shown`). Also removes the files
+    /// the task record replaced.
     pub fn prune_records(&self) -> Result<usize> {
         let scopes = Scope::known(self.project_root.as_deref());
+        let shown = Shown::read(&super::task_record::load()?);
         let now = Timestamp::now();
         let pruned = task_record_store::mutate(|records| {
             let before = records.clone();
-            for record in records.tasks.values_mut() {
+            for (id, record) in &mut records.tasks {
                 if record.is_live()
                     && scopes.contains(&record.binding.scope)
                     && !self.row_bindings.contains(&record.binding)
                 {
                     record.retired_at = Some(now);
                 }
-                record
-                    .marks
-                    .retain(|checkout, mark| mark.result.is_none() || checkout.is_dir());
+                let launched = shown.launched.contains(id);
+                record.marks.retain(|checkout, mark| {
+                    mark.result.is_none() || checkout.is_dir() || launched
+                });
             }
-            records.tasks.retain(|_, record| {
-                record.is_live() || record.marks.values().any(|mark| mark.result.is_none())
+            records.tasks.retain(|id, record| {
+                record.is_live()
+                    || record.marks.values().any(|mark| mark.result.is_none())
+                    || shown.launched.contains(id)
+                    || shown.logged.contains(id)
             });
             before
                 .tasks
@@ -639,7 +646,10 @@ impl TaskCatalog {
         for (name, task) in self.runnable.clone() {
             let target = match task.action() {
                 Ok(TaskAction::Deliver(target)) => target.clone(),
-                Ok(TaskAction::Command(_)) | Err(TaskActionErr::Refused { .. }) => continue,
+                Ok(TaskAction::Shell(_) | TaskAction::Launch(_))
+                | Err(TaskActionErr::Refused { .. }) => {
+                    continue;
+                }
                 // RimZ is the only writer of instance rows, so one that no
                 // longer compiles can never fire or retire: reap it. User-owned
                 // rows keep rendering `<invalid>` for the user to fix.
@@ -732,6 +742,93 @@ const RETIRED_ROOM_FILES: [&str; 3] = [
     "loop-capacity-waits",
     "loop-launches",
 ];
+
+/// What still shows a task's record, so `rimz gc` keeps it once its fires are settled.
+struct Shown {
+    /// A launch carrying one of the task's fire ids is alive, or a worktree marker carries one,
+    /// in a room its marks name; or such a room does not read.
+    launched: BTreeSet<TaskId>,
+    /// A row of the machine's loop run history, current or rotated, names the task.
+    logged: BTreeSet<TaskId>,
+}
+
+impl Shown {
+    fn read(records: &super::task_record::TaskRecords) -> Self {
+        let mut rooms = BTreeMap::<PathBuf, Option<ShownRoom>>::new();
+        let mut launched = BTreeSet::new();
+        for (id, record) in &records.tasks {
+            for checkout in record.marks.keys() {
+                let Ok(root) = WorkspaceResolver::persisted_project_root(checkout) else {
+                    launched.insert(id.clone());
+                    break;
+                };
+                let room = rooms
+                    .entry(root)
+                    .or_insert_with_key(|root| ShownRoom::read(root));
+                if room.as_ref().is_none_or(|room| room.shows(id)) {
+                    launched.insert(id.clone());
+                    break;
+                }
+            }
+        }
+        Self {
+            launched,
+            logged: super::run_log::logged_task_ids(),
+        }
+    }
+}
+
+/// One room's state as [`Shown`] reads it.
+struct ShownRoom {
+    paths: StatePaths,
+    agents: Vec<crate::agents::AgentState>,
+    /// The tasks whose fire ids the room's worktree markers carry.
+    marked: BTreeSet<TaskId>,
+}
+
+impl ShownRoom {
+    /// The room at `root`; `None` when its state or its worktrees do not read.
+    fn read(root: &Path) -> Option<Self> {
+        let read = || -> Result<Self> {
+            let paths = StatePaths::for_project_root(root)?;
+            let agents = super::runner::room_agents(&paths)?;
+            let owned = if root.is_dir() {
+                match crate::worktree::discover_owned(root) {
+                    Err(crate::worktree::WorktreeErr::NotRepo) => Vec::new(),
+                    owned => owned?,
+                }
+            } else {
+                Vec::new()
+            };
+            let marked = owned
+                .into_iter()
+                .filter_map(|tree| tree.marker.loop_fire.map(|fire| fire.task()))
+                .collect();
+            Ok(Self {
+                paths,
+                agents,
+                marked,
+            })
+        };
+        read()
+            .inspect_err(|error| {
+                tracing::debug!(
+                    root = %root.display(),
+                    error = %format!("{error:#}"),
+                    "room unreadable; its loop task records kept"
+                );
+            })
+            .ok()
+    }
+
+    /// Whether the room shows task `id`: a worktree marker carries one of its fire ids, or a
+    /// launch carrying one is alive. A read that fails shows it.
+    fn shows(&self, id: &TaskId) -> bool {
+        self.marked.contains(id)
+            || super::launches::alive(id, &self.paths, &self.agents)
+                .map_or(true, |alive| !alive.is_empty())
+    }
+}
 
 fn sweep_retired_files(room: Option<&StatePaths>) -> usize {
     let loops = crate::disk::paths::loops_dir();
@@ -960,7 +1057,7 @@ mod tests {
 
     fn task(label: &str) -> TaskEntry {
         TaskEntry {
-            command: vec!["true".to_owned()],
+            args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             label: Some(label.to_owned()),
             root: PathBuf::from("/repo"),
@@ -1049,7 +1146,7 @@ mod tests {
                     "no-delivery".into(),
                     TaskEntry {
                         wait: None,
-                        command: vec!["true".to_owned()],
+                        args: vec!["true".to_owned()],
                         timeout: Some("1m".to_owned()),
                         ..command.clone()
                     },
@@ -1251,7 +1348,7 @@ mod tests {
         );
         let loaded = &catalog.visible()["broken"];
 
-        assert!(matches!(loaded.action(), Ok(TaskAction::Command(_))));
+        assert!(matches!(loaded.action(), Ok(TaskAction::Shell(_))));
         assert!(matches!(
             loaded.trigger(),
             Err(ScheduleErr::TimeConflict { .. })
