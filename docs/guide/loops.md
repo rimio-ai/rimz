@@ -179,7 +179,7 @@ When a team finishes the work on a branch, you may want a cleanup agent to revie
 rimz loop add yagni --when 'pr=merged' --each-worktree --repeat --agent yagni -- "Review the merged work for unnecessary complexity and propose focused cleanup."
 ```
 
-A RimZ-owned worktree is one RimZ created, with `rimz worktree new` or a launch's `-w`. Worktrees that already meet the condition when you add the task qualify too. The project root and worktrees RimZ does not own are left out. To stop after one successful run per worktree, set `once-per-checkout = true` on the task in [`loop.toml`](#what-a-task-does-on-your-machine) ([launch memory](../reference/cli/loop.md#launch-memory)).
+A RimZ-owned worktree is one RimZ created, with `rimz worktree new` or a launch's `-w`. Worktrees that already meet the condition when you add the task qualify too. The project root and worktrees RimZ does not own are left out. To stop after one successful run per worktree, add the task with `--once-per-checkout` ([launch memory](../reference/cli/loop.md#launch-memory)).
 
 ## Wait for room in a usage window
 
@@ -268,7 +268,7 @@ at = "09:00"
 every = "mon"
 ```
 
-A task holds the keys `rimz loop add` writes, plus a few you set by hand, such as `once-per-checkout`. A task with a key RimZ does not know does not fire, and `rimz loop list` shows it under NEEDS YOU as `invalid` with the reason. Delete it and add it again with `rimz loop add`. The other tasks in the file keep firing.
+A task holds the keys `rimz loop add` writes, plus a few you set by hand, such as `dir`. A task with a key RimZ does not know does not fire, and `rimz loop list` shows it under NEEDS YOU as `invalid` with the reason. Delete it and add it again with `rimz loop add`. The other tasks in the file keep firing.
 
 A task that fires once (`--at`, `--in`, `--after-reset`, or a `--signal` or `--when` task without `--repeat`) belongs to the room. It lives in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`, beside the waits agents arm, so start the room with `rimz start` before you add one. It removes itself after its fire. [Where tasks are stored](../reference/cli/loop.md#where-tasks-are-stored) covers name clashes between the files.
 

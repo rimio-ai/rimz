@@ -112,6 +112,45 @@ fn an_added_row_stores_the_trigger_command_timeout_and_root_only() {
 }
 
 #[test]
+fn once_per_checkout_is_stored_on_a_repeating_row_and_refused_on_a_one_shot() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = rimz::WorkspaceResolver::resolve(root.path(), None).unwrap();
+    let entry = |trigger: &[&str]| {
+        let argv = [trigger, &["--once-per-checkout", "--", "true"]].concat();
+        build_task_entry(&args(&argv), "task", &workspace)
+    };
+    for trigger in [
+        &["--every", "1h"][..],
+        &["--cron", "0 * * * *"],
+        &["--signal", "pr.merged", "--repeat"],
+        &["--when", "pr=open", "--repeat"],
+        &["--project", "--signal", "pr.merged", "--repeat"],
+    ] {
+        assert_eq!(
+            entry(trigger).unwrap().once_per_checkout,
+            Some(true),
+            "{trigger:?}"
+        );
+    }
+    for trigger in [
+        &["--in", "5m"][..],
+        &["--at", "2099-01-01 09:00"],
+        &["--signal", "pr.merged"],
+        &["--when", "pr=open"],
+    ] {
+        assert_eq!(
+            entry(trigger).unwrap_err().to_string(),
+            "--once-per-checkout cannot be used on a one-shot: its first fire removes the task, \
+             so launch memory never acts; make it repeat with --every, --cron, or --repeat beside \
+             --signal or --when",
+            "{trigger:?}"
+        );
+    }
+    let plain = build_task_entry(&args(&["--every", "1h", "--", "true"]), "task", &workspace);
+    assert_eq!(plain.unwrap().once_per_checkout, None);
+}
+
+#[test]
 fn project_rows_must_repeat_and_account_needs_a_provider() {
     for argv in [
         vec!["--project", "--in", "5m", "--", "true"],

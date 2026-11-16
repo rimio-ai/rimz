@@ -224,6 +224,9 @@ struct AddArgs {
     /// Keep a --signal or --when task after a fire, so it fires again; without it, it fires once.
     #[arg(long)]
     repeat: bool,
+    /// Start at most one successful scheduled run per checkout; refused on a one-shot.
+    #[arg(long)]
+    once_per_checkout: bool,
     /// Project root whose room hosts the task; resolved to an absolute root.
     #[arg(long, default_value = ".")]
     root: PathBuf,
