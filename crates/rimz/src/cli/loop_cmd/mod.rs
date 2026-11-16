@@ -541,11 +541,10 @@ fn task_catalog(globals: &GlobalFlags) -> Result<TaskCatalog> {
 fn stop_active_run(
     name: &str,
     root: &Path,
-    expected: Option<RunLockInfo>,
     globals: &GlobalFlags,
 ) -> Result<(schedule::runner::StopOutcome, Option<String>)> {
     let mut pane_open = None;
-    let outcome = schedule::runner::stop_task(name, root, expected, |workspace, paths, record| {
+    let outcome = schedule::runner::stop_task(name, root, |workspace, paths, record| {
         let Some(record) = record else {
             return Ok(());
         };

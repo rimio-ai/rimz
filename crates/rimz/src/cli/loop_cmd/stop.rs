@@ -24,7 +24,7 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
                 })?,
         },
     };
-    let (outcome, pane_open) = stop_active_run(name, &root, None, globals)?;
+    let (outcome, pane_open) = stop_active_run(name, &root, globals)?;
     let (stopped, mut failures) = stop_alive_launches(name, task, &root, globals)?;
     match outcome {
         StopOutcome::NoActiveRun if stopped > 0 || !failures.is_empty() => {}

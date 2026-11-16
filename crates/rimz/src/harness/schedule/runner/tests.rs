@@ -219,7 +219,7 @@ fn cold_runtime_holder_is_visible_without_a_room_record() {
     let runtime = RuntimePaths::for_state(&paths).unwrap();
     let path = runtime.lock_path(run_lock_file_name("pending", None));
     let RunLockAttempt::Acquired(_guard) =
-        acquire_run_lock_file(&path, Some(TaskKind::Routine), None).unwrap()
+        acquire_run_lock_file(&path, Some(TaskKind::Routine)).unwrap()
     else {
         panic!("fixture takes lock")
     };
@@ -398,7 +398,7 @@ fn a_drainer_claims_nothing_while_held_then_pops_exactly_one_when_free() {
     )
     .unwrap();
     let RunLockAttempt::Acquired(held) =
-        acquire_run_lock_file(&lock_path, Some(TaskKind::Routine), None).unwrap()
+        acquire_run_lock_file(&lock_path, Some(TaskKind::Routine)).unwrap()
     else {
         panic!("fixture takes lock")
     };
@@ -678,7 +678,7 @@ fn holder_beside_an_earlier_fire_run(root: &Path) -> (RunLockGuard, StatePaths) 
         .unwrap()
         .lock_path(run_lock_file_name("pile", None));
     let RunLockAttempt::Acquired(guard) =
-        acquire_run_lock_file(&path, Some(TaskKind::Routine), None).unwrap()
+        acquire_run_lock_file(&path, Some(TaskKind::Routine)).unwrap()
     else {
         panic!("fixture takes lock")
     };
@@ -726,7 +726,7 @@ fn stop_task_cancels_and_records_no_earlier_fire_run_as_the_holders() {
     let root = tempfile::tempdir().unwrap();
     let (guard, _) = holder_beside_an_earlier_fire_run(root.path());
     let mut handed = Some(None);
-    let (outcome, _) = stop_task("pile", root.path(), None, |_, _, run| {
+    let (outcome, _) = stop_task("pile", root.path(), |_, _, run| {
         handed = Some(run.map(|run| run.run_id.clone()));
         // The holder leaves at the stop, as a fire that takes the mark does.
         drop(guard);
@@ -791,7 +791,7 @@ fn run_lock_probes_never_defeat_a_starting_run() {
     std::fs::write(&path, b"").unwrap();
     let state = assert_waits_for_gate(&path, || probe_run_lock_path(&path)).unwrap();
     assert!(matches!(state, RunLockState::Available));
-    let claim = assert_waits_for_gate(&path, || acquire_run_lock_file(&path, None, None)).unwrap();
+    let claim = assert_waits_for_gate(&path, || acquire_run_lock_file(&path, None)).unwrap();
     assert!(matches!(claim, RunLockAttempt::Acquired(_)));
 }
 
@@ -809,7 +809,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
     );
 
     let path = dir.path().join("task.lock");
-    let guard = match acquire_run_lock_file(&path, None, None).expect("acquire lock") {
+    let guard = match acquire_run_lock_file(&path, None).expect("acquire lock") {
         RunLockAttempt::Acquired(guard) => guard,
         RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
     };
@@ -817,7 +817,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
         serde_json::from_slice(&std::fs::read(&path).expect("read lock")).expect("parse lock info");
     assert_eq!(written.pid, std::process::id());
 
-    match acquire_run_lock_file(&path, None, None).expect("contend for lock") {
+    match acquire_run_lock_file(&path, None).expect("contend for lock") {
         RunLockAttempt::Held(Some(info)) => assert_eq!(info, written),
         RunLockAttempt::Held(None) => panic!("holder metadata should be readable"),
         RunLockAttempt::Acquired(_) => panic!("held lock should reject contender"),
@@ -857,7 +857,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
 fn wait_for_run_lock_release_observes_guard_drop() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("task.lock");
-    let guard = match acquire_run_lock_file(&path, None, None).expect("acquire lock") {
+    let guard = match acquire_run_lock_file(&path, None).expect("acquire lock") {
         RunLockAttempt::Acquired(guard) => guard,
         RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
     };
@@ -2120,8 +2120,7 @@ fn a_delivery_gates_scope_then_run_lock_then_deadline_then_watch() {
             fire.config = Arc::new(toml::from_str("[harness]\nbudget = \"0/day\"\n").unwrap());
         }
         let lock = fire.fire_run_lock_path().unwrap();
-        let RunLockAttempt::Acquired(_held) = acquire_run_lock_file(&lock, None, None).unwrap()
-        else {
+        let RunLockAttempt::Acquired(_held) = acquire_run_lock_file(&lock, None).unwrap() else {
             panic!("fixture takes lock")
         };
         let expected = if budget {
