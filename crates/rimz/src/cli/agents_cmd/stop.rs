@@ -5,14 +5,12 @@ use std::time::{Duration, Instant};
 
 use super::runs_lookup::{newest_run_by_ref, newest_run_for_agent};
 use crate::cli::{render, select};
+use rimz::agents::state::session_row;
 use rimz::ids::PaneId;
 use rimz::sidebar::produce::hosting::{Hosting, HostingRead, read_hosting};
 use rimz::store::runtime::{AgentLiveness, OWNER_EXIT_BOUND, agent_liveness};
-use rimz::store::snapshot::find_agent;
 
 type AgentKey = (AgentKind, AgentSessionId);
-/// A reservation's launch id and epoch.
-type Reservation = (AgentSessionId, u32);
 
 /// What a tree stop did. The default is the skip: the tracker already took
 /// this agent, so nothing was stopped and nothing failed.
@@ -555,11 +553,10 @@ const ENDING_POLL: Duration = Duration::from_millis(50);
 struct Ending {
     /// The key the stop was asked for; schedules retire under it.
     asked: AgentKey,
-    /// The row the agent is now, after a re-key this stop followed.
-    key: AgentKey,
-    /// The launch and epoch of the reservation `key` names, which the session that
-    /// registers over it carries; `None` once `key` names a provider session.
-    reservation: Option<Reservation>,
+    /// The session this stop acts on, as last read: after the swap cancellation the agent's
+    /// holder unless the asked session still holds it, and after a re-key the row that
+    /// adopted its provisional key.
+    session: AgentState,
     label: String,
     /// The handle of the agent whose stop reached this one as a launched child.
     parent: Option<String>,
@@ -579,6 +576,11 @@ struct Ending {
 }
 
 impl Ending {
+    /// The key of the session this stop acts on.
+    fn key(&self) -> AgentKey {
+        (self.session.kind.clone(), self.session.agent_id.clone())
+    }
+
     fn decide(&mut self, outcome: std::result::Result<(), String>) {
         self.outcome = Some(outcome);
     }
@@ -617,7 +619,7 @@ impl Stopper<'_> {
         }
         let ending = self.end(&agent, key.clone(), label, parent);
         self.tracker.insert(key);
-        self.tracker.insert(ending.key.clone());
+        self.tracker.insert(ending.key());
         endings.push(ending);
     }
 
@@ -629,9 +631,8 @@ impl Stopper<'_> {
         parent: Option<String>,
     ) -> Ending {
         let mut ending = Ending {
-            asked: key.clone(),
-            key,
-            reservation: None,
+            asked: key,
+            session: agent.clone(),
             label,
             parent,
             closed: false,
@@ -639,7 +640,7 @@ impl Stopper<'_> {
             still_hosted: false,
             unbound_unhosted: agent.agent_id.is_provisional()
                 && agent.runtime_owner.is_none()
-                && self.read.hosting(&agent.kind, &agent.agent_id) == Hosting::Nowhere,
+                && self.read.session_hosting(&agent.kind, &agent.agent_id) == Hosting::Nowhere,
             close_error: None,
             run: None,
             signaled: false,
@@ -681,15 +682,17 @@ impl Stopper<'_> {
         }
         // Read after the cancellation: a replacement that bound first holds the
         // agent now, and it is what the stop closes.
-        let rows = store.audit_rows().map_err(|err| format!("{err:#}"))?;
-        let target = stop_target(rows.iter(), agent)
-            .ok_or("the restarted agent disappeared while stopping it")?
-            .clone();
-        ending.key = (target.kind.clone(), target.agent_id.clone());
-        ending.reservation = target
-            .agent_id
-            .is_provisional()
-            .then(|| (target.launch_key().clone(), target.epoch));
+        self.refresh()?;
+        let target = if closes_asked(self.read.agents(), agent) {
+            agent.clone()
+        } else {
+            self.read
+                .agent_hosting(&agent.kind, agent.launch_key())
+                .holder
+                .ok_or("the restarted agent disappeared while stopping it")?
+                .clone()
+        };
+        ending.session = target.clone();
         #[cfg(feature = "testkit")]
         rimz::testkit::rendezvous("RIMZ_TEST_STOP_AFTER_TARGET");
         let agent = &target;
@@ -715,7 +718,7 @@ impl Stopper<'_> {
             ending.run = Some(run.clone());
         }
         if ending.cancelled && !ending.run.as_ref().is_some_and(|run| run.keep) {
-            self.await_departure(&mut ending.key, ending.reservation.as_ref())?;
+            self.await_departure(&mut ending.session)?;
         }
         self.close(ending)
     }
@@ -733,12 +736,10 @@ impl Stopper<'_> {
         .map_err(|err| format!("recording its end failed: {err:#}"))
     }
 
-    /// Where the agent is hosted in the current read, following a re-key first.
-    fn hosting(&self, key: &mut AgentKey, reservation: Option<&Reservation>) -> Hosting {
-        if let Some(followed) = follow(self.read.agents(), key, reservation) {
-            *key = followed;
-        }
-        self.read.hosting(&key.0, &key.1)
+    /// Where `session` is hosted in the current read, following a re-key first.
+    fn hosting(&self, session: &mut AgentState) -> Hosting {
+        track(self.read.agents(), session);
+        self.read.session_hosting(&session.kind, &session.agent_id)
     }
 
     fn refresh(&mut self) -> std::result::Result<(), String> {
@@ -757,13 +758,9 @@ impl Stopper<'_> {
 
     /// A pane whose run this stop cancelled gets the backstop grace to leave on its own; a
     /// kept run's never leaves on its own, so `act` closes it at once.
-    fn await_departure(
-        &mut self,
-        key: &mut AgentKey,
-        reservation: Option<&Reservation>,
-    ) -> std::result::Result<(), String> {
+    fn await_departure(&mut self, session: &mut AgentState) -> std::result::Result<(), String> {
         let deadline = Instant::now() + supervised::pane::STOP_BACKSTOP_GRACE;
-        while self.hosting(key, reservation) != Hosting::Nowhere && Instant::now() < deadline {
+        while self.hosting(session) != Hosting::Nowhere && Instant::now() < deadline {
             std::thread::sleep(CLOSE_POLL);
             self.refresh()?;
         }
@@ -781,7 +778,7 @@ impl Stopper<'_> {
             let Hosting::Pane {
                 pane_id,
                 session_name,
-            } = self.hosting(&mut ending.key, ending.reservation.as_ref())
+            } = self.hosting(&mut ending.session)
             else {
                 if last.is_none() && !awaited_hold {
                     awaited_hold = true;
@@ -802,7 +799,7 @@ impl Stopper<'_> {
                 rimz::harness::hibernate::wake_pane(&self.ctx.store, &pane_id)
                     .map_err(|err| format!("{err:#}"))?;
                 self.refresh()?;
-                if self.hosting(&mut ending.key, ending.reservation.as_ref())
+                if self.hosting(&mut ending.session)
                     != (Hosting::Pane {
                         pane_id: pane_id.clone(),
                         session_name: session_name.clone(),
@@ -837,9 +834,7 @@ impl Stopper<'_> {
             return Ok(());
         }
         let deadline = Instant::now() + supervised::pane::STOP_BACKSTOP_GRACE;
-        while self.hosting(&mut ending.key, ending.reservation.as_ref()) == Hosting::Nowhere
-            && Instant::now() < deadline
-        {
+        while self.hosting(&mut ending.session) == Hosting::Nowhere && Instant::now() < deadline {
             std::thread::sleep(CLOSE_POLL);
             self.refresh()?;
         }
@@ -859,17 +854,14 @@ impl Stopper<'_> {
         let mut signaled = false;
         if read.is_ok() {
             for ending in endings.iter_mut().filter(|ending| ending.awaits_owner()) {
-                if self.hosting(&mut ending.key, ending.reservation.as_ref()) != Hosting::Nowhere {
+                if self.hosting(&mut ending.session) != Hosting::Nowhere {
                     continue;
                 }
-                let Some(owner) = row(
-                    self.read.agents(),
-                    &mut ending.key,
-                    ending.reservation.as_ref(),
-                )
-                .filter(|row| matches!(agent_liveness(row), AgentLiveness::Live { .. }))
-                .and_then(|row| row.runtime_owner.as_ref())
-                .filter(|owner| owner.process_start.is_some()) else {
+                let Some(owner) = track(self.read.agents(), &mut ending.session)
+                    .filter(|row| matches!(agent_liveness(row), AgentLiveness::Live { .. }))
+                    .and_then(|row| row.runtime_owner.as_ref())
+                    .filter(|owner| owner.process_start.is_some())
+                else {
                     continue;
                 };
                 ending.signaled = rimz::child_process::signal_process_term(
@@ -890,14 +882,10 @@ impl Stopper<'_> {
         }
         if read.is_ok() {
             for ending in endings.iter_mut().filter(|ending| ending.unbound_unhosted) {
-                if self.hosting(&mut ending.key, ending.reservation.as_ref()) != Hosting::Nowhere {
+                if self.hosting(&mut ending.session) != Hosting::Nowhere {
                     continue;
                 }
-                let Some(agent) = row(
-                    &projection.agents,
-                    &mut ending.key,
-                    ending.reservation.as_ref(),
-                ) else {
+                let Some(agent) = track(&projection.agents, &mut ending.session) else {
                     continue;
                 };
                 let cwd = agent
@@ -905,8 +893,8 @@ impl Stopper<'_> {
                     .as_deref()
                     .map_or(self.ctx.workspace.worktree_root.as_path(), Path::new);
                 if let Err(err) = self.ctx.store.cancel_unbound_agent_launch(
-                    &ending.key.0,
-                    &ending.key.1,
+                    &ending.session.kind,
+                    &ending.session.agent_id,
                     &self.ctx.workspace.session_name,
                     cwd,
                 ) {
@@ -948,21 +936,18 @@ impl Stopper<'_> {
                 .runtime_projection(rimz::RuntimeScope::Audit)?;
             let waiting = endings.iter_mut().any(|ending| {
                 let closed = ending.awaits_owner();
-                row(
-                    &projection.agents,
-                    &mut ending.key,
-                    ending.reservation.as_ref(),
-                )
-                .is_some_and(|row| match agent_liveness(row) {
-                    AgentLiveness::Live { .. } => closed,
-                    AgentLiveness::Unknown => {
-                        !failed_unbound_launch(row)
-                            && (row.ended_at.is_none()
-                                || (ending.unbound_unhosted
-                                    && row.agent_id.is_provisional()
-                                    && row.runtime_owner.is_none()))
+                track(&projection.agents, &mut ending.session).is_some_and(|row| {
+                    match agent_liveness(row) {
+                        AgentLiveness::Live { .. } => closed,
+                        AgentLiveness::Unknown => {
+                            !failed_unbound_launch(row)
+                                && (row.ended_at.is_none()
+                                    || (ending.unbound_unhosted
+                                        && row.agent_id.is_provisional()
+                                        && row.runtime_owner.is_none()))
+                        }
+                        AgentLiveness::Dead => false,
                     }
-                    AgentLiveness::Dead => false,
                 })
             });
             if !waiting || Instant::now() >= deadline {
@@ -977,9 +962,7 @@ impl Stopper<'_> {
         ending: &mut Ending,
         agents: &[AgentState],
     ) -> std::result::Result<(), String> {
-        if let Hosting::Pane { pane_id, .. } =
-            self.hosting(&mut ending.key, ending.reservation.as_ref())
-        {
+        if let Hosting::Pane { pane_id, .. } = self.hosting(&mut ending.session) {
             ending.still_hosted = true;
             let close = ending
                 .close_error
@@ -989,7 +972,7 @@ impl Stopper<'_> {
             return Err(format!("a pane still hosts it: {pane_id}{close}"));
         }
         unhosted_verdict(
-            row(agents, &mut ending.key, ending.reservation.as_ref()),
+            track(agents, &mut ending.session),
             ending.awaits_owner(),
             ending.signaled,
         )
@@ -1000,6 +983,7 @@ impl Stopper<'_> {
     fn receipt(&self, endings: Vec<Ending>) -> TreeStop {
         let mut stop = TreeStop::default();
         for ending in endings {
+            let key = ending.key();
             // `judge` decides every ending before a receipt is built, so an undecided one
             // is impossible; it still never reads as stopped.
             let outcome = ending
@@ -1014,7 +998,7 @@ impl Stopper<'_> {
             }
             if ending.closed || outcome.is_ok() {
                 stop.reached.push(ending.asked.clone());
-                stop.reached.push(ending.key.clone());
+                stop.reached.push(key.clone());
             }
             if outcome.is_err() && !(ending.closed && !ending.still_hosted) {
                 continue;
@@ -1031,8 +1015,8 @@ impl Stopper<'_> {
             };
             let agent = rows
                 .iter()
-                .find(|row| (&row.kind, &row.agent_id) == (&ending.key.0, &ending.key.1));
-            if agent.is_some_and(|agent| !stop_ends_agent(rows.iter(), agent, &ending.key)) {
+                .find(|row| (&row.kind, &row.agent_id) == (&key.0, &key.1));
+            if agent.is_some_and(|agent| !stop_ends_agent(rows.iter(), agent, &key)) {
                 continue;
             }
             let members = agent.map_or_else(Vec::new, |agent| {
@@ -1062,24 +1046,17 @@ impl Stopper<'_> {
     }
 }
 
-/// The row a stop closes, read after its swap cancellation: `agent` itself,
-/// unless a swap replaced it meanwhile (the replacement bound before the
-/// cancellation could land, so the cancellation was refused) or it is a
-/// starting reservation with no pane. Then the agent's current row is.
-fn stop_target<'a>(
-    rows: impl IntoIterator<Item = &'a AgentState> + Clone,
-    agent: &'a AgentState,
-) -> Option<&'a AgentState> {
-    let members =
-        rimz::agents::state::launch_members(rows.clone(), &agent.kind, agent.launch_key());
+/// Whether a stop closes `agent` itself, judged over the rows read after its swap
+/// cancellation: unless a swap replaced it meanwhile (the replacement bound before the
+/// cancellation could land, so the cancellation was refused) or it is a starting
+/// reservation with no pane. Otherwise it closes the agent's holder.
+fn closes_asked(rows: &[AgentState], agent: &AgentState) -> bool {
+    let members = rimz::agents::state::launch_members(rows.iter(), &agent.kind, agent.launch_key());
     let holders = rimz::agents::state::LaunchHolders::new(members.iter().copied());
     let replaced = members.iter().any(|member| {
         member.kind == agent.kind && member.agent_id == agent.agent_id && holders.replaced(member)
     });
-    if !replaced && (agent.pane.is_some() || !agent.agent_id.is_provisional()) {
-        return Some(agent);
-    }
-    rimz::address::launch_row(rows, &agent.kind, agent.launch_key())
+    !replaced && (agent.pane.is_some() || !agent.agent_id.is_provisional())
 }
 
 /// Whether closing `closed` ends `agent`'s agent: every other row holding it
@@ -1139,43 +1116,13 @@ fn failed_unbound_launch(agent: &AgentState) -> bool {
         && agent.status == rimz::agents::AgentStatus::Failed
 }
 
-/// The row `key` names, after following a re-key.
-fn row<'a>(
-    agents: &'a [AgentState],
-    key: &mut AgentKey,
-    reservation: Option<&Reservation>,
-) -> Option<&'a AgentState> {
-    if let Some(followed) = follow(agents, key, reservation) {
-        *key = followed;
+/// The row `session` is now in `agents`; `session` follows it when a re-key moved it.
+fn track<'a>(agents: &'a [AgentState], session: &mut AgentState) -> Option<&'a AgentState> {
+    let row = session_row(agents, session)?;
+    if row.agent_id != session.agent_id {
+        *session = row.clone();
     }
-    find_agent(agents, &key.0, &key.1)
-}
-
-/// The row a provisional key moved to when a hook re-keyed it: the one unended row of its
-/// kind holding that launch id, which a first launch's key is. A swap's reservation is
-/// keyed apart from its launch, so its `reservation` names the launch and the epoch the
-/// registered session carries. `None` while the key still names a row, and whenever no
-/// row or more than one could be it.
-fn follow(
-    agents: &[AgentState],
-    (kind, id): &AgentKey,
-    reservation: Option<&Reservation>,
-) -> Option<AgentKey> {
-    if !id.is_provisional() || find_agent(agents, kind, id).is_some() {
-        return None;
-    }
-    let (launch, epoch) = reservation.map_or((id, None), |(launch, epoch)| (launch, Some(*epoch)));
-    let mut adopters = agents.iter().filter(|agent| {
-        &agent.kind == kind
-            && agent.ended_at.is_none()
-            && agent.launch_id.as_ref() == Some(launch)
-            && epoch.is_none_or(|epoch| agent.epoch == epoch)
-    });
-    let adopter = adopters.next()?;
-    adopters
-        .next()
-        .is_none()
-        .then(|| (adopter.kind.clone(), adopter.agent_id.clone()))
+    Some(row)
 }
 
 #[cfg(test)]
@@ -1183,7 +1130,7 @@ mod tests {
     use super::*;
 
     /// A stop that read the old session while its swap's replacement bound
-    /// closes the replacement, and only a stop of the holder ends the agent.
+    /// closes the holder instead, and only a stop of the holder ends the agent.
     #[test]
     fn a_stop_racing_a_bound_swap_targets_the_replacement() {
         let pane = |raw: &str| {
@@ -1202,25 +1149,20 @@ mod tests {
         let key = |row: &AgentState| (row.kind.clone(), row.agent_id.clone());
 
         let unbound = [old.clone(), replacement.clone()];
-        assert_eq!(
-            stop_target(&unbound, &old).map(key),
-            Some(key(&old)),
+        assert!(
+            closes_asked(&unbound, &old),
             "a reservation that never stood leaves the old session the agent"
         );
         assert!(stop_ends_agent(&unbound, &old, &key(&old)));
 
         replacement.launch_bound = true;
         let bound = [old.clone(), replacement.clone()];
-        assert_eq!(stop_target(&bound, &old).map(key), Some(key(&replacement)));
+        assert!(!closes_asked(&bound, &old));
         assert!(
             !stop_ends_agent(&bound, &old, &key(&old)),
             "closing the replaced session leaves the holder's waits"
         );
         assert!(stop_ends_agent(&bound, &old, &key(&replacement)));
-    }
-
-    fn provisional_key() -> AgentKey {
-        (AgentKind::new_unchecked("claude"), "launch_closed".into())
     }
 
     #[test]
@@ -1232,58 +1174,6 @@ mod tests {
                  end is recorded"
                     .to_owned()
             )
-        );
-    }
-
-    #[test]
-    fn follow_keeps_a_key_that_still_names_a_row() {
-        let mut exact = AgentState::stub(
-            "claude",
-            "launch_closed",
-            rimz::agents::AgentStatus::Success,
-        );
-        exact.ended_at = Some(jiff::Timestamp::now());
-        let mut adopter = AgentState::stub("claude", "adopter", rimz::agents::AgentStatus::Idle);
-        adopter.launch_id = Some("launch_closed".into());
-        assert_eq!(follow(&[exact, adopter], &provisional_key(), None), None);
-    }
-
-    #[test]
-    fn follow_moves_a_provisional_key_only_to_its_one_unended_adopter() {
-        let mut adopter = AgentState::stub("claude", "adopter", rimz::agents::AgentStatus::Idle);
-        adopter.launch_id = Some("launch_closed".into());
-        let followed = follow(std::slice::from_ref(&adopter), &provisional_key(), None);
-        assert_eq!(followed.map(|(_, id)| id), Some("adopter".into()));
-
-        let mut peer = adopter.clone();
-        peer.agent_id = "peer".into();
-        assert_eq!(
-            follow(&[adopter.clone(), peer.clone()], &provisional_key(), None),
-            None
-        );
-
-        peer.ended_at = Some(jiff::Timestamp::now());
-        let followed = follow(&[adopter.clone(), peer], &provisional_key(), None);
-        assert_eq!(followed.map(|(_, id)| id), Some("adopter".into()));
-
-        // A swap's reservation moves to its launch's session at the swap's epoch only.
-        let swap = (AgentKind::new_unchecked("claude"), "launch_swap".into());
-        let mut replaced = adopter.clone();
-        replaced.agent_id = "replaced".into();
-        let mut registered = adopter.clone();
-        registered.agent_id = "registered".into();
-        registered.epoch = 1;
-        let reservation = ("launch_closed".into(), 1);
-        let followed = follow(&[replaced, registered], &swap, Some(&reservation));
-        assert_eq!(followed.map(|(_, id)| id), Some("registered".into()));
-
-        let real = (AgentKind::new_unchecked("claude"), "real-session".into());
-        let mut namesake = adopter;
-        namesake.launch_id = Some("real-session".into());
-        assert_eq!(
-            follow(&[namesake], &real, None),
-            None,
-            "only a provisional key moves"
         );
     }
 

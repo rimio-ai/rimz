@@ -3987,9 +3987,11 @@ path = "crates/rimz/src/sidebar"
 # mount_missing_sidebars gives bare reload the mount reconcile pass (+1).
 # timing::REPAIR_HEARTBEAT_HOLD_CAP bounds reload --repair's heartbeat hold (+1).
 # produce::hosting is the point-of-use lookup every stop reads: the module, Hosting,
-# HostingRead, HostingErr, read_hosting, and HostingRead::{hosting, agent, agents, mux,
+# HostingRead, HostingErr, read_hosting, and HostingRead::{session_hosting, agent, agents, mux,
 # take_notices} (+10).
-surface-budget = 259
+# HostingRead::agent_hosting and AgentHosting answer for an agent: its launch's holder and
+# that row's pane (+2).
+surface-budget = 261
 
 [[verdict]]
 kind = "item"
@@ -4459,7 +4461,8 @@ path = "crates/rimz/src/store"
 # AttemptKind::owns_agent names the attempts that end through the stop protocol, an agent step's or a judge's (+1).
 # SidebarAwaitedAgent is one agent a card's subagent wait awaits beyond its own children (+1).
 # RunFire::evidence hands a run's command steps and agent prompts the fire's trigger evidence (+1).
-surface-budget = 659
+# store::runtime::agent_is_runtime_visible is the visibility rule the point-of-use lookup shares (+1).
+surface-budget = 660
 
 [[verdict]]
 kind = "item"
@@ -8173,12 +8176,17 @@ reason = "The point-of-use agent lookup: the mux's own required-authoritative li
 [[verdict]]
 kind = "item"
 key = "sidebar::produce::hosting::Hosting"
-reason = "Where one agent is hosted now: a listed pane or nowhere, the only answer a stop closes by."
+reason = "Where one session is hosted now: a listed pane or nowhere, the only answer a stop closes by."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::produce::hosting::AgentHosting"
+reason = "Where an agent is hosted now: the session holding its launch, as the address resolver picks it, and that session's pane."
 
 [[verdict]]
 kind = "item"
 key = "sidebar::produce::hosting::HostingRead"
-reason = "One read of the room: callers re-read after each action instead of carrying a pane."
+reason = "One read of the room, asked for an agent or for one exact session: callers re-read after each action instead of carrying a pane."
 
 [[verdict]]
 kind = "item"

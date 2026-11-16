@@ -5,19 +5,24 @@
 //! rollup. It never answers from a cached topology, a carried pane, a held frame, the
 //! published snapshot, or a pane stored on a record: when the mux cannot answer, the read is
 //! a [`HostingErr`] naming the failure.
+//!
+//! A read answers two questions. [`HostingRead::agent_hosting`] takes an agent, a kind and its
+//! launch key, and answers the session holding it, the row `address::launch_row` picks, with
+//! that row's pane. [`HostingRead::session_hosting`] takes one exact session, so a session a
+//! swap replaced still answers its own pane while it is listed.
 
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::sidebar::consumer::{RollupCursor, rollup_snapshot};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
-use crate::store::runtime::{AgentLiveness, agent_liveness};
+use crate::store::runtime::agent_is_runtime_visible;
 use crate::store::snapshot::{SidebarSnapshot, find_agent};
 use crate::utils::time::unix_now_ms;
 use crate::{ResolvedWorkspace, RuntimePaths, Store};
 
 use super::ProduceErr;
 
-/// Where one agent is hosted, by [`HostingRead::hosting`].
+/// Where one session is hosted, by [`HostingRead::session_hosting`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hosting {
     /// The pane binder ties the agent's unended row to this listed pane, and its process
@@ -30,6 +35,15 @@ pub enum Hosting {
     Nowhere,
 }
 
+/// Where an agent is hosted, by [`HostingRead::agent_hosting`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentHosting<'a> {
+    /// The session holding the agent in this read; `None` when no row answers to the launch key.
+    pub holder: Option<&'a AgentState>,
+    /// Where `holder` is hosted; `Nowhere` without one.
+    pub hosting: Hosting,
+}
+
 /// One read of the room: the mux's own pane listing at the time of the call, folded
 /// over the store rollup read by the same call.
 #[derive(Debug)]
@@ -37,7 +51,9 @@ pub struct HostingRead {
     mux: MuxName,
     session_name: String,
     notices: Vec<String>,
-    /// Every stored row, ended and dead-owner rows included, for judging a stop.
+    /// Every stored row, ended and dead-owner rows included, for judging a stop; live
+    /// rows carry their rest certificates, so the holder pick orders them as the resolver
+    /// does.
     audit: Vec<AgentState>,
     /// The fold over runtime-visible rows only, so no ended or dead row takes a pane.
     snapshot: SidebarSnapshot,
@@ -54,11 +70,26 @@ pub struct HostingErr {
 }
 
 impl HostingRead {
-    /// Where the agent `(kind, agent_id)` is hosted: an exact key, so a namesake's
+    /// The agent `(kind, launch)`: its current occupant among the launch's holder rows, and
+    /// that row's pane.
+    pub fn agent_hosting(&self, kind: &AgentKind, launch: &AgentSessionId) -> AgentHosting<'_> {
+        let holder = crate::address::launch_row(&self.audit, kind, launch);
+        AgentHosting {
+            holder,
+            hosting: holder.map_or(Hosting::Nowhere, |holder| {
+                self.session_hosting(&holder.kind, &holder.agent_id)
+            }),
+        }
+    }
+
+    /// Where the session `(kind, agent_id)` is hosted: an exact key, so a namesake's
     /// pane never answers for it, and an ended row or one whose known process is dead
     /// is hosted nowhere even while a pane it held is listed.
-    pub fn hosting(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> Hosting {
-        if !self.agent(kind, agent_id).is_some_and(runtime_visible) {
+    pub fn session_hosting(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> Hosting {
+        if !self
+            .agent(kind, agent_id)
+            .is_some_and(agent_is_runtime_visible)
+        {
             return Hosting::Nowhere;
         }
         match self.snapshot.live_agent_pane(kind, agent_id) {
@@ -152,12 +183,6 @@ fn absent_session_as_empty(
     }
 }
 
-/// A row the runtime still counts: not ended, and its owner not known dead.
-/// The same rule as `store::runtime::agent_is_runtime_visible`: a change to one is made in both.
-fn runtime_visible(agent: &AgentState) -> bool {
-    agent.ended_at.is_none() && agent_liveness(agent) != AgentLiveness::Dead
-}
-
 /// Fold `frame` over the runtime-visible rows of `snapshot`, whose rows are the audit
 /// rows: an ended or dead row never competes for a listed pane.
 fn fold(
@@ -168,10 +193,13 @@ fn fold(
     runtime: &RuntimePaths,
 ) -> HostingRead {
     let session_name = frame.session_name.clone();
-    let audit = snapshot.agents.to_vec();
+    let mut audit = snapshot.agents.to_vec();
+    // The holder pick orders live rows by their rest certificates, as the address
+    // resolver's snapshot does.
+    crate::store::agent_context::attach_rest_certificates(runtime, audit.iter_mut());
     snapshot.agents = audit
         .iter()
-        .filter(|agent| runtime_visible(agent))
+        .filter(|agent| agent_is_runtime_visible(agent))
         .cloned()
         .collect::<Vec<_>>()
         .into();
@@ -198,6 +226,7 @@ mod tests {
     use crate::ids::WorkspaceId;
     use crate::pane::RuntimeOwnerKind;
     use crate::sidebar::produce::test_support;
+    use crate::store::runtime::{AgentLiveness, agent_liveness};
     use jiff::Timestamp;
 
     struct Fixture {
@@ -253,14 +282,14 @@ mod tests {
         );
         let (kind, id) = key("claude", "listed");
         assert_eq!(
-            read.hosting(&kind, &id),
+            read.session_hosting(&kind, &id),
             Hosting::Pane {
                 pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
                 session_name: "room".to_owned(),
             }
         );
         let (kind, id) = key("claude", "gone");
-        assert_eq!(read.hosting(&kind, &id), Hosting::Nowhere);
+        assert_eq!(read.session_hosting(&kind, &id), Hosting::Nowhere);
         assert!(read.agent(&kind, &id).is_some(), "the row is still read");
     }
 
@@ -284,7 +313,7 @@ mod tests {
             agent_liveness(read.agent(&kind, &id).unwrap()),
             AgentLiveness::Dead
         );
-        assert_eq!(read.hosting(&kind, &id), Hosting::Nowhere);
+        assert_eq!(read.session_hosting(&kind, &id), Hosting::Nowhere);
     }
 
     fn owned(mut agent: AgentState, start: Option<&str>) -> AgentState {
@@ -315,12 +344,12 @@ mod tests {
         );
         let (kind, id) = key("claude", "live");
         assert!(
-            matches!(read.hosting(&kind, &id), Hosting::Pane { .. }),
+            matches!(read.session_hosting(&kind, &id), Hosting::Pane { .. }),
             "{:?}",
-            read.hosting(&kind, &id)
+            read.session_hosting(&kind, &id)
         );
         let (kind, id) = key("claude", "dead");
-        assert_eq!(read.hosting(&kind, &id), Hosting::Nowhere);
+        assert_eq!(read.session_hosting(&kind, &id), Hosting::Nowhere);
         assert!(
             read.agent(&kind, &id).is_some(),
             "the dead row is still read"
@@ -343,12 +372,12 @@ mod tests {
         );
         let (kind, id) = key("claude", "unended");
         assert!(
-            matches!(read.hosting(&kind, &id), Hosting::Pane { .. }),
+            matches!(read.session_hosting(&kind, &id), Hosting::Pane { .. }),
             "{:?}",
-            read.hosting(&kind, &id)
+            read.session_hosting(&kind, &id)
         );
         let (kind, id) = key("claude", "ended");
-        assert_eq!(read.hosting(&kind, &id), Hosting::Nowhere);
+        assert_eq!(read.session_hosting(&kind, &id), Hosting::Nowhere);
         assert!(
             read.agent(&kind, &id).is_some(),
             "the ended row is still read"
@@ -367,7 +396,7 @@ mod tests {
             vec![test_support::pane("terminal_1", None, Some("/repo/main"))],
         );
         let (kind, id) = key("claude", "namesake");
-        assert_eq!(read.hosting(&kind, &id), Hosting::Nowhere);
+        assert_eq!(read.session_hosting(&kind, &id), Hosting::Nowhere);
     }
 
     #[test]
@@ -380,9 +409,226 @@ mod tests {
         evidenced.hosted_agent_kind = Some(AgentKind::new_unchecked("codex"));
         let (kind, id) = key("codex", "lazy");
         let read = fixture.read(vec![agent.clone()], vec![bare]);
-        assert_eq!(read.hosting(&kind, &id), Hosting::Nowhere);
+        assert_eq!(read.session_hosting(&kind, &id), Hosting::Nowhere);
         let read = fixture.read(vec![agent], vec![evidenced]);
-        assert!(matches!(read.hosting(&kind, &id), Hosting::Pane { .. }));
+        assert!(matches!(
+            read.session_hosting(&kind, &id),
+            Hosting::Pane { .. }
+        ));
+    }
+
+    fn pane_of(id: &str) -> Hosting {
+        Hosting::Pane {
+            pane_id: PaneId::from_parts(MuxName::Zellij, id),
+            session_name: "room".to_owned(),
+        }
+    }
+
+    fn listed(ids: &[&str]) -> Vec<crate::pane::PaneRef> {
+        ids.iter()
+            .map(|id| test_support::pane(id, None, Some("/repo/main")))
+            .collect()
+    }
+
+    fn launch_session(
+        fixture: &Fixture,
+        kind: &str,
+        id: &str,
+        epoch: u32,
+        pane: Option<&str>,
+    ) -> AgentState {
+        let mut agent = fixture.agent(kind, id, pane);
+        agent.launch_id = Some("launch_agent".into());
+        agent.epoch = epoch;
+        agent
+    }
+
+    fn holder_id(answer: &AgentHosting<'_>) -> Option<String> {
+        answer.holder.map(|holder| holder.agent_id.to_string())
+    }
+
+    #[test]
+    fn a_swap_with_both_panes_listed_answers_the_holder_for_the_agent_and_each_session_its_own() {
+        let fixture = Fixture::new();
+        let old = launch_session(&fixture, "claude", "sess-old", 0, Some("terminal_1"));
+        let new = launch_session(&fixture, "claude", "sess-new", 1, Some("terminal_2"));
+        let read = fixture.read(vec![old, new], listed(&["terminal_1", "terminal_2"]));
+        let kind = AgentKind::new_unchecked("claude");
+        let answer = read.agent_hosting(&kind, &"launch_agent".into());
+        assert_eq!(holder_id(&answer), Some("sess-new".to_owned()));
+        assert_eq!(answer.hosting, pane_of("terminal_2"));
+        assert_eq!(
+            read.session_hosting(&kind, &"sess-old".into()),
+            pane_of("terminal_1"),
+            "the replaced session still answers its own pane"
+        );
+        assert_eq!(
+            read.session_hosting(&kind, &"sess-new".into()),
+            pane_of("terminal_2")
+        );
+    }
+
+    #[test]
+    fn a_holder_of_another_kind_answers_for_the_agent_asked_by_its_old_kind() {
+        let fixture = Fixture::new();
+        let mut old = launch_session(&fixture, "codex", "sess-codex", 0, None);
+        old.ended_at = Some(fixture.now);
+        let molted = launch_session(&fixture, "claude", "sess-claude", 1, Some("terminal_1"));
+        let read = fixture.read(vec![old, molted], listed(&["terminal_1"]));
+        let answer = read.agent_hosting(&AgentKind::new_unchecked("codex"), &"launch_agent".into());
+        assert_eq!(holder_id(&answer), Some("sess-claude".to_owned()));
+        assert_eq!(
+            answer.holder.map(|holder| holder.kind.as_str()),
+            Some("claude")
+        );
+        assert_eq!(answer.hosting, pane_of("terminal_1"));
+    }
+
+    #[test]
+    fn an_agent_without_a_launch_id_is_asked_by_its_session_id() {
+        let fixture = Fixture::new();
+        let solo = fixture.agent("claude", "solo", Some("terminal_1"));
+        let read = fixture.read(vec![solo], listed(&["terminal_1"]));
+        let answer = read.agent_hosting(&AgentKind::new_unchecked("claude"), &"solo".into());
+        assert_eq!(holder_id(&answer), Some("solo".to_owned()));
+        assert_eq!(answer.hosting, pane_of("terminal_1"));
+    }
+
+    #[test]
+    fn two_unended_holders_answer_the_launch_row_for_the_agent_and_each_session_its_own() {
+        let fixture = Fixture::new();
+        let first = launch_session(&fixture, "claude", "sess-a", 0, Some("terminal_1"));
+        let second = launch_session(&fixture, "claude", "sess-b", 0, Some("terminal_2"));
+        let read = fixture.read(vec![first, second], listed(&["terminal_1", "terminal_2"]));
+        let kind = AgentKind::new_unchecked("claude");
+        let launch = "launch_agent".into();
+        let picked = crate::address::launch_row(read.agents(), &kind, &launch)
+            .expect("the resolver picks one of the two")
+            .agent_id
+            .to_string();
+        let answer = read.agent_hosting(&kind, &launch);
+        assert_eq!(holder_id(&answer), Some(picked.clone()));
+        let own = |id: &str| {
+            if id == "sess-a" {
+                "terminal_1"
+            } else {
+                "terminal_2"
+            }
+        };
+        assert_eq!(answer.hosting, pane_of(own(&picked)));
+        for id in ["sess-a", "sess-b"] {
+            assert_eq!(read.session_hosting(&kind, &id.into()), pane_of(own(id)));
+        }
+    }
+
+    #[test]
+    fn two_live_holders_are_ordered_by_their_rest_certificates_as_the_resolver_orders_them() {
+        let fixture = Fixture::new();
+        // Claude keeps the primary: between two holders with open turns, the earlier
+        // registration wins, so without certificates `sess-a` would answer.
+        let mut first = launch_session(&fixture, "claude", "sess-a", 0, Some("terminal_1"));
+        first.registered_at = Some(fixture.now - jiff::SignedDuration::from_secs(20));
+        let mut second = launch_session(&fixture, "claude", "sess-b", 0, Some("terminal_2"));
+        second.registered_at = Some(fixture.now - jiff::SignedDuration::from_secs(10));
+        let error_at = fixture.now + jiff::SignedDuration::from_secs(1);
+        let rested = crate::agents::AgentContext {
+            turn_error: Some(crate::agents::AgentTurnError {
+                ended_turn: false,
+                class: crate::agents::TurnErrorClass::PausedOverloaded,
+                at: error_at,
+                label: Some("server_overloaded".to_owned()),
+            }),
+            ..crate::agents::AgentContext::new("claude", error_at)
+        };
+        crate::store::agent_context::write(&fixture.runtime, "claude", "sess-a", &rested, None)
+            .expect("context sidecar");
+        let read = fixture.read(vec![first, second], listed(&["terminal_1", "terminal_2"]));
+        let answer =
+            read.agent_hosting(&AgentKind::new_unchecked("claude"), &"launch_agent".into());
+        assert_eq!(
+            holder_id(&answer),
+            Some("sess-b".to_owned()),
+            "a holder whose turn rests on an error yields to the one holding an open turn"
+        );
+        assert_eq!(answer.hosting, pane_of("terminal_2"));
+    }
+
+    #[test]
+    fn a_swap_reservation_holds_the_agent_once_bound_and_alone_is_hosted_nowhere() {
+        let fixture = Fixture::new();
+        let standing = launch_session(&fixture, "claude", "sess-old", 0, Some("terminal_1"));
+        let mut reservation = launch_session(&fixture, "claude", "launch_swap", 1, None);
+        let read = fixture.read(
+            vec![standing.clone(), reservation.clone()],
+            listed(&["terminal_1"]),
+        );
+        let kind = AgentKind::new_unchecked("claude");
+        let answer = read.agent_hosting(&kind, &"launch_agent".into());
+        assert_eq!(holder_id(&answer), Some("sess-old".to_owned()));
+        assert_eq!(answer.hosting, pane_of("terminal_1"));
+
+        reservation.launch_bound = true;
+        reservation.pane = Some(test_support::pane("terminal_2", None, Some("/repo/main")));
+        let read = fixture.read(
+            vec![standing, reservation],
+            listed(&["terminal_1", "terminal_2"]),
+        );
+        let answer = read.agent_hosting(&kind, &"launch_agent".into());
+        assert_eq!(holder_id(&answer), Some("launch_swap".to_owned()));
+        assert_eq!(answer.hosting, pane_of("terminal_2"));
+
+        let mut alone = fixture.agent("claude", "launch_first", None);
+        alone.launch_id = Some("launch_first".into());
+        let read = fixture.read(vec![alone], listed(&["terminal_1"]));
+        let answer = read.agent_hosting(&kind, &"launch_first".into());
+        assert_eq!(holder_id(&answer), Some("launch_first".to_owned()));
+        assert_eq!(answer.hosting, Hosting::Nowhere);
+    }
+
+    #[test]
+    fn a_compaction_successor_in_its_predecessors_pane_answers_for_the_agent() {
+        let fixture = Fixture::new();
+        let mut predecessor = owned(
+            launch_session(&fixture, "codex", "sess-before", 0, Some("terminal_1")),
+            None,
+        );
+        predecessor.ended_at = Some(fixture.now);
+        let mut successor = owned(
+            launch_session(&fixture, "codex", "sess-after", 0, Some("terminal_1")),
+            None,
+        );
+        successor.runtime_owner = predecessor.runtime_owner.clone();
+        let mut pane = test_support::pane("terminal_1", None, Some("/repo/main"));
+        pane.hosted_agent_kind = Some(AgentKind::new_unchecked("codex"));
+        let read = fixture.read(vec![predecessor, successor], vec![pane]);
+        let kind = AgentKind::new_unchecked("codex");
+        let answer = read.agent_hosting(&kind, &"launch_agent".into());
+        assert_eq!(holder_id(&answer), Some("sess-after".to_owned()));
+        assert_eq!(answer.hosting, pane_of("terminal_1"));
+        assert_eq!(
+            read.session_hosting(&kind, &"sess-before".into()),
+            Hosting::Nowhere
+        );
+    }
+
+    #[test]
+    fn an_ended_agent_and_an_unknown_launch_are_hosted_nowhere() {
+        let fixture = Fixture::new();
+        let mut ended = launch_session(&fixture, "claude", "sess-ended", 0, Some("terminal_1"));
+        ended.ended_at = Some(fixture.now);
+        let read = fixture.read(vec![ended], listed(&["terminal_1"]));
+        let kind = AgentKind::new_unchecked("claude");
+        let answer = read.agent_hosting(&kind, &"launch_agent".into());
+        assert_eq!(holder_id(&answer), Some("sess-ended".to_owned()));
+        assert_eq!(answer.hosting, Hosting::Nowhere);
+        let unknown = read.agent_hosting(&kind, &"launch_unknown".into());
+        assert_eq!(
+            unknown,
+            AgentHosting {
+                holder: None,
+                hosting: Hosting::Nowhere,
+            }
+        );
     }
 
     #[test]

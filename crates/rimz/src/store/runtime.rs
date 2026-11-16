@@ -207,9 +207,11 @@ fn ended_keys<'a>(
 /// liveness — see `docs/internals/agents/model.md`); a known owner that is known-dead
 /// suppresses the stale overlay. A launched child's liveness follows its visible
 /// parent, matching a native child whose runtime owner is the parent's process.
-/// The same rule as `sidebar::produce::hosting::runtime_visible`: a change to one is made in
-/// both.
-fn agent_is_runtime_visible(agent: &AgentState) -> bool {
+/// The runtime projection adds two terms to this rule: it drops a row a swap replaced and keeps a
+/// failed swap holder whose owner is dead. The point-of-use lookup (`sidebar::produce::hosting`)
+/// applies this rule alone, so a replaced session still answers its own pane and a dead owner
+/// never takes one.
+pub(crate) fn agent_is_runtime_visible(agent: &AgentState) -> bool {
     agent.ended_at.is_none() && agent.runtime_owner.as_ref().is_none_or(owner_is_live)
 }
 

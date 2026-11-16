@@ -2631,3 +2631,71 @@ fn agent_status_round_trips_including_paused() {
         "\"paused\""
     );
 }
+
+fn session_row_id(agents: &[AgentState], session: &AgentState) -> Option<String> {
+    session_row(agents, session).map(|row| row.agent_id.to_string())
+}
+
+#[test]
+fn session_row_keeps_a_key_that_still_names_a_row() {
+    let mut exact = AgentState::stub("claude", "launch_closed", AgentStatus::Success);
+    exact.ended_at = Some(Timestamp::now());
+    let mut adopter = AgentState::stub("claude", "adopter", AgentStatus::Idle);
+    adopter.launch_id = Some("launch_closed".into());
+    assert_eq!(
+        session_row_id(&[exact.clone(), adopter], &exact),
+        Some("launch_closed".to_owned()),
+        "an ended row that still names the key is the row"
+    );
+}
+
+#[test]
+fn session_row_moves_a_provisional_key_only_to_its_one_unended_adopter() {
+    let reservation = AgentState::stub("claude", "launch_closed", AgentStatus::Running);
+    let mut adopter = AgentState::stub("claude", "adopter", AgentStatus::Idle);
+    adopter.launch_id = Some("launch_closed".into());
+    assert_eq!(
+        session_row_id(std::slice::from_ref(&adopter), &reservation),
+        Some("adopter".to_owned())
+    );
+
+    let mut peer = adopter.clone();
+    peer.agent_id = "peer".into();
+    assert_eq!(
+        session_row_id(&[adopter.clone(), peer.clone()], &reservation),
+        None,
+        "two unended adopters are no evidence for either"
+    );
+    peer.ended_at = Some(Timestamp::now());
+    assert_eq!(
+        session_row_id(&[adopter.clone(), peer], &reservation),
+        Some("adopter".to_owned())
+    );
+
+    let mut other_kind = adopter.clone();
+    other_kind.kind = AgentKind::new_unchecked("codex");
+    assert_eq!(session_row_id(&[other_kind], &reservation), None);
+
+    // A swap's reservation moves to its launch's session at the swap's epoch only.
+    let mut swap = AgentState::stub("claude", "launch_swap", AgentStatus::Running);
+    swap.launch_id = Some("launch_closed".into());
+    swap.epoch = 1;
+    let mut replaced = adopter.clone();
+    replaced.agent_id = "replaced".into();
+    let mut registered = adopter.clone();
+    registered.agent_id = "registered".into();
+    registered.epoch = 1;
+    assert_eq!(
+        session_row_id(&[replaced, registered], &swap),
+        Some("registered".to_owned())
+    );
+
+    let real = AgentState::stub("claude", "real-session", AgentStatus::Idle);
+    let mut namesake = adopter;
+    namesake.launch_id = Some("real-session".into());
+    assert_eq!(
+        session_row_id(&[namesake], &real),
+        None,
+        "only a provisional key moves"
+    );
+}
