@@ -1007,10 +1007,11 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
                 .attempt
                 .as_ref()
                 .is_some_and(|attempt| attempt.woken);
-            if let (Err(reason), Some(Kind::Script(_))) =
-                (&result.object, spec.check_kind(&record.node))
-            {
-                let cause = spec::Cause::parse(result.failure).unwrap_or(spec::Cause::Invalid);
+            if let (Err(reason), Some(Kind::Script(_)), Some(cause)) = (
+                &result.object,
+                spec.check_kind(&record.node),
+                result.failure,
+            ) {
                 let reason = reason.clone();
                 t.check_failure(seq, Some(cause), reason, result.detail, result.stderr_tail)?;
             } else {

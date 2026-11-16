@@ -1165,13 +1165,18 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
             .count(),
         1
     );
-    assert!(
-        report
-            .warnings
-            .iter()
-            .any(|issue| issue.path == "judge.pick"
-                && issue.message.contains("ends the attempt as limited"))
-    );
+    let judge_waits = |report: &Validation| {
+        report.warnings.iter().any(|issue| {
+            issue.path == "judge.pick"
+                && issue.message.ends_with(
+                    "auto-continue is off; a judge paused on a provider limit waits for you",
+                )
+        }) && !report.warnings.iter().any(|issue| {
+            issue.message.contains("ends the attempt as limited")
+                || issue.message.contains("retries once, then fails invalid")
+        })
+    };
+    assert!(judge_waits(&report), "{report:?}");
     let row = report.rows.iter().find(|row| row.node == "pick").unwrap();
     assert_eq!(serde_json::to_value(row).unwrap()["do_background"], true);
     assert!(row.edges.iter().any(|edge| edge.outcome == "died"
@@ -1186,12 +1191,8 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     )
     .unwrap();
     let codex = validate(&dir, &LoadedDefinitions::default(), None);
-    assert!(
-        codex.warnings.iter().any(|issue| issue.path == "judge.pick"
-            && issue.message.contains("retries once, then fails invalid")
-            && !issue.message.contains("ends the attempt as limited")),
-        "{codex:?}"
-    );
+    assert_eq!(codex.warnings.len(), 2, "{codex:?}");
+    assert!(judge_waits(&codex), "{codex:?}");
     let cases = [
         ("lifecycle='turn'", None),
         ("lifecycle='session'", None),

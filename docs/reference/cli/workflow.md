@@ -665,7 +665,7 @@ Below the table, each error prints as `<workflow>: <path>: <message>`, then each
 
 Warnings:
 
-- When auto-continue is off, each agent step warns at `agent.<step>` that a step paused on a provider limit waits for you, and each judge warns at `judge.<check>` that a provider limit mid-attempt ends the attempt as `limited`. A Codex judge instead warns that a failed judge retries once, then fails `invalid`.
+- When auto-continue is off, each agent step warns at `agent.<step>` that a step paused on a provider limit waits for you, and each judge warns at `judge.<check>` that a judge paused on a provider limit waits for you.
 - Turn steps and sessions with a `rest-check` warn when the leader adapter has no background reporting: a turn end may finish the attempt while provider background work remains.
 
 ### Refusals
