@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::bail;
 
+use super::deliver::FireScope;
 use super::*;
 use crate::harness::schedule::TaskKind;
 use crate::harness::schedule::run_control::{
