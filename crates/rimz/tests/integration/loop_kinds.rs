@@ -148,8 +148,6 @@ fn loop_add_stores_each_kind_as_its_target_and_tail_unchanged() {
     assert_eq!(listed["entry"]["kind"], "agent", "{listed}");
 }
 
-/// Each tail or flag a task of a launch kind cannot carry is refused at add, naming the task,
-/// the kind flag and its target, and the fix; nothing is written.
 /// `loop add` resolves an agent target in the lane its fire would launch into, as the launch
 /// does: a bare role of the team that holds the tail's `--channel` lane is that team's role,
 /// and outside the lane it stays unknown.
@@ -190,6 +188,8 @@ fn loop_add_resolves_a_bare_role_in_its_team_lane() {
     );
 }
 
+/// Each tail or flag a task of a launch kind cannot carry is refused at add, naming the task,
+/// the kind flag and its target, and the fix; nothing is written.
 #[test]
 fn loop_add_refuses_what_a_launch_task_cannot_carry() {
     let env = live_room();
