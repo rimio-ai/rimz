@@ -1,3 +1,6 @@
+//! A delivery to a living session: the scope gates, the run lock, the deadline and a watch's
+//! verdict, then the prepared wake the CLI sends, and its finish.
+
 use super::*;
 
 /// A delivery to a living session, which the CLI executes.
@@ -39,9 +42,10 @@ impl FireScope {
 impl Fire<'_> {
     /// An unguarded wait: scope gates, the lease, the deadline and a watch's verdict, then the
     /// delivery to its living session.
-    pub(super) fn prepare_wait(&mut self, delivery: &mut Delivery) -> Result<TaskFirePlan> {
-        if let Some(done) = self.prepare_scope_gates(&delivery.target)? {
-            return Ok(TaskFirePlan::Done(done));
+    pub(super) fn prepare_delivery(&mut self, delivery: &mut Delivery) -> Result<TaskFirePlan> {
+        let scope = FireScope::resolve(&self.entry, &delivery.target)?;
+        if let Some((result, reason)) = self.scope_refusal(&scope) {
+            return Ok(TaskFirePlan::Done(self.record_gate(result, reason)));
         }
         if let Some(done) = self.prepare_run_lock()? {
             return Ok(TaskFirePlan::Done(done));
@@ -52,15 +56,47 @@ impl Fire<'_> {
         if let Some(done) = self.prepare_watch()? {
             return Ok(TaskFirePlan::Done(done));
         }
-        self.prepare_delivery(delivery)
-    }
-
-    fn prepare_scope_gates(&mut self, target: &TaskTarget) -> Result<Option<TaskFireFinished>> {
-        let scope = FireScope::resolve(&self.entry, target)?;
-        let Some((result, reason)) = self.scope_refusal(&scope) else {
-            return Ok(None);
-        };
-        Ok(Some(self.record_gate(result, reason)))
+        let target = delivery.target.clone();
+        if catalog::delivery_holder(&self.entry.resolved_root(), &target)?.is_none() {
+            if self.mode == LoopRunMode::Scheduled {
+                self.remove_schedule()?;
+            }
+            let handle = target.handle;
+            return Ok(TaskFirePlan::Done(self.record_terminal_with(
+                LoopRunResult::TargetGone,
+                LoopRunPresentation::default(),
+                TaskFireNotice::TargetGone {
+                    handle: handle.clone(),
+                },
+                None,
+                |record| {
+                    record.target = Some(handle);
+                },
+            )));
+        }
+        let prompt = self.effect_prompt(self.entry.prompt.clone().unwrap_or_default());
+        // The one-shot row is consumed in `finish`, once the wake's message
+        // record exists: turn-completion waits read the row, then the queue,
+        // so the agent never looks rested between the two.
+        delivery.pending = true;
+        Ok(TaskFirePlan::Deliver(PreparedDelivery {
+            root: self.entry.resolved_root(),
+            target,
+            prompt,
+            supersedes: self.superseded_check_ins(),
+            intent: if self
+                .task
+                .trigger()
+                .as_ref()
+                .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Signal { .. }))
+            {
+                DeliveryIntent::Signal
+            } else if self.entry.wait_meta.is_some() {
+                DeliveryIntent::SelfWait
+            } else {
+                DeliveryIntent::Wait
+            },
+        }))
     }
 
     /// The first scope gate that refuses a delivery, in ladder order; every one reads the
@@ -117,50 +153,6 @@ impl Fire<'_> {
                 ))
             }
         }
-    }
-
-    fn prepare_delivery(&mut self, delivery: &mut Delivery) -> Result<TaskFirePlan> {
-        let target = delivery.target.clone();
-        if catalog::delivery_holder(&self.entry.resolved_root(), &target)?.is_none() {
-            if self.mode == LoopRunMode::Scheduled {
-                self.remove_schedule()?;
-            }
-            let handle = target.handle;
-            return Ok(TaskFirePlan::Done(self.record_terminal_with(
-                LoopRunResult::TargetGone,
-                LoopRunPresentation::default(),
-                TaskFireNotice::TargetGone {
-                    handle: handle.clone(),
-                },
-                None,
-                |record| {
-                    record.target = Some(handle);
-                },
-            )));
-        }
-        let prompt = self.effect_prompt(self.entry.prompt.clone().unwrap_or_default());
-        // The one-shot row is consumed in `finish`, once the wake's message
-        // record exists: turn-completion waits read the row, then the queue,
-        // so the agent never looks rested between the two.
-        delivery.pending = true;
-        Ok(TaskFirePlan::Deliver(PreparedDelivery {
-            root: self.entry.resolved_root(),
-            target,
-            prompt,
-            supersedes: self.superseded_check_ins(),
-            intent: if self
-                .task
-                .trigger()
-                .as_ref()
-                .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Signal { .. }))
-            {
-                DeliveryIntent::Signal
-            } else if self.entry.wait_meta.is_some() {
-                DeliveryIntent::SelfWait
-            } else {
-                DeliveryIntent::Wait
-            },
-        }))
     }
 
     /// Message ids of this arming's earlier check-ins, which a watch's

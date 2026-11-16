@@ -1,10 +1,10 @@
-//! Loop-fire policy from ordered gates through one durable history transition.
+//! The loop-fire transaction, from ordered gates through one durable history transition.
 //!
-//! [`TaskFire`] owns checks, deadlines, task consumption, its run lock, prompt and
-//! launch preparation, and terminal record mapping. A shell fire starts a workflow run
-//! here and a workflow, agent or team fire spawns its launch child here; the CLI executes
-//! a prepared message delivery and returns its typed result. The lock's holder side and
-//! the stop ladder are `run_control`'s.
+//! A [`TaskFire`] is a shared core plus one effect per task action, holding only its kind's
+//! state: `shell` starts a workflow run, `launch` spawns a launch child, and `deliver` prepares
+//! a delivery the CLI executes. The core owns the shared gates (watch verdict, deadline, launch
+//! memory, run lock, backlog reconcile, overlap), the fire mark, task consumption and the one
+//! terminal record. The run lock's holder side and the stop ladder are `run_control`'s.
 
 mod deliver;
 mod launch;
@@ -302,9 +302,9 @@ impl<'a> TaskFire<'a> {
         before_launch: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
         match &mut self.effect {
-            Effect::Shell(shell) => self.core.prepare_command(shell, before_launch),
+            Effect::Shell(shell) => self.core.prepare_shell(shell, before_launch),
             Effect::Launch(launch) => self.core.prepare_launch(launch, before_launch),
-            Effect::Deliver(delivery) => self.core.prepare_wait(delivery),
+            Effect::Deliver(delivery) => self.core.prepare_delivery(delivery),
         }
     }
 
@@ -568,6 +568,67 @@ impl<'a> Fire<'a> {
                 "the fire's tree carries no fire stamp"
             );
         }
+    }
+
+    /// The gates in front of the lease: a watch's verdict, the deadline, then the checkout's
+    /// memory of a run already started.
+    fn before_lease(&mut self) -> Result<Option<TaskFirePlan>> {
+        if let Some(done) = self.prepare_watch()? {
+            return Ok(Some(TaskFirePlan::Done(done)));
+        }
+        if let Some(done) = self.prepare_deadline()? {
+            return Ok(Some(TaskFirePlan::Done(done)));
+        }
+        if self.workflow_already_launched()? {
+            self.finished = true;
+            return Ok(Some(TaskFirePlan::AlreadyLaunched));
+        }
+        Ok(None)
+    }
+
+    /// Admission: the run lock, the room `before_launch` readies, the memory again, since
+    /// another fire may have started a run while this one waited for the room or lease, then
+    /// the backlog's reconcile.
+    fn admit(
+        &mut self,
+        before_launch: &mut dyn FnMut(&Path) -> Result<()>,
+    ) -> Result<Option<TaskFirePlan>> {
+        if let Some(done) = self.prepare_run_lock()? {
+            return Ok(Some(TaskFirePlan::Done(done)));
+        }
+        before_launch(&self.entry.resolved_root())?;
+        if self.workflow_already_launched()? {
+            self.finished = true;
+            return Ok(Some(TaskFirePlan::AlreadyLaunched));
+        }
+        Ok(self.reconcile_backlog()?.map(TaskFirePlan::Done))
+    }
+
+    /// A fire that published `run` at `at`. The run's report is the fire's one history row:
+    /// this launch only stamps its proof.
+    fn launched(
+        &mut self,
+        fire: FireId,
+        run: Option<crate::ids::WorkflowRunId>,
+        at: Timestamp,
+    ) -> Result<TaskFirePlan> {
+        self.saw_run = true;
+        let error = self.note_launched(&fire, run.as_ref(), at);
+        // A poll-until row lives until a run acts, which the run's report decides.
+        if self.entry.deadline.is_none() {
+            self.consume_ephemeral()?;
+        }
+        Ok(TaskFirePlan::Done(self.record_terminal_with(
+            LoopRunResult::Launched,
+            LoopRunPresentation::default(),
+            TaskFireNotice::None,
+            None,
+            |record| {
+                record.run_id = run.map(|run| run.to_string());
+                record.fire = Some(fire);
+                record.error = error;
+            },
+        )))
     }
 
     /// A watch's verdict arrives with its fire: a check-in passes on, and a terminal verdict

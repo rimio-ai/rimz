@@ -1,3 +1,6 @@
+//! A workflow, agent or team fire: the gates in front of the lease, admission, overlap by the
+//! last launch's aliveness or a hand-started run, the launch child.
+
 use super::*;
 
 /// A workflow, agent or team fire: a launch child running the row's launch.
@@ -14,29 +17,13 @@ impl Fire<'_> {
         launch: &mut Launch,
         before_launch: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
-        if let Some(done) = self.prepare_watch()? {
-            return Ok(TaskFirePlan::Done(done));
+        if let Some(plan) = self.before_lease()? {
+            return Ok(plan);
         }
-        if let Some(done) = self.prepare_deadline()? {
-            return Ok(TaskFirePlan::Done(done));
+        if let Some(plan) = self.admit(before_launch)? {
+            return Ok(plan);
         }
-        if self.workflow_already_launched()? {
-            self.finished = true;
-            return Ok(TaskFirePlan::AlreadyLaunched);
-        }
-        if let Some(done) = self.prepare_run_lock()? {
-            return Ok(TaskFirePlan::Done(done));
-        }
-        let root = self.entry.resolved_root();
-        before_launch(&root)?;
-        if self.workflow_already_launched()? {
-            self.finished = true;
-            return Ok(TaskFirePlan::AlreadyLaunched);
-        }
-        if let Some(done) = self.reconcile_backlog()? {
-            return Ok(TaskFirePlan::Done(done));
-        }
-        let state = StatePaths::for_project_root(&root)?;
+        let state = StatePaths::for_project_root(&self.entry.resolved_root())?;
         if self.entry.overlap != Some(OverlapPolicy::Allow)
             && let Some(blocker) = self.alive_launch(&state, launch.launch.kind)?
         {
@@ -46,7 +33,6 @@ impl Fire<'_> {
         if workflow && let Some(run) = self.hand_started_run(&state, &launch.launch.target)? {
             return Ok(TaskFirePlan::Done(self.record_hand_started(&run)));
         }
-
         let trigger = self.effect_prompt(String::new());
         let (fire, displaced) = self.open_fire()?;
         let checkout = self.fire_dir();
@@ -123,24 +109,7 @@ impl Fire<'_> {
                 .map(|live| (Some(live.id), live.created_at)),
         };
         if let Some((run, at)) = published {
-            self.saw_run = true;
-
-            let error = self.note_launched(&fire, run.as_ref(), at);
-            if self.entry.deadline.is_none() {
-                self.consume_ephemeral()?;
-            }
-            return Ok(TaskFirePlan::Done(self.record_terminal_with(
-                LoopRunResult::Launched,
-                LoopRunPresentation::default(),
-                TaskFireNotice::None,
-                None,
-                |record| {
-                    record.run_id = run.map(|run| run.to_string());
-                    record.fire = Some(fire);
-
-                    record.error = error;
-                },
-            )));
+            return self.launched(fire, run, at);
         }
         if kind == LaunchKind::Workflow
             && let crate::harness::schedule::launch::Ended::Exited {
