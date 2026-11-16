@@ -94,8 +94,7 @@ pub(super) fn prepare(
             .as_mut()
             .expect("observed held session")
             .attempt,
-        observed.ask.as_ref(),
-        observed.stopped.as_ref(),
+        &observed,
         t.now,
     );
     // The session's clock runs beside its check's, and passing it fails the session.
@@ -106,7 +105,7 @@ pub(super) fn prepare(
     {
         Some((AttemptOutcome::Timeout, EndCause::Timeout, "timeout"))
     } else {
-        agent::observed_outcome(&observed, false)
+        agent::observed_outcome(&observed, false, false)
             .map(|outcome| (outcome, EndCause::Lifecycle, outcome_reason(outcome)))
     };
     if let Some((outcome, cause, reason)) = ending {
@@ -355,5 +354,6 @@ fn outcome_reason(outcome: AttemptOutcome) -> &'static str {
         AttemptOutcome::Limited => "limited",
         AttemptOutcome::Timeout => "timeout",
         AttemptOutcome::Asked => "asked",
+        AttemptOutcome::Errored => "errored",
     }
 }

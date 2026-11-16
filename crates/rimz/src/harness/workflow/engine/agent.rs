@@ -59,13 +59,20 @@ pub(super) fn empty_observation() -> Observed {
         ask: None,
         limited: None,
         stopped: None,
+        errored: None,
         children: Children::default(),
         cost_usd: None,
         turn: None,
     }
 }
 
-pub(super) fn observed_outcome(observed: &Observed, on_asked: bool) -> Option<AttemptOutcome> {
+/// The ending an observation decides. An ask is tested before an errored turn, and each ends
+/// the attempt only when its node routes it.
+pub(super) fn observed_outcome(
+    observed: &Observed,
+    on_asked: bool,
+    on_errored: bool,
+) -> Option<AttemptOutcome> {
     match observed.status {
         RunStatus::Completed => Some(AttemptOutcome::Ended),
         RunStatus::Failed | RunStatus::VerifyFailed | RunStatus::TimedOut => {
@@ -75,6 +82,9 @@ pub(super) fn observed_outcome(observed: &Observed, on_asked: bool) -> Option<At
         RunStatus::BudgetExceeded => Some(AttemptOutcome::Limited),
         RunStatus::Pending | RunStatus::Running if on_asked && observed.ask.is_some() => {
             Some(AttemptOutcome::Asked)
+        }
+        RunStatus::Pending | RunStatus::Running if on_errored && observed.errored.is_some() => {
+            Some(AttemptOutcome::Errored)
         }
         _ => None,
     }
@@ -88,30 +98,33 @@ pub(super) fn fold_limited(observed: &mut Observed, outcome: AttemptOutcome) {
     }
 }
 
-/// Fold blocking evidence into one hold, crediting overlapping pauses only once.
+/// Fold blocking evidence into one hold, crediting overlapping pauses only once. The stop it
+/// stores is the leader's own errored turn when there is one, else the merged stop.
 pub(super) fn hold(
     attempt: &mut workflow::LiveAttempt,
-    ask: Option<&workflow::Asking>,
-    stopped: Option<&super::super::Stopped>,
+    observed: &Observed,
     now: Timestamp,
 ) -> bool {
     let previous = attempt.held_since;
-    let asking = ask.map(|seen| workflow::Asking {
+    let asking = observed.ask.as_ref().map(|seen| workflow::Asking {
         since: match &attempt.asking {
             Some(open) => open.since,
             None => seen.since.max(attempt.started_at).min(now),
         },
         ask: seen.ask.clone(),
     });
+    let held_on = observed
+        .errored
+        .as_ref()
+        .or(observed.stopped.as_ref())
+        .and_then(super::super::Stopped::hold);
     let since = asking
         .as_ref()
         .map(|asking| asking.since)
         .into_iter()
-        .chain(
-            stopped
-                .filter(|stopped| stopped.kind != super::super::StopKind::Interrupt)
-                .map(|stopped| stopped.since),
-        )
+        .chain(observed.stopped.as_ref().and_then(|stopped| {
+            (stopped.kind != super::super::StopKind::Interrupt).then_some(stopped.since)
+        }))
         .min();
     let held_since = since.map(|since| {
         previous
@@ -119,7 +132,9 @@ pub(super) fn hold(
             .max(attempt.started_at)
             .min(now)
     });
-    let changed = attempt.asking != asking || attempt.held_since != held_since;
+    let held_on = held_since.and(held_on);
+    let changed =
+        attempt.asking != asking || attempt.held_since != held_since || attempt.held_on != held_on;
     if held_since.is_none()
         && let Some(closed) = previous
     {
@@ -128,6 +143,7 @@ pub(super) fn hold(
     }
     attempt.asking = asking;
     attempt.held_since = held_since;
+    attempt.held_on = held_on;
     changed
 }
 
@@ -179,15 +195,12 @@ pub(super) fn prepare_end(
     };
     t.now = Timestamp::now();
     let missing_run = attempt.run.is_none();
-    let on_asked = t
-        .spec
-        .edges(&attempt.node)
-        .iter()
-        .any(|edge| edge.outcome == "asked");
+    let edges = t.spec.edges(&attempt.node);
+    let routes = |outcome: &str| edges.iter().any(|edge| edge.outcome == outcome);
+    let (on_asked, on_errored) = (routes("asked"), routes("errored"));
     let hold_changed = hold(
         t.record.attempt.as_mut().expect("observed agent attempt"),
-        observed.ask.as_ref(),
-        observed.stopped.as_ref(),
+        &observed,
         t.now,
     );
     let ending = if !t.record.deadline_fired && t.record.deadline.is_some_and(|at| at <= t.now) {
@@ -205,7 +218,7 @@ pub(super) fn prepare_end(
             reason: None,
         })
     } else {
-        observed_outcome(&observed, on_asked)
+        observed_outcome(&observed, on_asked, on_errored)
             .or_else(|| (missing_run && !host_live).then_some(AttemptOutcome::Canceled))
             .map(|outcome| Ending {
                 outcome,
@@ -427,7 +440,7 @@ fn detaches(spec: &Definition, attempt: &LiveAttempt) -> bool {
         && ending.cause == EndCause::Lifecycle
         && matches!(
             ending.outcome,
-            AttemptOutcome::Ended | AttemptOutcome::Asked
+            AttemptOutcome::Ended | AttemptOutcome::Asked | AttemptOutcome::Errored
         )
 }
 
@@ -509,10 +522,11 @@ pub(super) fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::workflow::Stopped;
     use crate::store::workflow::{Asked, Asking};
 
     #[test]
-    fn observed_outcome_covers_status_ask_limit_and_asked_edge_on_either_lifecycle() {
+    fn observed_outcome_covers_status_ask_error_limit_and_routed_edges_on_either_lifecycle() {
         let statuses = [
             (RunStatus::Pending, None),
             (RunStatus::Running, None),
@@ -523,37 +537,53 @@ mod tests {
             (RunStatus::Canceled, Some(AttemptOutcome::Canceled)),
             (RunStatus::BudgetExceeded, Some(AttemptOutcome::Limited)),
         ];
-        let signals = [
-            (false, false, None, None),
-            (true, false, None, Some(AttemptOutcome::Asked)),
-            (false, true, None, None),
-            (true, true, None, Some(AttemptOutcome::Asked)),
-        ];
+        let errored = Stopped {
+            since: Timestamp::now(),
+            kind: crate::harness::workflow::StopKind::Error,
+            handle: Some("@coder".into()),
+            class: Some(crate::agents::TurnErrorClass::Failed),
+            text: Some("API Error: 500".into()),
+        };
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for (status, terminal) in statuses {
-            for (ask, limit, held, routed) in signals {
-                for on_asked in [false, true] {
-                    let observed = Observed {
-                        status,
-                        ask: ask.then(|| Asking {
-                            since: Timestamp::now(),
-                            ask: Asked {
-                                text: "Approve?".into(),
-                                kind: "permission".into(),
-                                handle: "@child".into(),
-                            },
-                        }),
-                        limited: limit.then_some(Limited { reset_at: None }),
-                        stopped: None,
-                        children: Children::default(),
-                        cost_usd: None,
-                        turn: None,
-                    };
-                    let case = (status, ask, limit, on_asked);
-                    actual.push((case, observed_outcome(&observed, on_asked)));
-                    let live = if on_asked { routed } else { held };
-                    expected.push((case, terminal.or(live)));
+            for ask in [false, true] {
+                for error in [false, true] {
+                    for limit in [false, true] {
+                        for (on_asked, on_errored) in
+                            [(false, false), (true, false), (false, true), (true, true)]
+                        {
+                            let observed = Observed {
+                                status,
+                                ask: ask.then(|| Asking {
+                                    since: Timestamp::now(),
+                                    ask: Asked {
+                                        text: "Approve?".into(),
+                                        kind: "permission".into(),
+                                        handle: "@child".into(),
+                                    },
+                                }),
+                                limited: limit.then_some(Limited { reset_at: None }),
+                                stopped: error.then(|| errored.clone()),
+                                errored: error.then(|| errored.clone()),
+                                children: Children::default(),
+                                cost_usd: None,
+                                turn: None,
+                            };
+                            let case = (status, ask, error, limit, on_asked, on_errored);
+                            actual.push((case, observed_outcome(&observed, on_asked, on_errored)));
+                            // A routed ask wins, then a routed error; a limit never ends a
+                            // live attempt.
+                            let live = if ask && on_asked {
+                                Some(AttemptOutcome::Asked)
+                            } else if error && on_errored {
+                                Some(AttemptOutcome::Errored)
+                            } else {
+                                None
+                            };
+                            expected.push((case, terminal.or(live)));
+                        }
+                    }
                 }
             }
         }

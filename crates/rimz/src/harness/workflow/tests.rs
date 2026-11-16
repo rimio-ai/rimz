@@ -60,6 +60,7 @@ impl FakeHost {
                 ask: None,
                 limited: None,
                 stopped: None,
+                errored: None,
                 children: Children::default(),
                 cost_usd: Some(0.25),
                 turn: None,

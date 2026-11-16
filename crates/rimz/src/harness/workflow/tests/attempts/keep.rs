@@ -210,3 +210,151 @@ fn a_kept_agent_that_died_hit_a_limit_or_was_canceled_is_stopped() {
     let per_shape = [(1, 0), (1, 0), (1, 0), (0, 1)];
     assert_eq!(actual, [per_shape; 4].concat());
 }
+
+fn errored_turn() -> crate::harness::workflow::Stopped {
+    crate::harness::workflow::Stopped {
+        since: jiff::Timestamp::now(),
+        kind: crate::harness::workflow::StopKind::Error,
+        handle: Some("@builder".into()),
+        class: Some(crate::agents::TurnErrorClass::Failed),
+        text: Some("API Error: 500".into()),
+    }
+}
+
+#[test]
+fn an_errored_turn_takes_on_errored_with_its_evidence_and_key_and_ends_the_node() {
+    use crate::store::workflow::Key;
+    let mut actual = Vec::new();
+    for (lifecycle, keep) in [
+        ("lifecycle='turn'", false),
+        ("lifecycle='session'", false),
+        ("lifecycle='session'", true),
+        ("lifecycle='session'\nrest-check=['pr']", false),
+    ] {
+        let definition = rest::SESSION.replace(
+            "lifecycle='session'\nrest-check=['pr']",
+            &format!("{lifecycle}\nkeep={keep}\non.errored='@done'"),
+        );
+        let (_dir, state, mut record) = setup(&definition);
+        record.key = Some(Key::Integer(7));
+        update(&state, &record);
+        let host = FakeHost::new();
+        advance_ok(&state, &record.id, &host);
+        host.observed.borrow_mut().stopped = Some(errored_turn());
+        host.observed.borrow_mut().errored = Some(errored_turn());
+        let ended = advance_ok(&state, &record.id, &host);
+        let errored = json!({"text":"API Error: 500", "class":"failed", "handle":"@builder"});
+        assert_eq!(
+            ended.input,
+            Some(json!({
+                "outcome":"errored", "reason":"API Error: 500", "errored":errored, "key":7
+            })),
+            "{lifecycle}"
+        );
+        let previous = ended.prev_attempt.as_ref().unwrap();
+        assert_eq!(serde_json::to_value(&previous.errored).unwrap(), errored);
+        assert!(
+            records::journal(&state.workflow(&record.id))
+                .unwrap()
+                .iter()
+                .any(|row| matches!(
+                    &row.event,
+                    JournalEvent::Attempt {
+                        errored: Some(_),
+                        ..
+                    }
+                ))
+        );
+        actual.push((
+            ended.state,
+            previous.outcome,
+            host.stops.get(),
+            host.detaches.get(),
+        ));
+    }
+    let errored = AttemptOutcome::Errored;
+    assert_eq!(
+        actual,
+        [
+            (RunState::Done, errored, 1, 0),
+            (RunState::Done, errored, 1, 0),
+            (RunState::Done, errored, 0, 1),
+            (RunState::Done, errored, 1, 0),
+        ]
+    );
+}
+
+#[test]
+fn an_ask_wins_over_an_errored_turn_when_the_node_routes_both() {
+    use crate::store::workflow::{Asked, Asking};
+    let definition = format!("{STEP}on.asked='@done'\non.errored='@failed'\n");
+    let (_dir, state, record) = setup(&definition);
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    host.observed.borrow_mut().ask = Some(Asking {
+        since: jiff::Timestamp::now(),
+        ask: Asked {
+            text: "Which approach?".into(),
+            kind: "question".into(),
+            handle: "@builder".into(),
+        },
+    });
+    host.observed.borrow_mut().stopped = Some(errored_turn());
+    host.observed.borrow_mut().errored = Some(errored_turn());
+    let ended = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        (ended.state, ended.prev_attempt.unwrap().outcome),
+        (RunState::Done, AttemptOutcome::Asked)
+    );
+}
+
+#[test]
+fn without_on_errored_the_errored_turn_holds_the_step_and_names_its_stop_until_it_clears() {
+    use crate::agents::TurnErrorClass;
+    use crate::store::workflow::{Hold, HoldStop};
+    let (_dir, state, record) = setup(&format!("{STEP}timeout='1h'\n"));
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    let error = errored_turn();
+    let limit = crate::harness::workflow::Stopped {
+        kind: crate::harness::workflow::StopKind::Limit,
+        handle: Some("@child".into()),
+        class: Some(TurnErrorClass::PausedRateLimit),
+        text: None,
+        ..error.clone()
+    };
+    // The merged stop is a child's limit; the hold names the leader's own error.
+    host.observed.borrow_mut().stopped = Some(limit.clone());
+    host.observed.borrow_mut().errored = Some(error.clone());
+    let held = advance_ok(&state, &record.id, &host);
+    assert_eq!(held.state, RunState::Active);
+    let attempt = held.attempt.as_ref().unwrap();
+    assert_eq!(
+        attempt.held_on,
+        Some(Hold {
+            since: error.since,
+            handle: Some("@builder".into()),
+            stop: HoldStop::Error {
+                class: Some(TurnErrorClass::Failed),
+                text: Some("API Error: 500".into()),
+            },
+        })
+    );
+    assert!(attempt.held_on.as_ref().unwrap().needs_you());
+    assert_eq!(host.stops.get(), 0);
+
+    // A limit alone is named and waits on the provider, not the user.
+    host.observed.borrow_mut().errored = None;
+    let held = advance_ok(&state, &record.id, &host);
+    let hold = held.attempt.unwrap().held_on.unwrap();
+    assert_eq!(
+        (hold.handle.as_deref(), hold.label(), hold.needs_you()),
+        (Some("@child"), "rate limit".to_owned(), false)
+    );
+
+    // The turn restarts: the hold goes with its display.
+    host.observed.borrow_mut().stopped = None;
+    let resumed = advance_ok(&state, &record.id, &host);
+    let attempt = resumed.attempt.unwrap();
+    assert!(attempt.held_on.is_none() && attempt.held_since.is_none());
+}

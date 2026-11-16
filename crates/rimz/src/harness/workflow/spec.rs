@@ -66,6 +66,7 @@ pub struct HeaderEdges {
 #[derive(Clone, Debug, Default)]
 pub struct StepEdges {
     pub asked: Option<String>,
+    pub errored: Option<String>,
     /// Where a failure goes that the step routes by no cause of its own.
     pub failed: Option<String>,
     /// Each failure cause the step routes, by the cause's word.
@@ -133,10 +134,11 @@ impl Cause {
 }
 
 /// Whether `word` is the engine's and no author may write it as an outcome: a cause, the
-/// failure input's own `failed`, an agent's `asked`, a reading's `unknown`, and a held
-/// condition's `hold`.
+/// failure input's own `failed`, an agent's `asked` and `errored`, a reading's `unknown`, and a
+/// held condition's `hold`.
 pub(super) fn reserved(word: &str) -> bool {
-    Cause::parse(word).is_some() || matches!(word, "failed" | "asked" | "unknown" | "hold")
+    Cause::parse(word).is_some()
+        || matches!(word, "failed" | "asked" | "errored" | "unknown" | "hold")
 }
 
 /// The kind table a check was written in.

@@ -88,13 +88,22 @@ pub(super) fn misfit(spec: &Definition, record: &RunRecord) -> Option<String> {
                 &format!("it is no longer a rest check of {node}"),
             );
         }
-        let asked = attempt.ending.as_ref().is_some_and(|ending| {
-            ending.route.is_none()
-                && ending.cause == EndCause::Lifecycle
-                && ending.outcome == AttemptOutcome::Asked
-        });
-        if asked && !spec.edges(node).iter().any(|edge| edge.outcome == "asked") {
-            return changed(node, "it no longer routes asked");
+        let routed = attempt
+            .ending
+            .as_ref()
+            .filter(|ending| {
+                ending.route.is_none()
+                    && ending.cause == EndCause::Lifecycle
+                    && matches!(
+                        ending.outcome,
+                        AttemptOutcome::Asked | AttemptOutcome::Errored
+                    )
+            })
+            .map(|ending| ending.outcome.as_str());
+        if let Some(outcome) = routed
+            && !spec.edges(node).iter().any(|edge| edge.outcome == outcome)
+        {
+            return changed(node, &format!("it no longer routes {outcome}"));
         }
     }
     let verdict = held.and_then(|held| held.verdict.as_ref())?;

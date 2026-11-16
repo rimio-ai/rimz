@@ -736,6 +736,7 @@ impl Transition<'_> {
             .expect("agent ending has an attempt");
         attempt.asking = None;
         attempt.held_since = None;
+        attempt.held_on = None;
         attempt.ending = Some(ending);
         let mut previous = self.previous_attempt(outcome);
         previous.children = Some(observed.children.clone());
@@ -744,6 +745,9 @@ impl Transition<'_> {
             .flatten();
         previous.asked = (outcome == AttemptOutcome::Asked)
             .then(|| observed.ask.as_ref().map(|asking| asking.ask.clone()))
+            .flatten();
+        previous.errored = (outcome == AttemptOutcome::Errored)
+            .then(|| observed.errored.as_ref().and_then(super::Stopped::errored))
             .flatten();
         previous.cost_usd = observed.cost_usd;
         self.record.prev_attempt = Some(previous);
@@ -774,6 +778,7 @@ impl Transition<'_> {
             children: None,
             limited: None,
             asked: None,
+            errored: None,
             cost_usd: None,
         }
     }
@@ -824,6 +829,9 @@ impl Transition<'_> {
         if ending.outcome != AttemptOutcome::Asked {
             previous.asked = None;
         }
+        if ending.outcome != AttemptOutcome::Errored {
+            previous.errored = None;
+        }
         if ending.outcome != AttemptOutcome::Limited {
             previous.limited = None;
         }
@@ -866,6 +874,7 @@ impl Transition<'_> {
                     children: previous.children,
                     limited: previous.limited,
                     asked: previous.asked.clone(),
+                    errored: previous.errored.clone(),
                     reason: reason.clone(),
                     message: attempt.message.clone(),
                 },
@@ -928,6 +937,20 @@ impl Transition<'_> {
                     "asked":previous.asked
                 }),
                 &self.spec.engine_target(&self.record.node, "asked"),
+                ParkReason::Asked,
+            );
+        }
+        if ending.outcome == AttemptOutcome::Errored {
+            // Admission refuses `@user` on every route, so no errored route parks; its reason
+            // is the ask's, the other ending that stops an attempt for an agent's own state.
+            return self.engine_route(
+                "errored",
+                json!({
+                    "outcome":"errored",
+                    "reason":previous.errored.as_ref().map(|errored| &errored.text),
+                    "errored":previous.errored
+                }),
+                &self.spec.engine_target(&self.record.node, "errored"),
                 ParkReason::Asked,
             );
         }

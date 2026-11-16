@@ -86,6 +86,7 @@ struct AgentNode {
 #[schemars(deny_unknown_fields)]
 struct AgentEdges {
     asked: Option<String>,
+    errored: Option<String>,
     failed: Option<String>,
     died: Option<String>,
     timeout: Option<String>,
@@ -438,6 +439,7 @@ impl WorkflowFile {
                     subscribe: node.subscribe,
                     on: StepEdges {
                         asked: node.on.asked,
+                        errored: node.on.errored,
                         failed: node.on.failed,
                         causes: routes([
                             ("died", node.on.died),

@@ -361,6 +361,7 @@ impl Node {
         };
         match outcome {
             "asked" => step.on.asked.is_some(),
+            "errored" => step.on.errored.is_some(),
             "failed" => step.on.failed.is_some(),
             cause => step.on.causes.contains_key(cause),
         }

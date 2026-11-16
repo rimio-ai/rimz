@@ -205,6 +205,9 @@ pub struct Observed {
     pub ask: Option<Asking>,
     pub limited: Option<Limited>,
     pub stopped: Option<Stopped>,
+    /// The leader's own turn ended on an unrecoverable provider error: its supervised run
+    /// recorded a failed turn end and its row shows an error no wait recovers from.
+    pub errored: Option<Stopped>,
     pub children: Children,
     pub cost_usd: Option<f64>,
     pub turn: Option<LeaderTurn>,
@@ -214,6 +217,58 @@ pub struct Observed {
 pub struct Stopped {
     pub since: jiff::Timestamp,
     pub kind: StopKind,
+    /// The agent it came from; none for a stop only the run record shows.
+    pub handle: Option<String>,
+    /// A provider error's or limit's class, as the agent's row shows it.
+    pub class: Option<crate::agents::TurnErrorClass>,
+    /// The provider's text for an error or limit.
+    pub text: Option<String>,
+}
+
+impl Stopped {
+    /// A stop with no agent, class or text, as the run record alone shows one.
+    #[cfg(test)]
+    fn bare(since: jiff::Timestamp, kind: StopKind) -> Self {
+        Self {
+            since,
+            kind,
+            handle: None,
+            class: None,
+            text: None,
+        }
+    }
+
+    /// The errored turn as an attempt's evidence; `None` for a stop that carries no class or
+    /// handle.
+    fn errored(&self) -> Option<crate::store::workflow::Errored> {
+        let class = self.class?;
+        Some(crate::store::workflow::Errored {
+            text: self
+                .text
+                .clone()
+                .unwrap_or_else(|| class.words().to_owned()),
+            class,
+            handle: self.handle.clone()?,
+        })
+    }
+
+    /// The stop as the hold a live attempt stores; an interrupt holds nothing.
+    fn hold(&self) -> Option<crate::store::workflow::Hold> {
+        use crate::store::workflow::{Hold, HoldStop};
+        let stop = match self.kind {
+            StopKind::Interrupt => return None,
+            StopKind::Budget => HoldStop::Budget,
+            StopKind::Limit | StopKind::Error => HoldStop::Error {
+                class: self.class,
+                text: self.text.clone(),
+            },
+        };
+        Some(Hold {
+            since: self.since,
+            handle: self.handle.clone(),
+            stop,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

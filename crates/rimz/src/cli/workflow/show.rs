@@ -318,6 +318,16 @@ impl View<'_> {
                 .map_or(record.node.as_str(), |a| &a.node);
             context = format!(" · {} ({})", asking.ask.handle, asking.ask.kind);
             format!("{step} is asking you")
+        } else if let Some(hold) = workflow_view::held(record) {
+            let step = record
+                .session_attempt()
+                .map_or(record.node.as_str(), |a| &a.node);
+            context = format!(
+                " · {}: {}",
+                hold.handle.as_deref().unwrap_or(agent.unwrap_or("—")),
+                render::one_line(&hold.label())
+            );
+            format!("{step} is held {}", render::age_short(hold.since, self.now))
         } else if workflow_view::with_you(record) {
             let step = record
                 .session_attempt()
@@ -382,7 +392,7 @@ impl View<'_> {
             out,
             "{}{}{}",
             render::paint(
-                render::status::workflow(record.state, asking.is_some()).bold(),
+                render::status::workflow(record.state, workflow_view::calls_you(record)).bold(),
                 &format!("{glyph} {}", phrase.state)
             ),
             render::paint(render::palette::body(), &phrase.context),

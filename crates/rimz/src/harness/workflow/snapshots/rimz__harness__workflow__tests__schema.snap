@@ -81,6 +81,12 @@ expression: value
             "null"
           ]
         },
+        "errored": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "failed": {
           "type": [
             "string",

@@ -4,7 +4,7 @@ use std::time::Duration;
 use super::*;
 use crate::agents::{
     AgentContext, AgentStatus, AgentTurnError, AskRoute, BudgetPark, BudgetScope, BudgetWindow,
-    OpenAsk, PermissionMode,
+    OpenAsk, PermissionMode, TurnErrorClass,
 };
 use crate::ids::{AgentKind, AskId, WorkspaceId};
 use crate::store::run::{RunStatus, StoppedTurn};
@@ -187,10 +187,14 @@ fn a_missing_leader_row_keeps_the_run_record_defaults() {
         observed.stopped,
         Some(Stopped {
             since: ago(5),
-            kind: StopKind::Error
+            kind: StopKind::Error,
+            handle: None,
+            class: None,
+            text: None,
         })
     );
     assert!(observed.ask.is_none() && observed.limited.is_none() && observed.turn.is_none());
+    assert!(observed.errored.is_none(), "no leader row shows a class");
     assert_eq!(observed.children, Children::default());
     assert!(readers.ask_reads.take().is_empty());
 }
@@ -354,7 +358,10 @@ fn rate_and_spend_limits_stop_as_limits_and_the_first_limited_agent_reads_its_re
             observed.stopped,
             Some(Stopped {
                 since: ago(20),
-                kind: StopKind::Limit
+                kind: StopKind::Limit,
+                handle: Some("@child".into()),
+                class: Some(class),
+                text: Some("provider".into()),
             }),
             "the earlier child limit is the stop"
         );
@@ -371,7 +378,10 @@ fn a_non_limit_error_stops_as_an_error_without_a_reset_read() {
         observed.stopped,
         Some(Stopped {
             since: ago(10),
-            kind: StopKind::Error
+            kind: StopKind::Error,
+            handle: Some("@claude".into()),
+            class: Some(TurnErrorClass::Failed),
+            text: Some("provider".into()),
         })
     );
     assert!(observed.limited.is_none());
@@ -380,28 +390,33 @@ fn a_non_limit_error_stops_as_an_error_without_a_reset_read() {
 
 #[test]
 fn stop_precedence_replaces_an_interrupt_and_keeps_the_earliest_then_the_first_scanned() {
-    let stop = |since, kind| Some(Stopped { since, kind });
+    let stop = |since, kind| Some((since, kind));
     let seeded = |disposition, at| {
         let leader = row("leader", 50);
         let mut run = leader_run(&leader);
         run.stopped_turn = Some(StoppedTurn { at, disposition });
         run
     };
-    let observe = |run: &RunRecord, agents| Readers::new(&[], &[]).observe(run, &snapshot(agents));
+    let observe = |run: &RunRecord, agents| {
+        let observed = Readers::new(&[], &[]).observe(run, &snapshot(agents));
+        observed
+            .stopped
+            .map(|stopped| (stopped.since, stopped.kind))
+    };
     let failed = TurnErrorClass::Failed;
     // An interrupt seed is replaced even by a later stop.
     let run = seeded(StoppedTurnDisposition::Canceled, ago(50));
     let observed = observe(&run, vec![errored(row("leader", 50), 10, failed)]);
-    assert_eq!(observed.stopped, stop(ago(10), StopKind::Error));
+    assert_eq!(observed, stop(ago(10), StopKind::Error));
     // A strictly earlier stop replaces the seed; a later one does not.
     let run = seeded(StoppedTurnDisposition::Failed, ago(15));
     let observed = observe(&run, vec![parked(row("leader", 50), 20)]);
-    assert_eq!(observed.stopped, stop(ago(20), StopKind::Budget));
+    assert_eq!(observed, stop(ago(20), StopKind::Budget));
     let observed = observe(&run, vec![parked(row("leader", 50), 10)]);
-    assert_eq!(observed.stopped, stop(ago(15), StopKind::Error));
+    assert_eq!(observed, stop(ago(15), StopKind::Error));
     // A tie keeps the seed, then the leader before its child.
     let observed = observe(&run, vec![parked(row("leader", 50), 15)]);
-    assert_eq!(observed.stopped, stop(ago(15), StopKind::Error));
+    assert_eq!(observed, stop(ago(15), StopKind::Error));
     let run = leader_run(&row("leader", 50));
     let observed = observe(
         &run,
@@ -410,13 +425,13 @@ fn stop_precedence_replaces_an_interrupt_and_keeps_the_earliest_then_the_first_s
             errored(child("child", "leader", 40), 15, failed),
         ],
     );
-    assert_eq!(observed.stopped, stop(ago(15), StopKind::Budget));
+    assert_eq!(observed, stop(ago(15), StopKind::Budget));
     // On one agent the error is read before the budget park, so a tie keeps the error.
     let observed = observe(
         &run,
         vec![parked(errored(row("leader", 50), 15, failed), 15)],
     );
-    assert_eq!(observed.stopped, stop(ago(15), StopKind::Error));
+    assert_eq!(observed, stop(ago(15), StopKind::Error));
 }
 
 #[test]
@@ -694,4 +709,113 @@ fn a_leader_turn_observation_rests_past_only_the_waking_frame() {
     };
     assert_eq!(at_rest(Some(&frame.event_id)), Some(true));
     assert_eq!(at_rest(None), Some(false));
+}
+
+fn failed_turn(mut run: RunRecord, secs: u64) -> RunRecord {
+    run.stopped_turn = Some(StoppedTurn {
+        at: ago(secs),
+        disposition: StoppedTurnDisposition::Failed,
+    });
+    run
+}
+
+#[test]
+fn the_leaders_unrecoverable_error_after_a_failed_turn_end_is_its_errored_turn() {
+    for class in [
+        TurnErrorClass::Failed,
+        TurnErrorClass::Unknown,
+        TurnErrorClass::NotEntitled,
+    ] {
+        let leader = errored(row("leader", 50), 10, class);
+        let run = failed_turn(leader_run(&leader), 5);
+        let observed = Readers::new(&[], &[]).observe(&run, &snapshot(vec![leader.clone()]));
+        assert_eq!(
+            observed.errored,
+            Some(Stopped {
+                since: ago(10),
+                kind: StopKind::Error,
+                handle: Some("@claude".into()),
+                class: Some(class),
+                text: Some("provider".into()),
+            }),
+            "{class:?}"
+        );
+
+        // The same row error without a recorded failed turn end is a mid-turn marker.
+        let observed =
+            Readers::new(&[], &[]).observe(&leader_run(&leader), &snapshot(vec![leader]));
+        assert!(observed.errored.is_none(), "{class:?}");
+        assert_eq!(observed.stopped.unwrap().class, Some(class));
+    }
+}
+
+#[test]
+fn a_limit_or_overload_on_the_leader_is_no_errored_turn() {
+    for class in [
+        TurnErrorClass::PausedRateLimit,
+        TurnErrorClass::PausedSpendLimit,
+        TurnErrorClass::PausedOverloaded,
+    ] {
+        let leader = errored(row("leader", 50), 10, class);
+        let run = failed_turn(leader_run(&leader), 5);
+        let observed = Readers::new(&[], &[]).observe(&run, &snapshot(vec![leader]));
+        assert!(observed.errored.is_none(), "{class:?}");
+        let stopped = observed.stopped.unwrap();
+        assert_eq!(
+            (stopped.class, stopped.handle.as_deref()),
+            (Some(class), Some("@claude"))
+        );
+    }
+}
+
+#[test]
+fn a_descendants_error_alone_is_the_merged_stop_and_no_errored_turn() {
+    let leader = row("leader", 50);
+    let run = failed_turn(leader_run(&leader), 5);
+    let observed = Readers::new(&[], &[]).observe(
+        &run,
+        &snapshot(vec![
+            leader,
+            errored(child("child", "leader", 40), 20, TurnErrorClass::Failed),
+        ]),
+    );
+    assert!(observed.errored.is_none());
+    let stopped = observed.stopped.unwrap();
+    assert_eq!(
+        (stopped.since, stopped.handle.as_deref()),
+        (ago(20), Some("@child"))
+    );
+}
+
+#[test]
+fn an_earlier_descendant_limit_does_not_hide_the_leaders_errored_turn() {
+    let leader = errored(row("leader", 50), 10, TurnErrorClass::Failed);
+    let run = failed_turn(leader_run(&leader), 5);
+    let observed = Readers::new(&[], &[]).observe(
+        &run,
+        &snapshot(vec![
+            leader,
+            errored(
+                child("child", "leader", 40),
+                20,
+                TurnErrorClass::PausedRateLimit,
+            ),
+        ]),
+    );
+    let stopped = observed.stopped.unwrap();
+    assert_eq!(
+        (stopped.kind, stopped.handle.as_deref()),
+        (StopKind::Limit, Some("@child")),
+        "the merged stop is the earliest"
+    );
+    let errored = observed.errored.unwrap();
+    assert_eq!(
+        (errored.since, errored.handle.as_deref()),
+        (ago(10), Some("@leader"))
+    );
+    assert_eq!(
+        errored.hold().unwrap().handle.as_deref(),
+        Some("@leader"),
+        "the hold names the leader's error"
+    );
 }

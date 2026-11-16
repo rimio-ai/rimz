@@ -7,6 +7,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::agents::TurnErrorClass;
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId, WorkflowRunId};
@@ -284,6 +285,10 @@ pub struct LiveAttempt {
     pub asking: Option<Asking>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_since: Option<Timestamp>,
+    /// The stop the attempt is held on, written and cleared with `held_since`; none while it
+    /// is held only on an ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_on: Option<Hold>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub asked_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -364,6 +369,7 @@ pub enum AttemptOutcome {
     Died,
     Timeout,
     Asked,
+    Errored,
     Limited,
     Canceled,
 }
@@ -376,6 +382,7 @@ impl AttemptOutcome {
             Self::Died => "died",
             Self::Timeout => "timeout",
             Self::Asked => "asked",
+            Self::Errored => "errored",
             Self::Limited => "limited",
             Self::Canceled => "canceled",
         }
@@ -392,6 +399,68 @@ pub struct Asked {
     pub text: String,
     pub kind: String,
     pub handle: String,
+}
+
+/// A leader turn that ended on an unrecoverable provider error: the provider's text (the class
+/// in words when it gave none), the class, and the agent's handle.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Errored {
+    pub text: String,
+    pub class: TurnErrorClass,
+    pub handle: String,
+}
+
+/// What holds a live agent attempt besides an ask: a stopped turn of one of its agents.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Hold {
+    pub since: Timestamp,
+    /// The agent the stop came from; none when only the run's record shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+    #[serde(flatten)]
+    pub stop: HoldStop,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "stop", rename_all = "snake_case")]
+pub enum HoldStop {
+    /// A turn stopped on a provider error or limit, by its class when the row shows one, with
+    /// the provider's text.
+    Error {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        class: Option<TurnErrorClass>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
+    Budget,
+}
+
+impl Hold {
+    /// Whether the hold waits on the user rather than on a provider or budget window: an error
+    /// with no class, or one no wait recovers from.
+    pub fn needs_you(&self) -> bool {
+        match &self.stop {
+            HoldStop::Error { class, .. } => class.is_none_or(|class| !class.pauses_turn()),
+            HoldStop::Budget => false,
+        }
+    }
+
+    /// What holds the attempt, in words, with the provider's text for an errored turn.
+    pub fn label(&self) -> String {
+        match &self.stop {
+            HoldStop::Budget => "budget park".into(),
+            HoldStop::Error {
+                class: Some(class), ..
+            } if class.pauses_turn() => class.words().into(),
+            HoldStop::Error { class, text } => {
+                let words = class.map_or(String::new(), |class| format!(" ({})", class.words()));
+                let text = text
+                    .as_ref()
+                    .map_or(String::new(), |text| format!(": {text}"));
+                format!("errored turn{words}{text}")
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -451,6 +520,8 @@ pub struct PreviousAttempt {
     pub limited: Option<Limited>,
     #[serde(default)]
     pub asked: Option<Asked>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub errored: Option<Errored>,
     #[serde(default)]
     pub cost_usd: Option<f64>,
 }
@@ -963,6 +1034,8 @@ pub enum JournalEvent {
         limited: Option<Limited>,
         #[serde(default)]
         asked: Option<Asked>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        errored: Option<Errored>,
         #[serde(default)]
         reason: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

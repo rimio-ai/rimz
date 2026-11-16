@@ -4458,7 +4458,9 @@ path = "crates/rimz/src/store"
 # RunRecord::definition_dir resolves the directory every reader takes a run's definition from (+1).
 # RunRecord::ran_for on the finished-run header selects a task's runs by the fire's task id (+1).
 # store::workflow::KeyVisits records each item key's share of a step's visits (+1).
-surface-budget = 651
+# store::workflow::Errored, Hold and HoldStop record a step's errored turn and the stop holding it,
+# and Hold::needs_you and Hold::label decide NEEDS YOU and name the hold for every view (+5).
+surface-budget = 656
 
 [[verdict]]
 kind = "item"
@@ -12873,6 +12875,21 @@ reason = "Workflow creation supplies node-owned scratch through the classed path
 kind = "item"
 key = "store::workflow::EvaluationOrigin"
 reason = "Persist check versus engine provenance for accounting and journal inspection."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Errored"
+reason = "An attempt that ended on the leader's own errored turn records its text, class and handle for prev_attempt, the journal and the on.errored input."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Hold"
+reason = "A live attempt stores the stop it is held on beside held_since, so list, show and NEEDS YOU name the hold without re-observing the room."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::HoldStop"
+reason = "A hold is an error (with its class and text when known) or a budget park; only a classless or non-pausing error needs the user."
 
 [[verdict]]
 kind = "item"

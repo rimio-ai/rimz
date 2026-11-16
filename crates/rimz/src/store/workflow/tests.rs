@@ -579,6 +579,24 @@ fn capacity_wait_round_trips_and_other_waits_omit_its_fields() {
 }
 
 #[test]
+fn a_hold_round_trips_its_stop_and_stays_absent_unless_held() {
+    let mut value = serde_json::to_value(record()).unwrap();
+    assert!(value["attempt"].get("held_on").is_none());
+    let holds = [
+        json!({"since":"2026-01-01T00:00:00Z", "handle":"@fox", "stop":"error",
+               "class":"not_entitled", "text":"plan lapsed"}),
+        json!({"since":"2026-01-01T00:00:00Z", "stop":"error"}),
+        json!({"since":"2026-01-01T00:00:00Z", "handle":"@fox", "stop":"budget"}),
+    ];
+    for hold in holds {
+        value["attempt"]["held_since"] = hold["since"].clone();
+        value["attempt"]["held_on"] = hold;
+        let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), value);
+    }
+}
+
+#[test]
 fn a_held_session_round_trips_with_its_verdict() {
     let turn = json!({
         "agent_id":"leader", "started_at":"2026-01-01T00:00:00Z",

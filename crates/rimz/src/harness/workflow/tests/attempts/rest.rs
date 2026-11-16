@@ -25,10 +25,7 @@ fn stopped_turns_wait_for_a_clean_rest_before_the_check_judges() {
         let host = FakeHost::new();
         advance_ok(&state, &record.id, &host);
         host.observed.borrow_mut().turn = Some(turn());
-        host.observed.borrow_mut().stopped = Some(Stopped {
-            since: Timestamp::now(),
-            kind,
-        });
+        host.observed.borrow_mut().stopped = Some(Stopped::bare(Timestamp::now(), kind));
         let held = advance_ok(&state, &record.id, &host);
         assert_eq!(held.state, RunState::Active, "{kind:?}");
         assert_eq!(held.node, "build");

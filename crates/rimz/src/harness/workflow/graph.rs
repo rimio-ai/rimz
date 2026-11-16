@@ -307,6 +307,11 @@ impl Definition {
             {
                 answer("asked", Target::parse(asked), EdgeSource::Explicit);
             }
+            if let Some(errored) = &step.on.errored
+                && step.table == super::spec::StepTable::Agent
+            {
+                answer("errored", Target::parse(errored), EdgeSource::Explicit);
+            }
             step.table.word()
         };
         for cause in Cause::raised_by(table) {

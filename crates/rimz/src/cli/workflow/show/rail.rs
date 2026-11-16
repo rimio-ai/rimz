@@ -47,11 +47,8 @@ impl View<'_> {
                 }
             };
             row.style = if is_current {
-                render::status::workflow(
-                    self.record.state,
-                    workflow_view::asking(self.record).is_some(),
-                )
-                .bold()
+                render::status::workflow(self.record.state, workflow_view::calls_you(self.record))
+                    .bold()
             } else if count > 0 {
                 render::palette::body()
             } else {
