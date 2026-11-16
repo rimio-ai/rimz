@@ -18,7 +18,7 @@ use crate::config::{CheckOn, FileMark, TaskEntry, WatchSpec};
 use crate::disk::lease;
 use crate::disk::paths::StatePaths;
 use crate::harness::check_run::{CheckEcho, WAIT_TAIL_CAP, WatchDeadline, run_command};
-use crate::harness::schedule::runner::RunLockInfo;
+use crate::harness::schedule::run_control::RunLockInfo;
 use crate::harness::signal::{Signal, SignalResolution, WatchOutcome, WatchVerdict};
 use crate::store::Store;
 use crate::store::event::SignalSource;

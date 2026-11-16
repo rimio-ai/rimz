@@ -121,7 +121,7 @@ pub(super) fn run_one(
         if let Some(root) = project_root_for_globals(globals)
             .or_else(|| loaded.as_ref().map(|task| task.entry().resolved_root()))
         {
-            rimz::harness::schedule::runner::discard_backlog(name, &root)?;
+            rimz::harness::schedule::run_control::discard_backlog(name, &root)?;
         }
         return Ok(());
     }

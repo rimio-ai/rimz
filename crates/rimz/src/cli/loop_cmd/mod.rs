@@ -25,13 +25,15 @@ use jiff::Timestamp;
 
 use rimz::config::{MachineConfig, TaskEntry, TaskTarget};
 use rimz::disk::paths::{RuntimePaths, StatePaths};
+use rimz::harness::schedule::run_control::{
+    InFlightRun, RunLockInfo, RunLockState, RunLocks, in_flight_run,
+};
 use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult, ProcessExit,
     RunStage, RunTransition,
 };
 use rimz::harness::schedule::runner::{
-    AfterReset, InFlightRun, RunLockInfo, RunLockState, RunLocks,
-    SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, after_reset as resolve_after_reset, in_flight_run,
+    AfterReset, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, after_reset as resolve_after_reset,
     window_condition_provider,
 };
 use rimz::harness::schedule::{
@@ -543,9 +545,9 @@ fn stop_active_run(
     name: &str,
     root: &Path,
     globals: &GlobalFlags,
-) -> Result<(schedule::runner::StopOutcome, Option<String>)> {
+) -> Result<(schedule::run_control::StopOutcome, Option<String>)> {
     let mut pane_open = None;
-    let outcome = schedule::runner::stop_task(name, root, |workspace, paths, record| {
+    let outcome = schedule::run_control::stop_task(name, root, |workspace, paths, record| {
         let Some(record) = record else {
             return Ok(());
         };
