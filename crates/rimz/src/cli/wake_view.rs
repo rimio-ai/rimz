@@ -270,7 +270,11 @@ impl WakeRow {
         };
         let unread = match parsed.as_ref().map(|parsed| &parsed.trigger) {
             Ok(Trigger::Condition { expr, .. }) if state == WakeState::Waiting => {
-                read_condition(room, entry, expr, None).unread
+                let fired_at = room
+                    .runtime
+                    .as_ref()
+                    .and_then(|runtime| schedule::fire::last_stamps(runtime).get(name).copied());
+                read_condition(room, entry, expr, fired_at).unread
             }
             _ => BTreeMap::new(),
         };

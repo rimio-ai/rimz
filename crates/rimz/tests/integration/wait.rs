@@ -3765,6 +3765,7 @@ fn forge_wait_fires_with_its_label_and_pr_reading() {
 #[test]
 fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
     const NO_FORGE: &str = "no supported forge for this checkout";
+    const STALE: &str = "probed before the last fire or first sight";
     const NO_FORGE_FIX: &str = "RimZ reads a git checkout whose `origin` remote is on github.com (through `gh`) or on a host whose name contains gitea, forgejo or codeberg (through `tea`), so wait on something else here";
     let env = Env::new();
     env.record(&env.project_root);
@@ -3773,15 +3774,15 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
     let root = env.project_root.to_string_lossy().to_string();
     let cache = runtime.lane_path("pr-state.json");
     std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
-    let publish = |repo: &str, detached: bool| {
+    let publish = |repo: &str, detached: bool, refreshed_at_ms: u64| {
         std::fs::write(
             &cache,
             serde_json::json!({
                 "branch_ci": {},
                 "path_repos": {root.clone(): repo},
                 "repos": {
-                    "repo": {"ok": true, "refreshed_at_ms": 1_000},
-                    "<unsupported>": {"ok": true, "refreshed_at_ms": 1_000},
+                    "repo": {"ok": true, "refreshed_at_ms": refreshed_at_ms},
+                    "<unsupported>": {"ok": true, "refreshed_at_ms": refreshed_at_ms},
                 },
                 "states": {root.clone(): {"state": "open"}},
                 "detached": if detached { vec![root.clone()] } else { Vec::new() },
@@ -3795,22 +3796,17 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
         serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap()
     };
     // The clock pass's first sight of each wait, which a condition reads from.
-    let sight = || {
+    let sight = |stamp: &str| {
         let stamps = runtime.lane_path("loop-fire.json");
         std::fs::create_dir_all(stamps.parent().unwrap()).unwrap();
         let names = listed()
             .iter()
-            .map(|row| {
-                (
-                    row["name"].as_str().unwrap().to_owned(),
-                    "1970-01-01T00:00:00Z",
-                )
-            })
+            .map(|row| (row["name"].as_str().unwrap().to_owned(), stamp))
             .collect::<std::collections::BTreeMap<_, _>>();
         std::fs::write(stamps, serde_json::to_vec(&names).unwrap()).unwrap();
     };
-    let loops = || -> (String, serde_json::Value) {
-        sight();
+    let loops = |stamp: &str| -> (String, serde_json::Value) {
+        sight(stamp);
         let text = env.rimz().args(["loop", "list", "--all"]).output().unwrap();
         let json = env
             .rimz()
@@ -3850,7 +3846,7 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
     assert_eq!(now_line(&unprobed), "  now: unknown · pr: not checked yet");
 
     // The next probe finds no supported forge: the armed wait says so and needs you.
-    publish("<unsupported>", false);
+    publish("<unsupported>", false, 1_000);
     let rows = listed();
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0]["unread"], serde_json::json!({"pr": NO_FORGE}));
@@ -3859,7 +3855,7 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
         text.contains(&format!("waiting · pr: {NO_FORGE}")),
         "{text}"
     );
-    let (text, json) = loops();
+    let (text, json) = loops("1970-01-01T00:00:00Z");
     assert!(text.contains("· 1 need you"), "{text}");
     assert!(!text.contains("all healthy"), "{text}");
     assert_eq!(attention(&json), [serde_json::json!("no_forge")], "{json}");
@@ -3878,22 +3874,41 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
     );
     assert_eq!(listed().len(), 1, "the refused wait stored nothing");
 
+    // A supported-forge reading before first sight is unread in both views until a
+    // later probe passes that stamp.
+    publish("repo", false, 1_000);
+    let (text, json) = loops("1970-01-01T00:00:02Z");
+    assert!(text.contains(&format!("pr: {STALE}")), "{text}");
+    let unread = serde_json::json!({"pr": STALE});
+    assert_eq!(json["rooms"][0]["tasks"][0]["unread"], unread, "{json}");
+    let rows = listed();
+    assert_eq!(rows[0]["unread"], unread, "{rows:?}");
+    let text = wait_ok(&env, &["wait", "list"]);
+    assert!(text.contains(&format!("waiting · pr: {STALE}")), "{text}");
+
     // The reading comes back: the reason and the attention are gone.
-    publish("repo", false);
+    publish("repo", false, 3_000);
     let rows = listed();
     assert!(rows[0].get("unread").is_none(), "{rows:?}");
-    let (text, json) = loops();
+    let text = wait_ok(&env, &["wait", "list"]);
+    assert!(!text.contains(STALE), "{text}");
+    let (text, json) = loops("1970-01-01T00:00:02Z");
+    assert!(!text.contains(STALE), "{text}");
+    assert!(
+        json["rooms"][0]["tasks"][0].get("unread").is_none(),
+        "{json}"
+    );
     assert!(text.contains("all healthy"), "{text}");
     assert_eq!(attention(&json), [serde_json::Value::Null], "{json}");
 
     // A detached HEAD reads unknown under its own reason, arms, and needs nothing.
-    publish("<unsupported>", true);
+    publish("<unsupported>", true, 1_000);
     let detached = wait_ok(&env, &["wait", "--when", "ci=passed"]);
     assert_eq!(
         now_line(&detached),
         "  now: unknown · ci: the checkout's HEAD is detached, so it has no branch to read"
     );
-    let (text, json) = loops();
+    let (text, json) = loops("1970-01-01T00:00:00Z");
     assert!(text.contains("all healthy"), "{text}");
     assert_eq!(
         attention(&json),
@@ -3904,7 +3919,7 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
     // A fresh probe that leaves a key unread (an open PR whose review the forge has not
     // reported) says why on every surface, as `loop show` does.
     const UNREPORTED: &str = "not reported for this checkout's open PR";
-    publish("repo", false);
+    publish("repo", false, 1_000);
     let review = wait_ok(&env, &["wait", "--when", "pr.review=approved"]);
     assert_eq!(
         now_line(&review),
@@ -3917,7 +3932,7 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
         .find(|row| row["trigger"].as_str().unwrap().contains("pr.review"))
         .unwrap();
     assert_eq!(row["unread"], unread, "{rows:?}");
-    let (_, json) = loops();
+    let (_, json) = loops("1970-01-01T00:00:00Z");
     let tasks = json["rooms"][0]["tasks"].as_array().unwrap();
     assert!(tasks.iter().any(|task| task["unread"] == unread), "{json}");
 }
