@@ -823,6 +823,12 @@ struct Reader {
 }
 
 impl Reader {
+    fn new() -> Self {
+        Self {
+            definitions: agent_definitions(),
+        }
+    }
+
     /// The run's definition as admission reads it now. A definition admission refuses, and a
     /// deployed one that does not read, is an error: the advance writes nothing, and the run
     /// waits for the file to be fixed.
@@ -837,13 +843,29 @@ impl Reader {
             }
             Err(error) => return Err(error.into()),
         };
-        Ok(Read::Admitted(Box::new(super::validate::admit_parsed(
-            &dir,
+        Ok(Read::Admitted(Box::new(self.admit(paths, record, spec)?)))
+    }
+
+    /// The run's definition admitted as an advance admits it, for a command that must refuse
+    /// before it changes the run: one that does not read is refused too, inline or deployed.
+    fn admitted(&self, paths: &WorkflowPaths, record: &RunRecord) -> Result<Definition> {
+        self.admit(paths, record, spec::load(&record.definition_dir(paths))?)
+    }
+
+    /// Admit `spec`, already parsed from the run's definition.
+    fn admit(
+        &self,
+        paths: &WorkflowPaths,
+        record: &RunRecord,
+        spec: Definition,
+    ) -> Result<Definition> {
+        Ok(super::validate::admit_parsed(
+            &record.definition_dir(paths),
             &record.workflow,
             spec,
             &self.definitions,
             Some(&record.project_root),
-        )?)))
+        )?)
     }
 
     /// The definition read again after a hosted child exits, or `None` when that read fails.
@@ -891,9 +913,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
     if record.state.is_terminal() {
         return Ok(());
     }
-    let reader = Reader {
-        definitions: agent_definitions(),
-    };
+    let reader = Reader::new();
     let mut seen = BTreeSet::new();
     let mut admission = Admission::default();
     loop {
@@ -1873,9 +1893,10 @@ pub fn restart(
     host: &dyn AttemptHost,
 ) -> Result<(RunRecord, Option<Advance>)> {
     let paths = state.workflow(id);
+    let reader = Reader::new();
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let record = workflow::load(&paths)?;
-    let spec = spec::load(&record.definition_dir(&paths))?;
+    let spec = reader.admitted(&paths, &record)?;
     let mut t = Transition {
         record,
         spec: &spec,
@@ -2046,10 +2067,11 @@ pub fn resume(
     extend: &[String],
 ) -> Result<RunRecord> {
     let paths = state.workflow(id);
+    let reader = Reader::new();
     let record = {
         let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
         let record = workflow::load(&paths)?;
-        let spec = spec::load(&record.definition_dir(&paths))?;
+        let spec = reader.admitted(&paths, &record)?;
         if record.state.is_terminal() {
             return Err(WorkflowErr::Refused(
                 "terminal workflow runs cannot resume".into(),
@@ -2428,6 +2450,7 @@ pub(crate) fn hears_lifecycle(
 }
 
 pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Result<()> {
+    let reader = std::cell::OnceCell::new();
     for record in workflow::live_runs(state)? {
         let paths = state.workflow(&record.id);
         let result: Result<()> = (|| {
@@ -2449,11 +2472,15 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
                 None => false,
             };
             let forwards = subscribers(&spec, &current, signal, host)?;
+            if !woken && forwards.is_empty() {
+                return Ok(());
+            }
+            // A run the signal reaches is admitted as an advance would before anything moves.
+            let spec = reader
+                .get_or_init(Reader::new)
+                .admit(&paths, &current, spec)?;
             let entries = forwards.iter().map(|forward| forward.entry(signal));
             if !woken {
-                if forwards.is_empty() {
-                    return Ok(());
-                }
                 for entry in entries {
                     workflow::append(&paths, &entry, &guard)?;
                 }

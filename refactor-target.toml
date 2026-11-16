@@ -5773,7 +5773,7 @@ allowed-dependencies = [
 # observe projects an observed agent attempt for the CLI host (+1).
 # Cohort, stop_cohort, detach_cohort and leader pick the agents an attempt's stop, detach, push and forward reach; one fits the slot leader_turn left.
 # AttemptHost::{orphan, leader_session, start_groups}, orphan and launch_groups close the engine's reads around the attempt host (+5).
-# admit and Inadmissible: run start, each advance read and the workflow CLI's waiting report share one admission (+2).
+# admit and Inadmissible: run start, each advance read, resume, restart, the signal wake and the workflow CLI's waiting report share one admission (+2).
 surface-budget = 96
 
 [[module]]
@@ -12333,7 +12333,7 @@ reason = "The workflow CLI and engine share a strict spec loader, the editor sch
 [[verdict]]
 kind = "item"
 key = "harness::workflow::admit"
-reason = "Run start, each advance's read of a run's definition, and the workflow CLI's report of a waiting run admit the definition through one parse-and-validate step."
+reason = "Run start, each advance's read of a run's definition, resume, restart, the signal wake, and the workflow CLI's report of a waiting run admit the definition through one parse-and-validate step."
 
 [[verdict]]
 kind = "item"
@@ -12348,7 +12348,7 @@ reason = "The workflow CLI and engine share a strict spec loader, the editor sch
 [[verdict]]
 kind = "item"
 key = "harness::workflow::validate::validate_spec"
-reason = "Run admission at the start and at each advance read validates the parsed definition it holds, reusing the CLI validator without re-reading the definition."
+reason = "Run admission at the start, at each advance read, and before resume, restart and the signal wake validates the parsed definition it holds, reusing the CLI validator without re-reading the definition."
 
 [[verdict]]
 kind = "item"

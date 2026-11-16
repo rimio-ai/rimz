@@ -709,3 +709,65 @@ fn continue_rechecks_the_history_pool_after_stopping() {
         run.run_id.as_str()
     );
 }
+
+/// `workflow restart` and `agents restart` on a step's agent admit the run's definition first:
+/// a refused one exits non-zero with the definition's error and leaves the run and its agent as
+/// they were; once the definition is fixed the restart goes ahead.
+#[test]
+fn restarts_refuse_a_refused_definition_and_leave_the_agent_running() {
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    let transcript = room.env.project_root.join("session.jsonl");
+    fs::write(&transcript, "{}\n").unwrap();
+    room.hook(
+        &id,
+        &run,
+        json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
+    );
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
+    )
+    .unwrap();
+    #[cfg(target_os = "linux")]
+    super::rest::wait_for_advances_to_exit(&room.env, &id);
+    let definition = room.env.rimz_home().join("workflows/review/workflow.toml");
+    let text = fs::read_to_string(&definition).unwrap();
+    fs::write(
+        &definition,
+        text.replace("then = 'after'", "then = 'build'"),
+    )
+    .unwrap();
+    let state = room.env.state_path_for(&room.env.project_root);
+    let paths = state.workflow(&id.parse().unwrap());
+    let before = records::load(&paths).unwrap();
+    let reference = format!("@{}", run.agent_name.as_deref().unwrap());
+    for args in [
+        vec!["workflow", "restart", id.as_str()],
+        vec!["agents", "restart", reference.as_str()],
+    ] {
+        let output = room.command(&args).output().unwrap();
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success()
+                && error.contains(
+                    "review: agent.build.then: then must name a check, @done, or @failed, never a step"
+                ),
+            "{args:?}: {output:?}"
+        );
+        assert_eq!(records::load(&paths).unwrap(), before, "{args:?}");
+    }
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+    assert!(!trace.contains("close-pane"), "{trace}");
+    fs::write(&definition, text).unwrap();
+    success(
+        room.command(&["agents", "restart", &reference])
+            .output()
+            .unwrap(),
+    );
+    until(&room.env, &id, |value| {
+        value["record"]["attempt"]["run"]["run_id"]
+            .as_str()
+            .is_some_and(|current| current != run.run_id.as_str())
+    });
+}
