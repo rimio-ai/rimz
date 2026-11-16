@@ -324,34 +324,13 @@ pub(crate) fn spawn_park_helpers(
     store: Option<&crate::store::Store>,
     outcomes: &[crate::store::snapshot::ResumeOutcome],
 ) {
-    let exhausted = OnceCell::new();
     spawn_park_helpers_with(
         runs,
         agents,
         &runtime.workspace_id,
         now,
         horizon(&config.harness),
-        |child| {
-            if !config.resume.auto_continue {
-                return Continuation::Off;
-            }
-            let exhausted = exhausted.get_or_init(|| {
-                let messages =
-                    super::auto_continue::read_resume_messages(store, &config.resume, outcomes);
-                super::auto_continue::exhausted_parks(
-                    |_| false,
-                    agents,
-                    runtime,
-                    &config.resume,
-                    &messages,
-                )
-            });
-            if exhausted.contains(&(child.kind.clone(), child.agent_id.clone())) {
-                Continuation::Spent
-            } else {
-                Continuation::On
-            }
-        },
+        continuation_reader(agents, runtime, config, store, outcomes),
         |child, since| limit_reading(runtime, child, now, since),
         |request| {
             let args = crate::child_process::agent_helper_argv("park-notice", request);
@@ -367,6 +346,39 @@ pub(crate) fn spawn_park_helpers(
             }
         },
     );
+}
+
+/// Read each child's [`Continuation`] in the host pass: the exhausted parks the
+/// displayed status demotes to failed, read once on first use.
+pub(super) fn continuation_reader<'a>(
+    agents: &'a [AgentState],
+    runtime: &'a RuntimePaths,
+    config: &'a crate::config::MachineConfig,
+    store: Option<&'a crate::store::Store>,
+    outcomes: &'a [crate::store::snapshot::ResumeOutcome],
+) -> impl FnMut(&AgentState) -> Continuation + 'a {
+    let exhausted = OnceCell::new();
+    move |child| {
+        if !config.resume.auto_continue {
+            return Continuation::Off;
+        }
+        let exhausted = exhausted.get_or_init(|| {
+            let messages =
+                super::auto_continue::read_resume_messages(store, &config.resume, outcomes);
+            super::auto_continue::exhausted_parks(
+                |_| false,
+                agents,
+                runtime,
+                &config.resume,
+                &messages,
+            )
+        });
+        if exhausted.contains(&(child.kind.clone(), child.agent_id.clone())) {
+            Continuation::Spent
+        } else {
+            Continuation::On
+        }
+    }
 }
 
 /// The run's stored failure sentence: the provider's label, and the refill

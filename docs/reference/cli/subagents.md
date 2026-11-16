@@ -286,7 +286,7 @@ The room's sidebar producer detects the stop, so a room with no sidebar running 
 
 ## A child silent past the stall window
 
-Any child still running but silent for `[agents.attention] stalled_after_secs` (default `900`) receives a labelled `!` in the sidebar. The same window covers a launched child given a task that has not started its first turn, whether or not it has registered. A promptless interactive child waiting for a human is excluded. Provider-native children lift the parent card's attention but send no notice. A child sleeping on a wait, paused, or already showing an error does not trigger the silence check. For a launched child, the parent gets one message parked for its next eligible turn boundary:
+Any child still running but silent for `[agents.attention] stalled_after_secs` (default `900`) receives a labelled `!` in the sidebar. The same window covers a launched child given a task that has not started its first turn, whether or not it has registered. A promptless interactive child waiting for a human is excluded. Provider-native children lift the parent card's attention but send no notice. A child sleeping on a wait, paused, or already showing an error does not trigger the silence check. A launched child stopped on a turn error that nothing will retry does, after the same window of silence: one showing `failed` (an auto-continue park whose retries are spent included), or one paused on an overloaded provider while auto-continue is off. A child paused on a rate or spend limit is left to the [limit hold or failure](#a-child-paused-on-a-provider-limit), and one paused on an overload with auto-continue retries left to auto-continue. For a launched child, the parent gets one message parked for its next eligible turn boundary:
 
 ```text
 Type: SUBAGENT_STALLED
@@ -295,7 +295,13 @@ Content:
 @still-silver has been silent for 17m and is still running; its pane is open. Its run stays open until its deadline in 13m. RimZ will not stop it: look with `rimz pane capture @still-silver`, stop it with `rimz subagents stop @still-silver`, or relaunch the task elsewhere.
 ```
 
-For a never-started child, the opening instead reads `@still-silver has not started its first turn for 17m; its pane is open.` The deadline clause is omitted when there is no deadline, or reads `, past its deadline, until it is stopped` after the deadline. The notice is once per run, even if the child recovers and stalls again or a follow-up reopens that run. Fresh activity clears the sidebar's stall label. The notice leaves the run open and does not replace its eventual fleet report. Detection needs the room's sidebar producer; delivery waits for the parent's next eligible boundary. If the child's run ends first, the notice is withdrawn and reads `canceled` in `rimz message show <id>`, with the reason in its timeline. The notice attempt is recorded in [assists](../../internals/harness/loops.md#the-assist-log) and shown by `rimz stats`.
+For a never-started child, the opening instead reads `@still-silver has not started its first turn for 17m; its pane is open.` For a stopped child, the notice quotes the reason the child shows and offers continuing it:
+
+```text
+@still-silver stopped on a turn error 17m ago: "Auto mode is unavailable: the server returned no safety verdict for 10 responses"; its pane is open. Its run stays open until its deadline in 13m. RimZ will not continue it: look with `rimz pane capture @still-silver`, continue it with `rimz message @still-silver "continue"`, stop it with `rimz subagents stop @still-silver`, or relaunch the task elsewhere.
+```
+
+The deadline clause is omitted when there is no deadline, or reads `, past its deadline, until it is stopped` after the deadline. The notice is once per run, even if the child recovers and stalls again or a follow-up reopens that run. Fresh activity clears the sidebar's stall label. The notice leaves the run open and does not replace its eventual fleet report. Detection needs the room's sidebar producer; delivery waits for the parent's next eligible boundary. If the child's run ends first, the notice is withdrawn and reads `canceled` in `rimz message show <id>`, with the reason in its timeline. The notice attempt is recorded in [assists](../../internals/harness/loops.md#the-assist-log) and shown by `rimz stats`.
 
 ## Stop children
 

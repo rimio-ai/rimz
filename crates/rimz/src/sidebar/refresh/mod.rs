@@ -439,7 +439,9 @@ pub(super) fn refresh_heavy_lanes(
                 &base.agents,
                 runtime,
                 base.now,
-                config.agents.attention.stalled_after_secs.get(),
+                config,
+                store.as_ref(),
+                base.resume_outcomes.as_deref().unwrap_or_default(),
             );
         }
         runs
