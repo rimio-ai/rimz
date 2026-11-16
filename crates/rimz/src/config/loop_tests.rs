@@ -385,7 +385,7 @@ fn default_timeout_rejects_a_zero_duration() {
 }
 
 #[test]
-fn a_row_with_a_key_outside_the_row_refuses_alone_and_keeps_its_bytes() {
+fn a_row_with_a_key_outside_the_row_refuses_alone_and_keeps_its_values() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("loop.toml");
     let text = "[tasks.ok]\nroot = '/repo'\nargs = ['true']\ntimeout = '1m'\nevery = '1h'\n\

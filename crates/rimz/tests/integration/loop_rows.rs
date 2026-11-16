@@ -395,7 +395,7 @@ fn a_strict_row_refusal_stands_alone_in_each_of_the_three_stores() {
             .get("agent")
             .and_then(toml::Value::as_str),
         Some("codex"),
-        "a refused row keeps its bytes through a rewrite"
+        "a refused row keeps its values through a rewrite"
     );
     let kept: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&instances).unwrap()).unwrap();
