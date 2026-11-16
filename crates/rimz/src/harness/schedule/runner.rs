@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 
 use super::{
@@ -200,8 +200,8 @@ fn launched_addresses(state: &StatePaths, fire: &FireId) -> Option<String> {
         })
 }
 
-/// One loop fire from ordered gates through one history transition, unless a drain finds no work.
-pub struct TaskFire<'a> {
+/// The state every kind of fire shares: the task, the trigger it serves, and the lease.
+struct Fire<'a> {
     name: String,
     /// The task's id, bound at construction: the key of its backlog entry and run lock.
     task_id: TaskId,
@@ -229,7 +229,6 @@ pub struct TaskFire<'a> {
     late_ms: Option<u64>,
     /// A watch's verdict, recorded as the fire's check.
     watch_check: Option<CheckRecord>,
-    pending: Option<TaskTarget>,
     finished: bool,
     /// This fire took its trigger from the backlog.
     draining: bool,
@@ -237,6 +236,36 @@ pub struct TaskFire<'a> {
     queued_arrival: Option<WaitingTrigger>,
     /// This fire started a run or found one live, whose report drains the backlog.
     saw_run: bool,
+}
+
+/// One loop fire from ordered gates through one history transition, unless a drain finds no work.
+pub struct TaskFire<'a> {
+    core: Fire<'a>,
+    effect: Effect,
+}
+
+/// What a fire does once admitted, one per task action, with the state only that kind keeps.
+enum Effect {
+    Shell(Shell),
+    Launch(Launch),
+    Deliver(Delivery),
+}
+
+/// A shell fire: the workflow run of its one command check.
+struct Shell {
+    argv: Vec<String>,
+}
+
+/// A workflow, agent or team fire: a launch child running the row's launch.
+struct Launch {
+    launch: TaskLaunch,
+}
+
+/// A delivery to a living session, which the CLI executes.
+struct Delivery {
+    target: TaskTarget,
+    /// A delivery was prepared and awaits `finish`.
+    pending: bool,
 }
 
 impl<'a> TaskFire<'a> {
@@ -255,7 +284,14 @@ impl<'a> TaskFire<'a> {
         started: Instant,
     ) -> Result<Self> {
         let name = name.into();
-        task.action().map_err(Clone::clone)?;
+        let effect = match task.action().map_err(Clone::clone)?.clone() {
+            TaskAction::Shell(argv) => Effect::Shell(Shell { argv }),
+            TaskAction::Launch(launch) => Effect::Launch(Launch { launch }),
+            TaskAction::Deliver(target) => Effect::Deliver(Delivery {
+                target,
+                pending: false,
+            }),
+        };
         let binding = task.binding(&name);
         let task_id = task_record_store::mutate(|records| records.bind(&binding).0)?;
         let entry = task.entry().clone();
@@ -265,7 +301,7 @@ impl<'a> TaskFire<'a> {
             .filter(|_| mode == LoopRunMode::Scheduled)
             .and_then(|at| u64::try_from(now.duration_since(at).as_millis()).ok())
             .filter(|late| *late >= LATE_FIRE_MS);
-        Ok(Self {
+        let core = Fire {
             name,
             task_id,
             task,
@@ -289,16 +325,73 @@ impl<'a> TaskFire<'a> {
             run_lock_path,
             late_ms,
             watch_check: None,
-            pending: None,
             finished: false,
             draining: false,
             queued_arrival: None,
             saw_run: false,
-        })
+        };
+        Ok(Self { core, effect })
     }
 
     /// Claim one waiting trigger before the CLI rechecks arming and trust.
     pub fn take_backlog(&mut self) -> Result<bool> {
+        self.core.take_backlog()
+    }
+
+    /// Spawn the next drain before releasing a protocol-managed run lock.
+    pub fn release_run_lock(&mut self) -> Result<()> {
+        self.core.release_run_lock()
+    }
+
+    pub fn with_arrived_at(mut self, arrived_at: Option<Timestamp>) -> Self {
+        self.core.arrived_at = arrived_at;
+        self
+    }
+
+    pub fn with_condition(
+        mut self,
+        condition: Option<crate::harness::when::ConditionEvidence>,
+    ) -> Self {
+        self.core.condition = condition;
+        self
+    }
+
+    pub fn with_checkout(mut self, checkout: Option<PathBuf>) -> Self {
+        self.core.checkout = checkout;
+        self
+    }
+
+    pub fn prepare(
+        &mut self,
+        before_launch: &mut dyn FnMut(&Path) -> Result<()>,
+    ) -> Result<TaskFirePlan> {
+        match &mut self.effect {
+            Effect::Shell(shell) => self.core.prepare_command(shell, before_launch),
+            Effect::Launch(launch) => self.core.prepare_launch(launch, before_launch),
+            Effect::Deliver(delivery) => self.core.prepare_wait(delivery),
+        }
+    }
+
+    pub fn finish(&mut self, effect: TaskFireEffect) -> Result<TaskFireFinished> {
+        let delivery = match &mut self.effect {
+            Effect::Deliver(delivery) if delivery.pending => delivery,
+            _ => bail!("loop task has no prepared effect to finish"),
+        };
+        delivery.pending = false;
+        self.core.finish_delivery(&delivery.target, effect)
+    }
+
+    pub fn finish_error(&mut self, err: &anyhow::Error) -> TaskFireFinished {
+        let prepared = match &mut self.effect {
+            Effect::Deliver(delivery) => std::mem::take(&mut delivery.pending),
+            Effect::Shell(_) | Effect::Launch(_) => false,
+        };
+        self.core.finish_error(err, prepared)
+    }
+}
+
+impl<'a> Fire<'a> {
+    fn take_backlog(&mut self) -> Result<bool> {
         let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
         let mut backlog = LockedBacklog::acquire(&paths)?;
         if let Some(legacy) = backlog.record.tasks.remove(&self.name) {
@@ -338,7 +431,7 @@ impl<'a> TaskFire<'a> {
     }
 
     /// Spawn the next drain before releasing a protocol-managed run lock.
-    pub fn release_run_lock(&mut self) -> Result<()> {
+    fn release_run_lock(&mut self) -> Result<()> {
         self.release_run_lock_with(|runtime, root, name| {
             super::fire::spawn_loop_drain(runtime, root, name, super::fire::LoopRunHost::Detached)
         })
@@ -459,24 +552,6 @@ impl<'a> TaskFire<'a> {
         Ok(None)
     }
 
-    pub fn with_arrived_at(mut self, arrived_at: Option<Timestamp>) -> Self {
-        self.arrived_at = arrived_at;
-        self
-    }
-
-    pub fn with_condition(
-        mut self,
-        condition: Option<crate::harness::when::ConditionEvidence>,
-    ) -> Self {
-        self.condition = condition;
-        self
-    }
-
-    pub fn with_checkout(mut self, checkout: Option<PathBuf>) -> Self {
-        self.checkout = checkout;
-        self
-    }
-
     fn launch_checkout(&self) -> PathBuf {
         self.checkout
             .clone()
@@ -558,21 +633,10 @@ impl<'a> TaskFire<'a> {
         }
     }
 
-    pub fn prepare(
-        &mut self,
-        before_launch: &mut dyn FnMut(&Path) -> Result<()>,
-    ) -> Result<TaskFirePlan> {
-        match self.task.action().map_err(Clone::clone)?.clone() {
-            TaskAction::Shell(argv) => self.prepare_command(&argv, before_launch),
-            TaskAction::Launch(launch) => self.prepare_launch(&launch, before_launch),
-            TaskAction::Deliver(target) => self.prepare_wait(target),
-        }
-    }
-
     /// An unguarded wait: scope gates, the lease, the deadline and a watch's verdict, then the
     /// delivery to its living session.
-    fn prepare_wait(&mut self, target: TaskTarget) -> Result<TaskFirePlan> {
-        if let Some(done) = self.prepare_scope_gates(&target)? {
+    fn prepare_wait(&mut self, delivery: &mut Delivery) -> Result<TaskFirePlan> {
+        if let Some(done) = self.prepare_scope_gates(&delivery.target)? {
             return Ok(TaskFirePlan::Done(done));
         }
         if let Some(done) = self.prepare_run_lock()? {
@@ -584,7 +648,7 @@ impl<'a> TaskFire<'a> {
         if let Some(done) = self.prepare_watch()? {
             return Ok(TaskFirePlan::Done(done));
         }
-        self.prepare_delivery(target)
+        self.prepare_delivery(delivery)
     }
 
     /// A watch's verdict arrives with its fire: a check-in passes on, and a terminal verdict
@@ -623,7 +687,7 @@ impl<'a> TaskFire<'a> {
     /// `create` refuses.
     fn prepare_command(
         &mut self,
-        argv: &[String],
+        shell: &mut Shell,
         before_launch: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
         if let Some(done) = self.prepare_watch()? {
@@ -636,7 +700,7 @@ impl<'a> TaskFire<'a> {
             self.finished = true;
             return Ok(TaskFirePlan::AlreadyLaunched);
         }
-        let definition = command_definition(&self.name, &self.entry, argv)?;
+        let definition = command_definition(&self.name, &self.entry, &shell.argv)?;
         if let Some(done) = self.prepare_run_lock()? {
             return Ok(TaskFirePlan::Done(done));
         }
@@ -716,7 +780,7 @@ impl<'a> TaskFire<'a> {
     /// outcome its kind gives.
     fn prepare_launch(
         &mut self,
-        launch: &TaskLaunch,
+        launch: &mut Launch,
         before_launch: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
         if let Some(done) = self.prepare_watch()? {
@@ -743,12 +807,12 @@ impl<'a> TaskFire<'a> {
         }
         let state = StatePaths::for_project_root(&root)?;
         if self.entry.overlap != Some(OverlapPolicy::Allow)
-            && let Some(blocker) = self.alive_launch(&state, launch.kind)?
+            && let Some(blocker) = self.alive_launch(&state, launch.launch.kind)?
         {
             return self.prepare_overlap(&blocker);
         }
-        let workflow = launch.kind == LaunchKind::Workflow;
-        if workflow && let Some(run) = self.hand_started_run(&state, &launch.target)? {
+        let workflow = launch.launch.kind == LaunchKind::Workflow;
+        if workflow && let Some(run) = self.hand_started_run(&state, &launch.launch.target)? {
             return Ok(TaskFirePlan::Done(self.record_hand_started(&run)));
         }
         let trigger = self.effect_prompt(String::new());
@@ -766,7 +830,7 @@ impl<'a> TaskFire<'a> {
             .with_context(|| format!("task checkout {}", checkout.display()))
             .and_then(|_| {
                 super::launch::spawn(&super::launch::Request {
-                    launch,
+                    launch: &launch.launch,
                     fire: &fire,
                     task: &self.name,
                     checkout: &checkout,
@@ -787,9 +851,10 @@ impl<'a> TaskFire<'a> {
         if let Err(error) = fires::spawned(&fire, spawned.pid()) {
             tracing::warn!(task = %self.name, %fire, %error, "the fire's mark does not name its launch child");
         }
-        let agent = launch.kind == LaunchKind::Agent;
+        let agent = launch.launch.kind == LaunchKind::Agent;
         let ended = spawned.wait(|| agent.then(|| published_run(&state, &fire)).flatten())?;
-        self.launch_outcome(launch.kind, &state, fire, ended)
+        let kind = launch.launch.kind;
+        self.launch_outcome(kind, &state, fire, ended)
     }
 
     /// The fire's outcome by its kind: a workflow run carrying the fire reports through its own
@@ -1445,15 +1510,15 @@ impl<'a> TaskFire<'a> {
         )
     }
 
-    pub fn finish(&mut self, effect: TaskFireEffect) -> Result<TaskFireFinished> {
-        let target = self
-            .pending
-            .take()
-            .context("loop task has no prepared effect to finish")?;
+    fn finish_delivery(
+        &mut self,
+        target: &TaskTarget,
+        effect: TaskFireEffect,
+    ) -> Result<TaskFireFinished> {
         match effect {
             TaskFireEffect::Delivered(message_id) => {
                 self.consume_ephemeral()?;
-                let handle = target.handle;
+                let handle = target.handle.clone();
                 Ok(self.record_terminal_with(
                     LoopRunResult::Delivered,
                     LoopRunPresentation::default(),
@@ -1469,7 +1534,7 @@ impl<'a> TaskFire<'a> {
                 if self.mode == LoopRunMode::Scheduled {
                     self.remove_schedule()?;
                 }
-                let handle = target.handle;
+                let handle = target.handle.clone();
                 Ok(self.record_terminal_with(
                     LoopRunResult::TargetGone,
                     LoopRunPresentation::default(),
@@ -1485,10 +1550,8 @@ impl<'a> TaskFire<'a> {
         }
     }
 
-    pub fn finish_error(&mut self, err: &anyhow::Error) -> TaskFireFinished {
-        if self.pending.take().is_some()
-            && let Err(consume) = self.consume_ephemeral()
-        {
+    fn finish_error(&mut self, err: &anyhow::Error, prepared: bool) -> TaskFireFinished {
+        if prepared && let Err(consume) = self.consume_ephemeral() {
             tracing::warn!(task = %self.name, error = %format!("{consume:#}"), "failed to consume errored one-shot delivery");
         }
         let error = format!("{err:#}");
@@ -1501,7 +1564,8 @@ impl<'a> TaskFire<'a> {
         )
     }
 
-    fn prepare_delivery(&mut self, target: TaskTarget) -> Result<TaskFirePlan> {
+    fn prepare_delivery(&mut self, delivery: &mut Delivery) -> Result<TaskFirePlan> {
+        let target = delivery.target.clone();
         if catalog::delivery_holder(&self.entry.resolved_root(), &target)?.is_none() {
             if self.mode == LoopRunMode::Scheduled {
                 self.remove_schedule()?;
@@ -1523,7 +1587,7 @@ impl<'a> TaskFire<'a> {
         // The one-shot row is consumed in `finish`, once the wake's message
         // record exists: turn-completion waits read the row, then the queue,
         // so the agent never looks rested between the two.
-        self.pending = Some(target.clone());
+        delivery.pending = true;
         Ok(TaskFirePlan::Deliver(PreparedDelivery {
             root: self.entry.resolved_root(),
             target,
@@ -1783,8 +1847,8 @@ impl<'a> TaskFire<'a> {
 
 impl Drop for TaskFire<'_> {
     fn drop(&mut self) {
-        if let Err(error) = self.release_run_lock() {
-            tracing::warn!(task = %self.name, error = %format!("{error:#}"), "failed to release loop run and start its backlog drain");
+        if let Err(error) = self.core.release_run_lock() {
+            tracing::warn!(task = %self.core.name, error = %format!("{error:#}"), "failed to release loop run and start its backlog drain");
         }
     }
 }

@@ -5980,7 +5980,7 @@ allowed-dependencies = [
 # TaskFire::take_backlog and TaskFire::release_run_lock coordinate CLI drain gates and process exit (+2).
 # `run_control` now owns discard_backlog, which lets the CLI drop an unrunnable task's triggers before constructing a fire.
 # TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
-# TaskFire::finish_record holds the `check_run::CheckSignalGuard` through terminal recording, with no accessor.
+# Fire::finish_record holds the `check_run::CheckSignalGuard` through terminal recording, with no accessor.
 # `check_run` now owns CheckOutcome, its accessors and `cancel_run_on_sigterm`, which this file exported.
 # `resolve_task_prompt`, `resolve_config_path`, `task_permission_mode`, and `agent_check` let the compiler read a fire's assets from the paths a supervised fire reads (+4).
 surface-budget = 70
