@@ -452,6 +452,55 @@ fn a_workflow_fire_publishes_the_tasks_run_and_a_hand_started_run_overlaps_it() 
     std::fs::write(&release, "").unwrap();
 }
 
+/// A fire typed in a pane of another room launches into the task's room: the launch child
+/// drops the firing shell's room pin, so it resolves the room from the fire's checkout, as a
+/// fire from the timer, which carries no pin, does.
+#[cfg(unix)]
+#[test]
+fn a_fire_from_a_shell_pinned_to_another_room_launches_in_the_tasks_room() {
+    let env = live_room();
+    let release = env.home_root.join("release");
+    deploy_workflow(
+        &env,
+        "smoke",
+        "worktree",
+        &format!(
+            "while [ ! -e {:?} ]; do sleep 0.05; done",
+            release.display().to_string()
+        ),
+    );
+    loop_ok(
+        &env,
+        &["loop", "add", "wf", "--workflow", "smoke", "--every", "1h"],
+    );
+    let other = env.home_root.join("other");
+    env.record(&other);
+    let other = canonical(&other);
+    let before = run_mark(&env, "wf");
+    let output = env
+        .rimz()
+        .env("RIMZ_PROJECT_ROOT", &other)
+        .env(
+            "RIMZ_WORKSPACE_ID",
+            WorkspaceId::from_project_root(&other).as_str(),
+        )
+        .args(["loop", "fire", "wf"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let live_runs = |root: &Path| env.state_path_for(root).workflow_runs().unwrap().len();
+    // The fire returns once its launch child exits, so the held run is published by now.
+    let (tasks, pinned) = (live_runs(&env.project_root), live_runs(&other));
+    std::fs::write(&release, "").unwrap();
+    assert_eq!(
+        (tasks, pinned),
+        (1, 0),
+        "live runs in the task's room and the pinned one: {output:?}"
+    );
+    let report = wait_for_loop_report_after(&env, "wf", before);
+    assert_eq!(report.result, LoopRunResult::Completed, "{report:?}");
+}
+
 /// A target written by hand that no longer resolves fails at the fire's launch: an `error`
 /// strike carrying the launch's own error text.
 #[test]

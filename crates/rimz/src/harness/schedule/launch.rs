@@ -1,7 +1,8 @@
 //! The launch child of a workflow, agent or team fire: `rimz` run with the task's stored launch
 //! argv in the fire's checkout. Its environment carries the fire's stamps with the room's
-//! channel and any agent identity dropped, its stdin is null, and its output goes to a log file,
-//! never a pipe, since a `-p` child outlives the fire.
+//! channel, any agent identity and the firing shell's room pin dropped, so it resolves the
+//! task's room from the checkout as a timer fire does. Its stdin is null, and its output goes to
+//! a log file, never a pipe, since a `-p` child outlives the fire.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -85,6 +86,8 @@ pub(super) fn spawn(request: &Request<'_>) -> Result<Spawned> {
     crate::harness::check_run::drop_room_identity(&mut command);
     crate::child_process::restore_user_temp_env(&mut command);
     command
+        .env_remove(crate::workspace::ENV_PROJECT_ROOT)
+        .env_remove(crate::workspace::ENV_WORKSPACE_ID)
         .env(LOOP_FIRE_ENV, request.fire.as_str())
         .env(LOOP_TASK_ENV, request.task)
         .env(crate::workspace::ENV_WORKTREE_PATH, request.checkout);
