@@ -20,6 +20,8 @@ use rimz::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
 use rimz::store::message::MessageStatus;
 use rimz::store::run::{RunRecord, RunStatus};
 
+#[cfg(target_os = "linux")]
+use crate::common::wait::wait_for_loop_runs_to_exit;
 use crate::common::wait::{publish_claude_5h, publish_claude_5h_resetting};
 use crate::common::{Env, ScrubSessionEnvExt, canonical, retained_runs_refusal};
 #[path = "loop_kinds.rs"]
@@ -1748,6 +1750,10 @@ fn a_team_binding_stored_without_repeat_delivers_on_every_match_and_stays() {
         while read_loop_run_records(&env).len() < fire && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(25));
         }
+        // The runner appends its row before it releases its run lock, so the next signal waits
+        // for it to exit, or it fires into the held lock and overlaps.
+        #[cfg(target_os = "linux")]
+        wait_for_loop_runs_to_exit(&env, name);
         let records = read_loop_run_records(&env);
         assert_eq!(
             records
