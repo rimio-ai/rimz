@@ -433,9 +433,8 @@ fn present_finished(
     print_run_summary(name, entry, action, mode, &summary)
 }
 
-/// `→ <workflow show command>` under a hand fire's `launched <id>` receipt, then the hold in
-/// front of the run's node once its advance has had its first pass, as `workflow run` prints
-/// both.
+/// `→ <workflow show command>` under a hand fire's `launched <id>` receipt, or
+/// `→ rimz loop show <task>` when the run has no home left.
 fn write_launched_run_command(
     entry: &TaskEntry,
     record: &LoopRunRecord,

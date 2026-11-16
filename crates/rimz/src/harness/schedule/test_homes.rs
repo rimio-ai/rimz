@@ -1,4 +1,6 @@
-//! The private-home re-exec and the fire mark fixture the schedule's unit tests share.
+//! The private-home re-exec and the fire mark fixture the schedule's unit tests share. A
+//! fixture that opens a `Store` stays in a `tests.rs`: `cargo xtask invariants` reads this file
+//! as production code.
 
 use std::process::Command;
 
