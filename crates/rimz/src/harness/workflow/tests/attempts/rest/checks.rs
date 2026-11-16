@@ -214,6 +214,41 @@ fn a_held_session_stays_held_while_its_rest_check_judge_is_held_on_a_limit() {
     assert_eq!(host.stops.get(), 0);
 }
 
+/// The judge's own errored turn fails the check through the failure chain, which no route
+/// names here: the run fails and closes the session it judged, as a script check's `died` does.
+#[test]
+fn a_rest_check_judges_unrouted_errored_turn_fails_the_run_and_closes_its_session() {
+    let (_dir, state, host, judging) = judging_rest(SESSION);
+    let (session, judge) = rest_runs(&judging);
+    let error = crate::harness::workflow::Stopped {
+        since: Timestamp::now(),
+        kind: crate::harness::workflow::StopKind::Error,
+        handle: Some("@judge".into()),
+        class: Some(crate::agents::TurnErrorClass::Failed),
+        text: Some("API Error: 500".into()),
+    };
+    let mut observed = host.observed.borrow().clone();
+    observed.status = RunStatus::Pending;
+    observed.stopped = Some(error.clone());
+    observed.errored = Some(error);
+    host.observed_runs
+        .borrow_mut()
+        .insert(judge.clone(), observed);
+    let failed = advance_ok(&state, &judging.id, &host);
+    assert_eq!(failed.state, RunState::Failed, "{failed:#?}");
+    assert!(failed.held.is_none(), "{failed:#?}");
+    assert_eq!(*host.stopped.borrow(), [judge, session]);
+    assert!(
+        records::journal(&state.workflow(&judging.id))
+            .unwrap()
+            .iter()
+            .any(|entry| matches!(
+                &entry.event,
+                JournalEvent::Route { outcome, .. } if outcome == "errored"
+            ))
+    );
+}
+
 #[test]
 fn a_session_that_opens_a_turn_while_its_rest_check_judge_runs_stops_only_the_judge() {
     // A stop that fails is dropped from the debt as well, so it never holds the run.

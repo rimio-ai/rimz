@@ -419,13 +419,11 @@ pub(super) fn validate_spec(
         .resume
         .auto_continue
     {
+        // A judge's timeout runs through a limit, so only a step waits for you.
         for row in &report.rows {
-            if row.agent.is_some() {
-                let message = if row.kind == "agent" {
-                    "auto-continue is off; a step paused on a provider limit waits for you"
-                } else {
-                    "auto-continue is off; a judge paused on a provider limit waits for you"
-                };
+            if row.agent.is_some() && row.kind == "agent" {
+                let message =
+                    "auto-continue is off; a step paused on a provider limit waits for you";
                 let path = format!("{}.{}", row.kind, row.node);
                 report.warnings.push(issue(&path, message));
             }
@@ -579,7 +577,6 @@ impl Validation {
     /// The values a check's own fields must hold, beyond what its kind table admits.
     fn check_values(&mut self, path: &str, check: &spec::Check) {
         let condition = matches!(check.kind(), Some(CheckKind::Condition));
-        let judge = matches!(check.kind(), Some(CheckKind::Judge(_)));
         let sleep = check.is_sleep();
         self.summary(&format!("{path}.summary"), check.summary.as_deref());
         self.duration(&format!("{path}.timeout"), check.timeout.as_deref());
@@ -608,9 +605,7 @@ impl Validation {
             .chain(check.else_outcome.as_deref())
             .collect::<BTreeSet<_>>();
         for outcome in check.on.keys() {
-            // A judge is an agent, so its ask and its errored turn route like a step's.
             let raised = outcome == "failed"
-                || (judge && matches!(outcome.as_str(), "asked" | "errored"))
                 || Cause::parse(outcome)
                     .is_some_and(|cause| Cause::raised_by(check.table.word()).contains(&cause));
             let engine = spec::reserved(outcome) && !raised && !(condition && outcome == "unknown");

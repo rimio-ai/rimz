@@ -473,8 +473,9 @@ pub(super) fn first_bound(
         .min_by_key(|(at, _, _)| *at))
 }
 
-/// The current node's timeout: a check's from its entry, and an agent step's or a judge's from
-/// its launch, less its held time; none while that attempt is held or before a judge launches.
+/// The current node's timeout: a check's from its entry, a judge's from its launch whatever it
+/// is stopped on, and an agent step's from its launch less its held time; none while the step
+/// is held or before a judge launches.
 pub fn timeout_at(
     spec: &Definition,
     record: &RunRecord,
@@ -487,7 +488,7 @@ pub fn timeout_at(
     };
     if matches!(check.kind(), Some(Kind::Judge(_))) {
         return match &record.attempt {
-            Some(judge) => step_timeout_at(spec, judge),
+            Some(judge) => clock(check.timeout(), judge.started_at, 0),
             None => Ok(None),
         };
     }

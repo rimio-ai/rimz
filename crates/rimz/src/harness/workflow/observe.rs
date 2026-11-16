@@ -44,6 +44,7 @@ pub fn observe<E: From<StoreErr>>(
         status: run.status,
         ask: None,
         limited: None,
+        limited_by: None,
         stopped: run.stopped_turn.as_ref().map(|stopped| Stopped {
             since: stopped.at,
             kind: match stopped.disposition {
@@ -85,6 +86,7 @@ pub fn observe<E: From<StoreErr>>(
             observed.limited = Some(Limited {
                 reset_at: reset_at(current),
             });
+            observed.limited_by = error.handle.clone();
         }
         if std::ptr::eq(current, root)
             && turn_failed

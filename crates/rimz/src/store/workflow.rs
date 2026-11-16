@@ -292,21 +292,26 @@ pub struct LiveAttempt {
     /// A judge that rested without an answer was reminded once.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reminded: bool,
-    /// A judge's ending evidence, staged with its ending for the settlement after the stop: the
-    /// input its `asked` or `errored` route hands on, or the detail of its failure. A judge's
-    /// ending never touches `prev_attempt`, which stays the last step's.
+    /// A judge's ending evidence, staged with its ending for the settlement after the stop: its
+    /// failure's detail, beside a `reason` that names the provider's error or what the judge was
+    /// stopped on as its timeout passed. A judge's ending never touches `prev_attempt`, which
+    /// stays the last step's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub woken: bool,
+    /// The blocking ask the attempt is stopped on, a judge's included.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asking: Option<Asking>,
+    /// When the attempt's current hold began. It pauses an agent step's timeout; a judge's
+    /// timeout runs through it, so on a judge it only shows the stop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_since: Option<Timestamp>,
     /// The stop the attempt is held on, written and cleared with `held_since`; none while it
     /// is held only on an ask.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_on: Option<Hold>,
+    /// The held time an agent step's timeout credits; a judge's timeout reads none of it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub asked_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

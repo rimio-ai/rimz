@@ -192,7 +192,8 @@ impl Definition {
     }
 
     /// Resolve a routing decision against this definition, including engine-owned outcomes:
-    /// a cause, or a step attempt's ending, takes the failure chain.
+    /// a cause, or a step attempt's ending, takes the failure chain; a step's `asked` and
+    /// `errored` take the step's own edge.
     pub fn target(&self, node: &str, outcome: &str) -> Option<Target> {
         let edges = self.resolved_edges(node)?;
         if let Some(cause) = self.ending_cause(node, outcome) {
@@ -212,15 +213,19 @@ impl Definition {
     }
 
     /// The cause an outcome at `node` raises: a cause word as written, or a step attempt's
-    /// ending that is not clean (a message's undelivered, any other step's died).
+    /// ending that is not clean (a message's undelivered, any other step's died). A step's
+    /// `errored` raises none: only a judge raises that cause, and a step routes its errored
+    /// turn by its own `on.errored`.
     pub(super) fn ending_cause(&self, node: &str, outcome: &str) -> Option<Cause> {
-        if self.check(node).is_none() && matches!(outcome, "died" | "canceled") {
-            return Some(match self.step_kind(node) {
+        let step = self.check(node).is_none();
+        match outcome {
+            "died" | "canceled" if step => Some(match self.step_kind(node) {
                 Some(Kind::Message(_)) => Cause::Undelivered,
                 _ => Cause::Died,
-            });
+            }),
+            "errored" if step => None,
+            _ => Cause::parse(outcome),
         }
-        Cause::parse(outcome)
     }
 
     /// The fallback chain: the node's `on.<cause>`, else its `on.failed`, else the workflow's

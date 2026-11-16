@@ -322,6 +322,15 @@ impl View<'_> {
                     .unwrap_or("—"),
                 render::one_line(&hold.label())
             );
+            if attempt.kind == rimz::store::workflow::AttemptKind::Judge
+                && self
+                    .spec
+                    .node(&attempt.node)
+                    .and_then(|node| node.timeout())
+                    .is_some()
+            {
+                forecast = " · the check timeout keeps running".to_owned();
+            }
             format!(
                 "{} is held {}",
                 attempt.node,
@@ -416,10 +425,13 @@ impl View<'_> {
             writeln!(
                 out,
                 "answer in its pane or with rimz answer · {}",
-                if timeout.is_some() {
-                    format!("the {kind} timeout is paused")
-                } else {
+                if timeout.is_none() {
                     format!("no {kind} timeout is set")
+                } else if kind == "check" {
+                    // Only a judge check asks, and nothing it is stopped on pauses its timeout.
+                    "the check timeout keeps running".to_owned()
+                } else {
+                    "the step timeout is paused".to_owned()
                 }
             )?;
         }

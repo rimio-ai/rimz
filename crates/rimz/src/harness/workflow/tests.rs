@@ -63,6 +63,7 @@ impl FakeHost {
                 status: RunStatus::Running,
                 ask: None,
                 limited: None,
+                limited_by: None,
                 stopped: None,
                 errored: None,
                 children: Children::default(),
@@ -1154,7 +1155,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{report:?}");
     assert_eq!(report.rows.len(), 2);
-    assert_eq!(report.warnings.len(), 2, "{report:?}");
+    assert_eq!(report.warnings.len(), 1, "{report:?}");
     assert_eq!(
         report
             .warnings
@@ -1165,18 +1166,15 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
             .count(),
         1
     );
-    let judge_waits = |report: &Validation| {
+    // A limit does not pause a judge's timeout, so no judge waits for you.
+    let judge_warned = |report: &Validation| {
         report.warnings.iter().any(|issue| {
             issue.path == "judge.pick"
-                && issue.message.ends_with(
-                    "auto-continue is off; a judge paused on a provider limit waits for you",
-                )
-        }) && !report.warnings.iter().any(|issue| {
-            issue.message.contains("ends the attempt as limited")
+                || issue.message.contains("ends the attempt as limited")
                 || issue.message.contains("retries once, then fails invalid")
         })
     };
-    assert!(judge_waits(&report), "{report:?}");
+    assert!(!judge_warned(&report), "{report:?}");
     let row = report.rows.iter().find(|row| row.node == "pick").unwrap();
     assert_eq!(serde_json::to_value(row).unwrap()["do_background"], true);
     assert!(row.edges.iter().any(|edge| edge.outcome == "died"
@@ -1191,8 +1189,8 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     )
     .unwrap();
     let codex = validate(&dir, &LoadedDefinitions::default(), None);
-    assert_eq!(codex.warnings.len(), 2, "{codex:?}");
-    assert!(judge_waits(&codex), "{codex:?}");
+    assert_eq!(codex.warnings.len(), 1, "{codex:?}");
+    assert!(!judge_warned(&codex), "{codex:?}");
     let cases = [
         ("lifecycle='turn'", None),
         ("lifecycle='session'", None),

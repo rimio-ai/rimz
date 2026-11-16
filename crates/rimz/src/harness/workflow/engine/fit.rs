@@ -8,8 +8,10 @@ use crate::store::workflow::{EvaluationOrigin, Verdict};
 /// when its node is in the definition; each live or held attempt sits at a node of the class
 /// it was published as, an agent step keeping its lifecycle; a held session, or a session with
 /// a push-back pending, sits at a step with rest checks; a held session's judging check is
-/// still in its step's `rest-check` list; a staged asked or errored ending sits at a step or
-/// judge check that routes it; and a held wait verdict names a case its check still has.
+/// still in its step's `rest-check` list; a staged asked or errored ending sits at a step that
+/// routes it, and a staged asked ending at a judge check that routes it, which only an ending
+/// an older RimZ staged reaches, since validation refuses a judge's `on.asked`; and a held wait
+/// verdict names a case its check still has.
 pub(super) fn misfit(spec: &Definition, record: &RunRecord) -> Option<String> {
     let changed = |node: &str, what: &str| {
         Some(format!(
@@ -67,10 +69,12 @@ pub(super) fn misfit(spec: &Definition, record: &RunRecord) -> Option<String> {
             .filter(|ending| {
                 ending.route.is_none()
                     && ending.cause == EndCause::Lifecycle
-                    && matches!(
-                        ending.outcome,
-                        AttemptOutcome::Asked | AttemptOutcome::Errored
-                    )
+                    && match ending.outcome {
+                        AttemptOutcome::Asked => true,
+                        // A judge's errored turn is a failure, which always has a route.
+                        AttemptOutcome::Errored => attempt.kind != AttemptKind::Judge,
+                        _ => false,
+                    }
             })
             .map(|ending| ending.outcome.as_str());
         if let Some(outcome) = routed

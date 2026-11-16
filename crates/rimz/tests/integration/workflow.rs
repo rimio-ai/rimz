@@ -2378,7 +2378,7 @@ fn babysit_fixture_validates_capabilities_and_missing_script() {
         rows.iter().find(|row| row["node"] == "triage").unwrap()["do_background"],
         true
     );
-    assert_eq!(value["warnings"].as_array().unwrap().len(), 4);
+    assert_eq!(value["warnings"].as_array().unwrap().len(), 3);
     fs::remove_file(dir.join("checks/notes.py")).unwrap();
     let failed = command(&env, &["workflow", "validate", "--json"]);
     assert_eq!(failed.status.code(), Some(1));
