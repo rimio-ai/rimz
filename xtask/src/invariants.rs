@@ -1184,17 +1184,14 @@ fn ensure_sidebar_render_runtime_uses_snapshot_clock(root: &Path, files: &[PathB
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
-        let mut in_tests = false;
-        for (idx, line) in text.lines().enumerate() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("mod tests") {
-                in_tests = true;
-            }
-            if in_tests {
-                continue;
-            }
+        for (line_number, line) in lines_outside_inline_tests(&text) {
             if line.contains(concat!("Timestamp", "::", "now()")) {
-                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+                violations.push(format!(
+                    "{}:{}: {}",
+                    path.display(),
+                    line_number,
+                    line.trim()
+                ));
             }
         }
     }
@@ -1231,10 +1228,7 @@ fn ensure_sidebar_loop_runtime_uses_driver_clock(root: &Path, files: &[PathBuf])
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
-        for (idx, line) in text.lines().enumerate() {
-            if line.trim_start().starts_with("mod tests") {
-                break;
-            }
+        for (line_number, line) in lines_outside_inline_tests(&text) {
             let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
             if [
                 "Instant::now",
@@ -1246,7 +1240,12 @@ fn ensure_sidebar_loop_runtime_uses_driver_clock(root: &Path, files: &[PathBuf])
             .iter()
             .any(|needle| compact.contains(needle))
             {
-                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+                violations.push(format!(
+                    "{}:{}: {}",
+                    path.display(),
+                    line_number,
+                    line.trim()
+                ));
             }
         }
     }
@@ -1296,8 +1295,13 @@ fn ensure_no_hardcoded_ui_colors(root: &Path, files: &[PathBuf]) -> Result<()> {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
-        for (idx, line) in ui_color_violation_lines(&text) {
-            violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+        for (line_number, line) in ui_color_violation_lines(&text) {
+            violations.push(format!(
+                "{}:{}: {}",
+                path.display(),
+                line_number,
+                line.trim()
+            ));
         }
     }
     if violations.is_empty() {
@@ -1354,23 +1358,13 @@ fn ui_color_violation_lines(text: &str) -> Vec<(usize, &str)> {
         concat!("Color", "::", "Indexed"),
         concat!("Color", "::", "Rgb"),
     ];
-    let mut hits = Vec::new();
-    let mut in_tests = false;
-    for (idx, line) in text.lines().enumerate() {
-        if line.trim_start().starts_with("mod tests") {
-            in_tests = true;
-        }
-        if in_tests {
-            continue;
-        }
-        if BANNED
-            .iter()
-            .any(|needle| names_color_variant(line, needle))
-        {
-            hits.push((idx, line));
-        }
-    }
-    hits
+    lines_outside_inline_tests(text)
+        .filter(|(_, line)| {
+            BANNED
+                .iter()
+                .any(|needle| names_color_variant(line, needle))
+        })
+        .collect()
 }
 
 fn ensure_cli_color_provenance(root: &Path, files: &[PathBuf]) -> Result<()> {
@@ -1495,8 +1489,13 @@ fn ensure_no_hardcoded_glyphs(root: &Path, files: &[PathBuf]) -> Result<()> {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
-        for (idx, line) in ui_glyph_violation_lines(&text) {
-            violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+        for (line_number, line) in ui_glyph_violation_lines(&text) {
+            violations.push(format!(
+                "{}:{}: {}",
+                path.display(),
+                line_number,
+                line.trim()
+            ));
         }
     }
     if violations.is_empty() {
@@ -1528,25 +1527,12 @@ fn ui_glyph_violation_lines(text: &str) -> Vec<(usize, &str)> {
         "┄", "⌘", "⚠", "⇄", "●", "○", "⋯", "↕", "⏎", "␣", "✉", "↔", "⟳", "✕", "╭", "╮", "╰", "╯",
         "│", "╱", "╎", "·", "▸", "▾", "▏", "▬",
     ];
-    let mut hits = Vec::new();
-    let mut in_tests = false;
-    for (idx, line) in text.lines().enumerate() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("mod tests") {
-            in_tests = true;
-        }
-        if in_tests
-            || trimmed.starts_with("//")
-            || trimmed.starts_with("///")
-            || trimmed.starts_with("//!")
-        {
-            continue;
-        }
-        if BANNED.iter().any(|needle| line.contains(needle)) {
-            hits.push((idx, line));
-        }
-    }
-    hits
+    lines_outside_inline_tests(text)
+        .filter(|(_, line)| {
+            !line.trim_start().starts_with("//")
+                && BANNED.iter().any(|needle| line.contains(needle))
+        })
+        .collect()
 }
 
 fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {

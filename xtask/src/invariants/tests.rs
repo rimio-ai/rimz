@@ -32,7 +32,15 @@ fn sidebar_loop_clock_rejects_wall_reads_and_references_but_not_tests_or_clock_d
             );
         }
         std::fs::write(&path, "fn decision() { clock.now(); }\n#[cfg(test)]\nmod tests {\nfn fixture() { Instant::now(); }\n}").unwrap();
-        ensure_sidebar_loop_runtime_uses_driver_clock(&root, &[path]).unwrap();
+        ensure_sidebar_loop_runtime_uses_driver_clock(&root, std::slice::from_ref(&path)).unwrap();
+        std::fs::write(
+            &path,
+            "#[cfg(test)]\nmod tests;\nfn decision() { Instant::now(); }",
+        )
+        .unwrap();
+        let error = ensure_sidebar_loop_runtime_uses_driver_clock(&root, &[path])
+            .expect_err("a `mod tests;` mount is no test region");
+        assert!(error.to_string().contains(&format!("{name}:3:")), "{error}");
     }
     let mut files = Vec::new();
     for name in ["loop_state.rs", "health.rs", "remind.rs", "timing.rs"] {
@@ -1198,6 +1206,31 @@ fn ui_glyph_violations_flag_literals_but_skip_comments_and_tests() {
         ui_glyph_violation_lines("mod tests {\nlet glyph = \"◇\";\n}\n").is_empty(),
         "inline tests may assert rendered shapes"
     );
+    assert_eq!(
+        ui_glyph_violation_lines("#[cfg(test)]\nmod tests;\nlet glyph = \"◇\";\n"),
+        [(3, "let glyph = \"◇\";")],
+        "a `mod tests;` mount is no test region"
+    );
+}
+
+#[test]
+fn sidebar_render_clock_scans_past_a_tests_mount_but_skips_inline_tests() {
+    let root = temp_repo_root("sidebar-render-clock");
+    let path = root.join("crates/rimz/src/sidebar_pane/render/row.rs");
+    std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
+    let now = concat!("Timestamp", "::", "now()");
+    std::fs::write(&path, format!("mod tests {{\nfn f() {{ {now}; }}\n}}\n")).expect("write");
+    ensure_sidebar_render_runtime_uses_snapshot_clock(&root, std::slice::from_ref(&path))
+        .expect("inline tests may read the wall clock");
+    std::fs::write(
+        &path,
+        format!("#[cfg(test)]\nmod tests;\nfn f() {{ {now}; }}\n"),
+    )
+    .expect("write");
+    let error = ensure_sidebar_render_runtime_uses_snapshot_clock(&root, &[path])
+        .expect_err("a `mod tests;` mount is no test region");
+    assert!(error.to_string().contains("row.rs:3:"), "{error}");
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1238,6 +1271,20 @@ fn ui_color_violations_flag_color_variants_but_allow_the_reset_sentinel() {
         "}\n",
     );
     assert!(ui_color_violation_lines(in_tests).is_empty());
+
+    // A `mod tests;` line mounts a sibling file; the production code after it is
+    // still scanned.
+    let mounted = concat!(
+        "#[cfg(test)]\n",
+        "mod tests;\n",
+        "let c = Color",
+        "::",
+        "Red;\n"
+    );
+    assert_eq!(
+        ui_color_violation_lines(mounted),
+        [(3, concat!("let c = Color", "::", "Red;"))]
+    );
 }
 
 #[test]
