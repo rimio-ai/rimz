@@ -115,8 +115,9 @@ pub(crate) fn measure_wrapper_memory(label: &str, wrapper: u32, budget_kib: u64)
     let outside_huge_kib = memory.outside_huge_kib();
     println!(
         "{label}: {private_kib} KiB Pss_Anon; {} KiB Pss; {outside_huge_kib} KiB outside huge \
-         pages; AnonHugePages {huge_kib} KiB; THP {mode}",
-        field("Pss:")
+         pages; AnonHugePages {huge_kib} KiB; THP {mode}; threads [{}]",
+        field("Pss:"),
+        wrapper_thread_names(wrapper).join(", ")
     );
     if outside_huge_kib > budget_kib || huge_kib > WRAPPER_HUGE_BUDGET_MIB * 1024 {
         println!(
@@ -128,6 +129,21 @@ pub(crate) fn measure_wrapper_memory(label: &str, wrapper: u32, budget_kib: u64)
         );
     }
     memory
+}
+
+/// The wrapper's thread names from `/proc/<pid>/task/*/comm`, sorted, so a figure that moves by
+/// one thread's stack and arena names that thread. A task that exits mid-read is skipped.
+fn wrapper_thread_names(wrapper: u32) -> Vec<String> {
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{wrapper}/task")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = tasks
+        .filter_map(Result::ok)
+        .filter_map(|task| std::fs::read_to_string(task.path().join("comm")).ok())
+        .map(|name| name.trim().to_owned())
+        .collect();
+    names.sort();
+    names
 }
 
 impl WrapperMemory {
