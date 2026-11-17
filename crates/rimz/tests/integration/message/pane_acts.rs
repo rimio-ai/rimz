@@ -932,6 +932,32 @@ fn a_steer_of_a_message_waiting_on_an_unreadable_listing_names_the_listing() {
     assert_eq!(typed(&env), Vec::<String>::new(), "{:#?}", trace(&env));
 }
 
+/// A fresh `--interrupt` the lookup parks names the lookup's cause and offers no `message
+/// interrupt` hint, which the same miss would refuse.
+#[test]
+fn a_fresh_interrupt_parked_on_an_unreadable_listing_names_the_listing() {
+    let env = Env::new();
+    planner_with_swap(&env);
+    let command = acting(&env, &[3]);
+    std::fs::write(env.project_root.join("stop-panes.json"), "not a listing").unwrap();
+    let output = { command }
+        .args(["message", "--interrupt", "@planner", "--", "stop there"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let waiting = only_message(&env);
+    assert!(
+        stdout.contains(&format!(
+            "({}) — receiver pane unreadable: ",
+            waiting.message_id
+        )),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("send now"), "{stdout}");
+    assert_eq!(typed(&env), Vec::<String>::new(), "{:#?}", trace(&env));
+}
+
 /// `message show <id>` on a record its snapshot calls ready asks the lookup once, and its
 /// verdict is the one delivery would reach: ready only while the lookup answers the bound
 /// pane, else the lookup's wait.
