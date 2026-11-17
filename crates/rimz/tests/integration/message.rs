@@ -22,6 +22,7 @@ use crate::common::{
     trust_codex_preflight_hooks, wait_for_text_then_enter, zellij_trace_shim,
 };
 
+mod pane_acts;
 mod premise;
 mod soft_compact;
 mod typing_hold;
@@ -4326,8 +4327,13 @@ fn stop_and_focus_print_paste_ready_receipts() {
             observation.runtime_owner = owner("receipt-session");
         },
     );
+    // Focus acts on the pane the room's listing shows hosting the agent.
     let focus = traced_rimz(&env, "receipt.log")
-        .args(["agents", "focus", "@receipt-pet"])
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES_FILE",
+            list_stop_panes(&env, &[3]),
+        )
+        .args(["--mux", "zellij", "agents", "focus", "@receipt-pet"])
         .output()
         .unwrap();
     assert!(focus.status.success(), "{focus:?}");

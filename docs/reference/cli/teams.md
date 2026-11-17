@@ -288,7 +288,7 @@ rimz teams restart '#feat-rate-limits'
 
 | Verb | Does | Prints |
 | --- | --- | --- |
-| `focus` | Jumps to the actionable member with the highest attention score, else the declared `leader`, else the first member. | Nothing on success. |
+| `focus` | Jumps to the actionable member with the highest attention score, else the declared `leader`, else the first member, in the pane the room's pane listing shows hosting it; it fails and focuses nothing as [`agents focus`](./agents.md#focus) does. | Nothing on success. |
 | `stop` | Closes every live member, stopping each member's own subagents first, then waits up to 3 seconds total for their processes to exit, sends SIGTERM once to each closed member's process still running without a pane, and waits up to 3 seconds more. | `stopped TEAM#LANE (N members)` when every member stopped, else `TEAM#LANE: K of N members stopped` and exit 1; then per member its subagents' stop lines, `stopped @<handle>`, and `error @<handle>: <reason>` per member not stopped (the pane still hosting it, or its pid still running). |
 | `restart` | Relaunches every live member in the order the layout launched them (members with no recorded launch order last), resuming each provider session where supported. | `restarted TEAM#LANE (N members)`, then one restart line per member, `error @<handle>: <reason>` per failure. |
 

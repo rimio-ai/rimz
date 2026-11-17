@@ -34,14 +34,19 @@ struct ShowReport {
     recent_transcript: Option<crate::cli::transcript::RenderedChat>,
 }
 
+/// What `--capture` asks of the report: ANSI kept or not, read on the backend `--mux` pinned.
+struct CaptureRequest {
+    ansi: bool,
+    mux: Option<rimz::ids::MuxName>,
+}
+
 fn collect_show_report(
     store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
     runtime: &rimz::RuntimePaths,
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     reference: &str,
-    capture: bool,
-    ansi: bool,
+    capture: Option<CaptureRequest>,
 ) -> Result<(ShowReport, Option<anyhow::Error>)> {
     let agent_result = resolve_live_or_audit(
         store,
@@ -65,19 +70,33 @@ fn collect_show_report(
         Err(err) => (None, false, Some(err)),
     };
     let run = newest_run_by_ref(store, reference, agent.as_ref())?;
-    let pane_capture = if capture {
+    let pane_capture = if let Some(request) = capture {
         let agent = agent.as_ref().ok_or_else(|| {
             anyhow::anyhow!("no live agent matches `{reference}`; nothing to capture")
         })?;
-        let pane = agent
-            .pane
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
+        // One read, then the capture of the pane it answers: an ended agent is hosted
+        // nowhere, whatever its stored pane shows now.
+        let mut notices = Vec::new();
+        let hosting = rimz::launcher::agent_pane::locate(
+            workspace,
+            store,
+            request.mux,
+            &agent.kind,
+            agent.launch_key(),
+            &mut notices,
+        );
+        render::room::print_notices(notices)?;
+        let Some(pane) = hosting.map_err(|err| {
+            anyhow::anyhow!("agent {}: {err}; nothing was captured", agent_name(agent))
+        })?
+        else {
+            bail!("agent {} has no bound pane", agent_name(agent));
+        };
         let backend = rimz::mux::backend_for(pane.pane_id.mux());
         Some(
             backend
                 // rimz-invariant: explicit-agent-show-capture
-                .capture_pane(&pane.pane_id, &workspace.session_name, None, ansi)
+                .capture_pane(&pane.pane_id, &pane.session_name, None, request.ansi)
                 .context("capturing agent pane")?,
         )
     } else {
@@ -269,8 +288,10 @@ pub(super) fn show_agent(
         runtime,
         &snapshot,
         &reference,
-        capture,
-        ansi,
+        capture.then_some(CaptureRequest {
+            ansi,
+            mux: ctx.mux(),
+        }),
     )?;
     if json {
         // A miss is an error in either format: an empty report is not an answer.
@@ -970,18 +991,31 @@ pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()
     Ok(())
 }
 
+/// Focus the pane the hosting lookup finds `agent` in, woken and read again first; refuses
+/// and focuses nothing when the agent has no pane or moved during the wake.
 pub(in crate::cli) fn focus_resolved(ctx: &Ctx, agent: &AgentState) -> Result<()> {
-    let pane = agent
-        .pane
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
-    let backend = rimz::mux::backend_for(pane.pane_id.mux());
-    rimz::harness::hibernate::wake_pane(&ctx.store, &pane.pane_id)?;
+    let mut notices = Vec::new();
+    let found = rimz::launcher::agent_pane::find(
+        &ctx.workspace,
+        &ctx.store,
+        ctx.mux(),
+        &agent.kind,
+        agent.launch_key(),
+        &mut notices,
+    );
+    render::room::print_notices(notices)?;
+    let pane = match found {
+        Ok(pane) => pane,
+        Err(rimz::launcher::agent_pane::FindErr::Nowhere) => {
+            bail!("agent {} has no bound pane", agent_name(agent))
+        }
+        Err(err) => bail!("agent {}: {err}; nothing was focused", agent_name(agent)),
+    };
     rimz::mux::focus_anchor::execute_action(
-        backend.as_ref(),
+        rimz::mux::backend_for(pane.pane_id.mux()).as_ref(),
         ctx.runtime(),
-        &ctx.workspace.session_name,
-        pane.pane_id.clone(),
+        &pane.session_name,
+        pane.pane_id,
     )?;
     Ok(())
 }
