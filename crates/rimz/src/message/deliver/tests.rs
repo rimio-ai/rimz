@@ -541,6 +541,179 @@ fn receiver_readiness_unifies_gate_waiting_and_force() {
     assert!(receiver_readiness(&waiting, DeliveryGate::Done, true, now).accepts_prompt());
 }
 
+/// A resting receiver on `model` whose keep-warm ping, opened at `now - 120s`, the provider
+/// refused `marker_age` before `now`.
+fn refused_ping(model: &str, now: Timestamp, marker_age: Duration) -> AgentState {
+    let mut receiver = agent("sess-refused", AgentStatus::Success);
+    receiver.model = Some(model.to_owned());
+    receiver.last_activity = now - Duration::from_secs(3_600);
+    receiver.ping_opened_at = Some(now - Duration::from_secs(1_200));
+    receiver.context = Some(crate::agents::AgentContext {
+        model_id: Some(model.to_owned()),
+        turn_error: Some(crate::agents::AgentTurnError {
+            model: Some(model.to_owned()),
+            ended_turn: false,
+            class: crate::agents::TurnErrorClass::PausedRateLimit,
+            at: now - marker_age,
+            label: Some("not available on your plan".to_owned()),
+        }),
+        ..crate::agents::AgentContext::new("claude", now - marker_age)
+    });
+    receiver
+}
+
+fn reader_with(capacity: crate::agents::ProviderCapacity, now: Timestamp) -> CardStatus {
+    let login = crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"));
+    CardStatus::from_demotion(crate::agents::ParkDemotion::new(
+        &[(login, capacity)].into(),
+        Default::default(),
+        now,
+    ))
+}
+
+fn read_at(observed: Timestamp) -> crate::agents::ProviderCapacity {
+    read_used_at(40, observed)
+}
+
+fn read_used_at(used: u8, observed: Timestamp) -> crate::agents::ProviderCapacity {
+    crate::agents::ProviderCapacity::from_windows(vec![crate::agents::RateLimitWindow {
+        used_percentage: Some(used),
+        duration_mins: Some(300),
+        observed_at: Some(observed),
+        ..Default::default()
+    }])
+}
+
+#[test]
+fn receiver_readiness_holds_a_refused_or_unconfirmed_receiver_at_every_gate_and_force() {
+    use crate::agents::ModelHold;
+    let now = Timestamp::from_second(100_000).unwrap();
+    let minute = Duration::from_secs(60);
+    let refused = read_at(now - 30 * minute).with_refusal("claude-fable-5-2", now - minute, "no");
+    let cases = [
+        (
+            "a standing record",
+            refused_ping("claude-fable-5-2", now, 2 * minute),
+            refused.clone(),
+            Some("refused"),
+        ),
+        (
+            "a ping refusal with no read since",
+            refused_ping("claude-fable-5-2", now, 2 * minute),
+            read_at(now - 30 * minute),
+            Some("unconfirmed"),
+        ),
+        (
+            "a read since that confirms the refusal before the record lands",
+            refused_ping("claude-fable-5-2", now, 2 * minute),
+            read_at(now - minute),
+            Some("refused_last"),
+        ),
+        (
+            "a read since that shows the account spent",
+            refused_ping("claude-fable-5-2", now, 2 * minute),
+            read_used_at(100, now - minute),
+            None,
+        ),
+        (
+            "a read first seen past the confirm window",
+            refused_ping("claude-fable-5-2", now, 12 * minute),
+            read_at(now - minute),
+            None,
+        ),
+        (
+            "a ping refusal past the confirm window",
+            refused_ping("claude-fable-5-2", now, 11 * minute),
+            read_at(now - 30 * minute),
+            None,
+        ),
+        (
+            "a login with no usage windows",
+            refused_ping("claude-fable-5-2", now, 2 * minute),
+            crate::agents::ProviderCapacity::from_windows(Vec::new()),
+            None,
+        ),
+        (
+            "a sibling version beside a standing record",
+            {
+                let mut sibling = refused_ping("claude-fable-5-5", now, 2 * minute);
+                sibling.context.as_mut().unwrap().turn_error = None;
+                sibling
+            },
+            refused,
+            None,
+        ),
+    ];
+    for (case, receiver, capacity, expected) in cases {
+        let reader = reader_with(capacity, now);
+        let live = snapshot(receiver.clone(), true, now);
+        for gate in [DeliveryGate::Done, DeliveryGate::Any, DeliveryGate::Resume] {
+            for force in [false, true] {
+                let readiness =
+                    super::receiver_readiness(&receiver, gate, force, now, &live, &reader);
+                let held = match &readiness.held {
+                    Some(ModelHold::Refused { .. }) => Some("refused"),
+                    Some(ModelHold::RefusedLast { .. }) => Some("refused_last"),
+                    Some(ModelHold::Unconfirmed { .. }) => Some("unconfirmed"),
+                    None => None,
+                };
+                assert_eq!(held, expected, "{case} at {gate:?} force={force}");
+                if expected.is_some() {
+                    assert!(!readiness.accepts_prompt(), "{case} at {gate:?}");
+                }
+            }
+        }
+        let candidate = message(&receiver, 1, "held");
+        let verdict = super::explain(
+            &candidate,
+            std::slice::from_ref(&candidate),
+            &live,
+            now,
+            &reader,
+        )
+        .verdict();
+        assert_eq!(
+            matches!(verdict, DeliveryVerdict::ModelHeld(_)),
+            expected.is_some(),
+            "{case}: {verdict:?}"
+        );
+    }
+}
+
+/// A raw-failed turn that ended on a limit marker stamped on a refused model, from an agent
+/// that has since moved to another model, rests idle and takes a `Done` send.
+#[test]
+fn leaving_a_refused_model_after_a_failed_limit_turn_opens_the_done_gate() {
+    let now = Timestamp::from_second(100_000).unwrap();
+    let minute = Duration::from_secs(60);
+    let mut receiver = agent("sess-left", AgentStatus::Failed);
+    receiver.model = Some("claude-fable-5-2".to_owned());
+    receiver.turn_started_at = Some(now - 10 * minute);
+    receiver.turn_ended_at = Some(now - 9 * minute);
+    receiver.last_activity = now - 9 * minute;
+    receiver.context = Some(crate::agents::AgentContext {
+        model_id: Some("claude-fable-5-5".to_owned()),
+        turn_error: Some(crate::agents::AgentTurnError {
+            model: Some("claude-fable-5-2".to_owned()),
+            ended_turn: true,
+            class: crate::agents::TurnErrorClass::PausedRateLimit,
+            at: now - 9 * minute,
+            label: Some("not available on your plan".to_owned()),
+        }),
+        ..crate::agents::AgentContext::new("claude", now - 9 * minute)
+    });
+    let reader = reader_with(
+        read_at(now - 30 * minute).with_refusal("claude-fable-5-2", now - 9 * minute, "no"),
+        now,
+    );
+    let live = snapshot(receiver.clone(), true, now);
+    assert_eq!(reader.status(&live, &receiver, now), AgentStatus::Idle);
+    let readiness =
+        super::receiver_readiness(&receiver, DeliveryGate::Done, false, now, &live, &reader);
+    assert!(readiness.held.is_none());
+    assert!(readiness.accepts_prompt());
+}
+
 #[test]
 fn sweep_guard_is_single_flight() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1009,6 +1182,7 @@ fn ready_check() -> DeliveryCheck {
             open: true,
             resume_recovered: None,
         },
+        hold: None,
         ask: AskCheck {
             waiting: false,
             force: false,

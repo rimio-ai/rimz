@@ -51,14 +51,17 @@ use crate::store::snapshot::SidebarSnapshot;
 /// agent, RimZ retries on this cadence rather than typing every frame.
 const AUTO_CONTINUE_RETRY_INTERVAL: Duration = Duration::from_secs(120);
 
-/// Read card status with lazy evidence for spent provider pauses.
+/// Read card status with lazy evidence for spent provider pauses and model refusals.
 ///
 /// One value serves one snapshot. Evidence is built at most once, from the
-/// snapshot and time of the first status read that needs it. Budget parks
-/// retain precedence over spent provider pauses.
+/// snapshot and time of the first status read that needs it: a provider pause
+/// reads the whole park evidence, and a resting card only the room's account
+/// capacities, which carry its model refusals. Budget parks retain precedence
+/// over spent provider pauses.
 pub struct CardStatus {
     store: Option<crate::Store>,
     demotion: OnceCell<crate::agents::ParkDemotion>,
+    refusals: OnceCell<crate::agents::ParkDemotion>,
 }
 
 impl CardStatus {
@@ -66,6 +69,7 @@ impl CardStatus {
         Self {
             store: Some(store.clone()),
             demotion: OnceCell::new(),
+            refusals: OnceCell::new(),
         }
     }
 
@@ -73,6 +77,7 @@ impl CardStatus {
         Self {
             store: None,
             demotion: demotion.into(),
+            refusals: OnceCell::new(),
         }
     }
 
@@ -82,7 +87,62 @@ impl CardStatus {
         agent: &AgentState,
         now: Timestamp,
     ) -> AgentStatus {
+        // A budget park outranks the limit marker, as on the card. A marker on a model the agent
+        // has left rests as if it were gone, and the rested status is judged against the new
+        // model's refusal below.
+        let status =
+            if agent.budget_park.is_none() && self.refusals(snapshot, now).left_model(agent, now) {
+                match agent.status {
+                    AgentStatus::Running | AgentStatus::Failed => AgentStatus::Idle,
+                    status => status,
+                }
+            } else {
+                self.pause_status(snapshot, agent, agent.effective_status(now), now)
+            };
+        if self
+            .refusals(snapshot, now)
+            .refused(agent, status, now)
+            .is_some()
+        {
+            return AgentStatus::Failed;
+        }
+        status
+    }
+
+    /// Why RimZ types no message into `agent` now, at its effective status.
+    pub fn held(
+        &self,
+        snapshot: &SidebarSnapshot,
+        agent: &AgentState,
+        now: Timestamp,
+    ) -> Option<crate::agents::ModelHold> {
         let status = agent.effective_status(now);
+        self.refusals(snapshot, now).held(agent, status, now)
+    }
+
+    /// [`CardStatus::held`] on the refusal record and usage reads as they stand now, not on the
+    /// evidence this reader cached at its first read: the check a write makes after its waits,
+    /// since a record can land for the agent's model meanwhile. A reader without a store has
+    /// only its fixed evidence.
+    pub fn held_now(
+        &self,
+        snapshot: &SidebarSnapshot,
+        agent: &AgentState,
+        now: Timestamp,
+    ) -> Option<crate::agents::ModelHold> {
+        let Some(store) = self.store.as_ref() else {
+            return self.held(snapshot, agent, now);
+        };
+        read_refusals(store, snapshot, now).held(agent, agent.effective_status(now), now)
+    }
+
+    fn pause_status(
+        &self,
+        snapshot: &SidebarSnapshot,
+        agent: &AgentState,
+        status: AgentStatus,
+        now: Timestamp,
+    ) -> AgentStatus {
         if status != AgentStatus::Paused || agent.budget_park.is_some() {
             return status;
         }
@@ -112,10 +172,37 @@ impl CardStatus {
         }
     }
 
+    /// The park evidence when a read already built it, else the room's account capacities
+    /// alone: model refusals need no retry or queue read.
+    fn refusals(&self, snapshot: &SidebarSnapshot, now: Timestamp) -> &crate::agents::ParkDemotion {
+        if let Some(demotion) = self.demotion.get() {
+            return demotion;
+        }
+        self.refusals.get_or_init(|| {
+            // A reader without a store already has fixed evidence in the demotion cell.
+            let store = self.store.as_ref().expect("fixed evidence is initialized");
+            read_refusals(store, snapshot, now)
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn evidence_built(&self) -> bool {
         self.demotion.get().is_some()
     }
+}
+
+/// The room's account capacities alone, which carry its model refusals.
+fn read_refusals(
+    store: &crate::Store,
+    snapshot: &SidebarSnapshot,
+    now: Timestamp,
+) -> crate::agents::ParkDemotion {
+    let config = crate::config::MachineConfig::load_lenient();
+    let logins =
+        crate::agents::RoomLoginSet::resolve(&store.paths().workspace_record, None, &config)
+            .with_agents(&snapshot.agents);
+    let capacities = ProviderCapacity::read_all(store.runtime_paths(), &logins);
+    crate::agents::ParkDemotion::new(&capacities, BTreeSet::new(), now)
 }
 
 /// Read durable park evidence for the sidebar and rowless CLI projections.

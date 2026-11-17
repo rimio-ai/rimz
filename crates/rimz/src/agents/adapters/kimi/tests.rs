@@ -1158,10 +1158,10 @@ fn stop_failure_label_prefers_error_message_and_caps_it() {
             .unwrap()
             .label
     };
-    let long = format!("  {}bcd  ", "a".repeat(79));
+    let long = format!("  {}bcd  ", "a".repeat(199));
     assert_eq!(
         label(json!({"error_message": long, "error_type": "rate_limit"})),
-        Some(format!("{}b", "a".repeat(79)))
+        Some(format!("{}b", "a".repeat(199)))
     );
     assert_eq!(
         label(json!({"error_type": " rate_limit "})),

@@ -1444,7 +1444,7 @@ pub enum TurnErrorClass {
 
 /// Cap on provider error text surfaced on the agent card. Upstream messages are
 /// one short line; the cap only guards a pathological entry.
-const TURN_ERROR_LABEL_MAX: usize = 80;
+const TURN_ERROR_LABEL_MAX: usize = 200;
 
 /// The provider error text an agent card shows: trimmed, `None` when blank,
 /// else its first [`TURN_ERROR_LABEL_MAX`] chars.

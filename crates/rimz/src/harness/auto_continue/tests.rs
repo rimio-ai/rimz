@@ -1563,7 +1563,9 @@ fn model_limit_waits_for_scoped_reset() {
             .windows
             .push(scoped);
         write_rate_limits_cache(&runtime, &cache);
-        let mut agent = parked_agent(1_000, 5_990, TurnErrorClass::PausedRateLimit, "Fable limit");
+        // The reads at 5_995 fall past the refusal confirm window of the marker, so a limit on
+        // a model no window scopes waits out its reset instead of reading as refused.
+        let mut agent = parked_agent(1_000, 5_300, TurnErrorClass::PausedRateLimit, "Fable limit");
         agent.model = Some(model.to_owned());
         let mut snapshot = SidebarSnapshot::build_with_agents(
             runtime.workspace_id.clone(),
@@ -2826,4 +2828,407 @@ fn a_request_carries_the_producers_prompt_stamp_and_an_older_one_decodes_without
         older.last_prompt_at, None,
         "an older producer's request decodes"
     );
+}
+
+/// The model refusal through the production lifecycle fold, the sidecar writers and the reads
+/// the card and the delivery gate make.
+mod refusal_fold {
+    use jiff::Timestamp;
+
+    use crate::RuntimePaths;
+    use crate::agents::account::{RateLimitCacheEntry, RateLimitsCache};
+    use crate::agents::lifecycle::LifecycleSignal;
+    use crate::agents::{
+        AgentContext, AgentLifecycleObservation, AgentRateLimits, AgentState, AgentStatus,
+        AgentTurnError, ModelHold, ModelRefusal, ModelRefusals, ProviderCapacity, RateLimitWindow,
+        RoomLoginSet, SanitizedPrompt, TurnErrorClass,
+    };
+    use crate::harness::auto_continue::CardStatus;
+    use crate::ids::{AgentKind, LoginKey, WorkspaceId};
+    use crate::store::writer::AgentLifecycleIntent;
+
+    const SENTENCE: &str = "Claude Fable 5.2 is not available on your plan. Switch models with /model to keep working.";
+
+    fn login() -> LoginKey {
+        LoginKey::default_for(AgentKind::new_unchecked("claude"))
+    }
+
+    /// A store whose rows come from the production lifecycle fold, and the sidecar attach every
+    /// reader of a resting card uses.
+    struct Fold {
+        _dir: tempfile::TempDir,
+        store: crate::Store,
+        runtime: RuntimePaths,
+    }
+
+    impl Fold {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let workspace_id = WorkspaceId::from_project_root(dir.path());
+            let paths =
+                crate::disk::paths::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+            let runtime = RuntimePaths::under(workspace_id, dir.path()).unwrap();
+            runtime.ensure_dirs().unwrap();
+            let store = crate::Store::open(paths, runtime.clone()).unwrap();
+            Self {
+                _dir: dir,
+                store,
+                runtime,
+            }
+        }
+
+        /// One hook's lifecycle edge for `session`, carrying the model the hook reports.
+        fn append(
+            &self,
+            session: &str,
+            signal: LifecycleSignal,
+            prompt: Option<&str>,
+            model: &str,
+        ) {
+            let mut observed = AgentLifecycleObservation::new(Some(session.into()), signal);
+            observed.prompt = SanitizedPrompt::new(prompt);
+            observed.launch.model = Some(model.to_owned());
+            // Each session sits in its own checkout, as siblings do: two paneless sessions of
+            // one checkout reap the older.
+            observed.worktree_path = Some(format!("/work/{session}"));
+            self.store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: AgentKind::new_unchecked("claude"),
+                    event_name: "test",
+                    observation: &observed,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+        }
+
+        /// A clean turn of `session` on `model`.
+        fn clean_turn(&self, session: &str, id: &str, model: &str) {
+            self.append(session, started(id), Some("do X"), model);
+            self.append(session, end(id), None, model);
+        }
+
+        /// The statusline push: the session's model id, and the provider's limit marker when one
+        /// is showing.
+        fn statusline(&self, session: &str, at: Timestamp, turn_error: Option<AgentTurnError>) {
+            let context = AgentContext {
+                model_id: Some("claude-fable-5-2".to_owned()),
+                turn_error,
+                ..AgentContext::new("claude", at)
+            };
+            crate::store::agent_context::write(&self.runtime, "claude", session, &context, None)
+                .unwrap();
+        }
+
+        fn rows(&self) -> (crate::store::snapshot::SidebarSnapshot, Vec<AgentState>) {
+            let snapshot = self.store.snapshot().unwrap();
+            let agents = self
+                .store
+                .rows_with_live_context(snapshot.agents.iter())
+                .into_iter()
+                .map(std::borrow::Cow::into_owned)
+                .collect();
+            (snapshot, agents)
+        }
+
+        /// The heavy pass's refusal step over the folded rows: its decision and its write, as
+        /// `sidebar::refresh::model_refusals::record_model_refusals` makes them (that step is
+        /// private to the sidebar's refresh lanes, and the sidebar's tests write no store).
+        fn pass(&self, now: Timestamp) {
+            let (_, agents) = self.rows();
+            let logins = RoomLoginSet::native().with_agents(&agents);
+            let capacities = ProviderCapacity::read_all(&self.runtime, &logins);
+            let path = self.runtime.shared_model_refusals_path();
+            let mut refusals = ModelRefusals::read(&path);
+            if refusals.observe(&agents, &capacities, now) {
+                crate::disk::atomic::write_temp_then_rename_cache(&path, &refusals).unwrap();
+            }
+        }
+
+        fn record(&self, model_key: &str) -> Option<ModelRefusal> {
+            ModelRefusals::read(&self.runtime.shared_model_refusals_path())
+                .login(&login())
+                .get(model_key)
+                .cloned()
+        }
+
+        /// What the card and the delivery gate read for `session`.
+        fn card(&self, session: &str, now: Timestamp) -> (AgentStatus, Option<ModelHold>) {
+            let (snapshot, agents) = self.rows();
+            let agent = agents
+                .iter()
+                .find(|row| row.agent_id.as_str() == session)
+                .unwrap_or_else(|| {
+                    let ids: Vec<_> = agents.iter().map(|row| row.agent_id.as_str()).collect();
+                    panic!("no row {session} among {ids:?}")
+                });
+            let reader = CardStatus::new(&self.store);
+            (
+                reader.status(&snapshot, agent, now),
+                reader.held(&snapshot, agent, now),
+            )
+        }
+    }
+
+    fn started(id: &str) -> LifecycleSignal {
+        LifecycleSignal::TurnStarted {
+            turn_id: Some(id.to_owned()),
+        }
+    }
+
+    fn end(id: &str) -> LifecycleSignal {
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: Some(id.to_owned()),
+        }
+    }
+
+    fn limit_marker(at: Timestamp) -> AgentTurnError {
+        AgentTurnError {
+            model: None,
+            ended_turn: false,
+            class: TurnErrorClass::PausedRateLimit,
+            at,
+            label: Some(SENTENCE.to_owned()),
+        }
+    }
+
+    /// A usage read of the default Claude login at `observed`, its windows unspent.
+    fn read_windows(runtime: &RuntimePaths, observed: Timestamp) {
+        let window = |duration_mins, used| RateLimitWindow {
+            used_percentage: Some(used),
+            duration_mins: Some(duration_mins),
+            observed_at: Some(observed),
+            ..Default::default()
+        };
+        let cache = RateLimitsCache {
+            entries: [(
+                login().into(),
+                RateLimitCacheEntry {
+                    limits: AgentRateLimits {
+                        windows: vec![window(300, 40), window(10_080, 60)],
+                    },
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &RateLimitsCache::shared_path(runtime),
+            &cache,
+        )
+        .unwrap();
+    }
+
+    /// The incident through the production fold: a clean `Stop`, a keep-warm prompt that opens a
+    /// ping, then the statusline push writing the provider's limit marker inside that ping.
+    #[test]
+    fn the_incident_through_the_fold_holds_then_refuses_until_the_agents_own_next_prompt() {
+        let fold = Fold::new();
+        let model = "claude-fable-5-2";
+        let second = jiff::SignedDuration::from_secs(1);
+        let ping =
+            "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
+
+        fold.clean_turn("sess", "r1", model);
+        fold.statusline("sess", Timestamp::now(), None);
+        let stale_read = Timestamp::now();
+        fold.append("sess", started("p1"), Some(ping), model);
+        let marker_at = Timestamp::now();
+        fold.statusline("sess", marker_at, Some(limit_marker(marker_at)));
+        assert!(fold.rows().1[0].ping_turn, "the refused ping stays open");
+
+        // Before a read since the marker: the card rests, and a `Done` send would stay queued.
+        read_windows(&fold.runtime, stale_read);
+        let now = marker_at + second;
+        fold.pass(now);
+        assert_eq!(
+            fold.record("fable 5.2"),
+            None,
+            "a read older than the marker"
+        );
+        assert_eq!(
+            fold.card("sess", now),
+            (
+                AgentStatus::Success,
+                Some(ModelHold::Unconfirmed {
+                    until: marker_at + jiff::SignedDuration::from_mins(10)
+                })
+            )
+        );
+
+        // A fresh unspent read inside ten minutes refuses the card from that read, before the
+        // heavy pass turns it into the record: the agent stays held, as refused on its last
+        // request rather than waiting for a read that has arrived.
+        read_windows(&fold.runtime, marker_at + 2 * second);
+        let now = marker_at + 3 * second;
+        let (status, hold) = fold.card("sess", now);
+        assert_eq!(
+            status,
+            AgentStatus::Failed,
+            "refused at the confirming read"
+        );
+        let Some(ModelHold::RefusedLast { label, .. }) = hold else {
+            panic!("held as refused on its last request: {hold:?}");
+        };
+        assert_eq!(label.as_deref(), Some(SENTENCE));
+
+        // The pass records the refusal.
+        fold.pass(now);
+        let refusal = fold
+            .record("fable 5.2")
+            .expect("the confirmed refusal is recorded");
+        assert_eq!(refusal.label.as_deref(), Some(SENTENCE));
+        let (status, hold) = fold.card("sess", now);
+        assert_eq!(status, AgentStatus::Failed);
+        let Some(ModelHold::Refused { label, .. }) = hold else {
+            panic!("held as refused: {hold:?}");
+        };
+        assert_eq!(label.as_deref(), Some(SENTENCE), "the sentence whole");
+
+        // A sibling's clean turn on the model clears the record; the refused agent stays failed on
+        // the marker that raised it, told its last request was refused, until its own next prompt.
+        fold.clean_turn("sibling", "s1", model);
+        let now = Timestamp::now() + 4 * second;
+        fold.pass(now);
+        assert!(
+            !fold.record("fable 5.2").unwrap().stands(),
+            "the sibling's success clears it"
+        );
+        let (status, hold) = fold.card("sess", now);
+        assert_eq!(status, AgentStatus::Failed);
+        let hold = hold.expect("still held after the record cleared");
+        assert!(matches!(hold, ModelHold::RefusedLast { .. }), "{hold:?}");
+        assert_eq!(
+            hold.to_string(),
+            format!(
+                "the provider refused the receiver's last request on Fable 5.2 on claude@default: \
+                 \"{SENTENCE}\"; it goes in once the agent's model changes or after the agent's own next turn"
+            )
+        );
+
+        fold.clean_turn("sess", "r2", model);
+        assert_eq!(
+            fold.card("sess", Timestamp::now() + 5 * second),
+            (AgentStatus::Success, None)
+        );
+    }
+
+    /// A fresh `--model fable` launch refused on its first prompt, before any model id reaches its
+    /// context: the fold gives the row the bare alias and the provider's marker no model, so the
+    /// record lands under the version-less key, and a clean turn on any version of the family
+    /// clears it.
+    #[test]
+    fn a_refusal_recorded_under_a_family_alias_clears_on_a_clean_turn_of_any_version() {
+        let fold = Fold::new();
+        let second = jiff::SignedDuration::from_secs(1);
+        fold.append("sess", started("r1"), Some("do X"), "fable");
+        let marker_at = Timestamp::now();
+        crate::store::agent_context::merge_turn_error(
+            &fold.runtime,
+            "claude",
+            "sess",
+            AgentTurnError {
+                ended_turn: true,
+                ..limit_marker(marker_at)
+            },
+        )
+        .unwrap();
+        let (_, agents) = fold.rows();
+        assert_eq!(agents[0].current_model(), Some("fable"));
+        read_windows(&fold.runtime, marker_at + second);
+        fold.pass(marker_at + 2 * second);
+        assert!(
+            fold.record("fable").is_some_and(|refusal| refusal.stands()),
+            "recorded under the alias"
+        );
+
+        fold.clean_turn("sibling", "s1", "claude-fable-5-2");
+        fold.pass(Timestamp::now() + 3 * second);
+        assert!(
+            !fold.record("fable").unwrap().stands(),
+            "a clean turn on a version of the family clears it"
+        );
+    }
+
+    /// Every clean verdict the fold writes clears a standing record: a `Stop` parked on
+    /// background work (raw running, displayed as success), also on a row parked before the
+    /// refusal, whose next prompt opens no turn. A compaction at rest is no such verdict.
+    #[test]
+    fn a_parked_clean_turn_after_the_refusal_clears_the_record() {
+        let second = jiff::SignedDuration::from_secs(1);
+        let model = "claude-fable-5-2";
+        let refused = |fold: &Fold| {
+            fold.append("sess", started("r1"), Some("do X"), model);
+            let marker_at = Timestamp::now();
+            fold.statusline("sess", marker_at, Some(limit_marker(marker_at)));
+            read_windows(&fold.runtime, marker_at + second);
+            fold.pass(marker_at + 2 * second);
+            assert!(
+                fold.record("fable 5.2")
+                    .is_some_and(|refusal| refusal.stands())
+            );
+        };
+
+        let fold = Fold::new();
+        refused(&fold);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        fold.append("sibling", started("s1"), Some("do X"), model);
+        let parked = LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            turn_id: Some("s1".to_owned()),
+        };
+        fold.append("sibling", parked, None, model);
+        fold.pass(Timestamp::now() + 3 * second);
+        assert!(
+            !fold.record("fable 5.2").unwrap().stands(),
+            "a clean Stop parked on background work clears it"
+        );
+
+        // A row parked on background work before the refusal opens no turn at its next prompt:
+        // that prompt's clean Stop clears the record, and nothing before it does.
+        let fold = Fold::new();
+        let parked = |id: &str| LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            turn_id: Some(id.to_owned()),
+        };
+        fold.append("sibling", started("s1"), Some("do X"), model);
+        fold.append("sibling", parked("s1"), None, model);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        refused(&fold);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        fold.append("sibling", started("s2"), Some("do Y"), model);
+        fold.pass(Timestamp::now() + 3 * second);
+        assert!(
+            fold.record("fable 5.2").unwrap().stands(),
+            "a prompt into the parked row is no success"
+        );
+        fold.append("sibling", parked("s2"), None, model);
+        fold.pass(Timestamp::now() + 4 * second);
+        assert!(
+            !fold.record("fable 5.2").unwrap().stands(),
+            "the prompt's clean Stop clears it"
+        );
+
+        // A manual compaction on a raw-idle row carries no clean verdict and clears nothing.
+        let fold = Fold::new();
+        refused(&fold);
+        fold.append("sibling", LifecycleSignal::Registered, None, model);
+        fold.append("sibling", LifecycleSignal::Compacting, None, model);
+        let closed = LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        };
+        fold.append("sibling", closed, None, model);
+        fold.pass(Timestamp::now() + 3 * second);
+        assert!(
+            fold.record("fable 5.2").unwrap().stands(),
+            "a compaction at rest is no success"
+        );
+    }
 }

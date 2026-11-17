@@ -6,6 +6,28 @@ enum Evidence {
     Recoverable,
     Exhausted,
     ResetOnly,
+    Refused,
+    /// Refusals of both `REFUSED` and `MOVED_TO` on the login.
+    RefusedBoth,
+}
+
+const REFUSED: &str = "claude-fable-5-2";
+const MOVED_TO: &str = "claude-fable-5-5";
+const MOVED_TO_SENTENCE: &str = "Claude Fable 5.5 is not available on your plan.";
+const SENTENCE: &str =
+    "Claude Fable 5.2 is not available on your plan. Switch models with /model to keep working.";
+
+/// `session` on `model` (lifecycle and context alike), its marker, if any, stamped `refused_on`.
+fn on_model(mut session: AgentState, model: &str, refused_on: Option<&str>) -> AgentState {
+    session.model = Some(REFUSED.to_owned());
+    let context = session.context.get_or_insert_with(|| {
+        crate::agents::AgentContext::new("claude", epoch() - std::time::Duration::from_secs(600))
+    });
+    context.model_id = Some(model.to_owned());
+    if let Some(marker) = context.turn_error.as_mut() {
+        marker.model = refused_on.map(str::to_owned);
+    }
+    session
 }
 
 fn pausing_agent(status: AgentStatus, class: TurnErrorClass) -> AgentState {
@@ -47,8 +69,9 @@ fn budget_park(mut session: AgentState) -> AgentState {
 
 #[test]
 fn card_and_reader_agree_on_pausing_rows() {
+    use AgentStatus::Success;
     use AgentStatus::{Failed, Idle, Paused, Running, Waiting};
-    use Evidence::{Exhausted, Recoverable, ResetOnly};
+    use Evidence::{Exhausted, Recoverable, Refused, RefusedBoth, ResetOnly};
     use TurnErrorClass::{PausedOverloaded, PausedRateLimit, PausedSpendLimit};
 
     for (label, session, evidence, with_live_child, expected) in [
@@ -175,14 +198,131 @@ fn card_and_reader_agree_on_pausing_rows() {
             true,
             Failed,
         ),
+        (
+            "a resting agent on a refused model",
+            on_model(
+                agent("claude", "root", Success, 0).active_ago(60),
+                REFUSED,
+                None,
+            ),
+            Refused,
+            false,
+            Failed,
+        ),
+        (
+            "a pause on the refused model it landed on",
+            on_model(
+                pausing_agent(Running, PausedRateLimit),
+                REFUSED,
+                Some(REFUSED),
+            ),
+            Refused,
+            false,
+            Failed,
+        ),
+        (
+            "a pause whose agent left the refused model",
+            on_model(
+                pausing_agent(Running, PausedRateLimit),
+                "claude-fable-5-5",
+                Some(REFUSED),
+            ),
+            Refused,
+            false,
+            Idle,
+        ),
+        (
+            "a failed limit turn whose agent left the refused model",
+            on_model(
+                pausing_agent(Failed, PausedRateLimit),
+                MOVED_TO,
+                Some(REFUSED),
+            ),
+            Refused,
+            false,
+            Idle,
+        ),
+        (
+            "a session that ended mid-turn after leaving the refused model reads as before",
+            {
+                let mut ended = on_model(
+                    pausing_agent(Failed, PausedRateLimit),
+                    MOVED_TO,
+                    Some(REFUSED),
+                );
+                ended.ended_at = Some(ago(1));
+                ended
+            },
+            Refused,
+            false,
+            Paused,
+        ),
+        (
+            "a pause that left one refused model for another",
+            on_model(
+                pausing_agent(Running, PausedRateLimit),
+                MOVED_TO,
+                Some(REFUSED),
+            ),
+            RefusedBoth,
+            false,
+            Failed,
+        ),
+        (
+            "a budget park whose agent left the refused model",
+            budget_park(on_model(
+                pausing_agent(Running, PausedRateLimit),
+                MOVED_TO,
+                Some(REFUSED),
+            )),
+            Refused,
+            false,
+            Paused,
+        ),
+        (
+            "a sibling version beside a refused model",
+            on_model(
+                agent("claude", "root", Success, 0).active_ago(60),
+                "claude-fable-5-5",
+                None,
+            ),
+            Refused,
+            false,
+            Success,
+        ),
+        (
+            "a running agent on a refused model",
+            on_model(
+                agent("claude", "root", Running, 0).active_ago(5),
+                REFUSED,
+                None,
+            ),
+            Refused,
+            false,
+            Running,
+        ),
     ] {
         let capacities = match evidence {
             ResetOnly => provider_capacity("claude", vec![unprojectable_spent_window(-60)]),
+            Refused => provider_capacity("claude", Vec::new())
+                .into_iter()
+                .map(|(login, capacity)| (login, capacity.with_refusal(REFUSED, ago(5), SENTENCE)))
+                .collect(),
+            RefusedBoth => provider_capacity("claude", Vec::new())
+                .into_iter()
+                .map(|(login, capacity)| {
+                    let capacity = capacity.with_refusal(REFUSED, ago(5), SENTENCE);
+                    (
+                        login,
+                        capacity.with_refusal(MOVED_TO, ago(5), MOVED_TO_SENTENCE),
+                    )
+                })
+                .collect(),
             Recoverable | Exhausted => BTreeMap::new(),
         };
         let exhausted = match evidence {
             Exhausted => BTreeSet::from([(session.kind.clone(), session.agent_id.clone())]),
-            Recoverable | ResetOnly => BTreeSet::new(),
+            Recoverable | ResetOnly | Refused | RefusedBoth => BTreeSet::new(),
         };
         let demotion = ParkDemotion::new(&capacities, exhausted.clone(), epoch());
         let reader = CardStatus::from_demotion(ParkDemotion::new(&capacities, exhausted, epoch()));
@@ -213,6 +353,28 @@ fn card_and_reader_agree_on_pausing_rows() {
             );
         }
         assert_eq!(card.status(), Some(expected), "{label}: card status");
+        if expected == Failed
+            && let Some(sentence) = match evidence {
+                Refused => Some(SENTENCE),
+                RefusedBoth => Some(MOVED_TO_SENTENCE),
+                Recoverable | Exhausted | ResetOnly => None,
+            }
+        {
+            assert_eq!(
+                card.turn_error_label(),
+                Some(sentence),
+                "{label}: card label"
+            );
+        }
+        // The rowless path reads no live child, so only the refusal rows share the card's answer
+        // there.
+        if matches!(evidence, Refused | RefusedBoth) {
+            assert_eq!(
+                snapshot.agents[0].rowless_status(&demotion, epoch()).0,
+                expected,
+                "{label}: rowless status"
+            );
+        }
         assert_eq!(
             reader.status(&snapshot, rolled_up, epoch()),
             expected,
@@ -266,4 +428,82 @@ fn promoted_child_row_without_a_source_settles_on_its_own_card() {
         reset_window: None,
     });
     assert_eq!(project(budgeted), (Some(AgentStatus::Running), None));
+}
+
+#[test]
+fn launched_children_read_the_refusal_and_its_sentence_on_their_line_and_their_own_row() {
+    use AgentStatus::{Failed, Idle, Running, Success};
+    let refused = || -> BTreeMap<_, _> {
+        provider_capacity("claude", Vec::new())
+            .into_iter()
+            .map(|(login, capacity)| (login, capacity.with_refusal(REFUSED, ago(5), SENTENCE)))
+            .collect()
+    };
+    let launched = |mut child: AgentState, parent: &str| {
+        child.launch_depth = Some(1);
+        child.parent_agent_id = Some(parent.into());
+        child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+        child
+    };
+    let parent = || {
+        agent("claude", "root", Success, 0)
+            .worktree("/repo/main")
+            .active_ago(120)
+    };
+
+    // Refused through the record alone, under a rendered parent: the line quotes the sentence.
+    let resting = launched(
+        on_model(child_state("root", "child", Success, 60), REFUSED, None),
+        "root",
+    );
+    let snapshot = room_with_agent_panes_and_capacities(vec![parent(), resting], refused());
+    let line = &row(&snapshot, "root").sub_agents()[0];
+    assert_eq!(
+        (line.status, line.turn_error_label.as_deref()),
+        (Failed, Some(SENTENCE)),
+        "a refused child's line"
+    );
+
+    // A child that left the refused model rests with no old sentence beside it.
+    let left = launched(
+        on_model(
+            child_state("root", "child", Running, 60)
+                .turn_started_ago(120)
+                .turn_error_class(10, "provider pause", TurnErrorClass::PausedRateLimit),
+            MOVED_TO,
+            Some(REFUSED),
+        ),
+        "root",
+    );
+    let snapshot = room_with_agent_panes_and_capacities(vec![parent(), left], refused());
+    let line = &row(&snapshot, "root").sub_agents()[0];
+    assert_eq!(
+        (line.status, line.turn_error_label.as_deref()),
+        (Idle, None),
+        "a child that left the refused model"
+    );
+
+    // A launched child promoted to its own row, its parent not rendered, reads the refusal too.
+    let promoted = launched(
+        on_model(
+            agent("claude", "child-1", Success, 1_000)
+                .worktree("/repo/child")
+                .in_pane("%2")
+                .active_ago(60),
+            REFUSED,
+            None,
+        ),
+        "parent-gone",
+    );
+    let snapshot = room(vec![promoted]).with_live_panes_and_provider_capacities(
+        vec![pane("%2", "claude", "/repo/child")],
+        None,
+        &refused(),
+    );
+    let promoted = row(&snapshot, "child-1");
+    assert_eq!(
+        (promoted.status(), promoted.turn_error_label()),
+        (Some(Failed), Some(SENTENCE)),
+        "a promoted child's own row"
+    );
 }

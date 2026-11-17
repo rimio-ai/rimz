@@ -313,8 +313,7 @@ fn project_sub_agent(
             Some(format!("silent {}", format_duration_coarse(secs as i64))),
         )
     } else if child.is_launched_child() && child.ended_at.is_none() {
-        let (status, phase) = child.rowless_status(demotion, now);
-        (status, phase, child.displayed_turn_error_label(now))
+        child.rowless_card(demotion, now)
     } else {
         (child.display_rest_status(child.status), child.phase, None)
     };

@@ -8,7 +8,7 @@ use super::{DeliveryKind, InterruptConfirmation};
 use jiff::Timestamp;
 use serde::Serialize;
 
-use crate::agents::{AgentState, AgentStatus};
+use crate::agents::{AgentState, AgentStatus, ModelHold};
 use crate::harness::auto_continue::CardStatus;
 use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{gate_open_for_agent, max_delivery_attempts_from_env};
@@ -71,17 +71,19 @@ impl DeliveryPolicy {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ReceiverReadiness {
     pub status: AgentStatus,
     pub compacting: bool,
     pub gate_open: bool,
     pub waiting: bool,
+    /// Why no message of any kind or gate, forced or not, goes in.
+    pub held: Option<ModelHold>,
 }
 
 impl ReceiverReadiness {
-    pub fn accepts_prompt(self) -> bool {
-        self.gate_open && !self.waiting
+    pub fn accepts_prompt(&self) -> bool {
+        self.gate_open && !self.waiting && self.held.is_none()
     }
 }
 
@@ -98,6 +100,7 @@ pub(super) fn receiver_readiness(
         compacting: agent.is_compacting(now),
         gate_open: gate_open_for_agent(gate, agent, force, now, snapshot, card_status),
         waiting: !force && agent.is_awaiting_input(),
+        held: card_status.held(snapshot, agent, now),
     }
 }
 
@@ -107,7 +110,7 @@ pub(super) enum AttemptSource {
     Claimed,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum AttemptOutcome {
     Sent {
         compacted: bool,
@@ -163,6 +166,7 @@ pub enum DeliveryVerdict {
     },
     ReceiverGone,
     ReceiverEnded,
+    ModelHeld(ModelHold),
     Compacting,
     GateClosed {
         gate: DeliveryGate,
@@ -207,6 +211,7 @@ impl DeliveryVerdict {
             | Self::PaneHeld
             | Self::ReceiverGone
             | Self::ReceiverEnded
+            | Self::ModelHeld(_)
             | Self::GateClosed { .. } => Some(StallClass::NotWorking),
             Self::Scheduled { .. }
             | Self::WaitingOnAfter { .. }
@@ -230,6 +235,7 @@ impl DeliveryVerdict {
             Self::PaneHeld => "pane held after a provider error ended its turn".to_owned(),
             Self::ReceiverGone => "receiver has no current card".to_owned(),
             Self::ReceiverEnded => "receiver ended".to_owned(),
+            Self::ModelHeld(hold) => hold.to_string(),
             Self::WaitingForRegistration { register_by } => {
                 format!("waiting for registration after resume until {register_by}")
             }
@@ -1036,6 +1042,8 @@ pub struct DeliveryCheck {
     pub fifo: FifoCheck,
     pub agent: AgentCheck,
     pub gate: GateCheck,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold: Option<ModelHold>,
     pub ask: AskCheck,
     pub pane: PaneCheck,
 }
@@ -1103,6 +1111,9 @@ impl DeliveryCheck {
         }
         if self.agent.ended {
             return DeliveryVerdict::ReceiverEnded;
+        }
+        if let Some(hold) = &self.hold {
+            return DeliveryVerdict::ModelHeld(hold.clone());
         }
         if self.gate.compacting {
             return DeliveryVerdict::Compacting;
@@ -1303,9 +1314,13 @@ fn evaluate_delivery<'a>(
             card_status,
         )
     });
-    let status = readiness.map(|readiness| readiness.status);
-    let compacting = readiness.is_some_and(|readiness| readiness.compacting);
-    let open = readiness.is_some_and(|readiness| readiness.gate_open);
+    let status = readiness.as_ref().map(|readiness| readiness.status);
+    let compacting = readiness
+        .as_ref()
+        .is_some_and(|readiness| readiness.compacting);
+    let open = readiness
+        .as_ref()
+        .is_some_and(|readiness| readiness.gate_open);
     let resume_recovered = match (message.gate, agent, open) {
         (DeliveryGate::Resume, Some(agent), true) => {
             let runtime = RuntimePaths::for_workspace(message.workspace_id.clone()).ok();
@@ -1315,7 +1330,10 @@ fn evaluate_delivery<'a>(
         }
         _ => None,
     };
-    let waiting = readiness.is_some_and(|readiness| readiness.waiting);
+    let waiting = readiness
+        .as_ref()
+        .is_some_and(|readiness| readiness.waiting);
+    let hold = readiness.and_then(|readiness| readiness.held);
     let binding = agent.and_then(|agent| crate::address::bind_agent(snapshot, agent));
     let retry_at = message
         .typing_hold
@@ -1373,6 +1391,7 @@ fn evaluate_delivery<'a>(
             open,
             resume_recovered,
         },
+        hold,
         ask: AskCheck {
             waiting,
             force: message.force,

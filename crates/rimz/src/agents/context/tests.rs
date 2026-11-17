@@ -884,15 +884,17 @@ fn console_usage_cap_matches_only_the_provider_pattern() {
 }
 
 #[test]
-fn turn_error_label_cap_trims_drops_blank_and_keeps_80_chars() {
+fn turn_error_label_cap_trims_drops_blank_and_keeps_200_chars() {
     assert_eq!(cap_turn_error_label(""), None);
     assert_eq!(cap_turn_error_label(" \n\t "), None);
     assert_eq!(
         cap_turn_error_label("  API Error: Overloaded \n").as_deref(),
         Some("API Error: Overloaded")
     );
-    let capped = cap_turn_error_label(&"é".repeat(200)).unwrap();
-    assert_eq!(capped.chars().count(), 80);
+    let refusal = "Claude Fable 5.2 is not available on your plan. Switch models with /model to keep working.";
+    assert_eq!(cap_turn_error_label(refusal).as_deref(), Some(refusal));
+    let capped = cap_turn_error_label(&"é".repeat(300)).unwrap();
+    assert_eq!(capped.chars().count(), 200);
 }
 
 #[test]
