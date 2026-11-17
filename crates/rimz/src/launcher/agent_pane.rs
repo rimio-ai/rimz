@@ -1,0 +1,246 @@
+//! The pane an agent-addressed act wakes and then acts on, found at the point of use.
+//!
+//! [`find`] reads the hosting lookup for the agent, wakes the pane it answers, and reads
+//! again on the first read's backend: the act goes ahead only on the pane both reads
+//! answer, and refuses when the agent has no pane, moved during the wake, or the
+//! multiplexer could not be read. [`locate`] is the single read, for an act that wakes
+//! nothing or that decides before work of its own.
+//!
+//! One window is accepted after [`find`]: a focus's anchor samples the attached clients
+//! between `find` and `focus_pane`. The sample moves no pane, and the anchor's lock
+//! forbids the I/O a re-read there would take.
+
+use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
+use crate::sidebar::produce::hosting::{Hosting, HostingErr, read_hosting};
+use crate::{ResolvedWorkspace, Store};
+
+/// The pane the lookup answered for the agent, and the session it found there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentPane {
+    pub pane_id: PaneId,
+    pub session_name: String,
+    /// The `(kind, session id)` of the agent's row the lookup holds in the pane: the
+    /// launch's occupant, which another session of one launch can be after a revival.
+    pub holder: (AgentKind, AgentSessionId),
+}
+
+/// Why [`find`] found no pane to act on; the act refuses and changes nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum FindErr {
+    #[error(transparent)]
+    Read(HostingErr),
+    #[error("no listed pane hosts the agent")]
+    Nowhere,
+    #[error("the agent left pane {pane} while it was woken")]
+    Moved { pane: PaneId },
+    #[error("waking pane {pane}: {source}")]
+    Wake {
+        pane: PaneId,
+        source: crate::harness::hibernate::HibernateErr,
+    },
+}
+
+/// The pane hosting the agent `(kind, launch)`, `None` when no listed pane hosts it, by
+/// one read of the lookup on `mux`, the backend pick's notices pushed to `notices` for
+/// the caller to print once.
+pub fn locate(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    mux: Option<MuxName>,
+    kind: &AgentKind,
+    launch: &AgentSessionId,
+    notices: &mut Vec<String>,
+) -> Result<Option<AgentPane>, HostingErr> {
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_AGENT_PANE_BEFORE_READ");
+    read_answer(workspace, store, mux, kind, launch, notices).map(|(_, pane)| pane)
+}
+
+/// The pane hosting the agent `(kind, launch)`, read, woken, and read again; the
+/// notices of both reads are pushed to `notices` for the caller to print once.
+pub fn find(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    mux: Option<MuxName>,
+    kind: &AgentKind,
+    launch: &AgentSessionId,
+    notices: &mut Vec<String>,
+) -> Result<AgentPane, FindErr> {
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_AGENT_PANE_BEFORE_READ");
+    find_with(
+        mux,
+        |mux| read_answer(workspace, store, mux, kind, launch, notices),
+        |pane| crate::harness::hibernate::wake_pane(store, pane).map(drop),
+    )
+}
+
+fn read_answer(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    mux: Option<MuxName>,
+    kind: &AgentKind,
+    launch: &AgentSessionId,
+    notices: &mut Vec<String>,
+) -> Result<(MuxName, Option<AgentPane>), HostingErr> {
+    match read_hosting(workspace, store, mux) {
+        Ok(mut read) => {
+            notices.extend(read.take_notices());
+            let answer = read.agent_hosting(kind, launch);
+            let pane = match (answer.hosting, answer.holder) {
+                (
+                    Hosting::Pane {
+                        pane_id,
+                        session_name,
+                    },
+                    Some(holder),
+                ) => Some(AgentPane {
+                    pane_id,
+                    session_name,
+                    holder: (holder.kind.clone(), holder.agent_id.clone()),
+                }),
+                _ => None,
+            };
+            Ok((read.mux(), pane))
+        }
+        Err(mut err) => {
+            notices.append(&mut err.notices);
+            Err(err)
+        }
+    }
+}
+
+fn find_with(
+    mux: Option<MuxName>,
+    mut read: impl FnMut(Option<MuxName>) -> Result<(MuxName, Option<AgentPane>), HostingErr>,
+    wake: impl FnOnce(&PaneId) -> Result<(), crate::harness::hibernate::HibernateErr>,
+) -> Result<AgentPane, FindErr> {
+    let (mux, first) = read(mux).map_err(FindErr::Read)?;
+    let first = first.ok_or(FindErr::Nowhere)?;
+    wake(&first.pane_id).map_err(|source| FindErr::Wake {
+        pane: first.pane_id.clone(),
+        source,
+    })?;
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_AGENT_PANE_AFTER_WAKE");
+    let (_, second) = read(Some(mux)).map_err(FindErr::Read)?;
+    match second {
+        Some(second)
+            if second.pane_id == first.pane_id && second.session_name == first.session_name =>
+        {
+            Ok(second)
+        }
+        _ => Err(FindErr::Moved {
+            pane: first.pane_id,
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sidebar::produce::ProduceErr;
+
+    fn held(id: &str, session: &str) -> Option<AgentPane> {
+        Some(AgentPane {
+            pane_id: PaneId::from_parts(MuxName::Zellij, id),
+            session_name: "room".to_owned(),
+            holder: (
+                AgentKind::new_unchecked("claude"),
+                AgentSessionId::from(session),
+            ),
+        })
+    }
+
+    fn pane(id: &str) -> Option<AgentPane> {
+        held(id, "planner")
+    }
+
+    fn failed() -> HostingErr {
+        HostingErr {
+            notices: vec!["skipped tmux".to_owned()],
+            source: ProduceErr::PaneDiscovery(crate::mux::MuxErr::SessionNotFound {
+                session: "room".to_owned(),
+            }),
+        }
+    }
+
+    /// Run `find_with` over `answers`, one per read, recording the backend each read
+    /// was pinned to and the panes woken.
+    fn run(
+        answers: Vec<Result<Option<AgentPane>, HostingErr>>,
+    ) -> (
+        Result<AgentPane, FindErr>,
+        Vec<Option<MuxName>>,
+        Vec<PaneId>,
+    ) {
+        let mut answers = answers.into_iter();
+        let mut pins = Vec::new();
+        let mut woken = Vec::new();
+        let found = find_with(
+            None,
+            |mux| {
+                pins.push(mux);
+                answers
+                    .next()
+                    .expect("no read past the answers")
+                    .map(|pane| (MuxName::Tmux, pane))
+            },
+            |pane| {
+                woken.push(pane.clone());
+                Ok(())
+            },
+        );
+        (found, pins, woken)
+    }
+
+    #[test]
+    fn a_pane_both_reads_answer_is_found_after_its_wake_on_the_first_reads_backend() {
+        let (found, pins, woken) = run(vec![Ok(pane("terminal_1")), Ok(pane("terminal_1"))]);
+        assert_eq!(found.unwrap(), pane("terminal_1").unwrap());
+        assert_eq!(pins, [None, Some(MuxName::Tmux)]);
+        assert_eq!(woken, [PaneId::from_parts(MuxName::Zellij, "terminal_1")]);
+    }
+
+    #[test]
+    fn the_holder_found_is_the_one_the_second_read_answers_in_the_pane() {
+        let (found, _, _) = run(vec![
+            Ok(held("terminal_1", "planner")),
+            Ok(held("terminal_1", "revived")),
+        ]);
+        assert_eq!(found.unwrap(), held("terminal_1", "revived").unwrap());
+    }
+
+    #[test]
+    fn an_agent_hosted_nowhere_refuses_without_a_wake_or_a_second_read() {
+        let (found, pins, woken) = run(vec![Ok(None)]);
+        assert!(matches!(found, Err(FindErr::Nowhere)), "{found:?}");
+        assert_eq!(pins.len(), 1);
+        assert!(woken.is_empty());
+    }
+
+    #[test]
+    fn an_agent_that_moves_or_leaves_during_the_wake_refuses_naming_the_pane_it_left() {
+        for after in [pane("terminal_2"), None] {
+            let (found, _, woken) = run(vec![Ok(pane("terminal_1")), Ok(after)]);
+            assert_eq!(woken.len(), 1);
+            match found {
+                Err(err @ FindErr::Moved { .. }) => assert_eq!(
+                    err.to_string(),
+                    "the agent left pane zellij:terminal_1 while it was woken"
+                ),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_failed_read_refuses_before_or_after_the_wake() {
+        let (found, _, woken) = run(vec![Err(failed())]);
+        assert!(matches!(found, Err(FindErr::Read(_))), "{found:?}");
+        assert!(woken.is_empty());
+        let (found, _, woken) = run(vec![Ok(pane("terminal_1")), Err(failed())]);
+        assert!(matches!(found, Err(FindErr::Read(_))), "{found:?}");
+        assert_eq!(woken.len(), 1);
+    }
+}
