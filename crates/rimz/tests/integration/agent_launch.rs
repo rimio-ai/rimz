@@ -2622,6 +2622,18 @@ fn assert_planner_kept_what_it_was_owed(env: &Env) {
 /// wrapper; without it nothing binds and the swap's bind wait runs out.
 #[cfg(unix)]
 fn restart_owed_planner(resumed: bool, bound: bool) -> (Env, std::process::Output) {
+    let (env, mut command) = owed_planner_restart(resumed);
+    if bound {
+        command.env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1");
+    } else {
+        command.env("RIMZ_TEST_SWAP_BIND_WAIT_MS", "300");
+    }
+    let output = command.bounded_output().unwrap();
+    (env, output)
+}
+
+/// Seeds `@planner` with what it is owed and builds its restart command.
+fn owed_planner_restart(resumed: bool) -> (Env, std::process::Command) {
     let env = Env::new();
     env.install_agent_hooks("claude");
     env.record(&env.project_root);
@@ -2668,13 +2680,7 @@ fn restart_owed_planner(resumed: bool, bound: bool) -> (Env, std::process::Outpu
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
             format!("{} [Created 1s ago]\n", workspace.session_name),
         );
-    if bound {
-        command.env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1");
-    } else {
-        command.env("RIMZ_TEST_SWAP_BIND_WAIT_MS", "300");
-    }
-    let output = command.bounded_output().unwrap();
-    (env, output)
+    (env, command)
 }
 
 #[cfg(unix)]
@@ -2902,6 +2908,51 @@ fn restart_whose_replacement_never_binds_leaves_the_agent_in_its_old_session() {
     assert_eq!(kit.ended_at, None);
     let trace = std::fs::read_to_string(env.home_root.join("mux.log")).unwrap_or_default();
     assert!(!trace.contains("close-pane"), "{trace}");
+}
+
+/// A stop cancels the starting swap's reservation before it ends the old
+/// session, so the restart reads the cancellation first and the end after.
+#[cfg(unix)]
+#[test]
+fn restart_whose_agent_a_stop_ends_meanwhile_says_the_stop_ended_it() {
+    let (env, mut command) = owed_planner_restart(false);
+    command.env("RIMZ_TEST_SWAP_BIND_WAIT_MS", "20000");
+    let restart = std::thread::spawn(move || command.bounded_output().unwrap());
+    let deadline = std::time::Instant::now() + crate::common::COMMAND_TIMEOUT;
+    let reservation = loop {
+        let rows = env.store().audit_rows().unwrap();
+        if let Some(row) = rows
+            .iter()
+            .find(|row| row.launch_id.as_deref() == Some("launch-session") && row.epoch == 1)
+        {
+            break row.clone();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no reservation: {rows:#?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let workspace = env.resolve_workspace(&env.project_root);
+    assert!(
+        env.store()
+            .cancel_unbound_swap(&reservation, &workspace.session_name, &env.project_root)
+            .unwrap()
+    );
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    append_planner_lifecycle(&env, "provider-session", LifecycleSignal::Ended, None);
+
+    let output = restart.join().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(
+            "restart of @planner failed: the replacement did not start (its reservation failed \
+             before binding); a stop ended @planner while its replacement was starting, so no \
+             session of it is running"
+        ) && !stderr.contains("still running in its old session"),
+        "{stderr}"
+    );
 }
 
 /// Seeds a bound codex agent `@pruner` (launch `launch_holder`) with an

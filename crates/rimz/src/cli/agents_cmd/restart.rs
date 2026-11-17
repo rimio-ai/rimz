@@ -3,6 +3,7 @@ use crate::cli::{render, select};
 use rimz::config::effective::ProfileScope;
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 use rimz::harness::launch::{ExecAction, ExecRequest};
+use rimz::store::writer::SwapAbort;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FreshReason {
@@ -551,7 +552,7 @@ pub(super) fn place_replacement(
 
 /// Wait until the swap's reservation stands: its wrapper bound it (a fresh
 /// launch) or the resumed session took its epoch. A reservation its wrapper
-/// failed, or one still unbound at the timeout, is an error.
+/// or a stop failed, or one still unbound at the timeout, is an error.
 pub(super) fn wait_for_swap_bind(
     store: &rimz::Store,
     identity: &AgentLaunchIdentity,
@@ -571,7 +572,7 @@ pub(super) fn wait_for_swap_bind(
                 && row.session_over()
         });
         if failed {
-            bail!("its wrapper failed before binding");
+            bail!("its reservation failed before binding");
         }
         if std::time::Instant::now() >= deadline {
             bail!(
@@ -596,7 +597,8 @@ fn swap_bind_wait() -> Duration {
 
 /// The swap's one error boundary: a placement that failed before the
 /// replacement bound fails its reservation, and the command fails saying the
-/// agent stays in its old session. One that bound anyway carries on.
+/// agent stays in its old session, or that a stop ended it. One that bound
+/// anyway carries on.
 pub(super) fn settle_placement(
     store: &rimz::Store,
     batch: &AgentLaunchBatch,
@@ -610,14 +612,25 @@ pub(super) fn settle_placement(
         return Ok(());
     };
     let handle = handle(agent);
-    match store.abort_agent_swap(identity, batch.scope()) {
-        Ok(rimz::store::writer::SwapAbort::Bound) => {
+    let aborted = match store.abort_agent_swap(identity, batch.scope()) {
+        Ok(SwapAbort::Cancelled) if stop_ends_source(store, identity) => Ok(SwapAbort::Ended),
+        aborted => aborted,
+    };
+    match aborted {
+        Ok(SwapAbort::Bound) => {
             // The swap carries on, so the caller's cleanup must still run.
             let _ = writeln!(
                 crate::cli::render::err(),
                 "rimz: the replacement bound despite an error: {err:#}"
             );
             Ok(())
+        }
+        Ok(SwapAbort::Ended) => {
+            undo();
+            bail!(
+                "{verb} of {handle} failed: the replacement did not start ({err:#}); a stop \
+                 ended {handle} while its replacement was starting, so no session of it is running"
+            )
         }
         aborted => {
             undo();
@@ -629,6 +642,23 @@ pub(super) fn settle_placement(
                  {handle} is still running in its old session, and nothing owed to it was touched"
             )
         }
+    }
+}
+
+/// Whether the stop that cancelled a swap's reservation goes on to end the
+/// session it would replace. Such a stop cancels before it closes the holder,
+/// so the end can land after the abort: wait for it within the stop's own
+/// owner-exit bound.
+fn stop_ends_source(store: &rimz::Store, identity: &AgentLaunchIdentity) -> bool {
+    let deadline = std::time::Instant::now() + rimz::store::runtime::OWNER_EXIT_BOUND;
+    loop {
+        match store.swap_source_ended(identity) {
+            Ok(true) => return true,
+            Err(_) => return false,
+            Ok(false) if std::time::Instant::now() >= deadline => return false,
+            Ok(false) => {}
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
