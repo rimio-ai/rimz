@@ -862,24 +862,32 @@ fn negated_leaf_glyphs_and_short_read_through_the_negation() {
     let CheckoutState::Ready { verdict, .. } = &view.worktrees[0].state else {
         panic!("ready fixture must carry a verdict");
     };
-    let mut out = Vec::new();
-    super::super::condition::write_terms(&mut out, &view.entry, &expr, verdict).unwrap();
+    let terms = |verdict: &rimz::harness::when::Verdict| {
+        let reading = crate::cli::wake_view::ConditionReading {
+            unread: verdict.unread_reasons(&expr, &view.entry.run_dir(), None, None),
+            verdict: verdict.clone(),
+            resets: BTreeMap::new(),
+        };
+        let mut out = Vec::new();
+        super::super::condition::write_terms(&mut out, &expr, &reading, &jiff::tz::TimeZone::UTC)
+            .unwrap();
+        out
+    };
+    let out = terms(verdict);
     assert_eq!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
         "  pr=open   ✓ open\n  !ci=pending,failed   ✗ failed\n"
     );
     let mut unread = verdict.clone();
     unread.readings.insert("ci".into(), None);
-    let mut out = Vec::new();
-    super::super::condition::write_terms(&mut out, &view.entry, &expr, &unread).unwrap();
+    let out = terms(&unread);
     assert!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap())
             .to_string()
             .contains("!ci=pending,failed   ? readings paused (room closed)")
     );
     unread.readings.insert("pr".into(), None);
-    let mut out = Vec::new();
-    super::super::condition::write_terms(&mut out, &view.entry, &expr, &unread).unwrap();
+    let out = terms(&unread);
     assert!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap())
             .to_string()
@@ -1547,7 +1555,14 @@ fn true_condition_without_hold_renders_due() {
     );
     let timing = super::super::condition::observe(("machine::ready", "ready"), &entry, timing, now);
     let mut out = Vec::new();
-    super::super::condition::write_show(&mut out, "ready", &entry, &timing).unwrap();
+    super::super::condition::write_show(
+        &mut out,
+        "ready",
+        &entry,
+        &timing,
+        &jiff::tz::TimeZone::UTC,
+    )
+    .unwrap();
     assert!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap())
             .to_string()
@@ -1580,7 +1595,14 @@ fn closed_room_forge_condition_shows_unknown_on_unread_keys() {
         Some("unknown · ci: unknown")
     );
     let mut out = Vec::new();
-    super::super::condition::write_show(&mut out, "forge", &entry, &timing).unwrap();
+    super::super::condition::write_show(
+        &mut out,
+        "forge",
+        &entry,
+        &timing,
+        &jiff::tz::TimeZone::UTC,
+    )
+    .unwrap();
     assert!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap())
             .to_string()

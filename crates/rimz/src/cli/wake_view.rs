@@ -7,6 +7,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use rimz::agents::AgentState;
 use rimz::config::TaskEntry;
 use rimz::disk::paths::{RuntimePaths, StatePaths};
@@ -57,6 +58,9 @@ pub(super) struct ConditionReading {
     pub(super) verdict: Verdict,
     /// Each forge term that reads nothing, with its reason (`Verdict::unread_reasons`).
     pub(super) unread: BTreeMap<String, String>,
+    /// When each window holding the condition back next resets (`WindowReadings::resets`),
+    /// on the windows `verdict` read.
+    pub(super) resets: BTreeMap<String, Timestamp>,
 }
 
 /// Read `expr` for `entry` under the freshness rule firing applies, against the task's fire
@@ -81,25 +85,91 @@ pub(super) fn read_condition(
     )
     .freshen(expr, &scope, source, fired_at, Some(now), true);
     let unread = verdict.unread_reasons(expr, &scope, source, Some(now));
-    ConditionReading { verdict, unread }
+    let resets = windows.resets(
+        expr,
+        entry.provider.as_ref(),
+        entry.account.as_ref(),
+        &verdict.readings,
+    );
+    ConditionReading {
+        verdict,
+        unread,
+        resets,
+    }
+}
+
+/// A window reset as a reading line shows it, in `zone`.
+pub(super) fn reset_minute(at: Timestamp, zone: &TimeZone) -> String {
+    at.to_zoned(zone.clone())
+        .strftime("%Y-%m-%d %H:%M")
+        .to_string()
+}
+
+/// Each window reset as a reading line shows it, in `zone`.
+pub(super) fn reset_minutes(
+    resets: &BTreeMap<String, Timestamp>,
+    zone: &TimeZone,
+) -> BTreeMap<String, String> {
+    resets
+        .iter()
+        .map(|(key, at)| (key.clone(), reset_minute(*at, zone)))
+        .collect()
+}
+
+/// An unmet condition `state` with each reading `resets` names followed by its reset, as the
+/// `now:` line and `loop watch` show it; any other state as given.
+pub(super) fn with_resets(
+    state: schedule::TaskTimingState,
+    resets: &BTreeMap<String, String>,
+) -> schedule::TaskTimingState {
+    let annotate = |readings: Vec<(String, Option<String>)>| {
+        readings
+            .into_iter()
+            .map(|(key, value)| {
+                let value = value.map(|value| match resets.get(&key) {
+                    Some(at) => format!("{value} (resets {at})"),
+                    None => value,
+                });
+                (key, value)
+            })
+            .collect()
+    };
+    match state {
+        schedule::TaskTimingState::Waiting { readings } => schedule::TaskTimingState::Waiting {
+            readings: annotate(readings),
+        },
+        schedule::TaskTimingState::Unknown { readings } => schedule::TaskTimingState::Unknown {
+            readings: annotate(readings),
+        },
+        state => state,
+    }
 }
 
 /// The `now:` state of a condition just armed: its readings while unmet, each unread key with
-/// its reason, else `due`, or the start of its hold.
+/// its reason and each window holding it back with its reset, else `due`, or the start of its
+/// hold.
 pub(super) fn condition_now(
     entry: &TaskEntry,
     expr: &WhenExpr,
     hold: Option<std::time::Duration>,
 ) -> String {
     let reading = read_condition(&RoomSource::read(&entry.resolved_root()), entry, expr, None);
-    let state =
-        schedule::TaskTimingState::unmet(expr, &reading.verdict).unwrap_or_else(|| match hold {
+    let state = match schedule::TaskTimingState::unmet(expr, &reading.verdict) {
+        Some(unmet) => with_resets(
+            unmet,
+            &reset_minutes(
+                &reading.resets,
+                &rimz::config::MachineConfig::load_lenient().time_zone(),
+            ),
+        ),
+        None => match hold {
             Some(hold) => schedule::TaskTimingState::Holding {
                 elapsed: std::time::Duration::ZERO,
                 hold,
             },
             None => schedule::TaskTimingState::Due(Timestamp::now()),
-        });
+        },
+    };
     state
         .condition_label_with(&reading.unread)
         .unwrap_or_default()

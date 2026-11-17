@@ -244,13 +244,22 @@ pub fn seed_launch_lane_as(
         .expect("seed launched lane");
 }
 
-pub fn publish_claude_5h(env: &Env, used: u8) {
-    publish_claude_5h_resetting(env, used, jiff::SignedDuration::from_hours(2));
+pub fn publish_claude_5h(env: &Env, used: u8) -> jiff::Timestamp {
+    let resets_at = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(2);
+    publish_claude_5h_resetting_at(env, used, resets_at);
+    resets_at
+}
+
+/// A reset instant as a window reading's `(resets <time>)` names it, in the fixture's zone.
+pub fn reset_minute(at: jiff::Timestamp) -> String {
+    at.to_zoned(jiff::tz::TimeZone::system())
+        .strftime("%Y-%m-%d %H:%M")
+        .to_string()
 }
 
 /// Publishes a 5h claude window on the room's default account, `used` percent
-/// spent and resetting `resets_in` from now.
-pub fn publish_claude_5h_resetting(env: &Env, used: u8, resets_in: jiff::SignedDuration) {
+/// spent and resetting at `resets_at`.
+pub fn publish_claude_5h_resetting_at(env: &Env, used: u8, resets_at: jiff::Timestamp) {
     use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
     env.publish_rate_limits(&RateLimitsCache {
         entries: std::collections::BTreeMap::from([(
@@ -259,7 +268,7 @@ pub fn publish_claude_5h_resetting(env: &Env, used: u8, resets_in: jiff::SignedD
                 limits: AgentRateLimits {
                     windows: vec![RateLimitWindow {
                         used_percentage: Some(used),
-                        resets_at: Some(jiff::Timestamp::now() + resets_in),
+                        resets_at: Some(resets_at),
                         duration_mins: Some(rimz::agents::WindowSpan::FiveHour.minutes()),
                         ..RateLimitWindow::default()
                     }],

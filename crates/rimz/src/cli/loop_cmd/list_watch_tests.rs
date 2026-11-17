@@ -732,3 +732,34 @@ fn a_closed_pull_request_counts_as_needing_you() {
         "{output}"
     );
 }
+
+#[test]
+fn a_spent_window_label_names_its_reset_like_the_now_line() {
+    let mut row = timed(
+        "refill",
+        TaskEntry {
+            when: Some(vec!["window.5h.left>=40".into()]),
+            provider: Some(rimz::ids::AgentKind::new_unchecked("claude")),
+            repeat: true,
+            ..TaskEntry::default()
+        },
+        None,
+        Some(now() - SignedDuration::from_secs(60)),
+    );
+    let verdict = |left: &str| rimz::harness::when::Verdict {
+        truth: Some(false),
+        readings: BTreeMap::from([("window.5h.left".to_owned(), Some(left.to_owned()))]),
+        unread: BTreeMap::new(),
+    };
+    row.timing = Some(
+        row.timing
+            .take()
+            .unwrap()
+            .with_condition(&verdict("8"), None, now()),
+    );
+    row.window_resets = BTreeMap::from([("window.5h.left".to_owned(), "2099-06-15 12:00".into())]);
+    assert_eq!(
+        row.state_text(now()),
+        "waiting · window.5h.left: 8 (resets 2099-06-15 12:00)"
+    );
+}

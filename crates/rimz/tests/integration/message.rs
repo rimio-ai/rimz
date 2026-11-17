@@ -8382,7 +8382,11 @@ fn a_refused_model_holds_every_message_kind_until_its_record_clears() {
         &rimz::agents::context::record::AgentContextRecord::new("claude", "sess-refused", context),
     )
     .expect("seed context");
-    crate::common::wait::publish_claude_5h_resetting(&env, 40, jiff::SignedDuration::from_hours(3));
+    crate::common::wait::publish_claude_5h_resetting_at(
+        &env,
+        40,
+        jiff::Timestamp::now() + jiff::SignedDuration::from_hours(3),
+    );
     let record_path = rimz::agents::RateLimitsCache::shared_path(&env.runtime_paths())
         .with_file_name("model_refusals.v1.json");
     let refused_at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(1);
@@ -8479,7 +8483,11 @@ fn a_refusal_recorded_during_the_write_wait_holds_the_send() {
         ),
     )
     .expect("seed context");
-    crate::common::wait::publish_claude_5h_resetting(&env, 40, jiff::SignedDuration::from_hours(3));
+    crate::common::wait::publish_claude_5h_resetting_at(
+        &env,
+        40,
+        jiff::Timestamp::now() + jiff::SignedDuration::from_hours(3),
+    );
     run_success(
         env.rimz()
             .args(["config", "set", "harness.smart_compact", "off"]),

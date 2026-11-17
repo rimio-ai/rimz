@@ -403,6 +403,28 @@ impl<'a> RoomReadings<'a> {
             .0
     }
 
+    /// When each window holding back the unmet condition `timing` observed for `entry` next
+    /// resets ([`WindowReadings::resets`]), on the windows its readings came from; a condition
+    /// not waiting or unknown has none.
+    pub fn resets(&self, entry: &TaskEntry, timing: &TaskTiming) -> BTreeMap<String, Timestamp> {
+        let (
+            Ok(ParsedTrigger {
+                trigger: Trigger::Condition { expr, .. },
+                ..
+            }),
+            TaskTimingState::Waiting { readings } | TaskTimingState::Unknown { readings },
+        ) = (timing.parsed(), timing.state())
+        else {
+            return BTreeMap::new();
+        };
+        self.windows.resets(
+            expr,
+            entry.provider.as_ref(),
+            entry.account.as_ref(),
+            &readings.into_iter().collect(),
+        )
+    }
+
     fn observe_blocking(
         &self,
         (key, name): (&str, &str),

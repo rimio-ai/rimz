@@ -191,7 +191,7 @@ rimz loop add big-refactor --when 'window.5h.left>=80' --agent claude -- "Refact
 
 An agent task reads the windows of the kind it launches, on the account its launch names, and the receipt says so on a `windows:` line. `--provider` names the agent kind whose windows the condition reads for any other task, or overrides that default. `--account` picks one of its [named accounts](./accounts.md). Neither picks the account the command's own launches use. `add` reads the window first and refuses when it cannot, and the [conditions reference](../reference/cli/loop.md#conditions) lists those cases.
 
-Set the threshold to the room the work needs. The task fires as soon as the window has that much room, which may be before the window resets. A threshold of 100 can wait a whole window: one prompt spent from the fresh window before the next tick keeps it below 100 until the next reset.
+Set the threshold to the room the work needs. The task fires as soon as the window has that much room, which may be before the window resets. While the window is short, the `add` receipt, `rimz loop list`, `rimz loop watch`, `rimz loop show`, and `rimz loop explain` say when it resets, when the provider reports one. A threshold of 100 can wait a whole window: one prompt spent from the fresh window before the next tick keeps it below 100 until the next reset.
 
 ## See what a task did
 

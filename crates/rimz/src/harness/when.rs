@@ -480,13 +480,52 @@ impl<'a> WindowReadings<'a> {
         account: Option<&LoginName>,
         span: WindowSpan,
     ) -> Option<String> {
+        Some(percent_left(&self.window(kind, account, span)?)?.to_string())
+    }
+
+    /// When each window a refill can satisfy next resets: each `window.*` term of `expr` that
+    /// waits for room (a `>`/`>=`, or a negated `<`/`<=`) and that `readings` read false, on
+    /// the window [`evaluate`] reads for it on `account` of `provider`. A lifted or undated
+    /// window has none.
+    pub fn resets(
+        &self,
+        expr: &WhenExpr,
+        provider: Option<&AgentKind>,
+        account: Option<&LoginName>,
+        readings: &BTreeMap<String, Option<String>>,
+    ) -> BTreeMap<String, Timestamp> {
+        let Some(kind) = provider else {
+            return BTreeMap::new();
+        };
+        expr.leaves()
+            .filter(|(term, negated)| {
+                let reading = readings.get(&term.key).and_then(Option::as_deref);
+                term.waits_for_room(*negated) && term.truth(reading) == Some(*negated)
+            })
+            .filter_map(|(term, _)| {
+                let window = self.window(kind, account, window_span(&term.key)?)?;
+                let resets_at = window
+                    .resets_at
+                    .filter(|at| !window.lifted && *at > self.now)?;
+                Some((term.key.clone(), resets_at))
+            })
+            .collect()
+    }
+
+    /// The `span` window projected to now, on `account` of `kind`, else on the room's
+    /// account for it.
+    fn window(
+        &self,
+        kind: &AgentKind,
+        account: Option<&LoginName>,
+        span: WindowSpan,
+    ) -> Option<RateLimitWindow> {
         let (room, capacities) = self.capacities.get_or_init(|| self.read());
         let key = match account {
             Some(name) => LoginKey::new(kind.clone(), name.clone()),
             None => room.default_key(kind)?,
         };
-        let window = capacities.get(&key)?.window_of_span(span, self.now)?;
-        Some(percent_left(&window)?.to_string())
+        capacities.get(&key)?.window_of_span(span, self.now)
     }
 
     fn read(&self) -> (RoomLoginSet, BTreeMap<LoginKey, ProviderCapacity>) {
@@ -786,6 +825,16 @@ impl WhenTerm {
             }
         };
         format!("{}={reading}{op}{}", self.key, self.values.join(","))
+    }
+
+    /// Whether the term, `negated` or not, asks a window for at least some room, so that the
+    /// window's refill can make it true.
+    fn waits_for_room(&self, negated: bool) -> bool {
+        window_span(&self.key).is_some()
+            && matches!(
+                (self.op, negated),
+                (Op::Ge | Op::Gt, false) | (Op::Le | Op::Lt, true)
+            )
     }
 
     /// The term's truth over a reading; an unread key (`None`) leaves it unknown.

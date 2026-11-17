@@ -1,8 +1,9 @@
 //! Condition admission and room-aware presentation.
 
 use super::*;
-use crate::cli::wake_view::{ConditionReading, RoomSource, read_condition};
-use rimz::harness::when::{self, CiSource, Verdict, WhenExpr, WhenTerm};
+use crate::cli::wake_view::{ConditionReading, RoomSource, read_condition, reset_minute};
+use jiff::tz::TimeZone;
+use rimz::harness::when::{self, CiSource, WhenExpr, WhenTerm};
 
 pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
     if clauses.is_empty() {
@@ -23,8 +24,8 @@ fn read(entry: &TaskEntry, expr: &WhenExpr, fired_at: Option<Timestamp>) -> Cond
     )
 }
 
-pub(super) fn reading(entry: &TaskEntry, expr: &WhenExpr) -> Verdict {
-    read(entry, expr, None).verdict
+pub(super) fn reading(entry: &TaskEntry, expr: &WhenExpr) -> ConditionReading {
+    read(entry, expr, None)
 }
 
 pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
@@ -132,6 +133,7 @@ pub(super) fn write_show(
     name: &str,
     entry: &TaskEntry,
     timing: &schedule::TaskTiming,
+    zone: &TimeZone,
 ) -> Result<()> {
     let Ok(schedule::ParsedTrigger {
         trigger: schedule::Trigger::Condition { expr, .. },
@@ -142,8 +144,7 @@ pub(super) fn write_show(
     };
     let fired_at = runtime_for_root(&entry.resolved_root())
         .and_then(|runtime| schedule::fire::last_stamps(&runtime).get(name).copied());
-    let verdict = read(entry, expr, fired_at).verdict;
-    write_terms(out, entry, expr, &verdict)?;
+    write_terms(out, expr, &read(entry, expr, fired_at), zone)?;
     if expr.reads_forge()
         && let Some(checked) = runtime_for_root(&entry.resolved_root())
             .map(|runtime| CiSource::read(&runtime))
@@ -160,19 +161,13 @@ pub(super) fn write_show(
 
 pub(super) fn write_terms(
     out: &mut impl Write,
-    entry: &TaskEntry,
     expr: &WhenExpr,
-    verdict: &Verdict,
+    reading: &ConditionReading,
+    zone: &TimeZone,
 ) -> Result<()> {
-    let room = RoomSource::read(&entry.resolved_root());
-    let unread = verdict.unread_reasons(
-        expr,
-        &entry.run_dir(),
-        room.source.as_ref(),
-        Some(Timestamp::now()),
-    );
     for (term, negated) in expr.leaves() {
-        let value = verdict
+        let value = reading
+            .verdict
             .readings
             .get(&term.key)
             .and_then(|value| value.as_deref());
@@ -182,17 +177,16 @@ pub(super) fn write_terms(
             None => ui::status::StateRole::Unknown,
         };
         let (glyph, style) = ui::verdict(role);
-        let reason = if value.is_none() {
-            term_unread_reason(term, &unread)
-        } else {
-            String::new()
+        let shown = match (value, reading.resets.get(&term.key)) {
+            (None, _) => term_unread_reason(term, &reading.unread),
+            (Some(value), Some(at)) => format!("{value} (resets {})", reset_minute(*at, zone)),
+            (Some(value), _) => value.to_owned(),
         };
         writeln!(
             out,
-            "  {}{term}   {} {}",
+            "  {}{term}   {} {shown}",
             if negated { "!" } else { "" },
             ui::paint(style, glyph),
-            value.unwrap_or(&reason)
         )?;
     }
     Ok(())

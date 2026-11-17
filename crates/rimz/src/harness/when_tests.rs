@@ -1050,6 +1050,92 @@ fn window_terms_read_percent_left_at_the_boundaries() {
 }
 
 #[test]
+fn window_resets_name_each_dated_window_key_projected_to_now() {
+    let now = Timestamp::now();
+    let at = |secs: i64| now + jiff::SignedDuration::from_secs(secs);
+    let window = |resets_at, span: WindowSpan| RateLimitWindow {
+        used_percentage: Some(92),
+        resets_at,
+        duration_mins: Some(span.minutes()),
+        ..RateLimitWindow::default()
+    };
+    let claude = AgentKind::new_unchecked("claude");
+    let codex = AgentKind::new_unchecked("codex");
+    let windows = WindowReadings::fixed(
+        now,
+        BTreeMap::from([
+            (
+                LoginKey::default_for(claude.clone()),
+                ProviderCapacity::from_windows(vec![
+                    window(Some(at(3_600)), WindowSpan::FiveHour),
+                    window(Some(at(-60)), WindowSpan::SevenDay),
+                ]),
+            ),
+            (
+                LoginKey::new(claude.clone(), "work".parse().unwrap()),
+                ProviderCapacity::from_windows(vec![window(None, WindowSpan::FiveHour)]),
+            ),
+            (
+                LoginKey::default_for(codex.clone()),
+                ProviderCapacity::from_windows(vec![RateLimitWindow {
+                    lifted: true,
+                    ..window(Some(at(3_600)), WindowSpan::FiveHour)
+                }]),
+            ),
+        ]),
+    );
+    let resets =
+        |clauses: &[&str], left: &str, provider: Option<&AgentKind>, account: Option<&str>| {
+            let clauses = clauses
+                .iter()
+                .map(|clause| (*clause).to_owned())
+                .collect::<Vec<_>>();
+            let expr = WhenExpr::parse(&clauses).unwrap();
+            let readings = expr
+                .terms()
+                .map(|term| (term.key.clone(), Some(left.to_owned())))
+                .collect();
+            let account = account.map(|name| name.parse().unwrap());
+            windows.resets(&expr, provider, account.as_ref(), &readings)
+        };
+
+    let read = resets(
+        &["window.5h.left>=50", "window.7d.left>=50", "ci=passed"],
+        "8",
+        Some(&claude),
+        None,
+    );
+    assert_eq!(read.get("window.5h.left"), Some(&at(3_600)));
+    let week = read["window.7d.left"];
+    assert!(
+        week > now && week <= at(7 * 86_400),
+        "a passed reset rolls forward to the next one: {week}"
+    );
+    assert_eq!(read.len(), 2, "only window keys reset: {read:?}");
+    for refill in [
+        "window.5h.left>8",
+        "!window.5h.left<50",
+        "!window.5h.left<=8",
+    ] {
+        assert_eq!(
+            resets(&[refill], "8", Some(&claude), None).len(),
+            1,
+            "{refill} waits for room"
+        );
+    }
+    for spent in ["window.5h.left<=4", "window.5h.left<4", "!window.5h.left>4"] {
+        assert!(
+            resets(&[spent], "8", Some(&claude), None).is_empty(),
+            "{spent} waits for the window to be spent, so a refill does not help"
+        );
+    }
+    assert!(resets(&["window.5h.left>=50"], "90", Some(&claude), None).is_empty());
+    assert!(resets(&["window.5h.left>=50"], "8", Some(&claude), Some("work")).is_empty());
+    assert!(resets(&["window.5h.left>=50"], "8", Some(&codex), None).is_empty());
+    assert!(resets(&["window.5h.left>=50"], "8", None, None).is_empty());
+}
+
+#[test]
 fn window_readings_read_nothing_until_a_window_term_asks() {
     let root = tempfile::tempdir().unwrap();
     let runtime = crate::RuntimePaths::under(

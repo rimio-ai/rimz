@@ -41,12 +41,21 @@ pub(super) fn run(args: ExplainArgs) -> Result<()> {
             Err(ui::AlreadyReported.into())
         };
     }
-    let verdict = condition::reading(&entry, &expr);
+    let reading = condition::reading(&entry, &expr);
     let mut out = ui::out();
     writeln!(out, "when: {expr}")?;
     writeln!(out, "scope: {}", entry.run_dir().display())?;
-    condition::write_terms(&mut out, &entry, &expr, &verdict)?;
-    writeln!(out, "now: {}", condition::truth_label(verdict.truth))?;
+    condition::write_terms(
+        &mut out,
+        &expr,
+        &reading,
+        &MachineConfig::load_lenient().time_zone(),
+    )?;
+    writeln!(
+        out,
+        "now: {}",
+        condition::truth_label(reading.verdict.truth)
+    )?;
     if !render::room_open(&entry.resolved_root()) {
         condition::write_no_room_hint(
             &mut out,
@@ -62,7 +71,7 @@ pub(super) fn run(args: ExplainArgs) -> Result<()> {
             "window readings need --provider <KIND>; without it they are unknown"
         )?;
     }
-    if verdict.truth != Some(true) {
+    if reading.verdict.truth != Some(true) {
         return Err(ui::AlreadyReported.into());
     }
     Ok(())

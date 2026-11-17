@@ -1,7 +1,7 @@
 //! Room-scoped loop list model and presentation.
 
 use super::*;
-use crate::cli::wake_view::checkout_name;
+use crate::cli::wake_view::{self, checkout_name};
 use rimz::config::WatchSpec;
 use rimz::harness::schedule::attention::{self, Attention, InProgress};
 use rimz::harness::schedule::task_record::{self, FireMark, TaskRecords};
@@ -413,6 +413,12 @@ pub(super) struct TaskRow {
     task: Option<LoadedTask>,
     #[serde(skip)]
     timing: Option<schedule::TaskTiming>,
+    /// When each window holding back its unmet condition resets, as a reading shows it.
+    #[serde(skip)]
+    window_resets: BTreeMap<String, String>,
+    /// The latest of those resets, compared as instants.
+    #[serde(skip)]
+    latest_reset: Option<String>,
     /// The task's run in progress, by [`attention::run_in_progress`]: it holds back a failure,
     /// and reads as running while the lock is held or the run executes.
     #[serde(skip)]
@@ -442,6 +448,10 @@ struct RowContext<'a> {
     count: u32,
     watcher_pid: Option<u32>,
     launch: Option<&'a FireMark>,
+    /// When each window holding back its unmet condition resets
+    /// ([`attention::RoomReadings::resets`]).
+    resets: BTreeMap<String, Timestamp>,
+    zone: &'a jiff::tz::TimeZone,
     now: Timestamp,
 }
 
@@ -619,15 +629,17 @@ fn load(
                 record.and_then(|(_, record)| record.arming.as_ref()),
                 &now_zoned,
             );
-            let timing = if timing
+            let (timing, resets) = if timing
                 .parsed()
                 .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Condition { .. }))
             {
-                conditions
-                    .get_or_init(|| attention::RoomReadings::new(runtime.as_ref(), open, now))
-                    .observe((&key, name), entry, &run_dir, timing, now)
+                let readings = conditions
+                    .get_or_init(|| attention::RoomReadings::new(runtime.as_ref(), open, now));
+                let timing = readings.observe((&key, name), entry, &run_dir, timing, now);
+                let resets = readings.resets(entry, &timing);
+                (timing, resets)
             } else {
-                timing
+                (timing, BTreeMap::new())
             };
             let count = record.map_or(0, |(_, record)| record.strikes);
             let mut row = TaskRow::new(
@@ -648,6 +660,8 @@ fn load(
                         .and_then(|runtime| watcher_info(runtime, name).ok().flatten())
                         .map(|info| info.pid),
                     launch: records.launched(entry, &key, &run_dir),
+                    resets,
+                    zone: now_zoned.time_zone(),
                     now,
                 },
             );
@@ -762,6 +776,8 @@ impl TaskRow {
             count,
             watcher_pid,
             launch,
+            resets,
+            zone,
             now,
         } = context;
         let entry = task.entry();
@@ -825,6 +841,11 @@ impl TaskRow {
             continuation,
             reason: String::new(),
             task: Some(task.clone()),
+            window_resets: wake_view::reset_minutes(&resets, zone),
+            latest_reset: resets
+                .values()
+                .max()
+                .map(|at| wake_view::reset_minute(*at, zone)),
             timing: Some(timing),
             in_progress,
             worktree_here: false,
@@ -949,6 +970,8 @@ impl TaskRow {
             reason: String::new(),
             task: None,
             timing: None,
+            window_resets: BTreeMap::new(),
+            latest_reset: None,
             in_progress: Some(in_progress),
             worktree_here: false,
             watcher_pid: None,
@@ -1012,7 +1035,9 @@ impl TaskRow {
             schedule::TaskTimingState::Upcoming(next) => ui::until_label(next, now),
             schedule::TaskTimingState::Listening { .. }
             | schedule::TaskTimingState::Watching { .. } => self.head.clone(),
-            _ => timing.condition_label().unwrap_or_else(|| "—".into()),
+            state => wake_view::with_resets(state, &self.window_resets)
+                .condition_label_with(timing.unread())
+                .unwrap_or_else(|| "—".into()),
         }
     }
 
