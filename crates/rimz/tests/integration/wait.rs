@@ -3,9 +3,9 @@
 #[cfg(target_os = "linux")]
 use crate::common::wait::wait_for_loop_runs_to_exit;
 use crate::common::wait::{
-    agent_wait, agent_wait_at, loop_instances_path, publish_claude_5h, publish_claude_5h_resetting,
-    register_agent, register_agent_with_owner, register_calling_agent,
-    register_calling_agent_with_launch, seed_signal_wait, wait_instances, wait_ok,
+    agent_wait, agent_wait_at, loop_instances_path, publish_claude_5h, register_agent,
+    register_agent_with_owner, register_calling_agent, register_calling_agent_with_launch,
+    seed_signal_wait, wait_instances, wait_ok,
 };
 use crate::common::{Env, canonical, retained_runs_refusal, zellij_trace_shim};
 use rimz::agents::{AgentLifecycleObservation, AskKind, LaunchParams, LifecycleSignal};
@@ -1771,8 +1771,7 @@ fn wait_check_rejects_shapes_without_a_meaning() {
         ),
         (
             vec!["wait", "--check", "true", "--pid", "123"],
-            "choose exactly one wait trigger: --in, --at, --after-reset, --when, --pid, --check, \
-             --file, or --run",
+            "choose exactly one wait trigger: --in, --at, --when, --pid, --check, --file, or --run",
         ),
         (vec!["wait", "--check", " "], "--check needs a command"),
         (
@@ -3459,7 +3458,7 @@ fn wait_refusal(env: &Env, args: &[&str]) -> String {
 }
 
 #[test]
-fn wait_at_after_reset_and_when_arm_one_shot_self_waits_in_the_arming_checkout() {
+fn wait_at_and_when_arm_one_shot_self_waits_in_the_arming_checkout() {
     let env = Env::new();
     env.record(&env.project_root);
     let Some(linked) = linked_worktree(&env) else {
@@ -3471,7 +3470,6 @@ fn wait_at_after_reset_and_when_arm_one_shot_self_waits_in_the_arming_checkout()
     let mut names = Vec::new();
     for (args, kind, label) in [
         (&["--at", "23:59"][..], "schedule", "clock"),
-        (&["--after-reset", "5h"][..], "schedule", "reset"),
         (
             &["--when", "pr=merged", "--when", "ci=passed"][..],
             "condition",
@@ -3540,11 +3538,6 @@ fn wait_at_after_reset_and_when_arm_one_shot_self_waits_in_the_arming_checkout()
         }
         names.push(name);
     }
-    let reset = wait_instances(&env).0[&names[1]].fire_at.unwrap();
-    assert!(
-        reset > jiff::Timestamp::now() + jiff::SignedDuration::from_mins(90),
-        "--after-reset fires at the window's reset, about 2h ahead: {reset}"
-    );
     let report: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"])).unwrap();
     assert_eq!(report["agent"]["status"], "sleeping", "{report}");
@@ -3583,24 +3576,6 @@ fn wait_receipts_name_the_clock_time_the_window_and_the_condition_reading() {
         "{at:?}"
     );
     assert!(at[0].ends_with(" 23:59 → @planner#main"), "{at:?}");
-    publish_claude_5h(&env, 30);
-    let reset = first_lines(&["--after-reset", "5h"]);
-    assert!(
-        reset[0].starts_with("armed wait-") && reset[0].contains(": once at "),
-        "{reset:?}"
-    );
-    assert!(
-        reset[1].starts_with("  window: claude 5h · 70% left · resets ")
-            && reset[1].ends_with(" · read from the room's current claude account"),
-        "{reset:?}"
-    );
-    publish_claude_5h_resetting(&env, 0, jiff::SignedDuration::from_hours(5));
-    let fresh = first_lines(&["--after-reset", "5h"]);
-    assert_eq!(
-        fresh[1],
-        "  window: claude 5h · not started · 100% left · fires on the next scheduler tick · read \
-         from the room's current claude account"
-    );
     let forge = first_lines(&["--when", "pr=merged"]);
     assert!(
         forge[0].starts_with("armed wait-")
@@ -3659,10 +3634,6 @@ fn wait_when_twice_names_the_existing_wait_while_other_triggers_arm_again() {
 fn arm_and_fire(env: &Env, trigger: &str, command: impl Fn() -> std::process::Command) -> String {
     let args: &[&str] = match trigger {
         "at" => &["--at", "23:59"],
-        "after-reset" => {
-            publish_claude_5h_resetting(env, 0, jiff::SignedDuration::from_hours(5));
-            &["--after-reset", "5h"]
-        }
         _ => {
             publish_claude_5h(env, 10);
             &["--when", "window.5h.left >= 40"]
@@ -3683,7 +3654,6 @@ fn arm_and_fire(env: &Env, trigger: &str, command: impl Fn() -> std::process::Co
     let name = receipt["name"].as_str().unwrap().to_owned();
     let passes: &[&[&str]] = match trigger {
         "at" => &[&["loop", "run", &name]],
-        "after-reset" => &[&["loop", "tick"]],
         _ => &[&["loop", "tick"], &["loop", "tick"]],
     };
     for (index, pass) in passes.iter().enumerate() {
@@ -3712,7 +3682,7 @@ fn arm_and_fire(env: &Env, trigger: &str, command: impl Fn() -> std::process::Co
 
 #[test]
 fn new_self_waits_steer_a_wait_carrying_label_clock_and_readings() {
-    for trigger in ["at", "after-reset", "when"] {
+    for trigger in ["at", "when"] {
         let env = Env::new();
         env.record(&env.project_root);
         env.install_agent_hooks("claude");
@@ -4011,7 +3981,7 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
 
 #[test]
 fn new_self_waits_park_with_any_gate_at_an_open_prompt() {
-    for trigger in ["at", "after-reset", "when"] {
+    for trigger in ["at", "when"] {
         let env = Env::new();
         let pane_fixture = register_waiting_caller(&env);
         arm_and_fire(&env, trigger, || traced_wait(&env, &pane_fixture));
@@ -4052,15 +4022,6 @@ fn new_wait_triggers_refuse_in_words_true_of_a_wait() {
             "--at `2020-01-01 09:00` is in the past; choose a later time",
         ),
         (
-            &["--after-reset", "3h"][..],
-            "unknown window span `3h`; use 5h or 7d",
-        ),
-        (
-            &["--after-reset", "5h"][..],
-            "no current claude 5h window reading; open the room's sidebar or run `rimz accounts \
-             --refresh`",
-        ),
-        (
             &["--when", "window.5h.left >= 40"][..],
             "no current claude 5h window reading; open the room's sidebar or run `rimz accounts \
              --refresh`",
@@ -4087,11 +4048,7 @@ fn new_wait_triggers_take_exactly_one_trigger_and_no_watch_flags() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
-    let new: [&[&str]; 3] = [
-        &["--at", "09:00"],
-        &["--after-reset", "5h"],
-        &["--when", "pr=merged"],
-    ];
+    let new: [&[&str]; 2] = [&["--at", "09:00"], &["--when", "pr=merged"]];
     let old: [&[&str]; 5] = [
         &["--in", "5m"],
         &["--pid", "123"],
@@ -4105,8 +4062,8 @@ fn new_wait_triggers_take_exactly_one_trigger_and_no_watch_flags() {
             let stderr = wait_refusal(&env, &args);
             assert!(
                 stderr.contains(
-                    "choose exactly one wait trigger: --in, --at, --after-reset, --when, --pid, \
-                     --check, --file, or --run"
+                    "choose exactly one wait trigger: --in, --at, --when, --pid, --check, --file, \
+                     or --run"
                 ),
                 "{args:?}: {stderr}"
             );

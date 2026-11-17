@@ -199,7 +199,6 @@ fn receipts_name_where_each_fire_runs() {
             shape.action().unwrap(),
             &[],
             shape.trigger().as_ref().unwrap(),
-            None,
         )
         .unwrap();
         let text = String::from_utf8(out).unwrap();
@@ -233,7 +232,7 @@ fn each_worktree_with_when_needs_repeat() {
 }
 
 /// `-w` takes the name a launch's own `-w` takes, refuses `--each-worktree` for every kind,
-/// and is stored as the row's `worktree`; `--after-reset` no longer needs `--provider` typed.
+/// and is stored as the row's `worktree`.
 #[test]
 fn the_loops_worktree_is_validated_like_a_launchs_and_stored_on_the_row() {
     assert_eq!(
@@ -265,7 +264,6 @@ fn the_loops_worktree_is_validated_like_a_launchs_and_stored_on_the_row() {
     )
     .unwrap();
     assert_eq!(entry.worktree.as_deref(), Some("feat/x"));
-    assert!(parse(&["--after-reset", "5h", "--agent", "worker"]).is_ok());
 }
 
 fn launch(worktree: Option<&str>, prompt: bool, print: Option<Option<u64>>) -> LoopLaunch {
@@ -421,7 +419,12 @@ fn window_terms_default_to_the_launchs_kind_and_account() {
         }
     );
     assert_eq!(
-        source(&["--after-reset", "5h"], Agent, &parsed(&["claude"], None)).unwrap(),
+        source(
+            &["--when", "window.7d.left>=80"],
+            Agent,
+            &parsed(&["claude"], None)
+        )
+        .unwrap(),
         WindowSource {
             provider: Some("claude".into()),
             provider_from_launch: true,

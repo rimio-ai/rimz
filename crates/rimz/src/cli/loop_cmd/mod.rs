@@ -33,9 +33,7 @@ use rimz::harness::schedule::run_log::{
     RunStage, RunTransition,
 };
 use rimz::harness::schedule::shell_task::SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL;
-use rimz::harness::schedule::window::{
-    AfterReset, after_reset as resolve_after_reset, window_condition_provider,
-};
+use rimz::harness::schedule::window::window_condition_provider;
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
     arming::{self, ArmState, Arming, DisabledReason},
@@ -204,14 +202,6 @@ struct AddArgs {
         conflicts_with_all = ["at", "every", "cron", "signal"]
     )]
     in_after: Option<String>,
-    /// Fire once after the next reset of a 5h or 7d window: --provider's, else the kind an
-    /// agent task's launch runs on.
-    #[arg(
-        long = "after-reset",
-        value_name = "5h|7d",
-        conflicts_with_all = ["at", "every", "cron", "in_after", "signal", "when", "until"]
-    )]
-    after_reset: Option<rimz::agents::WindowSpan>,
     /// Fire when a signal with this name is emitted.
     #[arg(
         long,
@@ -240,8 +230,8 @@ struct AddArgs {
     /// Write the task to the project's `.rimz/config.toml` instead of per-machine loop.toml.
     #[arg(long)]
     project: bool,
-    /// Provider whose usage windows a `window.*` condition or --after-reset reads; an agent
-    /// task defaults to the kind its launch runs on.
+    /// Provider whose usage windows a `window.*` condition reads; an agent task defaults to
+    /// the kind its launch runs on.
     #[arg(long, value_name = "KIND")]
     provider: Option<String>,
     /// Named account whose windows the condition reads; an agent task defaults to its launch's

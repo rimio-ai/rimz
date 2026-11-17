@@ -20,9 +20,9 @@ use rimz::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
 use rimz::store::message::MessageStatus;
 use rimz::store::run::{RunRecord, RunStatus};
 
+use crate::common::wait::publish_claude_5h;
 #[cfg(target_os = "linux")]
 use crate::common::wait::wait_for_loop_runs_to_exit;
-use crate::common::wait::{publish_claude_5h, publish_claude_5h_resetting};
 use crate::common::{Env, ScrubSessionEnvExt, canonical, retained_runs_refusal};
 #[path = "loop_kinds.rs"]
 mod kind_tests;
@@ -1217,98 +1217,6 @@ fn agents_team_cwd_subdirectory_refuses_root_checkout_bindings() {
         error.contains("root checkout needs an explicit scope"),
         "{error}"
     );
-}
-
-#[test]
-fn after_reset_fires_once_at_the_window_reset_and_removes_its_row() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-reset", "feature-loop");
-    let add = |name: &str, extra: &[&str]| {
-        calling_loop(&env, "sess-reset")
-            .args(["loop", "add", name, "--after-reset", "5h"])
-            .args(extra)
-            .args(["--", "true"])
-            .output()
-            .unwrap()
-    };
-    for (extra, expected) in [
-        (&[][..], "--provider"),
-        (
-            &["--provider", "claude", "--project"][..],
-            "--project tasks cannot use --after-reset",
-        ),
-        (
-            &["--provider", "claude", "--in", "5m"][..],
-            "cannot be used with",
-        ),
-    ] {
-        let refused = add("refused", extra);
-        let stderr = String::from_utf8_lossy(&refused.stderr);
-        assert!(
-            !refused.status.success() && stderr.contains(expected),
-            "{extra:?}: {stderr}"
-        );
-    }
-    let refused = add("refused", &["--provider", "claude"]);
-    assert!(
-        String::from_utf8_lossy(&refused.stderr)
-            .contains("no current claude 5h window reading; open the room's sidebar"),
-        "no cache: {}",
-        String::from_utf8_lossy(&refused.stderr)
-    );
-    publish_claude_5h_resetting(&env, 30, SignedDuration::from_mins(-1));
-    let refused = add("refused", &["--provider", "claude"]);
-    assert!(
-        String::from_utf8_lossy(&refused.stderr).contains("no current claude 5h window reading"),
-        "expired cache: {}",
-        String::from_utf8_lossy(&refused.stderr)
-    );
-    assert!(
-        read_loop_instances(&env).0.is_empty(),
-        "a refusal writes nothing"
-    );
-
-    publish_claude_5h(&env, 30);
-    let started = add("later", &["--provider", "claude"]);
-    let receipt = String::from_utf8_lossy(&started.stdout);
-    assert!(
-        started.status.success(),
-        "{}",
-        String::from_utf8_lossy(&started.stderr)
-    );
-    for line in [
-        "trigger: fires once after the next claude 5h reset\n",
-        "window: claude 5h · 70% left · resets ",
-        "next fire: ",
-    ] {
-        assert!(receipt.contains(line), "{line}: {receipt}");
-    }
-    assert!(read_loop_instances(&env).0["later"].fire_at.is_some());
-    loop_ok(&env, &["loop", "tick"]);
-    loop_ok(&env, &["loop", "tick"]);
-    assert!(read_loop_run_records(&env).is_empty());
-    assert!(read_loop_instances(&env).0.contains_key("later"));
-
-    publish_claude_5h_resetting(&env, 0, SignedDuration::from_hours(5));
-    let fresh = add("now", &["--provider", "claude"]);
-    let receipt = String::from_utf8_lossy(&fresh.stdout);
-    for line in [
-        "trigger: fires once after the next claude 5h reset\n",
-        "window: claude 5h · not started · 100% left\n",
-        "next fire: the next scheduler tick, since the window has not started\n",
-    ] {
-        assert!(receipt.contains(line), "{line}: {receipt}");
-    }
-    loop_ok(&env, &["loop", "tick"]);
-    wait_for_loop_run_records(&env, "the fire and its spent row", |records| {
-        !records.is_empty() && !read_loop_instances(&env).0.contains_key("now")
-    });
-    assert_eq!(last_loop_record(&env).task, "now");
-    let rows = read_loop_instances(&env).0;
-    assert!(!rows.contains_key("now"));
-    assert!(rows.contains_key("later"));
 }
 
 #[test]

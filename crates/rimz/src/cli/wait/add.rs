@@ -9,9 +9,7 @@ use rimz::harness::schedule::arm::{
     ArmOutcome, DeliveryName, DeliveryPrompt, DeliveryProvenance, DeliverySpec, DeliveryTrigger,
     SubscriptionLifetime, arm_delivery, duration_label,
 };
-use rimz::harness::schedule::window::{
-    AfterReset, WindowRefusal, after_reset, window_condition_provider,
-};
+use rimz::harness::schedule::window::{WindowRefusal, window_condition_provider};
 use rimz::harness::schedule::{self, ScheduleErr, Trigger};
 use rimz::harness::when::WhenExpr;
 
@@ -72,7 +70,6 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         .map(|login| login.key());
         Ok((runtime, login))
     };
-    let mut window = None;
     let mut condition = None;
     let (trigger, description) = if let Some(delay) = args.in_after {
         (
@@ -86,23 +83,6 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             fire_at: Some(fire_at),
             ..TaskEntry::default()
         })?
-    } else if let Some(span) = args.after_reset {
-        let (runtime, login) = room_login()?;
-        let reset = after_reset(
-            span,
-            Some(agent.kind.as_str()),
-            login.as_ref(),
-            &ctx.workspace.worktree_root,
-            &runtime,
-            Timestamp::now(),
-        )
-        .map_err(window_refusal)?;
-        let trigger = one_shot_trigger(TaskEntry {
-            fire_at: Some(reset.fire_at),
-            ..TaskEntry::default()
-        })?;
-        window = Some(reset);
-        trigger
     } else if !args.when.is_empty() {
         let stages = rimz::harness::when::condition::condition_stages(&ctx.workspace.project_root)?;
         let expr = WhenExpr::parse_with_stages(&args.when, Some(&stages))
@@ -221,9 +201,6 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         "armed {name}: {description} → {}{timeout}",
         target.handle
     )?;
-    if let Some(reset) = &window {
-        write_window(&mut out, reset)?;
-    }
     if let Some(expr) = &condition {
         write_condition_now(&mut out, task.entry(), expr)?;
     }
@@ -267,34 +244,10 @@ fn window_refusal(error: WindowRefusal) -> anyhow::Error {
     match error {
         WindowRefusal::ManagedAccount { kind } => anyhow!(
             "{kind} chooses its account per launch, so the room has no {kind} account whose \
-             windows a wait can read; --after-reset and window.* terms do not support {kind}"
+             windows a wait can read; window.* terms do not support {kind}"
         ),
         other => other.into(),
     }
-}
-
-fn write_window(out: &mut impl Write, reset: &AfterReset) -> Result<()> {
-    let left = reset.left.map_or_else(
-        || "usage unknown".to_owned(),
-        |left| format!("{left}% left"),
-    );
-    let when = if reset.started {
-        format!(
-            "{left} · resets {}",
-            reset
-                .resets_at
-                .to_zoned(MachineConfig::load_lenient().time_zone())
-                .strftime("%Y-%m-%d %H:%M")
-        )
-    } else {
-        format!("not started · {left} · fires on the next scheduler tick")
-    };
-    writeln!(
-        out,
-        "  window: {} {} · {when} · read from the room's current {} account",
-        reset.kind, reset.span, reset.kind
-    )?;
-    Ok(())
 }
 
 fn write_condition_now(out: &mut impl Write, entry: &TaskEntry, expr: &WhenExpr) -> Result<()> {
@@ -318,11 +271,9 @@ fn validate_shape(args: &WaitArgs) -> Result<()> {
             "`--timeout` is now `--check-in`: it sends one still-running notice and never stops the command"
         );
     }
-    let clock_or_condition =
-        args.at.is_some() || args.after_reset.is_some() || !args.when.is_empty();
+    let clock_or_condition = args.at.is_some() || !args.when.is_empty();
     if usize::from(args.in_after.is_some())
         + usize::from(args.at.is_some())
-        + usize::from(args.after_reset.is_some())
         + usize::from(!args.when.is_empty())
         + usize::from(args.pid.is_some())
         + usize::from(args.check.is_some())
@@ -331,8 +282,7 @@ fn validate_shape(args: &WaitArgs) -> Result<()> {
         != 1
     {
         bail!(
-            "choose exactly one wait trigger: --in, --at, --after-reset, --when, --pid, --check, \
-             --file, or --run"
+            "choose exactly one wait trigger: --in, --at, --when, --pid, --check, --file, or --run"
         );
     }
     if args
@@ -401,7 +351,7 @@ mod tests {
         assert_eq!(
             message,
             "qwen chooses its account per launch, so the room has no qwen account whose windows \
-             a wait can read; --after-reset and window.* terms do not support qwen"
+             a wait can read; window.* terms do not support qwen"
         );
         for wrong in ["before the run", "window triggers", "task"] {
             assert!(!message.contains(wrong), "{message}");

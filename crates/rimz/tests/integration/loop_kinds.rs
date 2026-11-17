@@ -2339,7 +2339,7 @@ fn window_terms_default_to_the_kind_an_agent_task_launches() {
     );
     let refusals: [&[&str]; 2] = [
         &["--team", "forge", "--when", "window.5h.left >= 40"],
-        &["--after-reset", "5h", "--", "true"],
+        &["--when", "window.7d.left >= 80", "--", "true"],
     ];
     for flags in refusals {
         let output = env

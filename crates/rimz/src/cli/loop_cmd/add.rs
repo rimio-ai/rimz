@@ -44,23 +44,6 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
         &runtime,
         Timestamp::now(),
     )?;
-    let after_reset = args
-        .after_reset
-        .map(|span| {
-            resolve_after_reset(
-                span,
-                provider.as_deref(),
-                login_key.as_ref(),
-                &entry.resolved_root(),
-                &runtime,
-                Timestamp::now(),
-            )
-        })
-        .transpose()?;
-    if let Some(reset) = &after_reset {
-        entry.fire_at = Some(reset.fire_at);
-        entry.provider = Some(reset.kind.clone());
-    }
     if entry.provider.is_some() {
         entry.account.clone_from(&window.account);
     }
@@ -97,14 +80,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
             .then(|| window_source_line(&window))
             .flatten(),
     ];
-    write_add_feedback(
-        &mut out,
-        &entry,
-        action,
-        &read_back,
-        parsed,
-        after_reset.as_ref(),
-    )?;
+    write_add_feedback(&mut out, &entry, action, &read_back, parsed)?;
     if let Some(note) = idle_note(&args, &launch) {
         writeln!(out, "{note}")?;
     }
@@ -247,7 +223,6 @@ fn validate_add_args(args: &AddArgs) -> Result<()> {
                 args.at.is_some() && args.every.is_none(),
                 "--at without --every",
             ),
-            (args.after_reset.is_some(), "--after-reset"),
         ]
         .into_iter()
         .filter_map(|(used, flag)| used.then_some(flag))
@@ -267,10 +242,6 @@ fn validate_add_args(args: &AddArgs) -> Result<()> {
     }
     let project_error = args.project.then(|| {
         [
-            (
-                args.after_reset.is_some(),
-                "--project tasks cannot use --after-reset; its reset instant is machine state",
-            ),
             (
                 !args.when.is_empty(),
                 "--project tasks cannot use --when yet; add it without --project",
@@ -612,7 +583,6 @@ fn write_add_feedback(
     action: &TaskAction,
     read_back: &[Option<String>],
     parsed: &schedule::ParsedTrigger,
-    after_reset: Option<&AfterReset>,
 ) -> Result<()> {
     match entry.timeout.as_deref() {
         Some(timeout) => writeln!(
@@ -638,47 +608,13 @@ fn write_add_feedback(
     } else {
         ""
     };
-    if let Some(reset) = after_reset {
-        writeln!(
-            out,
-            "trigger: fires once after the next {} {} reset",
-            reset.kind, reset.span
-        )?;
-    } else if matches!(parsed.trigger, schedule::Trigger::Condition { .. }) {
+    if matches!(parsed.trigger, schedule::Trigger::Condition { .. }) {
         writeln!(out, "trigger: {}{suffix}", parsed.describe())?;
         condition::write_receipt(out, entry, parsed)?;
     } else {
         writeln!(out, "trigger: fires {}{suffix}", parsed.describe())?;
     }
     let zone = MachineConfig::load_lenient().time_zone();
-    if let Some(reset) = after_reset {
-        let left = reset.left.map_or_else(
-            || "usage unknown".to_owned(),
-            |left| format!("{left}% left"),
-        );
-        if !reset.started {
-            writeln!(
-                out,
-                "window: {} {} · not started · {left}",
-                reset.kind, reset.span
-            )?;
-            writeln!(
-                out,
-                "next fire: the next scheduler tick, since the window has not started"
-            )?;
-            return Ok(());
-        }
-        writeln!(
-            out,
-            "window: {} {} · {left} · resets {}",
-            reset.kind,
-            reset.span,
-            reset
-                .resets_at
-                .to_zoned(zone.clone())
-                .strftime("%Y-%m-%d %H:%M")
-        )?;
-    }
     if let Some(next) = first_next_fire(parsed) {
         let local = next.to_zoned(zone);
         writeln!(
@@ -709,9 +645,8 @@ fn window_source(
     launch: &LoopLaunch,
 ) -> Result<WindowSource> {
     let agent = kind == rimz::config::LaunchKind::Agent;
-    let reads_windows = args.after_reset.is_some()
-        || rimz::harness::when::WhenExpr::parse(&args.when)
-            .is_ok_and(|expr| expr.window_spans().next().is_some());
+    let reads_windows = rimz::harness::when::WhenExpr::parse(&args.when)
+        .is_ok_and(|expr| expr.window_spans().next().is_some());
     let (provider, provider_from_launch) = match (&args.provider, launch.kinds.as_slice()) {
         (Some(provider), _) => (Some(provider.clone()), false),
         (None, [kind]) if agent && reads_windows => (Some(kind.clone()), true),

@@ -77,7 +77,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 
 - `rimz agents -p` is `claude -p` for every agent that can run headless, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows.
 - `rimz loop` runs a command on a clock (calendar, interval, or cron), on a signal, or when a condition holds: a test suite, a script, or a `rimz agents` launch that starts an agent. RimZ emits CI, pull request, agent, and team signals itself, and anything else can emit its own.
-- `rimz wait` lets an agent arm its own timer, clock time, window reset, state condition, command, process, polled check, or file watch and end its turn instead of sleeping.
+- `rimz wait` lets an agent arm its own timer, clock time, state condition, command, process, polled check, or file watch and end its turn instead of sleeping.
 - A rate-limit pause resumes the moment the budget window resets, transient API overload retries on a backoff ramp, and smart compaction asks a filling turn to wrap up before compacting and continuing, so agents keep working while you are gone.
 - Dollar budgets cap one turn, one agent, the room, or a provider account. A turn that crosses a cap is stopped and parked.
 - Notification handlers run your own command the moment a row needs eyes: a push to your phone, or a script that answers the routine prompt for you.

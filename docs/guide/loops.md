@@ -186,18 +186,12 @@ A RimZ-owned worktree is one RimZ created, with `rimz worktree new` or a launch'
 A long refactor that starts in a nearly spent 5-hour usage window stalls halfway. Start it when the window has room instead. `window.5h.left` and `window.7d.left` read the percent left in a provider's 5-hour or 7-day window:
 
 ```sh
-rimz loop add big-refactor --when 'window.5h.left>=60' --agent claude -- "Refactor the storage layer and leave the branch green."
+rimz loop add big-refactor --when 'window.5h.left>=80' --agent claude -- "Refactor the storage layer and leave the branch green."
 ```
 
 An agent task reads the windows of the kind it launches, on the account its launch names, and the receipt says so on a `windows:` line. `--provider` names the agent kind whose windows the condition reads for any other task, or overrides that default. `--account` picks one of its [named accounts](./accounts.md). Neither picks the account the command's own launches use. `add` reads the window first and refuses when it cannot, and the [conditions reference](../reference/cli/loop.md#conditions) lists those cases.
 
-When the moment you want is the reset itself, `--after-reset 5h` (or `7d`) fires once when that window next resets, then removes the task. A window that has not started yet has no reset to wait for, so the task fires on the next tick:
-
-```sh
-rimz loop add after-limit --after-reset 5h --agent claude -- "The 5h window has reset. Pick the refactor back up."
-```
-
-The receipt shows the window's current percent left and when it resets, or that it has not started. [After a reset](../reference/cli/loop.md#after-a-reset) covers a reset that passes while nothing keeps time.
+Set the threshold to the room the work needs. The task fires as soon as the window has that much room, which may be before the window resets. A threshold of 100 can wait a whole window: one prompt spent from the fresh window before the next tick keeps it below 100 until the next reset.
 
 ## See what a task did
 
@@ -276,7 +270,7 @@ every = "mon"
 
 A task holds the keys `rimz loop add` writes, plus a few you set by hand, such as `dir`. A task with a key RimZ does not know does not fire, and `rimz loop list` shows it under NEEDS YOU as `invalid` with the reason. Delete it and add it again with `rimz loop add`. The other tasks in the file keep firing.
 
-A task that fires once (`--at`, `--in`, `--after-reset`, or a `--signal` or `--when` task without `--repeat`) belongs to the room. It lives in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`, beside the waits agents arm, so start the room with `rimz start` before you add one. It removes itself after its fire. [Where tasks are stored](../reference/cli/loop.md#where-tasks-are-stored) covers name clashes between the files.
+A task that fires once (`--at`, `--in`, or a `--signal` or `--when` task without `--repeat`) belongs to the room. It lives in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`, beside the waits agents arm, so start the room with `rimz start` before you add one. It removes itself after its fire. [Where tasks are stored](../reference/cli/loop.md#where-tasks-are-stored) covers name clashes between the files.
 
 `--project` writes the task into the project config, `<root>/.rimz/config.toml`, so it travels with the repository. Such a task must repeat (`--every`, `--cron`, or `--signal` with `--repeat`) and always runs at the project root. A committed task runs commands on the machine of whoever pulls it, so it runs only when both of these hold:
 
@@ -298,7 +292,6 @@ The previous sections schedule work from your shell. An agent needs its own alar
 ```sh
 rimz wait --in 30m
 rimz wait --at 14:30
-rimz wait --after-reset 5h
 rimz wait --when pr=merged
 rimz wait --pid 16776
 rimz wait --check 'nc -z localhost 3000'
@@ -330,7 +323,6 @@ Each task names one trigger and one command after `--`.
 | Raw cron | `--cron`, a five-field expression with names such as `mon-fri` and steps, or a macro such as `@daily` | per the expression | `--cron "*/15 * * * *"` |
 | Signal | `--signal <name-or-family>`, narrowed with `--match key=value` ([above](#fire-on-a-signal)) | once, or on every delivering signal with `--repeat` | `--signal ci.failed`, `--signal 'ci.*'` |
 | Condition | `--when <expr>`, held with `--for <duration>` ([above](#wait-for-done-and-green)) | once, or each time it turns true again with `--repeat` | `--when 'pr[feat-x]=merged'` |
-| After a reset | `--after-reset 5h` or `7d`, reading an agent task's kind or `--provider` ([above](#wait-for-room-in-a-usage-window)) | fires once, then the task removes itself | `--after-reset 5h --provider claude` |
 
 `--every 1d` is an interval: it fires a day after the last fire and drifts with it. `--every day --at 07:00` fires at 07:00 each day. Calendar times, `--at`, and cron use the top-level `timezone` setting, or the system zone when it is unset. Every command and flag is in the [loop CLI reference](../reference/cli/loop.md).
 
