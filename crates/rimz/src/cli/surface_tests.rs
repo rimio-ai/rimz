@@ -200,6 +200,7 @@ fn hot_cli_arguments_match_full_tree() {
         ["hooks", "feed"],
         ["hooks", "apply"],
         ["statusline", "feed"],
+        ["mod", "feed"],
     ] {
         let full = full
             .find_subcommand(command)

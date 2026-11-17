@@ -788,6 +788,17 @@ pub struct SubagentObservation {
     pub context: SubagentContext,
 }
 
+/// One report of a provider mod RimZ installs, as the adapter reads it: the
+/// session it came from, the versions it checks in with, and one observation
+/// per child its agent list carries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModReport {
+    pub session_id: String,
+    pub mod_version: String,
+    pub provider_version: Option<String>,
+    pub subagents: Vec<SubagentObservation>,
+}
+
 /// The provider account/plan a session authenticates against. The dashboard
 /// reads account-level facts from the freshest session or the login probe,
 /// never paints them per row. Delegated clients also carry each backing

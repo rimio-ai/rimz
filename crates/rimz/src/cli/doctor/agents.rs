@@ -331,11 +331,17 @@ pub(super) fn collect_agent_rollup(
             };
         }
     };
-    let live_keys = projection
-        .agents
-        .iter()
-        .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
-        .collect::<std::collections::BTreeSet<_>>();
+    let live = LiveSessions {
+        keys: projection
+            .agents
+            .iter()
+            .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+            .collect(),
+        mod_checked_in: rimz::store::mod_checkin::read_all(store.runtime_paths())
+            .into_iter()
+            .map(|record| (record.kind, record.agent_id))
+            .collect(),
+    };
     if audit {
         projection = match store.runtime_projection(rimz::RuntimeScope::Audit) {
             Ok(projection) => projection,
@@ -388,8 +394,32 @@ pub(super) fn collect_agent_rollup(
         &reader,
         accounts,
         audit,
-        &live_keys,
+        &live,
     )
+}
+
+type SessionKey = (rimz::ids::AgentKind, rimz::ids::AgentSessionId);
+
+/// The sessions live in the room, and the sessions the RimZ mod checked in.
+#[derive(Default)]
+struct LiveSessions {
+    keys: std::collections::BTreeSet<SessionKey>,
+    mod_checked_in: std::collections::BTreeSet<SessionKey>,
+}
+
+impl LiveSessions {
+    /// A live, registered Claude session the mod never reported for, a child
+    /// launched through `rimz subagents` included. A provider-native child
+    /// runs inside its parent's session, and a provisional row has no session
+    /// yet. Only Claude ships a RimZ mod.
+    fn mod_missing(&self, agent: &rimz::agents::AgentState) -> bool {
+        let key = (agent.kind.clone(), agent.agent_id.clone());
+        agent.kind.as_str() == "claude"
+            && !agent.is_provider_subagent()
+            && !agent.agent_id.is_provisional()
+            && self.keys.contains(&key)
+            && !self.mod_checked_in.contains(&key)
+    }
 }
 
 fn project_agent_rollup(
@@ -399,7 +429,7 @@ fn project_agent_rollup(
     reader: &rimz::address::AddressContext,
     accounts: &mut Probe<Accounts>,
     audit: bool,
-    live_keys: &std::collections::BTreeSet<(rimz::ids::AgentKind, rimz::ids::AgentSessionId)>,
+    live: &LiveSessions,
 ) -> AgentRollup {
     let mut counts = AgentCounts::default();
     let mut agents: Vec<_> = agents.iter().collect();
@@ -413,10 +443,13 @@ fn project_agent_rollup(
         .into_iter()
         .filter_map(|agent| {
             let historical = agent.ended_at.is_some()
-                || !live_keys.contains(&(agent.kind.clone(), agent.agent_id.clone()));
+                || !live
+                    .keys
+                    .contains(&(agent.kind.clone(), agent.agent_id.clone()));
             let compaction_lowered = (!historical)
                 .then(|| agent_compaction_lowered(agent))
                 .flatten();
+            let mod_missing = !historical && live.mod_missing(agent);
             let agent = if historical {
                 agent
             } else {
@@ -445,16 +478,18 @@ fn project_agent_rollup(
             if !audit
                 && !matches!(status, AgentStatus::Failed | AgentStatus::Paused)
                 && compaction_lowered.is_none()
+                && !mod_missing
             {
                 return None;
             }
             let handle = rimz::address::paste_address(agent, snapshot, reader);
-            let account = agent.login_key().to_string();
+            let account = agent.login_key();
+            let account_key = account.to_string();
             let usage = match accounts {
                 Probe::Ready(accounts) => accounts
                     .rows
                     .iter_mut()
-                    .find(|row| format!("{}@{}", row.kind, row.name) == account)
+                    .find(|row| format!("{}@{}", row.kind, row.name) == account_key)
                     .and_then(|row| row.usage.as_mut()),
                 Probe::Unavailable { .. } => None,
             };
@@ -481,6 +516,7 @@ fn project_agent_rollup(
                 turn_error: agent.displayed_turn_error_label(snapshot.now),
                 attributed_to_account,
                 compaction_lowered,
+                mod_missing,
                 restartable: agent.pane.is_some() && agent.ended_at.is_none(),
                 historical,
             })
@@ -967,498 +1003,4 @@ pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn compaction_agent(
-        window: u64,
-        count: u64,
-        max_window: Option<u64>,
-    ) -> rimz::agents::AgentState {
-        let mut agent = rimz::testkit::agent_state("codex", "compaction", jiff::Timestamp::now());
-        agent.record = Some(Box::new(rimz::agents::LaunchRecord {
-            auto_compact: Some(count),
-            ..Default::default()
-        }));
-        agent.context = Some(rimz::agents::AgentContext {
-            model_id: Some("gpt-6-sol".into()),
-            model_context_limits: Some(rimz::agents::context::ModelContextLimits {
-                model: "gpt-6-sol".into(),
-                max_window,
-                usable_percent: Some(95),
-                own_compact_limit: None,
-            }),
-            tokens: Some(rimz::agents::AgentTokenUsage {
-                context_window_size: Some(window),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        agent
-    }
-
-    #[test]
-    fn opencode_never_warns_about_an_unsupported_compaction_count() {
-        let mut agent = compaction_agent(983_010, 2_000_000, None);
-        agent.kind = rimz::ids::AgentKind::new_unchecked("opencode");
-        agent.usage.context_capacity = Some(1_048_576);
-        assert!(agent_compaction_lowered(&agent).is_none());
-    }
-
-    #[test]
-    fn compaction_lowered_fix_raises_a_smaller_or_unknown_window() {
-        let env =
-            rimz::agents::session_login_env(&rimz::ids::AgentKind::new_unchecked("codex"), None)
-                .unwrap();
-        let config = rimz::agents::find_definition("codex")
-            .unwrap()
-            .config_home(&env)
-            .unwrap()
-            .join("config.toml");
-        for max in [Some(872_000), None] {
-            let agent = compaction_agent(258_400, 372_000, max);
-            assert_eq!(
-                agent_compaction_lowered(&agent).map(|lowered| lowered.fix),
-                Some(format!(
-                    "set `model_context_window` in {}",
-                    config.display()
-                ))
-            );
-        }
-    }
-
-    #[test]
-    fn compaction_lowered_fix_reduces_the_count_at_model_capacity() {
-        let agent = compaction_agent(828_400, 1_000_000, Some(872_000));
-        assert_eq!(
-            agent_compaction_lowered(&agent).map(|lowered| lowered.fix),
-            Some(
-                "lower `auto-compact` to 784800 or less where this launch sets it: its team \
-                 role, its profile, else `[harness] auto_compact`"
-                    .into()
-            )
-        );
-        let mut profiled = agent;
-        profiled.profile = Some("big".into());
-        assert_eq!(
-            agent_compaction_lowered(&profiled).map(|lowered| lowered.fix),
-            Some(
-                "lower `auto-compact` to 784800 or less where this launch sets it: its team \
-                 role, the `big` profile, else `[harness] auto_compact`"
-                    .into()
-            )
-        );
-    }
-
-    #[test]
-    fn compaction_lowered_keeps_warning_when_account_path_is_unknown() {
-        let mut agent = compaction_agent(258_400, 372_000, Some(872_000));
-        agent.login = Some("missing-compaction-account".parse().unwrap());
-        assert_eq!(
-            agent_compaction_lowered(&agent).map(|lowered| (lowered.effective, lowered.fix)),
-            Some((
-                244_800,
-                "set `model_context_window` in the codex@missing-compaction-account account's config.toml"
-                    .into(),
-            ))
-        );
-    }
-
-    #[test]
-    fn compaction_lowered_keeps_live_healthy_rows_and_uses_the_latest_sidecar() {
-        let now = jiff::Timestamp::now();
-        let mut small = rimz::testkit::agent_state("codex", "small-window", now);
-        small.name = Some("small-window".into());
-        small.name_explicit = true;
-        small.record = Some(Box::new(rimz::agents::LaunchRecord {
-            auto_compact: Some(372_000),
-            ..Default::default()
-        }));
-        let mut unlowered = small.clone();
-        unlowered.agent_id = "large-window".into();
-        let mut historical = small.clone();
-        historical.agent_id = "historical-window".into();
-        historical.ended_at = Some(now);
-        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
-            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/project")),
-            vec![small.clone(), unlowered.clone(), historical.clone()],
-            now,
-        );
-        small.context = Some(rimz::agents::AgentContext {
-            model_id: Some("gpt-6-sol".into()),
-            model_context_limits: Some(rimz::agents::context::ModelContextLimits {
-                model: "gpt-6-sol".into(),
-                max_window: Some(872_000),
-                usable_percent: Some(95),
-                own_compact_limit: None,
-            }),
-            tokens: Some(rimz::agents::AgentTokenUsage {
-                context_window_size: Some(258_400),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        unlowered.context = small.context.clone();
-        unlowered
-            .context
-            .as_mut()
-            .unwrap()
-            .tokens
-            .as_mut()
-            .unwrap()
-            .context_window_size = Some(828_400);
-        historical.context = small.context.clone();
-        let live_keys = [
-            (small.kind.clone(), small.agent_id.clone()),
-            (unlowered.kind.clone(), unlowered.agent_id.clone()),
-        ]
-        .into();
-        for audit in [false, true] {
-            let rollup = project_agent_rollup(
-                &[small.clone(), unlowered.clone(), historical.clone()],
-                &snapshot,
-                &Default::default(),
-                &rimz::address::AddressContext {
-                    channel: None,
-                    origin: rimz::address::ChannelOrigin::Root,
-                },
-                &mut Probe::Ready(Accounts { rows: vec![] }),
-                audit,
-                &live_keys,
-            );
-            let wire = serde_json::to_value(rollup).unwrap();
-            let warnings: Vec<_> = wire["rows"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|row| row.get("compaction_lowered"))
-                .cloned()
-                .collect();
-            assert_eq!(
-                warnings,
-                [serde_json::json!({"configured": 372_000,
-                "effective": 244_800, "model": "gpt-6-sol", "raw_window": 272_000,
-                "max_window": 872_000})]
-            );
-            assert_eq!(
-                wire["rows"].as_array().unwrap().len(),
-                if audit { 3 } else { 1 }
-            );
-        }
-    }
-
-    #[test]
-    fn integration_file_identity_resolves_dangling_directory_links() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempfile::tempdir().unwrap();
-        let default = dir.path().join("default");
-        let named = dir.path().join("named");
-        std::fs::create_dir(&default).unwrap();
-        std::fs::create_dir(&named).unwrap();
-        symlink(default.join("rules"), named.join("absolute")).unwrap();
-        symlink("../default/rules", named.join("relative")).unwrap();
-        symlink("relative", named.join("chained")).unwrap();
-
-        let expected = integration_file_identity(&default.join("rules/nested/rimz.rules"));
-        let identities = ["absolute", "relative", "chained"]
-            .map(|link| integration_file_identity(&named.join(link).join("nested/rimz.rules")));
-        assert_eq!(identities, [expected.clone(), expected.clone(), expected]);
-
-        symlink("cycle", named.join("cycle")).unwrap();
-        let cyclic = named.join("cycle/rimz.rules");
-        assert_eq!(integration_file_identity(&cyclic), cyclic);
-    }
-
-    #[test]
-    fn soft_compact_skips_list_only_detected_kinds_with_their_reasons() {
-        let hooks = ["qoder", "codex", "amp", "muse", "kiro"].map(|kind| HookRow {
-            kind: kind.into(),
-            detected: kind != "kiro",
-            status: HookStatus::Installed,
-        });
-        assert_eq!(
-            serde_json::to_value(collect_soft_compact_skips(&hooks)).unwrap(),
-            serde_json::json!([
-                {"kind": "amp", "reason": "no_compact_command"},
-                {"kind": "muse", "reason": "no_compaction_signal"},
-                {"kind": "qoder", "reason": "no_live_context_reading"},
-            ])
-        );
-        assert!(collect_soft_compact_skips(&[]).is_empty());
-        assert!(collect_soft_compact_skips(&hooks[1..2]).is_empty());
-    }
-
-    #[test]
-    fn prompt_cache_fallback_lists_detected_kinds_using_any_sign_in_mode() {
-        let hooks: Vec<_> = ["custom", "codex", "amp", "claude", "gemini"]
-            .map(|kind| HookRow {
-                kind: kind.into(),
-                detected: kind != "gemini",
-                status: HookStatus::Installed,
-            })
-            .into();
-        let actual: Vec<_> = [
-            ("", "1h", vec!["amp", "custom"]),
-            ("[prompt_cache_ttl]\namp = 'off'", "1h", vec!["custom"]),
-            (
-                "[prompt_cache_ttl]\namp = {subscription = '2h', api-key = '3h'}",
-                "1h",
-                vec!["amp", "custom"],
-            ),
-            (
-                "[prompt_cache_ttl]\nfallback = 'off'",
-                "off",
-                vec!["amp", "custom"],
-            ),
-            (
-                "[prompt_cache_ttl]\nfallback = '2h'",
-                "2h",
-                vec!["amp", "custom"],
-            ),
-        ]
-        .map(|(config, ttl, kinds)| {
-            let harness = toml::from_str(config).unwrap();
-            let summary = collect_prompt_cache_fallback(&hooks, &harness);
-            let empty = collect_prompt_cache_fallback(&[], &harness);
-            (
-                serde_json::to_value(summary).unwrap()
-                    == serde_json::json!({"ttl": ttl, "kinds": kinds}),
-                serde_json::to_value(empty).unwrap()
-                    == serde_json::json!({"ttl": ttl, "kinds": []}),
-            )
-        })
-        .into();
-        assert_eq!(actual, [(true, true); 5]);
-    }
-
-    #[test]
-    fn account_config_remedies_are_separate_from_the_wire_problem() {
-        use rimz::agents::LoginConfigErr;
-        let kind = rimz::ids::AgentKind::new_unchecked("codex");
-        for (error, remedy) in [
-            (
-                LoginConfigErr::ReservedName { kind: kind.clone() },
-                "remove",
-            ),
-            (
-                LoginConfigErr::AmbiguousHome {
-                    kind: kind.clone(),
-                    name: "work".parse().unwrap(),
-                    home: "/home/one,two".into(),
-                },
-                "choose",
-            ),
-            (
-                LoginConfigErr::DuplicateHome {
-                    kind,
-                    name: "work".parse().unwrap(),
-                    first: "other".parse().unwrap(),
-                    home: "/home/work".into(),
-                },
-                "give",
-            ),
-        ] {
-            let text = error.to_string();
-            let problem = super::super::model::AccountProblem::from(error);
-            assert!(!problem.summary.contains(remedy), "{problem:?}");
-            assert!(problem.fix.contains(remedy), "{problem:?}");
-            assert_eq!(serde_json::to_value(problem).unwrap(), text);
-        }
-    }
-
-    #[test]
-    fn empty_dir_io_errors_do_not_prescribe_removing_files() {
-        let error = rimz::agents::empty_dir::EmptyDirErr::Io {
-            path: "/empty".into(),
-            source: std::io::ErrorKind::PermissionDenied.into(),
-        };
-        assert!(empty_dir_fix(&error).contains("repair access"));
-        assert!(
-            empty_dir_fix(&rimz::agents::empty_dir::EmptyDirErr::Dirty(
-                "/empty/file".into()
-            ))
-            .contains("remove unexpected files")
-        );
-    }
-
-    #[test]
-    fn rowless_budget_park_uses_the_published_agent() {
-        let now = jiff::Timestamp::now();
-        let mut raw = rimz::testkit::agent_state("codex", "session", now);
-        raw.status = AgentStatus::Running;
-        let mut published = raw.clone();
-        published.budget_park = Some(rimz::agents::BudgetPark {
-            cap_usd: 1.0,
-            spend_usd: 2.0,
-            window: rimz::agents::BudgetWindow::Session,
-            at: now,
-            scope: Default::default(),
-            account_kind: None,
-            resets_at: None,
-            reset_window: None,
-        });
-        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
-            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/project")),
-            vec![published],
-            now,
-        );
-        let rollup = project_agent_rollup(
-            &[raw.clone()],
-            &snapshot,
-            &Default::default(),
-            &rimz::address::AddressContext {
-                channel: None,
-                origin: rimz::address::ChannelOrigin::Root,
-            },
-            &mut Probe::Ready(Accounts { rows: vec![] }),
-            false,
-            &[(raw.kind, raw.agent_id)].into(),
-        );
-        let AgentRollup::Observed { counts, rows } = rollup else {
-            panic!("missing rollup")
-        };
-        assert_eq!(counts.paused, 1);
-        assert_eq!(rows[0].status, AgentStatus::Paused);
-    }
-
-    #[test]
-    fn newer_published_activity_keeps_the_named_handle() {
-        let now = jiff::Timestamp::now();
-        let mut raw = rimz::testkit::agent_state("codex", "session", now);
-        raw.name = Some("otter".into());
-        raw.name_explicit = true;
-        let mut published = raw.clone();
-        published.last_activity = now + jiff::SignedDuration::from_secs(1);
-        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
-            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/project")),
-            vec![published],
-            now,
-        );
-        let rollup = project_agent_rollup(
-            &[raw.clone()],
-            &snapshot,
-            &Default::default(),
-            &rimz::address::AddressContext {
-                channel: None,
-                origin: rimz::address::ChannelOrigin::Root,
-            },
-            &mut Probe::Ready(Accounts { rows: vec![] }),
-            true,
-            &[(raw.kind, raw.agent_id)].into(),
-        );
-        let AgentRollup::Observed { rows, .. } = rollup else {
-            panic!("missing rollup")
-        };
-        assert_eq!(rows[0].handle, "@otter");
-    }
-
-    #[test]
-    fn invalid_account_names_do_not_read_default_login_usage() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime = rimz::RuntimePaths::under(
-            rimz::ids::WorkspaceId::from_project_root(dir.path()),
-            dir.path(),
-        )
-        .unwrap();
-        runtime.ensure_dirs().unwrap();
-        let cache = rimz::agents::account::RateLimitsCache {
-            entries: std::collections::BTreeMap::from([(
-                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("codex"))
-                    .into(),
-                rimz::agents::account::RateLimitCacheEntry {
-                    limits: rimz::agents::AgentRateLimits {
-                        windows: vec![rimz::agents::RateLimitWindow {
-                            observed_at: Some(jiff::Timestamp::now()),
-                            ..Default::default()
-                        }],
-                    },
-                    ..Default::default()
-                },
-            )]),
-            ..Default::default()
-        };
-        std::fs::write(
-            rimz::agents::RateLimitsCache::shared_path(&runtime),
-            serde_json::to_vec(&cache).unwrap(),
-        )
-        .unwrap();
-        let mut rows = vec![AccountRow {
-            kind: "codex".into(),
-            name: "not@a-login".into(),
-            home: None,
-            room: false,
-            machine_default: false,
-            default_for: Default::default(),
-            problem: None,
-            outdated: None,
-            usage: None,
-        }];
-        collect_account_usage(&mut rows, &runtime, &rimz::config::MachineConfig::default());
-        assert!(
-            rows[0].usage.is_none(),
-            "invalid login inherited default usage"
-        );
-    }
-
-    #[test]
-    fn account_rows_mark_machine_defaults_and_report_dangling_selections() {
-        let config: rimz::config::AccountsConfig =
-            toml::from_str("[codex.work]\n[use]\ncodex = \"work\"\nclaude = \"missing\"\n")
-                .unwrap();
-        let catalog = rimz::agents::LoginCatalog::from_config(&config).unwrap();
-        let rows = account_rows(
-            &catalog,
-            None,
-            &std::collections::BTreeMap::new(),
-            &config.use_accounts,
-        );
-        let rows = serde_json::to_value(rows).unwrap();
-        let rows = rows.as_array().unwrap();
-        let work = rows.iter().find(|row| row["name"] == "work").unwrap();
-        assert_eq!(work["machine_default"], true);
-        let missing = rows
-            .iter()
-            .find(|row| row["name"] == "missing")
-            .expect("dangling machine selection");
-        assert_eq!(missing["machine_default"], true);
-        assert!(
-            missing["problem"]
-                .as_str()
-                .unwrap()
-                .contains("rimz accounts use --global claude default")
-        );
-    }
-
-    #[test]
-    fn account_rows_flag_an_exported_home_outside_the_room_born_on_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("rimio");
-        std::fs::create_dir(&home).unwrap();
-        let config: rimz::config::AccountsConfig = toml::from_str(&format!(
-            "[codex.rimio]\nhome = {:?}\n",
-            home.display().to_string()
-        ))
-        .unwrap();
-        let catalog = rimz::agents::LoginCatalog::from_config(&config).unwrap();
-        let ambient = std::collections::BTreeMap::from([
-            ("HOME".to_owned(), "/home/u".to_owned()),
-            ("CODEX_HOME".to_owned(), home.display().to_string()),
-        ]);
-        let problem = |room: Option<&rimz::agents::RoomAccounts>| {
-            let rows = account_rows(&catalog, room, &ambient, &config.use_accounts);
-            let rows = serde_json::to_value(rows).unwrap();
-            rows[0]["problem"].as_str().map(str::to_owned)
-        };
-
-        let outside = problem(None).expect("an exported account home is a problem");
-        assert!(outside.contains("unset `CODEX_HOME`"), "{outside}");
-        let room: rimz::agents::RoomAccounts = rimz::ids::RoomLogins::from([(
-            rimz::ids::AgentKind::new_unchecked("codex"),
-            "rimio".parse().unwrap(),
-        )])
-        .into();
-        let inside = problem(Some(&room)).unwrap_or_default();
-        assert!(!inside.contains("CODEX_HOME"), "{inside}");
-    }
-}
+mod tests;

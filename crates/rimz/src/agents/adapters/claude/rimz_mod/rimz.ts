@@ -11,7 +11,7 @@ const MOD_VERSION = '1.0.0'
 const REPORT_TIMEOUT_MS = 2000
 
 // One envelope on the stdin of `rimz mod feed --source claude`, argv and no
-// shell. Every field but `event` and `session_id` is optional to the feed.
+// shell. Every field but `v`, `event` and `session_id` is optional to the feed.
 const report = async ($: any, event: string, agentId?: string): Promise<void> => {
   try {
     const info = await $.session.info().catch(() => undefined)
@@ -38,10 +38,33 @@ const report = async ($: any, event: string, agentId?: string): Promise<void> =>
   }
 }
 
+// The child id a loop event carries; main-loop events carry none.
+const childOf = (e: any): string | undefined =>
+  typeof e?.agentId === 'string' && e.agentId !== '' ? e.agentId : undefined
+
+// Each hook reports once `next(e)` resolved: at session start (the check-in),
+// once a child is spawned, after a child's tool call, and at the end of a
+// child's turn or the main loop's. `rimz` maps `$.agent.list()` onto its rows.
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await report($, 'session.start')
+    return result
+  })
+  on('agent.spawn', async ($, e, next) => {
+    const result = await next(e)
+    await report($, 'agent.spawn', childOf(result))
+    return result
+  })
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+    const child = childOf(e)
+    if (child !== undefined) await report($, 'tool.call', child)
+    return result
+  })
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    await report($, 'turn.complete', childOf(e))
     return result
   })
 }

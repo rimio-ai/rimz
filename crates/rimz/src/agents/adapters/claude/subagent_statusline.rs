@@ -80,7 +80,7 @@ impl SubagentStatuslinePayload {
 /// `startTime` as a `Timestamp`, tolerating the unit drift the upstream doc
 /// leaves open: an RFC 3339 string, or an epoch number/stringified-number in
 /// seconds or milliseconds (disambiguated by magnitude).
-fn value_as_timestamp(value: &Value) -> Option<Timestamp> {
+pub(super) fn value_as_timestamp(value: &Value) -> Option<Timestamp> {
     match value {
         Value::Number(n) => n
             .as_i64()

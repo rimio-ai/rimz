@@ -25,15 +25,21 @@ fn held_sidecars_keep_values_without_stats_until_the_boundary_or_thaw() {
             None,
         )
         .unwrap();
-        crate::store::subagent_context::update(&runtime, "claude", id, |_| {
-            (
-                serde_json::from_value(serde_json::json!({
-                    "description": "child", "observed_at": at.to_string(),
-                }))
-                .unwrap(),
-                None,
-            )
-        })
+        crate::store::subagent_context::update(
+            &runtime,
+            "claude",
+            id,
+            crate::store::subagent_context::SubagentReporter::StatusLine,
+            |_| {
+                (
+                    serde_json::from_value(serde_json::json!({
+                        "description": "child", "observed_at": at.to_string(),
+                    }))
+                    .unwrap(),
+                    None,
+                )
+            },
+        )
         .unwrap();
         crate::agent_activity::touch(
             &runtime,

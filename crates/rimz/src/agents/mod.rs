@@ -88,7 +88,7 @@ pub use context::{
     SessionContextInput, SubagentContext, SubagentUsageCursor, TurnErrorClass, TurnSettle,
     TurnSettleOutcome,
 };
-use context::{ContextObservation, SessionContextRefresh, SubagentObservation};
+use context::{ContextObservation, ModReport, SessionContextRefresh, SubagentObservation};
 use credits::HttpErrKind;
 pub use credits::{
     AccountUsageProbe, AccountUsageSnapshot, Entitlement, ExtraCredits, RedeemEffect, ResetCredits,

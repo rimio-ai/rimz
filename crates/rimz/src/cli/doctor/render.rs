@@ -3056,6 +3056,16 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                         (Some(reason), Some(badge))
                     })
                     .unwrap_or_default();
+                let mod_reason = agent.mod_missing.then_some(MOD_MISSING_REASON);
+                let mod_badge = mod_reason.map(|reason| {
+                    counted(
+                        tally,
+                        Severity::Warning,
+                        format!("{}: {reason}", agent.handle),
+                        mod_missing_fix(agent),
+                    )
+                });
+                let compaction_badge = compaction_badge.or(mod_badge);
                 let badge = if agent.attributed_to_account
                     || agent.historical
                     || agent.status == AgentStatus::Waiting
@@ -3093,16 +3103,24 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                 } else {
                     compaction_badge.unwrap_or_else(|| badge(status_health(agent.status)))
                 };
-                let reason = match (agent.turn_error.as_deref(), compaction_reason.as_deref()) {
-                    (Some(error), Some(compaction)) => format!("{error}; {compaction}"),
-                    (Some(reason), None) | (None, Some(reason)) => reason.to_owned(),
-                    (None, None) => "-".to_owned(),
+                let reasons: Vec<&str> = [
+                    agent.turn_error.as_deref(),
+                    compaction_reason.as_deref(),
+                    mod_reason,
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                let reason = if reasons.is_empty() {
+                    "-".to_owned()
+                } else {
+                    reasons.join("; ")
                 };
                 let style = status::agent(agent.status, agent.phase);
                 table.row([
                     badge,
                     cell(agent.handle.as_str()).fg(palette::accent()),
-                    cell(agent.account.as_str()).fg(palette::identity(&agent.kind)),
+                    cell(agent.account.to_string()).fg(palette::identity(&agent.kind)),
                     cell(agent.branch.as_deref().unwrap_or("-")).dash(),
                     cell(agent.status.as_str()).fg(style),
                     cell(reason).dash(),
@@ -3112,6 +3130,28 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
             table.render(w)
         }
     }
+}
+
+const MOD_MISSING_REASON: &str = "the RimZ mod never reported";
+
+/// Reinstall into the row's own login, then restart so Claude loads the mod;
+/// name what else can stop it.
+fn mod_missing_fix(agent: &super::model::AgentRow) -> String {
+    let install = if agent.account.name.is_default() {
+        "rimz hooks install claude".to_owned()
+    } else {
+        format!("rimz accounts add claude {}", agent.account.name)
+    };
+    let restart = if agent.restartable {
+        format!("`rimz agents restart {}`", agent.handle)
+    } else {
+        "a new session".to_owned()
+    };
+    format!(
+        "run `{install}`, then {restart}; an organization policy, or a \
+         `CLAUDE_CODE_PLUGIN_DIRS` set in Claude's own environment, can also keep the mod \
+         from loading"
+    )
 }
 
 fn agent_counts_line(counts: &AgentCounts, audit: bool) -> String {

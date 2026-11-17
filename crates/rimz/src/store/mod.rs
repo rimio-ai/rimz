@@ -45,6 +45,7 @@ pub mod idle_stop;
 pub mod ingress;
 pub mod live_roster;
 pub mod message;
+pub mod mod_checkin;
 pub(crate) mod notes;
 pub(crate) mod pending_recovery;
 pub mod raised;
@@ -534,6 +535,7 @@ mod tests {
             &runtime.read_marks_dir,
             &runtime.agent_context_dir,
             &runtime.subagent_context_dir,
+            &runtime.mod_checkin_dir,
             &runtime.agent_telemetry_dir,
             &runtime.agent_activity_dir,
             &runtime.active_time_dir,

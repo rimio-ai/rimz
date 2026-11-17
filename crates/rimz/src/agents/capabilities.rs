@@ -1063,6 +1063,15 @@ pub trait ContextCapability: CoreCapability {
         Vec::new()
     }
 
+    /// Read one report of the mod RimZ installs for this provider (`rimz mod
+    /// feed`). `None` when the adapter ships no mod, or the report is not one
+    /// to act on: unparseable, missing its session or version, or an event the
+    /// adapter does not know. Display-only enrichment, like
+    /// [`observe_subagent_context`](Self::observe_subagent_context).
+    fn observe_mod_report(&self, _payload: &Value) -> Option<ModReport> {
+        None
+    }
+
     /// Incrementally price one child's dedicated transcript from provider-native
     /// statusline context. The cursor is display-only enrichment: callers may
     /// persist and resume it, but it never feeds lifecycle or routing decisions.

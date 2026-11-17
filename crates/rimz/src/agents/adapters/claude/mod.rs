@@ -1478,6 +1478,10 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
         parsed.into_observations(Timestamp::now())
     }
 
+    fn observe_mod_report(&self, payload: &Value) -> Option<super::ModReport> {
+        rimz_mod::observe(payload, Timestamp::now())
+    }
+
     fn subagent_cost_cursor(
         &self,
         payload: &Value,

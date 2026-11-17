@@ -49,7 +49,8 @@ Four boundaries decide where new code goes:
 | [`message.rs`](../../crates/rimz/src/store/message.rs), [`message/codec.rs`](../../crates/rimz/src/store/message/codec.rs) | The durable message record, FIFO/claim/batch selection, and the live-queue and history codec. |
 | [`run.rs`](../../crates/rimz/src/store/run.rs) | `RunRecord` and `RunStatus`, the durable codec, and `wake_run`. |
 | [`workflow.rs`](../../crates/rimz/src/store/workflow.rs) | Workflow record and append-only journal codecs. The harness owns the locked transitions ([workflow.md](./harness/workflow.md)). |
-| [`sidecar.rs`](../../crates/rimz/src/store/sidecar.rs) | The stat-gated latest-wins sidecar store behind [`agent_context.rs`](../../crates/rimz/src/store/agent_context.rs) and [`subagent_context.rs`](../../crates/rimz/src/store/subagent_context.rs). |
+| [`sidecar.rs`](../../crates/rimz/src/store/sidecar.rs) | The stat-gated latest-wins sidecar store behind [`agent_context.rs`](../../crates/rimz/src/store/agent_context.rs), [`subagent_context.rs`](../../crates/rimz/src/store/subagent_context.rs), and [`mod_checkin.rs`](../../crates/rimz/src/store/mod_checkin.rs). |
+| [`mod_checkin.rs`](../../crates/rimz/src/store/mod_checkin.rs) | The latest-wins per-session check-in a provider mod's report upserts (mod version, provider version, report time), one sidecar per `(kind, agent_id)` under `live/mod_checkin/`, read by `rimz doctor`. |
 | [`active_time.rs`](../../crates/rimz/src/store/active_time.rs) | The per-session estimated active-time accumulator, serialized by per-record flocks. |
 | [`notes.rs`](../../crates/rimz/src/store/notes.rs) | The `run.json` manifest of a `team-notes/` or `automation-notes/` run, dated run-folder allocation, legacy flat-run migration, and the archive reader that lists dated and legacy runs together. |
 | [`gc.rs`](../../crates/rimz/src/store/gc.rs) | Room and machine maintenance: `gc/classes.rs` the per-class state sweeps, `gc/collect.rs` runtime hints, `gc/tmp.rs` the temp-unit inventory and owner holds, `gc/temp_sweep.rs` orphan write temps, `gc/prune.rs` machine-only dead workspaces. |
@@ -223,6 +224,7 @@ snapshots/publish.stamp                       checkpoint publish pacing
 live/heartbeat/sidebar.*.json                 renderer liveness
 live/read-marks/marks.json                    room read marks
 live/{agent_context,subagent_context}/        enrichment
+live/mod_checkin/                             RimZ mod check-ins, one per session
 live/agent-activity/                          activity hints
 live/active-time/                             active-time accumulators
 live/prompt/{task,sys}.<digest>.md            launch artifacts

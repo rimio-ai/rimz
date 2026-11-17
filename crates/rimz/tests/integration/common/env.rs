@@ -634,6 +634,24 @@ impl Env {
             .expect("wait subagent statusline feed")
     }
 
+    /// `rimz mod feed --source <source>`, as the RimZ mod's `$.process.run`
+    /// invokes it, with `envelope` on stdin.
+    pub fn run_mod_feed(&self, source: &str, envelope: &str) -> Output {
+        let mut cmd = self.rimz();
+        cmd.args(["mod", "feed", "--source", source])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        self.spawn_payload(cmd, envelope)
+            .wait_with_output()
+            .expect("wait mod feed")
+    }
+
+    /// Read every persisted mod check-in for the harness workspace.
+    pub fn mod_checkins(&self) -> Vec<rimz::store::mod_checkin::ModCheckinRecord> {
+        rimz::store::mod_checkin::read_all(&self.runtime_paths())
+    }
+
     /// Read every persisted agent-context sidecar for the harness workspace.
     pub fn agent_contexts(&self) -> Vec<rimz::agents::context::record::AgentContextRecord> {
         rimz::store::agent_context::read_all(&self.runtime_paths())
