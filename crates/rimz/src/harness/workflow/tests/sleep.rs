@@ -173,11 +173,11 @@ fn sleep_conditions_share_freshness_unread_and_hold_semantics_with_expiry_first(
                 .unwrap()
                 .contains("probed before")
         );
-        forge(Timestamp::now(), "open");
+        forge(attempts::fresh_probe_at(&record), "open");
         waiting = advance_sleep(&state, &record);
         if term == "pr=merged" {
             assert_eq!(waiting.wait.as_ref().unwrap().outcome, "sleeping");
-            forge(Timestamp::now(), "merged");
+            forge(attempts::fresh_probe_at(&record), "merged");
             waiting = advance_sleep(&state, &record);
         }
         assert_eq!(waiting.wait.as_ref().unwrap().outcome, "hold");
@@ -215,7 +215,7 @@ fn a_sleep_hold_survives_unknown_and_ends_on_false() {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let forge = |fresh: bool, pr: &str| {
         let at = if fresh {
-            Timestamp::now()
+            attempts::fresh_probe_at(&record)
         } else {
             record.entered_at - std::time::Duration::from_secs(1)
         };

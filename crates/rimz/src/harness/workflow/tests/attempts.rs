@@ -45,6 +45,19 @@ pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     (dir, state, record)
 }
 
+/// A forge probe stamp that reads as taken after `record`'s check was entered. The cache keeps
+/// whole milliseconds, so the stamp is rounded up: `now()` cut to its millisecond falls below an
+/// `entered_at` taken earlier in that same millisecond.
+pub(super) fn fresh_probe_at(record: &RunRecord) -> jiff::Timestamp {
+    let at = record.entered_at.max(jiff::Timestamp::now());
+    let whole = jiff::Timestamp::from_millisecond(at.as_millisecond()).unwrap();
+    if whole == at {
+        at
+    } else {
+        whole + jiff::SignedDuration::from_millis(1)
+    }
+}
+
 /// The deployed definition file a `setup` run reads live.
 pub(super) fn definition_file(record: &RunRecord) -> std::path::PathBuf {
     crate::disk::paths::workflow_spec_file(record.spec_dir.as_deref().unwrap())
