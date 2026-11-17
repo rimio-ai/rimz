@@ -586,3 +586,78 @@ fn stopped_agent_match_bounds_names_but_not_session_ids() {
         );
     }
 }
+
+#[test]
+fn launch_id_round_trips_and_defaults_when_absent() {
+    let mut record = listing_record();
+    record.launch_id = Some("launch_otter".into());
+    let mut value = serde_json::to_value(&record).unwrap();
+    assert_eq!(value["launch_id"], "launch_otter");
+    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(decoded.launch_id, record.launch_id);
+    assert_eq!(decoded.agent_launch_id(), record.launch_id.as_ref());
+
+    value.as_object_mut().unwrap().remove("launch_id");
+    let decoded: RunRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.launch_id, None);
+    assert_eq!(decoded.agent_launch_id(), None);
+    record.launch_id = None;
+    record.team = Some(TeamRun {
+        launch_id: "launch_leader".into(),
+        instance: "forge#feat-x".parse().unwrap(),
+    });
+    assert_eq!(
+        record.agent_launch_id().map(AgentSessionId::as_str),
+        Some("launch_leader")
+    );
+    record.team = None;
+    record.peer = Some(PeerRun {
+        launch_id: "launch_peer".into(),
+        opened_by: Vec::new(),
+    });
+    assert_eq!(
+        record.agent_launch_id().map(AgentSessionId::as_str),
+        Some("launch_peer")
+    );
+}
+
+/// A stamped ordinary run names its agent by launch id alone: the launch's rows
+/// match across kinds and sessions, and a namesake of another launch never does.
+#[test]
+fn a_stamped_run_matches_its_launch_and_never_a_namesake() {
+    let mut record = RunRecord::new(
+        WorkspaceId::from_project_root(Path::new("/repo")),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "task".into(),
+        "/repo".into(),
+    );
+    record.agent_id = Some("old".into());
+    record.agent_name = Some("otter".to_owned());
+    record.launch_id = Some("launch_otter".into());
+    record.completed_at = Some(Timestamp::from_second(2000).unwrap());
+    for (id, launch, kind, expected) in [
+        ("old", Some("launch_otter"), "codex", true),
+        ("new", Some("launch_otter"), "codex", true),
+        ("molted", Some("launch_otter"), "claude", true),
+        ("launch_otter", None, "codex", true),
+        ("old", Some("launch_other"), "codex", false),
+        ("old", None, "codex", false),
+        ("namesake", Some("launch_other"), "codex", false),
+    ] {
+        let mut agent = crate::agents::AgentState::stub(kind, id, crate::agents::AgentStatus::Idle);
+        agent.name = Some("otter".to_owned());
+        agent.launch_id = launch.map(Into::into);
+        agent.registered_at = Some(Timestamp::from_second(3000).unwrap());
+        assert_eq!(
+            record.matches_agent(&agent),
+            expected,
+            "id={id}, launch={launch:?}, kind={kind}"
+        );
+        assert_eq!(
+            record.matches_stopped_agent(&agent),
+            expected,
+            "a stamped run's stopped match needs no registration bound: id={id}"
+        );
+    }
+}

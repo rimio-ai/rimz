@@ -426,7 +426,9 @@ fn open_fresh(
     })?;
     panes.focused_pane = team_leader_pane(&fresh.layout, fresh.team.as_ref().map(|(_, team)| team));
     let waiter = if let (Some(leader), Some(record)) = (&leader, &mut record) {
-        record.agent_name = Some(batch.identities()[leader_index].name.clone());
+        let identity = &batch.identities()[leader_index];
+        record.agent_name = Some(identity.name.clone());
+        record.launch_id = Some(identity.launch_id().clone());
         publish_run(store, record, &leader.completion)?
     } else {
         None

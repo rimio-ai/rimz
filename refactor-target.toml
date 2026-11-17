@@ -4462,7 +4462,8 @@ path = "crates/rimz/src/store"
 # SidebarAwaitedAgent is one agent a card's subagent wait awaits beyond its own children (+1).
 # RunFire::evidence hands a run's command steps and agent prompts the fire's trigger evidence (+1).
 # store::runtime::agent_is_runtime_visible is the visibility rule the point-of-use lookup shares (+1).
-surface-budget = 660
+# RunRecord::agent_launch_id names the launch a run's agent holds (+1).
+surface-budget = 661
 
 [[verdict]]
 kind = "item"
