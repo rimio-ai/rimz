@@ -6,6 +6,7 @@ use crate::store::workflow::{
     self as records, JournalEntry, JournalEvent, Key, RunEnding, RunRecord, RunState,
 };
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const WATCH: &str = "[workflow]\nscope='worktree'\nstart='build'\n\
@@ -133,7 +134,53 @@ fn a_try_at_a_check_ends_tried_at_its_answer_whatever_the_target() {
             }),
             "{answer}"
         );
+        let (kinds, reached) = projected(&state, &record, &journal);
+        assert_eq!(
+            (kinds.last(), reached),
+            (
+                Some(&HopKind::Terminal {
+                    state: RunState::Done,
+                    tried: Some(target.into())
+                }),
+                [("watch".into(), 1)].into()
+            ),
+            "{answer}: the try's node once, and no visit to the target it did not take"
+        );
     }
+    // The same answer on a run that is not a try takes its route.
+    let (_home, state, root) = room();
+    fs::write(
+        root.join("answer.json"),
+        json!({"outcome":"red"}).to_string(),
+    )
+    .unwrap();
+    let record = start(&state, &root, placed(Some("watch"), None, false)).unwrap();
+    advance(&state, &record.id, &FakeHost::new()).unwrap();
+    let (kinds, reached) = projected(&state, &record, &journal(&state, &record));
+    assert_eq!(
+        (kinds.last(), reached),
+        (
+            Some(&HopKind::Route),
+            [("build".into(), 1), ("watch".into(), 1)].into()
+        )
+    );
+}
+
+/// The hop kinds `inspect::hops` projects from a run's journal, and what `inspect::reached`
+/// counts from them.
+fn projected(
+    state: &StatePaths,
+    record: &RunRecord,
+    journal: &[JournalEntry],
+) -> (Vec<HopKind>, BTreeMap<String, u64>) {
+    let paths = state.workflow(&record.id);
+    let spec = spec::load(&record.definition_dir(&paths)).unwrap();
+    let hops = hops(&spec, journal, None);
+    let reached = reached(&hops, journal)
+        .into_iter()
+        .map(|(node, count)| (node.to_owned(), count))
+        .collect();
+    (hops.into_iter().map(|hop| hop.kind).collect(), reached)
 }
 
 #[test]

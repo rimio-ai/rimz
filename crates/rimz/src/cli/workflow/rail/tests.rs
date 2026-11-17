@@ -337,6 +337,7 @@ fn horizontal_keeps_a_terminal_detour_and_its_parent_even_without_visits() {
         Hop {
             kind: HopKind::Terminal {
                 state: record.state,
+                tried: None,
             },
             ..route("fix", "failed", "@failed")
         },
@@ -430,7 +431,7 @@ fn horizontal_terminal_marks_only_the_failed_ending_node_alarm() {
             },
         ));
         hops.push(Hop {
-            kind: HopKind::Terminal { state },
+            kind: HopKind::Terminal { state, tried: None },
             target: None,
             ..hops.last().unwrap().clone()
         });
@@ -1380,7 +1381,7 @@ mod horizontal_sweep {
                 };
                 hops.push(route(node, state.as_str(), target));
                 hops.push(Hop {
-                    kind: HopKind::Terminal { state },
+                    kind: HopKind::Terminal { state, tried: None },
                     target: None,
                     ..route(node, state.as_str(), target)
                 });

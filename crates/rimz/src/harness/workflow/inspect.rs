@@ -24,7 +24,7 @@ pub struct Hop {
 }
 
 /// Distinguish routing decisions from start, resume, visit-reset, park, and terminal markers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HopKind {
     Route,
     /// A start placed by hand (`rimz workflow run --at` or `--input`), at its start node.
@@ -37,6 +37,8 @@ pub enum HopKind {
     },
     Terminal {
         state: RunState,
+        /// A try's end: the target of the route it did not take, as its `Terminal` entry holds.
+        tried: Option<String>,
     },
 }
 
@@ -176,7 +178,7 @@ fn replaced_attempt(journal: &[JournalEntry], hop: &Hop) -> bool {
 pub fn reached<'a>(hops: &'a [Hop], journal: &'a [JournalEntry]) -> BTreeMap<&'a str, u64> {
     let mut counts = BTreeMap::new();
     let mut position = None;
-    for hop in hops {
+    for (index, hop) in hops.iter().enumerate() {
         if hop.kind == HopKind::VisitsReset {
             continue;
         }
@@ -185,7 +187,13 @@ pub fn reached<'a>(hops: &'a [Hop], journal: &'a [JournalEntry]) -> BTreeMap<&'a
             *counts.entry(node).or_default() += 1;
         }
         position = Some(node);
+        // A try ends instead of taking its route, so the route's target is never entered.
+        let untaken = matches!(
+            hops.get(index + 1).map(|next| &next.kind),
+            Some(HopKind::Terminal { tried: Some(_), .. })
+        );
         if hop.kind == HopKind::Route
+            && !untaken
             && let Some(target) = hop.target.as_ref().and_then(Target::authored_node)
         {
             *counts.entry(target).or_default() += hop.count;
@@ -298,8 +306,12 @@ fn hop_kind(
         JournalEvent::Park { reason, .. } => {
             return Some((HopKind::Park { reason: *reason }, None, None));
         }
-        JournalEvent::Terminal { state, .. } => {
-            return Some((HopKind::Terminal { state: *state }, None, None));
+        JournalEvent::Terminal { state, tried } => {
+            let kind = HopKind::Terminal {
+                state: *state,
+                tried: tried.clone(),
+            };
+            return Some((kind, None, None));
         }
         _ => return None,
     };

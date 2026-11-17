@@ -1951,9 +1951,12 @@ pub fn restart(
         entries: Vec::new(),
     };
     if t.record.state.is_terminal() {
+        let word = match t.record.state {
+            RunState::Done if t.record.once => "tried",
+            state => state.as_str(),
+        };
         return Err(WorkflowErr::Refused(format!(
-            "workflow run {id} is {}; cannot restart",
-            t.record.state.as_str()
+            "workflow run {id} is {word}; cannot restart"
         )));
     }
     if t.record

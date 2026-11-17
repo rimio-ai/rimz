@@ -116,6 +116,31 @@ fn a_try_prints_its_answer_and_the_route_it_did_not_take_and_exits_zero_whatever
             canceled.starts_with("review#") && canceled.contains(" is already tried; unchanged\n"),
             "{canceled}"
         );
+        // The ended try's home back in the live directory, as a failed move leaves it.
+        let finished = run_home(&env, &id).home;
+        let live = env
+            .state_path_for(&env.project_root)
+            .workflow(&id.parse().unwrap())
+            .home;
+        fs::rename(&finished, &live).unwrap();
+        let shown = success(command(&env, &["workflow", "show", &id]));
+        let trail = shown
+            .lines()
+            .find(|line| line.contains("trail"))
+            .unwrap_or_else(|| panic!("a trail: {shown}"));
+        assert!(trail.ends_with(" tried"), "{trail}");
+        for args in [
+            &["workflow", "restart", &id][..],
+            &["workflow", "restart", &id, "--continue"],
+        ] {
+            let output = command(&env, args);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success()
+                    && stderr.contains(&format!("workflow run {id} is tried; cannot restart")),
+                "{args:?}: {stderr}"
+            );
+        }
     }
 }
 

@@ -717,7 +717,7 @@ impl View<'_> {
             trail.push(format!("+{earlier} earlier"));
         }
         for hop in &hops[earlier..] {
-            let fact = match hop.kind {
+            let fact = match &hop.kind {
                 HopKind::Start => format!("started → {}", hop.node),
                 HopKind::Resume => format!("resumed → {}", hop.node),
                 HopKind::Restart => format!("restarted → {}", hop.node),
@@ -727,7 +727,8 @@ impl View<'_> {
                     hop.outcome.as_deref().unwrap_or_default()
                 ),
                 HopKind::Park { reason } => format!("parked {}", reason.as_str()),
-                HopKind::Terminal { state } => state.as_str().into(),
+                HopKind::Terminal { tried: Some(_), .. } => "tried".into(),
+                HopKind::Terminal { state, .. } => state.as_str().into(),
                 HopKind::Route => format!(
                     "{} {}{} → {}",
                     hop.node,
