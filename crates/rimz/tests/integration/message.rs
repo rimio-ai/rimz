@@ -6435,7 +6435,13 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
     // anchors the ping: under a 4m maximum a ping 1s after that turn would
     // start at 221s and is allowed, and a helper 25s past the anchor (246s)
     // delivers it as the last one.
-    for (blocked, capped) in [(false, false), (true, false), (false, true)] {
+    // An unreadable listing is blocked too: the one-shot ping ends on the lookup's miss.
+    for (blocked, unreadable, capped) in [
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+        (false, false, true),
+    ] {
         let env = Env::new();
         env.record(&env.project_root);
         env.install_agent_hooks("claude");
@@ -6507,7 +6513,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
             .session_name;
         let mut pane = agent_pane(&env, "claude");
         pane.session_name = session.clone();
-        let fixture = env.write_pane_fixture(if blocked {
+        let fixture = env.write_pane_fixture(if blocked && !unreadable {
             &[]
         } else {
             std::slice::from_ref(&pane)
@@ -6582,6 +6588,9 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
                 .collect::<Vec<_>>(),
             current.agent_panes
         );
+        if unreadable {
+            std::fs::write(&fixture, "not a listing").unwrap();
+        }
         send(&request);
         let mut messages = store.list_messages().unwrap();
         messages.extend(store.list_message_history().unwrap());
@@ -6626,6 +6635,20 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
             .find(|event| event["assist"] == "cache_keepalive")
             .expect("keepalive assist");
         assert_eq!(assist["delivered"], !blocked);
+        if unreadable {
+            let reason = ping.last_error.as_deref().unwrap_or_default();
+            assert!(
+                reason.starts_with("stuck: receiver pane unreadable: "),
+                "{ping:?}"
+            );
+            assert_eq!(assist["error"], reason, "{assist}");
+            assert!(
+                !trace_lines(&env.project_root.join("keepalive-trace.log"))
+                    .iter()
+                    .any(|line| line.contains("\taction\twrite")),
+                "nothing typed under an unreadable listing"
+            );
+        }
         assert_eq!(assist["waits"], 1);
         assert_eq!(assist["capped"], capped);
         if blocked {
