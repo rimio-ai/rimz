@@ -49,7 +49,7 @@ use super::clock::LoopClock;
 use super::fetch::{
     FetchHandle, FetchPhase, FetchRequest, FetchUpdate, SnapshotSource, WorkspaceFold,
 };
-use super::focus::{FocusRepairDispatch, spawn_pane_focus};
+use super::focus::{CardAgent, FocusRepairDispatch, spawn_pane_focus};
 #[cfg(test)]
 use super::focus::{finish_focus_request, request_focus_until};
 use super::focus_push::{FocusPeers, FocusPush};
@@ -1507,6 +1507,7 @@ impl LoopState {
             None,
             self.pane.wake.clone(),
             None,
+            None,
         );
         true
     }
@@ -1786,13 +1787,13 @@ impl LoopState {
         }
         for effect in applied.effects {
             match effect {
-                InputEffect::Focus(pane) => {
+                InputEffect::Focus(pane) | InputEffect::Return(pane) => {
                     let peers = self.pane.input_jump.take();
                     let clicked = peers
                         .as_ref()
                         .and_then(FocusPeers::clicked)
                         .unwrap_or_else(|| self.pane.clock.now());
-                    let (placement, order, input) =
+                    let (placement, order, (input, agent)) =
                         self.views.with(&mut self.pane, Route::READ, |state, v| {
                             (
                                 state.focus_placement(v.state, v.context, &pane),
@@ -1800,7 +1801,8 @@ impl LoopState {
                                 v.context
                                     .focus_rollback
                                     .as_ref()
-                                    .map(|rollback| rollback.input),
+                                    .map(|rollback| (rollback.input, rollback.agent.clone()))
+                                    .unzip(),
                             )
                         });
                     spawn_pane_focus(
@@ -1816,6 +1818,7 @@ impl LoopState {
                         peers,
                         self.pane.wake.clone(),
                         input,
+                        agent.flatten(),
                     );
                 }
                 InputEffect::Width(dir) => {
@@ -1969,7 +1972,7 @@ impl LoopState {
                 )
             });
         for effect in &outcome.effects {
-            if let InputEffect::Focus(pane) = effect {
+            if let InputEffect::Focus(pane) | InputEffect::Return(pane) = effect {
                 self.pane.input_jump = self
                     .pane
                     .clock
@@ -2003,7 +2006,7 @@ impl LoopState {
                 if outcome
                     .effects
                     .iter()
-                    .any(|effect| matches!(effect, InputEffect::Focus(_)))
+                    .any(|effect| matches!(effect, InputEffect::Focus(_) | InputEffect::Return(_)))
                 {
                     layout_freeze::arm_freeze(
                         v.state,
@@ -3157,7 +3160,10 @@ impl PaneState {
             };
             user_input |= card
                 && applied.effects.iter().any(|effect| {
-                    matches!(effect, InputEffect::Focus(_) | InputEffect::SyncFilter(_))
+                    matches!(
+                        effect,
+                        InputEffect::Focus(_) | InputEffect::Return(_) | InputEffect::SyncFilter(_)
+                    )
                 });
             if let Some((interactions, roster)) = live_frame {
                 self.ui.interactions = interactions;
@@ -3180,7 +3186,7 @@ impl PaneState {
                 v.context.focus_rollback = None;
             }
             for effect in &applied.effects {
-                if let InputEffect::Focus(pane) = effect {
+                if let InputEffect::Focus(pane) | InputEffect::Return(pane) = effect {
                     v.context.pending_input_focus = Some(pane.clone());
                     let owner = v
                         .state
@@ -3211,6 +3217,9 @@ impl PaneState {
                         previous_card: previous_card.clone(),
                         entry_focus: v.state.entry_focus.clone(),
                         label: row.display_name().to_owned(),
+                        agent: matches!(effect, InputEffect::Focus(_))
+                            .then(|| CardAgent::in_row(row, pane))
+                            .flatten(),
                     });
                     self.arm_clicked_row(v, pane, now);
                 }

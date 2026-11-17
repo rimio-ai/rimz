@@ -694,7 +694,7 @@ fn focus_worker_reports_request_and_dispatch_errors_but_not_superseded_dispatch(
         let lease = peers.arm(target.clone(), Instant::now());
         finish_focus_request(&target, Some(&tx), requested, Some(&lease), None, |_| {
             assert!(lease.is_current(), "lease lasts through dispatch");
-            dispatched
+            dispatched.map_err(Into::into)
         });
         assert!(!lease.is_current(), "dispatch return releases the lease");
         if failed {
@@ -826,6 +826,7 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
             nonce,
             Default::default(),
         )
+        .map_err(Into::into)
     });
     assert!(
         crate::mux::focus_anchor::load(&rig.runtime).is_none(),
@@ -2858,8 +2859,18 @@ fn pane_return_focuses_the_work_pane_the_room_frame_lists_beside_the_sidebar() {
     );
     tab.work_pane = Some(remembered.clone());
     rig.views.lock().fold = Some(Arc::new(fold));
+    // An agent runs in the remembered pane, but `q` is no card act and carries no agent.
+    let rows = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    );
+    let mut agent = rows[0].clone();
+    agent.id = "agent-8".to_owned();
+    agent.name = "claude".to_owned();
+    agent.pane = Some(pane("terminal_8", "tab_0"));
+    agent.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
+    rows.push(agent);
     rig.view().ctx().current = snapshot;
-    let focus = vec![InputEffect::Focus(remembered)];
+    let focus = vec![InputEffect::Return(remembered)];
     // The attach wire delivers the raw press; the key resolves only inside the reducer.
     let press = Wakeup::Press {
         code: KeyCode::Char('q'),
@@ -2867,9 +2878,316 @@ fn pane_return_focuses_the_work_pane_the_room_frame_lists_beside_the_sidebar() {
     };
     let applied = rig.state.apply_input([press], &mut rig.terminal).unwrap();
     assert_eq!(applied.effects, focus, "a pressed q");
+    assert!(
+        rig.view().ctx().focus_rollback.is_some(),
+        "q rolls back on failure"
+    );
+    assert_eq!(focus_agent(&mut rig), None, "q takes no hosting read");
     let applied = rig
         .state
         .apply_input([Wakeup::Key(KeyAction::PaneReturn)], &mut rig.terminal)
         .unwrap();
     assert_eq!(applied.effects, focus, "a resolved pane return");
+}
+
+fn card_agent(kind: &str, session: &str) -> crate::sidebar_pane::app::focus::CardAgent {
+    crate::sidebar_pane::app::focus::CardAgent {
+        kind: crate::ids::AgentKind::new_unchecked(kind),
+        session: session.into(),
+    }
+}
+
+fn focus_agent(rig: &mut Rig) -> Option<crate::sidebar_pane::app::focus::CardAgent> {
+    rig.view()
+        .ctx()
+        .focus_rollback
+        .as_ref()
+        .and_then(|rollback| rollback.agent.clone())
+}
+
+#[test]
+fn a_card_focus_dispatches_only_to_the_pane_the_lookup_puts_its_agent_in() {
+    use crate::sidebar_pane::app::focus::{CardHosting, vet_card_focus};
+    let rig = Rig::new();
+    let target = zellij("terminal_9");
+    let agent = card_agent("claude", "agent-1");
+    let failed = "the multiplexer could not be read: listing failed";
+    let cases: [(std::result::Result<CardHosting, String>, Option<&str>); 5] = [
+        (Ok(CardHosting::Unheld), None),
+        (Ok(CardHosting::Pane(target.clone())), None),
+        (
+            Ok(CardHosting::Pane(zellij("terminal_4"))),
+            Some("the agent is in pane zellij:terminal_4 now"),
+        ),
+        (
+            Ok(CardHosting::Nowhere),
+            Some("no pane hosts the agent now"),
+        ),
+        (Err(failed.to_owned()), Some(failed)),
+    ];
+    for (answer, refusal) in cases {
+        let case = format!("{answer:?}");
+        let anchor = requested_focus_anchor(target.clone(), 0, rig.state.pane.clock.now_ms(), None);
+        crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let dispatched = std::cell::Cell::new(false);
+        finish_focus_request(
+            &target,
+            Some(&tx),
+            Some(Ok(anchor.nonce)),
+            None,
+            None,
+            |nonce| {
+                vet_card_focus(Some(&agent), &target, nonce, &rig.runtime, None, |asked| {
+                    assert_eq!(asked, &agent, "the read asks for the card's agent");
+                    answer
+                })
+                .unwrap_or_else(|| {
+                    dispatched.set(true);
+                    Ok(true)
+                })
+            },
+        );
+        let Some(reason) = refusal else {
+            assert!(dispatched.get(), "{case}");
+            assert!(
+                rx.try_recv().is_err(),
+                "a dispatched focus reports no failure"
+            );
+            assert_eq!(crate::mux::focus_anchor::load(&rig.runtime), Some(anchor));
+            continue;
+        };
+        assert!(!dispatched.get(), "a refusal dispatches nothing: {reason}");
+        assert_eq!(
+            rx.try_recv(),
+            Ok(Wakeup::FocusFailed {
+                pane: target.clone(),
+                error: reason.to_owned(),
+            })
+        );
+        assert!(rx.try_recv().is_err(), "a refusal reports once");
+        assert_eq!(
+            crate::mux::focus_anchor::load(&rig.runtime),
+            None,
+            "a refusal clears its own intent"
+        );
+    }
+
+    let anchor = requested_focus_anchor(target.clone(), 0, rig.state.pane.clock.now_ms(), None);
+    let newer = requested_focus_anchor(target.clone(), 0, rig.state.pane.clock.now_ms(), None);
+    crate::mux::focus_anchor::store(&rig.runtime, &newer).unwrap();
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    let input = crate::ids::FocusNonce::new();
+    finish_focus_request(
+        &target,
+        Some(&tx),
+        Some(Ok(anchor.nonce)),
+        None,
+        Some(input),
+        |nonce| {
+            vet_card_focus(Some(&agent), &target, nonce, &rig.runtime, None, |_| {
+                Ok(CardHosting::Nowhere)
+            })
+            .unwrap_or_else(|| panic!("a refused focus must not dispatch"))
+        },
+    );
+    assert_eq!(rx.try_recv(), Ok(Wakeup::FocusSuperseded { input }));
+    assert_eq!(
+        crate::mux::focus_anchor::load(&rig.runtime),
+        Some(newer),
+        "a refusal never clears another click's intent"
+    );
+
+    assert!(
+        vet_card_focus(None, &target, anchor.nonce, &rig.runtime, None, |_| {
+            panic!("an unkeyed focus takes no read")
+        })
+        .is_none()
+    );
+}
+
+#[test]
+fn a_card_focus_superseded_during_its_read_ends_silently() {
+    use crate::sidebar_pane::app::focus::{CardHosting, vet_card_focus};
+    let rig = Rig::new();
+    let target = zellij("terminal_9");
+    let plane = super::super::super::plane::DataPlane::detached();
+    let peers = plane
+        .focus_peers(
+            rig.state.pane.config.instance_id.clone(),
+            crate::diag::DiagSink::disabled(),
+        )
+        .without_push();
+    let anchor = requested_focus_anchor(target.clone(), 0, rig.state.pane.clock.now_ms(), None);
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    let lease = peers.arm(target.clone(), Instant::now());
+    let verdict = vet_card_focus(
+        Some(&card_agent("claude", "agent-1")),
+        &target,
+        anchor.nonce,
+        &rig.runtime,
+        Some(&lease),
+        |_| {
+            let _newer = peers.arm(target.clone(), Instant::now());
+            Ok(CardHosting::Nowhere)
+        },
+    );
+    assert!(
+        matches!(verdict, Some(Ok(false))),
+        "a click superseded during its read is superseded, not refused: {verdict:?}"
+    );
+    assert_eq!(crate::mux::focus_anchor::load(&rig.runtime), Some(anchor));
+}
+
+#[test]
+fn a_card_focus_carries_the_agent_its_pane_shows_in_the_reducing_snapshot() {
+    let (mut rig, _, [_, child]) = child_focus_rig();
+    click_child(&mut rig, &child);
+    assert_eq!(
+        focus_agent(&mut rig),
+        Some(card_agent("claude", "child-1")),
+        "a child entry"
+    );
+
+    let (mut rig, _, _) = child_focus_rig();
+    let parent = rig.state.views.mirror().worktree_groups[0].rows[1].clone();
+    let line = rig.state.pane.ui.interactions.line_for_row(1).unwrap() as u16;
+    rig.state.pane.click_guard = None;
+    rig.state
+        .apply_input(
+            [Wakeup::MouseClick {
+                column: 1,
+                row: line,
+            }],
+            &mut rig.terminal,
+        )
+        .unwrap();
+    assert_eq!(
+        focus_agent(&mut rig),
+        Some(card_agent("parent-at-click", &parent.id)),
+        "the card's own agent"
+    );
+    rig.state.pane.click_guard = None;
+    let press = |code| Wakeup::Press {
+        code,
+        mods: ratatui::crossterm::event::KeyModifiers::NONE,
+    };
+    rig.state
+        .apply_input(
+            [press(ratatui::crossterm::event::KeyCode::Enter)],
+            &mut rig.terminal,
+        )
+        .unwrap();
+    assert_eq!(
+        focus_agent(&mut rig),
+        Some(card_agent("parent-at-click", &parent.id)),
+        "a pressed Enter"
+    );
+
+    // A provider registration re-keys the selected row on the same pane after the paint:
+    // the focus carries the reducing snapshot's id.
+    let mut snapshot = rig.state.views.mirror().clone();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1]
+    .id = "sess-registered".to_owned();
+    rig.fold(snapshot, SnapshotSource::Produced);
+    let applied = rig
+        .state
+        .apply_input(
+            [press(ratatui::crossterm::event::KeyCode::Enter)],
+            &mut rig.terminal,
+        )
+        .unwrap();
+    assert_eq!(
+        applied.effects,
+        vec![InputEffect::Focus(parent.pane.unwrap().pane_id)]
+    );
+    assert_eq!(
+        focus_agent(&mut rig),
+        Some(card_agent("parent-at-click", "sess-registered"))
+    );
+
+    let (mut rig, _, picked) = picked_focus_rig();
+    assert_eq!(
+        rig.view().ctx().pending_input_focus,
+        Some(picked),
+        "the process row was focused"
+    );
+    assert_eq!(
+        focus_agent(&mut rig),
+        None,
+        "a process row carries no agent"
+    );
+}
+
+#[test]
+fn an_awaited_entry_with_no_card_of_its_own_carries_its_holders_agent() {
+    let (mut rig, _, _) = child_focus_rig();
+    let awaited = zellij("terminal_30");
+    let mut snapshot = rig.state.views.mirror().clone();
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1];
+    let parent = (row.id.clone(), row.pane.as_ref().unwrap().pane_id.clone());
+    row.as_agent_mut().unwrap().awaited = vec![
+        serde_json::from_value(serde_json::json!({
+            "handle": "@helper", "pane": awaited, "since": snapshot.now,
+        }))
+        .unwrap(),
+    ];
+    rig.fold(snapshot, SnapshotSource::Produced);
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    rig.state.pane.click_guard = None;
+    let (column, line) = rig
+        .state
+        .pane
+        .ui
+        .interactions
+        .line_for_target(&render::HitTarget::SubAgentPane(awaited))
+        .expect("painted awaited entry");
+    let applied = rig
+        .state
+        .apply_input(
+            [Wakeup::MouseClick { column, row: line }],
+            &mut rig.terminal,
+        )
+        .unwrap();
+    assert_eq!(applied.effects, vec![InputEffect::Focus(parent.1)]);
+    assert_eq!(
+        focus_agent(&mut rig),
+        Some(card_agent("parent-at-click", &parent.0))
+    );
+}
+
+#[test]
+fn a_refused_card_focus_rolls_the_selection_back_with_the_refusal_notice() {
+    let (mut rig, baseline, picked) = picked_focus_rig();
+    let label = rig
+        .view()
+        .ctx()
+        .focus_rollback
+        .as_ref()
+        .unwrap()
+        .label
+        .clone();
+    rig.state
+        .on_wakeup(
+            &mut rig.terminal,
+            Wakeup::FocusFailed {
+                pane: picked,
+                error: "no pane hosts the agent now".to_owned(),
+            },
+        )
+        .unwrap();
+    assert_eq!(rig.view().ui().selected_pane, Some(baseline));
+    let alert = rig.view().ctx().health.alert.clone().expect("a notice");
+    assert!(
+        format!("{alert:?}").contains(&format!(
+            "focus failed: {label}: no pane hosts the agent now"
+        )),
+        "{alert:?}"
+    );
 }

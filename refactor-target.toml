@@ -4030,7 +4030,9 @@ path = "crates/rimz/src/sidebar"
 # that row's pane (+2).
 # HostingRead::agent_hosting_of_session answers for a card's session: itself while no swap
 # replaced it, else its launch's holder (+1).
-surface-budget = 262
+# produce::hosting::read_hosting_in gives the sidebar host's card focus the read by the room's
+# identity, without a resolved workspace (+1).
+surface-budget = 263
 
 [[verdict]]
 kind = "item"

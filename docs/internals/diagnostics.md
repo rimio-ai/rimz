@@ -309,7 +309,7 @@ To correlate a fold with its publication, take the latest `frame_published` whos
 | Field | Meaning |
 | --- | --- |
 | `nonce`, `target` | The focus intent and its destination pane |
-| `budget_ms` | Time remaining from send until click + 500 ms, floored at zero. Request work and fitting spend this one budget |
+| `budget_ms` | Time remaining from send until click + 500 ms, floored at zero. Request work and fitting spend this one budget; a card jump's hosting read follows the wait, outside it |
 | `lead_ms` | From lease arming on the source loop, before the synchronous click paint, to the send instant, request work and any fit included |
 | `fit_ms` | From push entry to the send instant, the fit included. Omitted when zero or when no fit callback ran |
 | `decided_ms` | From the send instant (taken after any fit returns) to the source's wait decision |
@@ -357,6 +357,8 @@ jq 'select(.event.kind=="push_handshake" and (.event.outcome!="painted" or any(.
 | `request_failed` | The request failed |
 | `anchor_changed` | The stored nonce no longer matched before push. This fallback also uses the request gate for its dispatch fence |
 | `push_superseded` | The obsolete jump stopped before handshake tracing |
+| `hosting_read` | A card jump starts its hosting read, after the paint wait (cross-tab) or before the request gate (same-tab) |
+| `read_superseded` | The jump stopped being current during its hosting read; it ends superseded, not refused |
 | `owner_unresolved` | The push was offered to nobody: the host's fold had no frame, no tab listed the target, or no attachment other than the source owned it. Written once, after the push |
 | `input_superseded` | A same-tab focus click or key revoked the active jump before arming its own local lease. The record keeps the cancelled jump's sequence, target, and source attachment |
 
