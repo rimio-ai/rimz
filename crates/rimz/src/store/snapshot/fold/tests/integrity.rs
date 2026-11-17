@@ -183,7 +183,7 @@ fn sequence_event(
             &AgentKind::new_unchecked(kind),
             AgentLaunchPayload {
                 system_prompt_digest: None,
-                agent_id: key.into(),
+                agent_id: key.clone().into(),
                 launch_id: Some(launch.into()),
                 agent_name: format!("swap-{agent_id}"),
                 agent_name_explicit: false,
@@ -198,7 +198,10 @@ fn sequence_event(
                 },
                 run_id: None,
                 pane_id: (action == 13).then(|| PaneId::parse(&format!("tmux:%{epoch}")).unwrap()),
-                runtime_owner: None,
+                runtime_owner: (action == 13).then(|| RuntimeOwner {
+                    ancestors: vec![100 + epoch, 7],
+                    ..RuntimeOwner::new(RuntimeOwnerKind::Agent, key, 9 + epoch, None)
+                }),
                 worktree_path: None,
                 worktree_branch: None,
                 prompt: None,
@@ -216,6 +219,12 @@ fn sequence_event(
         let mut params = event.params_value();
         params["launch_id"] = serde_json::json!(launch);
         params["pane_id"] = serde_json::json!(format!("tmux:%{epoch}"));
+        params["runtime_owner"] = serde_json::json!({
+            "kind": "agent",
+            "subject_id": agent_id,
+            "pid": 20 + epoch,
+            "ancestors": [200 + epoch, 7],
+        });
         if epoch > 0 {
             params["epoch"] = serde_json::json!(epoch);
         }

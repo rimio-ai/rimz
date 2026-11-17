@@ -230,16 +230,24 @@ pub fn current_process_owner(
     kind: RuntimeOwnerKind,
     subject_id: impl Into<String>,
 ) -> RuntimeOwner {
-    let pid = std::process::id();
-    RuntimeOwner::new(kind, subject_id, pid, crate::proc::process_start_token(pid))
+    process_owner(kind, subject_id, std::process::id())
 }
 
+/// The owner record for `pid`, with its parent chain when the walk was whole
+/// and the process's start token held across it, so a pid that changed hands
+/// mid-walk records no chain.
 pub fn process_owner(
     kind: RuntimeOwnerKind,
     subject_id: impl Into<String>,
     pid: u32,
 ) -> RuntimeOwner {
-    RuntimeOwner::new(kind, subject_id, pid, crate::proc::process_start_token(pid))
+    let process_start = crate::proc::process_start_token(pid);
+    let ancestors = crate::proc::whole_ancestor_pids(pid);
+    let held = crate::proc::process_start_token(pid) == process_start;
+    RuntimeOwner {
+        ancestors: if held { ancestors } else { Vec::new() },
+        ..RuntimeOwner::new(kind, subject_id, pid, process_start)
+    }
 }
 
 pub(super) fn owner_is_live(owner: &RuntimeOwner) -> bool {
@@ -728,5 +736,50 @@ mod tests {
 
         let daemon = RuntimeOwner::new(RuntimeOwnerKind::Daemon, "sess-daemon", u32::MAX, None);
         assert_eq!(agent_liveness(&agent(Some(daemon))), AgentLiveness::Dead);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn owners_record_their_whole_parent_chain() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("617")
+            .spawn()
+            .unwrap();
+        let spawned = process_owner(RuntimeOwnerKind::Agent, "sess-child", child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(spawned.ancestors.first(), Some(&std::process::id()));
+        assert!(!spawned.ancestors.contains(&1));
+
+        let current = current_process_owner(RuntimeOwnerKind::Agent, "sess-current");
+        assert_eq!(
+            current.ancestors.first(),
+            Some(&std::os::unix::process::parent_id())
+        );
+        assert!(!current.ancestors.contains(&1) && !current.ancestors.contains(&current.pid));
+
+        let gone = process_owner(RuntimeOwnerKind::Agent, "sess-gone", child.id());
+        assert!(gone.ancestors.is_empty(), "a gone pid records no chain");
+    }
+
+    #[test]
+    fn an_owner_chain_is_omitted_when_empty_and_defaults_when_absent() {
+        let legacy = RuntimeOwner::new(RuntimeOwnerKind::Agent, "sess", 42, None);
+        assert!(legacy.ancestors.is_empty(), "a legacy pid reads no process");
+        let encoded = serde_json::to_value(&legacy).unwrap();
+        assert!(encoded.get("ancestors").is_none(), "{encoded}");
+        let decoded: RuntimeOwner = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, legacy);
+
+        let chained = RuntimeOwner {
+            ancestors: vec![41, 40],
+            ..legacy
+        };
+        let encoded = serde_json::to_value(&chained).unwrap();
+        assert_eq!(encoded["ancestors"], serde_json::json!([41, 40]));
+        assert_eq!(
+            serde_json::from_value::<RuntimeOwner>(encoded).unwrap(),
+            chained
+        );
     }
 }

@@ -298,6 +298,13 @@ pub enum RuntimeOwnerKind {
 /// them only while this process identity is still alive. `process_start` is
 /// the Linux `/proc/<pid>/stat` start-time token when available; it defeats PID
 /// reuse without becoming a cross-platform requirement.
+///
+/// `ancestors` is the owner process's parents at the instant the owner was
+/// built, nearest first, without the owner and without pid 1. It is recorded
+/// only from a whole walk over a process whose start token held across it, and
+/// is empty otherwise: empty means not known, never "no parents". The pane
+/// binder reads it to prove or disprove that a pane's root process holds this
+/// owner. Ancestor pids carry no start token.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeOwner {
     pub kind: RuntimeOwnerKind,
@@ -305,9 +312,12 @@ pub struct RuntimeOwner {
     pub pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_start: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ancestors: Vec<u32>,
 }
 
 impl RuntimeOwner {
+    /// An owner with no recorded ancestors; reads no process.
     pub fn new(
         kind: RuntimeOwnerKind,
         subject_id: impl Into<String>,
@@ -319,6 +329,7 @@ impl RuntimeOwner {
             subject_id: subject_id.into(),
             pid,
             process_start,
+            ancestors: Vec::new(),
         }
     }
 }

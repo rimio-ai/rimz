@@ -3731,7 +3731,13 @@ upward-dependencies = [
 # socket_inodes and socket_inodes_for_env share Linux fd ownership with remote discovery (+2).
 # pressure shares the cgroup-first PSI reader, Resource and its name, Pressure and PressureErr (+6).
 # input_tty_path shares the controlling-pty resolution with the sidebar host (+1).
-surface-budget = 156
+# whole_ancestor_pids gives runtime owner records the whole-or-empty parent chain the pane binder compares (+1).
+surface-budget = 157
+
+[[verdict]]
+kind = "item"
+key = "proc::whole_ancestor_pids"
+reason = "Runtime owner records carry a whole-or-empty parent chain; `ancestor_pids` keeps its partial walk for hook attribution."
 
 [[verdict]]
 kind = "item"

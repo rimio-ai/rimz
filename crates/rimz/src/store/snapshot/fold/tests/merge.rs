@@ -785,3 +785,51 @@ fn carryover_round_trips_on_disk() {
     let loaded = read_carryover(&path).unwrap();
     assert_eq!(loaded, carryover);
 }
+
+#[test]
+fn an_event_owner_replaces_the_prior_owners_chain_whole() {
+    use crate::agents::AgentLifecycleObservation;
+
+    let workspace = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
+    let event = |owner: Option<RuntimeOwner>, agent_pid: Option<u32>| {
+        let mut observation = AgentLifecycleObservation::new(
+            Some("agent-1".into()),
+            lifecycle::LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        observation.runtime_owner = owner;
+        observation.agent_pid = agent_pid;
+        EventEnvelope::agent_lifecycle(
+            workspace.clone(),
+            "session",
+            "claude",
+            "UserPromptSubmit",
+            &observation,
+        )
+    };
+    let chained = |pid, ancestors| RuntimeOwner {
+        ancestors,
+        ..RuntimeOwner::new(RuntimeOwnerKind::Agent, "agent-1", pid, None)
+    };
+    let first =
+        agent_rollup_with_carryover(&[event(Some(chained(42, vec![41, 40])), None)], vec![]);
+    assert_eq!(first[0].runtime_owner, Some(chained(42, vec![41, 40])));
+
+    let moved =
+        agent_rollup_with_carryover(&[event(Some(chained(43, vec![39])), None)], first.clone());
+    assert_eq!(moved[0].runtime_owner, Some(chained(43, vec![39])));
+
+    let unknown =
+        agent_rollup_with_carryover(&[event(Some(chained(42, vec![])), None)], first.clone());
+    assert_eq!(
+        unknown[0].runtime_owner,
+        Some(chained(42, vec![])),
+        "an owner with no chain carries none from the prior owner"
+    );
+
+    let legacy = agent_rollup_with_carryover(&[event(None, Some(44))], first);
+    assert_eq!(
+        legacy[0].runtime_owner,
+        Some(chained(44, vec![])),
+        "a legacy pid synthesizes an owner with no chain"
+    );
+}

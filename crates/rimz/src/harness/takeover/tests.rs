@@ -433,6 +433,7 @@ fn occupants_are_live_pane_sessions_at_or_under_the_checkout() {
         subject_id: "root".to_owned(),
         pid: 42,
         process_start: None,
+        ancestors: Vec::new(),
     });
     let mut cleared = agent("cleared", AgentStatus::Idle, "/repo/wt");
     cleared.launch_id = root.launch_id.clone();
