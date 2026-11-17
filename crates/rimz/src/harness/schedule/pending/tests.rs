@@ -4,10 +4,9 @@ use crate::config::TaskEntry;
 #[test]
 fn catalog_wait_classes_follow_the_kind_of_work() {
     use PendingWaitClass::{Sleeping, Working};
-    let now = "2026-06-01T10:00:00Z[UTC]".parse().unwrap();
     let entries = [
         TaskEntry {
-            at: Some("12:00".into()),
+            fire_at: Some("2026-06-01T12:00:00Z".parse().unwrap()),
             ..TaskEntry::default()
         },
         TaskEntry {
@@ -47,7 +46,7 @@ fn catalog_wait_classes_follow_the_kind_of_work() {
         .into_iter()
         .map(|entry| {
             let task = LoadedTask::new("wait", entry, TaskSource::Instance);
-            pending_wait("wait", &task, &now).unwrap().class
+            pending_wait("wait", &task).unwrap().class
         })
         .collect();
     assert_eq!(
@@ -507,7 +506,7 @@ fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
     }
     let agents = [vec![parent], children.to_vec(), vec![leader]].concat();
     let mut snapshot = SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), agents, now);
-    project_pending_waits(&mut snapshot, &paths, None, &MachineConfig::default());
+    project_pending_waits(&mut snapshot, &paths, None);
     assert_eq!(
         snapshot.agents[0].pending_waits.len(),
         3,
@@ -609,7 +608,7 @@ fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
         }
         run::write(&paths.runs_dir, run).unwrap();
     }
-    project_pending_waits(&mut snapshot, &paths, None, &MachineConfig::default());
+    project_pending_waits(&mut snapshot, &paths, None);
     assert!(snapshot.agents[0].pending_waits.is_empty());
     assert_ne!(
         snapshot.agents[0].effective_status(snapshot.now),
@@ -620,7 +619,6 @@ fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
 #[test]
 fn pending_wait_requires_an_ephemeral_valid_trigger_and_one_shot_clock() {
     let deadline = "2026-06-01T12:00:00Z".parse().unwrap();
-    let now = "2026-06-01T10:00:00Z[UTC]".parse().unwrap();
     for entry in [
         TaskEntry {
             signal: Some("pr.merged".into()),
@@ -638,7 +636,7 @@ fn pending_wait_requires_an_ephemeral_valid_trigger_and_one_shot_clock() {
         },
     ] {
         let task = LoadedTask::new("wait", entry, TaskSource::Instance);
-        assert!(pending_wait("wait", &task, &now).is_none());
+        assert!(pending_wait("wait", &task).is_none());
     }
     let task = LoadedTask::new(
         "signal",
@@ -649,7 +647,7 @@ fn pending_wait_requires_an_ephemeral_valid_trigger_and_one_shot_clock() {
         TaskSource::Instance,
     );
     assert_eq!(
-        pending_wait("signal", &task, &now).unwrap().trigger,
+        pending_wait("signal", &task).unwrap().trigger,
         PendingWaitTrigger::Signal {
             selector: "pr.merged".into(),
         }
@@ -658,7 +656,6 @@ fn pending_wait_requires_an_ephemeral_valid_trigger_and_one_shot_clock() {
 
 #[test]
 fn pending_waits_preserve_pid_and_delay() {
-    let now = "2026-06-01T10:00:00Z[UTC]".parse().unwrap();
     let armed_at = "2026-06-01T09:42:00Z".parse().unwrap();
     let meta = crate::config::WaitMeta {
         armed_at,
@@ -668,13 +665,13 @@ fn pending_waits_preserve_pid_and_delay() {
     let timer = LoadedTask::new(
         "timer",
         TaskEntry {
-            at: Some("10:12".into()),
+            fire_at: Some("2026-06-01T10:12:00Z".parse().unwrap()),
             wait_meta: Some(meta.clone()),
             ..TaskEntry::default()
         },
         TaskSource::Instance,
     );
-    let wait = pending_wait("timer", &timer, &now).unwrap();
+    let wait = pending_wait("timer", &timer).unwrap();
     assert_eq!(wait.armed_at, Some(armed_at));
     assert_eq!(
         wait.trigger,
@@ -717,46 +714,12 @@ fn pending_waits_preserve_pid_and_delay() {
             },
             TaskSource::Instance,
         );
-        assert_eq!(
-            pending_wait("watch", &task, &now).unwrap().trigger,
-            expected
-        );
-    }
-}
-
-#[test]
-fn clock_due_uses_arm_time_or_the_snapshot_clock() {
-    let now = "2026-06-02T10:00:00Z[UTC]".parse().unwrap();
-    for (armed_at, expected) in [
-        (Some("2026-06-01T10:00:00Z"), "2026-06-01T12:00:00Z"),
-        (None, "2026-06-02T12:00:00Z"),
-    ] {
-        let task = LoadedTask::new(
-            "timer",
-            TaskEntry {
-                at: Some("12:00".into()),
-                wait_meta: armed_at.map(|at| crate::config::WaitMeta {
-                    armed_at: at.parse().unwrap(),
-                    delay: None,
-                    reader: None,
-                }),
-                ..TaskEntry::default()
-            },
-            TaskSource::Instance,
-        );
-        assert_eq!(
-            pending_wait("timer", &task, &now).unwrap().trigger,
-            PendingWaitTrigger::Timer {
-                due: expected.parse().unwrap(),
-                delay: None,
-            },
-        );
+        assert_eq!(pending_wait("watch", &task).unwrap().trigger, expected);
     }
 }
 
 #[test]
 fn fire_at_due_is_its_instant_even_when_armed_at_it() {
-    let now = "2026-06-02T10:00:00Z[UTC]".parse().unwrap();
     let at: jiff::Timestamp = "2026-06-02T10:00:00Z".parse().unwrap();
     let task = LoadedTask::new(
         "reset",
@@ -772,7 +735,7 @@ fn fire_at_due_is_its_instant_even_when_armed_at_it() {
         TaskSource::Instance,
     );
     assert_eq!(
-        pending_wait("reset", &task, &now).unwrap().trigger,
+        pending_wait("reset", &task).unwrap().trigger,
         PendingWaitTrigger::Timer {
             due: at,
             delay: None,

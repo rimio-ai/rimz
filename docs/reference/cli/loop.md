@@ -5,7 +5,7 @@
 A clock task fires while a room for its project is open, from that room's sidebar, or from the optional machine-wide [timer](#timer) when no room is open. A signal task fires from whichever process emits the signal, without the timer or sidebar. [`rimz events emit`](./events.md#emit-a-signal) still requires an existing room.
 
 ```sh
-rimz loop add morning --agent claude --every weekday --at 07:00 -- "summarize what landed on main overnight"
+rimz loop add morning --agent claude --cron '0 7 * * 1-5' -- "summarize what landed on main overnight"
 rimz loop add watchdog --every 15m --timeout 20m -- cargo test
 rimz loop add --team forge --when 'pr[feat-x]=merged' -- -w feat-x-followup "start the follow-up"
 rimz loop list
@@ -103,7 +103,6 @@ A task that wants a clean tree for each fire makes it itself: a shell task whose
 | --- | --- | --- |
 | One-shot | `--at <TIME>`, or `--in <DUR>` | Fires once, then the task removes itself. |
 | Interval | `--every <DUR>`, measured from the last fire | Yes. |
-| Calendar | `--every <DAYS> --at HH:MM` | On each matching day. |
 | Raw cron | `--cron "<expression>"` | Per the expression. |
 | Poll-until | Stored rows only: `loop add` refuses `--until` | One run per cadence fire, until a command exits `0` or the deadline passes; a fire past the deadline records `expired`. |
 | Signal | `--signal <NAME\|FAMILY.*>`, narrowed by `--match` | Once, or on every delivering signal with `--repeat`; see [signals](#signals). |
@@ -115,14 +114,13 @@ The trigger values follow these rules:
 
 | Value | Accepts |
 | --- | --- |
-| `--at` | Alone, a one-shot time: 24-hour `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM` (such as `fri 09:30`). It resolves at add time to the first matching instant after now, so an `HH:MM` at or before the current minute fires tomorrow; a dated time in the past is refused. With `--every`, 24-hour `HH:MM` only. |
-| `--every` interval | An integer with `s`, `m`, `h`, or `d`, rounded up to whole minutes. `0` is refused, and an interval cannot take `--at`. |
-| `--every` days | `day` (or `daily`), `weekday` (or `weekdays`), `weekend` (or `weekends`), a list such as `mon,wed,fri`, or a range such as `mon-fri`. Requires `--at`. |
+| `--at` | A one-shot time: 24-hour `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM` (such as `fri 09:30`). It resolves at add time to the first matching instant after now, so an `HH:MM` at or before the current minute fires tomorrow; a dated time in the past is refused. It refuses `--every`, `--cron`, `--in`, and `--signal`. |
+| `--every` | An integer with `s`, `m`, `h`, or `d`, rounded up to whole minutes. `0` is refused. A daily or weekday time takes `--cron`. |
 | `--cron` | Five whitespace-separated fields (minute, hour, day of month, month, day of week). Each field is `*`, a value, a range `a-b`, a step `*/n` or `a-b/n`, or a comma list of these. Months take `jan` to `dec` and days take `sun` to `sat`, case-insensitive and usable as range ends, and day `7` is Sunday as well as `0`. `@hourly`, `@daily`, `@weekly`, `@monthly`, or `@yearly` stands for the whole expression. When both day fields are other than `*`, a day either one selects fires. `L`, `W`, `?`, `#`, `@reboot`, an out-of-range or reversed value, and an expression whose day of month no selected month has (`0 0 30 2 *`) are refused, naming the token or form. |
 | `--in` | A [duration](../cli.md#durations) in `s`, `m`, `h`, or `d`, greater than zero. It resolves at add time to a one-shot instant, rounded up to the next minute. |
 | `--until` | Refused with `--until is no longer accepted; fire on a condition with --when`. A stored row keeps its deadline and still runs. |
 
-`--every 1d` fires a day after the last fire and drifts with it; `--every day --at 07:00` fires at 07:00. Calendar times, `--at`, and `--until` resolve in the top-level `timezone` setting, or the system zone when it is unset. `--in` is a delay from now and does not depend on the zone. A recurring clock task arms the first time a clock sees it and fires on the next occurrence after that, so a late room or a new timer never replays missed fires. A one-shot from `--at` or `--in` instead fires on the first clock that sees it at or past its instant, however late, and its run then reads `fired <DUR> late` in `loop show` and `loop logs` when it started two minutes or more after the instant. It lists as `once at YYYY-MM-DD HH:MM`.
+`--every 1d` fires a day after the last fire and drifts with it; `--cron '0 7 * * *'` fires at 07:00. `--cron`, `--at`, and `--until` resolve in the top-level `timezone` setting, or the system zone when it is unset. `--in` is a delay from now and does not depend on the zone. A recurring clock task arms the first time a clock sees it and fires on the next occurrence after that, so a late room or a new timer never replays missed fires. A one-shot from `--at` or `--in` instead fires on the first clock that sees it at or past its instant, however late, and its run then reads `fired <DUR> late` in `loop show` and `loop logs` when it started two minutes or more after the instant. It lists as `once at YYYY-MM-DD HH:MM`.
 
 ### Window provider
 
@@ -235,11 +233,11 @@ Forge terms read the existing room cache only: explain does not keep a selected 
 `add` reads back the command or launch, where it runs, a shell task's timeout, what the launch's arguments ask for, the trigger in words, and the next fire for a clock:
 
 ```console
-$ rimz loop add deps --agent claude -w deps --every mon --at 09:00 -- -p --timeout 1h 'Check for outdated dependencies.'
+$ rimz loop add deps --agent claude -w deps --cron '0 9 * * mon' -- -p --timeout 1h 'Check for outdated dependencies.'
 added loop task `deps`
 action: launches `rimz agents claude -w deps -p --timeout 1h 'Check for outdated dependencies.'` in worktree `deps` (created at the first fire if missing)
 launch: worktree `deps` · prompt found · time limit 1h
-trigger: fires every Mon at 09:00
+trigger: fires cron `0 9 * * mon`
 next fire: 2026-11-23 09:00 (in 6d)
 live while a room for /home/you/code/app is open
 no room is open there; start one with `rimz start`, or use `rimz loop timer install` to fire without one
@@ -383,7 +381,7 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | a workflow fire's `launched`, which carries its run id | Neutral: the run's own outcome decides once it ends. Each run counts once, however often its outcome is reported. |
 | `skipped` (a sibling signal, or a watch verdict `on` filters out) | Neutral. |
 | `overlapped`, `deferred`, `canceled`, `expired`, `target gone`, `budget skipped` | Neutral. |
-| `start failed`: the fire left no run behind, either the runner was never spawned, or it exited before it could record anything. An interval, calendar, or cron occurrence is spent without a run; a one-shot (`--in`, `--at`) stays and is dispatched again five minutes later, as is a one-shot condition (and `rimz wait --when`) that still reads true | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
+| `start failed`: the fire left no run behind, either the runner was never spawned, or it exited before it could record anything. An interval or cron occurrence is spent without a run; a one-shot (`--in`, `--at`) stays and is dispatched again five minutes later, as is a one-shot condition (and `rimz wait --when`) that still reads true | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
 
 History an older RimZ wrote can also hold `timed out`, `verify failed`, and `budget exceeded`, which strike; `surplus skipped`, `account skipped`, `throttle skipped`, `capacity held`, `takeover blocked`, and `replaced` are neutral.
 

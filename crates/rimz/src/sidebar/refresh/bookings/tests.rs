@@ -502,8 +502,7 @@ fn the_published_cache_carries_the_loops_own_verdict() {
     let catalog = TaskCatalog::load_room_lenient(&root, &state);
     let readings = attention::read_catalog(&catalog, &root, &state, &runtime, context());
     assert!(
-        crate::harness::schedule::pending::pending_waits_by_session(&catalog, &root, &now)
-            .is_empty(),
+        crate::harness::schedule::pending::pending_waits_by_session(&catalog, &root).is_empty(),
         "a state-tier booking is no pending wait"
     );
     let published = BookingsCache {

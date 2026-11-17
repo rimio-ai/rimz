@@ -2258,7 +2258,7 @@ fn set_document_value_renders_inline_tables_as_table_blocks() {
     let mut doc = DocumentMut::new();
     let path = document_key_for_set(&parse_key("loop.tasks").expect("key"));
     let value = parse_edit_value(
-        r#"{ pr_watch = { agent = "codex", prompt = "check CI", root = "/r", every = "15m" }, self_wait = { wait = { kind = "claude", session = "s1", handle = "@planner" }, prompt = "resume", root = "/r", at = "09:30" } }"#,
+        r#"{ pr_watch = { agent = "codex", prompt = "check CI", root = "/r", every = "15m" }, self_wait = { wait = { kind = "claude", session = "s1", handle = "@planner" }, prompt = "resume", root = "/r", every = "1h" } }"#,
     );
 
     set_document_value(&mut doc, &path, value).expect("set tasks");

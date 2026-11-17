@@ -521,7 +521,7 @@ fn drain_drops_a_task_broken_by_hand_edit_without_a_row() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.busy]\nroot={:?}\nargs=['true']\ntimeout='1m'\nat='07:00'\noverlap='coalesce'\n",
+            "[tasks.busy]\nroot={:?}\nargs=['true']\ntimeout='1m'\nfire-at='2030-01-01T00:00:00Z'\noverlap='coalesce'\n",
             env.project_root
         ),
     );

@@ -238,8 +238,6 @@ pub struct TaskEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub every: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cron: Option<String>,

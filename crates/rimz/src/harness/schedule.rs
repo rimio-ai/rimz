@@ -19,10 +19,7 @@ use anyhow::Context;
 use crate::config::{LaunchKind, OverlapPolicy, TaskEntry, TaskTarget};
 use crate::harness::prose::{span, verbatim};
 use crate::harness::when;
-use crate::utils::time::{
-    CalendarAt, ClockTime, DurationUnit, parse_duration_units, parse_weekday,
-};
-use jiff::civil::Weekday;
+use crate::utils::time::{CalendarAt, DurationUnit, parse_duration_units};
 use jiff::{SignedDuration, Timestamp, Zoned};
 
 pub mod arm;
@@ -465,16 +462,14 @@ pub enum ScheduleErr {
     /// The stored row does not decode, so it has no trigger to read: the refusal is the error.
     #[error(transparent)]
     Refused(TaskActionErr),
-    #[error(
-        "schedule `{name}` needs a firing time: set `at = \"HH:MM\"` for a one-shot, `every = \"30m\"`, or `cron = \"...\"`"
-    )]
+    #[error("schedule `{name}` needs a firing time: set `every = \"30m\"` or `cron = \"...\"`")]
     NoTime { name: String },
     #[error(
-        "schedule `{name}` sets conflicting schedule fields; use `cron`, `every`, or bare `at`"
+        "schedule `{name}` sets conflicting schedule fields; use one of `cron`, `every`, or `fire-at`"
     )]
     TimeConflict { name: String },
     #[error(
-        "schedule `{name}` sets conflicting trigger fields; use one of `when`, `signal`, `watch`, `cron`, `every`, or bare `at`"
+        "schedule `{name}` sets conflicting trigger fields; use one of `when`, `signal`, `watch`, `cron`, `every`, or `fire-at`"
     )]
     TriggerConflict { name: String },
     #[error("schedule `{name}` sets `match` without `signal`")]
@@ -506,10 +501,6 @@ pub enum ScheduleErr {
         "schedule `{name}` has an invalid check watch: `every` must be a positive duration like `1s` and `on` must be `success` or `fail`"
     )]
     BadCheckWatch { name: String },
-    #[error("schedule `{name}` sets a calendar `every` value without `at`; add `at = \"HH:MM\"`")]
-    EveryNeedsAt { name: String },
-    #[error("schedule `{name}` has an invalid time `{value}`; use 24-hour `HH:MM`")]
-    BadTime { name: String, value: String },
     #[error(
         "schedule `{name}` has an invalid one-shot time `{value}`; use `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`"
     )]
@@ -539,9 +530,7 @@ pub enum ScheduleErr {
         "schedule `{name}` has a cron expression `{value}` that never fires: no selected month has the selected day of month"
     )]
     CronNeverFires { name: String, value: String },
-    #[error(
-        "schedule `{name}` has an invalid `every` value `{value}`; use a duration like `30m` or a day mask like `weekday` or `mon,wed,fri`"
-    )]
+    #[error("schedule `{name}` has an invalid `every` value `{value}`; use a duration like `30m`")]
     BadEvery { name: String, value: String },
     #[error(transparent)]
     BadName(#[from] crate::harness::name::NameErr),
@@ -614,37 +603,6 @@ fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
     !repeats(entry) || entry.deadline.is_some() || entry.watch.is_some() || entry.fire_at.is_some()
 }
 
-const WEEK: [Weekday; 7] = [
-    Weekday::Monday,
-    Weekday::Tuesday,
-    Weekday::Wednesday,
-    Weekday::Thursday,
-    Weekday::Friday,
-    Weekday::Saturday,
-    Weekday::Sunday,
-];
-
-fn short_day_name(day: Weekday) -> &'static str {
-    match day {
-        Weekday::Monday => "Mon",
-        Weekday::Tuesday => "Tue",
-        Weekday::Wednesday => "Wed",
-        Weekday::Thursday => "Thu",
-        Weekday::Friday => "Fri",
-        Weekday::Saturday => "Sat",
-        Weekday::Sunday => "Sun",
-    }
-}
-
-/// A normalized firing time: minute, hour (local wall-clock), and the weekday
-/// set. An empty weekday set means every day.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct CalendarSpec {
-    pub minute: u8,
-    pub hour: u8,
-    pub weekdays: Vec<Weekday>,
-}
-
 /// A normalized interval schedule.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct IntervalSpec {
@@ -664,11 +622,10 @@ fn local_minute(at: Timestamp) -> String {
         .to_string()
 }
 
-/// A parsed schedule: calendar time, interval, a raw cron escape hatch, or
-/// the absolute instant of a `fire-at` row.
+/// A parsed schedule: interval, a raw cron escape hatch, or the absolute instant of a `fire-at`
+/// row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Schedule {
-    Calendar(CalendarSpec),
     Interval(IntervalSpec),
     Cron(CronSpec),
     Instant(Timestamp),
@@ -679,18 +636,6 @@ impl Schedule {
     fn describe(&self) -> String {
         match self {
             Schedule::Cron(cron) => format!("cron `{}`", cron.source),
-            Schedule::Calendar(spec) => {
-                let days = if spec.weekdays.is_empty() {
-                    "day".to_owned()
-                } else {
-                    spec.weekdays
-                        .iter()
-                        .map(|day| short_day_name(*day))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                };
-                format!("every {days} at {:02}:{:02}", spec.hour, spec.minute)
-            }
             Schedule::Interval(spec) => format!("every {}", format_minutes(spec.minutes)),
             Schedule::Instant(at) => format!("once at {}", local_minute(*at)),
         }
@@ -703,7 +648,6 @@ impl Schedule {
             Schedule::Interval(spec) => {
                 now.timestamp().duration_since(last_fire).as_secs() >= i64::from(spec.minutes) * 60
             }
-            Schedule::Calendar(spec) => calendar_due(spec, last_fire, now),
             Schedule::Cron(cron) => cron.due(last_fire, now),
             Schedule::Instant(at) => last_fire < *at && *at <= now.timestamp(),
         }
@@ -717,7 +661,6 @@ impl Schedule {
             Schedule::Interval(spec) => last_fire
                 .checked_add(SignedDuration::from_secs(i64::from(spec.minutes) * 60))
                 .ok(),
-            Schedule::Calendar(spec) => calendar_next_after(spec, last_fire, now),
             Schedule::Cron(cron) => cron.next_after(last_fire, now),
             Schedule::Instant(at) => (last_fire < *at).then_some(*at),
         }
@@ -885,11 +828,6 @@ fn trigger_clause(task: &catalog::LoadedTask) -> Option<String> {
 impl ParsedSchedule {
     /// A short human description for listings.
     fn describe(&self) -> String {
-        if self.once
-            && let Schedule::Calendar(spec) = &self.schedule
-        {
-            return format!("once at {:02}:{:02}", spec.hour, spec.minute);
-        }
         self.schedule.describe()
     }
 }
@@ -1231,34 +1169,8 @@ fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, Sched
             });
         }
         TimingFields::Cron(cron) => Schedule::Cron(CronSpec::parse(name, cron)?),
-        TimingFields::Every { every, at } => match parse_every(name, every)? {
-            EverySpec::Interval(minutes) => {
-                if at.is_some() {
-                    return Err(ScheduleErr::TimeConflict {
-                        name: name.to_owned(),
-                    });
-                }
-                Schedule::Interval(IntervalSpec::new(minutes))
-            }
-            EverySpec::Days(weekdays) => {
-                let at = at.ok_or_else(|| ScheduleErr::EveryNeedsAt {
-                    name: name.to_owned(),
-                })?;
-                let (hour, minute) = parse_task_hhmm(name, at)?;
-                Schedule::Calendar(CalendarSpec {
-                    minute,
-                    hour,
-                    weekdays,
-                })
-            }
-        },
-        TimingFields::Once(at) => {
-            let (hour, minute) = parse_task_hhmm(name, at)?;
-            Schedule::Calendar(CalendarSpec {
-                minute,
-                hour,
-                weekdays: Vec::new(),
-            })
+        TimingFields::Every(every) => {
+            Schedule::Interval(IntervalSpec::new(parse_every(name, every)?))
         }
         TimingFields::Instant(at) => Schedule::Instant(at),
         TimingFields::Missing => {
@@ -1281,10 +1193,7 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
             detail: refused.detail.clone(),
         }));
     }
-    let has_schedule = entry.at.is_some()
-        || entry.every.is_some()
-        || entry.cron.is_some()
-        || entry.fire_at.is_some();
+    let has_schedule = entry.every.is_some() || entry.cron.is_some() || entry.fire_at.is_some();
     let has_signal = entry.signal.is_some();
     let has_watch = entry.watch.is_some();
     let has_when = entry.when.is_some();
@@ -1415,8 +1324,7 @@ fn watch_interval(spec: &crate::config::WatchSpec) -> Option<std::time::Duration
 enum TimingFields<'a> {
     Conflict,
     Cron(&'a str),
-    Every { every: &'a str, at: Option<&'a str> },
-    Once(&'a str),
+    Every(&'a str),
     Instant(Timestamp),
     Missing,
 }
@@ -1424,88 +1332,26 @@ enum TimingFields<'a> {
 impl<'a> TimingFields<'a> {
     fn classify(entry: &'a TaskEntry) -> Self {
         if let Some(at) = entry.fire_at {
-            return if entry.cron.is_some() || entry.every.is_some() || entry.at.is_some() {
+            return if entry.cron.is_some() || entry.every.is_some() {
                 Self::Conflict
             } else {
                 Self::Instant(at)
             };
         }
-        match (
-            entry.cron.as_deref(),
-            entry.every.as_deref(),
-            entry.at.as_deref(),
-        ) {
-            (Some(cron), None, None) => Self::Cron(cron),
-            (Some(_), _, _) => Self::Conflict,
-            (None, Some(every), at) => Self::Every { every, at },
-            (None, None, Some(at)) => Self::Once(at),
-            (None, None, None) => Self::Missing,
+        match (entry.cron.as_deref(), entry.every.as_deref()) {
+            (Some(cron), None) => Self::Cron(cron),
+            (Some(_), Some(_)) => Self::Conflict,
+            (None, Some(every)) => Self::Every(every),
+            (None, None) => Self::Missing,
         }
     }
 }
 
-enum EverySpec {
-    Interval(u32),
-    Days(Vec<Weekday>),
-}
-
-fn parse_every(name: &str, raw: &str) -> Result<EverySpec, ScheduleErr> {
-    let value = raw.trim();
-    if let Ok(minutes) = parse_interval_minutes(raw) {
-        return Ok(EverySpec::Interval(minutes));
-    }
-    if let Some(days) = parse_days(value) {
-        return Ok(EverySpec::Days(days));
-    }
-    Err(ScheduleErr::BadEvery {
+fn parse_every(name: &str, raw: &str) -> Result<u32, ScheduleErr> {
+    parse_interval_minutes(raw).map_err(|()| ScheduleErr::BadEvery {
         name: name.to_owned(),
         value: raw.to_owned(),
     })
-}
-
-fn parse_task_hhmm(name: &str, value: &str) -> Result<(u8, u8), ScheduleErr> {
-    let bad = || ScheduleErr::BadTime {
-        name: name.to_owned(),
-        value: value.to_owned(),
-    };
-    value
-        .parse::<ClockTime>()
-        .map(|time| (time.hour(), time.minute()))
-        .map_err(|_| bad())
-}
-
-fn parse_days(days: &str) -> Option<Vec<Weekday>> {
-    let days = days.trim();
-    if days.is_empty() {
-        return None;
-    }
-    match days.to_ascii_lowercase().as_str() {
-        "day" | "daily" => return Some(Vec::new()),
-        "weekday" | "weekdays" => return Some(weekday_range(Weekday::Monday, Weekday::Friday)),
-        "weekend" | "weekends" => return Some(vec![Weekday::Saturday, Weekday::Sunday]),
-        _ => {}
-    }
-    let mut set: Vec<Weekday> = Vec::new();
-    for token in days.split(',') {
-        let token = token.trim();
-        if token.is_empty() {
-            return None;
-        }
-        let expanded = if let Some((lo, hi)) = token.split_once('-') {
-            let lo = parse_weekday(lo)?;
-            let hi = parse_weekday(hi)?;
-            weekday_range(lo, hi)
-        } else {
-            vec![parse_weekday(token)?]
-        };
-        for day in expanded {
-            if !set.contains(&day) {
-                set.push(day);
-            }
-        }
-    }
-    set.sort_by_key(|day| day.to_monday_zero_offset());
-    Some(set)
 }
 
 fn parse_interval_minutes(raw: &str) -> Result<u32, ()> {
@@ -1528,19 +1374,6 @@ fn parse_interval_minutes(raw: &str) -> Result<u32, ()> {
     };
     let minutes = seconds.div_ceil(60);
     u32::try_from(minutes).map_err(|_| ())
-}
-
-/// Inclusive Mon..Sun range; a wrap-around (e.g. `fri-mon`) walks forward to Sun.
-fn weekday_range(lo: Weekday, hi: Weekday) -> Vec<Weekday> {
-    let (lo, hi) = (
-        lo.to_monday_zero_offset() as usize,
-        hi.to_monday_zero_offset() as usize,
-    );
-    if lo <= hi {
-        WEEK[lo..=hi].to_vec()
-    } else {
-        WEEK[lo..].iter().chain(&WEEK[..=hi]).copied().collect()
-    }
 }
 
 /// A cron expression parsed once: each field's selected values as a bit set, beside the source
@@ -1822,50 +1655,6 @@ fn format_minutes(minutes: u32) -> String {
     } else {
         format!("{minutes}m")
     }
-}
-
-fn calendar_due(spec: &CalendarSpec, last_fire: Timestamp, now: &Zoned) -> bool {
-    if !spec.weekdays.is_empty() && !spec.weekdays.contains(&now.weekday()) {
-        return false;
-    }
-    if (now.hour(), now.minute()) < (spec.hour as i8, spec.minute as i8) {
-        return false;
-    }
-    let Ok(occurrence) = now
-        .date()
-        .at(spec.hour as i8, spec.minute as i8, 0, 0)
-        .to_zoned(now.time_zone().clone())
-    else {
-        return false;
-    };
-    last_fire < occurrence.timestamp() && now.timestamp() >= occurrence.timestamp()
-}
-
-fn calendar_next_after(
-    spec: &CalendarSpec,
-    last_fire: Timestamp,
-    now: &Zoned,
-) -> Option<Timestamp> {
-    for days in 0..=8 {
-        let date = now
-            .date()
-            .checked_add(Duration::from_secs(days * 86_400))
-            .ok()?;
-        if !spec.weekdays.is_empty() && !spec.weekdays.contains(&date.weekday()) {
-            continue;
-        }
-        let Ok(occurrence) = date
-            .at(spec.hour as i8, spec.minute as i8, 0, 0)
-            .to_zoned(now.time_zone().clone())
-        else {
-            continue;
-        };
-        let timestamp = occurrence.timestamp();
-        if timestamp > last_fire {
-            return Some(timestamp);
-        }
-    }
-    None
 }
 
 fn minute_bucket(timestamp: Timestamp) -> i64 {

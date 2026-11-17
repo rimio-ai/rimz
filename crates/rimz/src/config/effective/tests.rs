@@ -1633,7 +1633,7 @@ fn trusted_project_tasks_load_with_project_root() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\nargs = [\"rimz\", \"agents\", \"codex\", \"triage\"]\ntimeout = \"1h\"\naccount = \"work\"\nevery = \"day\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nargs = [\"rimz\", \"agents\", \"codex\", \"triage\"]\ntimeout = \"1h\"\naccount = \"work\"\ncron = \"0 8 * * *\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
 
@@ -1681,7 +1681,7 @@ fn untrusted_project_tasks_stay_visible_with_state() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"day\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 8 * * *\"\n",
     );
 
     let loaded = load_project_tasks(project.path(), config.path()).expect("project tasks");
@@ -1702,19 +1702,19 @@ fn project_tasks_reject_machine_local_fields() {
             "for",
         ),
         (
-            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\ndir = \"/tmp/linked\"\nevery = \"day\"\nat = \"08:00\"\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\ndir = \"/tmp/linked\"\ncron = \"0 8 * * *\"\n",
             "dir",
         ),
         (
-            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"/tmp/other\"\nevery = \"day\"\nat = \"08:00\"\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"/tmp/other\"\ncron = \"0 8 * * *\"\n",
             "root",
         ),
         (
-            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nwait = { kind = \"codex\", session = \"sess\", handle = \"@codex\" }\nevery = \"day\"\nat = \"08:00\"\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nwait = { kind = \"codex\", session = \"sess\", handle = \"@codex\" }\ncron = \"0 8 * * *\"\n",
             "wait",
         ),
         (
-            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\ndeadline = \"2026-07-01T12:00:00Z\"\nevery = \"day\"\nat = \"08:00\"\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\ndeadline = \"2026-07-01T12:00:00Z\"\ncron = \"0 8 * * *\"\n",
             "deadline",
         ),
         (
@@ -1722,7 +1722,7 @@ fn project_tasks_reject_machine_local_fields() {
             "wait-meta",
         ),
         (
-            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"day\"\nat = \"08:00\"\nbooked-by = [{ kind = \"claude\", agent_id = \"launch_lead\" }]\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 8 * * *\"\nbooked-by = [{ kind = \"claude\", agent_id = \"launch_lead\" }]\n",
             "booked-by",
         ),
     ];
@@ -1749,7 +1749,7 @@ fn project_tasks_validate_schedule_shape() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"weekday\"\n",
+        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"soon\"\n",
     );
 
     let err = project_tasks(project.path(), config.path()).expect_err("invalid schedule");
@@ -1757,9 +1757,9 @@ fn project_tasks_validate_schedule_shape() {
     assert!(matches!(
         err,
         EffectiveConfigErr::Tasks {
-            source: ProjectTasksErr::Schedule(crate::harness::schedule::ScheduleErr::EveryNeedsAt { name }),
+            source: ProjectTasksErr::Schedule(crate::harness::schedule::ScheduleErr::BadEvery { name, value }),
             ..
-        } if name == "wait"
+        } if name == "wait" && value == "soon"
     ));
 }
 
@@ -1769,7 +1769,7 @@ fn project_tasks_must_repeat() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nsignal = \"deploy.done\"\n",
     );
 
     let err = project_tasks(project.path(), config.path()).expect_err("one-shot project task");

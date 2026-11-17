@@ -204,7 +204,7 @@ fn expanded_wakes_nest_live_children_and_fall_back_without_agent_rows() {
     );
     let wait = |session: &str, handle: &str| TaskEntry {
         root: env.project_root.clone(),
-        at: Some("23:59".into()),
+        fire_at: Some("2099-06-15T12:00:00Z".parse().unwrap()),
         wait: Some(TaskTarget {
             kind: AgentKind::new_unchecked("claude"),
             session: session.into(),
@@ -253,7 +253,7 @@ fn expanded_waits_tolerate_an_unreadable_room_store() {
             "orphan-wait".into(),
             TaskEntry {
                 root: env.project_root.clone(),
-                at: Some("23:59".into()),
+                fire_at: Some("2099-06-15T12:00:00Z".parse().unwrap()),
                 wait: Some(TaskTarget {
                     kind: AgentKind::new_unchecked("claude"),
                     session: "missing".into(),
@@ -736,7 +736,7 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
     let clock = task(&env.project_root);
     let one_off = TaskEntry {
         every: None,
-        at: Some("08:00".into()),
+        fire_at: Some("2099-06-15T12:00:00Z".parse().unwrap()),
         ..clock.clone()
     };
     let resident = TaskEntry {
@@ -918,6 +918,22 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
     );
 }
 
+/// `loop list` read in UTC, so a one-shot's local time is the fixture's.
+fn list_in_utc(env: &Env) -> String {
+    let output = env
+        .rimz()
+        .args(["loop", "list"])
+        .env("TZ", "UTC")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
 #[test]
 fn disabled_one_off_displays_its_state() {
     let env = Env::new();
@@ -927,14 +943,17 @@ fn disabled_one_off_displays_its_state() {
             "disabled".into(),
             TaskEntry {
                 every: None,
-                at: Some("23:59".into()),
+                fire_at: Some("2099-06-15T12:00:00Z".parse().unwrap()),
                 ..task(&env.project_root)
             },
         )])),
     );
     loop_ok(&env, &["loop", "disable", "disabled"]);
-    let text = loop_ok(&env, &["loop", "list"]);
-    assert!(text.contains("once at 23:59 · off"), "{text}");
+    let text = list_in_utc(&env);
+    assert!(
+        text.contains("once at 2099-06-15 12:00") && text.contains(" · off"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -942,7 +961,7 @@ fn plain_one_off_ignores_a_former_resident_launch() {
     let env = Env::new();
     let entry = TaskEntry {
         every: None,
-        at: Some("23:59".into()),
+        fire_at: Some("2099-06-15T12:00:00Z".parse().unwrap()),
         ..task(&env.project_root)
     };
     write_loop_instances(&env, Tasks(BTreeMap::from([("reused".into(), entry)])));
@@ -956,8 +975,8 @@ fn plain_one_off_ignores_a_former_resident_launch() {
         value["rooms"][0]["tasks"][0]["section"], "waiting",
         "{value}"
     );
-    let text = loop_ok(&env, &["loop", "list"]);
-    assert!(text.contains("once at 23:59"), "{text}");
+    let text = list_in_utc(&env);
+    assert!(text.contains("once at 2099-06-15 12:00"), "{text}");
     assert!(!text.contains("launched"), "{text}");
 }
 
@@ -2029,7 +2048,7 @@ fn timer_fixture(code: i32, units: bool) -> (Env, PathBuf, PathBuf) {
                 "once".into(),
                 TaskEntry {
                     every: None,
-                    at: Some("23:59".into()),
+                    fire_at: Some("2099-06-15T12:00:00Z".parse().unwrap()),
                     ..clock.clone()
                 },
             ),

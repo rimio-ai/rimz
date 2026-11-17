@@ -1176,7 +1176,7 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     assert_eq!(tasks.0.len(), 1);
     let (name, entry) = tasks.0.iter().next().unwrap();
     assert!(name.starts_with("wait-"));
-    assert!(entry.at.is_none() && entry.fire_at.is_some());
+    assert!(entry.fire_at.is_some());
     assert_eq!(
         entry
             .wait_meta
@@ -1450,7 +1450,6 @@ fn wait_accepts_delays_of_a_day_or_more_as_an_absolute_instant() {
     let tasks = wait_instances(&env);
     let (_, entry) = tasks.0.iter().next().expect("armed wait row");
     let fire_at = entry.fire_at.expect("a timer stores fire-at");
-    assert!(entry.at.is_none(), "{entry:?}");
     assert!(
         fire_at
             >= before
@@ -3521,7 +3520,7 @@ fn wait_at_and_when_arm_one_shot_self_waits_in_the_arming_checkout() {
         );
         assert_eq!(entry.root, canonical(&env.project_root));
         assert_eq!(entry.dir.as_deref(), Some(linked.as_path()));
-        assert!(entry.every.is_none() && entry.cron.is_none() && entry.at.is_none());
+        assert!(entry.every.is_none() && entry.cron.is_none());
         assert!(entry.signal.is_none() && entry.hold.is_none() && entry.prompt.is_none());
         if kind == "schedule" {
             assert!(entry.when.is_none(), "{entry:?}");

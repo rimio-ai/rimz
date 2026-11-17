@@ -5376,8 +5376,8 @@ allowed-dependencies = []
 # format_duration_bound shares exact s/ms bounds between mux errors and room probes (+1).
 # parse_compact_duration is the one s/m/h/d grammar for the CLI ladder flags, subagent
 # definition timeouts, and the [agents.subagents] defaults (+1).
-# CalendarAt with parse and resolve, and parse_weekday, give loop and wait one-shot times and
-# workflow times one calendar resolver below harness::schedule (+4).
+# CalendarAt with parse and resolve gives loop and wait one-shot times and workflow times one
+# calendar resolver below harness::schedule.
 surface-budget = 24
 
 [[module]]

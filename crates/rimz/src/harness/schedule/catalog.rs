@@ -1090,7 +1090,7 @@ mod tests {
         };
         let timer = TaskEntry {
             watch: None,
-            at: Some("12:00".into()),
+            fire_at: Some("2026-06-01T12:00:00Z".parse().unwrap()),
             wait_meta: Some(crate::config::WaitMeta {
                 armed_at: "2026-06-01T10:00:00Z".parse().unwrap(),
                 delay: None,
@@ -1113,7 +1113,7 @@ mod tests {
                 (
                     "z-sooner-timer".into(),
                     TaskEntry {
-                        at: Some("11:00".into()),
+                        fire_at: Some("2026-06-01T11:00:00Z".parse().unwrap()),
                         ..timer
                     },
                 ),
@@ -1176,11 +1176,7 @@ mod tests {
                 "z-sooner-timer"
             ]
         );
-        let waits = pending_waits_by_session(
-            &catalog,
-            Path::new("/repo"),
-            &"2026-06-01T10:00:00Z[UTC]".parse().unwrap(),
-        );
+        let waits = pending_waits_by_session(&catalog, Path::new("/repo"));
         assert_eq!(
             waits[&session]
                 .iter()
@@ -1339,7 +1335,7 @@ mod tests {
     #[test]
     fn malformed_schedule_stays_visible_with_valid_action() {
         let mut entry = task("still runnable manually");
-        entry.at = Some("07:00".to_owned());
+        entry.cron = Some("0 7 * * *".to_owned());
         let catalog = TaskCatalog::from_layers(
             Tasks::default(),
             Tasks(BTreeMap::from([("broken".to_owned(), entry)])),

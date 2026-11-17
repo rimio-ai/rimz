@@ -675,7 +675,6 @@ fn react_lifecycle(
                 let sleeping = pending_waits_by_session(
                     &TaskCatalog::load_lenient(Some(&workspace.project_root)),
                     &workspace.project_root,
-                    &event.at.to_zoned(MachineConfig::load_time_zone_lenient()),
                 )
                 .into_keys()
                 .collect();

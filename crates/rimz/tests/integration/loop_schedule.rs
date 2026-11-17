@@ -2146,7 +2146,10 @@ fn loop_one_shots_store_an_absolute_instant() {
             &["loop", "add", name, trigger[0], trigger[1], "--", "true"],
         );
         let entry = &read_loop_instances(&env).0[name];
-        assert!(entry.at.is_none(), "{name}: {entry:?}");
+        assert!(
+            entry.every.is_none() && entry.cron.is_none(),
+            "{name}: {entry:?}"
+        );
         let fire_at = entry.fire_at.expect("a one-shot stores fire-at");
         assert!(fire_at > before, "{name}: {fire_at}");
         assert!(out.contains("trigger: fires once at 20"), "{name}: {out}");
@@ -2170,21 +2173,27 @@ fn loop_one_shots_store_an_absolute_instant() {
         ],
     );
     assert!(error.contains("in the past"), "{error}");
-    let (_, error) = loop_fail(
-        &env,
-        &[
+    let conflict = env
+        .rimz()
+        .args([
             "loop",
             "add",
             "weekly",
             "--every",
-            "day",
+            "1h",
             "--at",
             "fri 09:30",
             "--",
             "true",
-        ],
+        ])
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&conflict.stderr);
+    assert_eq!(conflict.status.code(), Some(2), "{error}");
+    assert!(
+        error.contains("the argument '--every <EVERY>' cannot be used with '--at <AT>'"),
+        "{error}"
     );
-    assert!(error.contains("--every <days> --at HH:MM"), "{error}");
 }
 
 #[test]
@@ -4323,7 +4332,13 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "morning", "--every", "weekday", "--at", "07:00", "--", "true",
+            "loop",
+            "add",
+            "morning",
+            "--cron",
+            "0 7 * * 1-5",
+            "--",
+            "true",
         ],
     );
     assert!(!read_loop_instances(&env).0.contains_key("morning"));
@@ -4346,9 +4361,7 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
     );
     loop_ok(
         &env,
-        &[
-            "loop", "add", "swap", "--every", "weekday", "--at", "07:00", "--", "true",
-        ],
+        &["loop", "add", "swap", "--cron", "0 7 * * 1-5", "--", "true"],
     );
     let text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
@@ -6219,7 +6232,7 @@ fn malformed_schedule_stays_visible_and_manual_action_remains_runnable() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.invalid]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\nat = \"07:00\"\n",
+            "[tasks.invalid]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\ncron = \"0 7 * * *\"\n",
             env.project_root.display()
         ),
     );
@@ -6349,20 +6362,13 @@ fn loop_show_wait_survives_unreadable_store_enrichment() {
 }
 
 #[test]
-fn loop_overlap_records_holder_and_preserves_one_shot() {
+fn loop_overlap_records_the_holder_and_keeps_the_task() {
     let env = Env::new();
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "busy", "--at", "07:00", "--", "true"],
+        &["loop", "add", "busy", "--every", "1h", "--", "true"],
     );
-    // A stored bare `at` row: `loop add --at` now writes `fire-at`, whose one scheduled
-    // attempt ends the row whatever its result.
-    let mut tasks = read_loop_instances(&env);
-    let busy = tasks.0.get_mut("busy").unwrap();
-    busy.fire_at = None;
-    busy.at = Some("07:00".to_owned());
-    write_loop_instances(&env, tasks);
     let holder = RunLockInfo {
         pid: 42_424,
         started_at: Timestamp::now() - SignedDuration::from_secs(25 * 60),
@@ -6374,12 +6380,14 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
         run.contains("previous run still active (pid 42424, started 25m ago) — skipped"),
         "{run}"
     );
-    assert!(read_loop_instances(&env).0.contains_key("busy"));
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    assert!(config.tasks.0.contains_key("busy"));
     let record = last_loop_record(&env);
     assert_eq!(record.result, LoopRunResult::Overlapped);
     let show = loop_ok(&env, &["loop", "show", "busy"]);
     assert!(
-        show.starts_with("busy · one-off · once at 07:00 · ▸ running 25m · pid 42424\n")
+        show.starts_with("busy · routine · every 1h · ▸ running 25m · pid 42424\n")
             && show.contains("  1 fire skipped while the active run holds the lock\n")
             && show.contains("  stop with `rimz loop stop busy`\n")
             && !show

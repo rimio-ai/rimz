@@ -68,15 +68,6 @@ fn self_wait_provenance_admits_only_one_shot_triggers() {
             false,
         ),
         (
-            "calendar",
-            clock(TaskEntry {
-                at: Some("09:00".to_owned()),
-                every: Some("day".to_owned()),
-                ..TaskEntry::default()
-            }),
-            false,
-        ),
-        (
             "cron",
             clock(TaskEntry {
                 cron: Some("0 * * * *".to_owned()),

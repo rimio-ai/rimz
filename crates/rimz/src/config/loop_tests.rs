@@ -240,8 +240,7 @@ fn task_entry_row_fields_round_trip_toml_and_json() {
         on: Some(CheckOn::Success),
         root: PathBuf::from("/repo"),
         dir: Some(PathBuf::from("/linked")),
-        every: Some("weekday".to_owned()),
-        at: Some("07:00".to_owned()),
+        every: Some("1d".to_owned()),
         timeout: Some("45m".to_owned()),
         signal: Some("ci.failed".to_owned()),
         matches: Some(BTreeMap::from([(
@@ -281,11 +280,11 @@ fn task_entry_row_fields_round_trip_toml_and_json() {
             .0
             .get("ci")
             .and_then(|entry| entry.every.as_deref()),
-        Some("weekday")
+        Some("1d")
     );
     assert!(
-        toml.contains("every = \"weekday\""),
-        "weekday cadence should round-trip through TOML: {toml}"
+        toml.contains("every = \"1d\""),
+        "an interval cadence should round-trip through TOML: {toml}"
     );
     assert!(toml.contains("timeout = \"45m\""), "{toml}");
     assert!(toml.contains("signal = \"ci.failed\""), "{toml}");

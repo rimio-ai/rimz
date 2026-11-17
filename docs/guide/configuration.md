@@ -1037,8 +1037,7 @@ kind = "agent"
 target = "claude"
 args = ["summarize what landed on main since yesterday"]
 root = "/home/you/code/app"
-at = "07:00"             # 24h time in the configured timezone
-every = "weekday"        # day | weekday | weekend | mon,wed,fri
+cron = "0 7 * * 1-5"     # five-field cron in the configured timezone: 07:00 on weekdays
 
 [tasks.watchdog]
 kind = "shell"
@@ -1056,7 +1055,7 @@ Loop tasks live in `~/.rimz/loop.toml` under `[tasks.<name>]`. Shared project ta
 A task is one trigger and one launch:
 
 - `kind` says what each fire launches: `shell` (the default when `args` is present and `kind` is not), `workflow`, `agent`, or `team`. A shell task's `args` is the argv each fire runs, word for word with no shell, and `timeout`, which it requires, caps it: exit `0` ends the fire `completed`; any other exit, a signal, or the timeout ends it `failed`. A workflow, agent or team task names its workflow, profile or team in `target`, and its `args` are the arguments each fire passes to `rimz workflow run`, `rimz agents` or `rimz teams launch`; such a task refuses `timeout`. `worktree` names the RimZ-owned worktree every fire runs or launches in, created from the configured base when it is missing, as `rimz loop add -w <name>` stores it. What each kind's fire does is in [what a task launches](../reference/cli/loop.md#what-a-task-launches).
-- The trigger is `at`, `every`, `cron`, `signal` with `match`, or `when` with `for`; `repeat = true` keeps a `signal` or `when` task after it fires. `provider` and `account` name whose usage windows a `window.*` condition reads, and pick no login.
+- The trigger is `every` (a duration such as `15m` or `2h`), `cron`, `fire-at` (an RFC 3339 instant such as `2026-06-01T07:00:00Z`, fired once, as `rimz loop add --in` and `--at` store it), `signal` with `match`, or `when` with `for`; `repeat = true` keeps a `signal` or `when` task after it fires. `provider` and `account` name whose usage windows a `window.*` condition reads, and pick no login.
 - `root` is the project whose room hosts the task, and `each-worktree = true` evaluates the trigger and fires in each RimZ-owned worktree. `label` is a short description.
 - `overlap` chooses what a busy repeating clock, signal, or condition task keeps: `skip` (default), `coalesce`, `queue`, `replace` (stops the active run or launch and starts the newest trigger once nothing it launched is alive), or `allow` (an agent task launches at every trigger beside what earlier fires left alive). `overlap-limit` bounds a queue, defaults to `10`, and must be at least `1`. Both are refused for one-shots. See [overlapping triggers](../reference/cli/loop.md#overlapping-triggers).
 - `once-per-checkout = true` makes scheduled fires succeed at most once per checkout: a fire that did not fail (a command that exited `0`, a workflow run that ended done, an agent or team that launched, a `-p` launch whatever its run does after) is remembered until `rimz loop remove` clears the memory, and a failed or canceled one is not ([launch memory](../reference/cli/loop.md#launch-memory)). It defaults to `false`; `rimz loop add --once-per-checkout` writes it, and refuses it on a one-shot.
@@ -1066,7 +1065,7 @@ A task takes no other key. A task holding one refuses alone, naming the key and 
 
 Four rules apply when you edit the file by hand:
 
-- `at` and `cron` resolve in the top-level [`timezone`](#sidebar-rendering), falling back to the system zone when it is unset.
+- `cron` resolves in the top-level [`timezone`](#sidebar-rendering), falling back to the system zone when it is unset.
 - A machine task carries a `root` that must be absolute after expanding `~` or `~/` against `HOME`. `rimz loop add` writes an absolute path. A missing, empty, or relative root skips the task at load with a warning until you set an absolute root or remove the task with `rimz loop remove <NAME>`; a relative root is never resolved against the reading process's directory.
 - A project task runs at the project root implicitly, and requires `every`, `cron`, or `signal` with `repeat = true`. It refuses `root`, `dir`, `deadline`, `when`, `for`, and `each-worktree`, and the keys only RimZ writes (`wait`, `wait-meta`, `watch`, `loop-task`, `booked-by`).
 - `rimz loop add --project` writes the task into `.rimz/config.toml`. `rimz loop remove` and `rimz loop rename` reach a project task too. How trust and `rimz loop enable` gate a project task, and which task wins a name clash, are in [project tasks](../reference/cli/loop.md#project-tasks).
@@ -1122,8 +1121,7 @@ claude = "work"
 kind = "agent"
 target = "codex"
 args = ["triage yesterday's failing CI runs and open one issue per distinct cause"]
-at = "08:00"
-every = "day"
+cron = "0 8 * * *"
 ```
 
 Two fields enter the trust hash but do nothing yet: `launch_command` on an `[[agents]]` entry, and a `[[hooks]]` table. RimZ neither runs the command nor installs the hook today. One table is refused outright: a `[layout]` table fails the load with an error naming what replaced it, `placement` under `[agents]` for where a launch lands and a team definition for a whole room shape. Per-machine config has no `[layout]` either, so the table goes rather than moves. RimZ's own [`.rimz/config.toml`](../../.rimz/config.toml) is a working example of project tasks; its repository sync task assumes push rights on the remote.

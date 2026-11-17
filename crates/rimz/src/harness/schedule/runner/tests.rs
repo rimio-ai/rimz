@@ -619,7 +619,7 @@ fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
             false,
         ),
         (
-            "bare-at",
+            "recurring",
             false,
             LoopRunMode::Scheduled,
             SurplusSkipped,
@@ -637,7 +637,7 @@ fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
             args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             root: dir.path().to_path_buf(),
-            at: (!fire_at).then(|| "07:00".to_owned()),
+            every: (!fire_at).then(|| "1h".to_owned()),
             fire_at: fire_at.then_some(Timestamp::UNIX_EPOCH),
             ..TaskEntry::default()
         };

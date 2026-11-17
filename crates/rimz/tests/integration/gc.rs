@@ -697,12 +697,12 @@ fn gc_reaps_dead_loop_delivery_schedule() {
              wait = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
-             at = \"07:00\"\n\
+             every = \"1h\"\n\
              [tasks.ended]\n\
              wait = {{ kind = \"claude\", session = \"sess-ended\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
-             at = \"07:00\"\n",
+             every = \"1h\"\n",
             env.project_root.display(),
             env.project_root.display()
         ),
@@ -760,7 +760,7 @@ fn gc_reaps_instance_rows_without_an_action_and_keeps_user_rows() {
         "legacy-wake": {
             "prompt": "wake up",
             "root": root,
-            "at": "07:00",
+            "every": "1h",
         },
         "team-forge-live-coder-ci-failed": live,
     });
@@ -775,7 +775,7 @@ fn gc_reaps_instance_rows_without_an_action_and_keeps_user_rows() {
     let config_path = config_dir.join("loop.toml");
     std::fs::write(
         &config_path,
-        format!("[tasks.actionless]\nprompt = \"fix me\"\nroot = \"{root}\"\nat = \"07:00\"\n"),
+        format!("[tasks.actionless]\nprompt = \"fix me\"\nroot = \"{root}\"\nevery = \"1h\"\n"),
     )
     .expect("write loop config");
 
@@ -1341,13 +1341,13 @@ fn gc_keeps_spawn_and_live_loop_schedules() {
              args = [\"true\"]\n\
              timeout = \"1m\"\n\
              root = \"{}\"\n\
-             at = \"07:00\"\n\
+             every = \"1h\"\n\
              \n\
              [tasks.live]\n\
              wait = {{ kind = \"claude\", session = \"sess-live\", handle = \"@claude\" }}\n\
              prompt = \"live wait\"\n\
              root = \"{}\"\n\
-             at = \"07:00\"\n",
+             every = \"1h\"\n",
             env.project_root.display(),
             env.project_root.display()
         ),

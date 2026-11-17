@@ -186,11 +186,11 @@ struct AddArgs {
     /// Refused: fire on a condition with `--when` instead.
     #[arg(long, value_name = "DUR")]
     until: Option<String>,
-    /// One-shot time (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`), or `HH:MM` with --every.
-    #[arg(long, conflicts_with_all = ["cron", "in_after", "signal"])]
+    /// One-shot time: `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`.
+    #[arg(long, conflicts_with_all = ["every", "cron", "in_after", "signal"])]
     at: Option<String>,
-    /// Repeat cadence: `15m`, `day`, `weekday`, or `mon,wed,fri`.
-    #[arg(long, conflicts_with_all = ["cron", "in_after", "signal"])]
+    /// Repeat interval, such as `15m` or `2h`; daily and weekday times take --cron.
+    #[arg(long, conflicts_with_all = ["at", "cron", "in_after", "signal"])]
     every: Option<String>,
     /// Five-field cron expression (names, steps, and `@daily`-style macros accepted).
     #[arg(long, conflicts_with_all = ["at", "every", "in_after", "signal"])]
