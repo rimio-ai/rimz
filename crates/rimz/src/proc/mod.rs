@@ -455,6 +455,34 @@ pub fn ancestor_pids() -> Vec<u32> {
     Vec::new()
 }
 
+/// The parents of `pid`, nearest first, without `pid` itself and without
+/// pid 1, or an empty list unless the walk was whole: every parent read
+/// succeeded up to a parent pid of 1 or 0, within the depth cap, with no
+/// repeat. A pane binder compares the list with a pane's root pid, so a
+/// partial chain is never returned: empty means not known.
+pub(crate) fn whole_ancestor_pids(pid: u32) -> Vec<u32> {
+    whole_parent_chain(pid, |pid| comm_and_ppid(pid).map(|(_, parent)| parent))
+}
+
+fn whole_parent_chain(pid: u32, parent_of: impl Fn(u32) -> Option<u32>) -> Vec<u32> {
+    let mut chain = Vec::new();
+    let mut child = pid;
+    for _ in 0..32 {
+        let Some(parent) = parent_of(child) else {
+            return Vec::new();
+        };
+        if parent <= 1 {
+            return chain;
+        }
+        if parent == pid || chain.contains(&parent) {
+            return Vec::new();
+        }
+        chain.push(parent);
+        child = parent;
+    }
+    Vec::new()
+}
+
 /// The value of environment variable `key` for `pid`, read from
 /// `/proc/<pid>/environ` (NUL-separated `key=value` pairs). A sidebar inherits
 /// its pane's `ZELLIJ_PANE_ID` / `TMUX_PANE`, so `rimz reload` reads it back to

@@ -674,3 +674,54 @@ Uid:\t1000\t1000\t1000\t1000
         assert_eq!(parse_btime("cpu 1 2 3\nprocesses 42\n"), None);
     }
 }
+
+#[test]
+fn whole_parent_chain_is_nearest_first_without_the_pid_or_init() {
+    let parents = std::collections::HashMap::from([(40, 30), (30, 20), (20, 1)]);
+    assert_eq!(
+        whole_parent_chain(40, |pid| parents.get(&pid).copied()),
+        [30, 20]
+    );
+    let namespaced = std::collections::HashMap::from([(40, 30), (30, 0)]);
+    assert_eq!(
+        whole_parent_chain(40, |pid| namespaced.get(&pid).copied()),
+        [30]
+    );
+}
+
+#[test]
+fn a_walk_that_is_not_whole_records_no_chain() {
+    let broken = std::collections::HashMap::from([(40, 30), (30, 20)]);
+    assert!(
+        whole_parent_chain(40, |pid| broken.get(&pid).copied()).is_empty(),
+        "a failed read mid-walk"
+    );
+    assert!(whole_parent_chain(40, |_| None).is_empty(), "a gone pid");
+    let looped = std::collections::HashMap::from([(40, 30), (30, 20), (20, 30)]);
+    assert!(
+        whole_parent_chain(40, |pid| looped.get(&pid).copied()).is_empty(),
+        "a repeat"
+    );
+    assert!(
+        whole_parent_chain(10_000, |pid| Some(pid - 1)).is_empty(),
+        "the depth cap"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_spawned_child_reads_a_chain_through_the_test_process() {
+    let mut child = std::process::Command::new("sleep")
+        .arg("613")
+        .spawn()
+        .unwrap();
+    let chain = whole_ancestor_pids(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(chain.first(), Some(&std::process::id()));
+    assert!(!chain.contains(&1) && !chain.contains(&child.id()));
+    assert!(
+        whole_ancestor_pids(child.id()).is_empty(),
+        "a reaped child has no parent to read"
+    );
+}
