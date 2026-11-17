@@ -884,7 +884,8 @@ pub(in crate::harness) fn report_row(
 ) -> LoopRunRecord {
     use crate::store::workflow::RunEnding;
     let result = match outcome.ending {
-        RunEnding::Done => LoopRunResult::Completed,
+        // A try has no task and never reports; it maps as the done it ended in.
+        RunEnding::Done | RunEnding::Tried => LoopRunResult::Completed,
         RunEnding::Failed => LoopRunResult::Failed,
         RunEnding::Canceled => LoopRunResult::Canceled,
         RunEnding::CapacityGaveUp { .. } => LoopRunResult::ThrottleSkipped,
@@ -921,7 +922,7 @@ pub(in crate::harness) fn report_row(
             )),
             reason.as_deref().unwrap_or("no capacity")
         )),
-        RunEnding::Done | RunEnding::Canceled => None,
+        RunEnding::Done | RunEnding::Tried | RunEnding::Canceled => None,
     };
     record
 }

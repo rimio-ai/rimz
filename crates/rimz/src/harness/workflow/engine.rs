@@ -304,6 +304,7 @@ fn publish(
         task: start.task,
         loop_fire: start.loop_fire,
         manual,
+        once: false,
         spec_dir: (start.origin == RunOrigin::Deployed).then_some(start.spec_dir),
         prompt,
         scope,

@@ -290,7 +290,7 @@ fn hop_kind(
         JournalEvent::Park { reason, .. } => {
             return Some((HopKind::Park { reason: *reason }, None, None));
         }
-        JournalEvent::Terminal { state } => {
+        JournalEvent::Terminal { state, .. } => {
             return Some((HopKind::Terminal { state: *state }, None, None));
         }
         _ => return None,

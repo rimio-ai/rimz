@@ -687,6 +687,13 @@ impl History<'_> {
                         deadline.map_or_else(|| "none".into(), |at| self.clock(at))
                     )?;
                 }
+                JournalEvent::Start { input } => writeln!(
+                    out,
+                    "start by hand{}",
+                    input
+                        .as_ref()
+                        .map_or_else(String::new, |input| format!(" · input {}", value(input)))
+                )?,
                 JournalEvent::Cancel { reason } => writeln!(
                     out,
                     "cancel canceled{}",
@@ -694,7 +701,9 @@ impl History<'_> {
                         .as_ref()
                         .map_or_else(String::new, |reason| format!(" · {reason}"))
                 )?,
-                JournalEvent::Terminal { state } => writeln!(out, "terminal {}", state.as_str())?,
+                JournalEvent::Terminal { state, .. } => {
+                    writeln!(out, "terminal {}", state.as_str())?
+                }
                 JournalEvent::Wake { signal } => writeln!(out, "wake {signal}{note}")?,
                 JournalEvent::Signal { signal, .. } => writeln!(
                     out,

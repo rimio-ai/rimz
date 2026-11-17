@@ -289,7 +289,8 @@ fn cancel_preserves_the_stopping_node_in_the_record_and_terminal_journal() {
         assert_eq!(
             terminal.event,
             JournalEvent::Terminal {
-                state: RunState::Canceled
+                state: RunState::Canceled,
+                tried: None
             }
         );
         assert_eq!(terminal.node, canceled.node, "command: {command}");

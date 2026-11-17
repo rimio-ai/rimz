@@ -963,9 +963,9 @@ A finished run id still resolves, from any room, and `show` prints it without re
 
 ### Runs this RimZ cannot continue
 
-A run whose record a newer RimZ wrote is left for that RimZ: `workflow list` skips it, and `show`, `resume`, `restart`, and `cancel` by id refuse with `` workflow run <run> has record version <N>, written by a newer RimZ; this RimZ reads only version 15. It is left for the RimZ that wrote it; nothing changed `` and exit 1.
+A run whose record a newer RimZ wrote is left for that RimZ: `workflow list` skips it, and `show`, `resume`, `restart`, and `cancel` by id refuse with `` workflow run <run> has record version <N>, written by a newer RimZ; this RimZ reads only version 16. It is left for the RimZ that wrote it; nothing changed `` and exit 1.
 
-An unfinished run this RimZ cannot continue (an older record version, a missing or invalid one, or a version-15 record that does not decode) is skipped by `workflow list` too. `show` prints its header with why, and `resume` and `restart` refuse with `` this RimZ cannot continue workflow run <run>: <cause>; it reads only record version 15. The workflow pass will end it as failed; nothing changed ``. A `record.json` that holds no JSON object refuses the same way, ending `The workflow pass will set it aside; nothing changed`.
+An unfinished run this RimZ cannot continue (an older record version, a missing or invalid one, or a version-16 record that does not decode) is skipped by `workflow list` too. `show` prints its header with why, and `resume` and `restart` refuse with `` this RimZ cannot continue workflow run <run>: <cause>; it reads only record version 16. The workflow pass will end it as failed; nothing changed ``. A `record.json` that holds no JSON object refuses the same way, ending `The workflow pass will set it aside; nothing changed`.
 
 `cancel` and `advance` on such an id end that one run: its record is marked `failed` with why, in place, its agents are released and left running as ordinary sessions, its loop task gets a `failed` report that strikes nothing, and its directory moves to `finished-workflows/`. A record that holds no JSON object moves there unmodified. `cancel` prints `` ended <run> as failed: this RimZ cannot continue it: <cause> `` (or `` set aside <run>: its record holds no JSON object ``), then the agents it left running or `no agent was pinned to it`, and a `workflow show` hint. It ends no other run. When an earlier `cancel` or pass already ended the run but could not release its agents or move its directory, `cancel` and `advance` retry the report, the release, and the move, and `cancel` prints `` <run> was already ended as failed: this RimZ cannot continue it: <cause> `` in place of the first line.
 
@@ -997,7 +997,7 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 
 | Field | Meaning |
 | --- | --- |
-| `record.version` | `15`. RimZ refuses a record of any other version ([runs this RimZ cannot continue](#runs-this-rimz-cannot-continue)). |
+| `record.version` | `16`. RimZ refuses a record of any other version ([runs this RimZ cannot continue](#runs-this-rimz-cannot-continue)). |
 | `record.spec_dir` | A deployed run's definition folder, canonical at the start. Absent for a loop task's run, which reads its own `definition/`. |
 | `record.visits.<step>` | The step's visit count since its last manual restart. |
 | `record.key_visits.<step>` | The step's visits split by item key, as `key_visits` in [the context file](#the-context-file). Absent when no step has a keyed visit. |

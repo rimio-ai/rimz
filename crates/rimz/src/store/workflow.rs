@@ -15,7 +15,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The run record's own shape version, raised when a binary on either side of a change would
 /// misread the other's record; `load` refuses a record of any other version before decoding it.
 /// A change to what a definition means raises nothing: every run reads its definition as it is.
-pub const VERSION: u32 = 15;
+pub const VERSION: u32 = 16;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -646,6 +646,9 @@ pub enum RunEnding {
     Done,
     Failed,
     Canceled,
+    /// A try (`rimz workflow run --once`) ended done once its one node settled; the route it did
+    /// not take is on the journal's `Terminal` entry.
+    Tried,
     /// The run's last decision was the `capacity` route out of an agent step, after waiting
     /// `waited_ms` for the capacity named by `reason`.
     CapacityGaveUp {
@@ -719,6 +722,10 @@ pub struct RunRecord {
     pub loop_fire: Option<crate::ids::FireId>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub manual: bool,
+    /// The run is a try (`rimz workflow run --once`): it ends done at its start node's first
+    /// route that is not an `unknown` wait. Set at creation, never changed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub once: bool,
     #[serde(default)]
     pub loop_report: LoopReport,
     /// A deployed run's definition directory, canonical at the start and read live; an inline
@@ -1064,10 +1071,19 @@ pub enum JournalEvent {
     },
     Terminal {
         state: RunState,
+        /// A try's end: the target of the route it did not take, in `Target`'s display form.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tried: Option<String>,
     },
     Cancel {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+    },
+    /// A start placed by hand (`rimz workflow run --at` or `--input`), the journal's first entry,
+    /// at the start node, with the input given to it.
+    Start {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<Value>,
     },
     /// Written by workflow resume for both parked-run resumption and active-run `--extend`.
     Resume {
