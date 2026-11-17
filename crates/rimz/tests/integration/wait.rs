@@ -5,7 +5,7 @@ use crate::common::wait::wait_for_loop_runs_to_exit;
 use crate::common::wait::{
     agent_wait, agent_wait_at, loop_instances_path, publish_claude_5h, register_agent,
     register_agent_with_owner, register_calling_agent, register_calling_agent_with_launch,
-    seed_signal_wait, wait_instances, wait_ok,
+    reset_minute, seed_signal_wait, wait_instances, wait_ok,
 };
 use crate::common::{Env, canonical, retained_runs_refusal, zellij_trace_shim};
 use rimz::agents::{AgentLifecycleObservation, AskKind, LaunchParams, LifecycleSignal};
@@ -3585,13 +3585,25 @@ fn wait_receipts_name_the_clock_time_the_window_and_the_condition_reading() {
         forge[1],
         "  now: unknown · pr: readings paused (room closed)"
     );
-    publish_claude_5h(&env, 92);
+    let resets_at = publish_claude_5h(&env, 92);
     let window = first_lines(&["--when", "window.5h.left >= 40"]);
     assert!(
         window[0].ends_with(": when window.5h.left>=40 → @planner#main"),
         "{window:?}"
     );
-    assert_eq!(window[1], "  now: waiting · window.5h.left: 8");
+    assert_eq!(
+        window[1],
+        format!(
+            "  now: waiting · window.5h.left: 8 (resets {})",
+            reset_minute(resets_at)
+        )
+    );
+    publish_claude_5h(&env, 10);
+    let met = first_lines(&["--when", "window.5h.left >= 40", "--when", "pr=merged"]);
+    assert_eq!(
+        met[1],
+        "  now: unknown · window.5h.left: 90, pr: readings paused (room closed)"
+    );
 }
 
 #[test]

@@ -5979,7 +5979,8 @@ allowed-dependencies = [
 # forge_branch and CiSource::branch_pr read a booking's unmet keys and its branch's pull request for the sidebar (+2).
 # condition::ROOM_CLOSED gives every surface one wording for readings paused by a closed room (+1).
 # Verdict::unread_reasons gives every surface one reason for each forge term that reads nothing (+1).
-surface-budget = 56
+# WindowReadings::resets names when each window a condition reads next resets (+1).
+surface-budget = 57
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"

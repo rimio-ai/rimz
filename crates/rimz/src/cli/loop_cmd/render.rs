@@ -1420,7 +1420,13 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let mut condition = Vec::new();
     if !args.json && !entry.each_worktree {
-        condition::write_show(&mut condition, &args.name, entry, &timing)?;
+        condition::write_show(
+            &mut condition,
+            &args.name,
+            entry,
+            &timing,
+            now_zoned.time_zone(),
+        )?;
     }
     let subscriptions = if !args.json || entry.each_worktree {
         load_subscriptions(&root, &now_zoned, |entry| {

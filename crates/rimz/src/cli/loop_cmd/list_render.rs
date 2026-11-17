@@ -386,9 +386,11 @@ fn routine_rows(
                 if row.state != TaskState::Running && !row.capacity.is_empty() {
                     row.state_text(now)
                 } else {
-                    row.next_at
-                        .map(|at| ui::rel_until(at, now))
-                        .unwrap_or_else(|| "—".into())
+                    match (row.next_at, &row.latest_reset) {
+                        (Some(at), _) => ui::rel_until(at, now),
+                        (None, Some(reset)) => format!("resets {reset}"),
+                        (None, None) => "—".into(),
+                    }
                 },
                 action(row),
                 row.last_text(now),
@@ -439,6 +441,9 @@ fn waiting_rows(
                 if count.not_read > 0 {
                     trigger.push_str(&format!(" · {} not read", count.not_read));
                 }
+            }
+            if let Some(at) = &row.latest_reset {
+                trigger.push_str(&format!(" · resets {at}"));
             }
             if row.state != TaskState::Running && !row.capacity.is_empty() {
                 trigger.push_str(&format!(" · {}", row.state_text(now)));

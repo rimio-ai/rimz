@@ -20,9 +20,9 @@ use rimz::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
 use rimz::store::message::MessageStatus;
 use rimz::store::run::{RunRecord, RunStatus};
 
-use crate::common::wait::publish_claude_5h;
 #[cfg(target_os = "linux")]
 use crate::common::wait::wait_for_loop_runs_to_exit;
+use crate::common::wait::{publish_claude_5h, reset_minute};
 use crate::common::{Env, ScrubSessionEnvExt, canonical, retained_runs_refusal};
 #[path = "loop_kinds.rs"]
 mod kind_tests;
@@ -1225,7 +1225,7 @@ fn window_condition_waits_for_room_in_the_provider_window() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-window", "feature-loop");
-    publish_claude_5h(&env, 92);
+    let resets = format!("resets {}", reset_minute(publish_claude_5h(&env, 92)));
     let output = calling_loop(&env, "sess-window")
         .args([
             "loop",
@@ -1247,9 +1247,91 @@ fn window_condition_waits_for_room_in_the_provider_window() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        receipt.contains("now: waiting · window.5h.left: 8"),
+        receipt.contains(&format!("now: waiting · window.5h.left: 8 ({resets})")),
         "{receipt}"
     );
+    let show = loop_ok(&env, &["loop", "show", "roomy"]);
+    let term = show
+        .lines()
+        .find(|line| line.starts_with("  window.5h.left>=40   "))
+        .unwrap_or_else(|| panic!("{show}"));
+    assert!(term.ends_with(&format!(" 8 ({resets})")), "{show}");
+    let explain = env
+        .rimz()
+        .args([
+            "loop",
+            "explain",
+            "--provider",
+            "claude",
+            "window.5h.left>=40",
+        ])
+        .output()
+        .unwrap();
+    let explain = String::from_utf8_lossy(&explain.stdout);
+    assert!(
+        explain.contains(&format!("  window.5h.left>=40   ✗ 8 ({resets})\n")),
+        "{explain}"
+    );
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "refill",
+            "--provider",
+            "claude",
+            "--when",
+            "window.5h.left >= 40",
+            "--repeat",
+            "--",
+            "true",
+        ],
+    );
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "drain",
+            "--provider",
+            "claude",
+            "--when",
+            "window.5h.left <= 4",
+            "--",
+            "true",
+        ],
+    );
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        !list.contains("resets"),
+        "a row reads no window before the tick's first sight: {list}"
+    );
+    loop_ok(&env, &["loop", "tick"]);
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        list.contains(&format!(
+            "roomy  when window.5h.left>=40 · 0 of 1 met · {resets}  run true"
+        )),
+        "{list}"
+    );
+    let routine = list
+        .lines()
+        .find(|line| line.trim_start().starts_with("refill "))
+        .unwrap_or_else(|| panic!("{list}"));
+    assert!(routine.contains(&format!("  {resets}  ")), "{list}");
+    let drain = list
+        .lines()
+        .find(|line| line.trim_start().starts_with("drain "))
+        .unwrap_or_else(|| panic!("{list}"));
+    assert!(
+        !drain.contains("resets"),
+        "a term waiting for the window to be spent names no reset: {list}"
+    );
+    assert_eq!(list.matches(&resets).count(), 2, "{list}");
+    // `refill` would fire beside `roomy` once the window refills, and two
+    // runners birthing one cold room race on its claim, so only `roomy` stays.
+    loop_ok(&env, &["loop", "remove", "refill"]);
+    loop_ok(&env, &["loop", "remove", "drain"]);
     let row = &read_loop_instances(&env).0["roomy"];
     assert_eq!(
         row.when.as_deref(),
@@ -1261,6 +1343,25 @@ fn window_condition_waits_for_room_in_the_provider_window() {
     loop_ok(&env, &["loop", "tick"]);
     assert!(read_loop_run_records(&env).is_empty());
     publish_claude_5h(&env, 10);
+    let explain = loop_ok(
+        &env,
+        &[
+            "loop",
+            "explain",
+            "--provider",
+            "claude",
+            "window.5h.left>=40",
+        ],
+    );
+    assert!(
+        explain.contains("  window.5h.left>=40   ✓ 90\n"),
+        "a met term names no reset: {explain}"
+    );
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        !list.contains("resets"),
+        "a met window names no reset: {list}"
+    );
     loop_ok(&env, &["loop", "tick"]);
     wait_for_loop_run_records(&env, "the fire and its spent row", |records| {
         !records.is_empty() && !read_loop_instances(&env).0.contains_key("roomy")
