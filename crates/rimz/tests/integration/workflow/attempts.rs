@@ -315,7 +315,7 @@ fn stop_includes_a_cleared_companion() {
             ))
             .unwrap();
     }
-    fs::write(room.env.project_root.join("panes.json"), r#"[{"id":62,"is_plugin":false,"tab_id":1,"title":"claude"},{"id":99,"is_plugin":false,"tab_id":1,"title":"unrelated"}]"#).unwrap();
+    fs::write(room.env.project_root.join("panes.json"), r#"[{"id":62,"is_plugin":false,"tab_id":1,"title":"claude","pane_command":"claude"},{"id":99,"is_plugin":false,"tab_id":1,"title":"unrelated"}]"#).unwrap();
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
     let value = settled(&room.env, &id, "canceled");
     let stopped = value["record"]["prev_attempt"]["children"]["stopped"]

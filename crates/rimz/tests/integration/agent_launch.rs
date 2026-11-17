@@ -781,7 +781,7 @@ fn assert_restart_folder_trust(agent_trusted: bool, close_fails: bool) {
         ))
         .unwrap();
     let panes = serde_json::json!([
-        {"id": 3, "is_plugin": false, "tab_id": 1, "title": "claude"}
+        {"id": 3, "is_plugin": false, "tab_id": 1, "title": "claude", "pane_command": "claude"}
     ]);
     crate::common::room::seed_live_zellij_room(
         &env.runtime_paths(),
@@ -1283,7 +1283,7 @@ fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool, symlinke
             "RIMZ_TEST_ZELLIJ_LIST_CLIENTS",
             "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_3 claude\n",
         )
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude"}]"#)
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude","pane_command":"claude"}]"#)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
         .bounded_output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1604,7 +1604,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_3 claude\n",
         )
         .env("RIMZ_TEST_ZELLIJ_LOG", &log)
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude"}]"#)
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude","pane_command":"claude"}]"#)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name));
     if action == "hold-channel-symlink" {
         command
@@ -2433,7 +2433,7 @@ fn molt_at_chain_cap_keeps_handle_generation_note_and_launcher_beside_the_caller
                 .env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1")
                 .env(
                     "RIMZ_TEST_ZELLIJ_LIST_PANES",
-                    r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude"}]"#,
+                    r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude","pane_command":"claude"}]"#,
                 )
                 .env(
                     "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
@@ -2628,7 +2628,8 @@ fn assert_planner_kept_what_it_was_owed(env: &Env) {
 /// wrapper; without it nothing binds and the swap's bind wait runs out.
 #[cfg(unix)]
 fn restart_owed_planner(resumed: bool, bound: bool) -> (Env, std::process::Output) {
-    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude"}]"#;
+    let panes =
+        r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude","pane_command":"claude"}]"#;
     let (env, mut command) = owed_planner_restart(resumed, panes);
     if bound {
         command.env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1");
@@ -2934,7 +2935,8 @@ fn restart_whose_replacement_never_binds_leaves_the_agent_in_its_old_session() {
 #[cfg(unix)]
 #[test]
 fn restart_whose_agent_a_stop_ends_meanwhile_says_the_stop_ended_it() {
-    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude"}]"#;
+    let panes =
+        r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude","pane_command":"claude"}]"#;
     let (env, mut command) = owed_planner_restart(false, panes);
     command.env("RIMZ_TEST_SWAP_BIND_WAIT_MS", "20000");
     let restart = std::thread::spawn(move || command.bounded_output().unwrap());
@@ -4233,8 +4235,8 @@ impl RestartChild {
         env: &[(&str, &str)],
     ) -> std::process::Output {
         let panes = serde_json::json!([
-            {"id": 2, "is_plugin": false, "tab_id": 1, "title": "claude"},
-            {"id": 3, "is_plugin": false, "tab_id": 1, "title": "claude"}
+            {"id": 2, "is_plugin": false, "tab_id": 1, "title": "claude", "pane_command": "claude"},
+            {"id": 3, "is_plugin": false, "tab_id": 1, "title": "claude", "pane_command": "claude"}
         ]);
         crate::common::room::seed_live_zellij_room(
             &self.env.runtime_paths(),
@@ -8425,7 +8427,7 @@ fn launch_team_worktree(env: &Env, args: &[&str]) -> std::process::Output {
             "RIMZ_TEST_ZELLIJ_LIST_CLIENTS",
             "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_3 claude\n",
         )
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude"}]"#)
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude","pane_command":"claude"}]"#)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
         .bounded_output().unwrap()
 }

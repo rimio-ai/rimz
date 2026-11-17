@@ -1676,7 +1676,7 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
     );
 
     let deadline = Instant::now() + Duration::from_secs(10);
-    let mut panes = loop {
+    let panes = loop {
         let panes = server
             .backend
             .list_panes(PaneListOptions {
@@ -1697,17 +1697,15 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         );
         thread::sleep(Duration::from_millis(25));
     };
-    for pane in &mut panes {
-        let Some(hosted) = pane
-            .pane_pid
-            .and_then(rimz::proc::hosted_agent_process_for_root)
-        else {
-            continue;
-        };
-        pane.hosted_agent_kind = Some(hosted.kind);
-        pane.hosted_agent_process_start = Some(hosted.started_at);
-        pane.hosted_agent_lineage = hosted.lineage;
-    }
+    assert!(
+        attached
+            .runtime_owner
+            .as_ref()
+            .is_some_and(|owner| owner.ancestors.contains(&pane_pid)),
+        "the recorded owner's chain holds the pane's root: pane_pid={pane_pid}, owner={:?}",
+        attached.runtime_owner
+    );
+    // The raw listing carries no hosted-process stamp: the chain alone proves the pane.
     let live_pane = panes
         .iter()
         .find(|pane| pane.pane_id == attached_pane)

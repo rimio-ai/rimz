@@ -54,7 +54,11 @@ fn a_listed_pane_hosts_its_agent_and_a_stored_pane_absent_from_the_listing_hosts
     let gone = fixture.agent("claude", "gone", Some("terminal_2"));
     let read = fixture.read(
         vec![listed, gone],
-        vec![test_support::pane("terminal_1", None, Some("/repo/main"))],
+        vec![test_support::pane(
+            "terminal_1",
+            Some("claude"),
+            Some("/repo/main"),
+        )],
     );
     let (kind, id) = key("claude", "listed");
     assert_eq!(
@@ -89,6 +93,15 @@ fn a_known_dead_process_is_hosted_nowhere_while_its_pane_is_listed() {
     assert_eq!(read.session_hosting(&kind, &id), Hosting::Nowhere);
 }
 
+/// A listed pane with no program evidence whose root process is this test
+/// process, which [`owned`] rows record as their owner.
+fn rooted_in_this_process(id: &str) -> crate::pane::PaneRef {
+    crate::pane::PaneRef {
+        pane_pid: Some(std::process::id()),
+        ..test_support::pane(id, None, Some("/repo/main"))
+    }
+}
+
 fn owned(mut agent: AgentState, start: Option<&str>) -> AgentState {
     let mut owner = crate::store::runtime::process_owner(
         RuntimeOwnerKind::Agent,
@@ -111,10 +124,7 @@ fn a_dead_owners_open_turn_never_takes_the_pane_of_the_live_row_beside_it() {
     );
     let mut live = owned(fixture.agent("claude", "live", Some("terminal_1")), None);
     live.status = AgentStatus::Idle;
-    let read = fixture.read(
-        vec![dead, live],
-        vec![test_support::pane("terminal_1", None, Some("/repo/main"))],
-    );
+    let read = fixture.read(vec![dead, live], vec![rooted_in_this_process("terminal_1")]);
     let (kind, id) = key("claude", "live");
     assert!(
         matches!(read.session_hosting(&kind, &id), Hosting::Pane { .. }),
@@ -141,7 +151,7 @@ fn an_ended_row_with_later_activity_never_takes_the_pane_of_an_unended_one() {
     unended.last_activity = fixture.now - jiff::SignedDuration::from_secs(60);
     let read = fixture.read(
         vec![ended, unended],
-        vec![test_support::pane("terminal_1", None, Some("/repo/main"))],
+        vec![rooted_in_this_process("terminal_1")],
     );
     let (kind, id) = key("claude", "unended");
     assert!(
@@ -190,6 +200,37 @@ fn a_lazy_provider_binds_through_its_hosted_process_evidence() {
     ));
 }
 
+#[test]
+fn a_disproven_owner_is_hosted_nowhere_for_its_agent_and_its_session() {
+    let fixture = Fixture::new();
+    let mut agent = owned(
+        fixture.agent("claude", "elsewhere", Some("terminal_1")),
+        None,
+    );
+    agent.launch_id = Some("launch_agent".into());
+    let owner = agent.runtime_owner.as_ref().expect("owned row");
+    assert!(!owner.ancestors.is_empty(), "the owner records its chain");
+    let mut pane = test_support::pane("terminal_1", Some("claude"), Some("/repo/main"));
+    pane.pane_pid = Some(u32::MAX);
+    let read = fixture.read(vec![agent.clone()], vec![pane.clone()]);
+    let kind = AgentKind::new_unchecked("claude");
+    assert_eq!(
+        read.session_hosting(&kind, &"elsewhere".into()),
+        Hosting::Nowhere
+    );
+    assert_eq!(
+        read.agent_hosting(&kind, &"launch_agent".into()).hosting,
+        Hosting::Nowhere
+    );
+    pane.pane_pid = Some(std::process::id());
+    let read = fixture.read(vec![agent], vec![pane]);
+    assert_eq!(
+        read.session_hosting(&kind, &"elsewhere".into()),
+        pane_of("terminal_1"),
+        "the same row binds once the pane's root is on its chain"
+    );
+}
+
 fn pane_of(id: &str) -> Hosting {
     Hosting::Pane {
         pane_id: PaneId::from_parts(MuxName::Zellij, id),
@@ -197,9 +238,10 @@ fn pane_of(id: &str) -> Hosting {
     }
 }
 
+/// Panes running Claude, the program an unowned Claude row binds by.
 fn listed(ids: &[&str]) -> Vec<crate::pane::PaneRef> {
     ids.iter()
-        .map(|id| test_support::pane(id, None, Some("/repo/main")))
+        .map(|id| test_support::pane(id, Some("claude"), Some("/repo/main")))
         .collect()
 }
 
@@ -352,7 +394,10 @@ fn a_swap_reservation_holds_the_agent_once_bound_and_alone_is_hosted_nowhere() {
 
     let mut alone = fixture.agent("claude", "launch_first", None);
     alone.launch_id = Some("launch_first".into());
-    let read = fixture.read(vec![alone], listed(&["terminal_1"]));
+    let read = fixture.read(
+        vec![alone],
+        vec![test_support::pane("terminal_1", None, Some("/repo/main"))],
+    );
     let answer = read.agent_hosting(&kind, &"launch_first".into());
     assert_eq!(holder_id(&answer), Some("launch_first".to_owned()));
     assert_eq!(answer.hosting, Hosting::Nowhere);

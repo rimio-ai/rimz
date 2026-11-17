@@ -265,7 +265,7 @@ fn never_started_launched_child_uses_the_same_stall_label_and_window() {
     let project = |child: AgentState| {
         let mut snapshot = room(vec![parent.clone(), child]);
         snapshot.attention.stalled_after_secs = std::num::NonZeroU32::new(120).unwrap();
-        snapshot.with_live_panes(vec![pane("%1", "node", "/repo/main")], None)
+        snapshot.with_live_panes(vec![pane("%1", "claude", "/repo/main")], None)
     };
     let snapshot = project(child.clone());
     let projected = &row(&snapshot, "root").sub_agents()[0];
@@ -295,7 +295,7 @@ fn child_stall_uses_the_configured_window_but_not_sleep_or_errors() {
     let project = |child: AgentState| {
         let mut snapshot = room(vec![parent.clone(), child]);
         snapshot.attention.stalled_after_secs = std::num::NonZeroU32::new(120).unwrap();
-        snapshot.with_live_panes(vec![pane("%1", "node", "/repo/main")], None)
+        snapshot.with_live_panes(vec![pane("%1", "claude", "/repo/main")], None)
     };
     assert_eq!(
         row(&project(child.clone()), "root").sub_agents()[0].status,

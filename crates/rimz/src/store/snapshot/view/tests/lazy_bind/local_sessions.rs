@@ -1434,6 +1434,7 @@ fn prior_row_keeps_its_account_when_a_discovered_session_binds() {
 /// to `%2` and before the child's first SessionStart.
 fn provisional_codex_adopted_by_discovery(launched_child: bool) -> (SidebarSnapshot, PaneRef) {
     let mut parent = agent("claude", "real-parent", AgentStatus::Running, 1)
+        .active_ago(1)
         .worktree("/repo/main")
         .in_pane("%1");
     parent.launch_id = Some(AgentSessionId::from("launch_parent"));

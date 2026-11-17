@@ -62,7 +62,7 @@ fn stops_pinned_companions_even_without_a_live_leader() {
             LaunchParams::default(),
             LifecycleSignal::Registered,
         );
-        fs::write(room.env.project_root.join("panes.json"), r#"[{"id":71,"is_plugin":false,"tab_id":1,"title":"companion"},{"id":72,"is_plugin":false,"tab_id":1,"title":"unrelated"}]"#).unwrap();
+        fs::write(room.env.project_root.join("panes.json"), r#"[{"id":71,"is_plugin":false,"tab_id":1,"title":"companion","pane_command":"claude"},{"id":72,"is_plugin":false,"tab_id":1,"title":"unrelated","pane_command":"claude"}]"#).unwrap();
         success(room.command(&["workflow", "cancel", &id]).output().unwrap());
         let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
         let closed: Vec<_> = trace
@@ -135,7 +135,7 @@ fn takeover_waits_for_open_turn_then_stops_idle_occupant() {
     let room = Room::new("admission.occupancy='takeover'");
     fs::write(
         room.env.project_root.join("panes.json"),
-        r#"[{"id":71,"is_plugin":false,"tab_id":1,"title":"claude"}]"#,
+        r#"[{"id":71,"is_plugin":false,"tab_id":1,"title":"claude","pane_command":"claude"}]"#,
     )
     .unwrap();
     seed(

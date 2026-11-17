@@ -588,22 +588,29 @@ fn relaunch_in_reused_cwd_still_takes_over_the_card() {
 }
 
 #[test]
-fn agent_binds_only_by_stamped_pane_id() {
-    // The pane-keyed invariant: an agent stamped `%2`, but only `%1` is
-    // live. `%1`'s command and cwd both match the agent — under the old
-    // command/cwd fallback it would have bound. Stamped-id binding refuses
-    // it, so `%1` stays a process row and the agent simply does not render.
-    let claude = agent("claude", "sess-1", AgentStatus::Running, 1_000)
-        .worktree("/repo/main")
-        .in_pane("%2");
+fn an_unknown_eager_stamp_binds_only_its_own_pane_while_the_provider_runs_there() {
+    // The pane-keyed invariant: a stamp the owner neither proves nor disproves
+    // binds its exact pane id while the provider's program runs there. `%1`'s
+    // command and cwd both match an agent stamped `%2`, and it still stays a
+    // process row; a stamped `%1` that returned to its shell does the same.
+    for (stamped, command, binds) in [
+        ("%2", "claude", false),
+        ("%1", "claude", true),
+        ("%1", "zsh", false),
+    ] {
+        let claude = agent("claude", "sess-1", AgentStatus::Running, 1_000)
+            .worktree("/repo/main")
+            .in_pane(stamped);
 
-    let snapshot =
-        room(vec![claude]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
+        let snapshot =
+            room(vec![claude]).with_live_panes(vec![pane("%1", command, "/repo/main")], None);
 
-    let rows = &snapshot.worktree_groups[0].rows;
-    assert_eq!(rows.len(), 1);
-    assert!(rows[0].is_process());
-    assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1, "{stamped} over {command}");
+        assert_eq!(rows[0].id == "sess-1", binds, "{stamped} over {command}");
+        assert_eq!(rows[0].is_process(), !binds, "{stamped} over {command}");
+        assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
+    }
 }
 
 #[test]
@@ -800,9 +807,9 @@ fn closing_an_unrelated_pane_preserves_shared_cards() {
 #[test]
 fn seat_relaunched_from_its_leftover_shell_shows_before_the_first_turn() {
     // The wrapper typed into the seat's shell is a child of the pane root, and
-    // its Bound event predates the provider CLI it execs into. The hosted
-    // lineage proves the tenancy the clocks cannot. The failed first launch
-    // still owns the root pid, and loses to the later relaunch.
+    // its Bound event predates the provider CLI below it. The owner's recorded
+    // parent chain proves the tenancy the clocks cannot. The failed first
+    // launch still owns the root pid, and loses to the later relaunch.
     let seat = |id: &str, status, pid: u32, active_ago: i64| {
         let mut seat = agent("codex", id, status, 1)
             .worktree("/repo/main")
@@ -813,12 +820,13 @@ fn seat_relaunched_from_its_leftover_shell_shows_before_the_first_turn() {
         seat.team = Some("recon".to_owned());
         seat.registered_at = Some(ago(active_ago + 2));
         seat.pane.as_mut().expect("stamped pane").pane_pid = Some(pid);
-        seat.runtime_owner = Some(crate::pane::RuntimeOwner::new(
-            crate::pane::RuntimeOwnerKind::Agent,
-            id,
-            pid,
-            None,
-        ));
+        seat.runtime_owner = Some(crate::pane::RuntimeOwner {
+            ancestors: [84, 1_000]
+                .into_iter()
+                .filter(|parent| *parent != pid)
+                .collect(),
+            ..crate::pane::RuntimeOwner::new(crate::pane::RuntimeOwnerKind::Agent, id, pid, None)
+        });
         seat
     };
     let failed = seat("launch_failed", AgentStatus::Failed, 84, 60);
@@ -828,7 +836,6 @@ fn seat_relaunched_from_its_leftover_shell_shows_before_the_first_turn() {
         pane_process_start: Some(ago(5)),
         hosted_agent_kind: Some(crate::ids::AgentKind::new_unchecked("codex")),
         hosted_agent_process_start: Some(ago(5)),
-        hosted_agent_lineage: vec![85, 86],
         ..pane("%1", "zsh", "/repo/main")
     };
 

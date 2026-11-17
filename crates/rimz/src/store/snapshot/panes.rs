@@ -404,38 +404,74 @@ pub(super) fn pane_binding_evidence(pane: &PaneRef) -> PaneBindingEvidence<'_> {
     }
 }
 
-fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: &PaneRef) -> bool {
-    if stamped.pane_id != pane.pane_id || !pane_start_matches_agent_stamp(stamped, pane) {
-        return false;
-    }
-    let Some(definition) = crate::agents::spec_by_kind(agent.kind.as_str()) else {
-        return true;
+/// What a row's recorded owner says about the live pane its stamp names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OwnerProof {
+    /// The pane's root process is the owner or one of its recorded parents.
+    Proven,
+    /// The owner's recorded parent chain does not reach the pane's root.
+    Disproven,
+    /// No owner of this unended row, a daemon or script owner, another
+    /// subject, an empty chain, or a pane without a root pid.
+    Unknown,
+}
+
+fn owner_proof(agent: &AgentState, pane: &PaneRef) -> OwnerProof {
+    let Some(owner) = agent.runtime_owner.as_ref().filter(|owner| {
+        agent.ended_at.is_none()
+            && owner.kind == RuntimeOwnerKind::Agent
+            && owner.subject_id == agent.agent_id.as_str()
+    }) else {
+        return OwnerProof::Unknown;
     };
-    if !definition.capabilities.registers_lazily {
-        return true;
+    let Some(root) = pane.pane_pid else {
+        return OwnerProof::Unknown;
+    };
+    if owner.pid == root || owner.ancestors.contains(&root) {
+        OwnerProof::Proven
+    } else if owner.ancestors.is_empty() {
+        OwnerProof::Unknown
+    } else {
+        OwnerProof::Disproven
     }
-    let owner_lives_in_pane = owner_lives_in_live_pane(agent, pane);
-    if !owner_lives_in_pane && !pane_start_allows_bind(agent.last_activity, pane) {
+}
+
+/// The one gate a stamped row passes to bind the live pane its stamp names,
+/// for every agent kind. A proven owner binds with no clock or program
+/// evidence, a disproven one never binds, and an unknown one binds only while
+/// the pane's start, activity clocks and program agree with the row.
+/// Ancestry proves containment, not tenancy, so a pane whose hosted process
+/// names another kind rejects the row in every tier.
+fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: &PaneRef) -> bool {
+    if stamped.pane_id != pane.pane_id {
         return false;
     }
-    if !owner_lives_in_pane
-        && pane
+    let hosts_other_kind = pane
+        .hosted_agent_kind
+        .as_ref()
+        .is_some_and(|kind| kind != &agent.kind);
+    match owner_proof(agent, pane) {
+        OwnerProof::Proven => !hosts_other_kind,
+        OwnerProof::Disproven => false,
+        OwnerProof::Unknown => {
+            pane_start_matches_agent_stamp(stamped, pane)
+                && (crate::agents::spec_by_kind(agent.kind.as_str()).is_none()
+                    || (!hosts_other_kind && unproven_tenancy_holds(agent, pane)))
+        }
+    }
+}
+
+/// An unproven row holds its pane only while the pane's program names its
+/// kind and no clock shows the row belongs to an older instance: activity
+/// older than the pane's start or its hosted process's start.
+fn unproven_tenancy_holds(agent: &AgentState, pane: &PaneRef) -> bool {
+    if !pane_start_allows_bind(agent.last_activity, pane)
+        || pane
             .hosted_agent_process_start
             .is_some_and(|start| agent.last_activity < start)
     {
         return false;
     }
-    if pane
-        .hosted_agent_kind
-        .as_ref()
-        .is_some_and(|kind| kind != &agent.kind)
-    {
-        return false;
-    }
-    // A live foreground that positively names a different agent kind is not
-    // ours. A foreground naming this agent still binds; otherwise a stamped
-    // lazy agent holds only when the producer confirmed its in-pane process is
-    // still alive under the pane root.
     match pane_agent_kind(pane) {
         Some(kind) => kind == agent.kind.as_str(),
         None => pane
@@ -443,21 +479,6 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
             .as_ref()
             .is_some_and(|kind| kind == &agent.kind),
     }
-}
-
-/// Whether the card's owning agent process is this pane's current tenant: the
-/// pane root, or a process on the single-child chain the producer walked from
-/// the root down to the hosted CLI. A launch wrapper records its own pid as
-/// runtime owner and that pid survives its exec into the provider, as the root
-/// when the mux spawned it and under the shell when it was typed into one. Its
-/// activity is recorded before that exec, so only lineage proves the tenancy;
-/// an owner off the chain keeps the activity-clock guards.
-fn owner_lives_in_live_pane(agent: &AgentState, pane: &PaneRef) -> bool {
-    agent.runtime_owner.as_ref().is_some_and(|owner| {
-        owner.kind == RuntimeOwnerKind::Agent
-            && owner.subject_id == agent.agent_id.as_str()
-            && (pane.pane_pid == Some(owner.pid) || pane.hosted_agent_lineage.contains(&owner.pid))
-    })
 }
 
 /// Defensive guard for exact-identity read-time binds: when the pane's process
@@ -477,354 +498,4 @@ fn pane_start_matches_agent_stamp(expected: &PaneRef, actual: &PaneRef) -> bool 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::agents::AgentStatus;
-    use crate::ids::{AgentKind, MuxName, PaneId};
-    use crate::store::snapshot::SidebarSnapshot;
-    use crate::store::snapshot::testkit::{AgentStateFx, agent, ago};
-
-    /// A pane fixture with an explicit command and optional window name, so a
-    /// test can build daemon hosts, sidebars, and working shells across views.
-    fn pane_cmd(raw: &str, view: &str, command: &str, view_name: Option<&str>) -> PaneRef {
-        PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
-            session_name: "rimz-test".to_owned(),
-            view_id: Some(view.to_owned()),
-            view_kind: Some(crate::ids::ViewKind::Tab),
-            view_name: view_name.map(str::to_owned),
-            title: None,
-            is_floating: false,
-            command: Some(command.to_owned()),
-            foreground_cmdline: None,
-            spawn_command: None,
-            cwd: Some("/repo/main".to_owned()),
-            pane_pid: None,
-            pane_process_start: None,
-            hosted_agent_kind: None,
-            hosted_agent_process_start: None,
-            hosted_agent_lineage: Vec::new(),
-            resumed_session_id: None,
-            elevated_agent: None,
-            first_seen_at_ms: None,
-        }
-    }
-
-    #[test]
-    fn only_daemon_view_classifies_view_sets() {
-        for (label, panes, expected) in [
-            (
-                "daemon view only",
-                vec![
-                    pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
-                    pane_cmd(
-                        "terminal_1",
-                        "tab_0",
-                        "claude remote-control --spawn worktree",
-                        None,
-                    ),
-                    pane_cmd("terminal_2", "tab_0", "rimz codex app-server serve", None),
-                ],
-                true,
-            ),
-            (
-                "working view exists",
-                vec![
-                    pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
-                    pane_cmd(
-                        "terminal_1",
-                        "tab_0",
-                        "claude remote-control --spawn worktree",
-                        None,
-                    ),
-                    pane_cmd("terminal_3", "tab_1", "rimz-sidebar", None),
-                    pane_cmd("terminal_4", "tab_1", "zsh", None),
-                ],
-                false,
-            ),
-            (
-                "no daemon view",
-                vec![
-                    pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
-                    pane_cmd("terminal_1", "tab_0", "zsh", None),
-                ],
-                false,
-            ),
-            ("empty session", Vec::new(), false),
-            (
-                "sidebar-only limbo view ignored",
-                vec![
-                    pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
-                    pane_cmd("terminal_1", "tab_0", "rimz codex app-server serve", None),
-                    pane_cmd("terminal_3", "tab_1", "rimz-sidebar", None),
-                ],
-                true,
-            ),
-        ] {
-            assert_eq!(
-                SidebarSnapshot::only_daemon_view(&panes),
-                expected,
-                "{label}"
-            );
-        }
-    }
-
-    #[test]
-    fn card_admission_names_card_blockers() {
-        let root_pane = pane_cmd("terminal_5", "tab_1", "claude", Some("rimzd"));
-        let child_pane = pane_cmd("terminal_6", "tab_1", "claude", Some("rimzd"));
-        let mut root = agent("claude", "root", AgentStatus::Running, 1_000);
-        root.pane = Some(root_pane.clone());
-        let mut child = agent("claude", "child", AgentStatus::Running, 1_001);
-        child.pane = Some(child_pane.clone());
-        child.parent_agent_id = Some(root.agent_id.clone());
-        child.launch_depth = Some(1);
-        let agents = [root, child];
-        let bindings = PaneBindingIndex::new(&agents);
-        let working = pane_cmd("terminal_1", "tab_0", "zsh", None);
-        let unreadable = PaneRef {
-            command: None,
-            ..pane_cmd("terminal_2", "tab_0", "zsh", None)
-        };
-        for (label, pane, exclude, expected) in [
-            ("working pane", working.clone(), None, true),
-            (
-                "excluded pane id",
-                working.clone(),
-                Some(working.pane_id.clone()),
-                false,
-            ),
-            (
-                "sidebar chrome",
-                pane_cmd("terminal_3", "tab_0", "rimz-sidebar", None),
-                None,
-                false,
-            ),
-            (
-                "remote-control host",
-                pane_cmd("terminal_4", "tab_0", "rimz codex app-server serve", None),
-                None,
-                false,
-            ),
-            ("identityless pane", unreadable, None, true),
-            (
-                "daemon view without stamp",
-                pane_cmd("terminal_7", "tab_1", "claude", Some("rimzd")),
-                None,
-                false,
-            ),
-            ("daemon view stamped root", root_pane.clone(), None, true),
-            ("daemon view stamped child", child_pane, None, true),
-            (
-                "stamped host remains excluded",
-                PaneRef {
-                    spawn_command: Some("claude remote-control".to_owned()),
-                    ..root_pane
-                },
-                None,
-                false,
-            ),
-        ] {
-            assert_eq!(
-                pane_admits_card(&pane, exclude.as_ref(), &bindings),
-                expected,
-                "{label}"
-            );
-        }
-    }
-
-    #[test]
-    fn agent_stamp_tolerates_floor_to_exact_start_drift() {
-        let floor: Timestamp = "2026-06-05T13:49:53Z".parse().unwrap();
-        let exact: Timestamp = "2026-06-05T14:22:43Z".parse().unwrap();
-        let stamped = PaneRef {
-            pane_process_start: Some(floor),
-            ..pane_cmd("terminal_1", "tab_0", "codex", None)
-        };
-        let live = PaneRef {
-            pane_process_start: Some(exact),
-            ..pane_cmd("terminal_1", "tab_0", "codex", None)
-        };
-
-        assert!(
-            pane_start_matches_agent_stamp(&stamped, &live),
-            "old floor-era agent stamps still attach to the now-exact live process"
-        );
-    }
-
-    #[test]
-    fn stamped_lazy_agent_binds_with_carried_hosted_stamp_and_pidless_pane() {
-        let agent = agent("codex", "sess-1", AgentStatus::Running, 1_000)
-            .worktree("/repo/main")
-            .in_pane("%1");
-        let live = PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
-            command: Some("git".to_owned()),
-            pane_pid: None,
-            hosted_agent_kind: Some(AgentKind::new_unchecked("codex")),
-            hosted_agent_process_start: Some(ago(120)),
-            ..pane_cmd("%1", "tab_0", "git", None)
-        };
-
-        assert!(stamped_agent_matches_live_pane(
-            &agent,
-            agent.pane.as_ref().expect("stamped pane"),
-            &live,
-        ));
-    }
-
-    #[test]
-    fn resumed_stamp_from_live_pane_root_binds_before_new_activity() {
-        let mut agent = agent("codex", "sess-resumed", AgentStatus::Idle, 1)
-            .worktree("/repo/main")
-            .active_ago(120)
-            .in_pane("%4");
-        agent.pane.as_mut().expect("stamped pane").pane_pid = Some(84);
-        agent.runtime_owner = Some(crate::pane::RuntimeOwner::new(
-            crate::pane::RuntimeOwnerKind::Agent,
-            "sess-resumed",
-            84,
-            None,
-        ));
-        let live = PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
-            command: Some("codex".to_owned()),
-            pane_pid: Some(84),
-            pane_process_start: Some(ago(60)),
-            hosted_agent_kind: Some(AgentKind::new_unchecked("codex")),
-            hosted_agent_process_start: Some(ago(60)),
-            ..pane_cmd("%4", "tab_0", "codex", None)
-        };
-
-        assert!(stamped_agent_matches_live_pane(
-            &agent,
-            agent.pane.as_ref().expect("stamped pane"),
-            &live,
-        ));
-    }
-
-    #[test]
-    fn shell_root_stamp_keeps_clock_guard_when_agent_owner_is_child() {
-        let mut agent = agent("codex", "sess-retired", AgentStatus::Idle, 1)
-            .worktree("/repo/main")
-            .active_ago(120)
-            .in_pane("%4");
-        agent.pane.as_mut().expect("stamped pane").pane_pid = Some(84);
-        agent.runtime_owner = Some(crate::pane::RuntimeOwner::new(
-            crate::pane::RuntimeOwnerKind::Agent,
-            "sess-retired",
-            85,
-            None,
-        ));
-        let live = PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
-            command: Some("zsh".to_owned()),
-            pane_pid: Some(84),
-            pane_process_start: Some(ago(60)),
-            hosted_agent_kind: Some(AgentKind::new_unchecked("codex")),
-            hosted_agent_process_start: Some(ago(60)),
-            ..pane_cmd("%4", "tab_0", "zsh", None)
-        };
-
-        assert!(!stamped_agent_matches_live_pane(
-            &agent,
-            agent.pane.as_ref().expect("stamped pane"),
-            &live,
-        ));
-    }
-
-    #[test]
-    fn shell_launched_lazy_stamp_binds_by_hosted_lineage_before_its_first_turn() {
-        for (label, lineage, binds) in [
-            ("owner on the hosted chain", vec![85, 86], true),
-            ("shell hosts another process", vec![91, 92], false),
-            ("no lineage published", Vec::new(), false),
-        ] {
-            let mut launched = agent("codex", "launch_relaunched", AgentStatus::Idle, 1)
-                .worktree("/repo/main")
-                .active_ago(10)
-                .in_pane("%4");
-            launched.pane.as_mut().expect("stamped pane").pane_pid = Some(85);
-            launched.runtime_owner = Some(crate::pane::RuntimeOwner::new(
-                crate::pane::RuntimeOwnerKind::Agent,
-                "launch_relaunched",
-                85,
-                None,
-            ));
-            let live = PaneRef {
-                pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
-                pane_pid: Some(84),
-                pane_process_start: Some(ago(5)),
-                hosted_agent_kind: Some(AgentKind::new_unchecked("codex")),
-                hosted_agent_process_start: Some(ago(5)),
-                hosted_agent_lineage: lineage,
-                ..pane_cmd("%4", "tab_0", "zsh", None)
-            };
-            let agents = [launched];
-
-            let bound = PaneBindingIndex::new(&agents).stamped_agent(&live);
-            assert_eq!(
-                bound.map(|agent| agent.agent_id.as_str()),
-                binds.then_some("launch_relaunched"),
-                "{label}"
-            );
-        }
-    }
-
-    #[test]
-    fn carried_stamp_without_live_root_identity_keeps_clock_guard() {
-        for pane_pid in [None, Some(83)] {
-            let mut agent = agent("codex", "sess-stale", AgentStatus::Idle, 1)
-                .worktree("/repo/main")
-                .active_ago(120)
-                .in_pane("%4");
-            agent.pane.as_mut().expect("stamped pane").pane_pid = pane_pid;
-            let live = PaneRef {
-                pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
-                command: Some("codex".to_owned()),
-                pane_pid: Some(84),
-                pane_process_start: Some(ago(60)),
-                hosted_agent_kind: Some(AgentKind::new_unchecked("codex")),
-                hosted_agent_process_start: Some(ago(60)),
-                ..pane_cmd("%4", "tab_0", "codex", None)
-            };
-
-            assert!(!stamped_agent_matches_live_pane(
-                &agent,
-                agent.pane.as_ref().expect("stamped pane"),
-                &live,
-            ));
-        }
-    }
-
-    #[test]
-    fn live_root_stamp_still_rejects_a_different_hosted_kind() {
-        let mut agent = agent("codex", "sess-resumed", AgentStatus::Idle, 1)
-            .worktree("/repo/main")
-            .active_ago(120)
-            .in_pane("%4");
-        agent.pane.as_mut().expect("stamped pane").pane_pid = Some(84);
-        agent.runtime_owner = Some(crate::pane::RuntimeOwner::new(
-            crate::pane::RuntimeOwnerKind::Agent,
-            "sess-resumed",
-            84,
-            None,
-        ));
-        let live = PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
-            command: Some("node".to_owned()),
-            pane_pid: Some(84),
-            pane_process_start: Some(ago(60)),
-            hosted_agent_kind: Some(AgentKind::new_unchecked("claude")),
-            hosted_agent_process_start: Some(ago(60)),
-            ..pane_cmd("%4", "tab_0", "node", None)
-        };
-
-        assert!(!stamped_agent_matches_live_pane(
-            &agent,
-            agent.pane.as_ref().expect("stamped pane"),
-            &live,
-        ));
-    }
-}
+mod tests;

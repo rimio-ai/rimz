@@ -81,7 +81,7 @@ fn hidden_sidebar_mirrors_a_new_card_before_native_switch() {
         .open_tab(&TabOptions {
             env: Default::default(),
             title: "agents".to_owned(),
-            panes: agent_layout(),
+            panes: agent_layout(room.path()),
             focus: false,
             dock_sidebar: true,
             after: None,
@@ -114,7 +114,9 @@ fn hidden_sidebar_mirrors_a_new_card_before_native_switch() {
     let agents: Vec<_> = snapshot
         .panes
         .iter()
-        .filter(|pane| pane.is_live_terminal() && !pane.is_sidebar())
+        .filter(|pane| {
+            pane.is_live_terminal() && !pane.is_sidebar() && !before_tabs.contains(&pane.tab_id)
+        })
         .take(1)
         .map(|pane| pane.pane_ref(room.name()))
         .collect();
@@ -165,7 +167,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         .open_tab(&TabOptions {
             env: Default::default(),
             title: "agents".to_owned(),
-            panes: agent_layout(),
+            panes: agent_layout(room.path()),
             focus: false,
             dock_sidebar: true,
             after: None,

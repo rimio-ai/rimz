@@ -84,7 +84,7 @@ fn live_room(live: Live, ids: &[u64], args: &[&str]) -> (Env, std::process::Comm
     append_registered(&env, observation);
     let panes = serde_json::Value::Array(
         ids.iter()
-            .map(|id| serde_json::json!({"id": id, "is_plugin": false, "tab_id": 1, "title": "claude"}))
+            .map(|id| serde_json::json!({"id": id, "is_plugin": false, "tab_id": 1, "title": "claude", "pane_command": "claude"}))
             .collect(),
     )
     .to_string();

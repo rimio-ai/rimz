@@ -510,7 +510,12 @@ mod tests {
             rimz::MuxName::Tmux,
             "%2",
         )));
-        let panes = vec![parent.pane.clone().unwrap(), child.pane.clone().unwrap()];
+        let panes = [&parent, &child]
+            .map(|agent| PaneRef {
+                command: Some("claude".to_owned()),
+                ..agent.pane.clone().unwrap()
+            })
+            .to_vec();
         rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
             vec![parent, child],

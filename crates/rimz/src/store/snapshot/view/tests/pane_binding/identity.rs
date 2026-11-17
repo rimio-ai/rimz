@@ -21,17 +21,24 @@ fn commandless_panes_require_an_agent_or_spawn_identity() {
     let snapshot = room(Vec::new()).with_live_panes(vec![spawn_only], None);
     assert_eq!(rows(&snapshot)[0].name, "codex");
 
-    let claude = agent("claude", "sess-a", AgentStatus::Running, 1_000)
+    let mut claude = agent("claude", "sess-a", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
         .in_pane("%1");
+    claude.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+        crate::pane::RuntimeOwnerKind::Agent,
+        "sess-a",
+        84,
+        None,
+    ));
     let commandless_agent_pane = PaneRef {
         command: None,
+        pane_pid: Some(84),
         ..pane("%1", "claude", "/repo/main")
     };
     let snapshot = room(vec![claude]).with_live_panes(vec![commandless_agent_pane], None);
     assert!(
         rows(&snapshot)[0].is_agent(),
-        "agent stamp binds by pane id"
+        "a stamped agent whose owner is the pane's root binds"
     );
 
     let raced_sibling = PaneRef {

@@ -13,7 +13,7 @@ use crate::common::DeliveryRendezvous;
 fn listing(ids: &[u64]) -> String {
     let panes = ids
         .iter()
-        .map(|id| serde_json::json!({"id": id, "is_plugin": false, "tab_id": 1, "title": "claude"}))
+        .map(|id| serde_json::json!({"id": id, "is_plugin": false, "tab_id": 1, "title": "claude", "pane_command": "claude"}))
         .collect::<Vec<_>>();
     serde_json::Value::Array(panes).to_string()
 }

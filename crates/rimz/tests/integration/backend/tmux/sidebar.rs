@@ -92,7 +92,7 @@ fn hidden_sidebar_mirrors_a_new_card_before_native_switch() {
         .open_tab(&TabOptions {
             env: Default::default(),
             title: "agents".to_owned(),
-            panes: agent_layout(),
+            panes: agent_layout(server._tempdir.path()),
             focus: false,
             dock_sidebar: true,
             after: None,
@@ -122,7 +122,7 @@ fn hidden_sidebar_mirrors_a_new_card_before_native_switch() {
     thread::sleep(Duration::from_secs(3));
     let agents: Vec<_> = list_session_panes(&server, session)
         .into_iter()
-        .filter(|pane| pane.command.as_deref() != Some("rimz-sidebar"))
+        .filter(|pane| pane.command.as_deref() == Some("claude"))
         .take(1)
         .collect();
     assert_eq!(agents.len(), 1);
@@ -213,7 +213,7 @@ fn two_clients_share_the_sidebar_view_through_detach() {
         .open_tab(&TabOptions {
             env: Default::default(),
             title: "agents".to_owned(),
-            panes: agent_layout(),
+            panes: agent_layout(server._tempdir.path()),
             focus: false,
             dock_sidebar: true,
             after: None,

@@ -316,11 +316,16 @@ fn snapshot_with(mut agents: Vec<AgentState>) -> SidebarSnapshot {
         }
         let live = agent.pane.clone().unwrap_or_else(|| {
             let raw = format!("%agent-{idx}");
-            pane(
-                &raw,
-                agent.kind.as_str(),
-                agent.worktree_path.as_deref().unwrap_or("/repo/main"),
-            )
+            // The probe's hosted kind names the provider whose program name
+            // (Cursor's `cursor-agent`) differs from its kind.
+            crate::pane::PaneRef {
+                hosted_agent_kind: Some(agent.kind.clone()),
+                ..pane(
+                    &raw,
+                    agent.kind.as_str(),
+                    agent.worktree_path.as_deref().unwrap_or("/repo/main"),
+                )
+            }
         });
         agent.pane = Some(live.clone());
         panes.push(live);

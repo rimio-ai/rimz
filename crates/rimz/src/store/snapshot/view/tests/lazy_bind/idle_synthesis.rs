@@ -97,6 +97,7 @@ fn hosted_qwen_identity_promotes_only_when_wired_or_session_stamped() {
 
     let qwen = agent("qwen", "sess-qwen", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
+        .active_ago(30)
         .in_pane("term1");
     let stamped = room(vec![qwen]).with_live_panes(vec![live], None);
     let stamped_rows = rows(&stamped);

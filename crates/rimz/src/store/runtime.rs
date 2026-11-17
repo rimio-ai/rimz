@@ -139,45 +139,55 @@ impl RuntimeProjection {
             .into_iter()
             .map(|agent| {
                 let replaced = holders.replaced(agent);
+                let runtime_visible = agent_is_runtime_visible(agent);
                 (
                     agent,
                     replaced,
-                    !replaced && (agent_is_runtime_visible(agent) || failed_swap_holder(agent)),
+                    !replaced && (runtime_visible || failed_swap_holder(agent)),
+                    runtime_visible,
                 )
             })
             .collect::<Vec<_>>();
         let visible_parents = agents
             .iter()
-            .filter(|(agent, _, visible)| agent.parent_agent_id.is_none() && *visible)
+            .filter(|(agent, _, visible, _)| agent.parent_agent_id.is_none() && *visible)
             .flat_map(|(agent, ..)| agent.identity_ids().map(move |id| (&agent.kind, id)))
             .collect::<HashSet<_>>();
         let visible_parent_launches = agents
             .iter()
-            .filter(|(agent, _, visible)| agent.parent_agent_id.is_none() && *visible)
+            .filter(|(agent, _, visible, _)| agent.parent_agent_id.is_none() && *visible)
             .filter_map(|(agent, ..)| agent.launch_id.as_ref())
             .collect::<HashSet<_>>();
         let mut expelled = BTreeSet::new();
         let kept = agents
             .iter()
-            .filter_map(|(agent, replaced, independently_visible)| {
-                let visible = *independently_visible
-                    || (!*replaced
-                        && agent.is_launched_child()
-                        && agent.parent_agent_id.as_ref().is_some_and(|id| {
-                            visible_parent_launches.contains(id)
-                                || visible_parents.contains(&(
-                                    agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind),
-                                    id,
-                                ))
-                        }));
-                if !visible && agent.ended_at.is_none() {
-                    expelled.insert((agent.kind.clone(), agent.agent_id.clone()));
-                }
-                visible.then(|| AgentState {
-                    replaced: false,
-                    ..(*agent).clone()
-                })
-            })
+            .filter_map(
+                |(agent, replaced, independently_visible, runtime_visible)| {
+                    let visible = *independently_visible
+                        || (!*replaced
+                            && agent.is_launched_child()
+                            && agent.parent_agent_id.as_ref().is_some_and(|id| {
+                                visible_parent_launches.contains(id)
+                                    || visible_parents.contains(&(
+                                        agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind),
+                                        id,
+                                    ))
+                            }));
+                    if !visible && agent.ended_at.is_none() {
+                        expelled.insert((agent.kind.clone(), agent.agent_id.clone()));
+                    }
+                    visible.then(|| {
+                        let mut kept = AgentState {
+                            replaced: false,
+                            ..(*agent).clone()
+                        };
+                        if !*runtime_visible {
+                            drop_owner_ancestry(&mut kept);
+                        }
+                        kept
+                    })
+                },
+            )
             .collect::<Vec<_>>();
         super::snapshot::count_rows_materialized(kept.len() as u64);
         Self {
@@ -213,6 +223,15 @@ fn ended_keys<'a>(
 /// never takes one.
 pub(crate) fn agent_is_runtime_visible(agent: &AgentState) -> bool {
     agent.ended_at.is_none() && agent.runtime_owner.as_ref().is_none_or(owner_is_live)
+}
+
+/// A row kept for display though it fails [`agent_is_runtime_visible`] (an
+/// ended or dead launched child, a failed swap holder) hands the pane binder
+/// no parent chain, so a process that has left the pane never proves it.
+fn drop_owner_ancestry(agent: &mut AgentState) {
+    if let Some(owner) = agent.runtime_owner.as_mut() {
+        owner.ancestors.clear();
+    }
 }
 
 /// A swap's bound replacement that failed while it held its agent: its card

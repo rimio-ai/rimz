@@ -381,6 +381,15 @@ mod agent_ref {
     const NAME: &str = "bright-otter";
     const UUID: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
+    /// The materialized room with the saved agent's provider running in its
+    /// work pane, the program that lets the lookup answer that pane.
+    fn room_panes(kind: &str) -> String {
+        let mut panes: Vec<serde_json::Value> =
+            serde_json::from_str(crate::common::room::MATERIALIZED_ROOM_PANES).unwrap();
+        panes[1]["pane_command"] = kind.into();
+        serde_json::to_string(&panes).unwrap()
+    }
+
     struct Fixture {
         env: Env,
         cwd: PathBuf,
@@ -497,7 +506,7 @@ mod agent_ref {
             seed_live_zellij_room(
                 &env.runtime_paths(),
                 &workspace.session_name,
-                serde_json::from_str(crate::common::room::MATERIALIZED_ROOM_PANES).unwrap(),
+                serde_json::from_str(&room_panes(kind)).unwrap(),
             );
             std::fs::write(env.home_root.join("presence.wasm"), b"test-presence").unwrap();
             Self {
@@ -543,10 +552,7 @@ mod agent_ref {
                     "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                     format!("{} [Created 1s ago]\n", workspace.session_name),
                 )
-                .env(
-                    "RIMZ_TEST_ZELLIJ_LIST_PANES",
-                    crate::common::room::MATERIALIZED_ROOM_PANES,
-                );
+                .env("RIMZ_TEST_ZELLIJ_LIST_PANES", room_panes(&self.kind));
             command.env("ZELLIJ_SESSION_NAME", workspace.session_name);
             command
         }

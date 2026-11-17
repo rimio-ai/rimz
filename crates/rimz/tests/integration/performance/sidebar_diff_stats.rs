@@ -278,11 +278,20 @@ impl Fixture {
 
     /// Root an agent in each fixture pane at the pane's checkout: a shell alone
     /// in an unlisted checkout makes no group, while the agent's checkout is
-    /// the place whose `Worktree` group the git probes serve.
+    /// the place whose `Worktree` group the git probes serve. Each pane then
+    /// runs `claude`, the program that binds an agent with no recorded owner.
     pub(crate) fn register_pane_agents(&self) {
-        let panes: Vec<PaneRef> =
+        let mut panes: Vec<PaneRef> =
             serde_json::from_slice(&std::fs::read(&self.panes_path).expect("read panes"))
                 .expect("parse panes");
+        for pane in &mut panes {
+            pane.command = Some("claude".to_owned());
+        }
+        std::fs::write(
+            &self.panes_path,
+            serde_json::to_vec(&panes).expect("serialize panes"),
+        )
+        .expect("write panes");
         for (slot, pane) in panes.iter().enumerate() {
             self.register_agent(
                 slot,

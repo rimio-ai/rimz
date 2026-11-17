@@ -31,7 +31,8 @@ fn command(env: &Env, args: &[&str]) -> Command {
         .args(["--session-name", &session(env)]);
     let panes = env.home_root.join("panes.json");
     if !panes.exists() {
-        let rows = [7, 8, 9].map(|id| json!({"id": id, "is_plugin": false, "tab_id": 1}));
+        let rows = [7, 8, 9]
+            .map(|id| json!({"id": id, "is_plugin": false, "tab_id": 1, "pane_command": "claude"}));
         std::fs::write(&panes, serde_json::to_vec(&rows).unwrap()).unwrap();
     }
     command.env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", panes);

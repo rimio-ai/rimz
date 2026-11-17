@@ -4174,7 +4174,7 @@ fn list_stop_panes(env: &Env, ids: &[u64]) -> PathBuf {
     let path = env.project_root.join("stop-panes.json");
     let rows = ids
         .iter()
-        .map(|id| json!({"id": id, "is_plugin": false, "tab_id": 1, "title": "sh"}))
+        .map(|id| json!({"id": id, "is_plugin": false, "tab_id": 1, "title": "sh", "pane_command": "claude"}))
         .collect::<Vec<_>>();
     std::fs::write(&path, serde_json::to_vec(&rows).unwrap()).unwrap();
     path
@@ -4296,6 +4296,87 @@ fn stop_closes_the_agents_listed_pane_when_its_ended_run_names_a_gone_one() {
         "stopped @claude (claude); resume: rimz agents resume @repro"
     );
     assert!(process.try_wait().unwrap().is_some(), "its process is gone");
+}
+
+/// With no program in the pane to go on, the owner's process chain alone decides the
+/// lookup: a pane whose root is on the chain (the test process, the owner's parent) takes
+/// the message and the stop, and a pane whose root is another live process takes neither.
+/// The raw Zellij listing carries no pid, so the root comes from the cached topology.
+#[test]
+fn the_owners_process_chain_alone_decides_whether_a_pane_hosts_it() {
+    for proven in [true, false] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        let mut process = dummy_agent_process();
+        let mut other = dummy_agent_process();
+        register_stop_agent(
+            &env,
+            "chain",
+            TRACE_PANE,
+            Some(agent_owner("chain", &process)),
+        );
+        let root = if proven {
+            std::process::id()
+        } else {
+            other.id()
+        };
+        let workspace = env.resolve_workspace(&env.project_root);
+        crate::common::room::seed_live_zellij_room(
+            &env.runtime_paths(),
+            &workspace.session_name,
+            vec![
+                serde_json::from_value(json!({
+                    "id": 3, "tab_id": 1, "pane_command": "zsh", "pane_pid": root,
+                }))
+                .unwrap(),
+            ],
+        );
+        let panes = env.project_root.join("stop-panes.json");
+        std::fs::write(
+            &panes,
+            r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh","pane_command":"zsh"}]"#,
+        )
+        .unwrap();
+
+        let sent = stop_command(&env, &panes, 2000)
+            .args(["message", "@chain", "--", "are you there"])
+            .output()
+            .unwrap();
+        assert!(sent.status.success(), "{sent:?}");
+        let message = &env.store().list_messages().unwrap()[0];
+        let expected = if proven {
+            MessageStatus::Sent
+        } else {
+            MessageStatus::Queued
+        };
+        assert_eq!(message.status, expected, "proven={proven} {message:?}");
+
+        let stop = stop_command(&env, &panes, 2000)
+            .args(["agents", "stop", "@chain"])
+            .output()
+            .unwrap();
+        if proven {
+            assert!(stop.status.success(), "{stop:?}");
+            assert_eq!(closed_stop_panes(&env), [TRACE_PANE], "{stop:?}");
+            assert!(process.try_wait().unwrap().is_some(), "its process is gone");
+        } else {
+            assert!(!stop.status.success(), "{stop:?}");
+            assert!(
+                String::from_utf8_lossy(&stop.stderr).contains(&format!(
+                    "RimZ found no pane for it in this room and did not signal its process {}",
+                    process.id()
+                )),
+                "{stop:?}"
+            );
+            assert!(closed_stop_panes(&env).is_empty(), "{stop:?}");
+            assert!(process.try_wait().unwrap().is_none(), "its process runs on");
+        }
+        for child in [&mut process, &mut other] {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 /// A `kind` row of launch `launch`, bound to `pane` when given, under `owner`.
@@ -5121,7 +5202,7 @@ for arg do
         if [ -e "$RIMZ_TEST_RETURNED" ]; then read -r returns < "$RIMZ_TEST_RETURNED"; fi
         if [ "$returns" -lt 2 ]; then
             printf '%s\n' "$((returns + 1))" > "$RIMZ_TEST_RETURNED"
-            printf '%s' '[{"id":3,"is_plugin":false,"tab_id":1}]' > "$RIMZ_TEST_ZELLIJ_LIST_PANES_FILE"
+            printf '%s' '[{"id":3,"is_plugin":false,"tab_id":1,"pane_command":"claude"}]' > "$RIMZ_TEST_ZELLIJ_LIST_PANES_FILE"
         fi
     fi
 done
@@ -5159,7 +5240,7 @@ fn stop_bounds_repeated_closes_of_a_reappearing_pane_without_signalling_its_owne
         .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "1500")
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            r#"[{"id":3,"is_plugin":false,"tab_id":1}]"#,
+            r#"[{"id":3,"is_plugin":false,"tab_id":1,"pane_command":"claude"}]"#,
         )
         .output()
         .unwrap();
@@ -6151,7 +6232,7 @@ fn orphan_repair_records_no_end_while_the_run_pane_stays_open() {
         .env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1")
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh","pane_command":"claude"}]"#,
         )
         .args(rimz::child_process::agent_helper_argv(
             "orphan-subagent",
@@ -14445,7 +14526,8 @@ fn agents_compact_uses_native_commands_and_refuses_unsupported_instructions() {
             false,
             Some(TRACE_PANE),
         );
-        let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, kind)]);
+        let program = rimz::agents::spec_by_kind(kind).unwrap().bin_names[0];
+        let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, program)]);
         let trace = env.project_root.join("native-compact.log");
         let refused = traced_rimz(&env, &trace)
             .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
@@ -14478,6 +14560,10 @@ fn agents_compact_uses_native_commands_and_refuses_unsupported_instructions() {
 
         let output = traced_rimz(&env, &trace)
             .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                TRACE_LISTING.replace("\"claude\"", &format!("\"{program}\"")),
+            )
             .args(["agents", "compact", "@coder-agent"])
             .output()
             .expect("native compact");
@@ -16266,7 +16352,7 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
         traced_rimz(&env, "zellij-skip-trace.log")
             .env(
                 "RIMZ_TEST_ZELLIJ_LIST_PANES",
-                r#"[{"id":7,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":9,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+                r#"[{"id":7,"is_plugin":false,"tab_id":1,"title":"sh","pane_command":"claude"},{"id":9,"is_plugin":false,"tab_id":1,"title":"sh","pane_command":"claude"}]"#,
             )
             .args(["message", "--steer", "@claude", "--all", "--", "go"]),
         "steer partial skip",
@@ -16354,8 +16440,9 @@ fn boundary_fanout_preserves_target_order_on_hook_failure() {
 }
 
 /// The listing the tracing Zellij shim answers for `TRACE_PANE` and the peer pane beside it:
-/// delivery asks the listing where its receiver is.
-const TRACE_LISTING: &str = r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":4,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
+/// delivery asks the listing where its receiver is. Each runs `claude`, the program a raw
+/// listing (which carries no root pid) shows for an agent the lookup can answer.
+const TRACE_LISTING: &str = r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh","pane_command":"claude"},{"id":4,"is_plugin":false,"tab_id":1,"title":"sh","pane_command":"claude"}]"#;
 
 /// A `rimz` on the tracing Zellij shim, which answers `TRACE_LISTING` unless the test stages
 /// a listing of its own.

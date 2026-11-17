@@ -399,6 +399,162 @@ fn wait_for_no_sidebar_panes(xdg: &Path, session: &str) {
     }
 }
 
+/// A wrapper-launched agent's recorded owner chain holds the root pid the presence plugin
+/// publishes for its pane, and that proof alone binds the pane: the listed pane is stripped
+/// of every program the Unknown tier would read.
+#[test]
+fn wrapper_launched_agent_binds_by_its_owner_chain_from_the_plugins_root_pid() {
+    require_zellij!();
+    let wasm = super::presence::presence_wasm_artifact();
+    if !rimz::mux::zellij::capabilities().is_ok_and(|caps| {
+        caps.parsed_version
+            .is_some_and(|v| v >= rimz::mux::zellij::MIN_ZELLIJ_VERSION)
+    }) {
+        crate::common::skip("zellij below the presence-plugin floor");
+        return;
+    }
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let workspace = env.resolve_workspace(&env.project_root);
+    let namespace = ZellijNamespace::new();
+    super::presence::seed_presence_permissions(namespace.path(), &wasm);
+    let room = LiveZellijSession::from_namespace(namespace, workspace.session_name.clone());
+    let _client = AttachedClient::create_and_attach(&room, 160, 40);
+    let xdg = room.path();
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    backend
+        .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
+            session_name: room.name().to_owned(),
+            workspace_id: workspace.workspace_id.clone(),
+            wasm,
+            rimz_bin: env.rimz_bin(),
+            keymap: Default::default(),
+            project_root: env.project_root.clone(),
+            session_options: rimz::mux::zellij::zellij_session_options(
+                &rimz::config::MultiplexerConfig::default().zellij,
+            ),
+        })
+        .expect("load the presence plugin");
+
+    let agent_id = AgentSessionId::from("chain-proof-session");
+    let agent_bin = write_sleeping_agent_shim(&env, "claude");
+    let ready = env.home_root.join("chain-proof-ready");
+    let command = zellij_agent_exec_command(
+        &env,
+        xdg,
+        &agent_bin,
+        &ready,
+        rimz::harness::launch::ExecAction::Resume {
+            session_id: agent_id.to_string(),
+            extra_args: Vec::new(),
+        },
+    );
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let tab_name = "#chain-proof";
+    backend
+        .open_tab(&TabOptions {
+            env: Default::default(),
+            title: tab_name.to_owned(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: command,
+                    name: None,
+                }])],
+                focused_pane: 0,
+            },
+            focus: true,
+            dock_sidebar: false,
+            after: None,
+            sidebar: sidebar_opts(room.name(), &env.project_root, stub, 160),
+        })
+        .expect("open agent tab");
+    wait_for_path(&ready, "agent shim did not start");
+    let work = wait_for_named_work_pane_count(xdg, room.name(), tab_name, 1);
+    let pane_id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", work[0].id));
+
+    let runtime = rimz::disk::paths::RuntimePaths::under(workspace.workspace_id.clone(), xdg)
+        .expect("presence runtime paths");
+    let store = env.store();
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let (agent, root) = loop {
+        let root =
+            rimz::mux::zellij::pane_topology::read_pane_topology_cache(&runtime, room.name())
+                .and_then(|cache| {
+                    cache
+                        .panes
+                        .into_iter()
+                        .find(|pane| pane.id == work[0].id && !pane.is_plugin)
+                })
+                .and_then(|pane| pane.pane_pid);
+        let agent = store
+            .runtime_projection(rimz::RuntimeScope::Runtime)
+            .expect("runtime projection")
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id == agent_id && agent.runtime_owner.is_some());
+        if let (Some(agent), Some(root)) = (agent.clone(), root)
+            && agent
+                .runtime_owner
+                .as_ref()
+                .is_some_and(|owner| owner.ancestors.contains(&root))
+        {
+            break (agent, root);
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the recorded owner never reached the plugin's root pid: root={root:?}, {agent:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    let live = rimz::pane::PaneRef {
+        pane_pid: Some(root),
+        command: None,
+        foreground_cmdline: None,
+        spawn_command: None,
+        hosted_agent_kind: None,
+        ..agent
+            .pane
+            .clone()
+            .expect("the wrapper stamped its own pane")
+    };
+    assert_eq!(live.pane_id, pane_id);
+    let bound_to = |live: &rimz::pane::PaneRef| {
+        rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            workspace.workspace_id.clone(),
+            vec![agent.clone()],
+            jiff::Timestamp::now(),
+        )
+        .with_live_panes(vec![live.clone()], None)
+        .agent_bound_to_pane(live)
+        .map(|bound| bound.agent_id.clone())
+    };
+    assert_eq!(
+        bound_to(&live),
+        Some(agent_id),
+        "the proven pane binds its agent"
+    );
+
+    // A root off the chain disproves the stamp, though the pane runs the provider.
+    let mut other = std::process::Command::new("sleep")
+        .arg("349")
+        .spawn()
+        .expect("spawn another live process");
+    let disproven = rimz::pane::PaneRef {
+        pane_pid: Some(other.id()),
+        command: Some("claude".to_owned()),
+        ..live
+    };
+    let disproven_binding = bound_to(&disproven);
+    let _ = other.kill();
+    let _ = other.wait();
+    assert_eq!(
+        disproven_binding, None,
+        "a pane rooted off the chain binds nothing"
+    );
+}
+
 fn wait_for_path(path: &Path, message: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {

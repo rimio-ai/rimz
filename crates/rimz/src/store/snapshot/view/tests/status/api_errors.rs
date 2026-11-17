@@ -13,7 +13,7 @@ fn entitlement_failure_takes_attention_without_a_resume_park() {
             TurnErrorClass::NotEntitled,
         );
     let snapshot =
-        room(vec![session.clone()]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+        room(vec![session.clone()]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(row.status(), Some(AgentStatus::Failed));
     assert_eq!(row.turn_error_label(), Some("Subscription access denied"));
@@ -44,7 +44,7 @@ fn console_usage_cap_marker_fails_instead_of_parking() {
             .active_ago(60)
             .turn_error(10, label);
         let snapshot =
-            room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+            room(vec![session]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
         let row = row(&snapshot, "usage-capped");
         actual.push(row.status());
         assert_eq!(row.turn_error_label(), Some(label));
@@ -66,7 +66,7 @@ fn api_error_turn_escalates_running_to_attention() {
         .turn_error(10, "API Error: Bad Request");
 
     let snapshot =
-        room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+        room(vec![session]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
 
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
@@ -336,7 +336,7 @@ fn api_error_self_clears_when_activity_resumes() {
         .overloaded_turn_error(120, "API Error: Overloaded");
 
     let snapshot =
-        room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+        room(vec![session]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
 
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
@@ -377,7 +377,7 @@ fn paused_class_marker_survives_the_stall_window() {
             .overloaded_turn_error(10, label);
 
         let snapshot =
-            room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+            room(vec![session]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
 
         let row = row(&snapshot, "busy-claude");
         assert_eq!(row.status(), Some(AgentStatus::Paused), "{expected}");
