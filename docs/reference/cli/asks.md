@@ -174,8 +174,8 @@ Structured input is a JSON array with one object per question, in order. Use it 
 `answer` checks everything it can before it touches the pane, then sends the whole answer as one uninterrupted write:
 
 1. Validate every answer against the ask's questions and the agent's supported actions. A failure exits `3` and sends nothing.
-2. Find the agent's live pane, and wake it when the agent is hibernated.
-3. Wait up to 30 seconds for any other RimZ write to the same pane (a message, another answer) to finish, then hold the pane until the answer is sent. `--no-wait` does not skip this wait.
+2. Find the pane the agent is in now, from the multiplexer's listing, and wake it when the agent is hibernated.
+3. Wait up to 30 seconds for any other RimZ write to the same pane (a message, another answer) to finish, then hold the pane until the answer is sent. `--no-wait` does not skip this wait. Then read the listing again: when the agent left the pane meanwhile, another session of the agent holds it, or the listing cannot be read, no key is sent and the command exits `2`.
 4. Check that the ask read in step 1 is still the agent's open ask. A prompt answered or replaced in the meantime gets no keys, and the command exits `2`. This check runs for an address target too.
 5. Send the keys. A provider subagent's answer goes to its root agent's pane.
 6. Wait for confirmation: the blocking ask closes or the agent records an answer for it. When the agent recorded none, RimZ records the answer in the agent's transcript itself. `--no-wait` stops before this step.
@@ -190,7 +190,7 @@ On success `answer` prints `answered <handle>: <choice>  <ask_id>`, or `sent ans
 | --- | --- |
 | `0` | The agent confirmed the answer, or `--no-wait` sent it. |
 | `1` | No room, the store could not be read or written, a hibernated pane could not be woken, or a raised ask's message could not be dispatched. |
-| `2` | The target is not an agent or not asking, the ask id is malformed or matches no open ask, the ask was answered or replaced before sending, the agent's kind has no adapter, the agent has no live pane, the pane stayed busy for 30 seconds, or sending failed. A send that fails partway may leave some keys in the pane. An invalid command line (such as `--wait 5d`, or `--wait` with `--no-wait`) also exits `2`. |
+| `2` | The target is not an agent or not asking, the ask id is malformed or matches no open ask, the ask was answered or replaced before sending, the agent's kind has no adapter, the agent has no live pane, the agent left its pane or another of its sessions holds it, the multiplexer could not be listed, the pane stayed busy for 30 seconds, or sending failed. A send that fails partway may leave some keys in the pane. An invalid command line (such as `--wait 5d`, or `--wait` with `--no-wait`) also exits `2`. |
 | `3` | No answer was given, the answer is invalid for the ask, the `--json` input cannot be read or parsed, or the agent does not support the answer, including an ask answered only in the pane and Codex async questions. |
 | `4` | A blocking ask's keys were sent, but the agent did not confirm before the `--wait` deadline. Do not resend. The error gives `rimz asks show` and `rimz pane capture` commands to check. |
 

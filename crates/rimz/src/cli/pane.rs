@@ -176,18 +176,21 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             key,
             text,
         } => {
-            let (pane, session_name) = match resolve_pane_target(&target, globals)? {
+            let text = text.as_deref().filter(|text| !text.is_empty());
+            if text.is_none() && key.is_empty() && !enter {
+                bail!("expected text, --key, or --enter");
+            }
+            match resolve_pane_target(&target, globals)? {
                 ResolvedPaneTarget::Agent(agent) => {
-                    let pane = agent
-                        .stored_pane
-                        .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent.name))?;
-                    (pane, Some(agent.ctx.workspace.session_name.clone()))
+                    type_keys(&agent_writer(&agent)?, text, &key, enter)
                 }
-                ResolvedPaneTarget::Pane { pane, session_name } => (pane, session_name),
-            };
-            let session_name = resolve_session_name(globals, session_name)?;
-            rimz::mux::backend_for(pane.mux()).require_pane_in_session(&pane, &session_name)?;
-            send(&pane, &session_name, text.as_deref(), &key, enter)
+                ResolvedPaneTarget::Pane { pane, session_name } => {
+                    let session_name = resolve_session_name(globals, session_name)?;
+                    rimz::mux::backend_for(pane.mux())
+                        .require_pane_in_session(&pane, &session_name)?;
+                    send(&pane, &session_name, text, &key, enter)
+                }
+            }
         }
         PaneSubcmd::Focus {
             target,
@@ -238,8 +241,7 @@ enum ResolvedPaneTarget {
         pane: PaneId,
         session_name: Option<String>,
     },
-    /// An agent address: focus and capture ask the hosting lookup for its pane, while
-    /// send keeps the pane stored on the resolved row.
+    /// An agent address: focus, capture, and send ask the hosting lookup for its pane.
     Agent(Box<AgentTarget>),
 }
 
@@ -248,7 +250,6 @@ struct AgentTarget {
     kind: rimz::ids::AgentKind,
     launch: rimz::ids::AgentSessionId,
     name: String,
-    stored_pane: Option<PaneId>,
 }
 
 fn classify_pane_target(raw: &str) -> Result<PaneTarget> {
@@ -299,7 +300,6 @@ fn resolve_pane_target(raw: &str, globals: &GlobalFlags) -> Result<ResolvedPaneT
                 kind: agent.kind.clone(),
                 launch: agent.launch_key().clone(),
                 name: agent_name(agent).to_owned(),
-                stored_pane: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
                 ctx,
             };
             Ok(ResolvedPaneTarget::Agent(Box::new(target)))
@@ -919,6 +919,27 @@ fn resolve_session_name(globals: &GlobalFlags, session_name: Option<String>) -> 
     }
 }
 
+/// The writer of the pane the lookup answers for `agent`, read again once it is locked.
+fn agent_writer(agent: &AgentTarget) -> Result<PaneWriter> {
+    let mut notices = Vec::new();
+    let found = rimz::launcher::agent_pane::open_writer(
+        &agent.ctx.workspace,
+        &agent.ctx.store,
+        agent.ctx.mux(),
+        &agent.kind,
+        &agent.launch,
+        &mut notices,
+    );
+    render::room::print_notices(notices)?;
+    match found {
+        Ok((_, writer)) => Ok(writer),
+        Err(rimz::launcher::agent_pane::FindErr::Nowhere) => {
+            bail!("agent {} has no bound pane", agent.name)
+        }
+        Err(err) => bail!("agent {}: {err}; nothing was sent", agent.name),
+    }
+}
+
 fn send(
     pane: &PaneId,
     session_name: &str,
@@ -926,12 +947,6 @@ fn send(
     keys: &[NamedKey],
     enter: bool,
 ) -> Result<()> {
-    // The generic primitive types raw — a target may be a bare shell where
-    // bracketed-paste markers would echo literally. Agent-composer submits
-    // (`message`) take the bracketed `submit_message` path instead.
-    if text.is_none_or(str::is_empty) && keys.is_empty() && !enter {
-        bail!("expected text, --key, or --enter");
-    }
     let paths = rimz::room::session::workspace_record_for_session(session_name)?
         .map(|room| rimz::StatePaths::for_workspace(room.workspace_id))
         .transpose()?;
@@ -939,8 +954,24 @@ fn send(
         rimz::harness::hibernate::wake_pane_at(paths, pane)?;
     }
     let runtime = paths.as_ref().map(RuntimePaths::for_state).transpose()?;
-    let writer = PaneWriter::open(runtime.as_ref(), pane, session_name)?;
-    if let Some(text) = text.filter(|text| !text.is_empty()) {
+    type_keys(
+        &PaneWriter::open(runtime.as_ref(), pane, session_name)?,
+        text,
+        keys,
+        enter,
+    )
+}
+
+fn type_keys(
+    writer: &PaneWriter,
+    text: Option<&str>,
+    keys: &[NamedKey],
+    enter: bool,
+) -> Result<()> {
+    // The generic primitive types raw — a target may be a bare shell where
+    // bracketed-paste markers would echo literally. Agent-composer submits
+    // (`message`) take the bracketed `submit_message` path instead.
+    if let Some(text) = text {
         writer.type_text(text)?;
     }
     for key in keys {

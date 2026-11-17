@@ -157,11 +157,10 @@ Programmatic entry points ignore the waiver: see [the fail-fast gate](#the-fail-
 
 The helper, [`cli/agents_cmd/budget_park.rs`](../../../crates/rimz/src/cli/agents_cmd/budget_park.rs), does the two things the producer may not: touch a pane and write to the store. In order, it:
 
-1. Refuses unless the pane is still bound to the agent.
-2. Wakes the pane if hibernation froze it (`harness::hibernate::wake_pane`). A wake failure ends the helper before anything else runs.
-3. Presses Esc.
-4. Moves every non-terminal, non-workflow turn run record of that agent to `budget_exceeded` through `harness::run::budget_exceeded`, and wakes each run it wrote. That transition leaves session runs and all workflow runs open ([workflow.md § How an attempt ends](./workflow.md#how-an-attempt-ends)).
-5. Reports the keypress error, if there was one. The run transition happens even when the keypress fails.
+1. Opens the agent's writer through `crates/rimz/src/launcher/agent_pane.rs::open_writer`: reads the hosting lookup for the agent's launch, wakes the pane it answers if hibernation froze it, takes the pane's write lock, and reads again. The request's pane is not consulted. An agent no listed pane hosts, one that left the pane during the wake, a pane that holds another session of the launch (`AgentPane::holder`), a failed read, and a failed wake each end the helper with nothing pressed and nothing settled, so the producer's next due interrupt retries; an agent no listed pane hosts and a pane holding another session fail with `budget target pane is no longer bound to the agent`, and a move, a failed read, or a failed wake with `finding the over-budget agent's pane:` and its cause. A failed lock goes on to step 3 without a keypress.
+2. Presses Esc.
+3. Moves every non-terminal, non-workflow turn run record of that agent to `budget_exceeded` through `harness::run::budget_exceeded`, and wakes each run it wrote. That transition leaves session runs and all workflow runs open ([workflow.md § How an attempt ends](./workflow.md#how-an-attempt-ends)).
+4. Reports the lock or keypress error, if there was one. The run transition happens even when the lock or the keypress fails.
 
 The cost the helper records is the agent's own (`total_cost_usd`, falling back to the agent ledger's park stamp), never the fleet or account figure. A run record describes its own spend, and the broader figure only explains why the pane stopped.
 

@@ -43,16 +43,6 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
             request.kind
         );
     }
-    snapshot
-        .agent_panes
-        .iter()
-        .find(|pane| {
-            pane.kind == request.kind
-                && pane.agent_id.as_ref() == Some(&request.agent_id)
-                && pane.pane_id == request.pane_id
-        })
-        .context("idle-compaction target pane is no longer bound to the agent")?;
-
     let Some(occupied_tokens) = agent.occupied_context_tokens() else {
         return Ok(());
     };
@@ -73,8 +63,22 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         }
         Err(err) => return Err(err).context("checking idle-compaction eligibility"),
     }
-    // A freeze can race the snapshot; waking may also outlast the cache window.
-    rimz::harness::hibernate::wake_pane(store, &request.pane_id)?;
+    // A freeze can race the snapshot; waking may also outlast the cache window. The decision is
+    // the session's, so a pane holding another session of its launch is no target either.
+    let mut notices = Vec::new();
+    let found = rimz::launcher::agent_pane::find(
+        workspace,
+        store,
+        ctx.mux(),
+        &agent.kind,
+        agent.launch_key(),
+        &mut notices,
+    );
+    crate::cli::render::room::print_notices(notices)?;
+    let pane = found
+        .ok()
+        .filter(|pane| super::restart::held_by(pane, agent))
+        .context("idle-compaction target pane is no longer bound to the agent")?;
     let snapshot = ctx
         .published_snapshot()
         .context("rereading idle-compaction delivery snapshot after wake")?;
@@ -103,7 +107,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
             idle: true,
             message_id: message_id.clone(),
             agent,
-            pane_id: request.pane_id,
+            pane_id: pane.pane_id,
             command: expected_command,
             sender: MessageSender::System,
             automated: true,
