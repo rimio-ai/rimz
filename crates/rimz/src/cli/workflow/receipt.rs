@@ -286,7 +286,10 @@ pub(in crate::cli) fn restart(
             out,
             "restart {} step {step} · {mode} · run is {}; no live replacement",
             record.address(),
-            record.state.as_str()
+            workflow_view::state_word(
+                record.state,
+                record.outcome.as_ref().map(|outcome| &outcome.ending)
+            )
         )?;
     } else {
         writeln!(
@@ -464,7 +467,10 @@ fn continue_session(
         bail!(
             "workflow run {} is {}; cannot restart",
             run.record.id,
-            run.record.state.as_str()
+            workflow_view::state_word(
+                run.record.state,
+                run.record.outcome.as_ref().map(|outcome| &outcome.ending)
+            )
         );
     }
     let fix = format!("rimz workflow restart {}", run.record.id);

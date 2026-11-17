@@ -76,7 +76,7 @@ fn route<'a>(
 
 fn detail(hop: &Hop) -> (HopKind, Option<&str>, Option<&str>, u64) {
     (
-        hop.kind,
+        hop.kind.clone(),
         hop.outcome.as_deref(),
         hop.target.as_ref().map(|target| target.as_str()),
         hop.count,
@@ -444,7 +444,8 @@ fn hops_preserve_terminal_rows_without_counting_cancel_twice() {
             .map(|hop| &hop.kind)
             .collect::<Vec<_>>(),
         [&HopKind::Terminal {
-            state: RunState::Canceled
+            state: RunState::Canceled,
+            tried: None
         }]
     );
 }
