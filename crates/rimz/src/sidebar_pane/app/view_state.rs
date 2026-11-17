@@ -79,6 +79,9 @@ pub(super) struct FocusRollback {
     pub(super) previous_card: Option<PaneId>,
     pub(super) entry_focus: Option<PaneId>,
     pub(super) label: String,
+    /// The agent a card focus is aimed at, read from the reducing snapshot; `None` for a
+    /// process card and for `q`, which the worker focuses without a hosting read.
+    pub(super) agent: Option<super::focus::CardAgent>,
 }
 
 #[derive(Clone)]

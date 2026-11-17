@@ -1151,7 +1151,7 @@ These keys work while the sidebar has focus. With native room style, `Alt+p` foc
 | `Ctrl+f` / `Ctrl+b`, `PageDown` / `PageUp` | move a page; under tmux's default prefix `Ctrl+b` never arrives, so use `PageUp` |
 | `Ctrl+d` / `Ctrl+u` | move half a page |
 | `H` / `M` / `L` | select the first, middle, or last row on screen; when that row has left the room since the last paint, the nearest row on screen inward that is still listed, and nothing when none is |
-| `Enter`, `l` | focus the selected card or child |
+| `Enter`, `l` | focus the selected card or child, while its agent is still in that pane |
 | `1` to `9` | select and focus that room-wide card slot, even if a filter or fold hides it; an empty slot shows a notice |
 | `Tab` | select and focus the card you focused before this one; a notice says when there is none or it left the room |
 | `n` / `N` | with a committed text search, select and focus the next or previous matching card, wrapping; otherwise jump to the next or previous card that needs you: unread cards oldest first, then read `?` and `!` cards oldest first; attention lifted by a waiting launched child targets its live pane, first in entry order, otherwise the parent's pane |
@@ -1223,7 +1223,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 
 | mouse | action |
 |-------|--------|
-| click a card or process row, including either line of a not-tracked row | select the row immediately and focus its pane |
+| click a card or process row, including either line of a not-tracked row | select the row immediately and focus its pane; an agent's pane only while that agent is still in it, else a `focus failed` notice saying where it is |
 | click a pipeline line | focus the visible stage owner, else the first actionable team member, else the group's first visible row |
 | click a workflow strip | focus its current step's visible card, otherwise do nothing |
 | click a make-up bucket or `⑃ N` | filter the cards |
@@ -1242,5 +1242,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click a dashboard tab | switch provider |
 | wheel | scroll the cards without moving the selection |
 | drag the pane border | set the sidebar width for the room |
+
+A click that focuses a pane where the card or entry shows an agent (the card's own pane, a subagent entry's, or the pane an awaited or booked entry lands on) focuses it only while that agent is still there. When the agent has moved to another pane, no pane hosts it, or the multiplexer cannot be read, the click does not move focus, the selection returns, and a `focus failed` notice says why.
 
 For 400 ms after cards move without your input, a born card's reveal and its glide included, a click targets the card in the preceding frame, or does nothing if it has left. Scrolling, browsing, and other input paints clear that window.

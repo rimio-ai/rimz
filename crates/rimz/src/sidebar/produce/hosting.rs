@@ -15,7 +15,7 @@
 //! it, else its launch's holder.
 
 use crate::agents::AgentState;
-use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use crate::sidebar::consumer::{RollupCursor, rollup_snapshot};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::store::runtime::agent_is_runtime_visible;
@@ -158,7 +158,17 @@ pub fn read_hosting(
     store: &Store,
     mux: Option<MuxName>,
 ) -> Result<HostingRead, HostingErr> {
-    let session = &workspace.session_name;
+    read_hosting_in(&workspace.workspace_id, &workspace.session_name, store, mux)
+}
+
+/// [`read_hosting`] for a caller holding the room's identity without its resolved
+/// workspace: the sidebar host, which opens the room's existing store for one read.
+pub(crate) fn read_hosting_in(
+    workspace_id: &WorkspaceId,
+    session: &str,
+    store: &Store,
+    mux: Option<MuxName>,
+) -> Result<HostingRead, HostingErr> {
     let (mux, notices) = if super::pane_fixture_active() {
         (mux.unwrap_or(MuxName::Zellij), Vec::new())
     } else {
@@ -173,8 +183,7 @@ pub fn read_hosting(
         }
     };
     let runtime = store.runtime_paths();
-    let diag =
-        crate::diag::DiagSink::for_workspace(workspace.workspace_id.clone(), session.clone(), None);
+    let diag = crate::diag::DiagSink::for_workspace(workspace_id.clone(), session.to_owned(), None);
     let listed = absent_session_as_empty(
         super::panes::read_authoritative_pane_frame(runtime, mux, session, &diag),
         session,

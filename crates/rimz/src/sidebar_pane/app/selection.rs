@@ -32,6 +32,9 @@ pub(super) enum InputEffect {
     /// Fire the one-way focus command. Mouse input pairs it with a browse pick;
     /// key jumps leave the highlight derived until the baseline catches up.
     Focus(PaneId),
+    /// Focus the pane `q` returns to: a pane the user was in, not a card act, so the
+    /// worker asks the hosting lookup nothing about it.
+    Return(PaneId),
     /// Dispatch one resize step. Resize wakeups own repaint and persistence.
     Width(WidthAdjust),
     Reload,
@@ -464,7 +467,7 @@ fn key_outcome(
             from_pane: selected_row_pane(view),
         }),
         KeyAction::PaneReturn => match ui.return_pane.take() {
-            Some(pane) => InputOutcome::focus(pane),
+            Some(pane) => effect(InputEffect::Return(pane)),
             None => notice(view, "pane return: no work pane in this tab"),
         },
         KeyAction::WidthReset => effect(InputEffect::WidthReset),

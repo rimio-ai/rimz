@@ -1565,9 +1565,12 @@ fn source_click(mux: MuxName, cross_tab: bool) {
     let (_, _, mut anchor) = hidden_destination();
     anchor.pane_id = old_target;
     assert!(
-        old.dispatch(anchor, old.clicked().unwrap(), || panic!(
-            "older jump must not dispatch"
-        ))
+        old.dispatch(
+            anchor,
+            old.clicked().unwrap(),
+            || None,
+            || panic!("older jump must not dispatch")
+        )
         .is_none()
     );
     assert_eq!(
@@ -1671,9 +1674,12 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
         assert!(first.request(|| panic!("obsolete request")).is_none());
         assert!(
             first
-                .dispatch(anchor, first.clicked().unwrap(), || panic!(
-                    "obsolete dispatch"
-                ))
+                .dispatch(
+                    anchor,
+                    first.clicked().unwrap(),
+                    || None,
+                    || panic!("obsolete dispatch")
+                )
                 .is_none()
         );
         let log = std::fs::read_to_string(crate::diag::focus_trace::log_path(source._dir.path()))

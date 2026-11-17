@@ -966,7 +966,12 @@ fn dispatch_records_the_fitted_push_budget() {
                 },
             )]))
         })));
-    peers.dispatch(anchor, clicked, || assert!(rig.records().is_empty()));
+    peers.dispatch(
+        anchor,
+        clicked,
+        || None,
+        || assert!(rig.records().is_empty()),
+    );
     let records = rig.records();
     let event = &records[0]["event"];
     let remaining_ms = 500_u64.saturating_sub(event["lead_ms"].as_u64().unwrap());
@@ -1568,4 +1573,121 @@ fn a_landing_ends_at_its_deadline_from_the_send_instant() {
             .lands_on(destination.pane(), deadline - Duration::from_millis(1))
     );
     assert!(!rig.peers.lands_on(destination.pane(), deadline));
+}
+
+#[test]
+fn a_same_tab_card_read_runs_outside_the_click_ordered_gate() {
+    let rig = TraceRig::new();
+    let clicked = Instant::now();
+    let anchor = rig.anchor();
+    let first = rig
+        .peers
+        .clone()
+        .without_push()
+        .arm(anchor.pane_id.clone(), clicked);
+    let (reading_tx, reading_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    std::thread::scope(|scope| {
+        let (first, anchor, reading_tx) = (&first, &anchor, &reading_tx);
+        let held = scope.spawn(move || {
+            first.dispatch(
+                anchor.clone(),
+                clicked,
+                || {
+                    reading_tx.send(()).unwrap();
+                    release_rx.recv_timeout(SETTLE).unwrap();
+                    None
+                },
+                || 17,
+            )
+        });
+        let started = reading_rx.recv_timeout(SETTLE);
+        let second = rig
+            .peers
+            .clone()
+            .without_push()
+            .arm(anchor.pane_id.clone(), clicked);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        scope.spawn(move || done_tx.send(second.request(|| 18)).unwrap());
+        let requested = done_rx.recv_timeout(SETTLE);
+        let _ = release_tx.send(());
+        assert_eq!(
+            started,
+            Ok(()),
+            "a keyed same-tab focus reads before its request"
+        );
+        assert_eq!(
+            requested,
+            Ok(Some(18)),
+            "a held read must not hold the next click's request"
+        );
+        assert_eq!(
+            held.join().unwrap(),
+            None,
+            "the click superseded during its read dispatches nothing"
+        );
+    });
+}
+
+#[test]
+fn a_cross_tab_card_read_runs_after_the_paint_wait_and_before_the_dispatch() {
+    for refused in [false, true] {
+        let rig = TraceRig::new();
+        let clicked = Instant::now();
+        let anchor = rig.anchor();
+        let peers = rig.peers.arm(anchor.pane_id.clone(), clicked);
+        let order = std::cell::RefCell::new(Vec::new());
+        let result = peers.vetted_dispatch_with(
+            anchor,
+            clicked,
+            || {
+                order.borrow_mut().push("read");
+                refused.then_some(5)
+            },
+            || {
+                order.borrow_mut().push("dispatch");
+                17
+            },
+            || clicked,
+            |_, _| {
+                order.borrow_mut().push("wait");
+                Err(RecvTimeoutError::Disconnected)
+            },
+        );
+        let order = order.into_inner();
+        if refused {
+            assert_eq!(result, Some(5));
+            assert_eq!(order[..2], ["wait", "read"], "{order:?}");
+            assert!(!order.contains(&"dispatch"), "{order:?}");
+        } else {
+            assert_eq!(result, Some(17));
+            assert_eq!(order[..3], ["wait", "read", "dispatch"], "{order:?}");
+        }
+        assert!(!peers.is_current(), "the jump releases its lease");
+    }
+}
+
+#[test]
+fn a_card_focus_superseded_before_its_read_takes_no_read() {
+    let rig = TraceRig::new();
+    let clicked = Instant::now();
+    let anchor = rig.anchor();
+    for push in [false, true] {
+        let peers = if push {
+            rig.peers.clone()
+        } else {
+            rig.peers.clone().without_push()
+        };
+        let first = peers.arm(anchor.pane_id.clone(), clicked);
+        let _last = peers.arm(anchor.pane_id.clone(), clicked);
+        assert_eq!(
+            first.dispatch(
+                anchor.clone(),
+                clicked,
+                || -> Option<()> { panic!("a superseded click takes no read") },
+                || panic!("a superseded click dispatches nothing"),
+            ),
+            None
+        );
+    }
 }

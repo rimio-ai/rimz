@@ -3119,7 +3119,7 @@ fn effect_keys_carry_the_selected_rows_pane_or_their_own_effect() {
     pane_ui.return_pane = Some(back.clone());
     assert_eq!(
         handle_key(KeyAction::PaneReturn, &mut ui, &mut pane_ui, &snapshot).effects,
-        vec![InputEffect::Focus(back)]
+        vec![InputEffect::Return(back)]
     );
     assert!(
         handle_key(KeyAction::PaneReturn, &mut ui, &mut pane_ui, &snapshot)

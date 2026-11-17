@@ -251,21 +251,43 @@ impl FocusPeers {
         self
     }
 
+    /// Dispatch the jump to `anchor` once its push wait ends. `vet` runs after that last
+    /// wait and before the dispatch, outside the click-ordered gate, and its `Some` answer
+    /// ends the jump in place of the dispatch.
     pub(in crate::sidebar_pane) fn dispatch<T>(
         &self,
         anchor: FocusAnchor,
         clicked: Instant,
+        vet: impl FnOnce() -> Option<T>,
         dispatch: impl FnOnce() -> T,
     ) -> Option<T> {
-        self.dispatch_with(anchor, clicked, dispatch, Instant::now, |rx, timeout| {
-            rx.recv_timeout(timeout)
-        })
+        self.vetted_dispatch_with(
+            anchor,
+            clicked,
+            vet,
+            dispatch,
+            Instant::now,
+            |rx, timeout| rx.recv_timeout(timeout),
+        )
     }
 
+    #[cfg(test)]
     fn dispatch_with<T>(
         &self,
         anchor: FocusAnchor,
         clicked: Instant,
+        dispatch: impl FnOnce() -> T,
+        now: impl FnMut() -> Instant,
+        receive: impl FnMut(&Receiver<PushPeer>, Duration) -> Result<PushPeer, RecvTimeoutError>,
+    ) -> Option<T> {
+        self.vetted_dispatch_with(anchor, clicked, || None, dispatch, now, receive)
+    }
+
+    fn vetted_dispatch_with<T>(
+        &self,
+        anchor: FocusAnchor,
+        clicked: Instant,
+        vet: impl FnOnce() -> Option<T>,
         dispatch: impl FnOnce() -> T,
         mut now: impl FnMut() -> Instant,
         mut receive: impl FnMut(&Receiver<PushPeer>, Duration) -> Result<PushPeer, RecvTimeoutError>,
@@ -275,6 +297,10 @@ impl FocusPeers {
             return None;
         }
         if !self.push_layout {
+            if let Some(verdict) = vet() {
+                self.release();
+                return Some(verdict);
+            }
             let result = self.request(dispatch);
             self.release();
             return result;
@@ -296,8 +322,12 @@ impl FocusPeers {
             },
             &mut reports,
         );
+        let verdict = self.is_current().then(vet).flatten();
         let decided = now();
-        let (result, dispatched) = if self.is_current() {
+        let (result, dispatched) = if let Some(verdict) = verdict {
+            self.release();
+            (Some(verdict), None)
+        } else if self.is_current() {
             let result = dispatch();
             let dispatched = now();
             self.release();
