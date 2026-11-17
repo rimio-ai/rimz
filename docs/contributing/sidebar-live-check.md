@@ -722,7 +722,7 @@ tmux -S "$ROOT/runtime/rimz/tmux/server" send-keys -t %1 Enter
 Confirm it is the shell's only child and reads as intended: `pgrep -P <shell pid>` prints one pid, and `tr '\0' ' ' < /proc/<that pid>/cmdline` prints `codex resume <id>`. The host publishes the pane frame to `lanes/snapshot.json` under the room's runtime directory; read the shell pane's published process from it after a few producer passes:
 
 ```sh
-jq '.tabs[].panes[] | select(.pane_id == "tmux:%1") | .current | {pid, hosted_agent_lineage, resumed_session_id}' "$ROOT"/runtime/rimz/ws/*/lanes/snapshot.json
+jq '.tabs[].panes[] | select(.pane_id == "tmux:%1") | .current | {pid, hosted_agent_pid, resumed_session_id}' "$ROOT"/runtime/rimz/ws/*/lanes/snapshot.json
 ```
 
 Kill the fake by its pid to leave the shell idle, or start another with a new id in the same shell to model an agent change.

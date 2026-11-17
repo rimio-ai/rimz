@@ -1657,8 +1657,8 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
     let hosted = rimz::proc::hosted_agent_process_for_root(pane_pid)
         .expect("the production wrapper root is a hosted CLI");
     assert_eq!(
-        (hosted.pid, &hosted.kind, hosted.lineage.is_empty()),
-        (pane_pid, &kind, true),
+        (hosted.pid, &hosted.kind),
+        (pane_pid, &kind),
         "the hosted CLI is the pane's wrapper root itself"
     );
     let children = rimz::proc::children(pane_pid);

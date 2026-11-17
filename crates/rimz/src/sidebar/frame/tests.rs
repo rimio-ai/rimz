@@ -53,7 +53,6 @@ fn pane(raw: &str, view: &str, command: Option<&str>, _focused: bool) -> PaneRef
         pane_process_start: None,
         hosted_agent_kind: None,
         hosted_agent_process_start: None,
-        hosted_agent_lineage: Vec::new(),
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,
@@ -120,21 +119,18 @@ fn floating_flag_survives_frame_round_trip() {
 }
 
 #[test]
-fn hosted_lineage_round_trips_and_defaults_when_absent() {
-    let mut pane = pane("terminal_1", "tab_0", Some("zsh"), true);
-    pane.hosted_agent_lineage = vec![11, 12];
+fn hosted_pid_round_trips_and_defaults_when_absent() {
+    let pane = pane("terminal_1", "tab_0", Some("zsh"), true);
     let mut frame = assemble_frame(vec![pane], 7, "rimz-test");
-    assert_eq!(
-        frame.tabs[0].panes[0].current.hosted_agent_lineage,
-        [11, 12]
-    );
-    assert_eq!(frame.to_pane_refs()[0].hosted_agent_lineage, [11, 12]);
+    frame.tabs[0].panes[0].current.hosted_agent_pid = Some(12);
+    let read: PaneFrame = serde_json::from_str(&serde_json::to_string(&frame).unwrap()).unwrap();
+    assert_eq!(read.tabs[0].panes[0].current.hosted_agent_pid, Some(12));
 
-    frame.tabs[0].panes[0].current.hosted_agent_lineage.clear();
+    frame.tabs[0].panes[0].current.hosted_agent_pid = None;
     let older = serde_json::to_string(&frame).unwrap();
-    assert!(!older.contains("hosted_agent_lineage"));
+    assert!(!older.contains("hosted_agent_pid"));
     let read: PaneFrame = serde_json::from_str(&older).unwrap();
-    assert!(read.to_pane_refs()[0].hosted_agent_lineage.is_empty());
+    assert_eq!(read.tabs[0].panes[0].current.hosted_agent_pid, None);
 }
 
 #[test]
@@ -909,7 +905,7 @@ fn unchanged_command_repairs_raced_nulls_and_keeps_previous() {
         started_at: None,
         hosted_agent_kind: None,
         hosted_agent_process_start: None,
-        hosted_agent_lineage: Vec::new(),
+        hosted_agent_pid: None,
         resumed_session_id: None,
         elevated_agent: None,
     });
