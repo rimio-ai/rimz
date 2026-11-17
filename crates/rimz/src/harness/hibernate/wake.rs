@@ -1,4 +1,6 @@
-//! Focus dwell, synchronous thaw and crash recovery, outside the sidebar's read-only graph.
+//! Focus dwell, synchronous thaw and crash recovery, outside the sidebar producer's path. The
+//! sidebar graph reaches this file through `hibernate.rs`'s re-exports, so the sidebar
+//! store-write gate searches it.
 
 use super::*;
 

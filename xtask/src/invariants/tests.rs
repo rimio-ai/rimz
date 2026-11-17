@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::*;
@@ -545,19 +546,170 @@ fn read_only_boundaries_reject_store_run_wake_sender() {
     ] {
         let path = root.join("crates/rimz/src").join(relative);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "use crate::store::run::wake_run;\n").unwrap();
+        // The sidebar's import makes the harness file part of its graph.
+        let edge = "use crate::harness::orphan_sweep::enforce;\n";
+        std::fs::write(&path, format!("use crate::store::run::wake_run;\n{edge}")).unwrap();
         let files = [path];
         let result = if relative.starts_with("agents/") {
             ensure_spend_parser_boundaries(&root, &files)
         } else {
-            ensure_sidebar_library_boundaries(&root, &files)
+            ensure_sidebar_graph_read_only(&root, &files, &[])
         };
         assert!(result.unwrap_err().to_string().contains("read-only"));
-        std::fs::write(&files[0], "use crate::store::run::RunRecord;\n").unwrap();
+        std::fs::write(
+            &files[0],
+            format!("use crate::store::run::RunRecord;\n{edge}"),
+        )
+        .unwrap();
         ensure_spend_parser_boundaries(&root, &files).unwrap();
-        ensure_sidebar_library_boundaries(&root, &files).unwrap();
+        ensure_sidebar_graph_read_only(&root, &files, &[]).unwrap();
     }
     std::fs::remove_dir_all(root).unwrap();
+}
+
+fn write_sidebar_graph(root: &Path, files: &[(&str, &str)]) {
+    for (relative, text) in files {
+        let path = root.join("crates/rimz/src").join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+}
+
+#[test]
+fn sidebar_graph_searches_harness_files_reached_through_imports_only() {
+    let root = temp_repo_root("sidebar-graph-walk");
+    let writer = "use crate::store::writer::LaunchLogin;";
+    write_sidebar_graph(
+        &root,
+        &[
+            (
+                "sidebar/mod.rs",
+                "use crate::harness::schedule::run_log::Row;",
+            ),
+            ("harness/schedule.rs", "pub mod run_log; pub mod runner;"),
+            (
+                "harness/schedule/run_log.rs",
+                "use super::run_control::Lock;",
+            ),
+            ("harness/schedule/run_control.rs", writer),
+            ("harness/schedule/runner.rs", writer),
+        ],
+    );
+    // No harness file is in the tracked list: the walk reads the tree.
+    let error = ensure_sidebar_graph_read_only(&root, &[], &[])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("read-only"), "{error}");
+    assert!(
+        error.contains(&format!(
+            "crates/rimz/src/harness/schedule/run_control.rs:1: {writer}"
+        )),
+        "{error}"
+    );
+    assert!(!error.contains("runner.rs"), "{error}");
+
+    let tested = format!("fn lock() {{}}\n#[cfg(test)]\nmod tests {{\n    {writer}\n}}\n");
+    write_sidebar_graph(&root, &[("harness/schedule/run_control.rs", &tested)]);
+    ensure_sidebar_graph_read_only(&root, &[], &[]).unwrap();
+    let declared = format!("#[cfg(test)]\nmod tests;\n{writer}\n");
+    write_sidebar_graph(&root, &[("harness/schedule/run_control.rs", &declared)]);
+    let error = ensure_sidebar_graph_read_only(&root, &[], &[])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("run_control.rs:3:"), "{error}");
+    write_sidebar_graph(&root, &[("harness/schedule/run_control.rs", &tested)]);
+    let walked = sidebar_graph_harness_files(&root).unwrap();
+    assert_eq!(
+        walked,
+        BTreeSet::from(
+            ["schedule/run_log.rs", "schedule/run_control.rs"]
+                .map(|name| Path::new("crates/rimz/src/harness").join(name))
+        )
+    );
+
+    write_sidebar_graph(&root, &[("harness/schedule/run_log.rs", "fn {")]);
+    let error = ensure_sidebar_graph_read_only(&root, &[], &[])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("crates/rimz/src/harness/schedule/run_log.rs"),
+        "{error}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sidebar_graph_exemptions_walk_through_and_fail_when_stale() {
+    let root = temp_repo_root("sidebar-graph-exempt");
+    let writer = "use crate::store::writer::LaunchLogin;";
+    write_sidebar_graph(
+        &root,
+        &[
+            ("sidebar/mod.rs", "use crate::harness::run::load;"),
+            (
+                "harness/run.rs",
+                &format!("{writer}\nuse super::assist_log::Row;"),
+            ),
+            ("harness/assist_log.rs", ""),
+            ("harness/window.rs", writer),
+        ],
+    );
+    let exempt = [("crates/rimz/src/harness/run.rs", "imports the launch login")];
+    ensure_sidebar_graph_read_only(&root, &[], &exempt).unwrap();
+
+    write_sidebar_graph(&root, &[("harness/assist_log.rs", writer)]);
+    let error = ensure_sidebar_graph_read_only(&root, &[], &exempt)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("crates/rimz/src/harness/assist_log.rs:1:"),
+        "{error}"
+    );
+    write_sidebar_graph(&root, &[("harness/assist_log.rs", "")]);
+
+    let unreached = [(
+        "crates/rimz/src/harness/window.rs",
+        "imports the launch login",
+    )];
+    let error = ensure_sidebar_graph_read_only(&root, &[], &[exempt[0], unreached[0]])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(
+            "crates/rimz/src/harness/window.rs: exempt, but the sidebar graph no longer reaches it"
+        ),
+        "{error}"
+    );
+
+    let clean = [(
+        "crates/rimz/src/harness/assist_log.rs",
+        "imports the launch login",
+    )];
+    let error = ensure_sidebar_graph_read_only(&root, &[], &[exempt[0], clean[0]])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(
+            "crates/rimz/src/harness/assist_log.rs: exempt, but carries no banned import"
+        ),
+        "{error}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sidebar_graph_on_the_real_tree_reaches_split_and_child_files_only() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let walked = sidebar_graph_harness_files(root).unwrap();
+    let schedule = Path::new("crates/rimz/src/harness/schedule");
+    for name in ["run_control.rs", "shell_task.rs"] {
+        assert!(walked.contains(&schedule.join(name)), "{name}: {walked:?}");
+    }
+    for name in ["runner.rs", "window.rs"] {
+        assert!(!walked.contains(&schedule.join(name)), "{name}: {walked:?}");
+    }
+    let fit = Path::new("crates/rimz/src/harness/workflow/engine/fit.rs");
+    assert!(walked.contains(fit), "{walked:?}");
 }
 
 #[test]

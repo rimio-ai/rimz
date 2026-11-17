@@ -356,6 +356,79 @@ fn workspace_crate_imports_normalize_to_local_module_paths() {
 }
 
 #[test]
+fn file_imports_map_production_paths_to_the_files_that_define_their_modules() {
+    let report = analyze_sources(&[
+        Source::new(
+            "src/sidebar.rs",
+            "use crate::harness::schedule::{run_log, TaskKind};
+            use crate::harness::schedule;
+            use crate::harness::lane as lanes;
+            use crate::harness::workflow::*;
+            fn f() { crate::harness::run::load(); }
+            fn g() { schedule::shell_task::run(); lanes::view::draw(); engine::wake(); }
+            #[cfg(test)]
+            mod tests { use crate::harness::fixture::Seed; }",
+        ),
+        Source::new(
+            "src/harness/schedule.rs",
+            "pub mod run_log; pub mod runner; mod fit; pub use shell_task::COMMAND;
+            fn close<T: fit::Bound>(kind: fit::Kind) { fit::close(kind); }
+            #[cfg(test)]
+            fn fixture() { runner::start(); }",
+        ),
+        Source::new("src/harness/schedule/fit.rs", ""),
+        Source::new(
+            "src/harness/schedule/run_log.rs",
+            "use super::run_control::Lock; use crate::harness::schedule::Kind::Loop;",
+        ),
+        Source::new("src/harness/schedule/run_control.rs", ""),
+        Source::new("src/harness/schedule/runner.rs", ""),
+        Source::new("src/harness/schedule/shell_task.rs", ""),
+        Source::new("src/harness/run.rs", ""),
+        Source::new("src/harness/fixture.rs", ""),
+        Source::new("src/harness/lane.rs", "pub mod view;"),
+        Source::new("src/harness/lane/view.rs", ""),
+        Source::new("src/harness/workflow/mod.rs", "mod engine; mod spec;"),
+        Source::new("src/harness/workflow/engine.rs", ""),
+        Source::new("src/harness/workflow/spec.rs", ""),
+    ]);
+    let imports = file_imports(&report);
+    let targets = |path: &str| {
+        imports[Path::new(path)]
+            .iter()
+            .map(|path| path.to_str().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        targets("src/sidebar.rs"),
+        [
+            "src/harness/lane/view.rs",
+            "src/harness/lane.rs",
+            "src/harness/run.rs",
+            "src/harness/schedule/run_log.rs",
+            "src/harness/schedule/shell_task.rs",
+            "src/harness/schedule.rs",
+            "src/harness/workflow/engine.rs",
+            "src/harness/workflow/mod.rs",
+        ]
+    );
+    assert_eq!(
+        targets("src/harness/schedule.rs"),
+        [
+            "src/harness/schedule/fit.rs",
+            "src/harness/schedule/shell_task.rs",
+        ]
+    );
+    assert_eq!(
+        targets("src/harness/schedule/run_log.rs"),
+        [
+            "src/harness/schedule/run_control.rs",
+            "src/harness/schedule.rs",
+        ]
+    );
+}
+
+#[test]
 fn dependency_sites_include_qualified_paths_in_bodies_types_and_bounds_but_not_tests() {
     let report = super::analyze_sources(
         &[source(

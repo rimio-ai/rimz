@@ -2334,7 +2334,7 @@ path = "crates/rimz/src/harness"
 # run::hand_over lets `rimz agents restart` keep a child's open run across the restart (+1).
 # `when::condition` and `schedule::probe` split the shared condition evaluator from the scheduler's forge probe demand (+1).
 # run_log::{collect_run, collect_task_runs} collect a finished run from the commands that end it and the fire; the engine's workflow::forget_reported_launch is gone (+1).
-# The `task_login` module resolves a loop task's account outside the sidebar graph that `loop_task` joins (+1).
+# The `task_login` module resolves a loop task's account for `loop_task`; the sidebar store-write gate exempts its file by name (+1).
 # The neutral homes (`check_run`, `signal`, `throttle`, `when` and the rest) kept their items' surface once the trunk's fleet-report items took the slack they fitted in before (+3).
 # workflow::observe projects an observed agent attempt in the library for the CLI host (+1).
 # workflow::{Cohort, stop_cohort, detach_cohort, leader} pick the agents an attempt's stop, detach, push and forward reach; one fits the slot workflow::leader_turn left.
@@ -5866,7 +5866,7 @@ surface-budget = 3
 [[module]]
 path = "crates/rimz/src/harness/task_login.rs"
 # Neutral leaf resolving the account a loop task's launches use, for the runner, workflow steps
-# and `loop add`; it reads a `store::writer::LaunchLogin`, so it stays out of the sidebar graph.
+# and `loop add`; it reads a `store::writer::LaunchLogin`, so the sidebar store-write gate exempts it.
 allowed-dependencies = [
     "agents",
     "config",

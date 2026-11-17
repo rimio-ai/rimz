@@ -1,4 +1,5 @@
-//! Detached-helper writes, outside the sidebar producer's read-only graph.
+//! Detached-helper writes, outside the sidebar producer's path. The sidebar graph reaches this
+//! file through `hibernate.rs`'s re-exports, so the sidebar store-write gate searches it.
 
 use super::*;
 use crate::harness::assist_log::{Assist, AssistRecord};
