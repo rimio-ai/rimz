@@ -90,7 +90,16 @@ fn pane_writes_require_an_earlier_wake_in_the_same_function() {
         "fn send() {}\n#[cfg(test)]\nmod tests {\nfn fixture() { PaneWriter::open(); }\n}\n",
     )
     .unwrap();
-    ensure_pane_writes_wake_first(&root, &[path]).unwrap();
+    ensure_pane_writes_wake_first(&root, std::slice::from_ref(&path)).unwrap();
+    std::fs::write(
+        &path,
+        "const FIXTURE: &str = r\"\nmod tests {\n\";\n#[cfg(test)]\nmod tests {\n}\nfn send() { PaneWriter::open(); }\n",
+    )
+    .unwrap();
+    let err = ensure_pane_writes_wake_first(&root, &[path])
+        .expect_err("a fixture string ended the production scan")
+        .to_string();
+    assert!(err.contains("send.rs:7: fn send()"), "{err}");
     for relative in [
         "crates/rimz/src/mux/pane_writer.rs",
         "crates/rimz/src/message/tests.rs",
@@ -174,7 +183,10 @@ fn room_creators_rejects_participants_but_allows_creators_and_tests() {
             assert!(err.to_string().contains("room-choosing"));
         }
         std::fs::write(&path, "fn participant() {}\n#[cfg(test)]\nmod tests {\n    fn fixture() { Store::open(state, runtime); }\n}\n").unwrap();
-        ensure_room_creators(&root, &[path]).unwrap();
+        ensure_room_creators(&root, std::slice::from_ref(&path)).unwrap();
+        std::fs::write(&path, "const FIXTURE: &str = r\"\nmod tests {\n\";\nfn participant() { Store::open(state, runtime); }\n").unwrap();
+        let err = ensure_room_creators(&root, &[path]).unwrap_err();
+        assert!(err.to_string().contains("room-choosing"));
     }
     for relative in [
         "cli/mod.rs",
@@ -198,6 +210,37 @@ fn room_creators_rejects_participants_but_allows_creators_and_tests() {
         .unwrap();
         ensure_room_creators(&root, &[path]).unwrap();
     }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn inline_tests_cap_measures_the_real_module_and_not_fixture_strings() {
+    let root = temp_repo_root("inline-tests-cap");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("lib.rs");
+    let body = "    fn case() {}\n".repeat(INLINE_TESTS_MAX_LINES);
+    std::fs::write(
+        &path,
+        format!(
+            "const FIXTURE: &str = r\"\nmod tests {{\n{body}\";\n#[cfg(test)]\nmod tests {{}}\n"
+        ),
+    )
+    .unwrap();
+    ensure_inline_tests_stay_small(std::slice::from_ref(&path)).unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "const FIXTURE: &str = r\"\nmod tests {{\n\";\n#[cfg(test)]\nmod tests {{\n{body}}}\n"
+        ),
+    )
+    .unwrap();
+    let err = ensure_inline_tests_stay_small(&[path])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("lib.rs:5: inline tests module spans 502 lines"),
+        "{err}"
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 

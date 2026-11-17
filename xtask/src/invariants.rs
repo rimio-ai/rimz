@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -952,9 +953,13 @@ fn ensure_room_creators(root: &Path, files: &[PathBuf]) -> Result<()> {
             continue;
         }
         let source = fs::read_to_string(path)?;
+        let tests = inline_tests_lines(&source);
         for (idx, line) in source.lines().enumerate() {
-            if line == "mod tests {" {
-                break;
+            if tests
+                .as_ref()
+                .is_some_and(|tests| tests.contains(&(idx + 1)))
+            {
+                continue;
             }
             if !line.trim_start().starts_with("//")
                 && [concat!("open_", "store("), concat!("Store::", "open(")]
@@ -1081,15 +1086,14 @@ fn ensure_rimz_block_registry(root: &Path, files: &[PathBuf]) -> Result<()> {
             continue;
         }
         let source = fs::read_to_string(path)?;
+        // A fixture asserting the composed wire text is a guard, not a risk.
+        let tests = inline_tests_lines(&source);
         for (idx, line) in source.lines().enumerate() {
-            // A fixture asserting the composed wire text is a guard, not a risk.
-            // Exact-line match on the inline module's own opening line, as
-            // `ensure_inline_tests_stay_small` does: the house shape keeps it
-            // last, so its span runs to EOF. Breaking on `#[cfg(test)]` instead
-            // would stop at the `mod tests;` declaration that sits near the top
-            // of every file whose tests live in a sibling `tests.rs`.
-            if line == "mod tests {" {
-                break;
+            if tests
+                .as_ref()
+                .is_some_and(|tests| tests.contains(&(idx + 1)))
+            {
+                continue;
             }
             if tags.0.iter().any(|tag| line.contains(tag)) {
                 violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
@@ -1825,8 +1829,18 @@ fn ensure_pane_writes_wake_first(root: &Path, files: &[PathBuf]) -> Result<()> {
             continue;
         }
         let text = fs::read_to_string(path)?;
-        let production = text.split("\nmod tests {").next().unwrap_or(&text);
-        for block in function_blocks(production) {
+        let tests = inline_tests_lines(&text);
+        // Blanked rather than dropped, so each block keeps its line number.
+        let production = text
+            .lines()
+            .enumerate()
+            .map(|(idx, line)| match &tests {
+                Some(tests) if tests.contains(&(idx + 1)) => "",
+                _ => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for block in function_blocks(&production) {
             let Some(open) = block.body.find("PaneWriter::open(") else {
                 continue;
             };
@@ -2129,6 +2143,28 @@ fn function_blocks(text: &str) -> Vec<FunctionBlock<'_>> {
 /// docs/contributing/rust-conventions.md#tests.
 const INLINE_TESTS_MAX_LINES: usize = 500;
 
+/// The 1-based lines of a file's top-level inline `mod tests { … }`, from its
+/// `mod` keyword to its closing brace. Read from parsed syntax, so a fixture
+/// string holding `mod tests {` is never taken for the module; a file syn
+/// cannot parse has none. rustfmt writes the module's opening line as exactly
+/// `mod tests {`, so only a file holding that line is parsed.
+fn inline_tests_lines(text: &str) -> Option<RangeInclusive<usize>> {
+    if !text.lines().any(|line| line == "mod tests {") {
+        return None;
+    }
+    syn::parse_file(text)
+        .ok()?
+        .items
+        .into_iter()
+        .find_map(|item| {
+            let syn::Item::Mod(item) = item else {
+                return None;
+            };
+            let (brace, _) = item.content.as_ref().filter(|_| item.ident == "tests")?;
+            Some(item.mod_token.span.start().line..=brace.span.close().end().line)
+        })
+}
+
 fn ensure_inline_tests_stay_small(files: &[PathBuf]) -> Result<()> {
     let mut violations = Vec::new();
     for path in files {
@@ -2138,18 +2174,15 @@ fn ensure_inline_tests_stay_small(files: &[PathBuf]) -> Result<()> {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
-        let lines: Vec<&str> = text.lines().collect();
-        // Exact-line match so needles in strings never self-trip; the house
-        // shape keeps the tests module last, so its span runs to EOF.
-        let Some(start) = lines.iter().position(|line| *line == "mod tests {") else {
+        let Some(tests) = inline_tests_lines(&text) else {
             continue;
         };
-        let span = lines.len() - start;
+        let span = tests.clone().count();
         if span > INLINE_TESTS_MAX_LINES {
             violations.push(format!(
                 "{}:{}: inline tests module spans {span} lines",
                 path.display(),
-                start + 1,
+                tests.start(),
             ));
         }
     }
