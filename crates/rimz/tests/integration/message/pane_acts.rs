@@ -1,6 +1,6 @@
-//! Focus and capture of an agent act on the pane the hosting lookup answers at the point of
-//! use, never on the pane stored on the row the command resolved; a pane the user names
-//! reads no lookup.
+//! Focus, capture, and `pane send` of an agent act on the pane the hosting lookup answers at
+//! the point of use, never on the pane stored on the row the command resolved; a pane the
+//! user names reads no lookup.
 
 use super::*;
 
@@ -143,16 +143,22 @@ fn register_planner(env: &Env, pane: &str) {
     );
 }
 
+/// The panes the traced commands typed into.
+fn typed(env: &Env) -> Vec<String> {
+    after_arg(env, "--pane-id")
+}
+
 /// The agent moves to `NEW` after `@planner` resolved to the row whose stored pane is `OLD`
-/// and before the command reads the lookup: focus and capture act on `NEW`, the pane the
-/// lookup answers, while `pane send` keeps the resolved row's stored pane.
+/// and before the command reads the lookup: focus, capture, and send act on `NEW`, the pane
+/// the lookup answers.
 #[test]
-fn focus_and_capture_act_on_the_pane_the_lookup_answers_and_send_keeps_the_stored_pane() {
+fn focus_capture_and_send_act_on_the_pane_the_lookup_answers() {
     for args in [
         &["agents", "focus", "@planner"][..],
         &["pane", "focus", "@planner"],
         &["agents", "show", "@planner", "--capture"],
         &["pane", "capture", "@planner"],
+        &["pane", "send", "@planner", "hi"],
     ] {
         let env = Env::new();
         let reservation = planner_with_swap(&env);
@@ -172,31 +178,50 @@ fn focus_and_capture_act_on_the_pane_the_lookup_answers_and_send_keeps_the_store
         let output = command.wait_with_output().unwrap();
         let acted = if args.contains(&"--capture") || args[1] == "capture" {
             captured(&env)
+        } else if args[1] == "send" {
+            assert!(output.status.success(), "{args:?}: {output:?}");
+            typed(&env)
         } else {
             assert!(output.status.success(), "{args:?}: {output:?}");
             focused(&env)
         };
         assert_eq!(acted, [NEW], "{args:?}: {output:?}\n{:#?}", trace(&env));
     }
+}
 
+/// The agent moves to `NEW` after `pane send @planner` locked `OLD` and before its second
+/// read: nothing is typed into either pane, and the send fails naming the move.
+#[test]
+fn send_refuses_when_the_agent_moves_while_its_pane_is_locked() {
     let env = Env::new();
-    planner_with_swap(&env);
+    let reservation = planner_with_swap(&env);
+    let hold = DeliveryRendezvous::new(&env, "after-lock");
     let send = acting(&env, &[3, 4])
-        .args(["pane", "send", "@planner", "hi"])
-        .output()
+        .env("RIMZ_TEST_AGENT_PANE_AFTER_WAKE", &hold.path)
+        .args(["pane", "send", "@planner", "--enter", "hi"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .unwrap();
-    assert!(send.status.success(), "{send:?}");
-    assert_eq!(after_arg(&env, "--pane-id"), [OLD], "{:#?}", trace(&env));
-    assert_eq!(
-        lookup_reads(&env),
-        1,
-        "only send's room membership check lists panes: {:#?}",
-        trace(&env)
+    if let Some(mut held) = hold.arrive_timeout(Duration::from_secs(10)) {
+        bind_swap(&env, &reservation, NEW);
+        held.write_all(&[0]).unwrap();
+    }
+    let output = send.wait_with_output().unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        stderr(&output).contains(&format!(
+            "error: agent planner: the agent left pane zellij:{OLD} while it was woken; nothing \
+             was sent"
+        )),
+        "{}",
+        stderr(&output)
     );
+    assert_eq!(typed(&env), Vec::<String>::new(), "{:#?}", trace(&env));
 }
 
 /// `@planner`'s stored pane is no longer listed, so the lookup hosts it nowhere: neither
-/// focused nor captured, and each command says it has no pane.
+/// focused, captured, nor typed into, and each command says it has no pane.
 #[test]
 fn focus_and_capture_refuse_when_the_lookup_hosts_the_agent_nowhere() {
     let env = Env::new();
@@ -209,6 +234,7 @@ fn focus_and_capture_refuse_when_the_lookup_hosts_the_agent_nowhere() {
         &["pane", "focus", "@planner"],
         &["agents", "show", "@planner", "--capture"],
         &["pane", "capture", "@planner"],
+        &["pane", "send", "@planner", "hi"],
     ] {
         let output = acting(&env, &[4]).args(args).output().unwrap();
         assert!(!output.status.success(), "{args:?}: {output:?}");
@@ -220,6 +246,7 @@ fn focus_and_capture_refuse_when_the_lookup_hosts_the_agent_nowhere() {
     }
     assert_eq!(focused(&env), Vec::<String>::new(), "{:#?}", trace(&env));
     assert_eq!(captured(&env), Vec::<String>::new(), "{:#?}", trace(&env));
+    assert_eq!(typed(&env), Vec::<String>::new(), "{:#?}", trace(&env));
 }
 
 /// `pane focus @planner --session-name <other>` names a session other than the one the
@@ -307,7 +334,7 @@ fn focus_refuses_when_the_agent_moves_while_its_pane_is_woken() {
     }
 }
 
-/// A pane the user names reads no lookup, and is focused or captured as named.
+/// A pane the user names reads no lookup, and is focused, captured, or typed into as named.
 #[test]
 fn a_pane_the_user_names_reads_no_lookup() {
     let env = Env::new();
@@ -331,4 +358,234 @@ fn a_pane_the_user_names_reads_no_lookup() {
         "only capture's room membership check lists panes: {:#?}",
         trace(&env)
     );
+    let send = acting(&env, &[3, 4])
+        .args(["pane", "send", &pane, "hi"])
+        .output()
+        .unwrap();
+    assert!(send.status.success(), "{send:?}");
+    assert_eq!(typed(&env), [OLD]);
+    assert_eq!(
+        lookup_reads(&env),
+        2,
+        "only send's room membership check lists panes: {:#?}",
+        trace(&env)
+    );
+}
+
+/// `pane send` with nothing to send refuses before it reads the lookup or names a pane.
+#[test]
+fn an_empty_send_refuses_before_any_lookup_read() {
+    let env = Env::new();
+    planner_with_swap(&env);
+    for target in ["@planner".to_owned(), format!("zellij:{OLD}")] {
+        let output = acting(&env, &[3])
+            .args(["pane", "send", &target])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{target}: {output:?}");
+        assert!(
+            stderr(&output).contains("error: expected text, --key, or --enter"),
+            "{target}: {}",
+            stderr(&output)
+        );
+    }
+    assert_eq!(lookup_reads(&env), 0, "{:#?}", trace(&env));
+    assert_eq!(typed(&env), Vec::<String>::new(), "{:#?}", trace(&env));
+}
+
+/// An open Claude question on `sess-old`, the session `planner_with_swap` registers.
+fn ask_planner(env: &Env) {
+    let transcript = env.home_root.join("planner-question.jsonl");
+    std::fs::write(&transcript, "").unwrap();
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "sess-old",
+        "transcript_path": transcript,
+        "tool_name": "AskUserQuestion",
+        "tool_input": {
+            "questions": [{
+                "question": "Choose deployment path?",
+                "options": [{ "label": "safe" }, { "label": "fast" }],
+                "multiSelect": false
+            }]
+        }
+    });
+    let hook = env.run_hook("claude", &payload.to_string());
+    assert!(hook.status.success(), "{hook:?}");
+}
+
+/// `rimz answer @planner safe`, held at the rendezvous `hold` names while its action runs.
+fn answer(env: &Env, ids: &[u64], hold: Option<(&str, &dyn Fn())>) -> std::process::Output {
+    let mut command = acting(env, ids);
+    command
+        .args(["answer", "@planner", "safe", "--no-wait"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let Some((variable, during)) = hold else {
+        return command.output().unwrap();
+    };
+    let rendezvous = DeliveryRendezvous::new(env, "answer-hold");
+    let child = command.env(variable, &rendezvous.path).spawn().unwrap();
+    if let Some(mut held) = rendezvous.arrive_timeout(Duration::from_secs(10)) {
+        during();
+        held.write_all(&[0]).unwrap();
+    }
+    child.wait_with_output().unwrap()
+}
+
+/// The handle `answer` names `@planner` by: its card's, which the swap reservation's
+/// `planner` makes ambiguous.
+const ANSWERED: &str = "@claude#main";
+
+/// `rimz answer` types into the pane the lookup answers once its write lock is held, and
+/// exits 2 with no key sent when the agent moved during the lock or no listed pane hosts it.
+#[test]
+fn answer_types_only_into_the_pane_the_lookup_answers_after_the_lock() {
+    let env = Env::new();
+    planner_with_swap(&env);
+    ask_planner(&env);
+    let output = answer(&env, &[3, 4], None);
+    assert!(output.status.success(), "{output:?}");
+    assert!(!typed(&env).is_empty(), "{:#?}", trace(&env));
+    assert!(
+        typed(&env).iter().all(|pane| pane == OLD),
+        "{:#?}",
+        trace(&env)
+    );
+
+    let env = Env::new();
+    planner_with_swap(&env);
+    ask_planner(&env);
+    let output = answer(&env, &[4], None);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(
+        stderr(&output).contains(&format!("error: {ANSWERED} has no live bound pane")),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(typed(&env), Vec::<String>::new(), "{:#?}", trace(&env));
+
+    let env = Env::new();
+    let reservation = planner_with_swap(&env);
+    ask_planner(&env);
+    let output = answer(
+        &env,
+        &[3, 4],
+        Some(("RIMZ_TEST_AGENT_PANE_AFTER_WAKE", &|| {
+            bind_swap(&env, &reservation, NEW)
+        })),
+    );
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(
+        stderr(&output).contains(&format!(
+            "error: {ANSWERED}: the agent left pane zellij:{OLD} while it was woken; no key \
+             was sent"
+        )),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(typed(&env), Vec::<String>::new(), "{:#?}", trace(&env));
+}
+
+/// A running supervised run of `sess-old`, the session the budget park settles.
+fn planner_run(env: &Env) -> rimz::store::run::RunRecord {
+    let workspace = env.resolve_workspace(&env.project_root);
+    let mut run = rimz::store::run::RunRecord::new(
+        workspace.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("sess-old".into());
+    run.status = rimz::store::run::RunStatus::Running;
+    rimz::harness::run::create(env.store().paths(), &run).unwrap();
+    run
+}
+
+fn run_status(env: &Env, run: &rimz::store::run::RunRecord) -> rimz::store::run::RunStatus {
+    rimz::harness::run::list(env.store().paths())
+        .unwrap()
+        .into_iter()
+        .find(|record| record.run_id == run.run_id)
+        .unwrap()
+        .status
+}
+
+/// The budget park helper for `sess-old` in `OLD`, held at `hold` when it names one.
+fn budget_park(env: &Env, ids: &[u64], hold: Option<&dyn Fn()>) -> std::process::Output {
+    let request = rimz::harness::budget::BudgetParkRequest {
+        workspace_id: env.workspace_id.clone(),
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: "sess-old".into(),
+        pane_id: PaneId::from_parts(MuxName::Zellij, OLD),
+        at_cost: Some(1.0),
+    };
+    let mut command = acting(env, ids);
+    command
+        .args(rimz::child_process::agent_helper_argv(
+            "budget-park",
+            &request,
+        ))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let Some(during) = hold else {
+        return command.output().unwrap();
+    };
+    let rendezvous = DeliveryRendezvous::new(env, "park-hold");
+    let child = command
+        .env("RIMZ_TEST_AGENT_PANE_AFTER_WAKE", &rendezvous.path)
+        .spawn()
+        .unwrap();
+    if let Some(mut held) = rendezvous.arrive_timeout(Duration::from_secs(10)) {
+        during();
+        held.write_all(&[0]).unwrap();
+    }
+    child.wait_with_output().unwrap()
+}
+
+/// The budget park presses Escape in the pane the lookup answers and settles the session's
+/// run; when the agent moved during the lock, another session holds its pane, or no listed
+/// pane hosts it, it presses nothing and settles nothing.
+#[test]
+fn budget_park_presses_and_settles_only_in_the_pane_the_lookup_answers() {
+    use rimz::store::run::RunStatus;
+
+    let env = Env::new();
+    planner_with_swap(&env);
+    let run = planner_run(&env);
+    let output = budget_park(&env, &[3, 4], None);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(typed(&env), [OLD], "{:#?}", trace(&env));
+    assert_ne!(run_status(&env, &run), RunStatus::Running);
+
+    for case in ["nowhere", "moved", "other session"] {
+        let env = Env::new();
+        let reservation = planner_with_swap(&env);
+        let run = planner_run(&env);
+        let bind = || bind_swap(&env, &reservation, NEW);
+        let output = match case {
+            "nowhere" => budget_park(&env, &[4], None),
+            "moved" => budget_park(&env, &[3, 4], Some(&bind)),
+            _ => {
+                bind();
+                budget_park(&env, &[3, 4], None)
+            }
+        };
+        assert!(!output.status.success(), "{case}: {output:?}");
+        if case != "moved" {
+            assert!(
+                stderr(&output).contains("budget target pane is no longer bound to the agent"),
+                "{case}: {}",
+                stderr(&output)
+            );
+        }
+        assert_eq!(
+            typed(&env),
+            Vec::<String>::new(),
+            "{case}: {:#?}",
+            trace(&env)
+        );
+        assert_eq!(run_status(&env, &run), RunStatus::Running, "{case}");
+    }
 }

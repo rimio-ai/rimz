@@ -179,10 +179,11 @@ A later successful wake withdraws the entry and its `wake_error` together, so a 
 | Caller | Function | Then |
 | --- | --- | --- |
 | Message delivery | `crates/rimz/src/message/send.rs::send_batch_to_live_pane` | writes the batch |
-| `rimz answer` | `crates/rimz/src/cli/answer.rs::run` | writes the answer keys |
-| `rimz pane send` in a managed room | `crates/rimz/src/cli/pane.rs::send` | writes the keys |
-| Budget park helper | `crates/rimz/src/cli/agents_cmd/budget_park.rs::run_budget_park` | sends Esc. A wake failure ends the helper. |
-| Idle compaction helper | `crates/rimz/src/cli/agents_cmd/idle_compact.rs::run_idle_compact` | rechecks the cache window, then queues the compact command. A wake failure ends the helper. |
+| `rimz answer` | `crates/rimz/src/cli/answer.rs::run`, through `crates/rimz/src/launcher/agent_pane.rs::open_writer` | re-reads hosting after the wake and the pane lock, then writes the answer keys, or exits 2 when the agent left the pane |
+| `rimz pane send` of a pane id | `crates/rimz/src/cli/pane.rs::send` | writes the keys |
+| `rimz pane send @agent` | `crates/rimz/src/cli/pane.rs::agent_writer`, through `crates/rimz/src/launcher/agent_pane.rs::open_writer` | re-reads hosting after the wake and the pane lock, then writes the keys, or refuses when the agent left the pane |
+| Budget park helper | `crates/rimz/src/cli/agents_cmd/budget_park.rs::run_budget_park`, through `crates/rimz/src/launcher/agent_pane.rs::open_writer` | re-reads hosting after the wake and the pane lock, then sends Esc, or presses and settles nothing when the agent left the pane. A wake failure ends the helper. |
+| Idle compaction helper | `crates/rimz/src/cli/agents_cmd/idle_compact.rs::run_idle_compact`, through `crates/rimz/src/launcher/agent_pane.rs::find` | re-reads hosting after the wake, rechecks the cache window, then queues the compact command, or nothing when the agent left the pane. A wake failure ends the helper. |
 | `rimz pane focus` of a pane id or the sidebar | `crates/rimz/src/cli/pane.rs::focus` | focuses the pane |
 | `rimz pane focus @agent` | `crates/rimz/src/cli/pane.rs::focus_agent`, through `crates/rimz/src/launcher/agent_pane.rs::find` | re-reads hosting after the wake, then focuses the pane, or nothing when the agent left it |
 | `rimz agents focus`, `rimz teams focus` | `crates/rimz/src/cli/agents_cmd/show.rs::focus_resolved`, through `crates/rimz/src/launcher/agent_pane.rs::find` | re-reads hosting after the wake, then focuses the pane, or nothing when the agent left it |

@@ -548,5 +548,5 @@ fn pane_send_refuses_an_agent_whose_pane_left_the_room() {
     let send = rooms.pane(&["send", "--enter", "@gone", "echo GONE_MARK"]);
     let stderr = String::from_utf8_lossy(&send.stderr);
     assert_eq!(send.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains(&rooms.refusal(&gone)), "{stderr}");
+    assert!(stderr.contains("agent gone has no bound pane"), "{stderr}");
 }

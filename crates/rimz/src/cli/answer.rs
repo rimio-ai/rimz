@@ -117,17 +117,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         .answer_plan(detail.open.kind, &detail.questions, &replies)
         .unwrap_or_else(|err| answer_exit(3, &format!("{err}; in the pane: {}", commands.focus())));
 
-    let live = ctx.resolution_snapshot()?;
-    let target = live
-        .live_agent_pane(&owner.kind, &owner.agent_id)
-        .unwrap_or_else(|| answer_exit(2, &format!("{handle} has no live bound pane")));
-    rimz::harness::hibernate::wake_pane(store, &target)?;
-    let writer = PaneWriter::open(
-        Some(store.runtime_paths()),
-        &target,
-        &ctx.workspace.session_name,
-    )
-    .unwrap_or_else(|err| answer_exit(2, &format!("sending answer to {handle}: {err}")));
+    let writer = owner_writer(&ctx, owner, &handle, &ask_id)?;
 
     // Re-read immediately before the first keystroke. This is the compare half
     // of the ask-id CAS; a prompt answered or superseded during validation gets
@@ -194,6 +184,48 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         ask_commands::choice(&detail, &replies)
     )?;
     Ok(())
+}
+
+/// The writer of the pane the lookup answers for the ask's owner, read again once it is
+/// locked; a pane that cannot be woken fails as an error (exit 1), and any other answer exits
+/// 2, nothing typed either way. The ask belongs to the owner's session,
+/// so a pane that holds another session of its launch is refused too.
+fn owner_writer(
+    ctx: &Ctx,
+    owner: &rimz::agents::AgentState,
+    handle: &str,
+    ask_id: &AskId,
+) -> Result<PaneWriter> {
+    use rimz::launcher::agent_pane::FindErr;
+    let mut notices = Vec::new();
+    let found = rimz::launcher::agent_pane::open_writer(
+        &ctx.workspace,
+        &ctx.store,
+        ctx.mux(),
+        &owner.kind,
+        owner.launch_key(),
+        &mut notices,
+    );
+    super::render::room::print_notices(notices)?;
+    match found {
+        Ok((pane, writer)) if pane.holder.0 == owner.kind && pane.holder.1 == owner.agent_id => {
+            Ok(writer)
+        }
+        Ok((pane, _)) => answer_exit(
+            2,
+            &format!(
+                "another session of {handle}, {}, holds its pane {}, not the session asking \
+                 `{ask_id}`; no key was sent",
+                pane.holder.1, pane.pane_id
+            ),
+        ),
+        Err(err @ FindErr::Wake { .. }) => Err(err.into()),
+        Err(FindErr::Nowhere) => answer_exit(2, &format!("{handle} has no live bound pane")),
+        Err(FindErr::Lock { source, .. }) => {
+            answer_exit(2, &format!("sending answer to {handle}: {source}"))
+        }
+        Err(err) => answer_exit(2, &format!("{handle}: {err}; no key was sent")),
+    }
 }
 
 fn answer_raised(
