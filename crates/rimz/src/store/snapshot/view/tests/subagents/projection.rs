@@ -27,6 +27,7 @@ fn turn_ended_waiting_pair(wait_age_secs: i64, class: TurnErrorClass) -> (AgentS
     let error_at = ago(wait_age_secs - 7);
     child.context = Some(crate::agents::AgentContext {
         turn_error: Some(crate::agents::AgentTurnError {
+            model: None,
             class,
             at: error_at,
             label: Some(CAPACITY_LABEL.to_owned()),

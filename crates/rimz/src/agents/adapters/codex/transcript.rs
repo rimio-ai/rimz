@@ -830,6 +830,7 @@ fn task_complete_has_final_message(task: &CodexTaskComplete<'_>) -> bool {
 
 fn messageless_task_complete(at: Timestamp) -> AgentTurnError {
     AgentTurnError {
+        model: None,
         ended_turn: true,
         class: TurnErrorClass::Unknown,
         at,
@@ -843,6 +844,7 @@ fn turn_error_from_record(record: &RolloutRecord<'_>) -> Option<AgentTurnError> 
     let label = turn_error_label(error);
     let class = classify_turn_error(&error.kinds, label.as_deref());
     Some(AgentTurnError {
+        model: None,
         ended_turn: matches!(
             record.kind,
             RolloutKind::TaskComplete(_) | RolloutKind::TurnAborted

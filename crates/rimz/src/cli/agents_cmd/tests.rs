@@ -3104,6 +3104,7 @@ fn agent_with_turn_error(
     let at = Timestamp::from_second(at).unwrap();
     let mut context = rimz::agents::AgentContext::new(&agent.kind.to_string(), at);
     context.turn_error = Some(AgentTurnError {
+        model: None,
         ended_turn: false,
         class,
         at,

@@ -343,6 +343,7 @@ mod tests {
         let mut errored = agents.to_vec();
         let mut context = AgentContext::new("codex", now());
         context.turn_error = Some(AgentTurnError {
+            model: None,
             ended_turn: false,
             class,
             at: now() - Duration::from_secs(1_919),

@@ -244,6 +244,7 @@ fn provider_error_settles_the_turn_until_new_activity() {
         agent.turn_started_at = Some(at);
         agent.context = Some(AgentContext {
             turn_error: Some(AgentTurnError {
+                model: None,
                 ended_turn: false,
                 class,
                 at: Timestamp::from_second(second).unwrap(),
@@ -285,6 +286,7 @@ fn spent_provider_pauses_end_turns_but_recoverable_and_budget_parks_stay_open() 
         agent.turn_started_at = Some(at);
         agent.context = Some(AgentContext {
             turn_error: Some(AgentTurnError {
+                model: None,
                 ended_turn: false,
                 class,
                 at: at + jiff::SignedDuration::from_secs(1),
@@ -360,6 +362,7 @@ fn spent_pause_evidence_is_lazy_and_cached_per_view() {
 
     agent.context = Some(AgentContext {
         turn_error: Some(AgentTurnError {
+            model: None,
             ended_turn: false,
             class: TurnErrorClass::PausedRateLimit,
             at: at + jiff::SignedDuration::from_secs(1),

@@ -466,6 +466,7 @@ mod tests {
             let at = older.last_activity + std::time::Duration::from_secs(1);
             older.context = Some(AgentContext {
                 turn_error: Some(AgentTurnError {
+                    model: None,
                     ended_turn: false,
                     class,
                     at,
@@ -499,6 +500,7 @@ mod tests {
             conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Fresh));
         older.context = Some(AgentContext {
             turn_error: Some(AgentTurnError {
+                model: None,
                 ended_turn: false,
                 class: TurnErrorClass::PausedOverloaded,
                 at: older.last_activity,

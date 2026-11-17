@@ -1852,6 +1852,7 @@ again at 6:35 AM.
 #[test]
 fn refine_turn_death_from_frame_parks_keyword_proven_and_adopts_banner() {
     let mut capacity = crate::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
@@ -1871,6 +1872,7 @@ fn refine_turn_death_from_frame_parks_keyword_proven_and_adopts_banner() {
     );
 
     let mut usage_limit = crate::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
@@ -1901,6 +1903,7 @@ again at 6:35 AM.
     );
 
     let mut unknown = crate::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
@@ -1911,6 +1914,7 @@ again at 6:35 AM.
     assert_eq!(unknown.label.as_deref(), Some("Provider ended turn early"));
 
     let mut numeric_pane_line = crate::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
@@ -1950,6 +1954,7 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
         }])
     };
     let generic = || crate::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: now,
@@ -1976,6 +1981,7 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
     }
 
     let mut proven = crate::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: crate::agents::TurnErrorClass::PausedOverloaded,
         at: now,
@@ -1985,6 +1991,7 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
     assert_eq!(
         proven,
         crate::agents::AgentTurnError {
+            model: None,
             ended_turn: false,
             class: crate::agents::TurnErrorClass::PausedOverloaded,
             at: now,

@@ -587,6 +587,7 @@ mod tests {
         event_log::append(&paths.events_log, &started).unwrap();
         let context = AgentContext {
             turn_error: Some(AgentTurnError {
+                model: None,
                 ended_turn: false,
                 class: TurnErrorClass::PausedOverloaded,
                 at: error_at,

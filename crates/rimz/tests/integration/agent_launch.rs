@@ -3665,6 +3665,7 @@ fn limit_parked_child_lists_paused_and_is_held_without_a_message() {
     let seed_marker = |at: jiff::Timestamp| {
         let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), at);
         context.turn_error = Some(rimz::agents::AgentTurnError {
+            model: None,
             ended_turn: false,
             class: rimz::agents::TurnErrorClass::Failed,
             at,
@@ -3828,6 +3829,7 @@ fn limit_held_child_lets_its_settled_sibling_report_with_its_held_line() {
     let at = jiff::Timestamp::now() + std::time::Duration::from_secs(1);
     let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), at);
     context.turn_error = Some(rimz::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at,
@@ -4752,6 +4754,7 @@ fn limit_parked_child_past_the_hold_limit_fails_at_once_with_its_typed_cause() {
     let at = jiff::Timestamp::now();
     let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), at);
     context.turn_error = Some(rimz::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at,
@@ -4897,6 +4900,7 @@ fn limit_parked_child_with_auto_continue_off_fails_after_the_window_with_its_ref
     let seed_marker = |at: jiff::Timestamp| {
         let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), at);
         context.turn_error = Some(rimz::agents::AgentTurnError {
+            model: None,
             ended_turn: false,
             class: rimz::agents::TurnErrorClass::PausedRateLimit,
             at,

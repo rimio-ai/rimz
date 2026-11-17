@@ -84,6 +84,7 @@ fn rate_limited(agent: &mut AgentState) {
     agent.last_activity = now() - std::time::Duration::from_secs(1);
     let mut context = AgentContext::new("codex", now());
     context.turn_error = Some(AgentTurnError {
+        model: None,
         ended_turn: false,
         class: TurnErrorClass::PausedRateLimit,
         at: now(),

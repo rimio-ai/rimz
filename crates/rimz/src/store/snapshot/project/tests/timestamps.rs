@@ -1629,6 +1629,7 @@ fn a_limit_refused_prompt_keeps_the_cache_clock_on_the_last_real_request() {
         row.context = Some(AgentContext {
             recorded_request_at: recorded.map(at),
             turn_error: error.map(|(class, secs)| AgentTurnError {
+                model: None,
                 ended_turn: true,
                 class,
                 at: at(secs),
@@ -1769,6 +1770,7 @@ fn a_limit_refusal_claude_leaves_running_keeps_the_record_of_the_last_request_th
         row.context = Some(AgentContext {
             recorded_request_at: recorded.map(at),
             turn_error: Some(AgentTurnError {
+                model: None,
                 ended_turn: false,
                 class,
                 at: at(marker),

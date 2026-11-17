@@ -381,6 +381,7 @@ fn codex_local_refresh_overwrites_turn_error_marker() {
     refresh.context.turn_error = FieldPatch::Set(next_marker.clone());
     merge_local_context(&runtime, spec("codex"), "sess-1", refresh, observed_at).unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
+    next_marker.model = Some("gpt-5".to_owned());
     assert_eq!(merged.context.turn_error, Some(next_marker));
 
     let mut clear = unpriced_refresh();
@@ -453,6 +454,7 @@ fn non_codex_local_refresh_preserves_turn_error_marker() {
 fn merge_turn_error_skips_identical_marker() {
     let (_dir, runtime) = runtime();
     let marker = AgentTurnError {
+        model: None,
         ended_turn: false,
         class: TurnErrorClass::PausedRateLimit,
         at: Timestamp::from_second(1_700_000_000).unwrap(),
@@ -473,8 +475,47 @@ fn merge_turn_error_skips_identical_marker() {
     assert_eq!(second, first);
 }
 
+#[test]
+fn merge_turn_error_stamps_the_marker_with_the_sidecars_model_once() {
+    let (_dir, runtime) = runtime();
+    let observed = |model: &str| AgentContext {
+        model_id: Some(model.to_owned()),
+        ..AgentContext::new("claude", observed_at())
+    };
+    let marker = turn_error(
+        TurnErrorClass::PausedRateLimit,
+        "You've hit your limit",
+        100,
+    );
+    let stamp = || {
+        read_one(&runtime, "claude", "sess-1")
+            .unwrap()
+            .context
+            .turn_error
+            .and_then(|error| error.model)
+    };
+
+    merge_observed(&runtime, "claude", "sess-1", observed("claude-fable-5-2")).unwrap();
+    assert!(merge_turn_error(&runtime, "claude", "sess-1", marker.clone()).unwrap());
+    assert_eq!(stamp().as_deref(), Some("claude-fable-5-2"));
+    merge_observed(&runtime, "claude", "sess-1", observed("claude-opus-5-5")).unwrap();
+    assert!(
+        !merge_turn_error(&runtime, "claude", "sess-1", marker).unwrap(),
+        "the same unstamped marker again writes nothing"
+    );
+    assert_eq!(stamp().as_deref(), Some("claude-fable-5-2"));
+    let later = turn_error(
+        TurnErrorClass::PausedRateLimit,
+        "You've hit your limit",
+        200,
+    );
+    assert!(merge_turn_error(&runtime, "claude", "sess-1", later).unwrap());
+    assert_eq!(stamp().as_deref(), Some("claude-opus-5-5"));
+}
+
 fn turn_error(class: TurnErrorClass, label: &str, at: i64) -> AgentTurnError {
     AgentTurnError {
+        model: None,
         ended_turn: false,
         class,
         at: Timestamp::from_second(at).unwrap(),

@@ -51,6 +51,7 @@ fn child(id: &str, parent: &str, registered: u64) -> AgentState {
 fn errored(mut agent: AgentState, secs: u64, class: TurnErrorClass) -> AgentState {
     agent.context = Some(AgentContext {
         turn_error: Some(AgentTurnError {
+            model: None,
             ended_turn: false,
             class,
             at: ago(secs),

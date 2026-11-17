@@ -1654,6 +1654,7 @@ fn effort_counts_only_appended_human_prompts_and_agent_messages() {
         "a-shadowed-peer",
         &AgentContext {
             turn_error: Some(AgentTurnError {
+                model: None,
                 ended_turn: false,
                 class: TurnErrorClass::PausedOverloaded,
                 at: now,

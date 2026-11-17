@@ -1310,6 +1310,7 @@ fn agents_wait_ends_on_spent_provider_pause() {
     let at = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(1);
     let mut context = AgentContext::new("claude", at);
     context.turn_error = Some(AgentTurnError {
+        model: None,
         ended_turn: false,
         class: TurnErrorClass::PausedRateLimit,
         at,
