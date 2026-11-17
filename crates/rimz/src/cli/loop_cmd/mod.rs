@@ -562,8 +562,9 @@ fn stop_active_run(
     Ok((outcome, pane_open))
 }
 
-/// Stop a supervised run task `name` owns; a pane only the run's own stop can close is
-/// returned for the caller to report once the rest of its stop is done.
+/// Stop a supervised run task `name` owns; a stop that cancelled the run but could not
+/// confirm its agent stopped is returned for the caller to report once the rest of its
+/// stop is done.
 fn stop_owned_run(
     name: &str,
     workspace: Option<&rimz::ResolvedWorkspace>,
@@ -571,27 +572,41 @@ fn stop_owned_run(
     record: &rimz::store::run::RunRecord,
     globals: &GlobalFlags,
 ) -> Result<Option<String>> {
-    use crate::cli::supervised::StopRunErr;
-
-    let id = paths.workspace_id.clone();
-    let store = crate::cli::open_existing_store_at(paths)?
-        .with_context(|| crate::cli::no_room(format_args!("for workspace {id}")))?;
     // A kept run's wrapper ends its provider on the cancel and holds the pane, as the
     // collection of the fire's ended run leaves it; only its own stop closes that pane.
     let Some(workspace) = workspace.filter(|_| !record.keep) else {
+        let id = paths.workspace_id.clone();
+        let store = crate::cli::open_existing_store_at(paths)?
+            .with_context(|| crate::cli::no_room(format_args!("for workspace {id}")))?;
         crate::cli::supervised::cancel_supervised_run(&store, record)?;
         return Ok(None);
     };
-    match crate::cli::supervised::stop_supervised_run(workspace, &store, globals, record) {
-        // Cancellation succeeded; still finish the ladder before reporting
-        // the pane which only the run's own stop can now close.
-        Err(StopRunErr::PaneOpen(open)) => Ok(Some(format!(
-            "loop `{name}`: {open}; run `rimz agents stop {}` to close it",
-            record.run_id
-        ))),
-        Err(StopRunErr::NotCanceled(err) | StopRunErr::NotEnded(err)) => Err(err),
-        Ok(()) => Ok(None),
-    }
+    let ctx = crate::cli::Ctx::for_workspace(paths.workspace_id, workspace.mux_hint)?;
+    let label = record
+        .agent_name
+        .as_deref()
+        .unwrap_or(record.run_id.as_str());
+    // The run is cancelled; still finish the ladder before reporting the agent only a
+    // rerun of the run's own stop can finish.
+    let Err(err) =
+        crate::cli::agents_cmd::stop_run_agent(&ctx, globals, record)?.into_result(label)
+    else {
+        return Ok(None);
+    };
+    // The command names the run's room: a shell that pastes it can be pinned to another.
+    let root = workspace.project_root.display().to_string();
+    let args = [
+        "rimz",
+        "--root",
+        &root,
+        "agents",
+        "stop",
+        record.run_id.as_str(),
+    ];
+    Ok(Some(format!(
+        "loop `{name}`: {err:#}; run `{}` to finish the stop",
+        shlex::try_join(args)?
+    )))
 }
 
 fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<LoadedTask>> {

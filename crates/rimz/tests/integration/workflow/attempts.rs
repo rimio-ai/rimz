@@ -809,6 +809,71 @@ fn a_canceled_attempt_whose_leader_leaves_within_the_grace_is_never_closed() {
     settled(&room.env, &id, "canceled");
 }
 
+/// An attempt from before a rebirth: its agent ended, and the pane id its run saved now hosts
+/// another agent. Cancelling the attempt closes nothing of that agent and leaves its process.
+#[test]
+fn a_canceled_pre_rebirth_attempt_leaves_the_agent_now_in_its_saved_pane() {
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    let mut leader = dummy_agent_process();
+    room.hook_with_owner(
+        &id,
+        &run,
+        leader.id(),
+        json!({"hook_event_name":"SessionStart"}),
+    );
+    let state = room.env.state_path_for(&room.env.project_root);
+    let pane = rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_61");
+    rimz::harness::run::record_pane(&state, &run.run_id, pane.clone()).unwrap();
+    leader.kill().unwrap();
+    leader.wait().unwrap();
+    let workspace = room.env.resolve_workspace(&room.env.project_root);
+    let lifecycle = |event: &str, observation: &rimz::agents::AgentLifecycleObservation| {
+        room.env
+            .store()
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                run.kind.as_str(),
+                event,
+                observation,
+            ))
+            .unwrap();
+    };
+    lifecycle(
+        "SessionEnd",
+        &rimz::agents::AgentLifecycleObservation::new(
+            Some("workflow-session".into()),
+            rimz::agents::LifecycleSignal::Ended,
+        ),
+    );
+    let mut other = dummy_agent_process();
+    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+        Some("reborn-session".into()),
+        rimz::agents::LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some("reborn".to_owned());
+    observation.worktree_path = Some(room.env.project_root.display().to_string());
+    observation.pane_id = Some(pane);
+    observation.runtime_owner = Some(rimz::store::runtime::process_owner(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        "reborn-session",
+        other.id(),
+    ));
+    lifecycle("SessionStart", &observation);
+    let cancel = room.command(&["workflow", "cancel", &id]).output().unwrap();
+    success(cancel);
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+    assert!(!trace.contains("close-pane"), "{trace}");
+    assert!(
+        other.try_wait().unwrap().is_none(),
+        "the agent now in the saved pane runs on"
+    );
+    settled(&room.env, &id, "canceled");
+    other.kill().unwrap();
+    other.wait().unwrap();
+}
+
 impl Room {
     fn new(extra: &str) -> Self {
         Self::with_kind(extra, "codex")

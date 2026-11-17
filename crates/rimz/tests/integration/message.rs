@@ -4301,6 +4301,504 @@ fn stop_closes_the_agents_listed_pane_when_its_ended_run_names_a_gone_one() {
     assert!(process.try_wait().unwrap().is_some(), "its process is gone");
 }
 
+/// A `kind` row of launch `launch`, bound to `pane` when given, under `owner`.
+fn launch_stop_agent(
+    env: &Env,
+    kind: &str,
+    id: &str,
+    launch: &str,
+    pane: Option<&str>,
+    owner: Option<rimz::pane::RuntimeOwner>,
+    state: AgentLaunchState,
+) {
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            workspace.session_name,
+            &AgentKind::new_unchecked(kind),
+            AgentLaunchPayload {
+                agent_id: id.into(),
+                launch_id: Some(launch.into()),
+                system_prompt_digest: None,
+                agent_name: "repro".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state,
+                run_id: None,
+                pane_id: pane.map(|pane| PaneId::from_parts(MuxName::Zellij, pane)),
+                runtime_owner: owner,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+}
+
+/// A running claude run of `launch` (stamped, when given) for session `agent_id`, whose saved
+/// pane is one no listing has.
+fn stop_run_record(
+    env: &Env,
+    launch: Option<&str>,
+    agent_id: Option<&str>,
+) -> rimz::store::run::RunRecord {
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    run.launch_id = launch.map(Into::into);
+    run.agent_id = agent_id.map(Into::into);
+    run.agent_name = Some("repro".to_owned());
+    run.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
+    run.status = rimz::store::run::RunStatus::Running;
+    rimz::harness::run::create(env.store().paths(), &run).unwrap();
+    run
+}
+
+fn run_status(env: &Env, run: &rimz::store::run::RunRecord) -> rimz::store::run::RunStatus {
+    rimz::harness::run::load(env.store().paths(), &run.run_id)
+        .unwrap()
+        .status
+}
+
+/// The handoff's reproduction, through each entry that stops a run: the run's saved pane is
+/// gone while its agent is alive in another listed pane. The stop closes that pane and ends
+/// the agent's process, never succeeding with the agent still running.
+#[test]
+fn a_run_stop_ends_its_agent_in_whatever_pane_hosts_it() {
+    for path in ["run id", "stdin line", "timeout helper"] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        let mut process = dummy_agent_process();
+        launch_stop_agent(
+            &env,
+            "claude",
+            "repro-session",
+            "launch_repro",
+            Some(TRACE_PANE),
+            Some(agent_owner("repro-session", &process)),
+            AgentLaunchState::Bound,
+        );
+        let mut run = stop_run_record(&env, Some("launch_repro"), Some("repro-session"));
+        let panes = list_stop_panes(&env, &[3]);
+        let mut command = stop_command(&env, &panes, 2000);
+        let stop = match path {
+            "run id" => command
+                .args(["agents", "stop", run.run_id.as_str()])
+                .output()
+                .unwrap(),
+            "stdin line" => {
+                let mut child = command
+                    .args(["agents", "stop", "-"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                writeln!(child.stdin.take().unwrap(), "{}", run.run_id).unwrap();
+                child.wait_with_output().unwrap()
+            }
+            _ => {
+                run.deadline_at = Some(jiff::Timestamp::now() - Duration::from_secs(1));
+                rimz::harness::run::create(env.store().paths(), &run).unwrap();
+                let request = rimz::harness::run_timeout::RunTimeoutRequest {
+                    workspace_id: env.workspace_id.clone(),
+                    run_id: run.run_id.clone(),
+                    interrupted_at: None,
+                };
+                command
+                    .current_dir(&env.project_root)
+                    .args(rimz::child_process::agent_helper_argv(
+                        "run-timeout",
+                        &request,
+                    ))
+                    .output()
+                    .unwrap()
+            }
+        };
+        assert_eq!(closed_stop_panes(&env), [TRACE_PANE], "{path}: {stop:?}");
+        assert!(stop.status.success(), "{path}: {stop:?}");
+        let receipt = match path {
+            "run id" => "stopped repro (run)".to_owned(),
+            "stdin line" => format!("stopped {} (run)", run.run_id),
+            _ => String::new(),
+        };
+        assert_eq!(
+            String::from_utf8_lossy(&stop.stdout).trim(),
+            receipt,
+            "{path}"
+        );
+        assert!(
+            process.try_wait().unwrap().is_some(),
+            "{path}: its process is gone"
+        );
+        assert!(run_status(&env, &run).is_terminal(), "{path}");
+    }
+}
+
+/// A stamped run's agent restarted into a new session, or molted to another kind: the stop
+/// reaches the launch's holder, and the run it settles is the one it was given.
+#[test]
+fn a_run_stop_reaches_its_launchs_holder_after_a_restart_or_a_molt() {
+    for run_kind in ["claude", "codex"] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        launch_stop_agent(
+            &env,
+            run_kind,
+            "first-session",
+            "launch_repro",
+            None,
+            None,
+            AgentLaunchState::Bound,
+        );
+        append_lifecycle(
+            &env,
+            run_kind,
+            "SessionEnd",
+            "first-session",
+            LifecycleSignal::Ended,
+            |_| {},
+        );
+        let mut process = dummy_agent_process();
+        launch_stop_agent(
+            &env,
+            "claude",
+            "second-session",
+            "launch_repro",
+            Some(TRACE_PANE),
+            Some(agent_owner("second-session", &process)),
+            AgentLaunchState::Bound,
+        );
+        let mut run = stop_run_record(&env, Some("launch_repro"), Some("first-session"));
+        run.kind = AgentKind::new_unchecked(run_kind);
+        rimz::harness::run::create(env.store().paths(), &run).unwrap();
+        // A newer run of the same launch, which a stop that picked by row would settle instead.
+        let other = stop_run_record(&env, Some("launch_repro"), Some("second-session"));
+        let panes = list_stop_panes(&env, &[3]);
+        let stop = stop_command(&env, &panes, 2000)
+            .args(["agents", "stop", run.run_id.as_str()])
+            .output()
+            .unwrap();
+        assert_eq!(
+            closed_stop_panes(&env),
+            [TRACE_PANE],
+            "{run_kind}: {stop:?}"
+        );
+        assert!(stop.status.success(), "{run_kind}: {stop:?}");
+        assert!(
+            process.try_wait().unwrap().is_some(),
+            "{run_kind}: the holder's process is gone"
+        );
+        assert_eq!(
+            run_status(&env, &run),
+            rimz::store::run::RunStatus::Canceled,
+            "{run_kind}"
+        );
+        assert_eq!(
+            run_status(&env, &other),
+            rimz::store::run::RunStatus::Running,
+            "{run_kind}: the other run is not the one given"
+        );
+    }
+}
+
+/// What a run stop leaves alone: a namesake of another launch, a pane its record saved that
+/// another agent now holds, and nothing at all when the run names no row. A stamped launch
+/// that never bound has its reservation cancelled.
+#[test]
+fn a_run_stop_touches_only_its_own_launch() {
+    for case in ["never bound", "namesake", "saved pane reused"] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        let mut other = dummy_agent_process();
+        launch_stop_agent(
+            &env,
+            "claude",
+            "other-session",
+            "launch_other",
+            Some(TRACE_PANE),
+            Some(agent_owner("other-session", &other)),
+            AgentLaunchState::Bound,
+        );
+        let mut run = match case {
+            "namesake" => stop_run_record(&env, Some("launch_repro"), None),
+            "saved pane reused" => stop_run_record(&env, None, Some("gone-session")),
+            _ => {
+                use rimz::store::writer::{AgentLaunchName, AgentLaunchRequest, AgentLaunchScope};
+                let batch = env
+                    .store()
+                    .begin_agent_launch_batch(
+                        &[AgentLaunchRequest {
+                            kind: AgentKind::new_unchecked("claude"),
+                            login: rimz::store::writer::LaunchLogin::RoomDefault,
+                            agent_id: "launch_pending".into(),
+                            name: AgentLaunchName::Explicit("pending".into()),
+                            launch: Default::default(),
+                            run_id: None,
+                            prompt: None,
+                        }],
+                        AgentLaunchScope {
+                            session_name: env.resolve_workspace(&env.project_root).session_name,
+                            cwd: env.project_root.clone(),
+                            branch: None,
+                            description: None,
+                        },
+                    )
+                    .unwrap();
+                let launch = batch.identities()[0].launch_id().to_string();
+                stop_run_record(&env, Some(&launch), None)
+            }
+        };
+        if case == "saved pane reused" {
+            run.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            rimz::harness::run::create(env.store().paths(), &run).unwrap();
+        }
+        let panes = list_stop_panes(&env, &[3]);
+        let stop = stop_command(&env, &panes, 2000)
+            .args(["agents", "stop", run.run_id.as_str()])
+            .output()
+            .unwrap();
+        assert!(stop.status.success(), "{case}: {stop:?}");
+        assert!(closed_stop_panes(&env).is_empty(), "{case}: {stop:?}");
+        assert!(
+            other.try_wait().unwrap().is_none(),
+            "{case}: the other agent runs on"
+        );
+        assert_eq!(
+            run_status(&env, &run),
+            rimz::store::run::RunStatus::Canceled,
+            "{case}"
+        );
+        if case == "never bound" {
+            let snapshot = env.store().snapshot().unwrap();
+            let pending = snapshot
+                .agents
+                .iter()
+                .find(|row| row.agent_id == "launch_pending");
+            assert!(
+                pending.is_some_and(|row| row.status == rimz::agents::AgentStatus::Failed),
+                "the reservation is cancelled: {:?}",
+                snapshot.agents
+            );
+        }
+        reap_later(other);
+    }
+}
+
+/// A session a second launch resumed: the row holds the second launch now, with the first in
+/// its prior launches. Stopping the first launch's run is the cancel alone; the second
+/// launch's pane, process and run are left alone.
+#[test]
+fn a_run_stop_leaves_a_launch_that_resumed_its_session_alone() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let mut second = absorb_into_second_launch(&env);
+    let first_run = stop_run_record(&env, Some("launch_first"), Some("shared-session"));
+    let second_run = stop_run_record(&env, Some("launch_second"), Some("shared-session"));
+    let panes = list_stop_panes(&env, &[3]);
+    let stop = stop_command(&env, &panes, 2000)
+        .args(["agents", "stop", first_run.run_id.as_str()])
+        .output()
+        .unwrap();
+    assert!(stop.status.success(), "{stop:?}");
+    assert!(closed_stop_panes(&env).is_empty(), "{stop:?}");
+    assert!(
+        second.try_wait().unwrap().is_none(),
+        "the second launch runs on"
+    );
+    assert_eq!(
+        run_status(&env, &first_run),
+        rimz::store::run::RunStatus::Canceled
+    );
+    assert_eq!(
+        run_status(&env, &second_run),
+        rimz::store::run::RunStatus::Running
+    );
+    reap_later(second);
+}
+
+/// A fresh launch resumes the run's session while the stop holds its target: the stop counts
+/// the run's agent as hosted nowhere and closes or signals nothing of the new launch.
+#[cfg(unix)]
+#[test]
+fn a_run_stop_leaves_a_launch_that_resumes_its_session_mid_stop_alone() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let first = dummy_agent_process();
+    launch_stop_agent(
+        &env,
+        "claude",
+        "shared-session",
+        "launch_first",
+        Some(TRACE_PANE),
+        Some(agent_owner("shared-session", &first)),
+        AgentLaunchState::Bound,
+    );
+    let run = stop_run_record(&env, Some("launch_first"), Some("shared-session"));
+    let target = DeliveryRendezvous::new(&env, "stop-target");
+    let panes = list_stop_panes(&env, &[3, 5]);
+    let stop = stop_command(&env, &panes, 1000)
+        .env("RIMZ_TEST_STOP_AFTER_TARGET", &target.path)
+        .args(["agents", "stop", run.run_id.as_str()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut held = target.arrive();
+    let mut second = resume_in_second_launch(&env, "terminal_5");
+    held.write_all(&[0]).unwrap();
+    let stop = stop.wait_with_output().unwrap();
+    assert!(stop.status.success(), "{stop:?}");
+    assert!(closed_stop_panes(&env).is_empty(), "{stop:?}");
+    assert!(
+        second.try_wait().unwrap().is_none(),
+        "the second launch runs on"
+    );
+    assert_eq!(
+        run_status(&env, &run),
+        rimz::store::run::RunStatus::Canceled
+    );
+    reap_later(first);
+    reap_later(second);
+}
+
+/// Stage session `shared-session`, first launched as `launch_first` and ended, then resumed
+/// by a fresh launch `launch_second` in the trace pane, and return that launch's process.
+fn absorb_into_second_launch(env: &Env) -> std::process::Child {
+    launch_stop_agent(
+        env,
+        "claude",
+        "shared-session",
+        "launch_first",
+        None,
+        None,
+        AgentLaunchState::Bound,
+    );
+    append_lifecycle(
+        env,
+        "claude",
+        "SessionEnd",
+        "shared-session",
+        LifecycleSignal::Ended,
+        |_| {},
+    );
+    resume_in_second_launch(env, TRACE_PANE)
+}
+
+/// A fresh launch `launch_second` resumes `shared-session` in `pane`; returns its process.
+fn resume_in_second_launch(env: &Env, pane: &str) -> std::process::Child {
+    let pane_id = PaneId::from_parts(MuxName::Zellij, pane);
+    let process = dummy_agent_process();
+    launch_stop_agent(
+        env,
+        "claude",
+        "launch_second",
+        "launch_second",
+        Some(pane),
+        Some(agent_owner("launch_second", &process)),
+        AgentLaunchState::Starting,
+    );
+    // The resume wrapper's attach at the reservation's epoch gives the session row its launch.
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&EventEnvelope::agent_attached(
+            workspace.workspace_id,
+            workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            rimz::store::event::AgentAttachPayload {
+                record: None,
+                tier: None,
+                mode: None,
+                agent_id: "shared-session".into(),
+                isolation: None,
+                effective_isolation: None,
+                launch_id: Some("launch_second".into()),
+                epoch: Some(0),
+                login: None,
+                pane_id: pane_id.clone(),
+                pane_pid: None,
+                runtime_owner: agent_owner("shared-session", &process),
+            },
+        ))
+        .unwrap();
+    append_lifecycle(
+        env,
+        "claude",
+        "SessionStart",
+        "shared-session",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.pane_id = Some(pane_id);
+            observation.runtime_owner = Some(agent_owner("shared-session", &process));
+        },
+    );
+    let rows = env.store().audit_rows().unwrap();
+    let row = rows
+        .iter()
+        .find(|row| row.agent_id == "shared-session")
+        .unwrap();
+    assert_eq!(
+        (row.launch_id.as_deref(), row.prior_launch_ids.as_slice()),
+        (Some("launch_second"), &["launch_first".into()][..]),
+        "the second launch absorbed the session: {rows:?}"
+    );
+    process
+}
+
+/// A run stop whose hosting read fails after the cancel: the run is cancelled, the command
+/// fails, and its message says so without claiming nothing was stopped.
+#[test]
+fn a_run_stop_that_cannot_read_the_multiplexer_says_the_run_is_cancelled() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let process = dummy_agent_process();
+    launch_stop_agent(
+        &env,
+        "claude",
+        "repro-session",
+        "launch_repro",
+        Some(TRACE_PANE),
+        Some(agent_owner("repro-session", &process)),
+        AgentLaunchState::Bound,
+    );
+    let run = stop_run_record(&env, Some("launch_repro"), Some("repro-session"));
+    let stop = traced_rimz(&env, "stop-trace.log")
+        .args(["--mux", "zellij"])
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "not json")
+        .args(["agents", "stop", run.run_id.as_str()])
+        .output()
+        .unwrap();
+    assert!(!stop.status.success(), "{stop:?}");
+    let text = String::from_utf8_lossy(&stop.stderr);
+    assert!(
+        text.contains(
+            "repro was not stopped: repro: the run is canceled, but the multiplexer could not be \
+             read: "
+        ),
+        "{text}"
+    );
+    assert!(text.contains("; no pane was closed"), "{text}");
+    assert!(!text.contains("nothing was stopped"), "{text}");
+    assert!(closed_stop_panes(&env).is_empty(), "{text}");
+    assert_eq!(
+        run_status(&env, &run),
+        rimz::store::run::RunStatus::Canceled
+    );
+    reap_later(process);
+}
+
 #[test]
 fn stop_and_focus_print_paste_ready_receipts() {
     let env = Env::new();
@@ -5601,6 +6099,7 @@ fn orphan_repair_records_no_end_while_the_run_pane_stays_open() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let kind = AgentKind::new_unchecked("claude");
+    let process = dummy_agent_process();
     append_lifecycle(
         &env,
         "claude",
@@ -5609,6 +6108,7 @@ fn orphan_repair_records_no_end_while_the_run_pane_stays_open() {
         LifecycleSignal::Registered,
         |observation| {
             observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.runtime_owner = Some(agent_owner("child", &process));
             observation.launch.parent_agent_id = Some("gone".into());
             observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
             observation.launch.launch_depth = Some(1);
@@ -5677,7 +6177,11 @@ fn orphan_repair_records_no_end_while_the_run_pane_stays_open() {
             _ => None,
         })
         .expect("a repair-failed diagnostic");
-    assert!(failed.contains("is still open"), "{failed}");
+    assert!(
+        failed.contains("a pane still hosts it: zellij:terminal_3"),
+        "{failed}"
+    );
+    reap_later(process);
 }
 
 #[test]
@@ -5698,6 +6202,8 @@ fn orphan_repair_records_one_end_with_and_without_a_run() {
                 append_lifecycle(&env, "claude", event, "gone", signal, |_| {});
             }
         }
+        // The child sits in a listed pane with a process of its own, which the stop ends.
+        let mut process = dummy_agent_process();
         append_lifecycle(
             &env,
             "claude",
@@ -5706,6 +6212,7 @@ fn orphan_repair_records_one_end_with_and_without_a_run() {
             LifecycleSignal::Registered,
             |observation| {
                 observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+                observation.runtime_owner = Some(agent_owner("child", &process));
                 observation.launch.parent_agent_id = Some("gone".into());
                 observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
                 observation.launch.launch_depth = Some(1);
@@ -5747,7 +6254,10 @@ fn orphan_repair_records_one_end_with_and_without_a_run() {
                 "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                 format!("{session} [Created 1s ago]\n"),
             )
-            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES_FILE",
+                list_stop_panes(&env, &[3]),
+            )
             .args(rimz::child_process::agent_helper_argv(
                 "orphan-subagent",
                 &request,
@@ -5808,7 +6318,111 @@ fn orphan_repair_records_one_end_with_and_without_a_run() {
             record.event,
             rimz::diag::record::DiagEvent::SubagentOrphanReaped { .. }
         )));
+        let closed = std::fs::read_to_string(env.project_root.join("orphan-trace.log")).unwrap();
+        assert_eq!(closed.matches("\tclose-pane\t").count(), 1, "{closed}");
+        assert!(
+            process.try_wait().unwrap().is_some(),
+            "the stop ended the child's process"
+        );
     }
+}
+
+/// An orphan whose run is a same-kind namesake's, found by name on an unstamped run: the
+/// repair ends the orphan's own card and never the namesake's.
+#[test]
+fn orphan_repair_never_ends_a_namesake_whose_run_it_found_by_name() {
+    use rimz::store::run::{RunRecord, RunStatus};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "namesake",
+        LifecycleSignal::Registered,
+        |observation| observation.agent_name = Some("otter".to_owned()),
+    );
+    let mut process = dummy_agent_process();
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "child",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("otter".to_owned());
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.runtime_owner = Some(agent_owner("child", &process));
+            observation.launch.parent_agent_id = Some("gone".into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+        },
+    );
+    let store = env.store();
+    let kind = AgentKind::new_unchecked("claude");
+    let mut run = RunRecord::new(
+        env.workspace_id.clone(),
+        kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "task".to_owned(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("namesake".into());
+    run.agent_name = Some("otter".to_owned());
+    run.status = RunStatus::Running;
+    run.subagent = true;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let request = rimz::harness::orphan_sweep::OrphanSubagentRequest {
+        workspace_id: env.workspace_id.clone(),
+        child_kind: kind,
+        child_agent_id: "child".into(),
+        parent_agent_id: "gone".into(),
+    };
+    let output = traced_rimz(&env, "orphan-trace.log")
+        .env("RIMZ_TEST_SUBAGENT_ORPHAN_GRACE_MS", "0")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{session} [Created 1s ago]\n"),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES_FILE",
+            list_stop_panes(&env, &[3]),
+        )
+        .args(rimz::child_process::agent_helper_argv(
+            "orphan-subagent",
+            &request,
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let agents = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    let ended = |id: &str| {
+        agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == id)
+            .unwrap()
+            .ended_at
+            .is_some()
+    };
+    assert!(ended("child"), "{agents:?}");
+    assert!(
+        !ended("namesake"),
+        "the namesake's card stays live: {agents:?}"
+    );
+    assert!(
+        process.try_wait().unwrap().is_some(),
+        "the stop ended the orphan's process"
+    );
 }
 
 #[test]

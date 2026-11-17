@@ -4985,7 +4985,8 @@ path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # The workflow attempt stop passes its run, and the idle stop its re-check, through
 # StopTerms and stop_resolved_with (+2).
 # Command::is_launch, check_loop_launch and cohort_place_flag let `loop add` check an agent or team tail through the launch's own parser (+3).
-surface-budget = 34
+# stop_run_agent stops a run's agent for `loop stop`, the workflow host and the run-id stop (+1).
+surface-budget = 35
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"

@@ -7093,6 +7093,159 @@ fn loop_stop_ends_and_loop_show_lists_each_alive_launch_of_the_tasks_fires() {
     }
 }
 
+/// `rimz loop stop` of a task whose fire's supervised run is live stops the run's agent in
+/// the pane that hosts it, not the pane the run saved. When the agent outlives its SIGTERM,
+/// the stop fails with a line naming the task, the reason, and the command that finishes it,
+/// which does once the process is gone. That command names the task's room with `--root`,
+/// whether the stop named it so or ran from a shell pinned to another room.
+#[test]
+fn loop_stop_ends_a_fire_runs_agent_in_whatever_pane_hosts_it() {
+    for case in [
+        "ends",
+        "ignores term, --root",
+        "ignores term, pinned elsewhere",
+    ] {
+        let ignores_term = case != "ends";
+        let env = Env::new();
+        env.record(&env.project_root);
+        let elsewhere = env.home_root.join("elsewhere");
+        env.record(&elsewhere);
+        let pin = env.resolve_workspace(&elsewhere);
+        loop_ok(
+            &env,
+            &["loop", "add", "printed", "--every", "1h", "--", "true"],
+        );
+        let fire = rimz::ids::FireId::new(&task_id(&env, "printed"));
+        let ready = env.project_root.join("agent.ready");
+        let mut process = Command::new("sh")
+            .args([
+                "-c",
+                r#"[ "$1" = 1 ] && trap "" TERM; : > "$0"; exec sleep 349"#,
+            ])
+            .arg(&ready)
+            .arg(if ignores_term { "1" } else { "0" })
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !ready.exists() {
+            assert!(Instant::now() < deadline, "the agent never got ready");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let workspace = env.resolve_workspace(&env.project_root);
+        env.store()
+            .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &AgentKind::new_unchecked("claude"),
+                rimz::store::event::AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: "printed-session".into(),
+                    launch_id: Some("launch_printed".into()),
+                    agent_name: "printed".to_owned(),
+                    agent_name_explicit: true,
+                    launch: Default::default(),
+                    state: rimz::store::event::AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: Some(rimz::ids::PaneId::from_parts(MuxName::Zellij, "terminal_3")),
+                    runtime_owner: Some(rimz::store::runtime::process_owner(
+                        rimz::pane::RuntimeOwnerKind::Agent,
+                        "printed-session",
+                        process.id(),
+                    )),
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+        let mut run = RunRecord::new(
+            env.workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            env.project_root.clone(),
+        );
+        run.status = RunStatus::Running;
+        run.loop_fire = Some(fire);
+        run.launch_id = Some("launch_printed".into());
+        run.agent_id = Some("printed-session".into());
+        run.agent_name = Some("printed".to_owned());
+        run.pane_id = Some(rimz::ids::PaneId::from_parts(MuxName::Zellij, "terminal_9"));
+        rimz::harness::run::create(env.store().paths(), &run).unwrap();
+        let panes = env.project_root.join("stop-panes.json");
+        std::fs::write(
+            &panes,
+            serde_json::to_vec(&[json!({"id": 3, "is_plugin": false, "tab_id": 1, "title": "sh"})])
+                .unwrap(),
+        )
+        .unwrap();
+        let trace = env.project_root.join("stop-trace.log");
+        let stop = |args: &[&str]| {
+            let mut command = env.rimz();
+            if case == "ignores term, pinned elsewhere" {
+                command
+                    .env("RIMZ_PROJECT_ROOT", &pin.project_root)
+                    .env("RIMZ_WORKSPACE_ID", pin.workspace_id.as_str());
+            }
+            command
+                .args(["--mux", "zellij"])
+                .args(args)
+                .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+                .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+                .env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", &panes)
+                .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "1000")
+                .output()
+                .unwrap()
+        };
+        let root = workspace.project_root.display().to_string();
+        let output = if case == "ignores term, --root" {
+            stop(&["--root", &root, "loop", "stop", "printed"])
+        } else {
+            stop(&["loop", "stop", "printed"])
+        };
+        let closed = std::fs::read_to_string(&trace)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains("\tclose-pane\t"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(closed.len(), 1, "{output:?}");
+        assert!(closed[0].contains("\t--pane-id\tterminal_3"), "{closed:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains(&format!("loop `printed`: stopped · run {}", run.run_id)),
+            "{output:?}"
+        );
+        assert_eq!(
+            rimz::harness::run::load(env.store().paths(), &run.run_id)
+                .unwrap()
+                .status,
+            RunStatus::Canceled
+        );
+        if !ignores_term {
+            assert!(output.status.success(), "{output:?}");
+            assert!(process.try_wait().unwrap().is_some(), "its process is gone");
+            continue;
+        }
+        assert!(!output.status.success(), "{output:?}");
+        let finish = format!("rimz --root {root} agents stop {}", run.run_id);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "loop `printed`: printed was not stopped: @printed: its process {} is still \
+                 running after RimZ sent it SIGTERM; run `{finish}` to finish the stop",
+                process.id()
+            )),
+            "{stderr}"
+        );
+        process.kill().unwrap();
+        process.wait().unwrap();
+        let finished = stop(&finish.split(' ').skip(1).collect::<Vec<_>>());
+        assert!(finished.status.success(), "{finished:?}");
+    }
+}
+
 #[test]
 fn loop_stop_without_active_run_reports_no_active_run() {
     let env = Env::new();

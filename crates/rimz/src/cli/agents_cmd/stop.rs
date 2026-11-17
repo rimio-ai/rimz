@@ -265,12 +265,14 @@ pub(super) fn stop_agent(
     if let Some(run) =
         newest_run_by_ref(store, &reference, live_agent)?.filter(|run| run.peer.is_none())
     {
-        supervised::stop_supervised_run(workspace, store, globals, &run)?;
-        writeln!(
-            render::out(),
-            "stopped {} (run)",
-            run.agent_name.as_deref().unwrap_or(run.run_id.as_str())
-        )?;
+        let label = run.agent_name.as_deref().unwrap_or(run.run_id.as_str());
+        let stop = stop_run_agent(&ctx, globals, &run)?;
+        let mut out = render::out();
+        stop.report_children(&mut out)?;
+        if stop.error().is_some() {
+            return stop.into_result(label);
+        }
+        writeln!(out, "stopped {label} (run)")?;
         return Ok(());
     }
     live_agent_result.map(|_| ())
@@ -278,18 +280,17 @@ pub(super) fn stop_agent(
 
 /// Stop the run a stdin line names, as a positional reference falls back to
 /// one. `Err(None)` when it names no run either; `Err(Some(_))` when the lookup
-/// or the stop failed.
+/// or the run's cancel failed.
 fn stop_run_line(
     ctx: &Ctx,
     globals: &GlobalFlags,
     address: &str,
-) -> std::result::Result<(), Option<anyhow::Error>> {
+) -> std::result::Result<TreeStop, Option<anyhow::Error>> {
     let run = newest_run_by_ref(&ctx.store, address, None)
         .map_err(Some)?
         .filter(|run| run.peer.is_none())
         .ok_or(None)?;
-    supervised::stop_supervised_run(&ctx.workspace, &ctx.store, globals, &run)
-        .map_err(|err| Some(err.into()))
+    stop_run_agent(ctx, globals, &run).map_err(Some)
 }
 
 /// Stop each selected agent in turn, reading it again just before its stop,
@@ -323,7 +324,17 @@ fn stop_selected(
                         .map_err(|run_err| run_err.unwrap_or(err)),
                 };
                 match stopped {
-                    Ok(()) => writeln!(out, "stopped {} (run)", target.address)?,
+                    Ok(stop) => {
+                        closed.extend(stop.reached.iter().cloned());
+                        stop.report_children(&mut out)?;
+                        match stop.error() {
+                            None => writeln!(out, "stopped {} (run)", target.address)?,
+                            Some(error) => {
+                                writeln!(out, "error {}: {error}", target.address)?;
+                                failed += 1;
+                            }
+                        }
+                    }
                     Err(err) => {
                         writeln!(out, "error {}: {err:#}", target.address)?;
                         failed += 1;
@@ -499,11 +510,97 @@ pub(in crate::cli) fn stop_resolved_with(
         }
         None => false,
     };
+    stop_with_read(ctx, &peers, read, agents, terms.run, run_cancelled).map(Some)
+}
+
+/// Stop the agent the supervised `run` names, settling the run. The run is cancelled first,
+/// before any multiplexer read; `Err` means that cancel failed. Its agent is the holder of
+/// the run's launch, else the row of its exact session; never one found by name, and never a
+/// row that holds another launch now. A run that names no such row is done once cancelled.
+/// Otherwise the agent's tree is stopped as a stop of that agent is, with the run's agent awaited as one whose run this stop cancelled: the
+/// backstop grace (unless the run is kept) and the owner wait apply even when the run had
+/// already ended.
+pub(in crate::cli) fn stop_run_agent(
+    ctx: &Ctx,
+    globals: &GlobalFlags,
+    run: &RunRecord,
+) -> Result<TreeStop> {
+    stop_run_tree(ctx, globals, run, None)
+}
+
+/// [`stop_run_agent`], stopping `agent` in place of the agent the run names when given.
+pub(super) fn stop_run_tree(
+    ctx: &Ctx,
+    globals: &GlobalFlags,
+    run: &RunRecord,
+    agent: Option<&AgentState>,
+) -> Result<TreeStop> {
+    supervised::cancel_supervised_run(&ctx.store, run)?;
+    if agent.is_none() && run.agent_launch_id().is_none() && run.agent_id.is_none() {
+        return Ok(TreeStop {
+            root_stopped: true,
+            ..TreeStop::default()
+        });
+    }
+    let read = match read_hosting(&ctx.workspace, &ctx.store, globals.mux) {
+        Ok(mut read) => {
+            render::room::print_notices(read.take_notices())?;
+            read
+        }
+        Err(mut err) => {
+            render::room::print_notices(std::mem::take(&mut err.notices))?;
+            let label = run.agent_name.as_deref().unwrap_or(run.run_id.as_str());
+            let settled = if run.status.is_terminal() {
+                "had already ended"
+            } else {
+                "is canceled"
+            };
+            return Ok(TreeStop {
+                failures: vec![format!(
+                    "{label}: the run {settled}, but {err}; no pane was closed"
+                )],
+                ..TreeStop::default()
+            });
+        }
+    };
+    // A launch's holder may be a row that holds another launch now (a fresh launch resumed the
+    // session); it is not the run's agent, so that stop is the cancel alone.
+    let agent = match (agent, run.agent_launch_id(), &run.agent_id) {
+        (Some(agent), ..) => Some(agent.clone()),
+        (None, Some(launch), _) => read
+            .agent_hosting(&run.kind, launch)
+            .holder
+            .filter(|row| run.matches_agent(row))
+            .cloned(),
+        (None, None, Some(session)) => read.agent(&run.kind, session).cloned(),
+        (None, None, None) => None,
+    };
+    let Some(agent) = agent else {
+        return Ok(TreeStop {
+            root_stopped: true,
+            ..TreeStop::default()
+        });
+    };
+    let snapshot = ctx.cached_snapshot()?;
+    let peers = rimz::address::addressable_agents(&snapshot);
+    Ok(stop_with_read(ctx, &peers, read, &[&agent], Some(run), true)?.remove(0))
+}
+
+/// Stop every tree in `agents` from the first read, `read`; `run_cancelled` says the agent
+/// `run` names counts as one whose run this stop cancelled.
+fn stop_with_read(
+    ctx: &Ctx,
+    peers: &[&AgentState],
+    read: HostingRead,
+    agents: &[&AgentState],
+    run: Option<&RunRecord>,
+    run_cancelled: bool,
+) -> Result<Vec<TreeStop>> {
     let mut stopper = Stopper {
         ctx,
-        peers: &peers,
+        peers,
         read,
-        run: terms.run,
+        run,
         run_cancelled,
         tracker: HashSet::new(),
     };
@@ -521,12 +618,10 @@ pub(in crate::cli) fn stop_resolved_with(
         })
         .collect::<Vec<_>>();
     stopper.judge(trees.iter_mut().flatten().collect())?;
-    Ok(Some(
-        trees
-            .into_iter()
-            .map(|endings| stopper.receipt(endings))
-            .collect(),
-    ))
+    Ok(trees
+        .into_iter()
+        .map(|endings| stopper.receipt(endings))
+        .collect())
 }
 
 /// How long a stop waits for an agent's process to leave, and for a closed pane to leave
@@ -571,6 +666,11 @@ struct Ending {
     unbound_unhosted: bool,
     close_error: Option<String>,
     run: Option<RunRecord>,
+    /// The run the caller passed is this agent's: the stop settles it for this session.
+    holds_run: bool,
+    /// A fresh launch resumed the session since, so the run's agent is hosted nowhere and
+    /// nothing of that launch is this stop's to close, signal, or stamp.
+    left_run: bool,
     signaled: bool,
     outcome: Option<std::result::Result<(), String>>,
 }
@@ -643,6 +743,8 @@ impl Stopper<'_> {
                 && self.read.session_hosting(&agent.kind, &agent.agent_id) == Hosting::Nowhere,
             close_error: None,
             run: None,
+            holds_run: false,
+            left_run: false,
             signaled: false,
             outcome: None,
         };
@@ -699,6 +801,7 @@ impl Stopper<'_> {
         // A run the caller passed is the one this stop settles for the agent it names;
         // `stop_run` matches by name as well, so it could pick another.
         let passed = self.run.filter(|run| run.matches_agent(agent));
+        ending.holds_run = passed.is_some();
         ending.cancelled = match passed {
             Some(_) => self.run_cancelled,
             None => {
@@ -718,28 +821,43 @@ impl Stopper<'_> {
             ending.run = Some(run.clone());
         }
         if ending.cancelled && !ending.run.as_ref().is_some_and(|run| run.keep) {
-            self.await_departure(&mut ending.session)?;
+            self.await_departure(ending)?;
         }
         self.close(ending)
     }
 
     /// Record a stopped subagent run's end, once its ending is judged stopped.
     fn stamp_end(&self, ending: &Ending) -> std::result::Result<(), String> {
-        let Some(run) = &ending.run else {
+        let Some(run) = ending.run.as_ref().filter(|_| !ending.left_run) else {
             return Ok(());
         };
         supervised::stamp_stopped_subagent_end(
             &self.ctx.store,
             &self.ctx.workspace.session_name,
             run,
+            (&ending.session.kind, &ending.session.agent_id),
         )
         .map_err(|err| format!("recording its end failed: {err:#}"))
     }
 
-    /// Where `session` is hosted in the current read, following a re-key first.
-    fn hosting(&self, session: &mut AgentState) -> Hosting {
-        track(self.read.agents(), session);
-        self.read.session_hosting(&session.kind, &session.agent_id)
+    /// Where the ending's session is hosted in the current read, following a re-key first;
+    /// nowhere once it left the run this stop settles.
+    fn hosting(&self, ending: &mut Ending) -> Hosting {
+        let row = track(self.read.agents(), &mut ending.session);
+        if row.is_some_and(|row| self.leaves_run(ending, row)) {
+            ending.left_run = true;
+        }
+        if ending.left_run {
+            return Hosting::Nowhere;
+        }
+        self.read
+            .session_hosting(&ending.session.kind, &ending.session.agent_id)
+    }
+
+    /// Whether `row`, the ending's session as read again, no longer holds the run the caller
+    /// passed: a fresh launch resumed the session and holds it now.
+    fn leaves_run(&self, ending: &Ending, row: &AgentState) -> bool {
+        ending.holds_run && self.run.is_some_and(|run| !run.matches_agent(row))
     }
 
     fn refresh(&mut self) -> std::result::Result<(), String> {
@@ -758,9 +876,9 @@ impl Stopper<'_> {
 
     /// A pane whose run this stop cancelled gets the backstop grace to leave on its own; a
     /// kept run's never leaves on its own, so `act` closes it at once.
-    fn await_departure(&mut self, session: &mut AgentState) -> std::result::Result<(), String> {
+    fn await_departure(&mut self, ending: &mut Ending) -> std::result::Result<(), String> {
         let deadline = Instant::now() + supervised::pane::STOP_BACKSTOP_GRACE;
-        while self.hosting(session) != Hosting::Nowhere && Instant::now() < deadline {
+        while self.hosting(ending) != Hosting::Nowhere && Instant::now() < deadline {
             std::thread::sleep(CLOSE_POLL);
             self.refresh()?;
         }
@@ -778,7 +896,7 @@ impl Stopper<'_> {
             let Hosting::Pane {
                 pane_id,
                 session_name,
-            } = self.hosting(&mut ending.session)
+            } = self.hosting(ending)
             else {
                 if last.is_none() && !awaited_hold {
                     awaited_hold = true;
@@ -799,7 +917,7 @@ impl Stopper<'_> {
                 rimz::harness::hibernate::wake_pane(&self.ctx.store, &pane_id)
                     .map_err(|err| format!("{err:#}"))?;
                 self.refresh()?;
-                if self.hosting(&mut ending.session)
+                if self.hosting(ending)
                     != (Hosting::Pane {
                         pane_id: pane_id.clone(),
                         session_name: session_name.clone(),
@@ -834,7 +952,10 @@ impl Stopper<'_> {
             return Ok(());
         }
         let deadline = Instant::now() + supervised::pane::STOP_BACKSTOP_GRACE;
-        while self.hosting(&mut ending.session) == Hosting::Nowhere && Instant::now() < deadline {
+        while self.hosting(ending) == Hosting::Nowhere
+            && !ending.left_run
+            && Instant::now() < deadline
+        {
             std::thread::sleep(CLOSE_POLL);
             self.refresh()?;
         }
@@ -854,7 +975,7 @@ impl Stopper<'_> {
         let mut signaled = false;
         if read.is_ok() {
             for ending in endings.iter_mut().filter(|ending| ending.awaits_owner()) {
-                if self.hosting(&mut ending.session) != Hosting::Nowhere {
+                if self.hosting(ending) != Hosting::Nowhere || ending.left_run {
                     continue;
                 }
                 let Some(owner) = track(self.read.agents(), &mut ending.session)
@@ -882,7 +1003,7 @@ impl Stopper<'_> {
         }
         if read.is_ok() {
             for ending in endings.iter_mut().filter(|ending| ending.unbound_unhosted) {
-                if self.hosting(&mut ending.session) != Hosting::Nowhere {
+                if self.hosting(ending) != Hosting::Nowhere || ending.left_run {
                     continue;
                 }
                 let Some(agent) = track(&projection.agents, &mut ending.session) else {
@@ -937,6 +1058,9 @@ impl Stopper<'_> {
             let waiting = endings.iter_mut().any(|ending| {
                 let closed = ending.awaits_owner();
                 track(&projection.agents, &mut ending.session).is_some_and(|row| {
+                    if self.leaves_run(ending, row) {
+                        return false;
+                    }
                     match agent_liveness(row) {
                         AgentLiveness::Live { .. } => closed,
                         AgentLiveness::Unknown => {
@@ -962,7 +1086,7 @@ impl Stopper<'_> {
         ending: &mut Ending,
         agents: &[AgentState],
     ) -> std::result::Result<(), String> {
-        if let Hosting::Pane { pane_id, .. } = self.hosting(&mut ending.session) {
+        if let Hosting::Pane { pane_id, .. } = self.hosting(ending) {
             ending.still_hosted = true;
             let close = ending
                 .close_error
@@ -970,6 +1094,10 @@ impl Stopper<'_> {
                 .map(|err| format!("; closing it failed: {err}"))
                 .unwrap_or_default();
             return Err(format!("a pane still hosts it: {pane_id}{close}"));
+        }
+        // The run's stop was its cancel; the launch that resumed the session is not stopped.
+        if ending.left_run {
+            return Ok(());
         }
         unhosted_verdict(
             track(agents, &mut ending.session),
@@ -995,6 +1123,9 @@ impl Stopper<'_> {
                     .push(format!("stopped {} (subagent of {parent})", ending.label)),
                 (None, Ok(())) => stop.root_stopped = true,
                 (_, Err(reason)) => stop.failures.push(format!("{}: {reason}", ending.label)),
+            }
+            if ending.left_run {
+                continue;
             }
             if ending.closed || outcome.is_ok() {
                 stop.reached.push(ending.asked.clone());
