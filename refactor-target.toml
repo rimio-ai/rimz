@@ -4028,7 +4028,9 @@ path = "crates/rimz/src/sidebar"
 # take_notices} (+10).
 # HostingRead::agent_hosting and AgentHosting answer for an agent: its launch's holder and
 # that row's pane (+2).
-surface-budget = 261
+# HostingRead::agent_hosting_of_session answers for a card's session: itself while no swap
+# replaced it, else its launch's holder (+1).
+surface-budget = 262
 
 [[verdict]]
 kind = "item"
