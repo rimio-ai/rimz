@@ -67,7 +67,7 @@ An answer can also be "wait, I am fixing it": when the maintainer says they chan
 
 For cargo-vet evidence, first import applicable trusted audits or review the actual source delta under the repository's policy. A source PR's externals job stops at its first failing step, so its log may not list every unvetted crate: after applying the batch, run `cargo vet` without `--locked` for the full set before planning reviews. When you cannot truthfully vouch for it, ask once during Implement before the PR is raised, gathering every such crate into the one question. For each, state the crate and version delta, the crates.io owners, the size of the source delta, why no import or truthful audit covers it, and which source PR pulls it in. Offer:
 
-1. `trust <publisher>`: record `cargo vet trust` for the named publisher and crate.
+1. `trust <publisher>`: record `cargo vet trust` for the named publisher and crate. Name the identity that published the version (its crates.io `published_by` login, or `github:<owner>/<repo>` from the version's `trustpub_data`), since a user trust does not cover a trusted-publishing release.
 2. `exempt this version`: record a `safe-to-deploy` exemption for that exact version, noting in the PR body that the maintainer approved it without review.
 3. `drop this update`: pin the update that pulls the crate back out of the batch and land the rest; the affected source PR is then not fully covered, so it gets no `Closes #N`.
 4. `abandon this batch`: follow the stop condition above.
