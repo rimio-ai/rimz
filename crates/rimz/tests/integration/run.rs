@@ -1491,12 +1491,22 @@ fn supervised_birth_records_warnings_but_live_runs_leave_them_untouched() {
         live_record["skipped"], record["skipped"],
         "a live supervised run does not judge the room"
     );
-    assert_eq!(
-        rimz::harness::run::list(env.store().paths())
-            .expect("list runs")
-            .len(),
-        2
-    );
+    let runs = rimz::harness::run::list(env.store().paths()).expect("list runs");
+    assert_eq!(runs.len(), 2);
+    // Each launch stamps its run with the leader's launch id, which names that launch's row.
+    let rows = env.store().audit_rows().expect("audit rows");
+    for run in &runs {
+        let launch = run
+            .launch_id
+            .as_ref()
+            .expect("a fresh launch stamps its run");
+        assert!(
+            rows.iter()
+                .any(|row| row.launch_id.as_ref() == Some(launch) && row.name == run.agent_name),
+            "{launch:?} names no row of {:?}: {rows:#?}",
+            run.agent_name
+        );
+    }
 }
 
 #[cfg(unix)]

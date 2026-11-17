@@ -309,6 +309,12 @@ pub struct RunRecord {
     pub agent_id: Option<AgentSessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// The launch id of the agent this run belongs to, stamped once when the
+    /// launch creates the run; an ordinary run with it matches that launch's
+    /// rows alone. Absent on peer and team runs, which name it in their own
+    /// keys, and on a record an older RimZ wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<AgentSessionId>,
     /// Handle of the agent this run reports to (its launcher), whose `out/`
     /// directory receives the response; absent when no agent launched it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -569,6 +575,15 @@ impl RunRecord {
         }
     }
 
+    /// The launch this run's agent holds: the run's own stamp, else its peer's
+    /// or team's launch id.
+    pub fn agent_launch_id(&self) -> Option<&AgentSessionId> {
+        self.launch_id
+            .as_ref()
+            .or(self.peer.as_ref().map(|peer| &peer.launch_id))
+            .or(self.team.as_ref().map(|team| &team.launch_id))
+    }
+
     // `harness::fleet::FleetRunIndex` mirrors these branches as `RunMatchKey`
     // hash keys; a new matching branch here changes that index too.
     // A launch id matches across kinds, since a cross-kind molt keeps the agent.
@@ -582,6 +597,9 @@ impl RunRecord {
             return agent.launch_id.as_ref() == Some(&team.launch_id)
                 || agent.agent_id == team.launch_id;
         }
+        if let Some(launch) = &self.launch_id {
+            return agent.launch_id.as_ref() == Some(launch) || &agent.agent_id == launch;
+        }
         if self.kind != agent.kind {
             return false;
         }
@@ -592,9 +610,12 @@ impl RunRecord {
                 .is_some_and(|name| self.agent_name.as_ref() == Some(name))
     }
 
+    // A stamped run names its launch outright, so no registration bound is needed to tell a
+    // namesake that took its name after it ended.
     pub fn matches_stopped_agent(&self, agent: &crate::agents::AgentState) -> bool {
         self.matches_agent(agent)
-            && (self.agent_id.as_ref() == Some(&agent.agent_id)
+            && (self.launch_id.is_some()
+                || self.agent_id.as_ref() == Some(&agent.agent_id)
                 || self.completed_at.is_none_or(|completed_at| {
                     agent
                         .registered_at
@@ -616,6 +637,7 @@ impl RunRecord {
             kind,
             agent_id: None,
             agent_name: None,
+            launch_id: None,
             reader: None,
             pane_id: None,
             provider_pid: None,

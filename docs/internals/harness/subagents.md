@@ -294,7 +294,7 @@ A launcher's fleet is its launched children plus the peers it stamped with `laun
 
 `harness::fleet::FleetRuns` is the one settlement rule. The reporter, its orphan-sweep backstop, the owed-wake fleet term ([parked runs](./scripting.md#parked-runs)), and the pending-wait projection all read it. For each member it selects:
 
-- its newest run that is not a peer turn, matched by kind and either session id or a present name (`RunRecord::matches_agent`)
+- its newest run that is not a peer turn, matched by the launch id the run was stamped with, else by kind and either session id or a present name (`RunRecord::matches_agent`)
 - every peer turn (`RunRecord.peer`) that is open or still owes a report, matched by kind and launch or bound session identity, never by name
 
 It then drops each selected run whose `report_to` is `nobody`, and deduplicates by run id. A supervised parent parks at a clean end while any selected run is live or owes an answer's report, and the queued digest then holds it until delivery opens its next turn.

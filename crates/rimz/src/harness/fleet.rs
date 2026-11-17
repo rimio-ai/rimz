@@ -203,6 +203,8 @@ impl<'a> FleetRunIndex<'a> {
                 }
             } else if let Some(team) = &run.team {
                 keys.push(RunMatchKey::Launch(team.launch_id.clone()));
+            } else if let Some(launch) = &run.launch_id {
+                keys.push(RunMatchKey::Launch(launch.clone()));
             } else {
                 if let Some(id) = &run.agent_id {
                     keys.push(RunMatchKey::Session(run.kind.clone(), id.clone()));
@@ -734,6 +736,57 @@ mod tests {
         latest.agent_name = child.name.clone();
         let runs = [latest, run];
         assert_eq!(newest_run(&child, &runs).unwrap().run_id, runs[0].run_id);
+    }
+
+    #[test]
+    fn a_stamped_run_follows_its_launch_and_skips_a_namesake() {
+        let parent = AgentState::stub("codex", "parent", AgentStatus::Idle);
+        let child_of = |id: &str, launch: &str| {
+            let mut child = AgentState::stub("codex", id, AgentStatus::Idle);
+            child.parent_agent_id = Some(parent.agent_id.clone());
+            child.parent_agent_kind = Some(parent.kind.clone());
+            child.launch_depth = Some(1);
+            child.name = Some("otter".to_owned());
+            child.launch_id = Some(launch.into());
+            child
+        };
+        let namesake = child_of("namesake", "launch_other");
+        let mut child = child_of("session", "launch_otter");
+        let mut run = RunRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            child.kind.clone(),
+            PermissionMode::Auto,
+            "work".to_owned(),
+            "/repo".into(),
+        );
+        run.agent_name = child.name.clone();
+        run.launch_id = Some("launch_otter".into());
+        let runs = [run];
+        let fleet_child = |agents: &[AgentState]| {
+            fleet_runs(agents, &runs, &parent)
+                .0
+                .iter()
+                .map(|(agent, run)| (agent.agent_id.clone(), run.run_id.clone()))
+                .collect::<Vec<_>>()
+        };
+        let agents = [parent.clone(), namesake.clone(), child.clone()];
+        assert!(
+            newest_run(&namesake, &runs).is_none(),
+            "a namesake is another launch"
+        );
+        assert_eq!(
+            fleet_child(&agents),
+            [(child.agent_id.clone(), runs[0].run_id.clone())]
+        );
+        // A cross-kind molt into a new session keeps the launch, and so the run.
+        child.kind = AgentKind::new_unchecked("claude");
+        child.agent_id = "molted".into();
+        assert!(newest_run(&child, &runs).is_some());
+        let agents = [parent.clone(), namesake, child.clone()];
+        assert_eq!(
+            fleet_child(&agents),
+            [(child.agent_id.clone(), runs[0].run_id.clone())]
+        );
     }
 
     #[test]
