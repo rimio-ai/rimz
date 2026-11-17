@@ -16812,11 +16812,15 @@ fn seed_rate_limit_park(env: &Env, agent_id: &str, parked_at: jiff::Timestamp) {
     std::fs::write(path, serde_json::to_vec(&park).unwrap()).expect("seed park record");
 }
 
+/// Publishes one five-hour window for the default Claude login, read after any turn-error marker
+/// the test seeded, so a recovered budget counts as a read since the limit.
 fn seed_rate_limit_budget(env: &Env, used_percentage: u8) {
+    let now = jiff::Timestamp::now();
     let window = RateLimitWindow {
         used_percentage: Some(used_percentage),
-        resets_at: Some(jiff::Timestamp::now() + jiff::SignedDuration::from_secs(300)),
+        resets_at: Some(now + jiff::SignedDuration::from_secs(300)),
         duration_mins: Some(300),
+        observed_at: Some(now + jiff::SignedDuration::from_secs(5)),
         ..Default::default()
     };
     let cache = rimz::agents::account::RateLimitsCache {

@@ -357,7 +357,7 @@ It acts only on the record the agent's own CLI writes when a turn dies, naming t
 
 The cause sets the time of the attempt:
 
-- A rate-limit or spend-limit park waits for the account's or model's window to reset.
+- A rate-limit or spend-limit park waits for the account's or model's window to reset, as a usage reading taken after the limit shows it. An agent on a model its provider refuses on that account is never continued, since the provider would refuse the turn again.
 - A daily dollar-cap park waits for local midnight, and an account's monthly cap for 00:00 UTC on the 1st.
 - An overload or API-error park has no reset time, so it retries three minutes after the failure, then every five minutes (`resume.auto_continue_backoff_secs`, default `[180, 300]`, the last value repeating).
 

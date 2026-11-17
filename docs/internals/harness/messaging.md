@@ -320,7 +320,7 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | 11 | Not inside the compaction window | `Compacting` | `CompactionEnded`, or the 90 s window expiring |
 | 12 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, or `Sleeping`, plus `Failed` under `--on any` |
 | 13 | The resumed provider has started | `ProviderStarting` | Its next lifecycle observation (normally `Registered`), or one delivery window. Lazy-registering providers skip this check |
-| 14 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting, or the overload marker clearing |
+| 14 | A `Resume` gate's park is recoverable, on a model its provider does not refuse on the account | `ResumeUnrecovered` | The budget window resetting, read since the limit marker where the login publishes windows, or the overload marker clearing |
 | 15 | No open blocking prompt reserves the input, including a permission still under automatic review and a pane held after a provider error ended the turn | `AskWaiting`, or `PaneHeld` for the held pane | The ask clearing, the held agent's next activity, or `--force` |
 | 16 | A live pane can receive a paste | `NoPane` | A bindable pane appearing for the card |
 

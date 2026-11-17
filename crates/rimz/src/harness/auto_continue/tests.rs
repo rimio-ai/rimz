@@ -156,7 +156,13 @@ fn write_rate_limits_cache(runtime: &RuntimePaths, cache: &RateLimitsCache) {
     .expect("write rate-limits cache");
 }
 
+/// A recovered 5-hour window, read at 5,995: after every limit marker these tests stamp, since
+/// only a read since the marker shows the limit lifted.
 fn write_recovered_window(runtime: &RuntimePaths) {
+    write_recovered_window_read_at(runtime, 5_995);
+}
+
+fn write_recovered_window_read_at(runtime: &RuntimePaths, observed: i64) {
     write_rate_limits_cache(
         runtime,
         &RateLimitsCache {
@@ -166,7 +172,10 @@ fn write_recovered_window(runtime: &RuntimePaths) {
                     .into(),
                 crate::agents::account::RateLimitCacheEntry {
                     limits: AgentRateLimits {
-                        windows: vec![window(20, 9_000)],
+                        windows: vec![RateLimitWindow {
+                            observed_at: Some(ts(observed)),
+                            ..window(20, 9_000)
+                        }],
                     },
                     ..Default::default()
                 },
@@ -1550,6 +1559,7 @@ fn model_limit_waits_for_scoped_reset() {
         let mut cache =
             crate::agents::account::read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime));
         let mut scoped = window(100, 7_500);
+        scoped.observed_at = Some(ts(5_995));
         scoped.scope = Some(crate::agents::RateLimitWindowScope {
             id: "model:fable".to_owned(),
             label: "Fable".to_owned(),
@@ -1726,6 +1736,8 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
         }
     }
     assert_eq!(nudges, vec![6_000, 6_120, 6_240]);
+    // The re-park at 7,001 recovers only on a read since it.
+    write_recovered_window_read_at(&runtime, 7_002);
     let mut agent = parked_agent(7_000, 7_001, TurnErrorClass::PausedRateLimit, "usage limit");
     agent.user_turn_started_at = Some(ts(7_000));
     let mut snapshot =
@@ -1813,7 +1825,8 @@ fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
         resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
         assert!(read_park(&path).is_none(), "real progress kept the park");
 
-        write_recovered_window(&runtime);
+        // The re-park at 7,001 recovers only on a read since it.
+        write_recovered_window_read_at(&runtime, 7_002);
         std::sync::Arc::make_mut(&mut snapshot.agents)[0] =
             parked_agent(7_000, 7_001, TurnErrorClass::PausedRateLimit, "usage limit");
         std::sync::Arc::make_mut(&mut snapshot.agents)[0].user_turn_started_at = Some(ts(7_000));
@@ -2379,6 +2392,95 @@ fn recovered_budget_rearms_a_lost_limit_park() {
         read_park(&path),
         Some(rate_record(6_000, 1_000, Some(6_000), 1))
     );
+}
+
+#[test]
+fn a_read_older_than_the_limit_marker_neither_opens_the_gate_nor_arms() {
+    let (_dir, runtime) = temp_runtime();
+    let path = park_path(&runtime);
+    write_recovered_window_read_at(&runtime, 5_000);
+    let parked = parked_agent(
+        1_000,
+        5_990,
+        TurnErrorClass::PausedRateLimit,
+        "You've hit your usage limit",
+    );
+    assert!(!resume_gate_recovered(&runtime, &parked, ts(6_000)));
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![parked], ts(6_000));
+    snapshot.now = ts(6_000);
+    snapshot.agent_panes = vec![live_pane()].into();
+    resume_parked(
+        |_| false,
+        &snapshot,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &ResumeConfig {
+            auto_continue: true,
+            auto_continue_max_retries: 3,
+            ..ResumeConfig::default()
+        },
+        &[],
+    );
+    assert_eq!(read_park(&path), None);
+}
+
+#[test]
+fn a_refused_agent_opens_no_gate_and_arms_nothing_even_once_its_record_clears() {
+    let (_dir, runtime) = temp_runtime();
+    let path = park_path(&runtime);
+    write_recovered_window(&runtime);
+    let mut parked = parked_agent(
+        1_000,
+        5_990,
+        TurnErrorClass::PausedRateLimit,
+        "Claude Fable 5.2 is not available on your plan.",
+    );
+    parked.model = Some("claude-fable-5-2".to_owned());
+    if let Some(error) = parked
+        .context
+        .as_mut()
+        .and_then(|context| context.turn_error.as_mut())
+    {
+        error.model = parked.model.clone();
+    }
+    // A sibling's success after the refusal clears the record; the refused agent itself still
+    // rests on the marker that raised it.
+    for succeeded_at in [None, Some(ts(5_998))] {
+        std::fs::write(
+            runtime.shared_model_refusals_path(),
+            json!({"logins": {"claude@default": {"fable 5.2": {
+                "refused_at": ts(5_990),
+                "succeeded_at": succeeded_at,
+            }}}})
+            .to_string(),
+        )
+        .unwrap();
+        assert!(
+            !resume_gate_recovered(&runtime, &parked, ts(6_000)),
+            "{succeeded_at:?}"
+        );
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            vec![parked.clone()],
+            ts(6_000),
+        );
+        snapshot.now = ts(6_000);
+        snapshot.agent_panes = vec![live_pane()].into();
+        resume_parked(
+            |_| false,
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &ResumeConfig {
+                auto_continue: true,
+                auto_continue_max_retries: 3,
+                ..ResumeConfig::default()
+            },
+            &[],
+        );
+        assert_eq!(read_park(&path), None, "{succeeded_at:?}");
+    }
 }
 
 #[test]

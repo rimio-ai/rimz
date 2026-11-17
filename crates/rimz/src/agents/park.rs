@@ -216,7 +216,7 @@ impl ParkDemotion {
         let read_since = self
             .capacities
             .get(&agent.login_key())?
-            .read_since(current, marker.at)?;
+            .read_since(Some(current), marker.at)?;
         (marker_on(marker, current) && now < until && !read_since)
             .then_some(ModelHold::Unconfirmed { until })
     }

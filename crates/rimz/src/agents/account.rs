@@ -582,7 +582,7 @@ impl ProviderCapacity {
         let Ok(deadline) = at.checked_add(super::model_refusal::CONFIRM_WINDOW) else {
             return false;
         };
-        let mut covering = self.covering_windows(model).peekable();
+        let mut covering = self.covering_windows(Some(model)).peekable();
         covering.peek().is_some()
             && covering.all(|window| {
                 !window.is_spent()
@@ -593,8 +593,9 @@ impl ProviderCapacity {
     }
 
     /// Whether a usage read has seen this login for `model` since `at`: every covering window
-    /// was observed after it. `None` when the login has no covering window to read.
-    pub(crate) fn read_since(&self, model: &str, at: Timestamp) -> Option<bool> {
+    /// was observed after it. `None` when the login has no covering window to read; with no
+    /// model, the unscoped windows alone cover.
+    pub(crate) fn read_since(&self, model: Option<&str>, at: Timestamp) -> Option<bool> {
         let mut covering = self.covering_windows(model).peekable();
         covering.peek()?;
         Some(covering.all(|window| window.observed_at.is_some_and(|observed| observed > at)))
@@ -602,9 +603,8 @@ impl ProviderCapacity {
 
     /// The windows a request on `model` spends: the unscoped duration windows and the model's
     /// sub-caps.
-    fn covering_windows(&self, model: &str) -> impl Iterator<Item = &RateLimitWindow> {
-        self.duration_windows()
-            .chain(self.model_windows(Some(model)))
+    fn covering_windows(&self, model: Option<&str>) -> impl Iterator<Item = &RateLimitWindow> {
+        self.duration_windows().chain(self.model_windows(model))
     }
 
     fn model_windows(&self, model: Option<&str>) -> impl Iterator<Item = &RateLimitWindow> {

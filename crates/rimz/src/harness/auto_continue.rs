@@ -402,6 +402,15 @@ pub(crate) fn resume_gate_recovered(
         return park.resets_at.is_some_and(|resets_at| now >= resets_at);
     }
     let capacity = ProviderCapacity::read(runtime, &agent.login_key());
+    if let Some(capacity) = capacity.as_ref()
+        && refused(
+            &BTreeMap::from([(agent.login_key(), capacity.clone())]),
+            agent,
+            now,
+        )
+    {
+        return false;
+    }
     match resume_park(agent, capacity.as_ref(), now) {
         Some(ResumeArm::Overloaded { .. }) => true,
         Some(ResumeArm::RateLimit { .. }) => false,
@@ -431,6 +440,7 @@ pub(crate) fn resume_parked(
     let text = config.auto_continue_text.trim();
     let now = snapshot.now;
     let provider_capacities = ProviderCapacity::read_all(runtime, logins);
+    let refusals = crate::agents::ParkDemotion::new(&provider_capacities, BTreeSet::new(), now);
     let ctx = FireContext {
         snapshot,
         runtime,
@@ -488,6 +498,14 @@ pub(crate) fn resume_parked(
             {
                 write_park(&path, &record);
             }
+        }
+        // No continue reaches a model its provider refuses on the account: it would only be
+        // refused again.
+        if refusals
+            .refused(agent, agent.effective_status(now), now)
+            .is_some()
+        {
+            continue;
         }
         let capacity = provider_capacities.get(&agent.login_key());
         match resume_park(agent, capacity, now) {
@@ -629,9 +647,27 @@ fn capacity_recovered(
     agent: &AgentState,
     now: Timestamp,
 ) -> bool {
+    let model = agent.current_model();
+    // Only a read since the limit marker shows the limit lifted: an older one predates it.
+    let read_since_marker = |capacity: &ProviderCapacity| {
+        agent
+            .displayed_turn_error(now)
+            .is_none_or(|(_, marker)| capacity.read_since(model, marker.at) != Some(false))
+    };
     capacity.is_some_and(|capacity| {
-        capacity.subscription_budget_available_for_model(now, agent.current_model())
+        capacity.subscription_budget_available_for_model(now, model) && read_since_marker(capacity)
     })
+}
+
+/// Whether the provider refuses `agent` on its model and account, from `capacities`.
+fn refused(
+    capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
+    agent: &AgentState,
+    now: Timestamp,
+) -> bool {
+    crate::agents::ParkDemotion::new(capacities, BTreeSet::new(), now)
+        .refused(agent, agent.effective_status(now), now)
+        .is_some()
 }
 
 /// Whether the row's displayed turn error is a provider limit: the one
