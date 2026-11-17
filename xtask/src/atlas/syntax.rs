@@ -209,6 +209,15 @@ pub(super) struct FileSyntax {
     pub(super) struct_fields: Vec<String>,
     pub(super) cfg_regions: Vec<CfgRegion>,
     pub(super) dependencies: Vec<DependencySite>,
+    /// Production qualified paths with a bare head (`fit::close`), which
+    /// `dependencies` leaves out: each as the module it is written in and the
+    /// path before its last segment.
+    #[serde(skip)]
+    pub(super) bare_paths: Vec<(String, String)>,
+    /// What each production `use` binds, file-wide: the local name (`*` for
+    /// a glob) and the path it names.
+    #[serde(skip)]
+    pub(super) use_bindings: Vec<(String, String)>,
     pub(super) fns: Vec<FnBody>,
     pub(super) calls: Vec<CallSite>,
     #[serde(skip)]
@@ -297,6 +306,86 @@ pub(super) fn analyze_sources(sources: &[Source], crate_names: &BTreeSet<String>
     }
 }
 
+/// Each production file's imports, as the files that define the modules its
+/// `use` items and qualified paths name. A `use` leaf that names a module
+/// leads to that module's file, grouped or not, and a `use` or a qualified
+/// path through a child module the file declares (`pub use engine::wake;`,
+/// `fit::close(..)`) leads to the child. A qualified path whose head a `use`
+/// in the file binds to a module, by name, by `as`, or as a child of a glob
+/// `use`'s module, leads to the module the whole path names; bindings count
+/// file-wide, so one in an inline module may over-reach. A `mod` declaration
+/// is not an import, and test-gated code imports nothing. A path through an
+/// inline module or an item leads to the file around it.
+pub(super) fn file_imports(report: &SyntaxReport) -> BTreeMap<PathBuf, BTreeSet<PathBuf>> {
+    let module_files = report
+        .files
+        .iter()
+        .map(|file| (file.module_path.as_str(), file.path.as_path()))
+        .collect::<BTreeMap<_, _>>();
+    let file_of = |module: &str| {
+        let mut module = module;
+        loop {
+            if let Some(path) = module_files.get(module) {
+                return Some(path.to_path_buf());
+            }
+            module = module.rsplit_once("::")?.0;
+        }
+    };
+    let mut imports = BTreeMap::new();
+    for file in &report.files {
+        let mut targets = BTreeSet::new();
+        for dependency in &file.dependencies {
+            let module = if dependency.internal {
+                dependency.module_path.replace("(crate)", "")
+            } else {
+                let head = dependency
+                    .module_path
+                    .split("::")
+                    .next()
+                    .unwrap_or_default();
+                if !module_files.contains_key(join_module(&file.module_path, head).as_str()) {
+                    continue;
+                }
+                join_module(&file.module_path, &dependency.module_path)
+            };
+            let leaf = join_module(&module, &dependency.item);
+            let module = if module_files.contains_key(leaf.as_str()) {
+                leaf
+            } else {
+                module
+            };
+            if let Some(target) = file_of(&module).filter(|target| target != &file.path) {
+                targets.insert(target);
+            }
+        }
+        for (scope, path) in &file.bare_paths {
+            let (head, rest) = path.split_once("::").unwrap_or((path, ""));
+            let bound =
+                file.use_bindings
+                    .iter()
+                    .filter_map(|(local, target)| match local.as_str() {
+                        "*" => Some(join_module(target, head)),
+                        local => (local == head).then(|| target.clone()),
+                    });
+            for module in std::iter::once(join_module(scope, head)).chain(bound) {
+                if !module_files.contains_key(module.as_str()) {
+                    continue;
+                }
+                let module = if rest.is_empty() {
+                    module
+                } else {
+                    join_module(&module, rest)
+                };
+                if let Some(target) = file_of(&module).filter(|target| target != &file.path) {
+                    targets.insert(target);
+                }
+            }
+        }
+        imports.insert(file.path.clone(), targets);
+    }
+    imports
+}
+
 fn analyze_file(
     path: &Path,
     source: &str,
@@ -323,15 +412,21 @@ fn analyze_file(
     let mut cfg_regions = Vec::new();
     collect_cfg_regions(&file.items, &mut cfg_regions);
 
-    let dependencies = {
+    let (dependencies, bare_paths, use_bindings) = {
         let mut dependency_collector = DependencyCollector {
             module: module_path.clone(),
             crate_names,
             seen: BTreeSet::new(),
             sites: Vec::new(),
+            bare_paths: BTreeSet::new(),
+            use_bindings: BTreeSet::new(),
         };
         dependency_collector.visit_file(file);
-        dependency_collector.sites
+        (
+            dependency_collector.sites,
+            dependency_collector.bare_paths.into_iter().collect(),
+            dependency_collector.use_bindings.into_iter().collect(),
+        )
     };
 
     let mut fn_collector = FnCollector {
@@ -369,6 +464,8 @@ fn analyze_file(
         struct_fields,
         cfg_regions,
         dependencies,
+        bare_paths,
+        use_bindings,
         fns: fn_collector.functions,
         calls: call_collector.sites,
         test_fns: fn_collector.test_functions,
@@ -879,9 +976,30 @@ struct DependencyCollector<'a> {
     crate_names: &'a BTreeSet<String>,
     seen: BTreeSet<(String, String)>,
     sites: Vec<DependencySite>,
+    bare_paths: BTreeSet<(String, String)>,
+    use_bindings: BTreeSet<(String, String)>,
 }
 
 impl DependencyCollector<'_> {
+    fn bind(&mut self, leaf: &UseLeaf, internal: bool) {
+        let mut path = leaf.path.clone();
+        let local = match (leaf.name.as_str(), leaf.local.as_str()) {
+            ("*", _) => "*".to_owned(),
+            ("self", "self") => path.last().cloned().unwrap_or_default(),
+            ("self", local) => local.to_owned(),
+            (name, local) => {
+                path.push(name.to_owned());
+                local.to_owned()
+            }
+        };
+        let target = if internal {
+            resolve_import_path(&self.module, &path)
+        } else {
+            join_module(&self.module, &path.join("::"))
+        };
+        self.use_bindings.insert((local, target));
+    }
+
     fn push(&mut self, site: DependencySite) {
         if self
             .seen
@@ -905,6 +1023,7 @@ impl<'ast> Visit<'ast> for DependencyCollector<'_> {
                 .first()
                 .is_some_and(|segment| matches!(segment.as_str(), "crate" | "self" | "super"));
             let leaf_may_be_module = leaf.path.len() == 1 && !leaf.grouped;
+            self.bind(&leaf, internal);
             let mut module_path = resolve_import_path(&self.module, &leaf.path);
             if module_path.is_empty() && internal {
                 module_path = "(crate)".to_owned();
@@ -936,6 +1055,12 @@ impl<'ast> Visit<'ast> for DependencyCollector<'_> {
         let workspace = segments
             .first()
             .is_some_and(|segment| self.crate_names.contains(segment));
+        if path.leading_colon.is_none() && segments.len() >= 2 && !internal && !workspace {
+            self.bare_paths.insert((
+                self.module.clone(),
+                segments[..segments.len() - 1].join("::"),
+            ));
+        }
         if path.leading_colon.is_none() && segments.len() >= 2 && (internal || workspace) {
             let mut module_path =
                 resolve_import_path(&self.module, &segments[..segments.len() - 1]);

@@ -27,6 +27,7 @@ mod survey;
 mod syntax;
 mod target;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, bail};
@@ -67,6 +68,28 @@ pub(crate) fn atlas(root: &Path, args: &[String]) -> Result<()> {
 
 pub(crate) fn conform_ratchet(root: &Path) -> Result<()> {
     conform::ratchet(root)
+}
+
+/// Each production Rust file under `directory` mapped to the files it
+/// imports, every path relative to `root`; see `syntax::file_imports`. Only
+/// `crate::`, `self::`, `super::`, and child-module paths count: a binary's
+/// paths through its own library's name are not followed. A file that does
+/// not parse fails the call with its path.
+pub(crate) fn file_imports(
+    root: &Path,
+    directory: &Path,
+) -> Result<BTreeMap<PathBuf, BTreeSet<PathBuf>>> {
+    let sources = sources::working_tree_rust_sources_under(root, &root.join(directory))?;
+    let report = syntax::analyze_sources(&sources, &BTreeSet::new());
+    if !report.parse_failures.is_empty() {
+        let paths = report
+            .parse_failures
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>();
+        bail!("these files do not parse:\n{}", paths.join("\n"));
+    }
+    Ok(syntax::file_imports(&report))
 }
 
 fn validate_scope(value: &str, flag: &str) -> Result<PathBuf> {

@@ -27,7 +27,7 @@ Live checks: [Hibernate an agent](../../contributing/sidebar-live-check.md#hiber
 - The record is published only after a confirmed freeze and a successful first reclaim. A failure between the freeze and publication thaws the scope. A deepen step never recreates an entry that a wake withdrew.
 - Hibernation never changes an agent's lifecycle or displayed status ([What a frozen row shows](#what-a-frozen-row-shows)).
 - A scope holds only the provider, its descendants, and its in-scope ancestor chain. Any other process vetoes the freeze.
-- The producer in `harness/hibernate.rs` writes only runtime caches and spawns helpers. Cgroup writes and durable writes stay in the helper modules, outside the sidebar graph.
+- The producer in `harness/hibernate.rs` writes only runtime caches and spawns helpers. Cgroup writes and durable writes stay in the helper modules (`hibernate/execute.rs`, `hibernate/wake.rs`), outside the producer's path. The sidebar graph reaches their files through `hibernate.rs`'s re-exports, so the store-write gate searches them too.
 - The scopes are resource management, not a security boundary: any process of the same user can write the delegated cgroup files.
 
 ## Configuration and admission

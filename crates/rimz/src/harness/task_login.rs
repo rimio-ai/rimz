@@ -1,5 +1,6 @@
-//! The account a loop task's launches use. It resolves a `store::writer::LaunchLogin`, so it
-//! stays outside the sidebar import graph that `harness::loop_task` belongs to.
+//! The account a loop task's launches use. It resolves a `store::writer::LaunchLogin`, and
+//! `harness::loop_task` imports it, so the sidebar import graph reaches this file: the sidebar
+//! store-write gate in `cargo xtask invariants` exempts it by name.
 
 use crate::agents::{ProviderLogin, RoomLoginErr};
 use crate::config::MachineConfig;

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -602,78 +603,144 @@ fn ensure_spend_parser_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> 
     Ok(())
 }
 
+const SIDEBAR_GRAPH_READ_ONLY: &str =
+    "sidebar graph is read-only on the store: no writer, run-wake, or broker imports";
+
+const SIDEBAR_GRAPH_NEEDLES: [&str; 6] = [
+    concat!("store", "::", "writer"),
+    concat!("::", "run_wake"),
+    concat!("run_wake", "::"),
+    "wake_run",
+    concat!("::", "broker"),
+    concat!("broker", "::"),
+];
+
+/// Harness files the sidebar graph reaches that carry a banned name in
+/// production code. Each is a finding of its own, left for its own change: the
+/// gate walks through these files and searches the rest of the graph.
+const SIDEBAR_GRAPH_EXEMPT: [(&str, &str); 8] = [
+    (
+        "crates/rimz/src/harness/ancestry.rs",
+        "adds a method to the store writer's launch login type",
+    ),
+    (
+        "crates/rimz/src/harness/assist_log.rs",
+        "takes the store writer's launch identity type",
+    ),
+    (
+        "crates/rimz/src/harness/plan.rs",
+        "builds and matches the store writer's launch login type",
+    ),
+    (
+        "crates/rimz/src/harness/run.rs",
+        "carries the store writer's launch login and calls both run-wake senders",
+    ),
+    (
+        "crates/rimz/src/harness/run/peer.rs",
+        "imports the store writer's delivery ack match and calls the run-wake sender",
+    ),
+    (
+        "crates/rimz/src/harness/task_login.rs",
+        "resolves the store writer's launch login type",
+    ),
+    (
+        "crates/rimz/src/harness/workflow/engine.rs",
+        "builds the store writer's launch login and defines the workflow run-wake sender",
+    ),
+    (
+        "crates/rimz/src/harness/workflow/mod.rs",
+        "re-exports the workflow run-wake sender",
+    ),
+];
+
 fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> {
+    ensure_sidebar_graph_read_only(root, files, &SIDEBAR_GRAPH_EXEMPT)
+}
+
+/// Searches `sidebar/` and `wakeup/`, and every harness file their production
+/// code imports, directly or through other harness files (see
+/// `sidebar_graph_harness_files`). A reached harness file is searched outside
+/// its inline tests. An `exempt` file, given with the reason it is exempt, is
+/// walked through but not searched, and must stay reached and keep a needle.
+fn ensure_sidebar_graph_read_only(
+    root: &Path,
+    files: &[PathBuf],
+    exempt: &[(&str, &str)],
+) -> Result<()> {
     let sidebar_root = root.join("crates/rimz/src/sidebar");
     let wakeup_root = root.join("crates/rimz/src/wakeup");
-    let harness_root = root.join("crates/rimz/src/harness");
-    let sidebar_graph_harness = [
-        "auto_continue.rs",
-        "auto_gc.rs",
-        "auto_redeem.rs",
-        "spend_ladder.rs",
-        "budget.rs",
-        "cache_keepalive.rs",
-        "check_run.rs",
-        "deadline.rs",
-        "drainer_outage.rs",
-        "fleet.rs",
-        "idle_compact.rs",
-        "soft_compact.rs",
-        "idle_stop.rs",
-        "hibernate.rs",
-        "loop_task.rs",
-        "orphan_sweep.rs",
-        "park_notice.rs",
-        "stall_notice.rs",
-        "stall_nudge.rs",
-        "run_timeout.rs",
-        "signal.rs",
-        "when.rs",
-        "throttle.rs",
-        "duration.rs",
-        "schedule/attention.rs",
-        "schedule/fire.rs",
-        "schedule/run_lock.rs",
-        "schedule/probe.rs",
-        "schedule/task_record.rs",
-        "schedule/backlog.rs",
-        "schedule/pending.rs",
-        "schedule.rs",
-        "schedule/arming.rs",
-        "schedule/catalog.rs",
-        "schedule/instances.rs",
-        "schedule/run_log.rs",
-        "schedule/signal.rs",
-        "schedule/strikes.rs",
-        "workflow/spec.rs",
-        "workflow/definition.rs",
-        "workflow/graph.rs",
-        "workflow/inspect.rs",
-        "workflow/spec/kinds.rs",
-    ]
-    .map(|name| harness_root.join(name));
-    for needle in [
-        concat!("store", "::", "writer"),
-        concat!("::", "run_wake"),
-        concat!("run_wake", "::"),
-        "wake_run",
-        concat!("::", "broker"),
-        concat!("broker", "::"),
-    ] {
+    for needle in SIDEBAR_GRAPH_NEEDLES {
         ensure_no_match(
             files,
             needle,
-            |path| {
-                !path.starts_with(&sidebar_root)
-                    && !path.starts_with(&wakeup_root)
-                    && !sidebar_graph_harness
-                        .iter()
-                        .any(|candidate| candidate == path)
-            },
-            "sidebar graph is read-only on the store: no writer, run-wake, or broker imports",
+            |path| !path.starts_with(&sidebar_root) && !path.starts_with(&wakeup_root),
+            SIDEBAR_GRAPH_READ_ONLY,
         )?;
     }
-    Ok(())
+    let reached = sidebar_graph_harness_files(root)?;
+    let mut violations = exempt
+        .iter()
+        .map(|(path, _)| Path::new(path))
+        .filter(|path| !reached.contains(*path))
+        .map(|path| {
+            format!(
+                "{}: exempt, but the sidebar graph no longer reaches it",
+                path.display()
+            )
+        })
+        .collect::<Vec<_>>();
+    for path in &reached {
+        let text = fs::read_to_string(root.join(path))
+            .with_context(|| format!("read sidebar graph file {}", path.display()))?;
+        let hits = lines_outside_inline_tests(&text)
+            .filter(|(_, line)| {
+                SIDEBAR_GRAPH_NEEDLES
+                    .iter()
+                    .any(|needle| line.contains(needle))
+            })
+            .map(|(number, line)| format!("{}:{number}: {}", path.display(), line.trim()))
+            .collect::<Vec<_>>();
+        let exempted = exempt.iter().any(|(exempt, _)| Path::new(exempt) == path);
+        if !exempted {
+            violations.extend(hits);
+        } else if hits.is_empty() {
+            violations.push(format!(
+                "{}: exempt, but carries no banned import; drop its exemption",
+                path.display()
+            ));
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!("{SIDEBAR_GRAPH_READ_ONLY}\n{}", violations.join("\n"))
+}
+
+/// The harness files the sidebar graph imports, relative to `root`: the walk
+/// starts from the production files under `sidebar/` and `wakeup/` and
+/// follows imports into and within `harness/` only, so a path that leaves
+/// harness through another module and comes back is not followed. A `mod`
+/// declaration is not an import, so a module root does not pull in every
+/// child it declares.
+fn sidebar_graph_harness_files(root: &Path) -> Result<BTreeSet<PathBuf>> {
+    let imports = crate::atlas::file_imports(root, Path::new("crates/rimz/src"))?;
+    let harness = Path::new("crates/rimz/src/harness");
+    let mut queue = imports
+        .keys()
+        .filter(|path| {
+            path.starts_with("crates/rimz/src/sidebar")
+                || path.starts_with("crates/rimz/src/wakeup")
+        })
+        .collect::<Vec<_>>();
+    let mut reached = BTreeSet::new();
+    while let Some(file) = queue.pop() {
+        for target in imports.get(file).into_iter().flatten() {
+            if target.starts_with(harness) && reached.insert(target.clone()) {
+                queue.push(target);
+            }
+        }
+    }
+    Ok(reached)
 }
 
 fn ensure_sidebar_fold_caller_state(root: &Path, files: &[PathBuf]) -> Result<()> {
@@ -1381,7 +1448,8 @@ fn lines_outside_inline_tests(text: &str) -> impl Iterator<Item = (usize, &str)>
         .enumerate()
         .map(|(index, line)| (index + 1, line))
         .filter(move |(_, line)| {
-            if line.trim_start().starts_with("mod tests") {
+            // `mod tests;` mounts a sibling file; only an inline body starts the region.
+            if line.trim_start().starts_with("mod tests") && !line.trim_end().ends_with(';') {
                 in_tests = true;
             }
             !in_tests

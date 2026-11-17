@@ -212,8 +212,18 @@ pub(super) fn revision_blob(root: &Path, revision: &str, path: &Path) -> Result<
 }
 
 pub(super) fn working_tree_rust_sources(root: &Path) -> Result<Vec<Source>> {
+    working_tree_rust_sources_under(root, root)
+}
+
+/// The working tree's Rust sources under `directory`, paths kept relative to
+/// `root`. Module classification sees only these files, so `directory` holds
+/// whole crates' module trees.
+pub(super) fn working_tree_rust_sources_under(
+    root: &Path,
+    directory: &Path,
+) -> Result<Vec<Source>> {
     let mut sources = Vec::new();
-    walk(root, root, &mut sources)?;
+    walk(root, directory, &mut sources)?;
     classify_sources(&mut sources);
     Ok(sources)
 }
