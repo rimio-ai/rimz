@@ -21,6 +21,11 @@ user-id = 696
 user-login = "fitzgen"
 user-name = "Nick Fitzgerald"
 
+[[publisher.crc32fast]]
+version = "1.5.5"
+when = "2026-11-10"
+trusted-publisher = "github:srijs/rust-crc32fast"
+
 [[publisher.displaydoc]]
 version = "0.2.6"
 when = "2026-05-27"
@@ -116,8 +121,8 @@ when = "2026-10-16"
 trusted-publisher = "github:rust-lang/libc"
 
 [[publisher.libsqlite3-sys]]
-version = "0.39.1"
-when = "2026-10-25"
+version = "0.40.0"
+when = "2026-11-11"
 user-id = 5062
 user-login = "gwenn"
 user-name = "gwenn"
@@ -151,8 +156,8 @@ user-login = "dhardy"
 user-name = "Diggory Hardy"
 
 [[publisher.rusqlite]]
-version = "0.41.1"
-when = "2026-10-28"
+version = "0.42.0"
+when = "2026-11-11"
 user-id = 5062
 user-login = "gwenn"
 user-name = "gwenn"
@@ -163,9 +168,16 @@ when = "2026-01-15"
 user-id = 55123
 user-login = "rust-lang-owner"
 
+[[publisher.sqlite-wasm-rs]]
+version = "0.6.3"
+when = "2026-11-10"
+user-id = 89675
+user-login = "Spxg"
+user-name = "Noz Wu"
+
 [[publisher.sysinfo]]
-version = "0.40.1"
-when = "2026-10-30"
+version = "0.40.3"
+when = "2026-11-11"
 user-id = 111
 user-login = "GuillaumeGomez"
 user-name = "Guillaume Gomez"
