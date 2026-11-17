@@ -53,8 +53,8 @@ fn exhausted_default_does_not_pause_a_live_named_login() {
     work = work.in_pane("%2");
     let snapshot = room(vec![default, work]).with_live_panes_and_provider_capacities(
         vec![
-            pane("%1", "node", "/repo/main"),
-            pane("%2", "node", "/repo/main"),
+            pane("%1", "claude", "/repo/main"),
+            pane("%2", "claude", "/repo/main"),
         ],
         None,
         &provider_capacity(
@@ -97,7 +97,7 @@ fn repeated_tool_loop_escalates_and_self_clears() {
         session.last_activity = last_activity;
         let looping = room(vec![session.clone()])
             .with_agent_activity(std::slice::from_ref(&touch))
-            .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+            .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
         let row = &looping.worktree_groups[0].rows[0];
         assert_eq!(row.status(), Some(AgentStatus::Failed));
         assert_eq!(row.turn_error_label(), Some("loop: Bash ×20"));
@@ -105,7 +105,7 @@ fn repeated_tool_loop_escalates_and_self_clears() {
 
     session.tool_repeat = None;
     let recovered =
-        room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+        room(vec![session]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
     let row = &recovered.worktree_groups[0].rows[0];
     assert_eq!(row.status(), Some(AgentStatus::Running));
     assert_eq!(row.turn_error_label(), None);
@@ -132,7 +132,7 @@ fn stale_activity_repeat_does_not_override_a_newer_turn_boundary() {
 
     let snapshot = room(vec![session])
         .with_agent_activity(&[stale_touch])
-        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+        .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(row.status(), Some(AgentStatus::Running));
     assert_eq!(row.turn_error_label(), None);
@@ -162,7 +162,7 @@ fn stalled_running_agent_recovers_when_activity_resumes() {
     };
     let snapshot = room(vec![session])
         .with_agent_activity(&[touch])
-        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+        .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
 
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
@@ -182,7 +182,7 @@ fn configured_stall_window_controls_running_attention_escalation() {
         let mut snapshot = room(vec![session]);
         snapshot.attention.stalled_after_secs =
             std::num::NonZeroU32::new(120).expect("non-zero test window");
-        snapshot.with_live_panes(vec![pane("%1", "node", "/repo/main")], None)
+        snapshot.with_live_panes(vec![pane("%1", "claude", "/repo/main")], None)
     };
 
     assert_eq!(
@@ -205,7 +205,7 @@ fn parked_agent_settles_immediately_and_keeps_phase() {
             .in_pane("%1")
             .parked()
             .active_ago(age_secs);
-        room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None)
+        room(vec![session]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None)
     };
 
     let fresh = project(60);
@@ -237,7 +237,7 @@ fn displayed_status_precedence_ladder_holds() {
             agents.push(child_state("root", "child-1", AgentStatus::Running, 5));
         }
         let snapshot = room(agents).with_live_panes_and_provider_capacities(
-            vec![pane("%1", "node", "/repo/main")],
+            vec![pane("%1", "claude", "/repo/main")],
             None,
             &provider_capacity("claude", rung.budget_windows),
         );

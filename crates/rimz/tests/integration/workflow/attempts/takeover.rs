@@ -80,7 +80,7 @@ fn a_working_occupant_that_arrives_during_a_stop_is_returned_as_occupancy() {
     let panes = room.env.project_root.join("panes.json");
     fs::write(
         &panes,
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"claude"}]"#,
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"claude","pane_command":"claude"}]"#,
     )
     .unwrap();
     let shim = crate::common::write_path_shim(
@@ -89,7 +89,7 @@ fn a_working_occupant_that_arrives_during_a_stop_is_returned_as_occupancy() {
         r#""$RIMZ_TEST_TRACE" "$@" || exit "$?"
 for arg do
     if [ "$arg" = close-pane ]; then
-        printf '%s' '[{"id":62,"is_plugin":false,"tab_id":1,"title":"claude"}]' > "$RIMZ_TEST_LATE_PANES"
+        printf '%s' '[{"id":62,"is_plugin":false,"tab_id":1,"title":"claude","pane_command":"claude"}]' > "$RIMZ_TEST_LATE_PANES"
         printf '%s' "$RIMZ_TEST_LATE_REGISTER" | RIMZ_AGENT_NAME=late RIMZ_AGENT_PID="$RIMZ_TEST_LATE_PID" "$RIMZ_TEST_RIMZ" hooks feed --source claude || exit "$?"
         printf '%s' "$RIMZ_TEST_LATE_PROMPT" | RIMZ_AGENT_NAME=late RIMZ_AGENT_PID="$RIMZ_TEST_LATE_PID" "$RIMZ_TEST_RIMZ" hooks feed --source claude || exit "$?"
         exec "$RIMZ_TEST_RIMZ" hooks drain --project-root "$RIMZ_TEST_SCOPE" --once

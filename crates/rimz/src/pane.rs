@@ -388,8 +388,11 @@ pub struct PaneRef {
     /// Current working directory as reported by the multiplexer, if available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
-    /// Best-effort live pane process id. This is advisory routing metadata,
-    /// not correctness state.
+    /// Best-effort pid of the pane's root process. The pane binder proves a
+    /// stamped agent by finding it as the agent's runtime owner or on the
+    /// owner's recorded parent chain. On Zellij a raw listing carries the
+    /// presence plugin's cached root pid, which can lag a command rerun in
+    /// place until the plugin reprobes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_pid: Option<u32>,
     /// Used to detect reused pane IDs across mux restarts.

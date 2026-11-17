@@ -787,7 +787,13 @@ mod tests {
                 vec![state.clone()],
                 now,
             )
-            .with_live_panes(vec![state.pane.clone().unwrap()], None);
+            .with_live_panes(
+                vec![crate::pane::PaneRef {
+                    command: Some("claude".to_owned()),
+                    ..state.pane.clone().unwrap()
+                }],
+                None,
+            );
             display_model(snapshot.rows().next().unwrap())
         };
         assert_eq!(project(&state).as_deref(), Some("Opus 5"));

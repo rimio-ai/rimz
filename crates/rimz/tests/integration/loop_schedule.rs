@@ -7006,7 +7006,7 @@ fn loop_stop_ends_and_loop_show_lists_each_alive_launch_of_the_tasks_fires() {
     seed("stranger", 7, stamped(&stranger, None));
     let panes = env.project_root.join("stop-panes.json");
     let rows = (3..=7)
-        .map(|id| json!({"id": id, "is_plugin": false, "tab_id": 1, "title": "sh"}))
+        .map(|id| json!({"id": id, "is_plugin": false, "tab_id": 1, "pane_command": "claude"}))
         .collect::<Vec<_>>();
     std::fs::write(&panes, serde_json::to_vec(&rows).unwrap()).unwrap();
     let trace = env.project_root.join("stop-trace.log");
@@ -7193,8 +7193,10 @@ fn loop_stop_ends_a_fire_runs_agent_in_whatever_pane_hosts_it() {
         let panes = env.project_root.join("stop-panes.json");
         std::fs::write(
             &panes,
-            serde_json::to_vec(&[json!({"id": 3, "is_plugin": false, "tab_id": 1, "title": "sh"})])
-                .unwrap(),
+            serde_json::to_vec(&[json!({
+                "id": 3, "is_plugin": false, "tab_id": 1, "title": "sh", "pane_command": "claude"
+            })])
+            .unwrap(),
         )
         .unwrap();
         let trace = env.project_root.join("stop-trace.log");

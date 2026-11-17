@@ -79,7 +79,7 @@ The launch block is data, so one registry entry is enough to render `rimz agents
 | `native_ask_ui` | the agent draws its own permission and question prompts, so RimZ can mark the row waiting and route you to the pane. Every built-in declares it, and a process plugin may not |
 | `permission_before_auto_review` | permission hooks precede an automatic reviewer. Codex alone declares it. Recorded Auto launches hide permission attention for 60 seconds without releasing pane input, unless the rollout proves the asking Code Mode cell finished and closes the ask ([waiting and asks](./model.md#waiting-and-asks)) |
 | `transcript_tail_context` | a local transcript tail is a live context source, refreshable on a producer tick |
-| `registers_lazily` | a session can exist before its pane stamp does, so binding goes through the [recovery ladder](./instances.md#binding-a-session), and a stamp must also pass kind, activity, and process-start guards |
+| `registers_lazily` | a session can exist before its pane stamp does, so binding goes through the [recovery ladder](./instances.md#binding-a-session), and a stamp whose pane is absent from the frame may still pair by cwd |
 | `local_session_discovery` | `Unsupported` reads no provider-local sessions, `FullScan` scans admitted workspaces, and `PerPane` reads only sessions live panes can bind. Observations may supply identity alone or lifecycle |
 | `daemon_hooked_sessions` | hooks fire from a per-user daemon that outlives any one conversation |
 | `direct_account_usage` | an authoritative identity-bearing account-usage probe exists ([providers.md](./providers.md#refresh-cadences)) |

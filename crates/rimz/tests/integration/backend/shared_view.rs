@@ -6,17 +6,24 @@ use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd};
 use rimz::pane::PaneRef;
 use rimz::store::{event::EventEnvelope, event_log};
 
-pub(super) fn agent_layout() -> LayoutPanes {
+/// Twelve agent panes, each running the provider's program: a `claude` link to `sleep`
+/// under `bin_dir`, so an unproven stamp on the pane binds by the program it names.
+pub(super) fn agent_layout(bin_dir: &Path) -> LayoutPanes {
+    let claude = bin_dir.join("claude");
+    if !claude.exists() {
+        let sleep = which_sleep();
+        std::os::unix::fs::symlink(sleep, &claude).expect("link claude to sleep");
+    }
+    let script = format!(
+        "printf 'VIEW-AGENTS\\n'; exec {} 600",
+        shlex::try_quote(&claude.to_string_lossy()).expect("quote the claude link")
+    );
     LayoutPanes {
         columns: (0..3)
             .map(|_| LayoutColumn {
                 panes: (0..4)
                     .map(|_| PaneCmd {
-                        argv: vec![
-                            "sh".to_owned(),
-                            "-c".to_owned(),
-                            "printf 'VIEW-AGENTS\\n'; exec sleep 600".to_owned(),
-                        ],
+                        argv: vec!["sh".to_owned(), "-c".to_owned(), script.clone()],
                         name: None,
                     })
                     .collect(),
@@ -25,6 +32,14 @@ pub(super) fn agent_layout() -> LayoutPanes {
             .collect(),
         focused_pane: 0,
     }
+}
+
+fn which_sleep() -> std::path::PathBuf {
+    let found = std::process::Command::new("sh")
+        .args(["-c", "command -v sleep"])
+        .output()
+        .expect("locate sleep");
+    std::path::PathBuf::from(String::from_utf8(found.stdout).expect("sleep path").trim())
 }
 
 pub(super) fn seed_agents(state: &rimz::StatePaths, panes: &[PaneRef], worktree_path: &Path) {

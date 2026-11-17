@@ -566,6 +566,8 @@ pub mod fleet {
             .map_err(io::Error::other)?
             .join(" ");
         if let Some(pane) = &mut pane {
+            // The wrapper in the foreground names its provider to the pane binder.
+            pane.command = Some("rimz".to_owned());
             pane.spawn_command = Some(command.clone());
             pane.foreground_cmdline = Some(command);
         }

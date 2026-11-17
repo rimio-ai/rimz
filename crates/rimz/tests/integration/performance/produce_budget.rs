@@ -117,8 +117,11 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
     for (index, pane) in panes.iter_mut().enumerate() {
         pane.cwd = Some(roots[index % roots.len()].clone());
     }
-    for (index, pane) in panes.iter().enumerate() {
+    for (index, pane) in panes.iter_mut().enumerate() {
         let kind = if index % 2 == 0 { "codex" } else { "claude" };
+        if kind == "claude" {
+            pane.command = Some(kind.to_owned());
+        }
         let checkout = std::path::Path::new(pane.cwd.as_ref().unwrap());
         fixture.register_agent(index, kind, Some(pane), checkout);
     }

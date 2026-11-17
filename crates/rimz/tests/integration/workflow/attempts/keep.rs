@@ -213,7 +213,7 @@ fn register_companion(room: &Room) {
         room.env.project_root.join("panes.json"),
         serde_json::to_vec(&json!([
             {"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"},
-            {"id":62,"is_plugin":false,"tab_id":1,"title":"claude"},
+            {"id":62,"is_plugin":false,"tab_id":1,"title":"claude","pane_command":"claude"},
         ]))
         .unwrap(),
     )

@@ -317,7 +317,10 @@ fn pane_scope_keeps_nonagent_tabmates_but_filters_each_agent() {
             "/repo",
         ),
         pane("terminal_4", "tab_1", "#auth", "zsh", "/repo/auth"),
-        pane("terminal_5", "tab_0", "#auth", "rimz", "/repo/other"),
+        PaneRef {
+            spawn_command: Some("rimz agents exec claude --worktree-path /repo/other".to_owned()),
+            ..pane("terminal_5", "tab_0", "#auth", "rimz", "/repo/other")
+        },
     ];
     let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
         rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
@@ -591,6 +594,42 @@ fn pane_row_labels_a_calling_sidebar_before_any_agent_overlay() {
     assert!(plain.contains("sidebar"));
     assert!(plain.contains("zellij:terminal_3 (self)"));
     assert!(!plain.contains("@codex"));
+}
+
+#[test]
+fn overlay_binds_a_row_its_owner_chain_proves_from_the_raw_listing() {
+    // `pane list` folds the raw listing, with no hosted stamp: the listed root
+    // pid on the owner's recorded chain proves the pane though its program is
+    // a shell and its process started after the agent's last activity.
+    let t1: Timestamp = "2026-06-01T00:00:00Z".parse().unwrap();
+    let t2: Timestamp = "2026-06-01T01:00:00Z".parse().unwrap();
+    let mut agent = agent_on("terminal_1", "codex", "main");
+    agent.last_activity = t1;
+    agent.runtime_owner = Some(rimz::pane::RuntimeOwner {
+        ancestors: vec![84, 12],
+        ..rimz::pane::RuntimeOwner::new(rimz::pane::RuntimeOwnerKind::Agent, "sess-1", 90, None)
+    });
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
+        vec![agent],
+        t2,
+    );
+    let listed = PaneRef {
+        pane_pid: Some(84),
+        pane_process_start: Some(t2),
+        ..pane("terminal_1", "tab_0", "shell", "zsh", "/repo/main")
+    };
+    assert_eq!(
+        snapshot
+            .agent_bound_to_pane(&listed)
+            .map(|bound| bound.kind.as_str()),
+        Some("codex")
+    );
+    let elsewhere = PaneRef {
+        pane_pid: Some(85),
+        ..listed
+    };
+    assert!(snapshot.agent_bound_to_pane(&elsewhere).is_none());
 }
 
 #[test]
