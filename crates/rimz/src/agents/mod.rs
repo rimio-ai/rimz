@@ -34,6 +34,9 @@ mod managed_source;
 pub(crate) mod managed_statusline;
 pub mod model_display;
 mod model_refusal;
+#[cfg(test)]
+pub(crate) use model_refusal::ModelRefusal;
+pub(crate) use model_refusal::ModelRefusals;
 mod observation;
 mod open_ask;
 pub mod pane_title;
