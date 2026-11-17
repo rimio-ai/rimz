@@ -478,19 +478,21 @@ fn fire_tasks(
         .map(|(key, scope)| (key.clone(), scope.task.clone()))
         .collect();
     let windows = when::WindowReadings::new(Some(runtime), now.timestamp());
+    // A watch row's watcher is its runner, probed by row name like the run lock.
     let lost_runners: BTreeSet<String> = tasks
         .iter()
         .filter(|(name, task)| {
             state.get(*name).is_some_and(|stamp| {
-                (fire_at_retry_due(fire_at(task), *stamp, now.timestamp())
-                    || (once_condition_retry_due(task, *stamp, now.timestamp())
-                        && latched(task, when_states.get(*name))))
-                    && ArmState::resolve(
-                        arming.get(&task.key(name)),
-                        task.source(),
-                        now.timestamp(),
-                    ) == ArmState::Live
-                    && runner_lost(runtime, &records, &scoped[*name].name, task, *stamp)
+                watcher_lost(task, &scoped[*name].name, *stamp, now.timestamp())
+                    || ((fire_at_retry_due(fire_at(task), *stamp, now.timestamp())
+                        || (once_condition_retry_due(task, *stamp, now.timestamp())
+                            && latched(task, when_states.get(*name))))
+                        && ArmState::resolve(
+                            arming.get(&task.key(name)),
+                            task.source(),
+                            now.timestamp(),
+                        ) == ArmState::Live
+                        && runner_lost(runtime, &records, &scoped[*name].name, task, *stamp))
             })
         })
         .map(|(name, _)| name.clone())
@@ -840,11 +842,8 @@ fn plan(
                 actions.push((name.clone(), Action::Fire));
                 next_state.insert(name.clone(), now.timestamp());
             }
-            Some(last_fire)
-                if matches!(&parsed.trigger, Trigger::Watch(_))
-                    && now.timestamp().duration_since(last_fire).as_secs()
-                        > WATCH_LOST_GRACE_SECS
-                    && watcher_missing(task, name) =>
+            Some(_)
+                if matches!(&parsed.trigger, Trigger::Watch(_)) && lost_runners.contains(name) =>
             {
                 actions.push((name.clone(), Action::WatchLost));
                 next_state.insert(name.clone(), now.timestamp());
@@ -937,6 +936,16 @@ fn attempt_recorded_since(key: RecordedAttempt, scan: impl FnOnce() -> bool) -> 
         memo.insert(key);
     }
     recorded
+}
+
+/// Whether a watch row stamped at `last_fire` is past the lost grace with no watcher holding its
+/// lock. The watcher locks under the row `name`, which a bound row's stamp key is not.
+fn watcher_lost(task: &LoadedTask, name: &str, last_fire: Timestamp, now: Timestamp) -> bool {
+    task.trigger()
+        .as_ref()
+        .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Watch(_)))
+        && now.duration_since(last_fire).as_secs() > WATCH_LOST_GRACE_SECS
+        && watcher_missing(task, name)
 }
 
 fn watcher_missing(task: &LoadedTask, name: &str) -> bool {

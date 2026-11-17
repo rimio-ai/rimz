@@ -2259,6 +2259,73 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
     assert_eq!(stderr, retained_runs_refusal(&stderr, &records[0].task, 1));
 }
 
+/// A check-in binds the row's task record, so its stamps move to the task id; a tick past the
+/// grace still finds the live watcher's lock under the row name, and the exit is the one
+/// terminal outcome.
+#[cfg(target_os = "linux")]
+#[test]
+fn live_watcher_of_a_checked_in_wait_is_not_lost_past_the_grace() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let release = env.home_root.join("release");
+    let command = format!(
+        "printf started; while [ ! -e {} ]; do sleep 0.05; done",
+        shlex::try_quote(release.to_str().unwrap()).unwrap()
+    );
+    let receipt = wait_ok(
+        &env,
+        &["wait", "--json", "--check-in", "1s", "--run", &command],
+    );
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    let name = receipt["name"].as_str().unwrap();
+    let checkin = wait_for_wait_messages(&env, 1).pop().unwrap();
+    assert!(
+        checkin.text.contains("still running after"),
+        "{}",
+        checkin.text
+    );
+    wait_for_loop_runs_to_exit(&env, name);
+    let store = env.store();
+    let armed_at = jiff::Timestamp::now()
+        .checked_sub(std::time::Duration::from_secs(60))
+        .unwrap();
+    std::fs::write(
+        store.runtime_paths().lane_path("loop-fire.json"),
+        serde_json::to_vec(&std::collections::BTreeMap::from([(name, armed_at)])).unwrap(),
+    )
+    .unwrap();
+    wait_ok(&env, &["loop", "tick"]);
+    wait_for_loop_runs_to_exit(&env, name);
+    assert_eq!(wait_records(&env).len(), 1, "{:?}", wait_records(&env));
+    assert!(wait_instances(&env).0.contains_key(name));
+
+    std::fs::write(&release, "").unwrap();
+    wait_for_wait_records(&env, 2);
+    wait_for_no_wait_instances(&env);
+    wait_for_loop_runs_to_exit(&env, name);
+    let records = wait_records(&env);
+    assert_eq!(records.len(), 2, "{records:?}");
+    let verdict = records[1].watch.as_ref().unwrap();
+    assert_eq!(
+        records[1].check.as_ref().unwrap().code,
+        Some(0),
+        "{verdict:?}"
+    );
+    let (mut messages, history) = store.list_messages_and_history().unwrap();
+    messages.extend(history);
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    let exit = messages
+        .iter()
+        .find(|message| Some(&message.message_id) == records[1].message_id.as_ref())
+        .unwrap();
+    assert!(exit.text.contains(&verdict.label()), "{}", exit.text);
+    let logs = wait_ok(&env, &["loop", "logs", name]);
+    assert!(logs.contains(&verdict.label()), "{logs}");
+    assert!(!logs.contains("watcher died"), "{logs}");
+}
+
 #[test]
 fn watch_retires_without_delivery_when_its_polarity_does_not_match() {
     for (on, command) in [("fail", "true"), ("success", "false")] {
