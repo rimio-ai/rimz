@@ -177,7 +177,11 @@ pub(super) fn write_terms(
             None => ui::status::StateRole::Unknown,
         };
         let (glyph, style) = ui::verdict(role);
-        let shown = match (value, reading.resets.get(&term.key)) {
+        let reset = reading
+            .resets
+            .get(&term.key)
+            .filter(|_| role == ui::status::StateRole::Failed);
+        let shown = match (value, reset) {
             (None, _) => term_unread_reason(term, &reading.unread),
             (Some(value), Some(at)) => format!("{value} (resets {})", reset_minute(*at, zone)),
             (Some(value), _) => value.to_owned(),
