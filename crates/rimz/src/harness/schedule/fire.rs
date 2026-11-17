@@ -483,16 +483,13 @@ fn fire_tasks(
         .iter()
         .filter(|(name, task)| {
             state.get(*name).is_some_and(|stamp| {
-                watcher_lost(task, &scoped[*name].name, *stamp, now.timestamp())
-                    || ((fire_at_retry_due(fire_at(task), *stamp, now.timestamp())
-                        || (once_condition_retry_due(task, *stamp, now.timestamp())
-                            && latched(task, when_states.get(*name))))
-                        && ArmState::resolve(
-                            arming.get(&task.key(name)),
-                            task.source(),
-                            now.timestamp(),
-                        ) == ArmState::Live
-                        && runner_lost(runtime, &records, &scoped[*name].name, task, *stamp))
+                ArmState::resolve(arming.get(&task.key(name)), task.source(), now.timestamp())
+                    == ArmState::Live
+                    && (watcher_lost(task, &scoped[*name].name, *stamp, now.timestamp())
+                        || ((fire_at_retry_due(fire_at(task), *stamp, now.timestamp())
+                            || (once_condition_retry_due(task, *stamp, now.timestamp())
+                                && latched(task, when_states.get(*name))))
+                            && runner_lost(runtime, &records, &scoped[*name].name, task, *stamp)))
             })
         })
         .map(|(name, _)| name.clone())
