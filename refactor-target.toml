@@ -2821,7 +2821,8 @@ path = "crates/rimz/src/launcher"
 # prepare_run_layout joins run-bearing layouts to shared preparation (+1).
 # run_exit_policy moves to the shared pane compiler (-1).
 # worktree_entry::occupancy_protections keeps landing separate from removal's workflow pins (+1).
-surface-budget = 101
+# agent_pane::open_writer hands the commands that type the writer of the pane the lookup answers (+1).
+surface-budget = 102
 
 [[verdict]]
 kind = "item"
@@ -2861,7 +2862,7 @@ reason = "The library owns shared launch preparation, admission and pane executi
 [[verdict]]
 kind = "item"
 key = "launcher::agent_pane"
-reason = "CLI focus, capture, restart and molt and cohort reconciliation find an agent's pane at the point of use through one act."
+reason = "CLI focus, capture, typing, restart and molt and cohort reconciliation find an agent's pane at the point of use through one act."
 
 [[verdict]]
 kind = "item"
@@ -2882,6 +2883,11 @@ reason = "Every agent-addressed act that wakes a pane reads, wakes and reads aga
 kind = "item"
 key = "launcher::agent_pane::locate"
 reason = "Capture and restart's checks read where the agent is once, waking nothing."
+
+[[verdict]]
+kind = "item"
+key = "launcher::agent_pane::open_writer"
+reason = "Answer, pane send and the budget park type only into the pane the lookup answers again once its write lock is held."
 
 [[verdict]]
 kind = "item"
