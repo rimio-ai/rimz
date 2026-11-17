@@ -1,9 +1,11 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use jiff::Timestamp;
 use rimz::agents::RateLimitsCache;
 use serde_json::Value;
 
@@ -781,14 +783,21 @@ fn claude_refresh_usage_refuses_an_untrusted_override_without_publishing_usage()
 fn claude_refresh_usage_retries_transient_http_failures() {
     let env = Env::new();
     let claim_id = env.seed_usage_claim("claude");
-    let (origin, server) = serve_after_failures(
-        2,
-        r#"{
-            "five_hour": {
-                "utilization": 12.5,
-                "resets_at": "2100-01-01T00:00:00Z"
-            }
-        }"#,
+    let (response_clock, response_times) = mpsc::channel();
+    let route = "GET /api/oauth/usage";
+    let (origin, server) = serve_http_routes_with(
+        vec![
+            (route, 500, String::new()),
+            (route, 500, String::new()),
+            (
+                route,
+                200,
+                r#"{"five_hour":{"utilization":12.5,"resets_at":"2100-01-01T00:00:00Z"}}"#
+                    .to_owned(),
+            ),
+        ],
+        3,
+        move || response_clock.send(Timestamp::now()).unwrap(),
     );
     let claude_home = env.home_root.join(".claude");
     std::fs::create_dir_all(&claude_home).expect("mkdir claude home");
@@ -819,6 +828,8 @@ fn claude_refresh_usage_retries_transient_http_failures() {
         String::from_utf8_lossy(&output.stderr)
     );
     let requests = server.join().expect("server requests");
+    let first_attempt = response_times.recv().unwrap();
+    assert_usage_stamped_between(&env, "claude@default", Timestamp::MIN, first_attempt);
     assert_eq!(requests.len(), 3);
     assert!(
         requests
@@ -1143,7 +1154,12 @@ fn auto_redeem_declined_by_the_fresh_read_spends_and_records_nothing() {
     assert!(!stamp.exists(), "{}", stamp.display());
 }
 
-fn manual_redeem_fixture(env: &Env, count: usize, code: &str) -> thread::JoinHandle<Vec<String>> {
+fn manual_redeem_fixture(
+    env: &Env,
+    count: usize,
+    code: &str,
+    response_clock: Option<Sender<Timestamp>>,
+) -> thread::JoinHandle<Vec<String>> {
     env.install_agent_hooks("codex");
     crate::common::trust_codex_hooks(env);
     let now = jiff::Timestamp::now();
@@ -1158,20 +1174,27 @@ fn manual_redeem_fixture(env: &Env, count: usize, code: &str) -> thread::JoinHan
         "available_count": 1,
         "credits": [{"id": "credit-1", "status": "available", "expires_at": now + Duration::from_secs(10 * 60)}]
     });
-    let (origin, server) = serve_routes(
+    let (origin, server) = serve_http_routes_with(
         vec![
-            ("GET /backend-api/wham/usage ", usage.to_string()),
+            ("GET /backend-api/wham/usage ", 200, usage.to_string()),
             (
                 "GET /backend-api/wham/rate-limit-reset-credits ",
+                200,
                 credits.to_string(),
             ),
             (
                 "POST /backend-api/wham/rate-limit-reset-credits/consume ",
+                200,
                 serde_json::json!({"code": code, "windows_reset": if code == "reset" {2} else {0}})
                     .to_string(),
             ),
         ],
         count,
+        move || {
+            if let Some(clock) = &response_clock {
+                clock.send(Timestamp::now()).unwrap();
+            }
+        },
     );
     let home = env.home_root.join("spare");
     std::fs::create_dir_all(&home).unwrap();
@@ -1216,7 +1239,8 @@ fn manual_redeem_fixture(env: &Env, count: usize, code: &str) -> thread::JoinHan
 fn accounts_redeem_spends_one_credit_and_records_the_manual_login() {
     let env = Env::new();
     // Two preview GETs, consume, then two refresh GETs.
-    let server = manual_redeem_fixture(&env, 5, "reset");
+    let (response_clock, response_times) = mpsc::channel();
+    let server = manual_redeem_fixture(&env, 5, "reset", Some(response_clock));
     let output = env
         .rimz()
         .args(["accounts", "redeem", "codex", "spare", "--yes"])
@@ -1251,6 +1275,9 @@ fn accounts_redeem_spends_one_credit_and_records_the_manual_login() {
     assert_eq!(value["outcome"], "reset");
     let requests = server.join().unwrap();
     assert_eq!(requests.len(), 5);
+    let times: Vec<_> = response_times.into_iter().collect();
+    assert!(requests[3].starts_with("GET /backend-api/wham/usage "));
+    assert_usage_stamped_between(&env, "codex@spare", times[2], times[3]);
     let consume = &requests[2];
     assert!(consume.starts_with("POST /backend-api/wham/rate-limit-reset-credits/consume "));
     let body: Value = serde_json::from_str(consume.split_once("\r\n\r\n").unwrap().1).unwrap();
@@ -1279,7 +1306,7 @@ fn accounts_redeem_spends_one_credit_and_records_the_manual_login() {
 fn accounts_redeem_nothing_to_reset_exits_four_and_records_the_outcome() {
     let env = Env::new();
     // Two preview GETs and consume; no refresh for a non-reset.
-    let server = manual_redeem_fixture(&env, 3, "nothing_to_reset");
+    let server = manual_redeem_fixture(&env, 3, "nothing_to_reset", None);
     let output = env
         .rimz()
         .args(["accounts", "redeem", "codex", "spare", "--yes"])
@@ -1306,7 +1333,7 @@ fn accounts_redeem_nothing_to_reset_exits_four_and_records_the_outcome() {
 fn accounts_redeem_dry_run_reads_only_and_leaves_no_stamp_or_record() {
     let env = Env::new();
     // Only the two preview GETs.
-    let server = manual_redeem_fixture(&env, 2, "reset");
+    let server = manual_redeem_fixture(&env, 2, "reset", None);
     let output = env
         .rimz()
         .args(["accounts", "redeem", "codex", "spare", "--dry-run"])
@@ -1391,6 +1418,14 @@ pub(super) fn serve_http_routes(
     routes: Vec<(&'static str, u16, String)>,
     count: usize,
 ) -> (String, thread::JoinHandle<Vec<String>>) {
+    serve_http_routes_with(routes, count, || {})
+}
+
+fn serve_http_routes_with(
+    routes: Vec<(&'static str, u16, String)>,
+    count: usize,
+    mut before_response: impl FnMut() + Send + 'static,
+) -> (String, thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind http stub");
     let addr = listener.local_addr().expect("local addr");
     listener.set_nonblocking(true).unwrap();
@@ -1465,6 +1500,7 @@ pub(super) fn serve_http_routes(
                 "HTTP/1.1 {status} Stub\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len(),
             );
+            before_response();
             stream
                 .write_all(response.as_bytes())
                 .expect("write response");
@@ -1490,6 +1526,7 @@ struct ClaudeRedeemOptions {
     named_org: bool,
     omit_cleared: bool,
     fail_refresh: bool,
+    response_clock: Option<Sender<Timestamp>>,
 }
 
 fn claude_redeem_fixture(
@@ -1540,7 +1577,7 @@ fn claude_redeem_fixture(
     if options.omit_cleared {
         response.as_object_mut().unwrap().remove("cleared");
     }
-    let (origin, server) = serve_http_routes(
+    let (origin, server) = serve_http_routes_with(
         vec![
             (
                 "GET /api/oauth/usage?cedar_ember=1&skip_spend=1 ",
@@ -1568,6 +1605,11 @@ fn claude_redeem_fixture(
             ),
         ],
         count,
+        move || {
+            if let Some(clock) = &options.response_clock {
+                clock.send(Timestamp::now()).unwrap();
+            }
+        },
     );
     (format!("{origin}/api/oauth/usage"), server)
 }
@@ -1645,6 +1687,7 @@ fn claude_redeem_results_persist_once_and_refresh_only_a_reset() {
         ("new_result", "unknown", 6),
     ] {
         let env = Env::new();
+        let (response_clock, response_times) = mpsc::channel();
         let (url, server) = claude_redeem_fixture(
             &env,
             claude_redeem_usage(),
@@ -1652,7 +1695,10 @@ fn claude_redeem_results_persist_once_and_refresh_only_a_reset() {
             200,
             result,
             if result == "reset" { 4 } else { 3 },
-            Default::default(),
+            ClaudeRedeemOptions {
+                response_clock: Some(response_clock),
+                ..Default::default()
+            },
         );
         let output = claude_redeem_command(&env, &url, "", "--yes");
         assert_eq!(
@@ -1709,6 +1755,8 @@ fn claude_redeem_results_persist_once_and_refresh_only_a_reset() {
         );
         if result == "reset" {
             assert!(requests[3].starts_with("GET /api/oauth/usage?cedar_ember=1 "));
+            let times: Vec<_> = response_times.into_iter().collect();
+            assert_usage_stamped_between(&env, "claude@default", times[2], times[3]);
             assert_eq!(
                 read_json(env.runtime_paths().shared_credits_path())["logins"]["claude@default"]["extra_credits"]
                     ["known"]["used_usd"],
@@ -1730,6 +1778,23 @@ fn claude_redeem_results_persist_once_and_refresh_only_a_reset() {
             assert_eq!(stats["assists"]["manual_resets"], 1);
         }
     }
+}
+
+fn assert_usage_stamped_between(env: &Env, login: &str, after: Timestamp, by: Timestamp) {
+    let path = RateLimitsCache::shared_path(&env.runtime_paths());
+    let cache: RateLimitsCache = serde_json::from_value(read_json(path)).unwrap();
+    let windows = &cache.entries[&login.parse().unwrap()].limits.windows;
+    assert!(!windows.is_empty());
+    let stamp = windows[0].observed_at.expect("published usage has a stamp");
+    assert!(
+        after < stamp && stamp <= by,
+        "{login}: {stamp} not in ({after}, {by}]"
+    );
+    assert!(
+        windows
+            .iter()
+            .all(|window| window.observed_at == Some(stamp))
+    );
 }
 
 #[test]

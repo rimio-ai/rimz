@@ -716,8 +716,13 @@ fn oauth_account_key(oauth: &ClaudeAiOauth) -> Option<String> {
 }
 
 fn fetch_usage_with_url(url: &str, access_token: &str) -> Result<AccountUsageSnapshot> {
+    let observed_at = Timestamp::now();
     let body = http_get(url, access_token)?;
-    parse_usage_response(&body)
+    let mut snapshot = parse_usage_response(&body)?;
+    snapshot.rate_limits = snapshot
+        .rate_limits
+        .map(|limits| limits.stamped_at(observed_at));
+    Ok(snapshot)
 }
 
 fn account_key(secret_kind: &str, secret: &str) -> String {

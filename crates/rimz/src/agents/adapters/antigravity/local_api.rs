@@ -97,6 +97,7 @@ pub(in crate::agents::adapters::antigravity) fn probe_account_usage_with(
             let Some(timeout) = request_timeout(deadline) else {
                 return AccountUsageProbe::Failed(identity);
             };
+            let observed_at = jiff::Timestamp::now();
             let quota = match request(
                 *endpoint,
                 RETRIEVE_QUOTA_PATH,
@@ -106,7 +107,7 @@ pub(in crate::agents::adapters::antigravity) fn probe_account_usage_with(
                 Ok(body) => body,
                 Err(_) => return AccountUsageProbe::Failed(identity),
             };
-            let rate_limits = match wire::parse_rate_limits(&quota, jiff::Timestamp::now()) {
+            let rate_limits = match wire::parse_rate_limits(&quota, observed_at) {
                 Ok(rate_limits) => rate_limits,
                 Err(_) => return AccountUsageProbe::Failed(identity),
             };

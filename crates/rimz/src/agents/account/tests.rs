@@ -3,6 +3,35 @@ use crate::ids::AgentKind;
 use jiff::SignedDuration;
 
 #[test]
+fn capacity_requires_a_read_after_the_marker_and_confirms_through_the_deadline() {
+    let model = "fable";
+    let marker = Timestamp::from_second(2_000_000_000).unwrap();
+    let deadline = marker + crate::agents::model_refusal::CONFIRM_WINDOW;
+    for (observed, since, confirms) in [
+        (marker, false, false),
+        (deadline, true, true),
+        (deadline + SignedDuration::from_nanos(1), true, false),
+    ] {
+        let capacity = ProviderCapacity::from_windows(vec![RateLimitWindow {
+            duration_mins: Some(300),
+            used_percentage: Some(99),
+            observed_at: Some(observed),
+            ..Default::default()
+        }]);
+        assert_eq!(
+            capacity.read_since(Some(model), marker),
+            Some(since),
+            "{observed}"
+        );
+        assert_eq!(
+            capacity.confirms_refusal(model, marker),
+            confirms,
+            "{observed}"
+        );
+    }
+}
+
+#[test]
 fn usage_keys_round_trip_legacy_and_scoped_text_and_reject_ambiguous_shapes() {
     for text in [
         "claude@work",

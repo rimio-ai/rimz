@@ -296,8 +296,13 @@ pub(super) fn fetch_usage_with_url(
     url: &str,
     credentials: &CodexOauthCredentials,
 ) -> Result<AccountUsageSnapshot> {
+    let observed_at = Timestamp::now();
     let body = http_get(url, credentials)?;
-    parse_usage_response(&body)
+    let mut snapshot = parse_usage_response(&body)?;
+    snapshot.rate_limits = snapshot
+        .rate_limits
+        .map(|limits| limits.stamped_at(observed_at));
+    Ok(snapshot)
 }
 
 fn http_get(url: &str, credentials: &CodexOauthCredentials) -> Result<String> {

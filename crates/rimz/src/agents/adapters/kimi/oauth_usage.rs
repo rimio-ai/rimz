@@ -10,7 +10,7 @@ use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{
     AgentRateLimits, RateLimitWindow, RateLimitWindowScope, WindowSource,
 };
-use crate::agents::credits::{AccountUsageFault, oauth_http_get};
+use crate::agents::credits::{AccountUsageFault, OAuthHttpErr, oauth_http_get};
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
 
 const MAINLAND_USAGE_URL: &str = "https://api.kimi.com/coding/v1/usages";
@@ -60,7 +60,7 @@ pub(super) fn probe() -> crate::agents::AccountUsageProbe {
     };
     let result = official_usage_url().and_then(|url| {
         let token = load_token(&super::account::credentials_path())?;
-        fetch_with(url, &token)
+        fetch_with(url, &token, oauth_http_get)
     });
     crate::agents::credits::map_account_usage_probe(result, identity, "kimi")
 }
@@ -116,9 +116,14 @@ fn load_token(path: &Path) -> Result<String, Error> {
         .ok_or(Error::NoCredentials)
 }
 
-fn fetch_with(url: &str, token: &str) -> Result<AccountUsageSnapshot, Error> {
+fn fetch_with(
+    url: &str,
+    token: &str,
+    get: impl FnOnce(&str, &[(&str, String)], &str) -> Result<String, OAuthHttpErr>,
+) -> Result<AccountUsageSnapshot, Error> {
     let headers = usage_headers(token);
-    let body = oauth_http_get(url, &headers, "Kimi OAuth usage fetch").map_err(|error| {
+    let observed_at = Timestamp::now();
+    let body = get(url, &headers, "Kimi OAuth usage fetch").map_err(|error| {
         if matches!(error.kind, HttpErrKind::Status(404)) {
             Error::Unavailable
         } else {
@@ -128,7 +133,7 @@ fn fetch_with(url: &str, token: &str) -> Result<AccountUsageSnapshot, Error> {
             }
         }
     })?;
-    parse_response(&body)
+    parse_response(&body, observed_at)
 }
 
 fn usage_headers(token: &str) -> [(&'static str, String); 2] {
@@ -138,13 +143,12 @@ fn usage_headers(token: &str) -> [(&'static str, String); 2] {
     ]
 }
 
-fn parse_response(body: &str) -> Result<AccountUsageSnapshot, Error> {
+fn parse_response(body: &str, observed_at: Timestamp) -> Result<AccountUsageSnapshot, Error> {
     let root: Value = serde_json::from_str(body)?;
     let usages = root.get("usages").and_then(Value::as_object);
     if usages.is_none() {
         tracing::debug!("Kimi quota response has no usages block");
     }
-    let now = Timestamp::now();
     let windows = [
         ("limit_5h", Some(300), None),
         ("limit_7d", Some(10_080), None),
@@ -152,7 +156,9 @@ fn parse_response(body: &str) -> Result<AccountUsageSnapshot, Error> {
         ("limit_month_code", None, Some(("month_code", "mcd"))),
     ]
     .into_iter()
-    .filter_map(|(key, duration, scope)| parse_window(usages?.get(key)?, now, duration, scope))
+    .filter_map(|(key, duration, scope)| {
+        parse_window(usages?.get(key)?, observed_at, duration, scope)
+    })
     .collect::<Vec<_>>();
     let extra_credits = root.get("boosterWallet").and_then(parse_booster_wallet);
     let reported_plan = ["plan", "planName"]
@@ -176,7 +182,7 @@ fn parse_response(body: &str) -> Result<AccountUsageSnapshot, Error> {
 
 fn parse_window(
     row: &Value,
-    now: Timestamp,
+    observed_at: Timestamp,
     duration_mins: Option<u32>,
     scope: Option<(&str, &str)>,
 ) -> Option<RateLimitWindow> {
@@ -189,7 +195,7 @@ fn parse_window(
             id: id.to_owned(),
             label: label.to_owned(),
         }),
-        observed_at: Some(now),
+        observed_at: Some(observed_at),
         source: WindowSource::Authoritative,
         ..Default::default()
     })
@@ -288,6 +294,27 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn usage_windows_are_stamped_before_the_request() {
+        let mut sent_at = None;
+        let snapshot = fetch_with("https://example.com", "test-token", |_, _, _| {
+            sent_at = Some(Timestamp::now());
+            Ok(
+                r#"{"usages":{"limit_5h":{"used_ratio":0.5},"limit_7d":{"used_ratio":0.3}}}"#
+                    .into(),
+            )
+        })
+        .unwrap();
+        let windows = snapshot.rate_limits.unwrap().windows;
+        assert_eq!(windows.len(), 2);
+        let stamp = windows[0].observed_at.unwrap();
+        assert!(
+            stamp <= sent_at.unwrap(),
+            "{stamp} is after request {sent_at:?}"
+        );
+        assert_eq!(windows[1].observed_at, Some(stamp));
+    }
+
+    #[test]
     fn quota_usages_map_ratios_durations_and_month_scopes() {
         let snapshot = parse_response(
             &json!({
@@ -299,6 +326,7 @@ mod tests {
                 }
             })
             .to_string(),
+            Timestamp::UNIX_EPOCH,
         )
         .unwrap();
         let windows = snapshot.rate_limits.unwrap().windows;
@@ -391,6 +419,7 @@ mod tests {
                     "limit_month_code":{"used_ratio":0.5}
                 }})
                 .to_string(),
+                Timestamp::UNIX_EPOCH,
             )
             .unwrap();
             let windows = snapshot.rate_limits.unwrap().windows;
@@ -402,11 +431,14 @@ mod tests {
     #[test]
     fn quota_rejects_legacy_only_and_keeps_booster_only() {
         assert!(matches!(
-            parse_response("{\"usage\":{\"limit\":100,\"used\":25},\"limits\":[]}"),
+            parse_response(
+                r#"{"usage":{"limit":100,"used":25},"limits":[]}"#,
+                Timestamp::UNIX_EPOCH
+            ),
             Err(Error::Schema { .. })
         ));
         assert!(matches!(
-            parse_response(r#"{"plan":"Code"}"#),
+            parse_response(r#"{"plan":"Code"}"#, Timestamp::UNIX_EPOCH),
             Err(Error::Schema { .. })
         ));
         let snapshot = parse_response(
@@ -417,6 +449,7 @@ mod tests {
                 "monthlyUsed":{"priceInCents":125,"currency":"USD"}
             }})
             .to_string(),
+            Timestamp::UNIX_EPOCH,
         )
         .unwrap();
         assert!(snapshot.rate_limits.is_none());
@@ -437,9 +470,12 @@ mod tests {
             }
         });
         assert!(matches!(
-            parse_response(&body.to_string()),
+            parse_response(&body.to_string(), Timestamp::UNIX_EPOCH),
             Err(Error::Schema { .. })
         ));
-        assert!(matches!(parse_response("{}"), Err(Error::Schema { .. })));
+        assert!(matches!(
+            parse_response("{}", Timestamp::UNIX_EPOCH),
+            Err(Error::Schema { .. })
+        ));
     }
 }

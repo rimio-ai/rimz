@@ -1597,34 +1597,57 @@ fn empty_keyed_panel_preserves_the_bound_cache_entry() {
 }
 
 #[test]
-fn matching_birth_account_panel_keeps_instant_climbs() {
-    let (_dir, workspace, runtime) = runtime();
-    let now = Timestamp::now();
-    let reset = now + SignedDuration::from_secs(3_600);
-    super::merge_account_rate_limits(
-        &runtime,
-        &login_key("claude"),
-        AccountUsageIdentity {
+fn mid_probe_statusline_climb_wins_in_either_arrival_order() {
+    for statusline_first in [true, false] {
+        let (_dir, workspace, runtime) = runtime();
+        let captured = Timestamp::now() - SignedDuration::from_secs(1);
+        let requested = captured - SignedDuration::from_secs(1);
+        let reset = captured + SignedDuration::from_secs(3_600);
+        let login = login_key("claude");
+        let identity = AccountUsageIdentity {
             account_key: Some("same-account".to_owned()),
             ..Default::default()
-        },
-        AgentRateLimits {
-            windows: vec![auth(0, reset, now)],
-        },
-    );
-    let mut panel = provider_panel(
-        "claude",
-        vec![be(40, reset, now + SignedDuration::from_secs(1))],
-    );
-    panel.account_key = Some("same-account".to_owned());
-    let mut producer = snapshot_with_panels(workspace, vec![panel]);
-    refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
+        };
+        assert!(merge_account_rate_limits(
+            &runtime,
+            &login,
+            identity.clone(),
+            AgentRateLimits {
+                windows: vec![auth(0, reset, requested - SignedDuration::from_secs(60))],
+            },
+        ));
+        let statusline = be(40, reset, captured);
+        let mut panel = provider_panel("claude", vec![statusline.clone()]);
+        panel.account_key = identity.account_key.clone();
+        let mut producer = snapshot_with_panels(workspace, vec![panel]);
+        let mut publish_statusline = || {
+            refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
+        };
+        let merge_probe = || {
+            assert!(merge_account_rate_limits(
+                &runtime,
+                &login,
+                identity,
+                AgentRateLimits {
+                    windows: vec![auth(0, reset, requested)],
+                },
+            ));
+        };
+        if statusline_first {
+            publish_statusline();
+            merge_probe();
+        } else {
+            merge_probe();
+            publish_statusline();
+        }
 
-    let cache = read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime));
-    assert_eq!(
-        cache.entries[&login_key("claude").into()].limits.windows[0].used_percentage,
-        Some(40)
-    );
+        let cache = read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime));
+        assert_eq!(
+            cache.entries[&login.into()].limits.windows,
+            [statusline],
+            "statusline first: {statusline_first}"
+        );
+    }
 }
 
 #[test]

@@ -188,14 +188,13 @@ pub(super) fn merge_account_rate_limits(
     };
     let mut cache = read_rate_limits_cache(&path);
     cache.refreshed_at_ms = unix_now_ms();
-    // Stamp the authoritative capture instant, then pass every reported window
-    // through the same fusion used by the sidebar producer. A current reading
-    // supersedes older best-effort truth outright, even within the same epoch.
-    let observed_at = Timestamp::now();
-    let mut windows = windows.stamped_at(observed_at);
+    // Keep each probe's request stamp. The merge clock supplies missing stamps
+    // and the current time for reset detection and window fusion.
+    let now = Timestamp::now();
+    let mut windows = windows.stamped_at(now);
     let key = AccountUsageKey::new(key.clone(), identity.scope.clone());
     let prior_entry = cache.entries.get(&key);
-    let reset_spotted_at_ms = if reset_spotted(prior_entry, &windows, observed_at) {
+    let reset_spotted_at_ms = if reset_spotted(prior_entry, &windows, now) {
         Some(cache.refreshed_at_ms)
     } else {
         prior_entry.and_then(|entry| entry.reset_spotted_at_ms)
@@ -211,7 +210,7 @@ pub(super) fn merge_account_rate_limits(
     let bound_limits = identity.account_key.is_some().then(|| windows.clone());
     let index = WindowIndex::new(prior_entry, windows.windows);
     // Authoritative reads are complete snapshots: live-only keys prune omitted windows.
-    let (truth, pending) = index.fuse(index.live.keys().cloned(), observed_at, true);
+    let (truth, pending) = index.fuse(index.live.keys().cloned(), now, true);
     cache.entries.insert(
         key,
         RateLimitCacheEntry {

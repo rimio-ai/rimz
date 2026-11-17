@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
@@ -155,6 +156,7 @@ pub(super) fn account(kind: &str, plugin_dir: &Path, argv: &[String]) -> Account
 }
 
 pub(super) fn account_usage(kind: &str, plugin_dir: &Path, argv: &[String]) -> AccountUsageProbe {
+    let observed_at = Timestamp::now();
     let Ok(response) = account_response(kind, plugin_dir, argv) else {
         return AccountUsageProbe::Failed(Default::default());
     };
@@ -174,7 +176,7 @@ pub(super) fn account_usage(kind: &str, plugin_dir: &Path, argv: &[String]) -> A
         snapshot: AccountUsageSnapshot {
             rate_limits: response
                 .rate_limit_windows
-                .map(|windows| AgentRateLimits { windows }),
+                .map(|windows| AgentRateLimits { windows }.stamped_at(observed_at)),
             plan: response.plan,
             ..AccountUsageSnapshot::default()
         },
@@ -414,6 +416,47 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn account_usage_keeps_plugin_stamps_and_dates_missing_ones_before_spawn() {
+        let dir = TempDir::new().unwrap();
+        let argv = [
+            "/bin/sh".into(),
+            "-c".into(),
+            concat!(
+                "sleep 0.02\n",
+                ": > spawned\n",
+                "printf '%s' '{\"rate_limit_windows\":[",
+                "{\"duration_mins\":300,\"observed_at\":\"2026-01-01T00:00:00Z\"},",
+                "{\"duration_mins\":10080}]}'",
+            )
+            .into(),
+        ];
+        let AccountUsageProbe::Found { snapshot, .. } = account_usage("testbot", dir.path(), &argv)
+        else {
+            panic!("expected account probe windows");
+        };
+        let spawned_at = Timestamp::try_from(
+            fs::metadata(dir.path().join("spawned"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+        )
+        .unwrap();
+        let windows = snapshot.rate_limits.unwrap().windows;
+        assert_eq!(
+            windows[0].observed_at,
+            Some("2026-01-01T00:00:00Z".parse().unwrap())
+        );
+        let stamp = windows[1]
+            .observed_at
+            .expect("fill an omitted plugin stamp");
+        assert!(
+            stamp <= spawned_at,
+            "{stamp} is after spawn marker {spawned_at}"
+        );
+    }
 
     #[test]
     #[cfg(unix)]
