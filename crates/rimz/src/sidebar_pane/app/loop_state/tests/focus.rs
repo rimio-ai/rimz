@@ -2998,6 +2998,39 @@ fn a_card_focus_dispatches_only_to_the_pane_the_lookup_puts_its_agent_in() {
         "a refusal never clears another click's intent"
     );
 
+    // A directory at the lock path fails the clear while this click's intent still stands.
+    let lock = rig.runtime.focus_anchor_lock();
+    let _ = std::fs::remove_file(&lock);
+    std::fs::create_dir_all(&lock).unwrap();
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    finish_focus_request(
+        &target,
+        Some(&tx),
+        Some(Ok(anchor.nonce)),
+        None,
+        Some(input),
+        |nonce| {
+            vet_card_focus(Some(&agent), &target, nonce, &rig.runtime, None, |_| {
+                Ok(CardHosting::Nowhere)
+            })
+            .unwrap_or_else(|| panic!("a refused focus must not dispatch"))
+        },
+    );
+    assert_eq!(
+        rx.try_recv(),
+        Ok(Wakeup::FocusFailed {
+            pane: target.clone(),
+            error: "no pane hosts the agent now".to_owned(),
+        }),
+        "a refusal whose own intent could not be cleared still says why"
+    );
+    assert_eq!(
+        crate::mux::focus_anchor::load(&rig.runtime),
+        Some(anchor.clone())
+    );
+    std::fs::remove_dir(&lock).unwrap();
+
     assert!(
         vet_card_focus(None, &target, anchor.nonce, &rig.runtime, None, |_| {
             panic!("an unkeyed focus takes no read")

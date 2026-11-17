@@ -98,7 +98,11 @@ pub(super) fn vet_card_focus(
         Ok(CardHosting::Nowhere) => "no pane hosts the agent now".to_owned(),
         Err(error) => error,
     };
-    if !crate::mux::focus_anchor::clear_matching(runtime, nonce) {
+    // A clear also fails on a lock or remove error, which leaves this click's own intent standing:
+    // only an intent that is gone or names another click supersedes the refusal.
+    let superseded = !crate::mux::focus_anchor::clear_matching(runtime, nonce)
+        && crate::mux::focus_anchor::load(runtime).is_none_or(|anchor| anchor.nonce != nonce);
+    if superseded {
         return Some(Ok(false));
     }
     Some(Err(FocusFailure::Refused(reason)))
