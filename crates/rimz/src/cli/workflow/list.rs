@@ -112,6 +112,9 @@ pub(super) fn render(
             ),
             (None, None) => workflow_view::detail(record, spec.as_ref(), now, agent.as_deref()),
         };
+        if record.once {
+            detail.insert_str(0, "once · ");
+        }
         if let Some(number) = view.pr_number(&record.scope.path) {
             detail.push_str(&format!(" · PR #{number}"));
         }
@@ -198,6 +201,9 @@ fn json_row(record: &RunRecord, detail: &str) -> serde_json::Value {
     });
     if let Some(hold) = capacity_wait(record).and_then(|wait| wait.hold) {
         row["hold"] = serde_json::json!(hold);
+    }
+    if record.once {
+        row["once"] = serde_json::json!(true);
     }
     row
 }

@@ -301,7 +301,10 @@ impl View<'_> {
         let state = if record.state.is_terminal() {
             format!(
                 "{} {}",
-                record.state.as_str(),
+                workflow_view::state_word(
+                    record.state,
+                    record.outcome.as_ref().map(|outcome| &outcome.ending)
+                ),
                 render::age_short(record.terminal_at.unwrap_or(record.entered_at), self.now)
             )
         } else if record.state == RunState::Parked {
@@ -392,6 +395,9 @@ impl View<'_> {
         let role = workflow_view::glyph_role(record);
         let glyph = rimz::theme::theme_glyphs(&super::super::machine_config().theme)(role);
         write!(out, "{}", record.address())?;
+        if record.once && !record.state.is_terminal() {
+            write!(out, " · once")?;
+        }
         if let Some(number) = pr_number {
             write!(out, "  PR #{number}")?;
         }

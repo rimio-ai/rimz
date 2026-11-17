@@ -259,7 +259,10 @@ fn opening(record: &RunRecord, out: &mut impl Write) -> Result<()> {
             render::status::workflow(record.state, false).bold(),
             &format!(
                 "{glyph} {} {}",
-                record.state.as_str(),
+                workflow_view::state_word(
+                    record.state,
+                    record.outcome.as_ref().map(|outcome| &outcome.ending)
+                ),
                 dated_clock(terminal_now(record))
             )
         )
@@ -340,7 +343,9 @@ pub(in crate::cli) fn header_only(
     text.push_str(address.as_deref().unwrap_or(id.as_str()));
     text.push('\n');
     if let Some(header) = header {
-        let state = header.state.map_or("unknown", records::RunState::as_str);
+        let state = header.state.map_or("unknown", |state| {
+            workflow_view::state_word(state, header.ending.as_ref())
+        });
         match header.terminal_at {
             Some(at) => text.push_str(&format!("{state} {}\n", dated_clock(at))),
             None => text.push_str(&format!("{state}\n")),
@@ -700,6 +705,13 @@ impl History<'_> {
                     reason
                         .as_ref()
                         .map_or_else(String::new, |reason| format!(" · {reason}"))
+                )?,
+                JournalEvent::Terminal {
+                    tried: Some(target),
+                    ..
+                } => writeln!(
+                    out,
+                    "terminal tried · stopped after one node; the run would go → {target}"
                 )?,
                 JournalEvent::Terminal { state, .. } => {
                     writeln!(out, "terminal {}", state.as_str())?

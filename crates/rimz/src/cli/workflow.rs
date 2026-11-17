@@ -219,6 +219,22 @@ enum Command {
         /// attempt.
         #[arg(long)]
         skip_capacity: bool,
+        /// Start the run at this check or step instead of the definition's start.
+        #[arg(long, value_name = "NODE", conflicts_with = "loop_fire_json")]
+        at: Option<String>,
+        /// A JSON object handed to the start node as its input: a string `outcome`, and a
+        /// `key`, when given, that is a string or an integer.
+        #[arg(
+            long,
+            value_name = "OBJECT",
+            value_parser = start_input,
+            conflicts_with = "loop_fire_json"
+        )]
+        input: Option<serde_json::Map<String, serde_json::Value>>,
+        /// Try the start node: end the run once that node has answered, naming the route the run
+        /// would take, and wait for it here.
+        #[arg(long, conflicts_with = "loop_fire_json")]
+        once: bool,
         /// The fire of a workflow loop task starting this run as the task's own.
         #[arg(long, hide = true, value_name = "JSON")]
         loop_fire_json: Option<String>,
@@ -332,6 +348,9 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             deadline,
             give_up,
             skip_capacity,
+            at,
+            input,
+            once,
             loop_fire_json,
         } => {
             let args = workflow::StartArgs {
@@ -342,7 +361,9 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
                 } else {
                     records::StartCapacity::Wait
                 },
-                ..Default::default()
+                at,
+                input,
+                once,
             };
             let task = loop_fire_json
                 .as_deref()
@@ -533,6 +554,24 @@ fn answer_object(raw: &str) -> Result<serde_json::Map<String, serde_json::Value>
     }
 }
 
+/// A `run --input` value: one JSON object with a string `outcome`, and a `key`, when given,
+/// that a run's key decodes (a string or an integer).
+fn start_input(raw: &str) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let object = answer_object(raw)?;
+    if !object
+        .get("outcome")
+        .is_some_and(serde_json::Value::is_string)
+    {
+        return Err("expected an object with a string `outcome`".into());
+    }
+    if let Some(key) = object.get("key")
+        && serde_json::from_value::<records::Key>(key.clone()).is_err()
+    {
+        return Err("expected a `key` that is a string or an integer".into());
+    }
+    Ok(object)
+}
+
 /// Hand the calling judge's answer to its run. The judge is the calling agent's own row, with
 /// no walk to a parent, so a judge's child cannot answer for it.
 fn submit(
@@ -618,6 +657,7 @@ fn start(
     // loop fire carries the fire: listed and stopped by its task, reported to nobody.
     let manual = task.as_ref().is_some_and(|task| task.manual);
     let owned = task.is_some();
+    let once = args.once;
     let source = match task {
         Some(task) => workflow::DefinitionSource::Deployed {
             dir: &dir,
@@ -677,6 +717,10 @@ fn start(
         resolve::run_command(&record, "show", globals, None, &[], &[])
     )?;
     match passed {
+        Some(passed) if once => {
+            receipt::write_waiting(&paths, &passed)?;
+            receipt::finish_try(ctx.store.paths(), &record.id, globals)
+        }
         Some(passed) => receipt::write_held(&paths, &passed, ""),
         None => Ok(()),
     }
@@ -863,6 +907,9 @@ pub(super) fn check_loop_launch(
     let Command::Run {
         name,
         worktree,
+        at,
+        input,
+        once,
         loop_fire_json,
         ..
     } = &args.command
@@ -871,6 +918,24 @@ pub(super) fn check_loop_launch(
     };
     if loop_fire_json.is_some() {
         bail!("--loop-fire-json is the fire's own; remove it from the tail");
+    }
+    if at.is_some() {
+        bail!(
+            "--at starts a run by hand at a node, and a task's fire runs from the workflow's \
+             start; remove --at"
+        );
+    }
+    if input.is_some() {
+        bail!(
+            "--input hands a run's start an input by hand, and a task's fire gives none; remove \
+             --input"
+        );
+    }
+    if *once {
+        bail!(
+            "--once tries one node by hand, and a task's fire runs the whole workflow; remove \
+             --once"
+        );
     }
     if name.components().count() != 1 {
         bail!(

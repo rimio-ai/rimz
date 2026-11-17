@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use rimz::config::GlyphRole;
 use rimz::harness::workflow::{Definition, Target};
 use rimz::store::workflow::{
-    Asking, AttemptKind, Hold, LiveAttempt, ParkReason, RunRecord, RunState,
+    Asking, AttemptKind, Hold, LiveAttempt, ParkReason, RunEnding, RunRecord, RunState,
 };
 
 use super::render;
@@ -349,6 +349,15 @@ pub(super) fn with_you_suffix(
     match (record.wait.as_ref(), phrase) {
         (Some(wait), Some(phrase)) => format!(" · {}: {phrase}", wait.node),
         _ => String::new(),
+    }
+}
+
+/// The word a run's state is shown by: `tried` for a try that ended done, else the state's own.
+pub(super) fn state_word(state: RunState, ending: Option<&RunEnding>) -> &'static str {
+    if ending == Some(&RunEnding::Tried) {
+        "tried"
+    } else {
+        state.as_str()
     }
 }
 
