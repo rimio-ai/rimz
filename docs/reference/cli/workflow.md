@@ -910,8 +910,8 @@ These refuse before anything stops:
 
 - A definition that does not read, or that validation refuses, with the error `workflow advance` reports for it. `rimz agents restart` on the step's agent refuses the same way.
 - A missing conversation, an unsupported provider resume, or a different account's history pool, naming a fresh `workflow restart` or `rimz accounts use` fix.
-- A finished run: `workflow run <id> has ended (<state>); cannot restart`.
-- A run being canceled, and a check without a held session.
+- A finished run: `workflow run <id> has ended (<state>); cannot restart` once its home has moved to `finished-workflows/`, and `workflow run <id> is <state>; cannot restart` in the short window before the move, where the state is `done`, `failed`, `canceled`, or `tried` for a try.
+- A run being canceled, `workflow run <id> is canceling; cannot restart`, and a check without a held session.
 - A command or message step: `node <node> is <kind>[; @user: <park> | ; waiting on <outcome>]; restart requires an agent step`.
 - A restart already pending: `this step is already restarting`.
 
