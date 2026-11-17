@@ -65,7 +65,7 @@ These blockers are questions, and so is any other a human could clear:
 
 An answer can also be "wait, I am fixing it": when the maintainer says they changed something, retry the step that failed.
 
-For cargo-vet evidence, first import applicable trusted audits or review the actual source delta under the repository's policy. When you cannot truthfully vouch for it, ask once during Implement before the PR is raised, gathering every such crate into the one question. For each, state the crate and version delta, the crates.io owners, the size of the source delta, why no import or truthful audit covers it, and which source PR pulls it in. Offer:
+For cargo-vet evidence, first import applicable trusted audits or review the actual source delta under the repository's policy. A source PR's externals job stops at its first failing step, so its log may not list every unvetted crate: after applying the batch, run `cargo vet` without `--locked` for the full set before planning reviews. When you cannot truthfully vouch for it, ask once during Implement before the PR is raised, gathering every such crate into the one question. For each, state the crate and version delta, the crates.io owners, the size of the source delta, why no import or truthful audit covers it, and which source PR pulls it in. Offer:
 
 1. `trust <publisher>`: record `cargo vet trust` for the named publisher and crate.
 2. `exempt this version`: record a `safe-to-deploy` exemption for that exact version, noting in the PR body that the maintainer approved it without review.
