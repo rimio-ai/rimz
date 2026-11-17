@@ -155,7 +155,7 @@ pub(crate) fn render_dispatch_outcome(
             DispatchOutcome::Queued {
                 label,
                 message_id,
-                reason: None | Some(ParkReason::NoPane),
+                reason: None | Some(ParkReason::NoPane | ParkReason::NotHosted { .. }),
             },
         ) => {
             return Some(format!(
@@ -216,6 +216,10 @@ pub(crate) fn render_dispatch_outcome(
                 format!("queued for {label} ({message_id}) — {hold}")
             }
             Some(ParkReason::NoPane) => format!("queued for {label} ({message_id}) — no live pane"),
+            Some(ParkReason::NotHosted { blocker }) => format!(
+                "queued for {label} ({message_id}) — {}",
+                blocker.strip_prefix("stuck: ").unwrap_or(blocker)
+            ),
             None => format!("queued for {label} ({message_id})"),
             Some(ParkReason::ProviderStarting) => format!(
                 "queued for {label} ({message_id}) — {label} is resuming; delivers when its provider registers; send now: rimz message steer {message_id}"
@@ -281,15 +285,19 @@ fn report_interrupt(outcomes: &[DispatchOutcome], compacted: &[String]) -> Resul
 pub(crate) fn report_interrupt_confirmation(label: &str, confirmation: InterruptConfirmation) {
     use std::io::Write as _;
 
-    let InterruptConfirmation::NotConfirmed { window } = confirmation else {
-        return;
+    let warning = super::render::paint(super::render::palette::warn().bold(), "warning:");
+    let _ = match confirmation {
+        InterruptConfirmation::NotConfirmed { window } => writeln!(
+            super::render::err(),
+            "{warning} {label}: interrupt not confirmed within {} ms; its turn may still be running (rimz pane capture {label}), or Codex's Interrupt hook may not be trusted (rimz doctor)",
+            window.as_millis(),
+        ),
+        InterruptConfirmation::NotSent { cause } => writeln!(
+            super::render::err(),
+            "{warning} {label}: the message was sent, but its interrupt key was not: {cause}"
+        ),
+        InterruptConfirmation::NotChecked | InterruptConfirmation::Confirmed => Ok(()),
     };
-    let _ = writeln!(
-        super::render::err(),
-        "{} {label}: interrupt not confirmed within {} ms; its turn may still be running (rimz pane capture {label}), or Codex's Interrupt hook may not be trusted (rimz doctor)",
-        super::render::paint(super::render::palette::warn().bold(), "warning:"),
-        window.as_millis(),
-    );
 }
 
 fn report_boundary(outcomes: &[DispatchOutcome], compacted: &[String]) -> Result<()> {

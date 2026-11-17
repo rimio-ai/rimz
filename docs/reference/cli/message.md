@@ -304,7 +304,7 @@ A follow-up waiting for a resumed child says `waiting for @child to register aft
 | `--enter`, `--no-enter` | Whether the text is submitted. |
 | `--smart-compact <PCT\|TOKENS>`, `--no-smart-compact` | Set or clear the compaction threshold. |
 
-`steer` delivers now, past the schedule, conditions, queue order, and gate, but still honours the typing hold. An open prompt still blocks it without `--force`, and a missing agent or pane fails with the reason. A `claimed` message is refused with `delivery in progress; retry in a moment`, a `sent` one is refused because only queued messages can be steered, and a final one points to `requeue`.
+`steer` delivers now, past the schedule, conditions, queue order, and gate, but still honours the typing hold. An open prompt still blocks it without `--force`, and a missing agent or pane fails with the reason. A receiver the pane listing shows in another pane, or a listing that cannot be read, fails with the record's blocker, `stuck: receiver in pane <found>, not its bound pane <bound>` or `stuck: receiver pane unreadable: <error>`, and the message stays queued. A `claimed` message is refused with `delivery in progress; retry in a moment`, a `sent` one is refused because only queued messages can be steered, and a final one points to `requeue`.
 
 `requeue` writes a new queued message with a new id. It keeps the recipient and delivery settings unless flags override them, and re-arms every `--after` and `--when` condition. A soft-compaction wrap-up is refused: it is steer-only and never requeued. Any other message that is still queued is refused with a pointer to `edit` or `steer`, and a `sent` one must settle first.
 

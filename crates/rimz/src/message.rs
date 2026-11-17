@@ -67,7 +67,13 @@ impl std::fmt::Display for InputWait {
 pub enum InterruptConfirmation {
     NotChecked,
     Confirmed,
-    NotConfirmed { window: Duration },
+    NotConfirmed {
+        window: Duration,
+    },
+    /// The key was not pressed: the receiver was no longer where the paste decided it was.
+    NotSent {
+        cause: &'static str,
+    },
 }
 
 use crate::address::recipient_channel;

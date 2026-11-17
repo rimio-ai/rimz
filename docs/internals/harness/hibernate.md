@@ -178,7 +178,7 @@ A later successful wake withdraws the entry and its `wake_error` together, so a 
 
 | Caller | Function | Then |
 | --- | --- | --- |
-| Message delivery | `crates/rimz/src/message/send.rs::send_batch_to_live_pane` | writes the batch |
+| Message delivery | `crates/rimz/src/message/send.rs::send_batch_to_live_pane`, after a hosting read answers the receiver in that pane | writes the batch once the read under the pane lock still answers it there, else releases the claim to `Queued` |
 | `rimz answer` | `crates/rimz/src/cli/answer.rs::run`, through `crates/rimz/src/launcher/agent_pane.rs::open_writer` | re-reads hosting after the wake and the pane lock, then writes the answer keys, or exits 2 when the agent left the pane |
 | `rimz pane send` of a pane id | `crates/rimz/src/cli/pane.rs::send` | writes the keys |
 | `rimz pane send @agent` | `crates/rimz/src/cli/pane.rs::agent_writer`, through `crates/rimz/src/launcher/agent_pane.rs::open_writer` | re-reads hosting after the wake and the pane lock, then writes the keys, or refuses when the agent left the pane |

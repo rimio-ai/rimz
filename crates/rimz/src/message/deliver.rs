@@ -177,6 +177,11 @@ pub enum DeliveryVerdict {
     AskWaiting,
     PaneHeld,
     NoPane,
+    /// The hosting lookup answers another pane for the receiver than the one it is bound to,
+    /// or cannot be read; `blocker` says which, and waits as [`Self::NoPane`] does.
+    NotHosted {
+        blocker: String,
+    },
     Ready,
 }
 
@@ -205,6 +210,7 @@ impl DeliveryVerdict {
             | Self::Compacting
             | Self::TypingHeld { .. } => Some(StallClass::Busy),
             Self::NoPane
+            | Self::NotHosted { .. }
             | Self::ProviderStarting
             | Self::ResumeUnrecovered
             | Self::AskWaiting
@@ -229,6 +235,7 @@ impl DeliveryVerdict {
                 format!("someone is using the receiver's pane; retry at {until}")
             }
             Self::NoPane => NO_LIVE_PANE.to_owned(),
+            Self::NotHosted { blocker } => blocker.clone(),
             Self::ProviderStarting => "provider is starting".to_owned(),
             Self::ResumeUnrecovered => "resuming".to_owned(),
             Self::AskWaiting => "waiting on input in its pane".to_owned(),
@@ -285,11 +292,27 @@ pub const NO_LIVE_PANE: &str = "stuck: no live pane";
 /// carry it.
 const PINNED_PANE_PREFIX: &str = "stuck: pinned pane ";
 const PINNED_PANE_SUFFIX: &str = " is not live";
+/// The start of a `NotHosted` blocker, which the sweep clears as it clears its no-pane one.
+const NOT_HOSTED_PREFIX: &str = "stuck: receiver ";
 
 /// Whether a recorded `last_error` is one this sweep wrote, so a defer on any other verdict clears it and leaves a real send failure alone.
 fn is_no_pane_blocker(blocker: &str) -> bool {
     blocker == NO_LIVE_PANE
+        || blocker.starts_with(NOT_HOSTED_PREFIX)
         || (blocker.starts_with(PINNED_PANE_PREFIX) && blocker.ends_with(PINNED_PANE_SUFFIX))
+}
+
+/// The wait a lookup that does not answer `bound`, the pane a record is bound to, puts it in.
+pub(super) fn not_hosted(miss: send::LookupMiss, bound: &PaneId) -> DeliveryVerdict {
+    match miss {
+        send::LookupMiss::Nowhere => DeliveryVerdict::NoPane,
+        send::LookupMiss::Elsewhere(found) => DeliveryVerdict::NotHosted {
+            blocker: format!("{NOT_HOSTED_PREFIX}in pane {found}, not its bound pane {bound}"),
+        },
+        send::LookupMiss::Unread(error) => DeliveryVerdict::NotHosted {
+            blocker: format!("{NOT_HOSTED_PREFIX}pane unreadable: {error}"),
+        },
+    }
 }
 
 pub enum DeliveryReport {
@@ -403,6 +426,14 @@ fn attempt_delivery(
             }
             Candidacy::Gone => return Ok(DeliveryReport::Stopped),
         };
+    // Read before the claim, which a wait would only release again: a record waits here, with
+    // no claim and no commit, until the lookup answers the pane it is bound to.
+    if let Some(miss) = send::lookup_miss(workspace, store, candidate.target, candidate.bound) {
+        return Ok(DeliveryReport::Refused(not_hosted(
+            miss,
+            &candidate.target.pane_id,
+        )));
+    }
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_BEFORE_CLAIM");
     let claimed = match policy {
@@ -528,13 +559,16 @@ pub(super) fn execute_attempt(
         )
     };
     let receipt = receipt.and_then(|receipt| {
-        if let send::Receipt::ClaimLost { compacted } = receipt {
-            store.release_message_claims(
-                records,
+        let released = match receipt {
+            send::Receipt::ClaimLost { compacted } => Some((
                 "pane write stopped: message claim no longer held",
                 compacted,
-                &workspace.session_name,
-            )?;
+            )),
+            send::Receipt::NotHosted { compacted, reason } => Some((reason, compacted)),
+            _ => None,
+        };
+        if let Some((reason, compacted)) = released {
+            store.release_message_claims(records, reason, compacted, &workspace.session_name)?;
         }
         Ok(receipt)
     });
@@ -546,9 +580,11 @@ pub(super) fn execute_attempt(
             compacted,
             interrupt,
         }),
-        Ok(send::Receipt::ClaimLost { .. } | send::Receipt::Withdrawn { .. }) => {
-            Ok(AttemptOutcome::Queued)
-        }
+        Ok(
+            send::Receipt::ClaimLost { .. }
+            | send::Receipt::NotHosted { .. }
+            | send::Receipt::Withdrawn { .. },
+        ) => Ok(AttemptOutcome::Queued),
         Ok(send::Receipt::CacheCold) => {
             // The cold check reads the ping at the head; whatever was batched behind it waits for
             // the next attempt rather than failing with the ping.
@@ -933,6 +969,7 @@ pub fn sweep(
             };
             let blocker = match verdict {
                 Some(DeliveryVerdict::NoPane) => BlockerUpdate::Set(NO_LIVE_PANE),
+                Some(DeliveryVerdict::NotHosted { ref blocker }) => BlockerUpdate::Set(blocker),
                 _ => BlockerUpdate::ClearOwn(is_no_pane_blocker),
             };
             let retry_at = held_until.unwrap_or_else(|| {

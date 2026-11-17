@@ -167,6 +167,20 @@ pub enum ParkReason {
     },
     Behind(MessageId),
     NoPane,
+    /// The hosting lookup does not answer the receiver's bound pane; `blocker` says why.
+    NotHosted {
+        blocker: String,
+    },
+}
+
+impl ParkReason {
+    /// The park a fresh send takes for a lookup's no-pane wait.
+    fn from_verdict(verdict: deliver::DeliveryVerdict) -> Self {
+        match verdict {
+            deliver::DeliveryVerdict::NotHosted { blocker } => Self::NotHosted { blocker },
+            _ => Self::NoPane,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1063,6 +1077,25 @@ fn dispatch_targets(
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut compacted = Vec::new();
     for (target, decision) in targets.iter().zip(decisions) {
+        let decision = match (&decision, &target.pane) {
+            (DispatchDecision::Live, Some(pane)) => {
+                // Read before the enqueue-and-claim: a receiver the lookup does not answer in
+                // its bound pane parks, as one with no pane does.
+                send::lookup_miss(
+                    state.workspace,
+                    state.store,
+                    pane,
+                    target.bound(state.snapshot),
+                )
+                .map_or(decision, |miss| DispatchDecision::Parked {
+                    reason: Some(ParkReason::from_verdict(deliver::not_hosted(
+                        miss,
+                        &pane.pane_id,
+                    ))),
+                })
+            }
+            _ => decision,
+        };
         if matches!(decision, DispatchDecision::Parked { .. }) {
             let agent = target
                 .agent
