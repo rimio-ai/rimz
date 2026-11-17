@@ -1783,7 +1783,11 @@ impl Tick {
             now,
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &if self.lost {
+            &if self.lost
+                || self
+                    .state
+                    .is_some_and(|stamp| watcher_lost(task, NAME, stamp, now.timestamp()))
+            {
                 BTreeSet::from([NAME.to_owned()])
             } else {
                 BTreeSet::new()
@@ -2219,6 +2223,73 @@ fn stranded_fire_at_retries_only_when_its_runner_is_lost() {
         pass(),
         (vec![], stamp),
         "a recorded attempt since the stamp is not retried"
+    );
+}
+
+/// A bound watch row past the grace is lost only while its watcher holds no lock: the watcher
+/// locks under the row name, never the task id its stamps are keyed by once bound.
+#[test]
+fn bound_watch_row_is_lost_only_when_its_watcher_lock_is_free() {
+    const WATCHED: &str = "bound-watch";
+    let root = tempfile::tempdir().unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&paths).unwrap();
+    std::fs::create_dir_all(&runtime.locks_dir).unwrap();
+    let now = zdt(2026, 6, 24, 9, 0, 0);
+    let stale = seconds_before(now.timestamp(), WATCH_LOST_GRACE_SECS + 1);
+    let task = LoadedTask::new(
+        WATCHED,
+        TaskEntry {
+            args: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
+            root: root.path().to_path_buf(),
+            watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
+            ..TaskEntry::default()
+        },
+        TaskSource::Config,
+    );
+    // The row as its first fire (a check-in, or the exit runner) leaves it: bound.
+    let id = super::super::task_record_store::mutate(|records| {
+        records.mint(&task.binding(WATCHED), Timestamp::now())
+    })
+    .unwrap();
+    let key = id.to_string();
+    let tasks = BTreeMap::from([(WATCHED.to_owned(), task)]);
+    let pass = |stamp_key: &str| {
+        write_temp_then_rename_cache(
+            &state_path(&runtime),
+            &BTreeMap::from([(stamp_key.to_owned(), stale)]),
+        )
+        .unwrap();
+        let fired = fire_tasks(
+            &runtime,
+            Some(root.path()),
+            tasks.clone(),
+            &now,
+            LoopRunHost::Detached,
+            None,
+        );
+        (fired, last_stamps(&runtime)[&key])
+    };
+
+    let guard = super::super::signal::acquire_watch_lock(&runtime, WATCHED)
+        .unwrap()
+        .expect("watch lock");
+    assert_eq!(
+        pass(&key),
+        (vec![], stale),
+        "a held watch lock under the id key"
+    );
+    assert_eq!(
+        pass(WATCHED),
+        (vec![], stale),
+        "a held watch lock under the name key"
+    );
+    drop(guard);
+    assert_eq!(
+        pass(&key),
+        (vec![WATCHED.to_owned()], now.timestamp()),
+        "a free watch lock past the grace is a lost watcher"
     );
 }
 
