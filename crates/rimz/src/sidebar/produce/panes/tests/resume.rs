@@ -22,7 +22,6 @@ impl ResumeFixture {
                 pid: 76,
                 started_at: jiff::Timestamp::from_second(10).unwrap(),
                 cwd: None,
-                lineage: vec![76],
             })),
             root_command: RefCell::new("zsh".into()),
             hosted_command: RefCell::new(
@@ -150,8 +149,6 @@ fn resumed_session_follows_a_new_hosted_agent_under_the_same_shell() {
         let mut hosted = fixture.hosted.borrow_mut();
         let hosted = hosted.as_mut().unwrap();
         hosted.pid = 77;
-        hosted.lineage = vec![77];
-        hosted.started_at = jiff::Timestamp::from_second(20).unwrap();
     }
     *fixture.answer.borrow_mut() = ResumeProbe::Resumed("session-y".into());
     let mut fresh = fixture.candidate();
@@ -256,7 +253,6 @@ fn resumed_session_stays_without_new_walks_for_an_unchanged_or_parked_hosted_age
             let mut hosted = fixture.hosted.borrow_mut();
             let hosted = hosted.as_mut().unwrap();
             hosted.pid = 42;
-            hosted.lineage.clear();
             *fixture.root_command.borrow_mut() = fixture.hosted_command.borrow().clone();
         }
         let mut memo = SettledResumes::new();
@@ -337,7 +333,6 @@ fn settled_resume_probes_cost_the_same_reads_as_bound_panes_and_track_hosted_ide
         let mut hosted = fixture.hosted.borrow_mut();
         let hosted = hosted.as_mut().unwrap();
         hosted.pid = 77;
-        hosted.lineage = vec![77];
     }
     fixture.repair(&mut fixture.candidate(), &mut memo);
     assert_eq!(
@@ -349,11 +344,14 @@ fn settled_resume_probes_cost_the_same_reads_as_bound_panes_and_track_hosted_ide
         let mut hosted = fixture.hosted.borrow_mut();
         let hosted = hosted.as_mut().unwrap();
         hosted.pid = 42;
-        hosted.lineage.clear();
     }
     *fixture.root_command.borrow_mut() = fixture.hosted_command.borrow().clone();
     fixture.repair(&mut fixture.candidate(), &mut memo);
-    assert_eq!(fixture.calls.get(), 5, "hosted root uses an empty lineage");
+    assert_eq!(
+        fixture.calls.get(),
+        5,
+        "a hosted root is its own hosted pid"
+    );
     fixture.repair(&mut fixture.candidate(), &mut memo);
     assert_eq!(fixture.calls.get(), 5);
 

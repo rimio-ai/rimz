@@ -661,13 +661,8 @@ fn natively_unstamped(frame: &PaneFrame) -> HashSet<PaneId> {
 }
 
 fn hosted_process_identity(process: &PaneProcess) -> Option<(u32, jiff::Timestamp)> {
-    let root_pid = process.pid?;
     Some((
-        process
-            .hosted_agent_lineage
-            .last()
-            .copied()
-            .unwrap_or(root_pid),
+        process.hosted_agent_pid?,
         process.hosted_agent_process_start?,
     ))
 }
