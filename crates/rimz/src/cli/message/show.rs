@@ -852,6 +852,7 @@ pub(super) fn render_verdict(
         ),
         deliver::DeliveryVerdict::ModelHeld(hold) => format!("held: {target}: {hold}"),
         deliver::DeliveryVerdict::NoPane => format!("{} for {target}", deliver::NO_LIVE_PANE),
+        deliver::DeliveryVerdict::NotHosted { blocker } => format!("{blocker} for {target}"),
         deliver::DeliveryVerdict::Ready => "ready: delivery conditions pass".to_owned(),
     }
 }
@@ -881,7 +882,9 @@ pub(super) fn delivery_action_hint(
         deliver::DeliveryVerdict::PaneHeld => Some(format!(
             "check it: rimz pane capture {target}      send now: rimz message steer {message_id} --force"
         )),
-        deliver::DeliveryVerdict::NoPane | deliver::DeliveryVerdict::Ready => None,
+        deliver::DeliveryVerdict::NoPane
+        | deliver::DeliveryVerdict::NotHosted { .. }
+        | deliver::DeliveryVerdict::Ready => None,
         deliver::DeliveryVerdict::ReceiverEnded => None,
         // Nothing RimZ sends goes in; the user changes the model in the agent's own pane.
         deliver::DeliveryVerdict::ModelHeld(_) => None,

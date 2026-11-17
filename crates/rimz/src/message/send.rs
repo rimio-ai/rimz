@@ -8,6 +8,7 @@ use jiff::Timestamp;
 use crate::Store;
 use crate::agents::{AgentState, AgentStatus, LifecycleSignal};
 use crate::harness::auto_continue::CardStatus;
+use crate::launcher::agent_pane::AgentPane;
 use crate::message::{
     DeliveryKind, InterruptConfirmation, MessageDraft, Recipient, command_segments,
     command_submit_delay_from_env, message_interval_from_env,
@@ -15,6 +16,7 @@ use crate::message::{
 use crate::mux::PaneWriter;
 use crate::mux::typing::{InputSource, TypingRecord, TypingView};
 use crate::pane::keys::NamedKey;
+use crate::sidebar::produce::hosting::HostingErr;
 use crate::store::follow::{EventFollower, FollowEvent};
 use crate::store::message::{
     AutoCompact, HarnessNotice, MessageBody, MessageRecord, MessageSender,
@@ -73,6 +75,12 @@ pub(super) enum Receipt {
     CompactionPending,
     ClaimLost {
         compacted: bool,
+    },
+    /// The lookup read under the pane lock did not answer the claim's pane for the receiver;
+    /// `reason` is the release's.
+    NotHosted {
+        compacted: bool,
+        reason: &'static str,
     },
     TypingHeld {
         until: Timestamp,
@@ -254,9 +262,20 @@ pub(super) fn send_batch_to_live_pane(
         return Ok(receipt);
     };
     sleep(super::interrupt_delay_from_env());
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_BEFORE_INTERRUPT_KEY");
+    // The delay leaves the receiver time to move: the key goes only to the session the paste
+    // decided on, in the claim's pane.
+    // The follower opens first, so no store I/O sits between the withheld check and the key.
     let follower = crate::agents::spec_by_kind(head.kind.as_str())
         .is_some_and(|spec| spec.launch.confirm_interrupt)
         .then(|| EventFollower::open(store.paths().clone(), false));
+    if let Some(cause) = interrupt_withheld(workspace, store, target, bound, &agent_id) {
+        return Ok(Receipt::Sent {
+            compacted,
+            interrupt: InterruptConfirmation::NotSent { cause },
+        });
+    }
     writer.press(key)?;
     drop(writer);
     let window = super::interrupt_confirmation_window_from_env();
@@ -329,6 +348,7 @@ fn write_live(
             workspace,
             store,
             snapshot,
+            target,
             bound,
             card_status,
             batch,
@@ -468,6 +488,90 @@ fn holder_on_pane(holder: Option<&AgentState>, pane: &crate::ids::PaneId) -> boo
     holder.is_some_and(|row| row.pane.as_ref().is_none_or(|bound| &bound.pane_id == pane))
 }
 
+/// Why the hosting lookup did not answer the pane a write into `target` is bound to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum LookupMiss {
+    /// No listed pane hosts the receiver.
+    Nowhere,
+    /// The receiver is in this other pane.
+    Elsewhere(crate::ids::PaneId),
+    /// The multiplexer could not be read.
+    Unread(String),
+}
+
+impl LookupMiss {
+    /// The reason a claim released under the pane lock records.
+    fn release_reason(&self) -> &'static str {
+        match self {
+            Self::Nowhere | Self::Elsewhere(_) => {
+                "pane write stopped: the receiver is not in the claim's pane"
+            }
+            Self::Unread(_) => "pane write stopped: the receiver's pane could not be read",
+        }
+    }
+}
+
+/// Where the hosting lookup finds the receiver bound to `target`, read once on `target`'s
+/// backend. `None` when the target pane carries no session or binds no row: the lookup has
+/// no answer for such a pane, and its write goes ahead as bound.
+fn locate_receiver(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    target: &PaneAgent,
+    bound: Option<&AgentState>,
+) -> Option<std::result::Result<Option<AgentPane>, HostingErr>> {
+    target.agent_id.as_ref()?;
+    let bound = bound?;
+    let mut notices = Vec::new();
+    let answer = crate::launcher::agent_pane::locate(
+        workspace,
+        store,
+        Some(target.pane_id.mux()),
+        &bound.kind,
+        bound.launch_key(),
+        &mut notices,
+    );
+    for notice in notices {
+        tracing::debug!(%notice, pane = %target.pane_id, "delivery's hosting read");
+    }
+    Some(answer)
+}
+
+/// Why the lookup does not answer `target`'s pane for the receiver bound to it, or `None`
+/// when it does or has no answer for the pane (see [`locate_receiver`]).
+pub(super) fn lookup_miss(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    target: &PaneAgent,
+    bound: Option<&AgentState>,
+) -> Option<LookupMiss> {
+    match locate_receiver(workspace, store, target, bound)? {
+        Ok(Some(found)) if found.pane_id == target.pane_id => None,
+        Ok(Some(found)) => Some(LookupMiss::Elsewhere(found.pane_id)),
+        Ok(None) => Some(LookupMiss::Nowhere),
+        Err(err) => Some(LookupMiss::Unread(err.to_string())),
+    }
+}
+
+/// Why an interrupt key must not follow its paste: the lookup no longer answers the claim's
+/// pane, or holds a session there other than `agent_id`, the one the paste decided on.
+fn interrupt_withheld(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    target: &PaneAgent,
+    bound: Option<&AgentState>,
+    agent_id: &crate::ids::AgentSessionId,
+) -> Option<&'static str> {
+    match locate_receiver(workspace, store, target, bound)? {
+        Ok(Some(found)) if found.pane_id == target.pane_id && found.holder.1 == *agent_id => None,
+        Ok(Some(found)) if found.pane_id == target.pane_id => {
+            Some("another session of the receiver holds its pane now")
+        }
+        Ok(_) => Some("the receiver left its pane during the interrupt delay"),
+        Err(_) => Some("the receiver's pane could not be read after the interrupt delay"),
+    }
+}
+
 pub(super) fn interrupt_key(kind: &crate::ids::AgentKind, label: &str) -> Result<NamedKey> {
     crate::agents::spec_by_kind(kind.as_str())
         .and_then(|spec| spec.launch.interrupt_key)
@@ -537,6 +641,7 @@ fn wait_and_decide(
     workspace: &ResolvedWorkspace,
     store: &Store,
     snapshot: &SidebarSnapshot,
+    target: &PaneAgent,
     bound: Option<&AgentState>,
     card_status: &CardStatus,
     batch: &[MessageRecord],
@@ -559,12 +664,22 @@ fn wait_and_decide(
     if let Some(until) = send.typing_hold_until(workspace, store.runtime_paths(), pane) {
         return Ok(Decided::Stop(Receipt::TypingHeld { until, compacted }));
     }
+    // The lookup lists the room's panes, so it comes before the claim check and the row read:
+    // only store reads sit between those and the decisions made on them.
+    let not_hosted = || {
+        lookup_miss(workspace, store, target, bound).map(|miss| Receipt::NotHosted {
+            compacted,
+            reason: miss.release_reason(),
+        })
+    };
+    if let Some(receipt) = not_hosted() {
+        return Ok(Decided::Stop(receipt));
+    }
     if !store.message_claims_held(batch)? {
         return Ok(Decided::Stop(Receipt::ClaimLost { compacted }));
     }
-    let moved = |fresh: &Option<AgentState>| claim_moved(head, fresh.as_ref(), pane);
     let mut fresh = row_under_lock(store, head)?;
-    if moved(&fresh) {
+    if claim_moved(head, fresh.as_ref(), pane) {
         return Ok(Decided::Stop(Receipt::ClaimLost { compacted }));
     }
     let mut batch = batch.to_vec();
@@ -581,11 +696,14 @@ fn wait_and_decide(
         if survivors.is_empty() {
             return Ok(Decided::Stop(Receipt::Withdrawn { compacted }));
         }
+        if let Some(receipt) = not_hosted() {
+            return Ok(Decided::Stop(receipt));
+        }
         if !store.message_claims_held(&survivors)? {
             return Ok(Decided::Stop(Receipt::ClaimLost { compacted }));
         }
         fresh = row_under_lock(store, &survivors[0])?;
-        if moved(&fresh) {
+        if claim_moved(head, fresh.as_ref(), pane) {
             return Ok(Decided::Stop(Receipt::ClaimLost { compacted }));
         }
         batch = survivors;

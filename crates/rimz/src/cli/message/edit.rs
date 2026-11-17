@@ -138,6 +138,16 @@ pub(super) fn push_queued_message(
         }
         return Ok(());
     }
+    // The snapshot cannot see the hosting lookup, so a lookup wait names its own cause.
+    if let deliver::DeliveryReport::Refused(
+        verdict @ (deliver::DeliveryVerdict::NotHosted { .. } | deliver::DeliveryVerdict::NoPane),
+    ) = &delivered
+    {
+        bail!(
+            "{}",
+            render_verdict(verdict, &label, None, Timestamp::now())
+        );
+    }
     let messages = store.list_messages()?;
     let Some(record) = messages
         .iter()

@@ -694,11 +694,7 @@ fn auto_review_permission_refuses_steer_and_interrupt_with_review_wording() {
         );
         assert!(stderr.contains("retry shortly or pass --force"), "{stderr}");
         assert!(!stderr.contains("waiting on your input"), "{stderr}");
-        assert!(
-            trace_lines(&trace)
-                .iter()
-                .all(|line| is_client_view_read(line))
-        );
+        assert!(trace_lines(&trace).iter().all(|line| is_mux_read(line)));
         if flag == "--interrupt" {
             assert!(env.store().list_messages().unwrap().is_empty());
             assert!(env.store().list_message_history().unwrap().is_empty());
@@ -7633,7 +7629,9 @@ fn assert_parent_follow_up_case(
         |channel| format!("@{child_name}#{channel}"),
     );
     let mut send_command = traced_rimz(&env, &trace);
+    // The resume opens the child's pane through the shim, which a staged listing would hide.
     send_command
+        .env_remove("RIMZ_TEST_ZELLIJ_LIST_PANES")
         .args(["--mux", "zellij", "message", &target, "follow up"])
         .env("PATH", path_with_front(&shim))
         .env(
@@ -8339,11 +8337,7 @@ fn turn_ended_reserved_pane_names_the_provider_error() {
     );
     assert!(!shown.contains("waiting in pane"), "{shown}");
     assert!(!shown.contains("asks show"), "{shown}");
-    assert!(
-        trace_lines(&trace_log)
-            .iter()
-            .all(|line| is_client_view_read(line))
-    );
+    assert!(trace_lines(&trace_log).iter().all(|line| is_mux_read(line)));
     assert_eq!(
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id")).status,
         MessageStatus::Queued
@@ -8411,9 +8405,7 @@ fn a_refused_model_holds_every_message_kind_until_its_record_clears() {
         send(&["--steer", "--force", "@claude", "--", "forced"]),
     ];
     assert!(
-        trace_lines(&trace_log)
-            .iter()
-            .all(|line| is_client_view_read(line)),
+        trace_lines(&trace_log).iter().all(|line| is_mux_read(line)),
         "nothing is typed into a refused agent"
     );
     for id in &held {
@@ -8503,7 +8495,7 @@ fn a_refusal_recorded_during_the_write_wait_holds_the_send() {
     );
     let lines = trace_lines(&trace);
     assert!(
-        lines.iter().all(|line| is_client_view_read(line)),
+        lines.iter().all(|line| is_mux_read(line)),
         "nothing is typed into an agent refused during the wait: {lines:?}"
     );
     let messages = env.store().list_messages().unwrap();
@@ -13329,7 +13321,7 @@ fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
             );
             if changed == "waiting" {
                 assert!(
-                    lines.iter().all(|line| is_client_view_read(line)),
+                    lines.iter().all(|line| is_mux_read(line)),
                     "mode {mode:?}, line {line:?}: no write into an input prompt: {lines:?}"
                 );
                 assert_eq!(output.status.success(), mode.is_none(), "{output:?}");
@@ -13344,7 +13336,7 @@ fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
             assert!(output.status.success(), "{output:?}");
             if changed == "open turn" && mode.is_none() {
                 assert!(
-                    lines.iter().all(|line| is_client_view_read(line)),
+                    lines.iter().all(|line| is_mux_read(line)),
                     "{changed}: a boundary send must not write into the opened turn: {lines:?}"
                 );
                 let messages = env.store().list_messages().unwrap();
@@ -13400,7 +13392,7 @@ fn fresh_boundary_send_defers_when_the_turn_opens_during_its_write_wait() {
     assert!(stdout.contains("is running; send now"), "{output:?}");
     let lines = trace_lines(&trace);
     assert!(
-        lines.iter().all(|line| is_client_view_read(line)),
+        lines.iter().all(|line| is_mux_read(line)),
         "no byte may reach a pane whose turn opened: {lines:?}"
     );
     let messages = env.store().list_messages().unwrap();
@@ -13419,6 +13411,7 @@ fn fresh_boundary_send_defers_when_the_turn_opens_during_its_write_wait() {
             ("ZELLIJ_PANE_ID", "3"),
             ("RIMZ_ZELLIJ_BIN", shim),
             ("RIMZ_TEST_ZELLIJ_LOG", trace_path),
+            ("RIMZ_TEST_ZELLIJ_LIST_PANES", TRACE_LISTING),
             ("RIMZ_MESSAGE_SETTLE_MS", "0"),
             ("RIMZ_MESSAGE_INTERVAL_MS", "0"),
         ],
@@ -13520,7 +13513,7 @@ fn steer_skips_an_input_prompt_raised_during_its_write_wait() {
     let output = child.wait_with_output().unwrap();
     let lines = trace_lines(&trace);
     assert!(
-        lines.iter().all(|line| is_client_view_read(line)),
+        lines.iter().all(|line| is_mux_read(line)),
         "no write into an input prompt: {lines:?}"
     );
     assert!(!output.status.success(), "{output:?}");
@@ -15298,6 +15291,7 @@ fn compact_race_hook_payload(env: &Env, trace: &Path, payload: serde_json::Value
             ("ZELLIJ_PANE_ID", "3"),
             ("RIMZ_ZELLIJ_BIN", shim.to_str().unwrap()),
             ("RIMZ_TEST_ZELLIJ_LOG", trace.to_str().unwrap()),
+            ("RIMZ_TEST_ZELLIJ_LIST_PANES", TRACE_LISTING),
             ("RIMZ_MESSAGE_SETTLE_MS", "0"),
             ("RIMZ_MESSAGE_INTERVAL_MS", "0"),
             ("RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS", "0"),
@@ -15389,6 +15383,7 @@ fn agents_compact_queues_for_a_running_agent() {
             ("ZELLIJ_PANE_ID", "3"),
             ("RIMZ_ZELLIJ_BIN", shim.to_str().expect("shim path")),
             ("RIMZ_TEST_ZELLIJ_LOG", trace.to_str().expect("trace path")),
+            ("RIMZ_TEST_ZELLIJ_LIST_PANES", TRACE_LISTING),
             ("RIMZ_MESSAGE_SETTLE_MS", "0"),
             ("RIMZ_MESSAGE_INTERVAL_MS", "0"),
             ("RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS", "0"),
@@ -15736,6 +15731,7 @@ fn boundary_auto_compact_defers_prompt_until_compaction_ends() {
             ("ZELLIJ_PANE_ID", "3"),
             ("RIMZ_ZELLIJ_BIN", shim),
             ("RIMZ_TEST_ZELLIJ_LOG", trace),
+            ("RIMZ_TEST_ZELLIJ_LIST_PANES", TRACE_LISTING),
             ("RIMZ_MESSAGE_SETTLE_MS", "0"),
             ("RIMZ_MESSAGE_INTERVAL_MS", "0"),
         ],
@@ -16237,6 +16233,10 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
 
     let out = run_success(
         traced_rimz(&env, "zellij-skip-trace.log")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                r#"[{"id":7,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":9,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            )
             .args(["message", "--steer", "@claude", "--all", "--", "go"]),
         "steer partial skip",
     );
@@ -16322,10 +16322,17 @@ fn boundary_fanout_preserves_target_order_on_hook_failure() {
     }
 }
 
+/// The listing the tracing Zellij shim answers for `TRACE_PANE` and the peer pane beside it:
+/// delivery asks the listing where its receiver is.
+const TRACE_LISTING: &str = r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":4,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
+
+/// A `rimz` on the tracing Zellij shim, which answers `TRACE_LISTING` unless the test stages
+/// a listing of its own.
 fn traced_rimz(env: &Env, log_name: impl AsRef<Path>) -> std::process::Command {
     let mut cmd = env.rimz();
     cmd.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join(log_name));
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join(log_name))
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", TRACE_LISTING);
     cmd
 }
 
@@ -16386,15 +16393,15 @@ fn is_compact_command(line: &str) -> bool {
     ))
 }
 
-fn is_client_view_read(line: &str) -> bool {
+/// A read of the session's clients or of its pane listing, which delivery's hosting lookup
+/// asks; neither writes into a pane.
+fn is_mux_read(line: &str) -> bool {
     line.ends_with("\taction\tlist-clients")
+        || line.ends_with("\taction\tlist-panes\t--all\t--json")
 }
 
 fn assert_compact_segments_then_enter(lines: &[String], instruction: &str) {
-    let lines: Vec<_> = lines
-        .iter()
-        .filter(|line| !is_client_view_read(line))
-        .collect();
+    let lines: Vec<_> = lines.iter().filter(|line| !is_mux_read(line)).collect();
     let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t--\t");
     let head_at = lines
         .iter()

@@ -2862,7 +2862,7 @@ reason = "The library owns shared launch preparation, admission and pane executi
 [[verdict]]
 kind = "item"
 key = "launcher::agent_pane"
-reason = "CLI focus, capture, typing, restart and molt and cohort reconciliation find an agent's pane at the point of use through one act."
+reason = "CLI focus, capture, typing, restart and molt, cohort reconciliation, and message delivery find an agent's pane at the point of use through one act."
 
 [[verdict]]
 kind = "item"
@@ -2882,7 +2882,7 @@ reason = "Every agent-addressed act that wakes a pane reads, wakes and reads aga
 [[verdict]]
 kind = "item"
 key = "launcher::agent_pane::locate"
-reason = "Capture and restart's checks read where the agent is once, waking nothing."
+reason = "Capture, restart's checks, and delivery's checks read where the agent is once, waking nothing."
 
 [[verdict]]
 kind = "item"
@@ -3335,6 +3335,9 @@ upward-dependencies = [
     "harness::schedule::pending",
     # The write check reads a stage-visit premise's open visit from the team board.
     "harness::scratch",
+    # Delivery reads where the hosting lookup finds its receiver before its claim, under the
+    # pane lock, and before an interrupt key.
+    "launcher::agent_pane",
     "sidebar::produce",
 ]
 # The turn-completion wait view is shared by `agents wait` and owed-report wakes.
@@ -5138,9 +5141,11 @@ allowed-dependencies = [
     "harness::hibernate",
     "address",
     "ids",
+    "launcher::agent_pane",
     "message",
     "mux",
     "pane::keys",
+    "sidebar::produce::hosting",
     "store",
     "store::follow",
     "store::snapshot",
@@ -5149,7 +5154,9 @@ allowed-dependencies = [
 # Queued delivery shares the typed interrupt-key preflight with pane sends.
 # Deferral names why a boundary write stopped on its post-wait row; it reads the
 # same CardStatus gate as candidacy, from harness::auto_continue (+1).
-surface-budget = 12
+# LookupMiss and lookup_miss give delivery's before-claim and fresh-send waits the hosting
+# lookup's answer that the write check reads under the pane lock (+2).
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/mux/mount_proof.rs"
