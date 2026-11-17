@@ -236,10 +236,6 @@ criteria = "safe-to-deploy"
 version = "0.2.17"
 criteria = "safe-to-deploy"
 
-[[exemptions.crc32fast]]
-version = "1.5.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.critical-section]]
 version = "1.2.0"
 criteria = "safe-to-deploy"
@@ -1302,10 +1298,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.socket2]]
 version = "0.6.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.sqlite-wasm-rs]]
-version = "0.5.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.stable_deref_trait]]
