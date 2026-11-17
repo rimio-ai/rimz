@@ -850,6 +850,17 @@ fn walk_rungs<'a>(
     }
     let turn_started_at = source.and_then(|agent| agent.turn_started_at);
     if let Some(error) = display_turn_error(status, context, last_activity, turn_started_at) {
+        // A limit marker on a refused model the agent has since left rests as if
+        // it were gone: the open turn it paused and the errored end it raised alike.
+        if let Some((row, agent)) = row.zip(source)
+            && row.demotion.left_model(agent, now)
+        {
+            return keep(if matches!(status, Running | Failed) {
+                Idle
+            } else {
+                status
+            });
+        }
         let class = effective_turn_error_class(error);
         let status = match class {
             TurnErrorClass::PausedRateLimit
@@ -906,6 +917,27 @@ fn walk_rungs<'a>(
         return keep(if spent { Paused } else { Failed });
     }
     Rung::Open
+}
+
+/// The refusal step of a card's projection, in place: a card `agent` rests on at
+/// `status` that the provider [refuses](super::ParkDemotion::refused) reads
+/// failed, with the refusal's sentence when it has one.
+pub(crate) fn project_refusal(
+    agent: &AgentState,
+    status: &mut AgentStatus,
+    phase: &mut TurnPhase,
+    turn_error_label: &mut Option<String>,
+    demotion: &super::ParkDemotion,
+    now: Timestamp,
+) {
+    let Some(label) = demotion.refused(agent, *status, now) else {
+        return;
+    };
+    *status = AgentStatus::Failed;
+    *phase = TurnPhase::Idle;
+    if let Some(label) = label {
+        *turn_error_label = Some(label.to_owned());
+    }
 }
 
 /// Project one sidebar card's displayed status through the rung order, in
@@ -976,6 +1008,16 @@ pub(crate) fn project_display(
         RungLabel::Loop(repeat) => {
             *turn_error_label = Some(format!("loop: {} ×{}", repeat.tool, repeat.count));
         }
+    }
+    if let Some(agent) = source {
+        project_refusal(
+            agent,
+            &mut projected,
+            phase,
+            turn_error_label,
+            demotion,
+            now,
+        );
     }
     if let Some(alert) = source.and_then(|agent| agent.alert.as_ref()) {
         projected = Failed;
@@ -2833,12 +2875,55 @@ impl AgentState {
     }
 
     /// Displayed status and phase of an agent with no sidebar row of its own
-    /// (a launched child nests under its parent's card). A displayed fatal or
-    /// unknown marker reads `failed`, on a raw-`failed` row too, and so does a
-    /// displayed pausing marker the card's [`super::ParkDemotion`] counts as
-    /// spent; otherwise this is the rested status lifted by in-flight waits or
-    /// shells, or by an open soft-compaction cycle.
+    /// (a launched child nests under its parent's card), as
+    /// [`AgentState::rowless_card`] reads them.
     pub fn rowless_status(
+        &self,
+        demotion: &super::ParkDemotion,
+        now: Timestamp,
+    ) -> (AgentStatus, TurnPhase) {
+        let (status, phase, _) = self.rowless_card(demotion, now);
+        (status, phase)
+    }
+
+    /// Displayed status, phase and turn-error label of an agent with no sidebar
+    /// row of its own. A displayed fatal or unknown marker reads `failed`, on a
+    /// raw-`failed` row too, and so does a displayed pausing marker the card's
+    /// [`super::ParkDemotion`] counts as spent; otherwise this is the rested
+    /// status lifted by in-flight waits or shells, or by an open
+    /// soft-compaction cycle. A limit marker on a model the live agent has
+    /// since left rests as if it were gone (a raw-`running` or raw-`failed` row
+    /// reads `idle`) unless a budget park outranks it, and a resting agent the
+    /// provider [refuses](super::ParkDemotion::refused) then reads `failed`. The
+    /// label belongs to that status: the refusal's sentence when the agent is
+    /// refused, none when the left model rested it, else the displayed marker's.
+    pub fn rowless_card(
+        &self,
+        demotion: &super::ParkDemotion,
+        now: Timestamp,
+    ) -> (AgentStatus, TurnPhase, Option<String>) {
+        let (status, phase, label) = if self.budget_park.is_none() && demotion.left_model(self, now)
+        {
+            let status = match self.status {
+                AgentStatus::Running | AgentStatus::Failed => AgentStatus::Idle,
+                status => status,
+            };
+            (status, TurnPhase::Idle, None)
+        } else {
+            let (status, phase) = self.rowless_marker_status(demotion, now);
+            (status, phase, self.displayed_turn_error_label(now))
+        };
+        match demotion.refused(self, status, now) {
+            Some(refusal) => (
+                AgentStatus::Failed,
+                TurnPhase::Idle,
+                refusal.map(str::to_owned).or(label),
+            ),
+            None => (status, phase, label),
+        }
+    }
+
+    fn rowless_marker_status(
         &self,
         demotion: &super::ParkDemotion,
         now: Timestamp,

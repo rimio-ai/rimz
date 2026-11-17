@@ -376,7 +376,7 @@ When `Stop` was missed, the local refresh stamps `settle` as `PlanProposed`. A `
 
 #### Turn-death marker
 
-Codex writes most provider errors to the rollout. An error record is a `turn_error`, `stream_error`, or `error` event, or a `task_complete` or `turn_aborted` that carries an error. RimZ caps its label at 80 characters and classifies it, the Codex error kind deciding first, in either the app-server camelCase or the rollout snake_case spelling.
+Codex writes most provider errors to the rollout. An error record is a `turn_error`, `stream_error`, or `error` event, or a `task_complete` or `turn_aborted` that carries an error. RimZ caps its label at 200 characters and classifies it, the Codex error kind deciding first, in either the app-server camelCase or the rollout snake_case spelling.
 
 Only an errored `task_complete` or `turn_aborted`, or the synthetic death for a messageless `task_complete`, proves the turn ended: its `AgentTurnError` carries `ended_turn = true`. When that marker is strictly newer than `last_activity`, the shared waiting guard releases that turn's blocking ask, keyed or not, and the ordinary error projection displays paused or failed. Mid-turn error records, older markers, and ties never close an ask. Other adapters and older sidecars leave the bit false; false is omitted from the sidecar JSON.
 

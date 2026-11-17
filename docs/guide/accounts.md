@@ -146,6 +146,8 @@ The sidebar's provider dashboard shows one block per provider, for the account t
 
 An account can stay logged in while its subscription no longer allows access. The [dashboard](./sidebar.md#the-provider-dashboard) and `rimz accounts` show a lapse. The overview's `PLAN` reads `lapsed` unless an installation or setup problem takes precedence. Without a setup problem, the problem line reads `plan lapsed: no Claude access` for Claude; otherwise it keeps the setup repair. The lapse problem names the account's product, so a delegated Pi login reads `no Pi access`. This is separate from a logged-out account or missing hooks, and does not change launch setup checks. API-key and Claude Console accounts never show a plan lapse: running out of API credit fails the agent's turn with Claude's own message instead.
 
+A plan can also leave out one model while the account works on others. When a request on that model stops on a limit and the account's next usage read shows room left, RimZ remembers that the provider refuses that model on that account, until a turn on it succeeds. While it does, every agent resting on that model and account shows `failed` with the provider's sentence, RimZ types none of its messages into them and sends them no keep-warm ping, and a [model tier](./configuration.md#model-tiers) launch skips that model. RimZ never switches the model itself: switch it in the agent's pane (Claude's `/model`), or restart the agent on another account.
+
 A day or month cap in the per-machine config's `[accounts.budget]` table follows the history: `default` and the shared accounts of a provider spend against one cap, and each standalone account has its own:
 
 ```toml

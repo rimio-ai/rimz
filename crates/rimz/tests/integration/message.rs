@@ -8351,6 +8351,167 @@ fn turn_ended_reserved_pane_names_the_provider_error() {
 }
 
 #[test]
+fn a_refused_model_holds_every_message_kind_until_its_record_clears() {
+    const SENTENCE: &str = "Claude Fable 5.2 is not available on your plan. Switch models with /model to keep working.";
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_resting_agent(&env, "sess-refused", "refused", pane_env);
+    let mut context = rimz::agents::AgentContext::new("claude", jiff::Timestamp::now());
+    context.model_id = Some("claude-fable-5-2".to_owned());
+    rimz::store::agent_context::write_record(
+        &env.runtime_paths(),
+        &rimz::agents::context::record::AgentContextRecord::new("claude", "sess-refused", context),
+    )
+    .expect("seed context");
+    crate::common::wait::publish_claude_5h_resetting(&env, 40, jiff::SignedDuration::from_hours(3));
+    let record_path = rimz::agents::RateLimitsCache::shared_path(&env.runtime_paths())
+        .with_file_name("model_refusals.v1.json");
+    let refused_at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(1);
+    std::fs::write(
+        &record_path,
+        json!({"logins": {"claude@default": {"fable 5.2": {
+            "refused_at": refused_at,
+            "label": SENTENCE,
+        }}}})
+        .to_string(),
+    )
+    .expect("seed refusal record");
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace_log = env.project_root.join("zellij-refused-trace.log");
+    let send = |args: &[&str]| {
+        let out = run_success(
+            traced_rimz(&env, "zellij-refused-trace.log")
+                .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+                .arg("message")
+                .args(args),
+            "held send",
+        );
+        let receipt = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            receipt.contains(
+                "the provider refuses Fable 5.2 on claude@default: \"Claude Fable 5.2 is not \
+                 available on your plan. Switch models with /model to keep working.\"; it goes in \
+                 once the agent's model changes or a turn on that model and account succeeds"
+            ),
+            "{args:?}: {receipt}"
+        );
+        receipt
+            .split(['(', ')'])
+            .nth(1)
+            .expect("receipt names the message id")
+            .to_owned()
+    };
+    let held = [
+        send(&["@claude", "--", "done gate"]),
+        send(&["--on", "any", "@claude", "--", "any gate"]),
+        send(&["--steer", "@claude", "--", "steered"]),
+        send(&["--interrupt", "@claude", "--", "interrupted"]),
+        send(&["--steer", "--force", "@claude", "--", "forced"]),
+    ];
+    assert!(
+        trace_lines(&trace_log)
+            .iter()
+            .all(|line| is_client_view_read(line)),
+        "nothing is typed into a refused agent"
+    );
+    for id in &held {
+        let id = MessageId::parse(id).expect("message id");
+        assert_eq!(message_by_id(&env, &id).status, MessageStatus::Queued);
+    }
+    let shown = run_success(
+        env.rimz()
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "show", &held[0]]),
+        "message show",
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(shown.contains("the provider refuses Fable 5.2"), "{shown}");
+
+    std::fs::remove_file(&record_path).expect("clear the record");
+    run_success(
+        traced_rimz(&env, "zellij-refused-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "sweep"]),
+        "sweep after the record clears",
+    );
+    assert!(
+        trace_lines(&trace_log)
+            .iter()
+            .any(|line| line.contains("\taction\twrite\t--pane-id\t")),
+        "the held head goes in once the record clears"
+    );
+}
+
+/// A refusal a sibling's read confirms while a send waits to write holds that send: the hold is
+/// read again under the pane lock, after the waits, not taken from the read made before them.
+#[test]
+fn a_refusal_recorded_during_the_write_wait_holds_the_send() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_resting_agent(&env, "sess-late-refusal", "late-refusal", pane_env);
+    let mut context = rimz::agents::AgentContext::new("claude", jiff::Timestamp::now());
+    context.model_id = Some("claude-fable-5-2".to_owned());
+    rimz::store::agent_context::write_record(
+        &env.runtime_paths(),
+        &rimz::agents::context::record::AgentContextRecord::new(
+            "claude",
+            "sess-late-refusal",
+            context,
+        ),
+    )
+    .expect("seed context");
+    crate::common::wait::publish_claude_5h_resetting(&env, 40, jiff::SignedDuration::from_hours(3));
+    run_success(
+        env.rimz()
+            .args(["config", "set", "harness.smart_compact", "off"]),
+        "send without a seat line",
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace = env.project_root.join("late-refusal.log");
+    let before = DeliveryRendezvous::new(&env, "late-refusal-before-write");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_TEST_MESSAGE_BEFORE_WRITE", &before.path)
+        .args(["message", "@claude", "--", "after the refusal"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    let record_path = rimz::agents::RateLimitsCache::shared_path(&env.runtime_paths())
+        .with_file_name("model_refusals.v1.json");
+    std::fs::write(
+        &record_path,
+        json!({"logins": {"claude@default": {"fable 5.2": {
+            "refused_at": jiff::Timestamp::now(),
+            "label": "Claude Fable 5.2 is not available on your plan.",
+        }}}})
+        .to_string(),
+    )
+    .expect("seed refusal record");
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("the provider refuses Fable 5.2 on claude@default"),
+        "{output:?}"
+    );
+    let lines = trace_lines(&trace);
+    assert!(
+        lines.iter().all(|line| is_client_view_read(line)),
+        "nothing is typed into an agent refused during the wait: {lines:?}"
+    );
+    let messages = env.store().list_messages().unwrap();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0].status, MessageStatus::Queued);
+}
+
+#[test]
 fn steer_queues_when_durable_agent_has_no_live_pane() {
     let env = Env::new();
     env.record(&env.project_root);

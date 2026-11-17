@@ -720,7 +720,7 @@ Under each row, the sidebar's description rule chooses the error reason, first w
 | `waiting` | The agent is waiting on you: a question, a permission prompt, or a plan to approve. |
 | `idle` | At rest, including after an interrupted turn. |
 | `success` | The last turn completed. |
-| `failed` | The last turn failed, or a live launched child's provider park can no longer resume. |
+| `failed` | The last turn failed, a live launched child's provider park can no longer resume, or the agent rests on a model its provider refuses on its account. |
 | `paused` | Parked by a provider limit, overload, or budget cap, or by a live launched child with a provider park. |
 | `sleeping` | At rest on a timer, a one-shot signal, a condition, or a file watch, including through a child's wait. Standing subscriptions do not count, and running, waiting, failed, or paused take precedence. |
 

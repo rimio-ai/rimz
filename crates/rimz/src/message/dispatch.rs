@@ -151,6 +151,8 @@ pub enum ParkReason {
     Status(AgentStatus),
     WaitingOnPrompt,
     PaneHeld,
+    /// The provider refuses the receiver's model, or a refusal awaits its usage read.
+    ModelHeld(crate::agents::ModelHold),
     ProviderStarting,
     Resuming {
         register_by: Timestamp,
@@ -1158,7 +1160,9 @@ fn dispatch_decision(
             card_status,
         );
         if !readiness.accepts_prompt() {
-            let reason = if !readiness.waiting {
+            let reason = if let Some(hold) = readiness.held {
+                ParkReason::ModelHeld(hold)
+            } else if !readiness.waiting {
                 ParkReason::Status(readiness.status)
             } else if super::InputWait::for_agent(agent, now) == super::InputWait::TurnEnded {
                 ParkReason::PaneHeld
@@ -1265,6 +1269,7 @@ fn dispatch_one(
             reason: Some(match deferral {
                 send::Deferral::Status(status) => ParkReason::Status(status),
                 send::Deferral::ProviderStarting => ParkReason::ProviderStarting,
+                send::Deferral::ModelHeld(hold) => ParkReason::ModelHeld(hold),
             }),
         }),
         deliver::AttemptOutcome::CompactionPending => Ok(DispatchOutcome::CompactionPending {

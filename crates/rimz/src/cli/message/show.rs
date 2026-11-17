@@ -566,13 +566,19 @@ pub(super) fn render_delivery_check(
     );
     let (ok, detail) = gate_detail(check);
     kv.push("gate", condition_cell(ok, detail));
+    if let Some(hold) = &check.hold {
+        kv.push("hold", condition_cell(false, hold.to_string()));
+    }
     let (ok, detail) = ask_detail(check);
     kv.push("ask", condition_cell(ok, detail));
     let (ok, detail) = pane_detail(check);
     kv.push("pane", condition_cell(ok, detail));
     kv.render(out)?;
     writeln!(out, "  {verdict}")?;
-    if let Some(hint) = delivery_action_hint(&check.verdict(), message_id, target) {
+    // A model hold stops every mode, so no command would send it now.
+    if check.hold.is_none()
+        && let Some(hint) = delivery_action_hint(&check.verdict(), message_id, target)
+    {
         writeln!(out, "  {}", render::paint(render::palette::faint(), &hint))?;
     }
     Ok(())
@@ -844,6 +850,7 @@ pub(super) fn render_verdict(
         deliver::DeliveryVerdict::PaneHeld => format!(
             "waiting: {target} ended its turn on a provider error; its pane is held until its next activity in case a background approval is still open"
         ),
+        deliver::DeliveryVerdict::ModelHeld(hold) => format!("held: {target}: {hold}"),
         deliver::DeliveryVerdict::NoPane => format!("{} for {target}", deliver::NO_LIVE_PANE),
         deliver::DeliveryVerdict::Ready => "ready: delivery conditions pass".to_owned(),
     }
@@ -876,6 +883,8 @@ pub(super) fn delivery_action_hint(
         )),
         deliver::DeliveryVerdict::NoPane | deliver::DeliveryVerdict::Ready => None,
         deliver::DeliveryVerdict::ReceiverEnded => None,
+        // Nothing RimZ sends goes in; the user changes the model in the agent's own pane.
+        deliver::DeliveryVerdict::ModelHeld(_) => None,
         deliver::DeliveryVerdict::WaitingForRegistration { .. } => None,
         deliver::DeliveryVerdict::Expired { .. } => None,
         deliver::DeliveryVerdict::TypingHeld { .. } => None,
@@ -1146,6 +1155,7 @@ mod tests {
                 open: true,
                 resume_recovered: None,
             },
+            hold: None,
             ask: deliver::AskCheck {
                 waiting: false,
                 force: false,
@@ -1197,6 +1207,47 @@ mod tests {
         assert_eq!(
             delivery_action_hint(&check.verdict(), &message_id, "@claude"),
             None
+        );
+
+        // A message queued behind a held head shows the hold and offers no `force now`.
+        check.expiry.expired = false;
+        check.ask.waiting = false;
+        check.agent.present = true;
+        check.gate.open = true;
+        check.fifo = deliver::FifoCheck {
+            head: false,
+            blocker: Some(MessageId::parse("msg_0000000000000002").unwrap()),
+        };
+        let mut rendered = Vec::new();
+        render_delivery_check(
+            &mut rendered,
+            &message_id,
+            &check,
+            "",
+            "@claude",
+            Timestamp::now(),
+        )
+        .unwrap();
+        let rendered = String::from_utf8(rendered).unwrap();
+        assert!(rendered.contains("force now"), "{rendered}");
+        check.hold = Some(rimz::agents::ModelHold::Unconfirmed {
+            until: Timestamp::now(),
+        });
+        let mut rendered = Vec::new();
+        render_delivery_check(
+            &mut rendered,
+            &message_id,
+            &check,
+            "",
+            "@claude",
+            Timestamp::now(),
+        )
+        .unwrap();
+        let rendered = String::from_utf8(rendered).unwrap();
+        assert!(!rendered.contains("force now"), "{rendered}");
+        assert!(
+            rendered.contains("waiting for the account's usage read"),
+            "{rendered}"
         );
     }
 

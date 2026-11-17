@@ -864,7 +864,9 @@ reason = "Starter context types the shared folder-trust refusal without changing
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
 # Spent-child CLI parity shares durable park projection without reaching store or harness.
-surface-budget = 4
+# Model refusals share one projection between the card, the rowless status and delivery:
+# ModelHold, ParkDemotion::{refused, left_model, held} (+4).
+surface-budget = 8
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -8030,6 +8032,26 @@ reason = "Spent-child CLI parity applies the same retry/window predicate to root
 kind = "item"
 key = "agents::park::ParkDemotion::window_spent"
 reason = "The agents-owned status ladder reads its spent-window stall rung without exposing window sets."
+
+[[verdict]]
+kind = "item"
+key = "agents::park::ModelHold"
+reason = "Why delivery types no message into an agent the provider refuses, worded once for the receipt, message show and the sweep."
+
+[[verdict]]
+kind = "item"
+key = "agents::park::ParkDemotion::refused"
+reason = "The card, the rowless status and CardStatus read one model-refusal rule over the login's capacities."
+
+[[verdict]]
+kind = "item"
+key = "agents::park::ParkDemotion::left_model"
+reason = "The card, the rowless status and CardStatus rest an agent that left a refused model the same way."
+
+[[verdict]]
+kind = "item"
+key = "agents::park::ParkDemotion::held"
+reason = "Delivery's hold on a refused or unconfirmed receiver, read by receiver readiness and the write check alike."
 
 [[verdict]]
 kind = "item"

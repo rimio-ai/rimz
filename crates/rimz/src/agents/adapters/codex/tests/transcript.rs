@@ -955,7 +955,9 @@ fn task_complete_workspace_credits_depleted_is_a_rate_limit() {
     );
     assert_eq!(
         error.label.as_deref(),
-        Some("Your workspace is out of credits. Ask your workspace owner to refill in order to")
+        Some(
+            "Your workspace is out of credits. Ask your workspace owner to refill in order to continue."
+        )
     );
 }
 
@@ -1346,7 +1348,7 @@ fn turn_error_detector_self_clears_only_on_newer_live_clocked_records() {
     .to_string();
     assert!(detect_turn_error(&unclocked).is_none());
 
-    let long = "x".repeat(160);
+    let long = "x".repeat(300);
     let clocked = json!({
         "timestamp": "2026-06-11T07:18:00.000Z",
         "type": "event_msg",
@@ -1354,7 +1356,7 @@ fn turn_error_detector_self_clears_only_on_newer_live_clocked_records() {
     })
     .to_string();
     let error = detect_turn_error(&clocked).expect("clocked error");
-    assert_eq!(error.label.unwrap().chars().count(), 80);
+    assert_eq!(error.label.unwrap().chars().count(), 200);
 }
 
 #[test]
@@ -1814,7 +1816,7 @@ again at 6:35 AM.
 ";
     let expected_usage_limit = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 6:35 AM."
         .chars()
-        .take(80)
+        .take(200)
         .collect::<String>();
     assert_eq!(
         death_warning_from_frame(usage_limit),
@@ -1895,7 +1897,7 @@ again at 6:35 AM.
     );
     let expected_usage_limit = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 6:35 AM."
         .chars()
-        .take(80)
+        .take(200)
         .collect::<String>();
     assert_eq!(
         usage_limit.label.as_deref(),

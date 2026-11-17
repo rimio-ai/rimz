@@ -212,6 +212,9 @@ pub(crate) fn render_dispatch_outcome(
             Some(ParkReason::Behind(blocker)) => {
                 format!("queued for {label} ({message_id}) — behind {blocker}")
             }
+            Some(ParkReason::ModelHeld(hold)) => {
+                format!("queued for {label} ({message_id}) — {hold}")
+            }
             Some(ParkReason::NoPane) => format!("queued for {label} ({message_id}) — no live pane"),
             None => format!("queued for {label} ({message_id})"),
             Some(ParkReason::ProviderStarting) => format!(

@@ -25,12 +25,14 @@ type AgentKey = (AgentKind, AgentSessionId);
 
 struct AgentProjectionIndex<'a> {
     roots: BTreeMap<AgentKey, &'a AgentState>,
+    launched: BTreeMap<AgentKey, &'a AgentState>,
     children: BTreeMap<AgentKey, Vec<&'a AgentState>>,
 }
 
 impl<'a> AgentProjectionIndex<'a> {
     fn new(agents: &'a [AgentState], rows: &[SidebarRow]) -> Self {
         let mut roots = BTreeMap::new();
+        let mut launched = BTreeMap::new();
         let mut children: BTreeMap<AgentKey, Vec<&AgentState>> = BTreeMap::new();
         for agent in agents
             .iter()
@@ -61,6 +63,11 @@ impl<'a> AgentProjectionIndex<'a> {
                         .unwrap_or_else(|| agent.kind.clone()),
                     parent_id.clone(),
                 );
+                if agent.is_launched_child() {
+                    launched
+                        .entry((agent.kind.clone(), agent.agent_id.clone()))
+                        .or_insert(agent);
+                }
                 let parent_key = if agent.is_launched_child() {
                     rendered_parents
                         .iter()
@@ -73,11 +80,20 @@ impl<'a> AgentProjectionIndex<'a> {
                 children.entry(parent_key).or_default().push(agent);
             }
         }
-        Self { roots, children }
+        Self {
+            roots,
+            launched,
+            children,
+        }
     }
 
     fn root(&self, key: &AgentKey) -> Option<&'a AgentState> {
         self.roots.get(key).copied()
+    }
+
+    /// The launched child behind `key`, for a child rendered as its own row.
+    fn launched(&self, key: &AgentKey) -> Option<&'a AgentState> {
+        self.launched.get(key).copied()
     }
 
     fn children(&self) -> impl Iterator<Item = (&AgentKey, &[&'a AgentState])> {

@@ -45,11 +45,12 @@ pub enum SendErr {
     Deferred { reason: String },
 }
 
-/// Why a boundary write stopped on the row read after its waits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Why a write stopped on the row read after its waits.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Deferral {
     Status(AgentStatus),
     ProviderStarting,
+    ModelHeld(crate::agents::ModelHold),
 }
 
 impl std::fmt::Display for Deferral {
@@ -57,11 +58,12 @@ impl std::fmt::Display for Deferral {
         match self {
             Self::Status(status) => write!(f, "the receiver is {}", status.as_str()),
             Self::ProviderStarting => f.write_str("the receiver's provider is still starting"),
+            Self::ModelHeld(hold) => hold.fmt(f),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Receipt {
     Sent {
         compacted: bool,
@@ -234,7 +236,7 @@ pub(super) fn send_batch_to_live_pane(
         send,
         &writer,
     )?;
-    let (Some(key), Receipt::Sent { compacted, .. }) = (key, receipt) else {
+    let (Some(key), &Receipt::Sent { compacted, .. }) = (key, &receipt) else {
         return Ok(receipt);
     };
     // Decide on the row read after the write's waits: a resting agent gets a
@@ -605,6 +607,11 @@ fn wait_and_decide(
         return Ok(Decided::Stop(Receipt::CacheCold));
     }
     let now = Timestamp::now();
+    // No kind or gate, forced or not, goes into an agent its provider refuses. The waits above
+    // can outlast a refusal record landing, so the record is read again here.
+    if let Some(hold) = card_status.held_now(snapshot, agent, now) {
+        return Ok(Decided::Stop(Receipt::Deferred(Deferral::ModelHeld(hold))));
+    }
     if !send.force && agent.is_awaiting_input() {
         return Ok(Decided::Stop(Receipt::SkippedWaiting(
             super::InputWait::for_agent(agent, now),

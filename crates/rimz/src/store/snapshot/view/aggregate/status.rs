@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
-use crate::agents::state::project_display;
+use crate::agents::state::{project_display, project_refusal};
 use crate::agents::{AgentStatus, ParkDemotion};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
@@ -56,5 +56,19 @@ pub(super) fn project_display_status(
             stalled_after_secs,
             tool_repeat_attention_after,
         );
+        // A launched child rendered as its own row has no root source; only the refusal step
+        // reads its own row, and every other rung keeps what it sees without one.
+        if source_agent.is_none()
+            && let Some(child) = index.launched(&key)
+        {
+            project_refusal(
+                child,
+                &mut agent.status,
+                &mut agent.phase,
+                &mut agent.turn_error_label,
+                demotion,
+                now,
+            );
+        }
     }
 }

@@ -1296,7 +1296,7 @@ fn stop_failure_maps_retryable_classes() {
         .class,
         TurnErrorClass::Failed
     );
-    let long = format!("  {}bcd  ", "a".repeat(79));
+    let long = format!("  {}bcd  ", "a".repeat(199));
     assert_eq!(
         hook_output(
             &adapter,
@@ -1307,6 +1307,6 @@ fn stop_failure_maps_retryable_classes() {
         .cloned()
         .unwrap()
         .label,
-        Some(format!("{}b", "a".repeat(79)))
+        Some(format!("{}b", "a".repeat(199)))
     );
 }
