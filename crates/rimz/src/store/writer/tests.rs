@@ -1992,6 +1992,11 @@ fn a_cancelled_or_abandoned_swap_frees_the_launch_and_cannot_bind_late() {
             .bind_agent_launch(cancelled, "session", dir.path(), &pane("tmux:%2"), None)
             .is_err()
     );
+    assert_eq!(
+        store.abort_agent_swap(cancelled, &scope).unwrap(),
+        SwapAbort::Cancelled,
+        "a reservation another writer failed first, with the old session still the agent"
+    );
 
     // The coordinator of this reservation dies before placing it.
     let swap = store
@@ -2043,5 +2048,86 @@ fn a_cancelled_or_abandoned_swap_frees_the_launch_and_cannot_bind_late() {
         !store
             .cancel_unbound_swap(&audit_row("launch_d"), "session", dir.path())
             .unwrap()
+    );
+}
+
+#[test]
+fn a_swap_aborted_after_a_stop_ended_its_agent_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let store = Store::open(
+        StatePaths::under(id.clone(), dir.path()).unwrap(),
+        RuntimePaths::under(id, dir.path()).unwrap(),
+    )
+    .unwrap();
+    let scope = AgentLaunchScope {
+        session_name: "session".into(),
+        cwd: dir.path().into(),
+        branch: None,
+        description: None,
+    };
+    let audit_row = |key: &str| {
+        store
+            .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id == key)
+            .unwrap_or_else(|| panic!("row {key}"))
+    };
+    let first = store
+        .begin_agent_launch_batch(
+            &[launch_request(
+                "launch_a",
+                AgentLaunchName::Explicit("coder".into()),
+            )],
+            scope.clone(),
+        )
+        .unwrap();
+    store
+        .bind_agent_launch(
+            first.single_identity().unwrap(),
+            "session",
+            dir.path(),
+            &crate::ids::PaneId::parse("tmux:%1").unwrap(),
+            None,
+        )
+        .unwrap();
+    let swap = store
+        .begin_agent_swap(
+            &audit_row("launch_a"),
+            &launch_request("launch_b", AgentLaunchName::Mint),
+            scope.clone(),
+        )
+        .unwrap();
+    let reserved = swap.single_identity().unwrap();
+    assert!(!store.swap_source_ended(reserved).unwrap());
+
+    // The stop cancels the reservation, then ends the old session.
+    assert!(
+        store
+            .cancel_unbound_swap(&audit_row("launch_b"), "session", dir.path())
+            .unwrap()
+    );
+    let mut end = crate::agents::AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("launch_a")),
+        crate::agents::LifecycleSignal::Ended,
+    );
+    end.launch_id = Some("launch_a".into());
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            WorkspaceId::from_project_root(dir.path()),
+            "session",
+            "claude",
+            "SessionEnd",
+            &end,
+        ))
+        .unwrap();
+    assert!(audit_row("launch_a").session_over());
+
+    assert!(store.swap_source_ended(reserved).unwrap());
+    assert_eq!(
+        store.abort_agent_swap(reserved, &scope).unwrap(),
+        SwapAbort::Ended
     );
 }

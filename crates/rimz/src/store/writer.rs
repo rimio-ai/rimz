@@ -154,6 +154,13 @@ pub enum SwapAbort {
     /// The reservation had not stood and is now failed; the replaced session
     /// still holds the agent.
     Aborted,
+    /// The reservation had not stood and is now failed, and no other session
+    /// of the agent's launch is live: a stop ended the agent meanwhile.
+    Ended,
+    /// Another writer had failed the reservation first, a stop or its own
+    /// wrapper, and the replaced session still holds the agent: a stop that
+    /// cancelled it may still be ending that session.
+    Cancelled,
     /// The reservation's row has stood, so it holds the agent and the abort
     /// wrote nothing.
     Bound,
@@ -790,6 +797,8 @@ impl Store {
 
     /// Fail a swap reservation that has not stood. Once its row has stood the
     /// write is refused under the same lock: the replacement holds the agent.
+    /// The same read says whether another writer failed the reservation first
+    /// and whether any session the swap would replace still lives.
     #[must_use = "durability barrier; check the result"]
     pub fn abort_agent_swap(
         &self,
@@ -812,8 +821,26 @@ impl Store {
                 None,
                 None,
             ))?;
-            Ok(SwapAbort::Aborted)
+            let cancelled = agents.iter().any(|row| {
+                row.launch_key() == identity.launch_id()
+                    && row.epoch == epoch
+                    && row.agent_id.is_provisional()
+                    && row.session_over()
+            });
+            Ok(if swap_source_ended(agents.iter(), identity) {
+                SwapAbort::Ended
+            } else if cancelled {
+                SwapAbort::Cancelled
+            } else {
+                SwapAbort::Aborted
+            })
         })
+    }
+
+    /// Whether every session a swap would replace is over: what a stop leaves
+    /// once it has ended the agent.
+    pub fn swap_source_ended(&self, identity: &AgentLaunchIdentity) -> Result<bool> {
+        Ok(swap_source_ended(self.audit_rows()?.iter(), identity))
     }
 
     fn reserve_agent_launch_batch(
@@ -1374,6 +1401,19 @@ fn allocate_agent_launch_identities(
         });
     }
     Ok(identities)
+}
+
+/// Whether every session of `identity`'s launch other than its own
+/// reservation is over.
+fn swap_source_ended<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    identity: &AgentLaunchIdentity,
+) -> bool {
+    let epoch = identity.launch.epoch.unwrap_or(0);
+    crate::agents::state::launch_members(agents, &identity.kind, identity.launch_id())
+        .into_iter()
+        .filter(|member| member.epoch != epoch)
+        .all(AgentState::session_over)
 }
 
 /// The identity of a swap of `source`'s agent, decided over every retained
