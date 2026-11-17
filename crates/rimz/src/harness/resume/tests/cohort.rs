@@ -2715,7 +2715,7 @@ fn cohort_relaunch_normalizes_worktrees_and_keeps_named_team_siblings() {
             None,
         ),
         CohortRelaunchState::Present {
-            focus_pane: Some(pane_id("terminal_reviewer")),
+            focus: Some((AgentKind::new_unchecked("codex"), "reviewer".into())),
             leader: None,
             members: vec!["reviewer".into()],
         }
@@ -2762,7 +2762,7 @@ fn cohort_matching_uses_one_occupant_per_launch_instance() {
             None,
         ),
         CohortRelaunchState::Present {
-            focus_pane: Some(pane_id("terminal_coder")),
+            focus: Some((AgentKind::new_unchecked("codex"), "launch_coder".into())),
             leader: None,
             members: vec!["current".into()],
         }
@@ -2963,7 +2963,7 @@ fn cohort_relaunch_presence_table() {
             &one_cell,
             None,
             CohortRelaunchState::Present {
-                focus_pane: Some(pane_id("terminal_pane")),
+                focus: Some((AgentKind::new_unchecked("codex"), "pane".into())),
                 leader: None,
                 members: vec!["pane".into()],
             },
@@ -2983,7 +2983,7 @@ fn cohort_relaunch_presence_table() {
             &one_cell,
             None,
             CohortRelaunchState::Present {
-                focus_pane: None,
+                focus: None,
                 leader: None,
                 members: vec!["live".into()],
             },
@@ -2998,12 +2998,12 @@ fn cohort_relaunch_presence_table() {
             },
         ),
         (
-            "focus lands on the freshest present pane",
+            "focus lands on the freshest present member with a pane",
             present_group,
             &two_cells,
             None,
             CohortRelaunchState::Present {
-                focus_pane: Some(pane_id("terminal_fresher")),
+                focus: Some((AgentKind::new_unchecked("codex"), "fresher".into())),
                 leader: None,
                 members: vec!["older".into(), "fresher".into()],
             },
@@ -3021,7 +3021,7 @@ fn cohort_relaunch_presence_table() {
             &one_cell,
             Some("forge"),
             CohortRelaunchState::Present {
-                focus_pane: None,
+                focus: None,
                 leader: None,
                 members: vec!["launch_019f2cecea067320b667c5946d266e64".into()],
             },

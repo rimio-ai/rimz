@@ -269,7 +269,7 @@ Launching a named team, or an inline spec of two or more cells, into a named wor
 
 | Existing cohort | Result |
 | --- | --- |
-| live | With a prompt, sends or queues it to the leader at a completed-turn boundary and prints a message receipt. If the leader is not live, refuses with exit 1 and commands to message the live members instead. Without a prompt, focuses the cohort and exits 0. Focus stays put with `--bg` or an agent caller. |
+| live | With a prompt, sends or queues it to the leader at a completed-turn boundary and prints a message receipt. If the leader is not live, refuses with exit 1 and commands to message the live members instead. Without a prompt, focuses the cohort and exits 0. Focus stays put with `--bg` or an agent caller. The focused pane is the one the room's pane listing shows the member in; when no listed pane hosts it, or it leaves that pane while it is woken, the cohort is reported running without a focus. |
 | closed, RimZ-owned worktree with work in progress | Prompts `(resume/fresh/cancel)`, default `resume`. |
 | closed, RimZ-owned worktree that is clean and landed | Prompts `(remove/fresh/cancel)`, default `cancel`. `remove` deletes the worktree and its branch, then launches. |
 | closed, worktree RimZ did not create | Asks to enter the worktree, as above; add `--continue` to resume the cohort. |
@@ -479,7 +479,7 @@ When rebuilding a team tab, a member the lane cannot resume comes back as a fres
 
 | Lane state | Result |
 | --- | --- |
-| every member live | Focuses the freshest member's pane and exits `0`, or reports it already live without jumping for an agent caller or `--bg`. |
+| every member live | Focuses the pane the room's pane listing shows the freshest member in and exits `0`, or reports it already live without jumping for an agent caller or `--bg`. A member no listed pane hosts refuses with `live lane agent has no bound pane`, and a failed listing read with `lane '<lane>': <cause>; nothing was focused`. |
 | some members live | Splits only the closed members back into the live tab, keeping their resolvable role and team prompt layers, and reports each live handle it skipped. |
 | every member closed | Rebuilds restorable team layouts in declared order and restores other agents as flat panes. A team that cannot restore warns with its name and cause; its members resume individually. |
 

@@ -5,6 +5,9 @@
 mod session_step;
 
 #[cfg(unix)]
+mod live_focus;
+
+#[cfg(unix)]
 use assert_cmd::assert::OutputAssertExt;
 #[cfg(unix)]
 use predicates::str::contains;

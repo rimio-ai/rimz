@@ -434,7 +434,7 @@ The caller supplies the named worktree path without creating it, or the PR branc
 | closed, with dirty or unproven work | offer resume / fresh / cancel, default resume |
 | closed, clean and content-landed | offer remove / fresh / cancel, default cancel |
 
-The harness returns the leader's identity and present member identities with `Present`. A declared leader role uses the same claimed-wins `address::role_holders` rule as stage delivery; inline layouts and roleless team cells use the cohort matcher. The launcher dispatches to that identity with ordinary caller attribution, focuses its pane when allowed, and uses the other present members for missing-leader message hints. Resume's pre-registration prompt queue is separate from this dispatch.
+The harness returns the leader's identity and present member identities with `Present`. A declared leader role uses the same claimed-wins `address::role_holders` rule as stage delivery; inline layouts and roleless team cells use the cohort matcher. The launcher dispatches to that identity with ordinary caller attribution, focuses its pane when allowed (`Present` names the member to focus by kind and launch, and `crates/rimz/src/launcher/reconcile.rs::focus_existing` finds its pane through `crates/rimz/src/launcher/agent_pane.rs::find`, reporting the cohort running without a focus when no listed pane hosts it or it left its pane during the wake), and uses the other present members for missing-leader message hints. Resume's pre-registration prompt queue is separate from this dispatch.
 
 The library launcher's [`worktree_entry.rs`](../../../crates/rimz/src/launcher/worktree_entry.rs) owns entry checks and protected recreation; the shared CLI module presents offers and their facts: marker age, latest audit-row activity at or under the checkout, uncommitted count, and landed verdict. The harness's [`worktree_entry::read`](../../../crates/rimz/src/harness/worktree_entry.rs) takes a marked tree and owns the landed-memo read, Git inspection with the non-force removal rule, and audit activity over both lexical and physical checkout paths. `worktree_entry::occupied` applies the takeover occupancy rule over runtime-scoped rows.
 
@@ -543,7 +543,7 @@ Lane resume picks one of four `LaneResumeAction` variants:
 | Action | When |
 | --- | --- |
 | `List` | no scope was given |
-| `Focus` | every member is live; focuses the freshest pane |
+| `Focus` | every member is live; names the freshest live member, by kind and launch, for the caller to focus |
 | `SplitClosed` | a member is still live; splits closed members beside it, keeping each resolvable role and team prompt layer or warning with the affected handles and cause |
 | `RestoreClosed` | every member is closed; reuses the rebirth team and flat split |
 

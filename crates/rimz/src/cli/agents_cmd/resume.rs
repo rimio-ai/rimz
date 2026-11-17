@@ -661,7 +661,8 @@ pub(super) fn resume_lane(
         LaneResumeAction::List { lanes } => render_lane_list(&mut crate::cli::render::out(), lanes),
         LaneResumeAction::Focus {
             lane_label,
-            pane_id,
+            kind,
+            launch,
         } => {
             if !focus.takes_focus() {
                 writeln!(
@@ -671,12 +672,28 @@ pub(super) fn resume_lane(
                 return Ok(());
             }
             let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
-            rimz::harness::hibernate::wake_pane(&store, &pane_id)?;
+            let mut notices = Vec::new();
+            let found = rimz::launcher::agent_pane::find(
+                &workspace,
+                &store,
+                Some(backend.name()),
+                &kind,
+                &launch,
+                &mut notices,
+            );
+            crate::cli::render::room::print_notices(notices)?;
+            let pane = match found {
+                Ok(pane) => pane,
+                Err(rimz::launcher::agent_pane::FindErr::Nowhere) => {
+                    bail!("live lane agent has no bound pane")
+                }
+                Err(err) => bail!("lane '{lane_label}': {err}; nothing was focused"),
+            };
             rimz::mux::focus_anchor::execute_action(
                 backend,
                 &runtime,
                 &workspace.session_name,
-                pane_id,
+                pane.pane_id,
             )?;
             writeln!(
                 std::io::stdout().lock(),

@@ -635,7 +635,7 @@ fn lane_focus_uses_freshest_live_member_after_pane_dedupe() {
 
     assert!(matches!(
         action,
-        LaneResumeAction::Focus { pane_id: id, .. } if id == pane_id("shared")
+        LaneResumeAction::Focus { kind, launch, .. } if kind == "codex" && launch == "newer"
     ));
 }
 
