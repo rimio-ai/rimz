@@ -1,5 +1,6 @@
 //! Shared launch preparation, admission, and pane execution.
 
+pub mod agent_pane;
 pub mod checkout;
 pub mod context;
 mod execute;

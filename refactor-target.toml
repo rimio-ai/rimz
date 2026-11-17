@@ -2857,6 +2857,31 @@ reason = "The library owns shared launch preparation, admission and pane executi
 
 [[verdict]]
 kind = "item"
+key = "launcher::agent_pane"
+reason = "CLI focus, capture, restart and molt and cohort reconciliation find an agent's pane at the point of use through one act."
+
+[[verdict]]
+kind = "item"
+key = "launcher::agent_pane::AgentPane"
+reason = "The pane both of the find's reads answered, the one the act wakes and then acts on."
+
+[[verdict]]
+kind = "item"
+key = "launcher::agent_pane::FindErr"
+reason = "Each caller words its own refusal for an agent with no pane, one that moved, or an unreadable multiplexer."
+
+[[verdict]]
+kind = "item"
+key = "launcher::agent_pane::find"
+reason = "Every agent-addressed act that wakes a pane reads, wakes and reads again before it acts."
+
+[[verdict]]
+kind = "item"
+key = "launcher::agent_pane::locate"
+reason = "Capture and restart's checks read where the agent is once, waking nothing."
+
+[[verdict]]
+kind = "item"
 key = "launcher::checkout"
 reason = "Launch and relaunch adapters share checkout admission, settlement and host-path translation."
 
