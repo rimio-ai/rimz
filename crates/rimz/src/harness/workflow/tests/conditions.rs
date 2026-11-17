@@ -264,7 +264,7 @@ fn advance_condition(state: &StatePaths, record: &RunRecord) -> RunRecord {
 /// Publish a forge probe for the run's checkout: `fresh` after the check's entry, else before.
 fn publish_pr(dir: &Path, state: &StatePaths, record: &RunRecord, fresh: bool, pr: &str) {
     let at = if fresh {
-        jiff::Timestamp::now()
+        attempts::fresh_probe_at(record)
     } else {
         record.entered_at - std::time::Duration::from_secs(1)
     };
@@ -300,6 +300,18 @@ fn closed_waits(state: &StatePaths, record: &RunRecord) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+#[test]
+fn a_fresh_probe_reads_fresh_against_an_entry_inside_its_millisecond() {
+    let (dir, state, mut record) = attempts::setup(&held_condition("@wait"));
+    record.entered_at = jiff::Timestamp::from_millisecond(record.entered_at.as_millisecond())
+        .unwrap()
+        + std::time::Duration::from_micros(1_000_500);
+    attempts::update(&state, &record);
+    publish_pr(dir.path(), &state, &record, true, "merged");
+    let wait = advance_condition(&state, &record).wait.unwrap();
+    assert!(wait.is_hold(), "{wait:?}");
 }
 
 #[test]
