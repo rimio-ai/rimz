@@ -29,6 +29,7 @@ pub mod lifecycle;
 mod local_session_cache;
 pub(crate) mod locate;
 pub mod login;
+mod managed_env_list;
 pub(crate) mod managed_json_hooks;
 mod managed_source;
 pub(crate) mod managed_statusline;
@@ -647,6 +648,10 @@ pub struct HookInstallReport {
     pub files: Vec<HookInstallFileReport>,
     /// Event names installed (e.g. `SessionStart`, `PermissionRequest`).
     pub installed_events: Vec<String>,
+    /// The RimZ mod folder the install wrote, as in
+    /// [`HookInstallPreview::plugin_dir`], so the receipt names its files as the
+    /// consent did. `None` for agents RimZ ships no mod for.
+    pub plugin_dir: Option<PathBuf>,
 }
 
 /// One config file written by a completed hook install or uninstall.
@@ -671,6 +676,11 @@ pub struct HookInstallPreview {
     /// render command), same consent-surface discipline as `status_line_change`.
     /// `None` for agents that manage no subagent statusline (Codex).
     pub subagent_status_line_change: Option<StatusLineChange>,
+    /// The RimZ mod folder the install lists in the provider's plugin-folder
+    /// setting (Claude's `env.CLAUDE_CODE_PLUGIN_DIRS`), named in the consent
+    /// summary because the provider loads its code into every session of the
+    /// account. `None` for agents RimZ ships no mod for.
+    pub plugin_dir: Option<PathBuf>,
 }
 
 /// One exact config-file change in a hook-install preview.

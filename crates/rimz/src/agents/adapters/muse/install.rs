@@ -283,6 +283,7 @@ pub(super) fn preview_at(home: &Path, version: Option<CliVersion>) -> Result<Hoo
         planned_events: event_names(),
         status_line_change: None,
         subagent_status_line_change: None,
+        plugin_dir: None,
     })
 }
 
@@ -298,6 +299,7 @@ pub(super) fn install_at(home: &Path, version: Option<CliVersion>) -> Result<Hoo
         settings.original.as_deref().map(str::as_bytes),
     )?;
     Ok(HookInstallReport {
+        plugin_dir: None,
         agent: AGENT,
         files: preview
             .files

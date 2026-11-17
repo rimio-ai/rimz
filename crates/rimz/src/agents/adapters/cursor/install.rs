@@ -156,6 +156,7 @@ pub(super) fn install_all(
         installed_events = report.installed_events;
     }
     Ok(HookInstallReport {
+        plugin_dir: None,
         agent: "cursor",
         files: first_report_per_path(files),
         installed_events,
@@ -278,6 +279,7 @@ pub(super) fn install_into(
         config_original.as_deref(),
     )?;
     Ok(HookInstallReport {
+        plugin_dir: None,
         agent: "cursor",
         files: report_files(
             [
@@ -335,6 +337,7 @@ pub(super) fn preview_at(
         planned_events: events,
         status_line_change,
         subagent_status_line_change: None,
+        plugin_dir: None,
     })
 }
 

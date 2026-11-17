@@ -198,6 +198,7 @@ impl ManagedSource {
         self.refuse_unmarked(path, original.as_deref())?;
         provider_file::write_bytes(path, source.as_bytes())?;
         Ok(HookInstallReport {
+            plugin_dir: None,
             agent: self.agent,
             files: vec![HookInstallFileReport {
                 path: path.to_path_buf(),
@@ -227,6 +228,7 @@ impl ManagedSource {
             planned_events: self.installed_event_names(),
             status_line_change: None,
             subagent_status_line_change: None,
+            plugin_dir: None,
         })
     }
 

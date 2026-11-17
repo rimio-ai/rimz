@@ -30,6 +30,7 @@ mod payloads;
 mod remote_consent;
 mod remote_control;
 mod remote_liveness;
+mod rimz_mod;
 mod spend;
 mod statusline;
 mod subagent_cost;
@@ -45,6 +46,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
+#[cfg(test)]
 use self::install::MANAGED_SOURCE;
 use self::payloads::{
     ClaudeCommon, ClaudePermissionRequest, ClaudePostCompact, ClaudePostToolUse, ClaudePreToolUse,
@@ -1373,7 +1375,7 @@ impl crate::agents::capabilities::InstallationCapability for ClaudeAdapter {
     }
 
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
-        Some(&MANAGED_SOURCE)
+        Some(&install::MANAGED_INTEGRATION)
     }
 }
 

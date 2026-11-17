@@ -2175,6 +2175,23 @@ fn agents_home_in(env: &BTreeMap<String, String>) -> Option<PathBuf> {
         .or_else(|| path("HOME").map(|home| home.join(".rimz")))
 }
 
+/// RimZ's Claude Code mod, `<home>/mods/claude`, resolved from a launch or login
+/// environment (`RIMZ_HOME`, else `HOME/.rimz`, else the process home). One
+/// folder serves every Claude account: hook install writes it and lists it in
+/// each account's settings, and scoped sandbox views bind it read-only.
+pub(crate) fn claude_mod_dir_in(env: &BTreeMap<String, String>) -> PathBuf {
+    let path = |key: &str| {
+        env.get(key)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    path("RIMZ_HOME")
+        .or_else(|| path("HOME").map(|home| home.join(".rimz")))
+        .unwrap_or_else(rimz_home)
+        .join("mods")
+        .join("claude")
+}
+
 const SKILLS_SUBDIR: &str = "skills";
 
 /// Resolve the shared skill library from a launch environment.

@@ -5,6 +5,7 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use super::hook_types::HookEventSpec;
+use super::managed_env_list::ManagedEnvPath;
 use super::managed_statusline::{self, ManagedStatusLineSpec};
 use super::settings_json;
 use super::{
@@ -35,10 +36,21 @@ pub(super) struct ManagedJsonHookSpec {
 
 impl ManagedJsonHookSpec {
     pub(super) fn install_into(&self, path: &Path) -> Result<HookInstallReport> {
+        self.install_into_with(path, &[])
+    }
+
+    /// [`Self::install_into`], also listing each of `env_paths` in the settings
+    /// `env` block.
+    pub(super) fn install_into_with(
+        &self,
+        path: &Path,
+        env_paths: &[ManagedEnvPath<'_>],
+    ) -> Result<HookInstallReport> {
         let existed = path.exists();
-        let (root, installed_events) = self.candidate(path)?;
+        let (root, installed_events) = self.candidate(path, env_paths)?;
         self.write_json(path, &root)?;
         Ok(HookInstallReport {
+            plugin_dir: None,
             agent: self.agent,
             files: vec![HookInstallFileReport {
                 path: path.to_path_buf(),
@@ -49,6 +61,14 @@ impl ManagedJsonHookSpec {
     }
 
     pub(super) fn preview_at(&self, path: &Path) -> Result<HookInstallPreview> {
+        self.preview_at_with(path, &[])
+    }
+
+    pub(super) fn preview_at_with(
+        &self,
+        path: &Path,
+        env_paths: &[ManagedEnvPath<'_>],
+    ) -> Result<HookInstallPreview> {
         let existed = path.exists();
         let original = read_optional_file(self.agent, path)?;
         let existing = self.read_json(path)?;
@@ -60,7 +80,7 @@ impl ManagedJsonHookSpec {
             .status_lines
             .get(1)
             .and_then(|spec| managed_statusline::classify(&existing, spec));
-        let (candidate, planned_events) = self.candidate(path)?;
+        let (candidate, planned_events) = self.candidate(path, env_paths)?;
         Ok(HookInstallPreview {
             agent: self.agent,
             files: vec![HookInstallFilePreview {
@@ -72,10 +92,21 @@ impl ManagedJsonHookSpec {
             planned_events,
             status_line_change,
             subagent_status_line_change,
+            plugin_dir: None,
         })
     }
 
     pub(super) fn uninstall_from(&self, path: &Path) -> Result<HookUninstallReport> {
+        self.uninstall_from_with(path, &[])
+    }
+
+    /// [`Self::uninstall_from`], also removing each of `env_paths` from the
+    /// settings `env` block.
+    pub(super) fn uninstall_from_with(
+        &self,
+        path: &Path,
+        env_paths: &[ManagedEnvPath<'_>],
+    ) -> Result<HookUninstallReport> {
         let existed = path.exists();
         if !existed {
             return Ok(HookUninstallReport {
@@ -91,6 +122,9 @@ impl ManagedJsonHookSpec {
         let removed_events = self.strip_owned(&mut root);
         for spec in self.status_lines {
             managed_statusline::strip(&mut root, spec);
+        }
+        for entry in env_paths {
+            entry.strip(&mut root);
         }
         self.write_json(path, &root)?;
         Ok(HookUninstallReport {
@@ -128,6 +162,14 @@ impl ManagedJsonHookSpec {
     }
 
     pub(super) fn managed_artifacts_at(&self, path: &Path) -> bool {
+        self.managed_artifacts_at_with(path, &[])
+    }
+
+    pub(super) fn managed_artifacts_at_with(
+        &self,
+        path: &Path,
+        env_paths: &[ManagedEnvPath<'_>],
+    ) -> bool {
         let Ok(root) = self.read_json(path) else {
             return false;
         };
@@ -148,13 +190,20 @@ impl ManagedJsonHookSpec {
                 .status_lines
                 .iter()
                 .any(|spec| managed_statusline::is_managed(&root, spec))
+            || env_paths.iter().any(|entry| entry.is_listed(&root))
     }
 
     pub(super) fn outdated_at(&self, path: &Path) -> bool {
+        self.outdated_at_with(path, &[])
+    }
+
+    /// [`Self::outdated_at`], where an owned install that lacks one of
+    /// `env_paths` is outdated too.
+    pub(super) fn outdated_at_with(&self, path: &Path, env_paths: &[ManagedEnvPath<'_>]) -> bool {
         let Ok(root) = self.read_json(path) else {
             return false;
         };
-        let Ok((candidate, _)) = self.candidate(path) else {
+        let Ok((candidate, _)) = self.candidate(path, env_paths) else {
             return false;
         };
         let owned = self.owned_hooks(&root);
@@ -168,7 +217,8 @@ impl ManagedJsonHookSpec {
                 || self.status_lines.iter().any(|spec| {
                     managed_statusline::managed_value(&root, spec)
                         != managed_statusline::managed_value(&candidate, spec)
-                }))
+                })
+                || env_paths.iter().any(|entry| !entry.is_listed(&root)))
     }
 
     fn owned_hooks(&self, root: &Map<String, Value>) -> Map<String, Value> {
@@ -202,7 +252,11 @@ impl ManagedJsonHookSpec {
         managed_statusline::wrapped_command(&root, spec)
     }
 
-    fn candidate(&self, path: &Path) -> Result<(Map<String, Value>, Vec<String>)> {
+    fn candidate(
+        &self,
+        path: &Path,
+        env_paths: &[ManagedEnvPath<'_>],
+    ) -> Result<(Map<String, Value>, Vec<String>)> {
         let mut root = self.read_json(path)?;
         self.reject_async_blocking(&root)?;
         self.strip_owned(&mut root);
@@ -211,6 +265,14 @@ impl ManagedJsonHookSpec {
         }
         for spec in self.status_lines {
             managed_statusline::upsert(&mut root, spec);
+        }
+        for entry in env_paths {
+            entry
+                .upsert(&mut root)
+                .map_err(|reason| AgentErr::Install {
+                    agent: self.agent,
+                    reason: format!("{reason}; refusing to install"),
+                })?;
         }
         Ok((
             root,

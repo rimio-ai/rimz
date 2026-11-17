@@ -169,6 +169,7 @@ pub(super) fn install(hooks_path: &Path, settings_path: &Path) -> Result<HookIns
         hooks_original.as_deref(),
     )?;
     Ok(HookInstallReport {
+        plugin_dir: None,
         agent: AGENT,
         files: report_files([
             (hooks_path, hooks_existed),
@@ -202,6 +203,7 @@ pub(super) fn preview(hooks_path: &Path, settings_path: &Path) -> Result<HookIns
         planned_events: installed_event_names(),
         status_line_change: Some(status_line_change),
         subagent_status_line_change: None,
+        plugin_dir: None,
     })
 }
 

@@ -1565,7 +1565,8 @@ allowed-dependencies = [
 # RuntimePaths::bookings_path classes the sidebar's loop-bookings lane cache (+1).
 # loop_launch_logs_dir names the per-fire launch-child log directory beside the other loop paths (+1).
 # The model refusal record's path and lock are built here (+2).
-surface-budget = 345
+# paths::claude_mod_dir_in places the RimZ Claude mod folder every account lists (+1).
+surface-budget = 346
 
 [[verdict]]
 kind = "item"
@@ -1586,6 +1587,11 @@ reason = "Skill chains derive library and pack skill directories without bypassi
 kind = "item"
 key = "disk::paths::packs_dir"
 reason = "Pack readers and writers derive the machine-owned directory from their explicit agents home."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::claude_mod_dir_in"
+reason = "Claude hook install and the scoped sandbox's protected set resolve the one mod folder every Claude account lists from the login env map."
 
 [[module]]
 path = "crates/rimz/src/packs"

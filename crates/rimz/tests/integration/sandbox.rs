@@ -1684,6 +1684,10 @@ fn guard_fixture(env: &Env, checkout: &Path) -> Vec<PathBuf> {
             entries.push(path);
         }
     }
+    let claude_mod = env.rimz_home().join("mods/claude");
+    std::fs::create_dir_all(&claude_mod).unwrap();
+    std::fs::write(claude_mod.join("sentinel"), "original").unwrap();
+    entries.push(claude_mod);
     entries
 }
 

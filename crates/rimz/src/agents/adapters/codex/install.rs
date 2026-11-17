@@ -184,6 +184,7 @@ pub(super) fn install_into(path: &Path) -> Result<HookInstallReport> {
     write_table(path, &root)?;
 
     Ok(HookInstallReport {
+        plugin_dir: None,
         agent: "codex",
         files: vec![HookInstallFileReport {
             path: path.to_path_buf(),
@@ -209,6 +210,7 @@ pub(super) fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
         // Codex has no statusline; it inherits the no-op `wrapped_status_line_command`.
         status_line_change: None,
         subagent_status_line_change: None,
+        plugin_dir: None,
     })
 }
 
