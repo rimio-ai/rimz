@@ -577,6 +577,54 @@ fn start_arguments_round_trip_and_stay_absent_at_their_defaults() {
 }
 
 #[test]
+fn a_try_round_trips_its_flag_ending_and_untaken_route_and_a_start_entry_its_input() {
+    let mut value = serde_json::to_value(record()).unwrap();
+    assert!(value.get("once").is_none());
+    value["once"] = json!(true);
+    value["outcome"] = json!({"ending":{"kind":"tried"}, "acted":false});
+    let tried: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert!(tried.once);
+    assert_eq!(tried.outcome.as_ref().unwrap().ending, RunEnding::Tried);
+    assert_eq!(serde_json::to_value(tried).unwrap(), value);
+
+    let at = json!({"seq":null, "at":"2026-01-01T00:00:00Z", "node":"pr"});
+    let entry = |extra: Value| {
+        let mut entry = at.clone();
+        entry
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let decoded: JournalEntry = serde_json::from_value(entry.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), entry);
+        decoded.event
+    };
+    assert_eq!(
+        entry(json!({"event":"terminal", "state":"done", "tried":"@failed"})),
+        JournalEvent::Terminal {
+            state: RunState::Done,
+            tried: Some("@failed".into())
+        }
+    );
+    assert_eq!(
+        entry(json!({"event":"terminal", "state":"done"})),
+        JournalEvent::Terminal {
+            state: RunState::Done,
+            tried: None
+        }
+    );
+    assert_eq!(
+        entry(json!({"event":"start", "input":{"outcome":"pass", "key":7}})),
+        JournalEvent::Start {
+            input: Some(json!({"outcome":"pass", "key":7}))
+        }
+    );
+    assert_eq!(
+        entry(json!({"event":"start"})),
+        JournalEvent::Start { input: None }
+    );
+}
+
+#[test]
 fn capacity_wait_round_trips_and_other_waits_omit_its_fields() {
     let wait = json!({
         "node":"build", "outcome":"capacity", "detail":"no capacity for claude",

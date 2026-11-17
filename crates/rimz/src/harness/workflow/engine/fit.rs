@@ -274,6 +274,7 @@ pub(super) fn close(
                     None,
                     JournalEvent::Terminal {
                         state: RunState::Canceled,
+                        tried: None,
                     },
                 );
             }

@@ -130,7 +130,7 @@ pub(super) fn transition(t: &Transition<'_>, latched: bool) {
                 });
                 None
             }
-            JournalEvent::Terminal { state } => {
+            JournalEvent::Terminal { state, .. } => {
                 assist_log::append(&AssistRecord {
                     at: entry.at,
                     assist: Assist::WorkflowEnd {

@@ -358,6 +358,7 @@ impl Transition<'_> {
                         None,
                         JournalEvent::Terminal {
                             state: self.record.state,
+                            tried: None,
                         },
                     );
                 }
@@ -934,6 +935,7 @@ impl Transition<'_> {
             None,
             JournalEvent::Terminal {
                 state: RunState::Canceled,
+                tried: None,
             },
         );
     }
