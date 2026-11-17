@@ -667,6 +667,7 @@ fn provider_error_certificate_reaps_the_replaced_owner() {
 
     let context = AgentContext {
         turn_error: Some(AgentTurnError {
+            model: None,
             ended_turn: false,
             class: TurnErrorClass::PausedOverloaded,
             at: error_at,
@@ -762,6 +763,7 @@ fn stale_provider_certificate_does_not_reap_the_owner() {
 
     let context = AgentContext {
         turn_error: Some(AgentTurnError {
+            model: None,
             ended_turn: false,
             class: TurnErrorClass::PausedOverloaded,
             at: now - Duration::from_secs(3),

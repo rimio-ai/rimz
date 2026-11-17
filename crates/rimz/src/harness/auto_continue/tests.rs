@@ -347,6 +347,7 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
         account: None,
         turn_opened_by: Vec::new(),
         turn_error: Some(AgentTurnError {
+            model: None,
             ended_turn: false,
             class,
             at: ts(error_at),

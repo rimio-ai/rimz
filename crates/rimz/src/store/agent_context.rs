@@ -201,10 +201,14 @@ pub fn merge_turn_error(
     runtime: &RuntimePaths,
     kind: &str,
     agent_id: &str,
-    marker: AgentTurnError,
+    mut marker: AgentTurnError,
 ) -> Result<bool, atomic::AtomicErr> {
     let observed_at = Timestamp::now();
     update_record(runtime, kind, agent_id, observed_at, |record, _| {
+        marker.stamp_model(
+            record.context.turn_error.as_ref(),
+            record.context.model_id.as_deref(),
+        );
         if record.context.turn_error.as_ref() == Some(&marker) {
             return false;
         }

@@ -1235,6 +1235,7 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
                 .as_deref()
                 .and_then(crate::agents::context::cap_turn_error_label);
             Some(AgentTurnError {
+                model: None,
                 ended_turn: false,
                 class: statusline::classify_api_error(Some(error), None, label.as_deref()),
                 at: Timestamp::now(),

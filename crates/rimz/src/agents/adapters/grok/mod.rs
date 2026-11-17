@@ -393,6 +393,7 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
                 let label = non_empty_trimmed(raw_label)
                     .map(|label| label.chars().take(160).collect::<String>());
                 AgentTurnError {
+                    model: None,
                     ended_turn: false,
                     class: turn_error_class(&canonical, parsed.error.as_deref(), label.as_deref()),
                     at: Timestamp::now(),

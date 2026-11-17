@@ -1240,6 +1240,7 @@ fn context_severity_takes_the_worse_of_percent_and_tokens() {
 #[test]
 fn effective_turn_error_class_parks_legacy_limit_labels() {
     let turn_error = |label: &str| AgentTurnError {
+        model: None,
         ended_turn: false,
         class: TurnErrorClass::Failed,
         at: Timestamp::from_second(1_700_000_000).unwrap(),
@@ -1266,6 +1267,7 @@ fn effective_turn_error_class_parks_legacy_limit_labels() {
 fn effective_turn_error_class_keeps_usage_cap_failed() {
     let now = Timestamp::from_second(2_000).unwrap();
     let error = AgentTurnError {
+        model: None,
         ended_turn: false,
         class: TurnErrorClass::Failed,
         at: Timestamp::from_second(1_010).unwrap(),
@@ -1304,6 +1306,7 @@ fn test_agent(status: AgentStatus, activity: i64) -> AgentState {
 fn context_error(class: TurnErrorClass, at: i64) -> AgentContext {
     AgentContext {
         turn_error: Some(AgentTurnError {
+            model: None,
             ended_turn: false,
             class,
             at: Timestamp::from_second(at).unwrap(),

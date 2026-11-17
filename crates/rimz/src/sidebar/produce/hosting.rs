@@ -533,6 +533,7 @@ mod tests {
         let error_at = fixture.now + jiff::SignedDuration::from_secs(1);
         let rested = crate::agents::AgentContext {
             turn_error: Some(crate::agents::AgentTurnError {
+                model: None,
                 ended_turn: false,
                 class: crate::agents::TurnErrorClass::PausedOverloaded,
                 at: error_at,

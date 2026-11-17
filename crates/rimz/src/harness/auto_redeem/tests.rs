@@ -2175,6 +2175,7 @@ fn limit_stopped_agent(
     agent.context = Some(crate::agents::AgentContext {
         source: kind.to_owned(),
         turn_error: Some(crate::agents::AgentTurnError {
+            model: None,
             ended_turn: false,
             class,
             at: ts(1_700_000_000) - Duration::from_secs(30),

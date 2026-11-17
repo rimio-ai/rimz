@@ -1258,6 +1258,7 @@ fn held(name: &str, until: &str) -> (AgentState, RunRecord) {
     let at = child.last_activity + std::time::Duration::from_secs(1);
     let mut context = rimz::agents::AgentContext::new(child.kind.as_str(), at);
     context.turn_error = Some(rimz::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at,
@@ -1348,6 +1349,7 @@ fn seed_limit_marker(store: &Store, name: &str) {
     let at = Timestamp::now() + std::time::Duration::from_secs(5);
     let mut context = rimz::agents::AgentContext::new("codex", at);
     context.turn_error = Some(rimz::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at,

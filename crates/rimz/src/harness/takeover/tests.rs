@@ -341,6 +341,7 @@ fn provider_turn_errors_settle_failures_but_keep_pauses_open() {
         running.last_activity -= jiff::SignedDuration::from_secs(1);
         running.context = Some(AgentContext {
             turn_error: Some(AgentTurnError {
+                model: None,
                 ended_turn: false,
                 class,
                 at: now(),
@@ -364,6 +365,7 @@ fn spent_provider_pauses_stop_but_recoverable_pauses_block_takeover() {
     paused.last_activity -= jiff::SignedDuration::from_secs(1);
     paused.context = Some(AgentContext {
         turn_error: Some(AgentTurnError {
+            model: None,
             ended_turn: false,
             class: TurnErrorClass::PausedOverloaded,
             at: now(),

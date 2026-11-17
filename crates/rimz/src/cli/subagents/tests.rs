@@ -1182,6 +1182,7 @@ fn child_reports_show_a_limit_parked_child_as_paused_beside_its_open_run() {
     let at = parked.last_activity + Duration::from_secs(1);
     let mut context = rimz::agents::AgentContext::new("codex", at);
     context.turn_error = Some(rimz::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at,
@@ -1262,6 +1263,7 @@ fn parked_child_report(demotion: &rimz::agents::ParkDemotion) -> ChildReport {
     child.last_activity = now - Duration::from_secs(1);
     let mut context = rimz::agents::AgentContext::new("claude", now);
     context.turn_error = Some(rimz::agents::AgentTurnError {
+        model: None,
         ended_turn: false,
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at: now,
@@ -1641,6 +1643,7 @@ fn child_list_and_nested_entry(
     if let Some((class, label)) = error {
         let mut context = rimz::agents::AgentContext::new("claude", now);
         context.turn_error = Some(rimz::agents::AgentTurnError {
+            model: None,
             ended_turn: false,
             class,
             at: now,

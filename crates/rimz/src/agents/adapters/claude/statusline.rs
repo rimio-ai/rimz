@@ -266,6 +266,7 @@ fn detect_resting_turn_outcome(
     {
         let label = turn_error_label(&value);
         return Some(RestingTurnOutcome::Died(AgentTurnError {
+            model: None,
             ended_turn: false,
             class: classify_api_error(
                 value.get("error").and_then(Value::as_str),
@@ -358,6 +359,7 @@ fn turn_ending_denial(
     let refusal = outage
         .or_else(|| run().rfind(|entry| decision(entry, "decision").as_deref() == Some("reject")));
     AgentTurnError {
+        model: None,
         ended_turn: false,
         class: if outage.is_some() {
             TurnErrorClass::PausedOverloaded

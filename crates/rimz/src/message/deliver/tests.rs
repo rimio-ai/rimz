@@ -148,6 +148,7 @@ fn spent_receiver(now: Timestamp) -> (AgentState, CardStatus) {
     receiver.last_activity = now - Duration::from_secs(1);
     receiver.context = Some(crate::agents::AgentContext {
         turn_error: Some(crate::agents::AgentTurnError {
+            model: None,
             ended_turn: false,
             class: crate::agents::TurnErrorClass::PausedRateLimit,
             at: now,

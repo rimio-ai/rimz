@@ -1555,6 +1555,7 @@ fn paused_agent_reads_as_a_static_pause() {
     claude.last_activity = now - Duration::from_secs(60);
     claude.context = Some(AgentContext {
         turn_error: Some(AgentTurnError {
+            model: None,
             ended_turn: false,
             class: TurnErrorClass::PausedOverloaded,
             at: now - Duration::from_secs(10),

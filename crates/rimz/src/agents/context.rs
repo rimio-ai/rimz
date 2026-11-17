@@ -474,7 +474,12 @@ impl LocalContextPatch {
             .apply(&mut context.recorded_request_at);
         self.post_compaction_tokens
             .apply(&mut context.post_compaction_tokens);
+        let prior_turn_error = context.turn_error.clone();
+        let sets_turn_error = !self.turn_error.is_keep();
         self.turn_error.apply(&mut context.turn_error);
+        if sets_turn_error && let Some(error) = &mut context.turn_error {
+            error.stamp_model(prior_turn_error.as_ref(), context.model_id.as_deref());
+        }
         self.settle.apply(&mut context.settle);
         self.permission_settle.apply(&mut context.permission_settle);
     }
@@ -1616,6 +1621,23 @@ pub struct AgentTurnError {
     /// the timestamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// The context's model id when this marker first landed: the model the
+    /// provider refused. A later write of the same marker (a statusline push
+    /// after `/model` re-derives it with the new model id) keeps the first stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl AgentTurnError {
+    /// Stamp an incoming marker with its model: the stored marker's stamp when
+    /// it is the same marker or an older one of the same class (`at` no later
+    /// than `prior`'s), else `model_id`, the context's model id at this write.
+    pub(crate) fn stamp_model(&mut self, prior: Option<&Self>, model_id: Option<&str>) {
+        self.model = match prior {
+            Some(prior) if prior.at >= self.at && prior.class == self.class => prior.model.clone(),
+            _ => model_id.map(str::to_owned),
+        };
+    }
 }
 
 /// The pull request the agent associates with the session, when it reports one.

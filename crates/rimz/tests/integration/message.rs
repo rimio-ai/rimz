@@ -16619,6 +16619,7 @@ fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass, ended_turn:
     let at = agent.last_activity + jiff::SignedDuration::from_secs(1);
     let mut context = rimz::agents::AgentContext::new("claude", at);
     context.turn_error = Some(AgentTurnError {
+        model: None,
         ended_turn,
         class,
         at,

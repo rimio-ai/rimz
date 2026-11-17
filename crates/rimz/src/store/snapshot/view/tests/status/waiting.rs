@@ -66,6 +66,7 @@ fn turn_ending_capacity_error_releases_root_permission() {
     let label = "Selected model is at capacity. Please try a different model.";
     session.context = Some(crate::agents::AgentContext {
         turn_error: Some(crate::agents::AgentTurnError {
+            model: None,
             class: crate::agents::TurnErrorClass::PausedOverloaded,
             at: ago(83),
             label: Some(label.to_owned()),

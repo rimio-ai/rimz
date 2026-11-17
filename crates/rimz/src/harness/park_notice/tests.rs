@@ -31,6 +31,7 @@ fn mark(child: &mut AgentState, class: TurnErrorClass, label: Option<&str>) {
     let at = child.last_activity + Duration::from_secs(1);
     let mut context = AgentContext::new(child.kind.as_str(), at);
     context.turn_error = Some(AgentTurnError {
+        model: None,
         ended_turn: false,
         class,
         at,

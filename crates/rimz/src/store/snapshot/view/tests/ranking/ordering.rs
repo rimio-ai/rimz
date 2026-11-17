@@ -97,6 +97,7 @@ fn closed_permissions_do_not_rank_as_waiting() {
             }
             "turn ended" => {
                 closed.context.as_mut().unwrap().turn_error = Some(crate::agents::AgentTurnError {
+                    model: None,
                     class: crate::agents::TurnErrorClass::PausedOverloaded,
                     at: ago(88),
                     label: None,

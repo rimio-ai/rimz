@@ -264,6 +264,7 @@ fn delivery_gates_distinguish_failed_provider_parks_from_fatal_errors() {
         failed.turn_started_at = Some(Timestamp::from_second(1_000).unwrap());
         failed.context = Some(AgentContext {
             turn_error: Some(AgentTurnError {
+                model: None,
                 ended_turn: false,
                 class,
                 at: failed.turn_started_at.unwrap(),
@@ -299,6 +300,7 @@ fn spent_provider_pauses_open_any_but_keep_done_closed_and_resume_raw() {
         paused.last_activity = now - Duration::from_secs(1);
         paused.context = Some(AgentContext {
             turn_error: Some(AgentTurnError {
+                model: None,
                 ended_turn: false,
                 class,
                 at: now,
@@ -350,6 +352,7 @@ fn delivery_gates_admit_a_fatal_provider_error_only_on_any() {
     running.last_activity = now - jiff::SignedDuration::from_secs(1);
     running.context = Some(AgentContext {
         turn_error: Some(AgentTurnError {
+            model: None,
             ended_turn: false,
             class: TurnErrorClass::Failed,
             at: now,

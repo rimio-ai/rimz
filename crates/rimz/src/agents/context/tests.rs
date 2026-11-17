@@ -709,6 +709,7 @@ fn turn_error_class_round_trips_and_defaults_to_failed() {
         (TurnErrorClass::Failed, "failed", "API Error: Bad Request"),
     ] {
         let error = AgentTurnError {
+            model: None,
             ended_turn: false,
             class,
             at: Timestamp::from_second(1_700_000_000).unwrap(),
@@ -974,4 +975,64 @@ fn window_pace_requires_all_fields_and_gates_the_floor() {
         .unwrap()
         .past_floor()
     );
+}
+
+#[test]
+fn a_turn_error_marker_keeps_the_model_it_landed_on_across_every_writer() {
+    let definition = crate::agents::spec_by_kind("claude").unwrap();
+    let marker = |at: i64| AgentTurnError {
+        model: None,
+        ended_turn: false,
+        class: TurnErrorClass::PausedRateLimit,
+        at: Timestamp::from_second(at).unwrap(),
+        label: Some("You've hit your limit".to_owned()),
+    };
+    let push = |model: &str, at: i64| AgentContext {
+        model_id: Some(model.to_owned()),
+        turn_error: Some(marker(at)),
+        ..AgentContext::new("claude", Timestamp::from_second(at).unwrap())
+    };
+    let stamp = |record: &record::AgentContextRecord| {
+        record
+            .context
+            .turn_error
+            .as_ref()
+            .and_then(|error| error.model.clone())
+    };
+    let mut record = record::AgentContextRecord::new("claude", "agent", AgentContext::default());
+
+    record.apply_context_refresh("claude", "agent", push("claude-fable-5-2", 100), None);
+    assert_eq!(stamp(&record).as_deref(), Some("claude-fable-5-2"));
+    record.apply_context_refresh("claude", "agent", push("claude-opus-5-5", 100), None);
+    assert_eq!(
+        stamp(&record).as_deref(),
+        Some("claude-fable-5-2"),
+        "a statusline push carrying the same marker on a new model keeps its stamp"
+    );
+    record.merge_observed(
+        "claude",
+        push("claude-opus-5-5", 100),
+        Timestamp::UNIX_EPOCH,
+    );
+    assert_eq!(stamp(&record).as_deref(), Some("claude-fable-5-2"));
+    LocalContextPatch {
+        turn_error: FieldPatch::Set(marker(100)),
+        ..Default::default()
+    }
+    .apply(&mut record.context, definition);
+    assert_eq!(stamp(&record).as_deref(), Some("claude-fable-5-2"));
+
+    record.apply_context_refresh("claude", "agent", push("claude-opus-5-5", 200), None);
+    assert_eq!(
+        stamp(&record).as_deref(),
+        Some("claude-opus-5-5"),
+        "a later marker takes the model it landed on"
+    );
+    LocalContextPatch {
+        model_id: FieldPatch::Set("claude-fable-5-5".to_owned()),
+        turn_error: FieldPatch::Set(marker(300)),
+        ..Default::default()
+    }
+    .apply(&mut record.context, definition);
+    assert_eq!(stamp(&record).as_deref(), Some("claude-fable-5-5"));
 }

@@ -139,6 +139,10 @@ impl AgentContextRecord {
             }
         }
         let observed_cost = context.cost.is_some();
+        let model_id = context.model_id.clone().or(self.context.model_id.clone());
+        if let Some(error) = &mut context.turn_error {
+            error.stamp_model(self.context.turn_error.as_ref(), model_id.as_deref());
+        }
         context.turn_opened_by = self.context.turn_opened_by.clone();
         context.last_cache_write = self.context.last_cache_write;
         context.recorded_request_at = self.context.recorded_request_at;
@@ -200,9 +204,13 @@ impl AgentContextRecord {
     pub(crate) fn merge_observed(
         &mut self,
         kind: &str,
-        context: AgentContext,
+        mut context: AgentContext,
         observed_at: Timestamp,
     ) -> bool {
+        let model_id = context.model_id.clone().or(self.context.model_id.clone());
+        if let Some(error) = &mut context.turn_error {
+            error.stamp_model(self.context.turn_error.as_ref(), model_id.as_deref());
+        }
         let mut changed = false;
         macro_rules! merge_optional {
             ($field:ident) => {

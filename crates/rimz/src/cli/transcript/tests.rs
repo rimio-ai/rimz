@@ -1894,6 +1894,7 @@ fn latest_ask_view_keeps_turn_ended_reserved_pane_out_of_display() {
     agent.kind = ask.kind;
     agent.context = Some(rimz::agents::AgentContext {
         turn_error: Some(rimz::agents::AgentTurnError {
+            model: None,
             ended_turn: true,
             class: rimz::agents::TurnErrorClass::PausedOverloaded,
             at: agent.last_activity + jiff::SignedDuration::from_secs(1),
