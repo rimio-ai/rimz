@@ -712,6 +712,7 @@ impl View<'_> {
         }
         for hop in &hops[earlier..] {
             let fact = match hop.kind {
+                HopKind::Start => format!("started → {}", hop.node),
                 HopKind::Resume => format!("resumed → {}", hop.node),
                 HopKind::Restart => format!("restarted → {}", hop.node),
                 HopKind::VisitsReset => format!(

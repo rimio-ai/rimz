@@ -275,6 +275,8 @@ impl View<'_> {
         ) {
             Some(hop) if hop.kind == HopKind::Resume => Sender::Resume,
             Some(hop) if hop.kind == HopKind::Restart => Sender::Restart,
+            // A start placed by hand reads as a run that began here.
+            Some(hop) if hop.kind == HopKind::Start => Sender::Direct,
             Some(hop) => Sender::Edge(hop.node, hop.outcome.unwrap_or_default()),
             None => Sender::Direct,
         }

@@ -361,6 +361,7 @@ mod judges;
 mod message;
 mod refusals;
 mod sleep;
+mod tries;
 mod turns;
 
 #[test]

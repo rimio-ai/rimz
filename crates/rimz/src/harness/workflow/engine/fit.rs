@@ -149,9 +149,9 @@ pub(super) enum Closing<'r> {
 /// interrupted, a live agent or judge attempt is staged canceled and stopped off-lock (or left
 /// to the host still launching it), a step's child is killed and its attempt settled, and a
 /// check's evaluation is abandoned. A `Fail` first journals an engine fault naming the node and
-/// its reason, which the run's outcome reads, and ends the run failed through no route. An
-/// agent attempt a close already staged is closed: a later close only finishes the stop, as
-/// the first one meant it.
+/// its reason, which the run's outcome reads, and ends the run failed through no route, a try
+/// as well (`Transition::misfit`). An agent attempt a close already staged is closed: a later
+/// close only finishes the stop, as the first one meant it.
 pub(super) fn close(
     state: &StatePaths,
     paths: &WorkflowPaths,
@@ -278,7 +278,7 @@ pub(super) fn close(
                     },
                 );
             }
-            Closing::Fail(reason) => t.fault(reason)?,
+            Closing::Fail(reason) => t.misfit(reason)?,
         }
     }
     persist(&mut t, &guard)?;

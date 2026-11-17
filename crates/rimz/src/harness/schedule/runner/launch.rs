@@ -219,7 +219,7 @@ impl Fire<'_> {
     }
 
     /// A live run of workflow `name` in the firing checkout that a person started, which the
-    /// fire would only collide with.
+    /// fire would only collide with; a try (`run --once`) collides with nothing.
     pub(super) fn hand_started_run(
         &self,
         state: &StatePaths,
@@ -247,6 +247,7 @@ impl Fire<'_> {
             .find(|run| {
                 !run.state.is_terminal()
                     && run.task.is_none()
+                    && !run.once
                     && run.workflow == name
                     && run.scope.path == checkout
             }))

@@ -255,6 +255,114 @@ fn first_terminal_wins_for_every_terminal_state() {
 }
 
 #[test]
+fn a_try_ends_done_at_every_route_but_an_unknown_wait_naming_the_target_it_did_not_take() {
+    for (target, outcome) in [
+        ("@done", "ok"),
+        ("@failed", "bad"),
+        ("@user", "ask"),
+        ("@wait", "pending"),
+        ("@wait", "hold"),
+        ("build", "red"),
+    ] {
+        let spec = spec();
+        let paths = paths();
+        let mut record = record();
+        record.once = true;
+        record.input = Some(json!({"outcome":"given"}));
+        let mut t = Transition {
+            now: record.entered_at,
+            record,
+            spec: &spec,
+            paths: &paths,
+            entries: vec![],
+        };
+        t.route(&target.into(), json!({"outcome":outcome}), ParkReason::User)
+            .unwrap();
+        let terminals = t
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry.event, JournalEvent::Terminal { .. }))
+            .map(|entry| entry.event.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            terminals,
+            [JournalEvent::Terminal {
+                state: RunState::Done,
+                tried: Some(target.into())
+            }],
+            "{target}"
+        );
+        assert_eq!(
+            (
+                t.record.state,
+                t.record.node.as_str(),
+                t.record.park.is_none(),
+                t.record.wait.is_none(),
+                t.record.attempt.is_none(),
+                t.record.terminal_at,
+            ),
+            (RunState::Done, "pr", true, true, true, Some(t.now)),
+            "{target}"
+        );
+        assert_eq!(
+            t.record.input,
+            Some(json!({"outcome":"given"})),
+            "a try hands nothing on: {target}"
+        );
+    }
+    let spec = spec();
+    let paths = paths();
+    let mut record = record();
+    record.once = true;
+    let mut t = Transition {
+        now: record.entered_at,
+        record,
+        spec: &spec,
+        paths: &paths,
+        entries: vec![],
+    };
+    t.route(
+        &"@wait".into(),
+        json!({"outcome":"unknown", "reason":"pr unread"}),
+        ParkReason::User,
+    )
+    .unwrap();
+    assert_eq!(t.record.state, RunState::Active);
+    assert_eq!(t.record.wait.as_ref().unwrap().outcome, "unknown");
+    assert!(t.entries.is_empty(), "{:?}", t.entries);
+}
+
+/// A condition's reading error is the node's own engine fault, so a try still shows the route
+/// it decided.
+#[test]
+fn a_try_whose_condition_cannot_read_ends_tried_naming_failed() {
+    let spec: Definition = toml::from_str(
+        "[workflow]\nscope = 'worktree'\nstart = 'pr'\n[condition.pr]\ntimeout = '1h'\nelse = 'open'\non = { open = '@done' }\n[[condition.pr.cases]]\nwhen = ['pr=open']\noutcome = 'open'\n",
+    )
+    .unwrap();
+    let paths = paths();
+    let mut record = record();
+    record.once = true;
+    let mut t = Transition {
+        now: record.entered_at,
+        record,
+        spec: &spec,
+        paths: &paths,
+        entries: vec![],
+    };
+    t.finish_check(1, Err("unreadable".into()), json!({}), None)
+        .unwrap();
+    assert_eq!(t.record.state, RunState::Done);
+    assert_eq!(
+        t.entries.last().map(|entry| &entry.event),
+        Some(&JournalEvent::Terminal {
+            state: RunState::Done,
+            tried: Some("@failed".into())
+        })
+    );
+}
+
+#[test]
 fn deadline_wins_at_ties_and_fires_only_once() {
     let spec = spec();
     let paths = paths();

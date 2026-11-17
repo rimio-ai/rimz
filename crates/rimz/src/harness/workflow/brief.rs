@@ -38,6 +38,19 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
             Some(hop) if hop.kind == HopKind::Resume => {
                 "The user resumed the run at this step.".into()
             }
+            Some(hop) if hop.kind == HopKind::Start => {
+                let given = journal.first().is_some_and(|entry| {
+                    matches!(entry.event, JournalEvent::Start { input: Some(_) })
+                });
+                let mut started = String::from("The user started the run at this step by hand.");
+                if given {
+                    started.push_str(
+                        " An input was given with the start; it is `input` in `context.json` \
+                         in RIMZ_WORKFLOW_DIR.",
+                    );
+                }
+                started
+            }
             Some(hop) => {
                 // A routing hop always names its outcome.
                 let outcome = hop.outcome.as_deref().expect("routing hop outcome");

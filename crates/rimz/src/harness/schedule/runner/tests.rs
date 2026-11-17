@@ -1383,21 +1383,21 @@ fn a_placed_workflow_task_sees_a_hand_started_run_in_its_worktree() {
     let tree =
         crate::worktree::worktree_path(&root, &MachineConfig::default().agents.worktree, "deps")
             .unwrap();
-    let start = |scope: &Path| {
+    let start = |scope: &Path, once: bool| {
         let run: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
             "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(),
             "workflow":"smoke", "project_root":root,
             "scope":{"kind":"worktree","path":scope},
             "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"check",
             "entered_at":"2026-01-01T00:00:00Z", "deadline_fired":false,
-            "next_seq":1, "visits":{}, "visit_grant":0
+            "next_seq":1, "visits":{}, "visit_grant":0, "once":once
         }))
         .unwrap();
         let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
         crate::store::workflow::initialize(&state, &run, &guard).unwrap();
         run.id
     };
-    start(&root);
+    start(&root, false);
     assert!(
         fire.core
             .hand_started_run(&state, "smoke")
@@ -1405,7 +1405,15 @@ fn a_placed_workflow_task_sees_a_hand_started_run_in_its_worktree() {
             .is_none()
     );
     std::fs::create_dir_all(&tree).unwrap();
-    let held = start(&tree.canonicalize().unwrap());
+    start(&tree.canonicalize().unwrap(), true);
+    assert!(
+        fire.core
+            .hand_started_run(&state, "smoke")
+            .unwrap()
+            .is_none(),
+        "a live try does not block the fire"
+    );
+    let held = start(&tree.canonicalize().unwrap(), false);
     assert_eq!(
         fire.core
             .hand_started_run(&state, "smoke")

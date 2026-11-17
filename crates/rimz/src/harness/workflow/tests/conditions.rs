@@ -389,6 +389,47 @@ fn a_hold_ends_when_its_case_reads_false() {
     );
 }
 
+/// A try waits through `unknown` and ends at the next answer, one routed to `@wait` included.
+#[test]
+fn a_try_at_a_condition_waits_through_unknown_and_ends_at_its_next_answer() {
+    let (dir, state, mut record) = attempts::setup(CONDITION);
+    record.once = true;
+    attempts::update(&state, &record);
+    publish_pr(dir.path(), &state, &record, false, "open");
+    let unknown = advance_condition(&state, &record);
+    assert_eq!(
+        (
+            unknown.state,
+            unknown.wait.as_ref().map(|wait| wait.outcome.as_str())
+        ),
+        (RunState::Active, Some("unknown")),
+        "an unread forge reads unknown and the try keeps waiting"
+    );
+    publish_pr(dir.path(), &state, &record, true, "open");
+    let tried = advance_condition(&state, &record);
+    assert_eq!(
+        (
+            tried.state,
+            tried.outcome.map(|outcome| outcome.ending),
+            tried.wait,
+        ),
+        (
+            RunState::Done,
+            Some(crate::store::workflow::RunEnding::Tried),
+            None
+        )
+    );
+    let journal = crate::store::workflow::journal(&state.workflow(&record.id)).unwrap();
+    assert_eq!(
+        journal.last().map(|entry| &entry.event),
+        Some(&crate::store::workflow::JournalEvent::Terminal {
+            state: RunState::Done,
+            tried: Some("@wait".into())
+        })
+    );
+    assert_eq!(closed_waits(&state, &record), ["unknown"]);
+}
+
 #[test]
 fn an_unknown_routed_away_from_wait_leaves_the_node_and_ends_the_hold() {
     let (dir, state, record) = attempts::setup(&held_condition("@done"));
