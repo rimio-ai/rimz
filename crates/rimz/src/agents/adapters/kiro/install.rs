@@ -155,6 +155,7 @@ pub(super) fn preview_at(path: &Path, version: Option<CliVersion>) -> Result<Hoo
         planned_events: event_names(),
         status_line_change: None,
         subagent_status_line_change: None,
+        plugin_dir: None,
     })
 }
 

@@ -10,6 +10,7 @@ This page maps Claude Code onto RimZ's internal types: which hook carries which 
 | `payloads.rs` | typed hook payloads |
 | `ask.rs` | ask questions, answers, and `rimz answer` key plans |
 | `install.rs` | the `settings.json` hook and statusline integration |
+| `rimz_mod.rs`, `rimz_mod/` | the embedded RimZ mod (`plugin.json`, `hooks.json`, the `rimz.ts` hooks module), its folder writes, and its drift check |
 | `statusline.rs` | statusline parsing, the conversation parser, and the turn-death and turn-interruption scans |
 | `subagent_statusline.rs`, `subagent_cost.rs`, `subagents.rs` | child statusline enrichment, child cost cursors, and interrupted-child repair |
 | `local_context.rs` | the session-cumulative token fold |
@@ -107,6 +108,8 @@ Rejecting in the pane with typed feedback ends the same ask another way and fire
 Install merges into Claude's `settings.json` through the shared JSON-merge backend ([adapter.md](./adapter.md#hook-install)). The file resolves from the login env: `RIMZ_CLAUDE_SETTINGS` when set, then `settings.json` under the first entry of a comma-separated `CLAUDE_CONFIG_DIR`, then `$HOME/.claude/settings.json`. A named account's hooks therefore land in that account's home.
 
 Install writes one block per event in `CLAUDE_HOOKS`, each marked `_rimz_managed`, with a 2-second timeout. Hooks append ingress and nudge the elected drainer, and reply-bearing hooks wait within that budget. Only `PermissionRequest` carries `_rimz_sync = true`, and an existing async marker on it is a hard install error. Install also wraps both statusline commands ([rich context](#rich-context) and [child enrichment](#child-statusline-and-cost)).
+
+Install also installs the RimZ mod. `crates/rimz/src/agents/adapters/claude/install.rs::ClaudeManagedIntegration` writes the folder `crates/rimz/src/disk/paths.rs::claude_mod_dir_in` names (one for every account, resolved from the login env) before it touches `settings.json`, so a folder it cannot write fails the install with the settings unchanged. It writes only files whose bytes differ, since each rewrite prints a reload line in every open session. The settings change then carries one more managed value, the folder appended to `env.CLAUDE_CODE_PLUGIN_DIRS` (`crates/rimz/src/agents/managed_env_list.rs::ManagedEnvPath`, threaded through the `_with` methods of `ManagedJsonHookSpec`); an `env` or list of the wrong JSON type refuses at preview and install alike. Uninstall strips only that entry and keeps the folder, which machine-wide uninstall removes with the home. `installed` still reads the settings hooks alone, so a missing entry or mod file reads as drift (`outdated_files`), not as hooks missing; mod file drift counts only while the settings carry owned hooks. Claude writes `.claude-plugin/types/` into the folder at load, which the drift check ignores; in a scoped view the folder is read-only, and Claude 2.1.326 loads the mod from a read-only folder that has no `types/` yet, logging nothing about the write it skips. The mod carries `MOD_VERSION`, which the manifest and the module repeat and a unit test pins.
 
 ## Launch
 

@@ -1798,6 +1798,49 @@ fn doctor_reports_outdated_pi_extension_in_json_and_text_without_writing() {
 }
 
 #[test]
+fn doctor_reports_a_stale_claude_mod_and_a_missing_mod_entry_without_writing() {
+    let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["claude"]);
+    env.install_agent_hooks("claude");
+    let doctor = || {
+        let report = doctor_json(
+            &env.rimz()
+                .args(["doctor", "--json"])
+                .env("PATH", &stub_dir)
+                .output()
+                .unwrap(),
+        );
+        hook(report["hooks"].as_array().unwrap(), "claude")["status"].clone()
+    };
+    assert_eq!(doctor()["state"], "installed", "fresh install");
+
+    let module = env.rimz_home().join("mods/claude/hooks/rimz.ts");
+    std::fs::write(&module, "stale").unwrap();
+    let status = doctor();
+    assert_eq!(status["state"], "outdated", "{status}");
+    assert_eq!(status["files"], json!([module]), "{status}");
+    assert_eq!(std::fs::read_to_string(&module).unwrap(), "stale");
+
+    env.install_agent_hooks("claude");
+    let settings = env.home_root.join(".claude/settings.json");
+    let mut root: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    root.as_object_mut().unwrap().remove("env");
+    std::fs::write(&settings, root.to_string()).unwrap();
+    let status = doctor();
+    assert_eq!(status["state"], "outdated", "{status}");
+    assert_eq!(status["files"], json!([settings]), "{status}");
+    let output = env
+        .rimz()
+        .arg("doctor")
+        .env("PATH", &stub_dir)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("! HOOKS: claude out of date"), "{text}");
+}
+
+#[test]
 fn doctor_reports_outdated_relative_override_with_absolute_file_path() {
     let env = Env::new();
     let stub_dir = stub_agent_binaries(&env, &["pi"]);

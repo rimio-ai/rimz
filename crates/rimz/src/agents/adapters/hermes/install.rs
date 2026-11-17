@@ -170,6 +170,7 @@ fn preview_at(path: &Path, version: Option<CliVersion>) -> Result<HookInstallPre
             .collect(),
         status_line_change: None,
         subagent_status_line_change: None,
+        plugin_dir: None,
     })
 }
 
@@ -180,6 +181,7 @@ pub(super) fn install_at(path: &Path, version: Option<CliVersion>) -> Result<Hoo
         provider_file::write_bytes(path, file.candidate.as_bytes())?;
     }
     Ok(HookInstallReport {
+        plugin_dir: None,
         agent: "hermes",
         files: vec![HookInstallFileReport {
             path: path.to_path_buf(),

@@ -1,0 +1,7 @@
+{
+  "name": "rimz",
+  "version": "1.0.0",
+  "description": "RimZ observer: reports session readings to rimz and never changes what Claude does",
+  "author": { "name": "RimZ" },
+  "license": "MIT"
+}

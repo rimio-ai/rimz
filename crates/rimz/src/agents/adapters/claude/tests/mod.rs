@@ -8,6 +8,7 @@ use std::path::Path;
 
 mod context;
 mod install;
+mod install_mod;
 mod install_statusline;
 mod lifecycle;
 mod local_context;

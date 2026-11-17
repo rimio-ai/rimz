@@ -512,6 +512,24 @@ fn agents_home_environment_precedence() {
 }
 
 #[test]
+fn claude_mod_dir_resolves_from_the_environment_then_the_process_home() {
+    let mut env = BTreeMap::from([
+        ("RIMZ_HOME".to_owned(), "/rimz".to_owned()),
+        ("HOME".to_owned(), "/home/user".to_owned()),
+    ]);
+    assert_eq!(claude_mod_dir_in(&env), Path::new("/rimz/mods/claude"));
+    env.insert("RIMZ_HOME".to_owned(), String::new());
+    assert_eq!(
+        claude_mod_dir_in(&env),
+        Path::new("/home/user/.rimz/mods/claude")
+    );
+    assert_eq!(
+        claude_mod_dir_in(&BTreeMap::new()),
+        rimz_home().join("mods/claude")
+    );
+}
+
+#[test]
 fn rimz_home_prefers_the_override_then_home() {
     let tmp = Path::new("/tmp");
     let home = Some(Path::new("/home/user"));

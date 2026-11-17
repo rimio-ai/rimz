@@ -64,10 +64,14 @@ RimZ found 2 coding agents: claude, codex.
 To show them live in the sidebar, RimZ installs or refreshes reporting hooks in each agent's config.
 Codex also gets a permission rules file: routine `rimz` commands run without a prompt or sandbox in every Codex session, including outside RimZ. Turn it off with `[agents] allow-routine-rimz = false`.
 
-  claude  13 hooks → ~/.claude/settings.json  new file
+  claude  13 hooks → ~/.claude/settings.json                    new file
+          mod → ~/.rimz/mods/claude/.claude-plugin/plugin.json  new file
+          mod → ~/.rimz/mods/claude/hooks/hooks.json            new file
+          mod → ~/.rimz/mods/claude/hooks/rimz.ts               new file
           + sets your statusline to show live context
-  codex   11 hooks → ~/.codex/config.toml     new file
-          config → ~/.codex/rules/rimz.rules  new file
+          + loads the RimZ mod in every Claude session — it reports to rimz, never changes what Claude does
+  codex   11 hooks → ~/.codex/config.toml                       new file
+          config → ~/.codex/rules/rimz.rules                    new file
 
 Each hook is one `rimz hooks feed` line — it reports events, never acts or answers for you.
   undo     rimz hooks uninstall
@@ -76,6 +80,9 @@ Each hook is one `rimz hooks feed` line — it reports events, never acts or ans
 Install or refresh reporting hooks? [Y/n]
 
 ✓ claude  installed 13 hooks → ~/.claude/settings.json
+          mod → ~/.rimz/mods/claude/.claude-plugin/plugin.json
+          mod → ~/.rimz/mods/claude/hooks/hooks.json
+          mod → ~/.rimz/mods/claude/hooks/rimz.ts
 ✓ codex   installed 11 hooks → ~/.codex/config.toml
           config → ~/.codex/rules/rimz.rules
 ! codex ignores 11 hooks until trusted
@@ -87,7 +94,7 @@ Install or refresh reporting hooks? [Y/n]
 
 Enter or `y` installs for every agent listed, right away; `n` skips all of them and setup carries on. Only agents whose binary RimZ found appear, and an agent whose hooks and managed files are already current is not listed at all. An agent whose install fails, or whose file RimZ refuses to overwrite before anything is written (an unmarked file at a path RimZ manages whole), gets a `!` line naming the error, and setup offers and installs the rest. `All set` closes the results only when nothing is left for you to do; here Codex still needs its hooks trusted, as below. On a rerun the review's first row names the agents that need an install or a refresh, or else the agents whose hooks are installed, with `trust pending` beside each one whose hooks still wait for its own trust, as Codex's do here; the row's number opens this question.
 
-What the write does depends on the agent. Most are a merge: RimZ adds its entries to the existing JSON, TOML, or YAML and leaves every other value, your own hooks included. Amp, Copilot, Kiro, Pi, and OMP instead get one whole file that belongs to RimZ, marked `_rimz_managed` on its first line; an unmarked file already sitting at that path is yours, and install refuses rather than overwrite it. OpenCode gets two marked files in its `plugins/rimz` directory and removes the marked file from an older RimZ install. Uninstall removes those files, preserving any other files in the directory. Muse gets a separate RimZ-owned hook file plus two settings pointing to it, with your own hooks preserved. Where the row shows a statusline note, RimZ claims the agent's statusline slot, which is how the card gets live context. A statusline you had set keeps running, wrapped inside RimZ's, and uninstall puts yours back on its own.
+What the write does depends on the agent. Most are a merge: RimZ adds its entries to the existing JSON, TOML, or YAML and leaves every other value, your own hooks included. Amp, Copilot, Kiro, Pi, and OMP instead get one whole file that belongs to RimZ, marked `_rimz_managed` on its first line; an unmarked file already sitting at that path is yours, and install refuses rather than overwrite it. OpenCode gets two marked files in its `plugins/rimz` directory and removes the marked file from an older RimZ install. Uninstall removes those files, preserving any other files in the directory. Muse gets a separate RimZ-owned hook file plus two settings pointing to it, with your own hooks preserved. Claude also gets the RimZ mod: one folder, `~/.rimz/mods/claude/`, shared by every Claude account, which install writes and lists in the account's `settings.json` under `env.CLAUDE_CODE_PLUGIN_DIRS`, after any folders of your own. Claude then loads its hooks module into every session of that account, inside RimZ or not. The module runs only after each of Claude's own hooks has finished, reports what the session holds to `rimz`, and drops any report that fails, so it never changes what Claude does. Install rewrites a mod file only when its content differs, because each rewrite makes open sessions print a reload line. `rimz hooks uninstall` removes the settings entry, and `rimz uninstall` removes the folder. Where the row shows a statusline note, RimZ claims the agent's statusline slot, which is how the card gets live context. A statusline you had set keeps running, wrapped inside RimZ's, and uninstall puts yours back on its own.
 
 Codex also gets a marked `rules/rimz.rules` file for [routine coordination commands](./configuration.md#routine-rimz-commands). Those rules let matching commands run without a permission prompt or command sandbox; the dry run shows them separately from the reporting hooks. An unmarked file at that path is left alone; your own rules still apply.
 

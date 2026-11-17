@@ -347,6 +347,14 @@ fn uninstall_removes_managed_hooks() {
     let work_settings = work_home.join("settings.json");
     let hooked = fs::read_to_string(&work_settings).expect("work settings");
     assert!(hooked.contains("rimz"), "{hooked}");
+    let mod_dir = fixture.env.rimz_home().join("mods/claude");
+    let listed: serde_json::Value = serde_json::from_str(&hooked).expect("work settings json");
+    assert_eq!(
+        listed["env"]["CLAUDE_CODE_PLUGIN_DIRS"],
+        mod_dir.display().to_string(),
+        "a named account lists the shared mod folder"
+    );
+    assert!(mod_dir.join("hooks/rimz.ts").is_file());
     fs::write(work_home.join(".credentials.json"), b"{}").expect("seed credentials");
 
     let output = fixture
@@ -375,6 +383,10 @@ fn uninstall_removes_managed_hooks() {
         "{stderr}"
     );
     assert!(work_home.join(".credentials.json").is_file());
+    assert!(
+        !mod_dir.exists(),
+        "machine uninstall removes the mod folder"
+    );
     let unhooked = fs::read_to_string(&work_settings).expect("work settings kept");
     assert!(!unhooked.contains("rimz"), "{unhooked}");
     assert!(work_settings.is_symlink());

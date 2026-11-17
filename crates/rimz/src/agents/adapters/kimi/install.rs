@@ -213,6 +213,7 @@ pub(super) fn install(path: &Path, version: Option<CliVersion>) -> Result<HookIn
     let (table, installed_events) = candidate(path)?;
     write(path, &table)?;
     Ok(HookInstallReport {
+        plugin_dir: None,
         agent: "kimi",
         files: vec![crate::agents::HookInstallFileReport {
             path: path.to_path_buf(),
@@ -238,6 +239,7 @@ pub(super) fn preview(path: &Path, version: Option<CliVersion>) -> Result<HookIn
         planned_events,
         status_line_change: None,
         subagent_status_line_change: None,
+        plugin_dir: None,
     })
 }
 

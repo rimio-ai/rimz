@@ -165,6 +165,7 @@ impl ManagedIntegration for MiniMaxIntegration {
             });
         }
         Ok(HookInstallReport {
+            plugin_dir: None,
             agent: AGENT,
             files: report,
             installed_events: event_names(),
@@ -196,6 +197,7 @@ impl ManagedIntegration for MiniMaxIntegration {
             planned_events: event_names(),
             status_line_change: None,
             subagent_status_line_change: None,
+            plugin_dir: None,
         })
     }
 

@@ -53,7 +53,7 @@ Hermes follows the same watched/unattended rule: from your own shell, launch `ri
 
 | Agent | Files | Edit |
 | --- | --- | --- |
-| `claude` | `${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json` | Merge; wraps the statusline |
+| `claude` | `${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json`, the mod folder `~/.rimz/mods/claude/` | Merge; wraps the statusline; lists the mod folder in `env.CLAUDE_CODE_PLUGIN_DIRS` |
 | `codex` | `${CODEX_HOME:-~/.codex}/config.toml`, `rules/rimz.rules` in the same home | Merge hooks; whole managed rules file when `allow-routine-rimz` is on |
 | `amp` | `${XDG_CONFIG_HOME:-~/.config}/amp/plugins/rimz.ts` | Whole file |
 | `antigravity` | `~/.gemini/config/hooks.json`, `~/.gemini/antigravity-cli/settings.json` | Merge; wraps the statusline |
@@ -82,13 +82,15 @@ For Amp, Kiro, Pi, OMP, and Copilot, a whole file belongs to RimZ, and its first
 
 MiniMax's data directory is the first nonempty, trimmed `MINIMAX_DATA_DIR`, then `MAVIS_DATA_DIR`, then `~/.minimax`. Its package uses manifest name `rimz` and author `RimZ` for ownership, not `_rimz_managed`; symlinked package directories and a foreign manifest are refused. Install writes the icon and nine-hook document before the manifest. MiniMax discovers it as `rimz@local`, enabled by default. Preview shows the two JSON files, not the binary icon; uninstall removes only `plugins/rimz`. Changed package bytes offer a refresh. RimZ does not inspect MiniMax's private disabled-plugin setting: if disabled, restore it with `mcode plugin enable rimz@local` in the same data-directory environment. [MiniMax's mapping](../../internals/agents/adapter_minimax.md) records the integration limits.
 
+Claude's mod folder sits under the RimZ home (`$RIMZ_HOME/mods/claude/`, `~/.rimz/mods/claude/` by default) and holds `.claude-plugin/plugin.json`, `hooks/hooks.json`, and the hooks module `hooks/rimz.ts`. Every Claude account, named or the provider's own home, lists the same folder. Install writes only the files whose content differs from this build's, then appends the folder to `env.CLAUDE_CODE_PLUGIN_DIRS` (a `:`-separated list; your own entries stay first) and leaves the variable alone when the folder is already listed. A settings `env` that is not an object, or a `CLAUDE_CODE_PLUGIN_DIRS` that is not a string, refuses the install and leaves the file as it was. A mod file that is missing or differs, or a settings file without the entry, shows Claude's hooks as out of date in `rimz doctor`, and `rimz start` offers the refresh. Files Claude itself writes into the folder at load, such as `.claude-plugin/types/`, are not RimZ's and are not compared.
+
 Where the table says the statusline is wrapped, install puts RimZ's command in place of yours and runs yours inside it, so the sidebar reads live context and your statusline still shows. Uninstall restores the original value. Cursor keeps the displaced `statusLine` value in `~/.rimz/cursor-statusline.json` and deletes that file on uninstall. A Cursor install writes the single `~/.cursor/hooks.json` once per config home it resolves, pairing it each time with that home's `cli-config.json`, and commits each pass on its own: a failed write rolls back the pass it was in, while earlier passes and the statusline record stay. Fix the cause and rerun the install.
 
 Codex's `rules/rimz.rules` grants the [routine command prefixes](../agent-support.md#permission-modes), allowing matching commands to run unsandboxed without Guardian review. Existing hook installs get a consent row for the new file at the next `rimz start`. With machine-only `[agents] allow-routine-rimz = false`, install removes a marked rules file instead; the consent row says `removes file`. An unmarked file is left alone even during an explicit install and does not trigger a start-time refresh; your own rules still apply. `rimz hooks uninstall` and `rimz uninstall` remove only marked rules files. Named Codex accounts share `rules/`, including standalone accounts and Codex's own `default.rules` amendments.
 
 ### Preview with `--dry-run`
 
-`--dry-run` writes nothing. For each agent it prints the row the `rimz start` consent prompt shows (hook count, path, `new file`, `updates existing config`, or `removes file`, and a `+ wraps your statusline …` or `+ sets your statusline …` line when install changes the statusline), then a unified diff per file, all on stdout:
+`--dry-run` writes nothing. For each agent it prints the row the `rimz start` consent prompt shows (hook count, path, `new file`, `updates existing config`, or `removes file`, a `+ wraps your statusline …` or `+ sets your statusline …` line when install changes the statusline, and for Claude a `mod →` row per mod file install writes and a `+ loads the RimZ mod …` line), then a unified diff per file, all on stdout:
 
 ```console
 $ rimz hooks install --dry-run grok
@@ -110,7 +112,7 @@ A new `rules/rimz.rules` gets its own `--- /dev/null`, `+++ <path>`, and `@@ new
 
 ### Uninstall hooks
 
-`rimz hooks uninstall` removes RimZ's entries, deletes the whole files that carry the marker, and restores any statusline it wrapped. An unmarked file at a whole-file path is yours and stays.
+`rimz hooks uninstall` removes RimZ's entries, deletes the whole files that carry the marker, and restores any statusline it wrapped. An unmarked file at a whole-file path is yours and stays. For Claude it removes the mod folder from `env.CLAUDE_CODE_PLUGIN_DIRS`, then the variable when nothing else is listed, then `env` when it is left empty, and keeps the mod folder, which other accounts may still list; [`rimz uninstall`](./maintenance.md#uninstall-rimz) removes the folder with the rest of the RimZ home.
 
 With no `AGENT`, uninstall checks every agent's provider home and the home of every account declared in the machine config, and unhooks each one that holds RimZ hooks. It does not need any agent binary to be installed. With `AGENT` it unhooks that kind's provider home only.
 
@@ -131,6 +133,7 @@ Both commands exit 0 on success and 1 on any of these:
 | `AGENT` is not a known kind | ``unknown agent integration `NAME` `` |
 | The named kind cannot take RimZ hooks (a plugin agent, a Kiro CLI below 2.31.0, a Hermes Agent below 0.22.2 or a Hermes `config.yaml` RimZ cannot edit safely, or Grok's `allow_managed_hooks_only` policy engaged with no `rimz hooks feed --source grok` handler in `/etc/grok/managed_config.toml` or `/etc/grok/requirements.toml`) | `install failed for AGENT: REASON` |
 | A whole-file path holds a file without the marker | `install failed for AGENT: refusing to overwrite an unmarked user plugin at PATH; move it aside or remove it to let RimZ manage this file` (`extension` for Pi and OMP, `hook file` for Copilot and Kiro). OpenCode prints `refusing an unmarked user plugin at PATH; …`, or `PATH must be a real file, not a symlink or directory; move it aside` |
+| Claude's settings `env` is not an object, or its `CLAUDE_CODE_PLUGIN_DIRS` is not a string | ``install failed for claude: settings `env` is not an object; cannot list `DIR` in `env.CLAUDE_CODE_PLUGIN_DIRS`; refusing to install`` or ``install failed for claude: settings `env.CLAUDE_CODE_PLUGIN_DIRS` is not a string; cannot list `DIR` in it; refusing to install`` |
 | `uninstall` with no `AGENT` finds the machine's accounts config invalid | `only the providers' own homes were unhooked; fix the accounts config and rerun`, after unhooking those homes |
 
 An install without `AGENT` handles agents one at a time and stops at the first failure; agents already installed keep their hooks.

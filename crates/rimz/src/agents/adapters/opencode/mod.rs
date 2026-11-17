@@ -785,6 +785,7 @@ impl super::ManagedIntegration for OpencodeManagedIntegration {
             }
         }
         Ok(super::HookInstallReport {
+            plugin_dir: None,
             agent: "opencode",
             files: files
                 .into_iter()
@@ -814,6 +815,7 @@ impl super::ManagedIntegration for OpencodeManagedIntegration {
             planned_events: opencode_event_names(),
             status_line_change: None,
             subagent_status_line_change: None,
+            plugin_dir: None,
         })
     }
 

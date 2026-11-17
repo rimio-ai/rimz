@@ -596,6 +596,9 @@ fn protected_paths(inputs: &SandboxInputs<'_>) -> BTreeSet<PathBuf> {
     for root in [inputs.checkout.unwrap_or(inputs.cwd), inputs.project_root] {
         paths.extend([".claude", ".codex", ".agents", ".mcp.json"].map(|entry| root.join(entry)));
     }
+    // Claude loads and hot-reloads this folder's code in every session of the
+    // account, the user's own outside the view included.
+    paths.insert(crate::disk::paths::claude_mod_dir_in(inputs.env));
     paths
 }
 

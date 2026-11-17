@@ -16,6 +16,7 @@ fn preview(agent: &'static str, original: Option<&str>, candidate: &str) -> Hook
         planned_events: vec!["SessionStart".to_owned(), "PreToolUse".to_owned()],
         status_line_change: None,
         subagent_status_line_change: None,
+        plugin_dir: None,
     }
 }
 
@@ -289,6 +290,44 @@ fn dry_run_renders_existing_and_new_unified_diffs_without_prompt() {
 }
 
 #[test]
+fn consent_and_dry_run_name_the_claude_mod_and_its_entry() {
+    let mod_dir = home_config_path("rimz").with_file_name("mods/claude");
+    let mut claude = preview(
+        "claude",
+        Some("{}\n"),
+        &format!(
+            "{{\"env\": {{\"CLAUDE_CODE_PLUGIN_DIRS\": \"{}\"}}}}\n",
+            mod_dir.display()
+        ),
+    );
+    claude.files.push(HookInstallFilePreview {
+        path: mod_dir.join("hooks/rimz.ts"),
+        original: None,
+        candidate: "on('session.start', ...)\n".to_owned(),
+        existed: false,
+    });
+    claude.plugin_dir = Some(mod_dir);
+    let summary = "+ loads the RimZ mod in every Claude session — it reports to rimz, never changes what Claude does";
+    let file = "mod → ~/.rimz/mods/claude/hooks/rimz.ts";
+
+    let (_, consent) = drive(std::slice::from_ref(&claude), b"n\n");
+    assert_eq!(consent.matches(summary).count(), 1, "{consent}");
+    assert!(consent.contains(file), "{consent}");
+
+    let dry_run = strip(|out| render_dry_run(out, &[claude]));
+    assert_eq!(dry_run.matches(summary).count(), 1, "{dry_run}");
+    assert!(dry_run.contains(file), "{dry_run}");
+    assert!(
+        dry_run.contains("+{\"env\": {\"CLAUDE_CODE_PLUGIN_DIRS\""),
+        "{dry_run}"
+    );
+    assert!(dry_run.contains("+on('session.start', ...)"), "{dry_run}");
+
+    let (_, plain) = drive(&[preview("claude", Some("{}\n"), "{}\n")], b"n\n");
+    assert!(!plain.contains("RimZ mod"), "{plain}");
+}
+
+#[test]
 fn dry_run_names_every_cursor_config_file() {
     let mut cursor = preview("cursor", Some("{}\n"), "{\"hooks\": {}}\n");
     cursor.files[0].path = cursor.files[0].path.with_file_name("hooks.json");
@@ -313,6 +352,7 @@ fn completed_hook_reports_render_dispositions_files_and_footer() {
     std::fs::write(&hooks, "{}").unwrap();
     std::fs::write(&cli_config, "{}").unwrap();
     let report = HookInstallReport {
+        plugin_dir: None,
         agent: "cursor",
         files: vec![
             rimz::agents::HookInstallFileReport {
@@ -379,6 +419,7 @@ fn completed_hook_reports_render_dispositions_files_and_footer() {
         assert!(!rendered.contains(" +"), "no file is counted:\n{rendered}");
     }
     let long = HookInstallReport {
+        plugin_dir: None,
         agent: "cursor",
         files: vec![rimz::agents::HookInstallFileReport {
             path: PathBuf::from(format!("/{}/hooks.json", "d".repeat(80))),
@@ -397,6 +438,7 @@ fn completed_hook_reports_render_dispositions_files_and_footer() {
         )
     );
     let two = HookInstallReport {
+        plugin_dir: None,
         agent: "codex",
         files: vec![
             rimz::agents::HookInstallFileReport {
@@ -416,6 +458,7 @@ fn completed_hook_reports_render_dispositions_files_and_footer() {
         "✓ codex   installed 1 hooks → /x/config.toml\n          config → /x/rules/rimz.rules\n"
     );
     let gone = HookInstallReport {
+        plugin_dir: None,
         agent: "codex",
         files: vec![
             rimz::agents::HookInstallFileReport {
@@ -435,6 +478,7 @@ fn completed_hook_reports_render_dispositions_files_and_footer() {
         "✓ codex   refreshed 1 hooks → /x/config.toml\n          removed → /x/rules/rimz.rules\n"
     );
     let short = HookInstallReport {
+        plugin_dir: None,
         agent: "pi",
         files: vec![rimz::agents::HookInstallFileReport {
             path: PathBuf::from("/x/hooks.json"),
@@ -444,6 +488,29 @@ fn completed_hook_reports_render_dispositions_files_and_footer() {
     };
     let rendered = strip(|out| write_install_result(out, &short, InstallDisposition::Installed, 2));
     assert_eq!(rendered, "✓ pi  installed 1 hooks → /x/hooks.json\n");
+
+    let claude = HookInstallReport {
+        agent: "claude",
+        plugin_dir: Some(PathBuf::from("/r/mods/claude")),
+        files: vec![
+            rimz::agents::HookInstallFileReport {
+                path: PathBuf::from("/x/settings.json"),
+                existed: false,
+            },
+            rimz::agents::HookInstallFileReport {
+                path: PathBuf::from("/r/mods/claude/hooks/rimz.ts"),
+                existed: false,
+            },
+        ],
+        installed_events: vec!["Stop".to_owned()],
+    };
+    let rendered =
+        strip(|out| write_install_result(out, &claude, InstallDisposition::Installed, 6));
+    assert_eq!(
+        rendered,
+        "✓ claude  installed 1 hooks → /x/settings.json\n          mod → /r/mods/claude/hooks/rimz.ts\n",
+        "the receipt names mod files as the consent does"
+    );
 
     let uninstall = rimz::agents::HookUninstallReport {
         agent: "cursor",

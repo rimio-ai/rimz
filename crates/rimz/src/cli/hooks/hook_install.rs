@@ -434,7 +434,13 @@ fn write_agent_table_entry(
         )?;
     }
 
-    if let Some(summary) = status_line_summary(preview) {
+    let mod_summary = preview.plugin_dir.as_ref().map(|_| {
+        "loads the RimZ mod in every Claude session — it reports to rimz, never changes what Claude does"
+    });
+    for summary in [status_line_summary(preview), mod_summary]
+        .into_iter()
+        .flatten()
+    {
         writeln!(
             out,
             "{}{}",
@@ -514,7 +520,17 @@ pub(super) fn write_install_result(
     )?;
     let indent = 2 + name_width + 2;
     for file in unnamed {
-        let label = if removed(file) { "removed" } else { "config" };
+        let label = if removed(file) {
+            "removed"
+        } else if report
+            .plugin_dir
+            .as_ref()
+            .is_some_and(|dir| file.path.starts_with(dir))
+        {
+            "mod"
+        } else {
+            "config"
+        };
         writeln!(
             out,
             "{:indent$}{label} → {}",
@@ -650,6 +666,12 @@ fn agent_file_cell(
 ) -> String {
     let label = if index == 0 {
         format!("{} hooks", preview.planned_events.len())
+    } else if preview
+        .plugin_dir
+        .as_ref()
+        .is_some_and(|dir| file.path.starts_with(dir))
+    {
+        "mod".to_owned()
     } else {
         "config".to_owned()
     };
