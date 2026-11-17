@@ -219,6 +219,7 @@ fn fetch_usage_with_url(url: &str, token: &str) -> Result<AccountUsageSnapshot> 
         ("Editor-Plugin-Version", PLUGIN_VERSION.to_owned()),
         ("User-Agent", USER_AGENT.to_owned()),
     ];
+    let observed_at = Timestamp::now();
     let body =
         oauth_http_get(url, &headers, "copilot: fetching account usage").map_err(|error| {
             CopilotUsageErr::Http {
@@ -226,7 +227,11 @@ fn fetch_usage_with_url(url: &str, token: &str) -> Result<AccountUsageSnapshot> 
                 host: error.host,
             }
         })?;
-    parse_usage_response(&body)
+    let mut snapshot = parse_usage_response(&body)?;
+    snapshot.rate_limits = snapshot
+        .rate_limits
+        .map(|limits| limits.stamped_at(observed_at));
+    Ok(snapshot)
 }
 
 fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
@@ -698,7 +703,10 @@ mod tests {
             let mut bytes = [0_u8; 8192];
             let count = stream.read(&mut bytes).unwrap();
             let request = String::from_utf8_lossy(&bytes[..count]).into_owned();
-            let body = r#"{"copilot_plan":"individual"}"#;
+            let received_at = Timestamp::now();
+            let body = r#"{"copilot_plan":"individual","quota_snapshots":{
+                "chat":{"percent_remaining":80},"premium_interactions":{"percent_remaining":90}
+            }}"#;
             write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -706,12 +714,23 @@ mod tests {
                 body
             )
             .unwrap();
-            request
+            (request, received_at)
         });
         let url = format!("http://{address}{USAGE_PATH}");
         let snapshot = fetch_usage_with_url(&url, "test-secret").unwrap();
         assert_eq!(snapshot.plan.as_deref(), Some("individual"));
-        let request = handle.join().unwrap().to_ascii_lowercase();
+        let (request, received_at) = handle.join().unwrap();
+        let windows = snapshot.rate_limits.unwrap().windows;
+        assert_eq!(windows.len(), 2);
+        let stamp = windows[0]
+            .observed_at
+            .expect("stamp the account usage request");
+        assert!(
+            stamp <= received_at,
+            "{stamp} is after request {received_at}"
+        );
+        assert_eq!(windows[1].observed_at, Some(stamp));
+        let request = request.to_ascii_lowercase();
         for header in [
             "authorization: token test-secret",
             "accept: application/vnd.github+json",

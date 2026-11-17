@@ -1084,10 +1084,9 @@ pub struct AgentRateLimits {
 }
 
 impl AgentRateLimits {
-    /// Stamp every window that lacks provenance at its ingest boundary.
-    /// Ingest builders set the `source`; statusline persistence carries the
-    /// prior stamp of unchanged best-effort content, while an authoritative
-    /// refresh keeps its query time so fusion can rank freshness.
+    /// Fill missing observation times without replacing existing stamps.
+    /// Statusline persistence carries the stamp of unchanged best-effort
+    /// content; account usage probes stamp their windows before requesting them.
     pub(crate) fn stamped_at(mut self, observed_at: Timestamp) -> Self {
         for window in &mut self.windows {
             window.observed_at.get_or_insert(observed_at);
@@ -1188,8 +1187,9 @@ pub struct RateLimitWindow {
     /// in-process session switch cannot freshen replayed content. An unknown
     /// owner falls back to capture. Replayed content keeps its prior stamp;
     /// new windows in an already populated sidecar take capture time.
-    /// For [`WindowSource::Authoritative`], the query time:
-    /// reconfirming an unchanged value is fresh information.
+    /// For an [`WindowSource::Authoritative`] account usage window, the
+    /// probe's request start, before any retries. Reconfirming an unchanged
+    /// value is fresh information.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at: Option<Timestamp>,
     /// Where the reading came from, deciding how far the fusion trusts a drop.

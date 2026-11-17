@@ -1827,6 +1827,8 @@ mod local_account_api {
         let mut discovery_calls = 0;
         let mut revalidated = Vec::new();
         let mut requests = Vec::new();
+        let mut status_at = None;
+        let mut quota_at = None;
         let probe = local_api::probe_account_usage_with(
             |_| {
                 discovery_calls += 1;
@@ -1839,8 +1841,10 @@ mod local_account_api {
             |endpoint, path, body, timeout| {
                 requests.push((endpoint, path.to_owned(), body.to_owned(), timeout));
                 if path.ends_with("GetUserStatus") {
+                    status_at = Some(jiff::Timestamp::now());
                     Ok(status_body(Some("user@example.com"), "Pro"))
                 } else {
+                    quota_at = Some(jiff::Timestamp::now());
                     Ok(quota_body())
                 }
             },
@@ -1872,7 +1876,14 @@ mod local_account_api {
             (snapshot.extra_credits, snapshot.reset_credits),
             (None, None)
         );
-        assert_eq!(snapshot.rate_limits.unwrap().windows.len(), 2);
+        let windows = snapshot.rate_limits.unwrap().windows;
+        assert_eq!(windows.len(), 2);
+        let stamp = windows[0].observed_at.unwrap();
+        assert!(
+            stamp > status_at.unwrap() && stamp <= quota_at.unwrap(),
+            "{stamp} must come after status {status_at:?} and no later than quota request {quota_at:?}"
+        );
+        assert_eq!(windows[1].observed_at, Some(stamp));
         assert!(identity.account_key.is_some());
         assert!(AntigravityAdapter.spec().capabilities.direct_account_usage);
     }

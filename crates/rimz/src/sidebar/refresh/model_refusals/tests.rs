@@ -129,6 +129,40 @@ fn a_fresh_unspent_read_after_a_refused_ping_records_the_refusal_once() {
 }
 
 #[test]
+fn a_usage_answer_merged_after_a_limit_marker_confirms_only_if_requested_after_it() {
+    use crate::agents::context::WindowSource;
+    use crate::sidebar::refresh::rate_limits::merge_account_rate_limits;
+
+    let (_dir, runtime) = runtime();
+    let now = Timestamp::now().as_second();
+    let marker = now - 10;
+    let agents = [refused_ping("sess", marker)];
+    let merge = |requested_at| {
+        let windows = [
+            window(300, 99, requested_at),
+            window(10_080, 60, requested_at),
+        ]
+        .map(|window| RateLimitWindow {
+            source: WindowSource::Authoritative,
+            ..window
+        })
+        .into();
+        assert!(merge_account_rate_limits(
+            &runtime,
+            &login(),
+            Default::default(),
+            AgentRateLimits { windows },
+        ));
+        pass(&runtime, &agents, now);
+    };
+
+    merge(marker - 1);
+    assert_eq!(record(&runtime), None, "a read was already in flight");
+    merge(marker + 1);
+    assert_eq!(record(&runtime).unwrap().refused_at, ts(marker));
+}
+
+#[test]
 fn a_read_that_does_not_confirm_records_nothing() {
     let cases = [
         (

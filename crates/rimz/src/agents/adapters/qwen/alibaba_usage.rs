@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use super::selection::{AlibabaRegion, SelectedProvider, Selection};
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowAmount, WindowSource};
-use crate::agents::credits::oauth_http_post_json;
+use crate::agents::credits::{OAuthHttpErr, oauth_http_post_json};
 use crate::agents::{AccountUsageProbe, AccountUsageSnapshot, HttpErrKind};
 
 const ACTION: &str = "zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2";
@@ -33,7 +33,7 @@ pub(super) fn probe(selection: Selection) -> AccountUsageProbe {
     let SelectedProvider::Alibaba(region) = selection.provider else {
         return AccountUsageProbe::Unsupported;
     };
-    match fetch(region, &selection.credential) {
+    match fetch(region, &selection.credential, oauth_http_post_json) {
         Ok(snapshot) => AccountUsageProbe::Found { identity, snapshot },
         Err(Error::AuthRejected) => {
             tracing::debug!(provider = "qwen", "Alibaba Coding Plan API key rejected");
@@ -52,7 +52,16 @@ pub(super) fn probe(selection: Selection) -> AccountUsageProbe {
     }
 }
 
-fn fetch(region: AlibabaRegion, api_key: &str) -> Result<AccountUsageSnapshot, Error> {
+fn fetch(
+    region: AlibabaRegion,
+    api_key: &str,
+    post: impl FnOnce(
+        &str,
+        &[(&str, String)],
+        &RequestBody<'static>,
+        &str,
+    ) -> Result<String, OAuthHttpErr>,
+) -> Result<AccountUsageSnapshot, Error> {
     let request = RequestMetadata::for_region(region);
     let headers = request.headers(api_key);
     let body = RequestBody {
@@ -60,8 +69,10 @@ fn fetch(region: AlibabaRegion, api_key: &str) -> Result<AccountUsageSnapshot, E
             commodity_code: request.commodity_code,
         },
     };
-    let response = oauth_http_post_json(
-        &request.url(),
+    let url = request.url();
+    let observed_at = Timestamp::now();
+    let response = post(
+        &url,
         &headers,
         &body,
         "Qwen Alibaba Coding Plan quota fetch",
@@ -75,7 +86,7 @@ fn fetch(region: AlibabaRegion, api_key: &str) -> Result<AccountUsageSnapshot, E
             host: error.host,
         },
     })?;
-    parse_response(&response, region)
+    parse_response(&response, observed_at)
 }
 
 struct RequestMetadata {
@@ -136,7 +147,7 @@ struct QueryRequest<'a> {
     commodity_code: &'a str,
 }
 
-fn parse_response(body: &str, _region: AlibabaRegion) -> Result<AccountUsageSnapshot, Error> {
+fn parse_response(body: &str, observed_at: Timestamp) -> Result<AccountUsageSnapshot, Error> {
     let root: Value = serde_json::from_str(body).map_err(|_| Error::Schema {
         shape: "invalid-json".to_owned(),
     })?;
@@ -168,7 +179,6 @@ fn parse_response(body: &str, _region: AlibabaRegion) -> Result<AccountUsageSnap
             .flatten()
     });
 
-    let now = Timestamp::now();
     let mut windows = Vec::new();
     if let Some(quota) = quota {
         push_window(
@@ -181,7 +191,7 @@ fn parse_response(body: &str, _region: AlibabaRegion) -> Result<AccountUsageSnap
                 "perFiveHourQuotaNextRefreshTime",
             ],
             300,
-            now,
+            observed_at,
         );
         push_window(
             &mut windows,
@@ -190,7 +200,7 @@ fn parse_response(body: &str, _region: AlibabaRegion) -> Result<AccountUsageSnap
             &["perWeekTotalQuota"],
             &["perWeekQuotaNextRefreshTime"],
             10_080,
-            now,
+            observed_at,
         );
         push_window(
             &mut windows,
@@ -202,7 +212,7 @@ fn parse_response(body: &str, _region: AlibabaRegion) -> Result<AccountUsageSnap
                 "perMonthQuotaNextRefreshTime",
             ],
             43_200,
-            now,
+            observed_at,
         );
     }
     if windows.is_empty() && !(active && plan.is_some()) {
@@ -325,7 +335,7 @@ fn push_window(
     total_keys: &[&str],
     reset_keys: &[&str],
     duration_mins: u32,
-    now: Timestamp,
+    observed_at: Timestamp,
 ) {
     let Some(limit) = value_for(quota, total_keys)
         .and_then(quota_amount)
@@ -341,7 +351,7 @@ fn push_window(
         amount,
         resets_at: value_for(quota, reset_keys).and_then(timestamp),
         duration_mins: Some(duration_mins),
-        observed_at: Some(now),
+        observed_at: Some(observed_at),
         source: WindowSource::Authoritative,
         // The bill month runs on the billing cycle; the 5h and week windows
         // keep sliding-window detection.
@@ -446,6 +456,30 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn usage_windows_are_stamped_before_the_request() {
+        let mut sent_at = None;
+        let snapshot = fetch(AlibabaRegion::International, "test-key", |_, _, _, _| {
+            sent_at = Some(Timestamp::now());
+            Ok(json!({
+                "codingPlanQuotaInfo": {
+                    "per5HourUsedQuota": 10, "per5HourTotalQuota": 100,
+                    "perWeekUsedQuota": 20, "perWeekTotalQuota": 100
+                }
+            })
+            .to_string())
+        })
+        .unwrap();
+        let windows = snapshot.rate_limits.unwrap().windows;
+        assert_eq!(windows.len(), 2);
+        let stamp = windows[0].observed_at.unwrap();
+        assert!(
+            stamp <= sent_at.unwrap(),
+            "{stamp} is after request {sent_at:?}"
+        );
+        assert_eq!(windows[1].observed_at, Some(stamp));
+    }
+
+    #[test]
     fn region_request_metadata_is_fixed() {
         for (region, host, region_id, commodity, referer) in [
             (
@@ -515,7 +549,7 @@ mod tests {
                 ]
             }
         });
-        let snapshot = parse_response(&body.to_string(), AlibabaRegion::International).unwrap();
+        let snapshot = parse_response(&body.to_string(), Timestamp::UNIX_EPOCH).unwrap();
         assert_eq!(snapshot.plan.as_deref(), Some("Pro"));
         let windows = snapshot.rate_limits.unwrap().windows;
         assert_eq!(
@@ -589,7 +623,7 @@ mod tests {
         let body = json!({
             "data": {"successResponse": {"body": payload.to_string()}}
         });
-        let snapshot = parse_response(&body.to_string(), AlibabaRegion::China).unwrap();
+        let snapshot = parse_response(&body.to_string(), Timestamp::UNIX_EPOCH).unwrap();
         assert_eq!(snapshot.plan.as_deref(), Some("Starter"));
         assert!(snapshot.rate_limits.is_none());
     }
@@ -599,13 +633,13 @@ mod tests {
         assert!(matches!(
             parse_response(
                 r#"{"data":{"code":"ConsoleNeedLogin"}}"#,
-                AlibabaRegion::China
+                Timestamp::UNIX_EPOCH,
             ),
             Err(Error::Unsupported)
         ));
         let error = parse_response(
             r#"{"sentinel-secret":"body","data":{"unexpected":true}}"#,
-            AlibabaRegion::International,
+            Timestamp::UNIX_EPOCH,
         )
         .unwrap_err();
         assert!(!error.to_string().contains("body"));
@@ -623,7 +657,7 @@ mod tests {
                 "unsupported",
             ),
         ] {
-            let error = parse_response(body, AlibabaRegion::International).unwrap_err();
+            let error = parse_response(body, Timestamp::UNIX_EPOCH).unwrap_err();
             assert!(
                 matches!(
                     (expected, error),
