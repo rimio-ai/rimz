@@ -48,8 +48,10 @@ impl Other {
         self.found
             .class
             .header()
-            .and_then(|header| header.state)
-            .map_or("finished", records::RunState::as_str)
+            .map_or("finished", |header| match header.state {
+                Some(state) => super::state_word(state, header.ending.as_ref()),
+                None => "finished",
+            })
     }
 
     /// `rimz workflow show <id>`, with `--root` when the run is in another room.
@@ -271,7 +273,9 @@ impl RunTargets {
         let mut context = self.globals.clone();
         context.root = elsewhere.then(|| record.project_root.clone());
         let address = record.address().to_string();
-        let selected = self.runs.as_deref().and_then(|runs| {
+        // A try answers to its id alone: a real run started beside it later takes the address.
+        let runs = self.runs.as_deref().filter(|_| !record.once);
+        let selected = runs.and_then(|runs| {
             let workspace = match &context.root {
                 None => self.home.clone(),
                 Some(root) => self
@@ -366,11 +370,12 @@ pub(in crate::cli) fn names_workflow(raw: &str) -> bool {
 
 fn candidate_target(record: &RunRecord, runs: &[&Located]) -> String {
     let address = record.address();
-    if runs.iter().any(|other| {
+    let shared = runs.iter().any(|other| {
         other.record.id != record.id
             && other.record.project_root == record.project_root
             && other.record.address() == address
-    }) {
+    });
+    if record.once || shared {
         record.id.to_string()
     } else {
         address.to_string()
@@ -552,6 +557,10 @@ fn pick(
         if runs.iter().any(local) {
             runs.retain(local);
         }
+    }
+    // A bare address names the real run beside a try; the try is reached by its id.
+    if runs.iter().any(|run| !run.record.once) {
+        runs.retain(|run| !run.record.once);
     }
     if runs.len() > 1 {
         let caller_root = home();

@@ -50,7 +50,10 @@ pub(super) fn cancel(
                     out,
                     "{} is already {}; unchanged",
                     record.address(),
-                    record.state.as_str()
+                    workflow_view::state_word(
+                        record.state,
+                        record.outcome.as_ref().map(|outcome| &outcome.ending)
+                    )
                 )?;
                 writeln!(
                     out,
@@ -83,10 +86,12 @@ pub(super) fn cancel(
     if changed {
         writeln!(out, "canceled {address}")?;
     } else {
-        let state = record
-            .as_ref()
-            .map_or(run.record.state, |record| record.state);
-        writeln!(out, "{address} is already {}; unchanged", state.as_str())?;
+        let ended = record.as_ref().unwrap_or(&run.record);
+        let state = workflow_view::state_word(
+            ended.state,
+            ended.outcome.as_ref().map(|outcome| &outcome.ending),
+        );
+        writeln!(out, "{address} is already {state}; unchanged")?;
     }
     writeln!(
         out,
@@ -379,11 +384,76 @@ pub(in crate::cli) fn write_held(
     }) else {
         return Ok(());
     };
+    write_wait(paths, record, &wait.node, indent)
+}
+
+/// A try's wait line after its receipt: what the first pass left it waiting on, in the phrase
+/// `rimz workflow show` prints for it; nothing for a try not waiting.
+pub(super) fn write_waiting(paths: &paths::WorkflowPaths, record: &RunRecord) -> Result<()> {
+    let Some(wait) = record
+        .wait
+        .as_ref()
+        .filter(|_| record.state == RunState::Active)
+    else {
+        return Ok(());
+    };
+    write_wait(paths, record, &wait.node, "")
+}
+
+/// One receipt line: `node` and the run's wait in the phrase `rimz workflow show` prints for it.
+fn write_wait(
+    paths: &paths::WorkflowPaths,
+    record: &RunRecord,
+    node: &str,
+    indent: &str,
+) -> Result<()> {
     let spec = workflow::load(&record.definition_dir(paths)).ok();
     if let Some(text) = workflow_view::wait(record, spec.as_ref(), jiff::Timestamp::now()) {
-        writeln!(render::out(), "{indent}{} {text}", wait.node)?;
+        writeln!(render::out(), "{indent}{node} {text}")?;
     }
     Ok(())
+}
+
+/// Block until a try has ended and its home has left the live directory, then print its
+/// finished view. A home still live 30 s after its record ended is shown as it stands. A try
+/// that ended other than `tried` exits 1 naming how it ended. Interrupting the wait leaves the
+/// try running.
+pub(super) fn finish_try(
+    state: &paths::StatePaths,
+    id: &rimz::ids::WorkflowRunId,
+    globals: &super::super::GlobalFlags,
+) -> Result<()> {
+    let mut ended = None;
+    while let Some(record) = live_record(state, id)? {
+        if record.state.is_terminal()
+            && ended.get_or_insert_with(std::time::Instant::now).elapsed()
+                >= std::time::Duration::from_secs(30)
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    writeln!(render::out())?;
+    super::show(Some(id.as_str()), None, false, false, globals)?;
+    let ended = match records::find(state, id)? {
+        Some(records::FoundRun {
+            class: records::RunClass::Current(record),
+            ..
+        }) => Some(*record),
+        _ => None,
+    };
+    let tried = ended.as_ref().and_then(|record| record.outcome.as_ref());
+    if tried.is_some_and(|outcome| outcome.ending == records::RunEnding::Tried) {
+        return Ok(());
+    }
+    Err(super::super::ExitCodeError {
+        code: 1,
+        message: format!(
+            "workflow run {id} ended {}, not tried",
+            ended.map_or("unread", |record| record.state.as_str())
+        ),
+    }
+    .into())
 }
 
 fn continue_session(

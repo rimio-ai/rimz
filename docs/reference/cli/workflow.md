@@ -8,6 +8,7 @@ rimz workflow validate                            # every machine workflow
 rimz workflow validate ~/.rimz/workflows/babysit-pr --json
 rimz workflow run babysit-pr                      # in the current checkout
 rimz workflow run babysit-pr -w feat-x --prompt 'merge before Friday'
+rimz workflow run babysit-pr --at pr --input '{"outcome":"green"}' --once # try one node
 rimz workflow list                                # active and parked runs, every room
 rimz workflow show 'babysit-pr#feat-x'
 rimz workflow show 'babysit-pr#feat-x' --history  # detailed history, folded repeats
@@ -21,7 +22,7 @@ rimz workflow submit pass --reason 'tests cover it' # from a judge's own pane
 
 The [global flags](../cli.md#global-flags) apply. Every subcommand except `run` works from any directory: a run id resolves across every room on the machine.
 
-A run is active (a node is working or waiting), parked (stopped at a node until a command moves it), or finished as `done`, `failed`, or `canceled`. "Unfinished" means active or parked.
+A run is active (a node is working or waiting), parked (stopped at a node until a command moves it), or finished as `done`, `failed`, or `canceled`. A try (`run --once`) that ended done reads `tried` in its views. "Unfinished" means active or parked.
 
 ## Run addresses
 
@@ -43,7 +44,7 @@ The checkout name is the basename of the run's recorded scope path, kept after t
 
 ## Run a workflow
 
-`rimz workflow run <NAME|DIR> [-w <WORKTREE>] [--prompt <TEXT>] [--deadline <WHEN>] [--give-up <WHEN>] [--skip-capacity]`
+`rimz workflow run <NAME|DIR> [-w <WORKTREE>] [--prompt <TEXT>] [--deadline <WHEN>] [--give-up <WHEN>] [--skip-capacity] [--at <NODE>] [--input <OBJECT>] [--once]`
 
 | Argument or flag | Meaning |
 | --- | --- |
@@ -53,18 +54,27 @@ The checkout name is the basename of the run's recorded scope path, kept after t
 | `--deadline <WHEN>` | The run's deadline, in place of the definition's `[workflow].deadline`; with neither, the run has no deadline. `<WHEN>` is a [workflow time](#workflow-times), resolved when the run is created and stored on the run, where `resume --extend deadline=` replaces it. Any other value exits 2 with the forms. An instant already past fires the deadline at the run's first advance. |
 | `--give-up <WHEN>` | The run's give-up instant. A capacity wait at an agent step without its own `admission.give-up` gives up at `<WHEN>` and fails with cause `capacity`. `<WHEN>` is a [workflow time](#workflow-times), resolved when the run is created. Any other value exits 2 with the forms. An instant already past gives up at the first hold. |
 | `--skip-capacity` | The run's agent steps launch past every capacity hold, workflow and step limits and the machine [start throttle](../../guide/configuration.md#agent-start-limits) alike, and record the holds they passed. A usage window or a checkout occupant still holds them. `restart` and `resume` keep the run's choice. |
+| `--at <NODE>` | Start at this check or step instead of the definition's `start`, whether or not a route reaches it. An unknown node refuses with `unknown workflow node <node>` (exit 1) and creates nothing. The run's journal opens with a `start` row naming the node. |
+| `--input <OBJECT>` | One JSON object handed to the start node as its `input`, as an answer that routed there would be: it needs a string `outcome`, and its `key`, when present, is a string or an integer and becomes the run's key. Anything else exits 2 naming `--input`. The run's journal opens with a `start` row carrying it. |
+| `--once` | Try the start node: the run ends `tried` at that node's first answer that is not an `unknown` wait, whatever the route it would take, and the command waits for it ([trying one node](#trying-one-node)). |
 
 Before creating a run, the command validates the definition and refuses on any error, printing each as `<workflow>: <path>: <message>`. Warnings alone do not refuse: each prints to stderr as `warning: <workflow>: <path>: <reason>` before starting. It needs an existing room (`rimz start` creates one).
 
 With `scope = "worktree"`, nodes run in the selected checkout. With `scope = "project"`, they run at the project root, even when invoked from an owned worktree. `-w` on a project-scoped workflow refuses before anything is created, with `<workflow> has scope = project, so it runs at <project root>; start it without -w` (exit 1). A loop task's fire into a worktree is not a `-w` start and runs at the project root.
 
-One unfinished run holds each `(workflow, scope path)` pair, and a run a loop task started also holds `(task, scope path)`. A second start refuses and names the existing run. The CLI validates before it asks for that slot, so a broken definition refuses on validation first.
+One unfinished run holds each `(workflow, scope path)` pair, and a run a loop task started also holds `(task, scope path)`. A second start refuses and names the existing run, a start given `--at` or `--input` included. A try (`--once`) holds no slot: it starts beside any run, and any run starts beside it. A loop task's tail refuses all three flags, each naming the flag, since a task's run always runs the whole workflow from its start. The CLI validates before it asks for that slot, so a broken definition refuses on validation first.
 
 On success it prints three lines:
 
 1. The run id, printed at once. This line keeps its scripting format.
 2. The run's work directory (`RIMZ_WORKFLOW_DIR`) where the run's home is after the first decision: the finished directory when the run ended in it, since an ended run's home moves there. This line keeps its scripting format.
 3. `→ rimz workflow show <run>`.
+
+### Trying one node
+
+`--once` runs one node for real on the real engine: a command step's command runs and an agent step launches its agent. After the receipt's lines, when the first decision left the try waiting, one more line names the node and the wait in the phrase `show` prints. Then the command blocks, with no time limit, until the try has ended and its run directory has moved to `finished-workflows/`, and prints what `rimz workflow show <run>` prints for the finished run: its history opens with `tried`, holds the node's own rows (the answer with its readings and reason, an attempt), and ends with `terminal tried · stopped after one node; the run would go → <target>`. It exits 0 when the try ended `tried`, and 1 with `workflow run <run> ended <state>, not tried` when it was canceled or failed (a definition the try no longer fits, for example). Interrupting the command leaves the try running; `rimz workflow cancel <run>` ends it.
+
+A try waits through a condition's `unknown` and through capacity, window, budget, and occupancy holds. A session step stays live through a kept verdict and a push-back, and its try ends when the session closes. `resume --at` refuses a try; `--extend`, `restart`, and `cancel` work on it. A bare run address selects a real run in the same checkout over a try, so a try's own views name it by id. A try that waits advances as any run does: about once a minute while the room is open, and otherwise only on the [loop timer](../../guide/loops.md#who-keeps-time).
 
 ### Workflow times
 
@@ -234,7 +244,7 @@ A `summary` is one nonempty line, not instructions to the runner. A blank or mul
 
 Every work node requires `then`: for an agent one check, `@done`, or `@failed`; for a command one check; for a message exactly one node, `@done`, or `@failed`. A list refuses at `<kind>.<step>.then`. A check's `on.<outcome>` is a target string: a node, `@done`, `@failed`, or `@wait`. A table or any other value refuses. A failure route cannot target `@wait`. `@break` and `@user` refuse as targets anywhere (`<path>: @break is not a route target; route to a node, @done, or @failed`).
 
-A step at the start runs through the same admission as any later visit. Its first `context.json` has `input`, `key`, and `prev_attempt` set to null, with `visit` and `visits` both 1.
+A step at the start runs through the same admission as any later visit. Its first `context.json` has `input`, `key`, and `prev_attempt` set to null (`input` and `key` from `run --input` when given), with `visit` and `visits` both 1.
 
 ### Agent steps
 
@@ -615,7 +625,7 @@ RimZ rewrites `$RIMZ_WORKFLOW_DIR/context.json` before every check and every att
 | --- | --- |
 | `run`, `node`, `seq` | The run id, the current node, and this evaluation's sequence number. |
 | `prompt` | The run's `--prompt`, or null. |
-| `input` | The answer that routed here, the [failure input](#the-failure-input) after a failure route, or null at the start. |
+| `input` | The answer that routed here, the [failure input](#the-failure-input) after a failure route, or null at the start (the `run --input` object when given). |
 | `key` | The current item key, or null. |
 | `visit`, `visits` | Steps only: the step's visit count stamped when this launch or push-back was admitted, and its current count, both since its last manual restart. `max-visits` caps them. |
 | `step_visits` | Every node: an object from each visited step's name to its visit count, as `visits` counts it. `{}` before any step is visited. |
@@ -629,7 +639,7 @@ RimZ rewrites `$RIMZ_WORKFLOW_DIR/context.json` before every check and every att
 | Field | Meaning |
 | --- | --- |
 | `outcome` | `ended`, `died`, `timeout`, `asked`, `errored`, or `canceled`. `asked` occurs only with `on.asked` set, and `errored` only with `on.errored` set. A command step ends `ended`, `died`, `timeout`, or `canceled`. |
-| `routed_by` | The outcome that admitted the attempt, or the cause when a failure route did. Null for a start step. |
+| `routed_by` | The outcome that admitted the attempt, or the cause when a failure route did. Null for a start step, unless `run --input` gave it an outcome. |
 | `key`, `visit` | The attempt's key, and the visit count stamped when its launch or push-back was admitted. |
 | `started_at`, `ended_at` | The attempt's start and end times. |
 | `handle` | The leader's handle. Null for a command step. |
@@ -762,6 +772,8 @@ Detail is one of:
 - `held · <reason>` for a capacity hold.
 - Otherwise the [wait phrase](#the-waiting-line), `running` (with ` · visit <n> of <max>` when capped), or `checking`.
 
+A try's detail opens with `once · `.
+
 A cached PR number adds ` · PR #N` once per row. Each room supplies its own agent names and PR cache. JSON reads neither that enrichment nor the journal: its `detail` reads `with you` without an agent or PR, and `held <age>[, gives up <clock>] · <reason>` for capacity waits, without node or the separate age column.
 
 ### `workflow show`
@@ -770,7 +782,7 @@ A cached PR number adds ` · PR #N` once per row. Each room supplies its own age
 
 The compact view of an unfinished run prints, in order:
 
-1. `<address>[  PR #N]`. The PR badge shows a cached PR number for active or parked runs.
+1. `<address>[ · once][  PR #N]`. ` · once` marks a live try. The PR badge shows a cached PR number for active or parked runs.
 2. The activity glyph and the state headline. Only the state phrase takes the state tone. Agent context uses body tone, and the bound forecast is muted.
 3. On an active run, one saved readings line from the current check's latest evaluation since entry: `key=value` pairs separated by two spaces, null as `key=unread`, then ` · read <clock>`.
 4. The `now` line, for a condition check or a sleep with `when` ([below](#the-now-line)).
@@ -792,7 +804,7 @@ The headline:
 | Asking | `<step> is asking you · <handle> (<kind>)`, with an instruction to answer in the pane or with `rimz answer`: the step's line ends `the step timeout is paused`, a judge's `the check timeout keeps running`, and either reads `no <kind> timeout is set` without one. A judge's question names its check. |
 | Waiting | The wait phrase with its node, elapsed time, recheck, and the next bound's time and target. A hold names its outcome, duration, and the next bound. |
 | Parked | `parked at <node> <age> · <reason>`, with the explanation in the block below. |
-| Ended, before its directory moves | `done`, `failed`, or `canceled`, with no PR badge. The headline ages from the ending. Once the directory is in `finished-workflows/`, `show` prints the [finished view](#finished-runs). |
+| Ended, before its directory moves | `done`, `failed`, `canceled`, or `tried`, with no PR badge. The headline ages from the ending. Once the directory is in `finished-workflows/`, `show` prints the [finished view](#finished-runs). |
 
 The forecast picks the earliest of the unfired deadline, a held session's timeout, the check or step timeout, and a hold's completion, in that order on ties. A held session's timeout names where the step's `timeout` failure goes. A timeout block shows the flushed wait as `<node> said <outcome>` with a folded count and span, and the last shell-check log. `invalid` shows the recorded stderr tail.
 
@@ -842,6 +854,8 @@ To fit a terminal, the rail drops nodes from the left as `… `, then from the r
 | Park | `park <reason>`. The text is omitted when the newest printed answer or route row at the same node already printed it as its `reason`. |
 | Restart | `<step> restart · fresh\|continued · visits restarted at 1`. |
 | Cancel | `cancel canceled`, or `cancel canceled · <reason>` when the row has one. |
+| Start | `start by hand` for a run started with `--at` or `--input`, with ` · input <object>` when given. |
+| Terminal of a try | `terminal tried · stopped after one node; the run would go → <target>`. |
 | Signal | `signal <name> → <handle>`, naming the leader it went to as an attempt row names its agent. |
 
 The card handles are display only: the history text a run's ending saves into its home and notes keeps the recorded handles.
@@ -935,7 +949,8 @@ Grants live on the run record, never in the definition, and `show` includes them
 | Any other grant spelling | `invalid extension "<grant>"; use visits=+N or deadline=<when>` |
 | An active run with neither flag | `an active run needs --at <node> or --extend to resume` |
 | `--at` while the current attempt is settling | `the attempt at <node> is settling; retry resume after it finishes` |
-| An unknown node | `unknown workflow node <node>` |
+| An unknown node | `unknown workflow node <node>`, as `run --at` refuses it |
+| `--at` on a try | ``workflow run <id> is a try, which ends at its node and cannot be moved; cancel it with `rimz workflow cancel <id>` `` |
 | A finished run | `workflow run <id> has ended (<state>); cannot resume` |
 
 `--at` moves an active run too: a live attempt at its current node ends `canceled` first, and its agents stop, a `keep = true` step's included. Nothing resets a visit count: a step that spent its visits fails again with `visits` at once, unless `--extend visits=+N` grants more.
@@ -950,7 +965,7 @@ resumed repair#feat-x at work · work 2 of 3 visits, every capped step +1
 
 ### Finished runs
 
-A run ends `done` at `@done`, `failed` at `@failed` or on an unrouted failure, or `canceled`. At the ending RimZ writes the colorless `--history` view to `history.txt` in the run directory and atomically copies it to the notes folder's `history.txt`, then moves the run directory to the room's `finished-workflows/`. When the definition cannot be read at the ending, the saved text keeps every row but leaves out the `→ <node>` targets only the definition names (a turn end's recorded target still prints), after a line `its definition could not be read`, which names the load error unless the run's reason already quotes it. A failed copy, or a move that fails before the rename, warns without failing the transition and leaves the run directory in place, and the next `advance`, `cancel`, or `restart` of that run retries. A failure after the rename leaves the directory finished, and the command says the move completed but its barrier failed. A loop task's own run that ends `done` without acting, while its task still exists, is counted in the task's quiet summary and its directory removed, with no `history.txt` ([quiet runs](../../internals/harness/loops.md#run-reports-and-quiet-runs)). Runs without notes write no copy.
+A run ends `done` at `@done`, `failed` at `@failed` or on an unrouted failure, or `canceled`. A try ends `done` with the ending `tried` at its node's first answer, and its views print `tried` where another run prints its end state. At the ending RimZ writes the colorless `--history` view to `history.txt` in the run directory and atomically copies it to the notes folder's `history.txt`, then moves the run directory to the room's `finished-workflows/`. When the definition cannot be read at the ending, the saved text keeps every row but leaves out the `→ <node>` targets only the definition names (a turn end's recorded target still prints), after a line `its definition could not be read`, which names the load error unless the run's reason already quotes it. A failed copy, or a move that fails before the rename, warns without failing the transition and leaves the run directory in place, and the next `advance`, `cancel`, or `restart` of that run retries. A failure after the rename leaves the directory finished, and the command says the move completed but its barrier failed. A loop task's own run that ends `done` without acting, while its task still exists, is counted in the task's quiet summary and its directory removed, with no `history.txt` ([quiet runs](../../internals/harness/loops.md#run-reports-and-quiet-runs)). Runs without notes write no copy.
 
 A finished run id still resolves, from any room, and `show` prints it without reading its definition:
 
@@ -989,7 +1004,7 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 
 ## JSON shapes
 
-`list --json` and `show <workflow> --json` print arrays of `{id, address, workflow, scope, state, node, since, detail}`, with optional `hold` for a known capacity cause. `scope` is the scope path: the checkout, or the project root for `scope = "project"`. `since` is node entry, not the human row's state-specific age. `detail` is the [waiting line](#the-waiting-line), so its capacity bounds follow the same day-qualified clock as rechecks and passed deadlines. Read the node and its entry time from `node` and `since`, never from `detail`.
+`list --json` and `show <workflow> --json` print arrays of `{id, address, workflow, scope, state, node, since, detail}`, with optional `hold` for a known capacity cause and `once: true` for a try. `scope` is the scope path: the checkout, or the project root for `scope = "project"`. `since` is node entry, not the human row's state-specific age. `detail` is the [waiting line](#the-waiting-line), so its capacity bounds follow the same day-qualified clock as rechecks and passed deadlines. Read the node and its entry time from `node` and `since`, never from `detail`.
 
 `show [RUN] --json` prints `{address, dir, record, journal}`: the short run address, work directory, run record, and journal entries. Runs with kept notes add `notes`, the absolute folder path. When the definition cannot load, it still prints the record and journal. A finished run adds `history` ([finished runs](#finished-runs)).
 
@@ -998,6 +1013,8 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 | Field | Meaning |
 | --- | --- |
 | `record.version` | `16`. RimZ refuses a record of any other version ([runs this RimZ cannot continue](#runs-this-rimz-cannot-continue)). |
+| `record.once` | `true` for a try (`run --once`), omitted otherwise. |
+| `record.outcome.ending` | How a finished run ended: `{kind}` with `kind` one of `done`, `failed`, `canceled`, `tried`, or `capacity_gave_up` (with `waited_ms` and optional `reason`). |
 | `record.spec_dir` | A deployed run's definition folder, canonical at the start. Absent for a loop task's run, which reads its own `definition/`. |
 | `record.visits.<step>` | The step's visit count since its last manual restart. |
 | `record.key_visits.<step>` | The step's visits split by item key, as `key_visits` in [the context file](#the-context-file). Absent when no step has a keyed visit. |
@@ -1038,6 +1055,8 @@ A verdict is `{node, entered_at, at, target, object, reason}`, where `at` is the
 - A forwarded signal journals `{event: "signal", node: <step>, signal: <name>, message: <message id>}`, with the subscribing step as its node even while a session is held at its rest check.
 - Each turn-end decision or held-wait answer writes `{event: "turn_end", seq, node, action, turn, check}`: `action` is `"kept"`, `"pushed"`, `"closed"`, `"discarded"`, or `"interrupted"`, and `turn` is `{agent_id, started_at, ended_at}`. A saved verdict supplies optional `outcome` and `target`, and `reason` explains an interruption or a moved-turn discard. A `pushed` row also carries optional `visit` and `message`, and counts as a visit in history, the trail, and the visit counts.
 - A plain sleep journals `{outcome: "sleeping", recheck_at: "<entered_at + sleep>"}` at entry and `{outcome: "then", reason: "slept <sleep>"}` at expiry, inheriting the key into each object. A conditional sleep uses condition answers with `case: 0` for an early win: false is `sleeping`, unread is `unknown`, and an unfinished `for` rewrites a win to `hold`. These answers never replace the run's input or key. History shows `sleeping → @wait` and `then → <then>`.
+- A start given `--at` or `--input` writes `{event: "start", node, input?}` as the journal's first row, `input` being the `--input` object.
+- A try's terminal row carries `tried`, the target of the route it did not take (`@done`, `@failed`, `@wait`, or a node).
 - A restart writes `{event: "restart", step, continued}` and `{event: "visits_reset", step, outcome: "restart"}`.
 
 ### Loop JSON
@@ -1051,5 +1070,5 @@ A verdict is `{node, entered_at, at, target, object, reason}`, where `at` is the
 | Code | When |
 | --- | --- |
 | `0` | Success, including `cancel` of an already-finished run, `show <WORKFLOW>` with an unavailable definition, and `validate` with warnings only. |
-| `1` | A refusal or failure: an unknown or ambiguous run, a duplicate start, a terminal resume or restart, a refused `submit`, a validation error, an unknown node, `show` with no RUN outside a workflow, and a node view of a finished run. |
+| `1` | A refusal or failure: an unknown or ambiguous run, a duplicate start, a terminal resume or restart, a refused `submit`, a validation error, an unknown node, a try that ended other than `tried` under `run --once`, `show` with no RUN outside a workflow, and a node view of a finished run. |
 | `2` | A usage error: a clap parse error, a malformed `<workflow>#<checkout>` address, `show <run> <NODE>` with an unfinished run's address or id, `--history` with a workflow name, `--history` or a NODE together with `--json`, and a name that is both a deployed workflow and a loop task without a `workflow:` or `task:` selector. |

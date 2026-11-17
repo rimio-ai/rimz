@@ -17,6 +17,7 @@ mod sleep;
 mod stranded;
 mod tasks;
 mod ticks;
+mod tries;
 mod wakes;
 
 /// The definition directory a run reads: an edit there reaches the run at its next engine read.
