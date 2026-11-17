@@ -33,6 +33,21 @@ fn repeat_with_every_refuses_and_repeat_needs_a_signal_or_condition() {
 }
 
 #[test]
+fn at_and_every_conflict_in_either_order() {
+    for argv in [
+        ["--at", "09:00", "--every", "1h"],
+        ["--every", "1h", "--at", "09:00"],
+    ] {
+        let error = parse(&[&argv[..], &["--", "true"]].concat()).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+            "{argv:?}: {error}"
+        );
+    }
+}
+
+#[test]
 fn removed_flags_and_wait_are_unknown_to_loop_add() {
     for flag in [
         "--wait",

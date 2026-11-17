@@ -717,21 +717,6 @@ fn build_entry(
                 Schedule::Interval(interval) => {
                     entry.every = Some(format!("{}m", interval.minutes))
                 }
-                Schedule::Calendar(calendar) => {
-                    entry.at = Some(format!("{:02}:{:02}", calendar.hour, calendar.minute));
-                    if !parsed.once {
-                        entry.every = Some(if calendar.weekdays.is_empty() {
-                            "day".to_owned()
-                        } else {
-                            calendar
-                                .weekdays
-                                .iter()
-                                .map(|day| super::short_day_name(*day))
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        });
-                    }
-                }
             }
             None
         }

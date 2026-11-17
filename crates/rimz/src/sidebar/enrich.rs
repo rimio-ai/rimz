@@ -791,7 +791,6 @@ fn enrich_core(
             &mut snapshot,
             state,
             project_root.as_deref(),
-            &machine_config,
         );
         project_due_messages(&mut snapshot, state);
         crate::harness::idle_stop::project_requests(&mut snapshot, state);

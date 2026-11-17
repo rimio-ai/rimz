@@ -2,8 +2,6 @@ use super::*;
 use crate::config::{LaunchKind, WatchSpec};
 use jiff::civil::date;
 
-use jiff::civil::Weekday::{Friday, Monday, Wednesday};
-
 #[test]
 fn delivery_owners_follow_provenance_and_precedence() {
     let meta = crate::config::WaitMeta {
@@ -84,13 +82,6 @@ fn lifecycle_kind_follows_the_stored_row() {
                 ..recurring.clone()
             },
             TaskKind::Routine,
-        ),
-        (
-            TaskEntry {
-                at: Some("08:00".into()),
-                ..spawn_entry()
-            },
-            TaskKind::OneOff,
         ),
         (signal.clone(), TaskKind::OneOff),
         (
@@ -288,10 +279,9 @@ fn condition_rows_validate_describe_and_have_standing_lifetimes() {
     entry.repeat = false;
     assert!(parse_trigger("ship", &entry).unwrap().once);
     assert!(ephemeral_lifetime(&entry));
-    for field in ["at", "every", "cron", "signal", "watch", "deadline"] {
+    for field in ["every", "cron", "signal", "watch", "deadline"] {
         let mut conflict = entry.clone();
         match field {
-            "at" => conflict.at = Some("07:00".to_owned()),
             "every" => conflict.every = Some("5m".to_owned()),
             "cron" => conflict.cron = Some("0 * * * *".to_owned()),
             "signal" => conflict.signal = Some("ci.passed".to_owned()),
@@ -345,10 +335,9 @@ fn fire_at_rows_are_ephemeral_absolute_one_shots() {
         parsed.describe(),
         local.strftime("once at %Y-%m-%d %H:%M").to_string()
     );
-    for field in ["at", "every", "cron"] {
+    for field in ["every", "cron"] {
         let mut conflict = entry.clone();
         match field {
-            "at" => conflict.at = Some("07:00".to_owned()),
             "every" => conflict.every = Some("5m".to_owned()),
             "cron" => conflict.cron = Some("0 * * * *".to_owned()),
             _ => unreachable!(),
@@ -450,11 +439,10 @@ fn after(now: &Zoned, seconds: i64) -> Timestamp {
         .expect("shifted timestamp")
 }
 
-fn entry(at: Option<&str>, every: Option<&str>, cron: Option<&str>) -> TaskEntry {
+fn entry(every: Option<&str>, cron: Option<&str>) -> TaskEntry {
     TaskEntry {
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
-        at: at.map(ToOwned::to_owned),
         every: every.map(ToOwned::to_owned),
         cron: cron.map(ToOwned::to_owned),
         ..TaskEntry::default()
@@ -496,32 +484,7 @@ fn schedule_of(entry: &TaskEntry) -> Schedule {
 }
 
 fn cron(expr: &str) -> Schedule {
-    schedule_of(&entry(None, None, Some(expr)))
-}
-
-#[test]
-fn weekday_masks_preserve_aliases_sorting_and_wrapped_ranges() {
-    use jiff::civil::Weekday::{Saturday, Sunday, Thursday, Tuesday};
-
-    assert_eq!(
-        weekday_range(Friday, Monday),
-        vec![Friday, Saturday, Sunday, Monday]
-    );
-    for (raw, expected) in [
-        ("fri-mon", vec![Monday, Friday, Saturday, Sunday]),
-        ("wed,mon,mon", vec![Monday, Wednesday]),
-        ("tues,thurs,weds", vec![Tuesday, Wednesday, Thursday]),
-        ("weekends", vec![Saturday, Sunday]),
-    ] {
-        assert_eq!(parse_days(raw), Some(expected), "{raw}");
-    }
-    for raw in ["mon-", "mon,,fri"] {
-        assert_eq!(parse_days(raw), None, "{raw}");
-    }
-    assert_eq!(
-        schedule_of(&entry(Some("09:30"), Some("fri-mon"), None)).describe(),
-        "every Mon,Fri,Sat,Sun at 09:30"
-    );
+    schedule_of(&entry(None, Some(expr)))
 }
 
 /// Each accepted action shape with its kind predicates, then every way the
@@ -780,7 +743,10 @@ fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
         );
     }
     for (fields, reason) in [
-        ("args=['true']\ntimeout='1m'\nat='07:00'", "one-shot"),
+        (
+            "args=['true']\ntimeout='1m'\nfire-at='2030-01-01T00:00:00Z'",
+            "one-shot",
+        ),
         (
             "args=['true']\ntimeout='1m'\nwhen=['team.stage=Done']",
             "one-shot",
@@ -828,7 +794,7 @@ fn task_shape_compiles_action_and_timing_independently() {
         "morning",
         &TaskEntry {
             cron: Some("0 7 * * *".to_owned()),
-            every: Some("weekday".to_owned()),
+            every: Some("1h".to_owned()),
             args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             ..TaskEntry::default()
@@ -844,77 +810,38 @@ fn task_shape_compiles_action_and_timing_independently() {
     ));
 }
 
-/// Every accepted `(at, every, cron)` shape and the line a listing renders.
+/// Every accepted `(every, cron)` shape and the line a listing renders.
 /// `describe` is a total projection of the parsed schedule, so the structural
 /// assertions below pin the shape it renders from.
 #[test]
 fn parse_schedule_accepts_every_timing_form() {
-    let described = |at, every, cron| {
-        parse_schedule("m", &entry(at, every, cron))
+    let described = |every, cron| {
+        parse_schedule("m", &entry(every, cron))
             .expect("parse")
             .describe()
     };
-    for (at, every, cron, expected) in [
-        (Some("07:00"), None, None, "once at 07:00"),
-        (Some("07:00"), Some("day"), None, "every day at 07:00"),
-        (Some("07:00"), Some("daily"), None, "every day at 07:00"),
-        (
-            Some("06:05"),
-            Some("mon,wed,fri"),
-            None,
-            "every Mon,Wed,Fri at 06:05",
-        ),
-        (
-            Some("09:00"),
-            Some("weekends"),
-            None,
-            "every Sat,Sun at 09:00",
-        ),
-        (
-            Some("07:30"),
-            Some("weekdays"),
-            None,
-            "every Mon,Tue,Wed,Thu,Fri at 07:30",
-        ),
-        (
-            Some("06:00"),
-            Some("mon-fri"),
-            None,
-            "every Mon,Tue,Wed,Thu,Fri at 06:00",
-        ),
-        (None, Some("7m"), None, "every 7m"),
+    for (every, cron, expected) in [
+        (Some("7m"), None, "every 7m"),
         // Sub-minute intervals round up rather than flooring to never firing.
-        (None, Some("1s"), None, "every 1m"),
-        (None, None, Some("0 7 * * 1-5"), "cron `0 7 * * 1-5`"),
+        (Some("1s"), None, "every 1m"),
+        (None, Some("0 7 * * 1-5"), "cron `0 7 * * 1-5`"),
     ] {
-        let label = format!("{at:?} {every:?} {cron:?}");
-        assert_eq!(described(at, every, cron), expected, "{label}");
+        let label = format!("{every:?} {cron:?}");
+        assert_eq!(described(every, cron), expected, "{label}");
     }
 
     assert_eq!(
-        schedule_of(&entry(Some("06:05"), Some("mon,wed,fri"), None)),
-        Schedule::Calendar(CalendarSpec {
-            minute: 5,
-            hour: 6,
-            weekdays: vec![Monday, Wednesday, Friday],
-        })
-    );
-    assert_eq!(
-        schedule_of(&entry(None, Some("7m"), None)),
+        schedule_of(&entry(Some("7m"), None)),
         Schedule::Interval(IntervalSpec::new(7))
     );
     assert_eq!(
-        schedule_of(&entry(None, None, Some("0 7 * * 1-5"))),
+        schedule_of(&entry(None, Some("0 7 * * 1-5"))),
         cron("0 7 * * 1-5")
     );
-    // Only a bare `at` is a one-shot; a repeat cadence always outlives its fire.
-    for (at, every, cron, once) in [
-        (Some("07:00"), None, None, true),
-        (Some("07:00"), Some("day"), None, false),
-        (None, None, Some("0 7 * * 1-5"), false),
-    ] {
-        let parsed = parse_schedule("m", &entry(at, every, cron)).expect("parse");
-        assert_eq!(parsed.once, once, "{at:?} {every:?} {cron:?}");
+    // A repeat cadence always outlives its fire.
+    for (every, cron) in [(Some("1d"), None), (None, Some("0 7 * * 1-5"))] {
+        let parsed = parse_schedule("m", &entry(every, cron)).expect("parse");
+        assert!(!parsed.once, "{every:?} {cron:?}");
     }
 }
 
@@ -922,11 +849,6 @@ fn parse_schedule_accepts_every_timing_form() {
 #[test]
 fn parse_schedule_rejects_invalid_timing_fields() {
     let name = || "m".to_owned();
-    let conflict = || ScheduleErr::TimeConflict { name: name() };
-    let bad_time = |value: &str| ScheduleErr::BadTime {
-        name: name(),
-        value: value.to_owned(),
-    };
     let bad_every = |value: &str| ScheduleErr::BadEvery {
         name: name(),
         value: value.to_owned(),
@@ -936,33 +858,34 @@ fn parse_schedule_rejects_invalid_timing_fields() {
         value: value.to_owned(),
     };
 
-    for (at, every, cron, expected) in [
-        (Some("07:00"), None, Some("0 7 * * *"), conflict()),
-        (Some("07:00"), Some("5m"), None, conflict()),
-        (None, None, None, ScheduleErr::NoTime { name: name() }),
+    for (every, cron, expected) in [
         (
-            None,
-            Some("weekdays"),
-            None,
-            ScheduleErr::EveryNeedsAt { name: name() },
+            Some("5m"),
+            Some("0 7 * * *"),
+            ScheduleErr::TimeConflict { name: name() },
         ),
-        (Some("7am"), None, None, bad_time("7am")),
-        (Some("24:00"), None, None, bad_time("24:00")),
-        (Some("07:00"), Some("funday"), None, bad_every("funday")),
-        (None, Some("0m"), None, bad_every("0m")),
-        (None, Some("later"), None, bad_every("later")),
-        (None, Some("reset"), None, bad_every("reset")),
-        (None, Some("Reset"), None, bad_every("Reset")),
-        (None, Some(" reset "), None, bad_every(" reset ")),
-        (None, None, Some("0 7 * *"), bad_cron("0 7 * *")),
+        (None, None, ScheduleErr::NoTime { name: name() }),
+        (Some("weekday"), None, bad_every("weekday")),
+        (Some("day"), None, bad_every("day")),
+        (Some("mon,wed,fri"), None, bad_every("mon,wed,fri")),
+        (Some("0m"), None, bad_every("0m")),
+        (Some("later"), None, bad_every("later")),
+        (Some("reset"), None, bad_every("reset")),
+        (Some("Reset"), None, bad_every("Reset")),
+        (Some(" reset "), None, bad_every(" reset ")),
+        (None, Some("0 7 * *"), bad_cron("0 7 * *")),
     ] {
-        let label = format!("{at:?} {every:?} {cron:?}");
+        let label = format!("{every:?} {cron:?}");
         assert_eq!(
-            parse_schedule("m", &entry(at, every, cron)),
+            parse_schedule("m", &entry(every, cron)),
             Err(expected),
             "{label}"
         );
     }
+    assert_eq!(
+        bad_every("later").to_string(),
+        "schedule `m` has an invalid `every` value `later`; use a duration like `30m`"
+    );
 }
 
 #[test]
@@ -1181,7 +1104,7 @@ fn triggers_match_names_and_top_level_payload_values() {
     use crate::harness::signal::SignalResolution::{Deliver, Excluded, Ignore, Skip};
     assert_eq!(matching.resolve("task", &signal), Deliver);
     assert_eq!(
-        Trigger::Schedule(parse_schedule("task", &entry(None, Some("5m"), None)).unwrap())
+        Trigger::Schedule(parse_schedule("task", &entry(Some("5m"), None)).unwrap())
             .resolve("task", &signal),
         Ignore
     );
@@ -1410,9 +1333,9 @@ fn schedule_due_at_occurrence_edges() {
     let interval = Schedule::Interval(IntervalSpec::new(15));
     let quarter_hour = cron("*/15 * * * *");
     let weekday_cron = cron("0 7 * * 1-5");
-    let every_wed = schedule_of(&entry(Some("07:30"), Some("wed"), None));
-    let every_mon = schedule_of(&entry(Some("07:30"), Some("mon"), None));
-    let daily = schedule_of(&entry(Some("07:30"), None, None));
+    let every_wed = cron("30 7 * * wed");
+    let every_mon = cron("30 7 * * mon");
+    let daily = cron("30 7 * * *");
 
     let boundary = zdt(2026, 6, 24, 8, 15, 0);
     let wed_0730 = zdt(2026, 6, 24, 7, 30, 0);
@@ -1426,16 +1349,19 @@ fn schedule_due_at_occurrence_edges() {
 
     assert!(!due(&interval, &boundary, 899), "interval a second early");
     assert!(due(&interval, &boundary, 900), "interval at the boundary");
-    assert!(due(&every_wed, &wed_0730, 60), "calendar at its occurrence");
+    assert!(
+        due(&every_wed, &wed_0730, 60),
+        "weekly cron at its occurrence"
+    );
     assert!(
         !due(&every_wed, &wed_0730, 0),
-        "calendar already fired today"
+        "weekly cron already fired today"
     );
     assert!(
         !due(&every_mon, &wed_0730, 86_400),
-        "calendar off its weekday"
+        "weekly cron off its weekday"
     );
-    assert!(!due(&daily, &wed_0729, 86_400), "calendar a second early");
+    assert!(!due(&daily, &wed_0729, 86_400), "daily cron a second early");
     assert!(
         due(&quarter_hour, &quarter, 60),
         "cron on a matching minute"
@@ -1459,8 +1385,8 @@ fn schedule_next_after_reports_the_following_occurrence() {
     let interval = Schedule::Interval(IntervalSpec::new(15));
     let quarter_hour = cron("*/15 * * * *");
     let yearly = cron("0 0 1 1 *");
-    let every_mon = schedule_of(&entry(Some("07:30"), Some("mon"), None));
-    let daily = schedule_of(&entry(Some("07:30"), None, None));
+    let every_mon = cron("30 7 * * mon");
+    let daily = cron("30 7 * * *");
 
     let morning = zdt(2026, 6, 24, 8, 0, 0);
     let ten_past = zdt(2026, 6, 24, 8, 10, 0);
@@ -1479,12 +1405,12 @@ fn schedule_next_after_reports_the_following_occurrence() {
     assert_eq!(
         next(&every_mon, &morning, 2 * 86_400 + 1_800),
         Some(zdt(2026, 6, 29, 7, 30, 0).timestamp()),
-        "calendar crosses the week from Mon Jun 22"
+        "weekly cron crosses the week from Mon Jun 22"
     );
     assert_eq!(
         next(&daily, &morning, 86_400 + 1_800),
-        Some(zdt(2026, 6, 24, 7, 30, 0).timestamp()),
-        "calendar reports today's missed occurrence"
+        Some(zdt(2026, 6, 25, 7, 30, 0).timestamp()),
+        "daily cron skips today's missed occurrence"
     );
     assert_eq!(
         next(&quarter_hour, &before_quarter, 60),
@@ -1574,8 +1500,8 @@ fn task_timing_state_precedence_and_classification() {
     };
 
     let now = zdt(2026, 6, 24, 8, 10, 0);
-    let interval = entry(None, Some("15m"), None);
-    let invalid = entry(None, None, None);
+    let interval = entry(Some("15m"), None);
+    let invalid = entry(None, None);
     let stale = crate::trust::TrustState::Stale;
     let manual = arming::Arming {
         enabled: false,
@@ -1617,7 +1543,7 @@ fn task_timing_state_precedence_and_classification() {
     );
     assert_eq!(overlay(Timing::fired(0, &now)), Invalid);
     // A hand-written row whose cron the parser refuses reads invalid as compiled.
-    let refused = TaskShape::compile("task", &entry(None, None, Some("0 9 * * L")));
+    let refused = TaskShape::compile("task", &entry(None, Some("0 9 * * L")));
     let fired = Timing::fired(0, &now);
     assert_eq!(
         TaskTiming::evaluate(&refused.trigger, fired.source, fired.last_fire, None, &now).state(),
@@ -1663,10 +1589,8 @@ fn task_timing_state_precedence_and_classification() {
     );
     // A sparse cron expression still has a computable occurrence.
     assert_eq!(
-        Timing::fired(60, &zdt(2026, 1, 2, 0, 0, 0)).state(
-            &entry(None, None, Some("0 0 1 1 *")),
-            &zdt(2026, 1, 2, 0, 0, 0)
-        ),
+        Timing::fired(60, &zdt(2026, 1, 2, 0, 0, 0))
+            .state(&entry(None, Some("0 0 1 1 *")), &zdt(2026, 1, 2, 0, 0, 0)),
         Upcoming(zdt(2027, 1, 1, 0, 0, 0).timestamp()),
     );
 
@@ -1674,18 +1598,21 @@ fn task_timing_state_precedence_and_classification() {
     // `due` predicate that `schedule_due_at_occurrence_edges` pins directly.
     for (label, entry, timing) in [
         (
-            "calendar",
-            entry(Some("08:10"), None, None),
+            "fire-at",
+            TaskEntry {
+                fire_at: Some(before(&now, 30)),
+                ..spawn_entry()
+            },
             Timing::fired(60, &now),
         ),
         (
             "interval",
-            entry(None, Some("15m"), None),
+            entry(Some("15m"), None),
             Timing::fired(15 * 60, &now),
         ),
         (
             "cron",
-            entry(None, None, Some("10 8 * * *")),
+            entry(None, Some("10 8 * * *")),
             Timing::fired(60, &now),
         ),
     ] {
@@ -1825,27 +1752,6 @@ fn delayed_instant_rounds_up_to_the_next_whole_minute() {
     );
 }
 
-/// A stored bare `at` row keeps its calendar meaning: a clock down across its
-/// minute and midnight fires it at its time of day on the next day it sees, and
-/// a clock back after that minute fires it at once.
-#[test]
-fn legacy_once_calendar_fires_on_its_time_of_day_after_a_missed_midnight() {
-    let once = schedule_of(&entry(Some("07:00"), None, None));
-    let armed = zdt(2026, 6, 24, 6, 0, 0).timestamp();
-    assert!(
-        !once.due(armed, &zdt(2026, 6, 25, 6, 30, 0)),
-        "before its time of day"
-    );
-    assert!(
-        once.due(armed, &zdt(2026, 6, 25, 7, 0, 0)),
-        "a day late, at its time"
-    );
-    assert!(
-        once.due(armed, &zdt(2026, 6, 25, 8, 0, 0)),
-        "after its time, at once"
-    );
-}
-
 #[test]
 fn cron_accepts_names_stepped_ranges_and_macros() {
     let wed_0900 = zdt(2026, 6, 24, 9, 0, 0);
@@ -1900,7 +1806,7 @@ fn cron_accepts_names_stepped_ranges_and_macros() {
 
 #[test]
 fn cron_refuses_unsupported_forms_and_unknown_tokens() {
-    let parse = |expr: &str| parse_schedule("m", &entry(None, None, Some(expr))).map(|_| ());
+    let parse = |expr: &str| parse_schedule("m", &entry(None, Some(expr))).map(|_| ());
     for (expr, form) in [
         ("0 0 L * *", "L"),
         ("0 0 ? * 1", "?"),
@@ -1954,7 +1860,7 @@ fn cron_refuses_unsupported_forms_and_unknown_tokens() {
 
 #[test]
 fn cron_that_can_never_fire_is_refused_and_a_leap_day_is_found() {
-    let parse = |expr: &str| parse_schedule("m", &entry(None, None, Some(expr))).map(|_| ());
+    let parse = |expr: &str| parse_schedule("m", &entry(None, Some(expr))).map(|_| ());
     for expr in ["0 0 30 2 *", "0 0 31 4,6,9,11 *"] {
         let error = parse(expr).unwrap_err();
         assert_eq!(

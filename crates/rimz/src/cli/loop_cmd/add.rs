@@ -4,7 +4,6 @@ use super::*;
 use crate::cli::loop_launch::LoopLaunch;
 
 struct AddTiming {
-    at: Option<String>,
     fire_at: Option<Timestamp>,
     deadline: Option<Timestamp>,
 }
@@ -219,10 +218,7 @@ fn validate_add_args(args: &AddArgs) -> Result<()> {
         let used = [
             (args.signal.is_some(), "--signal"),
             (args.in_after.is_some(), "--in"),
-            (
-                args.at.is_some() && args.every.is_none(),
-                "--at without --every",
-            ),
+            (args.at.is_some(), "--at"),
         ]
         .into_iter()
         .filter_map(|(used, flag)| used.then_some(flag))
@@ -343,7 +339,6 @@ fn build_task_entry(
         }),
         overlap_limit: args.overlap_limit,
         root: workspace.project_root.clone(),
-        at: timing.at,
         fire_at: timing.fire_at,
         every: args.every.clone(),
         cron: args.cron.clone(),
@@ -522,7 +517,6 @@ fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
 fn resolve_add_timing(args: &AddArgs, name: &str) -> Result<AddTiming> {
     let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
     let mut timing = AddTiming {
-        at: None,
         fire_at: None,
         deadline: None,
     };
@@ -533,15 +527,7 @@ fn resolve_add_timing(args: &AddArgs, name: &str) -> Result<AddTiming> {
         }
         timing.fire_at = Some(schedule::delayed_instant(duration, now.timestamp())?);
     } else if let Some(at) = args.at.as_deref() {
-        if args.every.is_none() {
-            timing.fire_at = Some(schedule::resolve_once_at(name, at, &now)?);
-        } else if at.trim().contains(char::is_whitespace) {
-            bail!(
-                "--at with --every takes HH:MM; for a weekday time use --every <days> --at HH:MM, such as --every fri --at 09:30"
-            );
-        } else {
-            timing.at = Some(at.to_owned());
-        }
+        timing.fire_at = Some(schedule::resolve_once_at(name, at, &now)?);
     }
     Ok(timing)
 }

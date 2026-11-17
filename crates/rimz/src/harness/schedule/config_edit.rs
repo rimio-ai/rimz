@@ -349,7 +349,6 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             root: PathBuf::from("/repo"),
             dir: Some(PathBuf::from("/linked")),
             timeout: Some("20m".to_owned()),
-            at: Some("07:00".to_owned()),
             every: Some("1h".to_owned()),
             cron: Some("0 * * * *".to_owned()),
             signal: Some("ci.failed".to_owned()),
@@ -438,7 +437,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             "args = ['true']\ntimeout = '5m'\neach-worktree = true\nevery = '1h'",
             "args = ['true']\ntimeout = '5m'\nevery = '10m'\ndeadline = '2030-01-01T00:00:00Z'",
             "args = ['true']\ntimeout = '5m'\nwhen = ['ci=passed']\nfor = '5m'",
-            "once = true\nwait = { kind = 'claude', session = 's', handle = '@c' }\nat = '07:00'",
+            "once = true\nwait = { kind = 'claude', session = 's', handle = '@c' }\nevery = '1h'",
         ];
         let dir = tempfile::tempdir().unwrap();
         let compiled = |entry: &TaskEntry| {

@@ -283,7 +283,7 @@ mod tests {
             args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             root: PathBuf::from("/repo"),
-            at: Some("07:00".to_owned()),
+            fire_at: Some("2026-06-01T07:00:00Z".parse().unwrap()),
             ..TaskEntry::default()
         }
     }
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(value["wait"]["args"], serde_json::json!(["true"]));
         assert_eq!(value["wait"]["timeout"], "1m");
         assert_eq!(value["wait"]["root"], "/repo");
-        assert_eq!(value["wait"]["at"], "07:00");
+        assert_eq!(value["wait"]["fire-at"], "2026-06-01T07:00:00Z");
         assert_eq!(load_from(&paths.root).0.get("wait"), Some(&entry));
 
         assert!(remove(&paths, "wait", None).expect("remove"));

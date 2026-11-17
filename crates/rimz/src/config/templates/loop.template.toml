@@ -23,15 +23,14 @@
 ## target = "forge"
 ## args = ["-w", "morning", "summarize what landed"]
 ## root = "/home/you/code/app"         # absolute project root whose room hosts the fire
-## at = "07:00"                        # 24h firing time in the configured timezone
-## every = "weekday"                   # "day", "weekday", "weekend", or "mon,wed,fri"
+## cron = "0 7 * * 1-5"                # five-field cron in the configured timezone: 07:00 on weekdays
 ##
 ## [tasks.pr_watch]
 ## kind = "shell"
 ## args = ["gh", "pr", "checks"]
 ## timeout = "5m"                      # how long the command may run; required on a shell task
 ## root = "/home/you/code/app"
-## every = "15m"                       # interval; `cron = "*/15 * * * *"` uses raw cron syntax
+## every = "15m"                       # interval: a duration in s, m, h, or d
 ## overlap = "coalesce"                # busy triggers: skip (default), coalesce (newest), queue, replace (stop for newest), allow (agent tasks: launch anyway)
 ## # overlap-limit = 10                # only with overlap = "queue"; at least 1
 ##
@@ -47,14 +46,14 @@
 ## target = "claude"
 ## args = ["refactor the next rough module"]
 ## root = "/home/you/code/app"
-## when = ["window.5h.left>=60"]
+## when = ["window.5h.left>=80"]
 ## provider = "claude"                 # `rimz loop add` stores the kind a window term reads as state
 ## account = "work"                    # the account whose windows the conditions read; unset follows the room
 ##
 ## [tasks.self_wait]
 ## prompt = "resume the review and fix the next blocking comment"
 ## root = "/home/you/code/app"
-## at = "09:30"
+## fire-at = "2026-06-01T09:30:00Z"    # a one-shot's instant; the row goes once it fires
 ## [tasks.self_wait.wait]                # a delivery row: hands its prompt to one pinned live session
 ## kind = "claude"
 ## session = "sess-abc123"

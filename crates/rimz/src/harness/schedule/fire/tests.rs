@@ -613,7 +613,7 @@ fn condition_write_failure_preserves_clock_fires() {
         (
             "clock".to_owned(),
             loaded(TaskEntry {
-                at: Some("08:05".to_owned()),
+                cron: Some("5 8 * * *".to_owned()),
                 ..entry.clone()
             }),
         ),
@@ -1832,12 +1832,12 @@ fn plan_arms_fires_and_carries_each_task_state() {
         strikes: Some(3),
     };
     let every_5m = &task("/repo", "5m");
-    // `every` and `at` together are a time conflict, so this row never parses.
+    // `every` and `cron` together are a time conflict, so this row never parses.
     let malformed = &loaded(TaskEntry {
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         every: Some("5m".to_owned()),
-        at: Some("07:00".to_owned()),
+        cron: Some("0 7 * * *".to_owned()),
         ..TaskEntry::default()
     });
 
@@ -2028,8 +2028,7 @@ fn ended_pause_sets_the_effective_fire_edge() {
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         root: PathBuf::from("/repo"),
-        every: Some("day".to_owned()),
-        at: Some("07:00".to_owned()),
+        cron: Some("0 7 * * *".to_owned()),
         ..TaskEntry::default()
     });
     let slept_through = zdt(2026, 6, 23, 6, 0, 0).timestamp();

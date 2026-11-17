@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::agents::{AgentState, AgentStatus, PendingWait, PendingWaitClass, PendingWaitTrigger};
-use crate::config::{MachineConfig, WatchSpec};
+use crate::config::WatchSpec;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -122,7 +122,7 @@ pub fn take_waits(
     taken
 }
 
-fn pending_wait(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<PendingWait> {
+fn pending_wait(name: &str, task: &LoadedTask) -> Option<PendingWait> {
     if !task.is_ephemeral() {
         return None;
     }
@@ -134,22 +134,12 @@ fn pending_wait(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
             when: expr.to_string(),
             hold: hold.map(super::arm::duration_label),
         },
-        Trigger::Schedule(schedule) => {
-            // A deadline shortens row lifetime, but does not make a recurring
-            // clock's next occurrence derivable from its original arm time.
-            if !schedule.once {
-                return None;
-            }
-            let anchor = armed_at.map(|at| at.to_zoned(now.time_zone().clone()));
-            let due = match schedule.schedule.instant() {
-                Some(at) => at,
-                None => parsed.next_after(anchor.as_ref().unwrap_or(now))?,
-            };
-            PendingWaitTrigger::Timer {
-                due,
-                delay: meta.and_then(|meta| meta.delay.clone()),
-            }
-        }
+        // A deadline shortens a recurring clock's lifetime, but only a `fire-at` row has a due
+        // instant to list.
+        Trigger::Schedule(schedule) => PendingWaitTrigger::Timer {
+            due: schedule.schedule.instant()?,
+            delay: meta.and_then(|meta| meta.delay.clone()),
+        },
         Trigger::Watch(spec) => match spec {
             WatchSpec::Command(command) => PendingWaitTrigger::Command {
                 command: command.clone(),
@@ -184,11 +174,10 @@ fn pending_wait(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
 pub fn pending_waits_by_session(
     catalog: &TaskCatalog,
     root: &Path,
-    now: &jiff::Zoned,
 ) -> BTreeMap<(AgentKind, AgentSessionId), Vec<PendingWait>> {
     let mut waits = BTreeMap::<_, Vec<_>>::new();
     for (name, task) in session_deliveries(catalog, root, None, &[]) {
-        let Some(wait) = pending_wait(name, task, now) else {
+        let Some(wait) = pending_wait(name, task) else {
             continue;
         };
         let Some(target) = task.entry().wait.as_ref() else {
@@ -226,10 +215,8 @@ pub(crate) fn project_pending_waits(
     snapshot: &mut SidebarSnapshot,
     paths: &crate::StatePaths,
     project_root: Option<&Path>,
-    config: &MachineConfig,
 ) {
-    let now = snapshot.now.to_zoned(config.time_zone());
-    SessionWaits::load_at(project_root, || now).attach(snapshot);
+    SessionWaits::load_at(project_root).attach(snapshot);
     project_run_waits(snapshot, paths);
 }
 
@@ -417,17 +404,14 @@ pub(crate) struct SessionWaits {
 }
 
 impl SessionWaits {
-    /// Read the catalog now. The machine config is loaded only for a
-    /// workspace that holds instance rows.
+    /// Read the catalog now.
     pub(crate) fn load(paths: &crate::StatePaths) -> Self {
         // An unreadable record leaves no root, as snapshot assembly does.
         let project_root = crate::workspace::record::read_optional(&paths.workspace_record)
             .ok()
             .flatten()
             .map(|record| record.project_root);
-        Self::load_at(project_root.as_deref(), || {
-            jiff::Zoned::now().with_time_zone(MachineConfig::load_lenient().time_zone())
-        })
+        Self::load_at(project_root.as_deref())
     }
 
     /// Whether a wait is armed for the agent whose session `kind`/`session`
@@ -492,7 +476,7 @@ impl SessionWaits {
         })
     }
 
-    fn load_at(project_root: Option<&Path>, now: impl FnOnce() -> jiff::Zoned) -> Self {
+    fn load_at(project_root: Option<&Path>) -> Self {
         let empty = Self {
             waits: BTreeMap::new(),
             paths: None,
@@ -507,7 +491,7 @@ impl SessionWaits {
             return empty;
         }
         Self {
-            waits: pending_waits_by_session(&TaskCatalog::load_lenient(Some(root)), root, &now()),
+            waits: pending_waits_by_session(&TaskCatalog::load_lenient(Some(root)), root),
             paths: Some(paths),
         }
     }

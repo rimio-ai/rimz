@@ -1052,7 +1052,7 @@ fn removed_agents_tables_fail_fast_with_the_rename() {
              spec = \"claude\"\n\
              prompt = \"wait\"\n\
              root = \"/repo\"\n\
-             at = \"07:00\"\n",
+             every = \"1h\"\n",
             "loop.toml",
         ),
     ] {
@@ -1673,14 +1673,13 @@ fn loop_tasks_parse_and_default_empty() {
         "[tasks.morning]\n\
              args = [\"rimz\", \"agents\", \"claude\", \"triage\"]\n\
              root = \"/home/me/app\"\n\
-             at = \"07:00\"\n\
-             every = \"weekdays\"\n\
+             cron = \"0 7 * * 1-5\"\n\
              timeout = \"5m\"\n\
              [tasks.self_wait]\n\
              wait = { kind = \"claude\", session = \"sess-1\", handle = \"@planner\" }\n\
              prompt = \"pick up the review\"\n\
              root = \"/home/me/app\"\n\
-             at = \"07:00\"\n",
+             fire-at = \"2026-06-01T07:00:00Z\"\n",
     ))
     .expect("load");
     let entry = config.r#loop.tasks.0.get("morning").expect("morning task");
@@ -1688,10 +1687,9 @@ fn loop_tasks_parse_and_default_empty() {
     assert_eq!(entry.wait, None);
     assert_eq!(entry.refused, None);
     assert_eq!(entry.root, std::path::Path::new("/home/me/app"));
-    assert_eq!(entry.at.as_deref(), Some("07:00"));
-    assert_eq!(entry.every.as_deref(), Some("weekdays"));
+    assert_eq!(entry.cron.as_deref(), Some("0 7 * * 1-5"));
     assert_eq!(entry.timeout.as_deref(), Some("5m"));
-    assert_eq!(entry.cron, None);
+    assert_eq!(entry.every, None);
 
     let bound = config.r#loop.tasks.0.get("self_wait").expect("bind task");
     assert!(bound.args.is_empty());

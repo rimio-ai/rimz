@@ -103,7 +103,7 @@ impl FromStr for ClockTime {
 }
 
 /// A weekday by its English name or a common abbreviation, in any case.
-pub(crate) fn parse_weekday(token: &str) -> Option<jiff::civil::Weekday> {
+fn parse_weekday(token: &str) -> Option<jiff::civil::Weekday> {
     use jiff::civil::Weekday;
     match token.trim().to_ascii_lowercase().as_str() {
         "mon" | "monday" => Some(Weekday::Monday),

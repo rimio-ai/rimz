@@ -582,6 +582,56 @@ fn a_stored_fresh_worktree_row_refuses_alone_beside_its_neighbour() {
     assert!(fired.exists(), "the neighbour of a refused row still fires");
 }
 
+/// A row with an `at` key, and one whose `every` is a day list, each list as an invalid row
+/// while the row beside them still loads and fires.
+#[test]
+fn clock_rows_outside_fire_at_every_and_cron_list_as_invalid_beside_a_valid_row() {
+    let env = live_room();
+    let fired = env.home_root.join("fired");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.morning]\nroot = {root:?}\nat = '07:00'\ntimeout = '1m'\nargs = ['true']\n\
+             [tasks.weekdays]\nroot = {root:?}\nevery = 'weekday'\ntimeout = '1m'\nargs = ['true']\n\
+             [tasks.good]\nroot = {root:?}\nevery = '1h'\ntimeout = '1m'\nargs = ['touch', {fired:?}]\n",
+            root = env.project_root,
+            fired = fired.display().to_string()
+        ),
+    );
+    let list = env.rimz().args(["loop", "list"]).output().unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&list.stdout),
+        String::from_utf8_lossy(&list.stderr)
+    );
+    assert!(list.status.success(), "{text}");
+    assert!(
+        text.contains("loop task `morning` is not a row this RimZ takes (unknown field `at`"),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.trim_start().starts_with("weekdays")
+                && line.contains(
+                    "invalid: schedule `weekdays` has an invalid `every` value `weekday`"
+                )),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.trim_start().starts_with("good") && !line.contains("invalid")),
+        "{text}"
+    );
+    assert_eq!(
+        run_and_report(&env, "good").result,
+        LoopRunResult::Completed
+    );
+    assert!(
+        fired.exists(),
+        "the neighbour of an invalid row still fires"
+    );
+}
+
 /// The exec request of the agent pane a launch under a fire opened, from its traced layout.
 #[cfg(unix)]
 pub(super) fn launched_pane_request(

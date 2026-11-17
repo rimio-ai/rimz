@@ -7,7 +7,7 @@ Cron and a `while` loop know only a clock. They cannot fire when a pull request 
 `rimz loop` is the same clock with the room behind it. A room is RimZ's multiplexer session for one project, which `rimz start` opens: the panes of its agents, and the sidebar column that shows what each one is doing. A task is a name, one trigger, and one thing to launch: a shell command, a workflow, an agent, or a team. The trigger decides when the task fires, and the kind decides what the fire starts. To start an agent, name it with `--agent` and give the launch's arguments after `--`, as you would after `rimz agents claude`:
 
 ```sh
-rimz loop add deps --agent claude --every mon --at 09:00 -- "Check for outdated dependencies. Open a PR for the safe minor and patch bumps, and list any majors that need review." -w
+rimz loop add deps --agent claude --cron '0 9 * * mon' -- "Check for outdated dependencies. Open a PR for the safe minor and patch bumps, and list any majors that need review." -w
 ```
 
 The trigger is a clock, a signal, or a condition on the room's state. This page takes each in turn, then shows how to read what a task did, how to undo it, and the reflexes that keep unattended agents running.
@@ -38,7 +38,7 @@ The last two lines matter before your first task. A task belongs to the project 
 
 A task's command runs at the project root, even when you add it from a linked worktree. To keep its work off the tree you are editing, give the task `-w <name>`: every fire runs in the RimZ-owned worktree of that name, which the first fire creates when it is missing. For a fresh tree each fire, have the command make one with [`rimz worktree new`](./worktrees.md), or make the task an agent or team task with a bare `-w` in its arguments, [below](#start-an-agent-from-a-task). The name is optional: leave it out and the receipt prints the `loop-<petname>` name it chose.
 
-A clock repeats only with `--every` or `--cron`. A bare time (`--at 07:00`, `--at 'fri 09:30'`, `--in 30m`) fires once, and then the task removes itself. [Every schedule shape](#every-schedule-shape) lists them all.
+A clock repeats only with `--every` or `--cron`. A time (`--at 07:00`, `--at 'fri 09:30'`) or a delay (`--in 30m`) fires once, and then the task removes itself. [Every schedule shape](#every-schedule-shape) lists them all.
 
 ## Start an agent from a task
 
@@ -63,8 +63,8 @@ rimz trust grant --agents claude
 Then add the tasks:
 
 ```sh
-rimz loop add sweep --agent claude --every day --at 02:00 -- -p --timeout 1h "Scan the repository for cheap improvements and open a PR for each one worth fixing." -w
-rimz loop add review-team --team recon --every weekday --at 09:00 -- "Review yesterday's merges and propose focused follow-up." -w
+rimz loop add sweep --agent claude --cron '0 2 * * *' -- -p --timeout 1h "Scan the repository for cheap improvements and open a PR for each one worth fixing." -w
+rimz loop add review-team --team recon --cron '0 9 * * 1-5' -- "Review yesterday's merges and propose focused follow-up." -w
 ```
 
 A team whose lane already holds a closed cohort needs `--continue` or `--fresh` among its arguments, as `rimz teams launch` does from a shell.
@@ -256,7 +256,7 @@ Pause, disable, and enable belong to this machine and never edit the task's defi
 
 `rimz loop add` writes a task definition and starts no process.
 
-A repeating task goes into `~/.rimz/loop.toml`. Like your crontab, it belongs to this machine, and a cloned repository never brings one with it. The file is plain TOML, and `rimz loop add deps --agent claude --every mon --at 09:00 -- "Check for outdated dependencies." -w` lands as:
+A repeating task goes into `~/.rimz/loop.toml`. Like your crontab, it belongs to this machine, and a cloned repository never brings one with it. The file is plain TOML, and `rimz loop add deps --agent claude --cron '0 9 * * mon' -- "Check for outdated dependencies." -w` lands as:
 
 ```toml
 [tasks.deps]
@@ -264,8 +264,7 @@ kind = "agent"
 target = "claude"
 args = ["Check for outdated dependencies.", "-w"]
 root = "/home/you/code/app"
-at = "09:00"
-every = "mon"
+cron = "0 9 * * mon"
 ```
 
 A task holds the keys `rimz loop add` writes, plus a few you set by hand, such as `dir`. A task with a key RimZ does not know does not fire, and `rimz loop list` shows it under NEEDS YOU as `invalid` with the reason. Delete it and add it again with `rimz loop add`. The other tasks in the file keep firing.
@@ -306,7 +305,7 @@ A wait lasts until it fires, is canceled, or its agent ends. `rimz agents restar
 To wake a teammate on a clock instead, make the task's command a [message](./messaging.md):
 
 ```sh
-rimz loop add standup --every weekday --at 09:00 -- rimz message @planner "Post today's plan to #dev"
+rimz loop add standup --cron '0 9 * * 1-5' -- rimz message @planner "Post today's plan to #dev"
 ```
 
 A team can also wake its own members on a signal through [signal bindings](./teams.md#define-your-own-team).
@@ -317,14 +316,13 @@ Each task names one trigger and one command after `--`.
 
 | Shape | Flags | Repeats? | Example |
 | --- | --- | --- | --- |
-| One-shot | a bare `--at` (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`), or `--in <delay>` | fires once, then the task removes itself | `--in 30m` |
+| One-shot | `--at` (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`), or `--in <delay>` | fires once, then the task removes itself | `--in 30m` |
 | Interval | `--every <duration>`, measured from the last fire | yes | `--every 15m` |
-| Calendar | `--every <days> --at HH:MM`, where days is `day`, `weekday`, `weekend`, a range `mon-fri`, or a list `mon,wed,fri` | on each matching day | `--every weekday --at 07:00` |
 | Raw cron | `--cron`, a five-field expression with names such as `mon-fri` and steps, or a macro such as `@daily` | per the expression | `--cron "*/15 * * * *"` |
 | Signal | `--signal <name-or-family>`, narrowed with `--match key=value` ([above](#fire-on-a-signal)) | once, or on every delivering signal with `--repeat` | `--signal ci.failed`, `--signal 'ci.*'` |
 | Condition | `--when <expr>`, held with `--for <duration>` ([above](#wait-for-done-and-green)) | once, or each time it turns true again with `--repeat` | `--when 'pr[feat-x]=merged'` |
 
-`--every 1d` is an interval: it fires a day after the last fire and drifts with it. `--every day --at 07:00` fires at 07:00 each day. Calendar times, `--at`, and cron use the top-level `timezone` setting, or the system zone when it is unset. Every command and flag is in the [loop CLI reference](../reference/cli/loop.md).
+`--every 1d` is an interval: it fires a day after the last fire and drifts with it. `--cron '0 7 * * *'` fires at 07:00 each day, and `--cron '0 7 * * 1-5'` on weekdays only. `--at` times and cron use the top-level `timezone` setting, or the system zone when it is unset. Every command and flag is in the [loop CLI reference](../reference/cli/loop.md).
 
 ## Keep the fleet moving
 
@@ -402,7 +400,7 @@ A task's agent runs inside the room, so its prompt can use every other RimZ comm
 
 ```sh
 # 02:00 every night: a triage that fans out and opens PRs
-rimz loop add nightly --agent claude --every day --at 02:00 -- -p --timeout 4h --budget 5 \
+rimz loop add nightly --agent claude --cron '0 2 * * *' -- -p --timeout 4h --budget 5 \
     "Scan the repository for bugs and cheap improvements. For each one worth fixing, \
 run a codex -p subagent in its own worktree, review its diff, and open a PR." -w
 ```
