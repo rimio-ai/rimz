@@ -930,6 +930,9 @@ fn a_steer_of_a_message_waiting_on_an_unreadable_listing_names_the_listing() {
         stderr(&steer)
     );
     assert_eq!(typed(&env), Vec::<String>::new(), "{:#?}", trace(&env));
+    let after = only_message(&env);
+    assert_eq!(after.status, MessageStatus::Queued, "{after:?}");
+    assert_eq!(after.attempts, waiting.attempts, "{after:?}");
 }
 
 /// A fresh `--interrupt` the lookup parks names the lookup's cause and offers no `message
