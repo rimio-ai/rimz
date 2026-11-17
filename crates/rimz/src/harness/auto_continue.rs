@@ -292,7 +292,7 @@ fn resume_park(
     match class {
         TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit => {
             let deadline =
-                capacity?.latest_spent_window_reset_for_model(now, agent.model.as_deref())?;
+                capacity?.latest_spent_window_reset_for_model(now, agent.current_model())?;
             Some(ResumeArm::RateLimit { deadline })
         }
         TurnErrorClass::PausedOverloaded => Some(ResumeArm::Overloaded {
@@ -543,7 +543,7 @@ fn capacity_recovered(
     now: Timestamp,
 ) -> bool {
     capacity.is_some_and(|capacity| {
-        capacity.subscription_budget_available_for_model(now, agent.model.as_deref())
+        capacity.subscription_budget_available_for_model(now, agent.current_model())
     })
 }
 

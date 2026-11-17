@@ -84,6 +84,16 @@ fn window_triggers_refuse_at_add_in_order() {
         refusal.to_string(),
         "no current claude 5h window reading; open the room's sidebar or run `rimz accounts --refresh`"
     );
+    // A model refusal record is no window reading.
+    std::fs::write(
+        runtime.shared_model_refusals_path(),
+        r#"{"logins":{"claude@default":{"fable 5.2":{"refused_at":"2033-05-18T03:00:00Z"}}}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        at_add(Some("claude"), five, &native),
+        Err(WindowRefusal::NoReading { .. })
+    ));
     publish_windows(&runtime, "claude", vec![window(Some(30), -60, five)]);
     assert!(matches!(
         at_add(Some("claude"), five, &native),

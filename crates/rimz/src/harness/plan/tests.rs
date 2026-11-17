@@ -749,6 +749,58 @@ fn launch_availability_matches_aliases_to_model_sub_caps() {
 }
 
 #[test]
+fn launch_availability_skips_a_refused_model_with_no_reset() {
+    let root = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(root.path());
+    let runtime = RuntimePaths::under(id.clone(), root.path()).unwrap();
+    let state = StatePaths::under(id, root.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &crate::agents::account::RateLimitsCache::shared_path(&runtime),
+        &crate::agents::account::RateLimitsCache {
+            entries: [(
+                crate::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")).into(),
+                crate::agents::account::RateLimitCacheEntry {
+                    limits: crate::agents::AgentRateLimits {
+                        windows: vec![crate::agents::RateLimitWindow {
+                            used_percentage: Some(20),
+                            duration_mins: Some(300),
+                            resets_at: Some(now + jiff::SignedDuration::from_hours(1)),
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    std::fs::write(
+        runtime.shared_model_refusals_path(),
+        r#"{"logins":{"claude@default":{"fable 5.2":{"refused_at":"2033-05-18T03:00:00Z"}}}}"#,
+    )
+    .unwrap();
+    let availability = LaunchAvailability::read(&runtime, &state, &MachineConfig::default(), now);
+    for model in ["fable", "claude-fable-5-2"] {
+        assert_eq!(
+            availability.unavailable("claude", model),
+            Some(TierSkipReason::Exhausted { until: None }),
+            "{model}"
+        );
+    }
+    for model in ["claude-fable-5-5", "opus"] {
+        assert!(
+            availability.unavailable("claude", model).is_none(),
+            "{model}"
+        );
+    }
+    assert!(availability.unavailable("codex", "fable").is_none());
+}
+
+#[test]
 fn launch_availability_follows_the_spend_ladder() {
     use crate::agents::{ExtraCredits, RateLimitWindow, RateLimitWindowScope, ResetCredits};
     use crate::config::SpendOrder;

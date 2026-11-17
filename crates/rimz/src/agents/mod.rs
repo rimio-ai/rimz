@@ -33,6 +33,7 @@ pub(crate) mod managed_json_hooks;
 mod managed_source;
 pub(crate) mod managed_statusline;
 pub mod model_display;
+mod model_refusal;
 mod observation;
 mod open_ask;
 pub mod pane_title;

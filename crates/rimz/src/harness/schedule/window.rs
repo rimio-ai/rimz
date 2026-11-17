@@ -103,8 +103,10 @@ fn window_at_add(
         return Err(WindowRefusal::ManagedAccount { kind: owned() });
     }
     let key = login.ok_or_else(|| WindowRefusal::NoAccount { kind: owned() })?;
-    let capacity =
-        ProviderCapacity::read(runtime, key).ok_or_else(|| WindowRefusal::NoReading {
+    // A login's model refusals read without its usage entry; with no windows there is no reading.
+    let capacity = ProviderCapacity::read(runtime, key)
+        .filter(|capacity| !capacity.windows.is_empty())
+        .ok_or_else(|| WindowRefusal::NoReading {
             kind: owned(),
             span,
         })?;

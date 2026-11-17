@@ -1814,3 +1814,64 @@ fn a_pass_reads_the_credits_cache_once_and_only_for_a_spent_window() {
         "the next pass reads the paid extra usage that now carries the login"
     );
 }
+
+#[test]
+fn a_refused_model_stops_the_ping_at_the_producer_and_the_helper_until_it_clears() {
+    let mut agent = sleeping();
+    agent.model = Some("claude-opus-4-6".into());
+    let unspent = vec![usage_window(Some(40), 9_000, 300, None)];
+    let refused: RoomCapacities<'static> = BTreeMap::from([(
+        agent.login_key(),
+        ProviderCapacity::from_windows(unspent.clone()).with_refusal(
+            "claude-opus-4-6",
+            ts(0),
+            "Opus 4.6 requires usage credits.",
+        ),
+    )])
+    .into();
+    assert_eq!(producer_fires(&agent, &refused), (0, false));
+    assert_eq!(
+        producer_fires(&agent, &capacities(&agent, unspent.clone())),
+        (1, true)
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut agent = idle();
+    agent.profile = Some("warm".into());
+    agent.model = Some("claude-opus-4-6".into());
+    let snapshot = paned(&agent, workspace_id, 3540);
+    let config = HarnessConfig::default();
+    let held = policy(Some(KeepWarm::For(TWO_HOURS)), None);
+    let mut requests = Vec::new();
+    keepalive_agents_with(
+        &snapshot,
+        &runtime,
+        &RoomCapacities::default(),
+        &config,
+        &held,
+        |request| requests.push(request.clone()),
+    );
+    let [request] = requests.as_slice() else {
+        panic!("one fire, got {requests:?}")
+    };
+    let due = || request.target(&snapshot, &runtime, &config, &held, ts(3540));
+    write_capacity(&runtime, &agent, unspent);
+    let record = |succeeded: &str| {
+        format!(
+            r#"{{"logins":{{"{}":{{"opus 4.6":{{"refused_at":"{}"{succeeded}}}}}}}}}"#,
+            agent.login_key(),
+            ts(0)
+        )
+    };
+    std::fs::write(runtime.shared_model_refusals_path(), record("")).unwrap();
+    assert!(due().is_none(), "the helper's recheck reads the refusal");
+    std::fs::write(
+        runtime.shared_model_refusals_path(),
+        record(&format!(r#","succeeded_at":"{}""#, ts(60))),
+    )
+    .unwrap();
+    assert!(due().is_some(), "a cleared refusal pings again");
+}

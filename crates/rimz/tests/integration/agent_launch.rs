@@ -4148,6 +4148,7 @@ impl RestartChild {
                     parent_agent_id: Some(parent_id.clone()),
                     parent_agent_kind: Some(kind.clone()),
                     launch_depth: Some(1),
+                    model: Some("claude-fable-5-2".to_owned()),
                     ..Default::default()
                 },
             ),
@@ -4411,6 +4412,57 @@ fn restart_refuses_a_continue_on_a_spent_account_before_touching_any_pane() {
     let run = fixture.run_now();
     assert_eq!(run.status, rimz::store::run::RunStatus::Running);
     assert_eq!(run.handed_over_from, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_refuses_a_continue_on_a_model_the_account_refuses() {
+    let Some(fixture) = RestartChild::new(true) else {
+        return;
+    };
+    let reset = jiff::Timestamp::now() + std::time::Duration::from_secs(2 * 3600);
+    let mut cache = rimz::agents::account::RateLimitsCache::default();
+    cache.entries.insert(
+        rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")).into(),
+        rimz::agents::account::RateLimitCacheEntry {
+            limits: rimz::agents::AgentRateLimits {
+                windows: vec![rimz::agents::RateLimitWindow {
+                    used_percentage: Some(20),
+                    duration_mins: Some(300),
+                    resets_at: Some(reset),
+                    ..Default::default()
+                }],
+            },
+            ..Default::default()
+        },
+    );
+    fixture.env.runtime_paths().ensure_dirs().unwrap();
+    fixture.env.publish_rate_limits(&cache);
+    std::fs::write(
+        fixture
+            .env
+            .rimz_home()
+            .join("cache/providers/model_refusals.v1.json"),
+        r#"{"logins":{"claude@default":{"fable 5.2":{"refused_at":"2026-11-17T09:00:00Z"}}}}"#,
+    )
+    .unwrap();
+    let output = fixture.restart(&[], None);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "restart refused: the provider refuses Fable 5.2 on claude account `default`, so the \
+             continue for @still-silver's interrupted turn would stop again; pass `--account \
+             <other>` to run it on another account, or `--no-continue` to reopen it at rest"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("is spent"), "{stderr}");
+    assert!(
+        fixture.pane_actions().is_empty(),
+        "{:?}",
+        fixture.pane_actions()
+    );
 }
 
 #[cfg(unix)]

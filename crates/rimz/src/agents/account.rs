@@ -28,6 +28,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use super::model_refusal::{ModelRefusal, ModelRefusals};
 use super::{AgentAccount, RoomLoginSet, find_definition};
 use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
 use crate::RuntimePaths;
@@ -269,21 +270,33 @@ impl AccountUsageIdentity {
 /// Provider-account subscription capacity for one agent kind. Kind-wide
 /// windows drive general harness policy; exact bindings opt a managed launch
 /// into account-specific controls. Named and durationless quotas remain
-/// display data in the cache.
+/// display data in the cache. The login's model refusals ride along, so every
+/// reader vetoes a refused model as it vetoes a spent model sub-cap.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProviderCapacity {
     pub(crate) windows: Vec<RateLimitWindow>,
     pacing_max_mins: Option<u32>,
+    refusals: BTreeMap<String, ModelRefusal>,
 }
 
 impl ProviderCapacity {
-    /// Read one kind-wide capacity from the shared provider cache.
+    /// Read one kind-wide capacity from the shared provider cache. The login's model refusals
+    /// load apart from its usage entry, so a refusal still vetoes while that entry is missing.
     pub fn read(runtime: &RuntimePaths, key: &LoginKey) -> Option<Self> {
         let cache = read_rate_limits_cache(&RateLimitsCache::shared_path(runtime));
-        let entry = cache.entries.get(&key.clone().into())?;
-        entry.scope.is_kind_wide().then(|| Self {
-            windows: entry.limits.windows.clone(),
+        let windows = cache
+            .entries
+            .get(&key.clone().into())
+            .filter(|entry| entry.scope.is_kind_wide())
+            .map(|entry| entry.limits.windows.clone());
+        let refusals = ModelRefusals::read(&runtime.shared_model_refusals_path()).login(key);
+        if windows.is_none() && refusals.is_empty() {
+            return None;
+        }
+        Some(Self {
+            windows: windows.unwrap_or_default(),
             pacing_max_mins: None,
+            refusals,
         })
     }
 
@@ -307,40 +320,99 @@ impl ProviderCapacity {
                 .windows
                 .clone(),
             pacing_max_mins: Some(7 * 24 * 60),
+            refusals: BTreeMap::new(),
         })
     }
 
-    /// Read all kind-wide capacities from the shared provider cache once.
+    /// Read all kind-wide capacities from the shared provider cache once, plus a refusal-only
+    /// capacity for each login in use whose refusals stand without a usage entry.
     pub(crate) fn read_all(
         runtime: &RuntimePaths,
         logins: &RoomLoginSet,
     ) -> BTreeMap<LoginKey, Self> {
         let in_use = logins.keys_in_use();
-        read_rate_limits_cache(&RateLimitsCache::shared_path(runtime))
-            .entries
-            .into_iter()
-            .filter(|(key, entry)| {
-                key.scope.is_kind_wide()
-                    && entry.scope.is_kind_wide()
-                    && in_use.contains(&key.login)
-            })
-            .map(|(key, entry)| {
-                (
-                    key.login,
+        let mut refusals = ModelRefusals::read(&runtime.shared_model_refusals_path()).logins;
+        let mut capacities: BTreeMap<_, _> =
+            read_rate_limits_cache(&RateLimitsCache::shared_path(runtime))
+                .entries
+                .into_iter()
+                .filter(|(key, entry)| {
+                    key.scope.is_kind_wide()
+                        && entry.scope.is_kind_wide()
+                        && in_use.contains(&key.login)
+                })
+                .map(|(key, entry)| {
+                    let refusals = refusals.remove(&key.login).unwrap_or_default();
+                    (
+                        key.login,
+                        Self {
+                            windows: entry.limits.windows,
+                            pacing_max_mins: None,
+                            refusals,
+                        },
+                    )
+                })
+                .collect();
+        // A login with refusals and no usage entry still carries its veto.
+        for (login, refusals) in refusals {
+            if in_use.contains(&login) {
+                capacities.insert(
+                    login,
                     Self {
-                        windows: entry.limits.windows,
-                        pacing_max_mins: None,
+                        refusals,
+                        ..Self::default()
                     },
-                )
-            })
-            .collect()
+                );
+            }
+        }
+        capacities
     }
 
     pub(crate) fn from_windows(windows: Vec<RateLimitWindow>) -> Self {
         Self {
             windows,
             pacing_max_mins: None,
+            refusals: BTreeMap::new(),
         }
+    }
+
+    /// This reading with `model`'s refusal recorded at `at`, as a test fixture writes it.
+    #[cfg(test)]
+    pub(crate) fn with_refusal(mut self, model: &str, at: Timestamp, label: &str) -> Self {
+        self.refusals.insert(
+            super::model_refusal::model_key(model),
+            ModelRefusal {
+                refused_at: at,
+                succeeded_at: None,
+                label: Some(label.to_owned()),
+            },
+        );
+        self
+    }
+
+    /// The login's record for `model`, standing or cleared. A version-less key (a bare family
+    /// alias such as `fable`) stands for whichever version the provider serves, on either side:
+    /// a version-less name reads its own entry and every recorded version of its family, and a
+    /// versioned name its own entry and its family's version-less one. Among those the standing
+    /// record wins, then the newest refusal; the exact entry gets no precedence.
+    pub(crate) fn refusal(&self, model: Option<&str>) -> Option<&ModelRefusal> {
+        use super::model_refusal::is_version_of;
+        let key = super::model_refusal::model_key(model?);
+        let versionless = |name: &str| !name.bytes().any(|byte| byte.is_ascii_digit());
+        self.refusals
+            .iter()
+            .filter(|(recorded, _)| {
+                **recorded == key
+                    || (versionless(&key) && is_version_of(recorded, &key))
+                    || (versionless(recorded) && is_version_of(&key, recorded))
+            })
+            .map(|(_, refusal)| refusal)
+            .max_by_key(|refusal| (refusal.stands(), refusal.refused_at))
+    }
+
+    /// Whether the provider refuses `model` on this login: its record stands.
+    pub fn model_refused(&self, model: Option<&str>) -> bool {
+        self.refusal(model).is_some_and(ModelRefusal::stands)
     }
 
     pub(crate) fn projected_windows(
@@ -421,6 +493,7 @@ impl ProviderCapacity {
         model: Option<&str>,
     ) -> bool {
         self.subscription_budget_available(now)
+            && !self.model_refused(model)
             && self
                 .model_windows(model)
                 .all(|window| !window_spent_unreset(window, now))
@@ -428,11 +501,12 @@ impl ProviderCapacity {
 
     /// Whether this reading of `agent`'s own login has a spent window blocking its model at
     /// `now`, the test the keep-warm ping reads: a 5-hour or weekly window at 100% with its reset
-    /// ahead or unknown, or a spent sub-cap for the agent's model. Paid extra usage is not read,
+    /// ahead or unknown, or a spent sub-cap or a standing refusal for the agent's current model
+    /// ([`super::AgentState::current_model`]). Paid extra usage is not read,
     /// so a window it would carry still counts as spent. A window with no known percentage is
     /// not spent.
     pub(crate) fn window_spent(&self, agent: &super::AgentState, now: Timestamp) -> bool {
-        self.subscription_exhausted_for_model(now, agent.model.as_deref())
+        self.subscription_exhausted_for_model(now, agent.current_model())
     }
 
     /// [`ProviderCapacity::window_spent`] on `agent`'s login, read now from `runtime`'s shared
@@ -458,7 +532,7 @@ impl ProviderCapacity {
         now: Timestamp,
         paid_carries: impl FnOnce() -> bool,
     ) -> bool {
-        self.model_exhausted(now, agent.model.as_deref())
+        self.model_exhausted(now, agent.current_model())
             || (self.subscription_exhausted_for_model(now, None) && !paid_carries())
     }
 
@@ -491,18 +565,17 @@ impl ProviderCapacity {
             || self.model_exhausted(now, model)
     }
 
+    /// Whether `model` cannot run on this login now: a spent sub-cap, or a standing refusal.
     pub(crate) fn model_exhausted(&self, now: Timestamp, model: Option<&str>) -> bool {
-        self.model_windows(model)
-            .any(|window| window_spent_unreset(window, now))
+        self.model_refused(model)
+            || self
+                .model_windows(model)
+                .any(|window| window_spent_unreset(window, now))
     }
 
     fn model_windows(&self, model: Option<&str>) -> impl Iterator<Item = &RateLimitWindow> {
         let model = model.map(|model| {
-            let id = super::all_definitions()
-                .flat_map(|definition| definition.spec().launch.definitions.models)
-                .find(|entry| entry.name == model)
-                .map_or(model, |entry| entry.id);
-            crate::agents::model_display::display_model(id).to_ascii_lowercase()
+            crate::agents::model_display::display_model(launch_model_id(model)).to_ascii_lowercase()
         });
         self.windows.iter().filter(move |window| {
             let Some(family) = window
@@ -568,6 +641,14 @@ impl ProviderCapacity {
             .cloned()
             .map(move |window| window.projected_at(now))
     }
+}
+
+/// The model id a catalog launch alias names (`opus`), or `model` itself.
+pub(super) fn launch_model_id(model: &str) -> &str {
+    super::all_definitions()
+        .flat_map(|definition| definition.spec().launch.definitions.models)
+        .find(|entry| entry.name == model)
+        .map_or(model, |entry| entry.id)
 }
 
 fn entry_matches_binding(entry: &RateLimitCacheEntry, binding: &ProviderAccountBinding) -> bool {
