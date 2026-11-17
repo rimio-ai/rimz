@@ -113,7 +113,9 @@ fn open_delivery(
         return Ok(None);
     };
     let snapshot = ctx.fold_agent_context(ctx.resolution_snapshot()?);
-    let mut check = deliver::explain(
+    let (mut check, mut verdict) = deliver::explain_before_claim(
+        &ctx.workspace,
+        &ctx.store,
         record,
         live_messages,
         &snapshot,
@@ -122,7 +124,6 @@ fn open_delivery(
     );
     let agents = rimz::address::addressable_agents(&snapshot);
     let target = message_target(message, &agents);
-    let verdict = check.verdict();
     let audit_receiver = if verdict == deliver::DeliveryVerdict::ReceiverEnded {
         snapshot
             .agents
@@ -148,9 +149,10 @@ fn open_delivery(
     {
         check.agent.present = true;
         check.agent.ended = true;
+        verdict = check.verdict();
     }
     Ok(Some(MessageDeliveryJson {
-        verdict: render_verdict(&check.verdict(), &target, audit_receiver.as_ref(), now),
+        verdict: render_verdict(&verdict, &target, audit_receiver.as_ref(), now),
         check,
     }))
 }

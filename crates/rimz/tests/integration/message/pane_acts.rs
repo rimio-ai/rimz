@@ -932,6 +932,68 @@ fn a_steer_of_a_message_waiting_on_an_unreadable_listing_names_the_listing() {
     assert_eq!(typed(&env), Vec::<String>::new(), "{:#?}", trace(&env));
 }
 
+/// `message show <id>` on a record its snapshot calls ready asks the lookup once, and its
+/// verdict is the one delivery would reach: ready only while the lookup answers the bound
+/// pane, else the lookup's wait.
+#[test]
+fn message_show_reads_the_verdict_delivery_would_reach_from_the_lookup() {
+    let env = Env::new();
+    let reservation = planner_with_swap(&env);
+    let unreadable = |env: &Env| {
+        let command = acting(env, &[3]);
+        std::fs::write(env.project_root.join("stop-panes.json"), "not a listing").unwrap();
+        command
+    };
+    let output = unreadable(&env)
+        .args(["message", "@planner", "--", "can you hear me"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let id = only_message(&env).message_id;
+    let hold = DeliveryRendezvous::new(&env, "show-read");
+    let show = |during: &dyn Fn()| {
+        let child = acting(&env, &[3, 4])
+            .env("RIMZ_TEST_AGENT_PANE_BEFORE_READ", &hold.path)
+            .args(["message", "show", id.as_str()])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let reads = serve_reads(&hold, during);
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        (String::from_utf8_lossy(&output.stdout).into_owned(), reads)
+    };
+    let ready = "ready: delivery conditions pass";
+
+    let (stdout, reads) = show(&|| {});
+    assert_eq!(reads, 1, "{stdout}");
+    assert!(stdout.contains(ready), "{stdout}");
+
+    let output = unreadable(&env)
+        .args(["message", "show", id.as_str()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        stdout.contains("stuck: receiver pane unreadable: "),
+        "{stdout}"
+    );
+    assert!(!stdout.contains(ready), "{stdout}");
+
+    let (stdout, reads) = show(&|| bind_swap(&env, &reservation, NEW));
+    assert_eq!(reads, 1, "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "stuck: receiver in pane zellij:{NEW}, not its bound pane zellij:{OLD}"
+        )),
+        "{stdout}"
+    );
+    assert!(!stdout.contains(ready), "{stdout}");
+    assert_eq!(typed(&env), Vec::<String>::new(), "{:#?}", trace(&env));
+}
+
 /// The launch's other session holds the pane the lookup answers, not the session asking:
 /// `answer` exits 2 and types into no pane.
 #[test]

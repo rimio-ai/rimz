@@ -264,7 +264,7 @@ Trailing lines report what the view left out:
 
 ### Show one message
 
-`rimz message show <id>` (alias `status`) prints the record's fields (a `premises` row lists what must still hold for the message to be delivered, and a withdrawn message prints the premise that broke as `withdrawn`), its full text by the [agent-prose rule](../cli.md#agent-prose), and its event timeline. For an open message it adds a `DELIVERY CHECK` with rows for an active `typing hold`, `schedule`, `after`, `when`, `fifo`, `agent`, `gate`, `ask`, and `pane`, a verdict naming the first blocker, and the command that clears it when there is one:
+`rimz message show <id>` (alias `status`) prints the record's fields (a `premises` row lists what must still hold for the message to be delivered, and a withdrawn message prints the premise that broke as `withdrawn`), its full text by the [agent-prose rule](../cli.md#agent-prose), and its event timeline. For an open message it adds a `DELIVERY CHECK` with rows for an active `typing hold`, `schedule`, `after`, `when`, `fifo`, `agent`, `gate`, `ask`, and `pane`, a verdict naming the first blocker, and the command that clears it when there is one. When every row passes and the pane carries an agent session, it lists the room's panes once, as delivery does before it claims, and the verdict is `ready: delivery conditions pass` only when the agent is in its bound pane; otherwise it is the wait delivery would reach: `stuck: no live pane`, `stuck: receiver in pane <found>, not its bound pane <bound>`, or `stuck: receiver pane unreadable: <error>`, each followed by `for @coder`:
 
 ```text
 DELIVERY CHECK
