@@ -3,6 +3,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName};
+use rimz::sidebar::produce::hosting::read_hosting;
 use rimz::sidebar_pane::{CardReply, CardRequest, CardTarget};
 use serde::{Deserialize, Serialize};
 
@@ -72,16 +73,21 @@ fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, target: CardTarget) ->
             return Ok(());
         }
     };
-    let snapshot = ctx.cached_snapshot()?;
-    let Some(agent) = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
-        .filter(|agent| agent.pane.is_some())
-    else {
+    let read = match read_hosting(&ctx.workspace, &ctx.store, globals.mux) {
+        Ok(mut read) => {
+            render::room::print_notices(read.take_notices())?;
+            read
+        }
+        Err(mut err) => {
+            render::room::print_notices(std::mem::take(&mut err.notices))?;
+            bail!("sidebar close: {err}; nothing was closed");
+        }
+    };
+    let Some(agent) = read.agent_hosting_of_session(&kind, &agent_id).holder else {
         rimz::mux::backend_for(pane.mux()).close_pane(session, &pane)?;
         return Ok(());
     };
+    let snapshot = ctx.cached_snapshot()?;
     let stop = agents_cmd::stop_resolved(ctx, globals, &snapshot, &[agent])?.remove(0);
     stop.into_result(agent.agent_id.as_str())?;
     if !agents_cmd::offers_resume(&ctx.workspace, agent)
@@ -91,8 +97,8 @@ fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, target: CardTarget) ->
     }
     let mut entries = read_closed(ctx);
     entries.push(ClosedCard {
-        kind,
-        agent_id,
+        kind: agent.kind.clone(),
+        agent_id: agent.agent_id.clone(),
         team: agent.team.clone(),
         role: agent.role.clone(),
         worktree: agents_cmd::resume_worktree_name(&ctx.workspace, agent).map(str::to_owned),
