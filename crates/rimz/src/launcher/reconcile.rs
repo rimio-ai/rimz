@@ -48,7 +48,7 @@ pub(super) fn reconcile_cohort_launch(
     ) {
         crate::harness::resume::CohortRelaunchState::Absent => Ok(Reconciled::Absent),
         crate::harness::resume::CohortRelaunchState::Present {
-            mut focus_pane,
+            focus: mut member,
             leader,
             members,
         } => {
@@ -128,12 +128,13 @@ pub(super) fn reconcile_cohort_launch(
                     target: &target,
                     result: &result,
                 })?;
-                focus_pane = leader.pane.as_ref().map(|pane| pane.pane_id.clone());
+                member = Some((leader.kind.clone(), leader.launch_key().clone()));
             }
             if focus.takes_focus()
-                && let Some(pane_id) = focus_pane
+                && let Some((kind, launch)) = member
             {
-                let focused = focus_existing(workspace, backend, store, pane_id);
+                let focused =
+                    focus_existing(workspace, backend, store, &kind, &launch, interaction);
                 if prompt.is_some() {
                     // The prompt is already sent or queued, so a failed focus must
                     // not exit 1 and invite a retry that sends it twice.
@@ -144,9 +145,10 @@ pub(super) fn reconcile_cohort_launch(
                     }
                     return Ok(Reconciled::PromptDispatched);
                 }
-                focused?;
-                interaction.notice(Notice::Reconcile(&format!("{running}; focused it")))?;
-                return Ok(Reconciled::Done);
+                if focused? {
+                    interaction.notice(Notice::Reconcile(&format!("{running}; focused it")))?;
+                    return Ok(Reconciled::Done);
+                }
             }
             if prompt.is_some() {
                 return Ok(Reconciled::PromptDispatched);
@@ -223,16 +225,45 @@ fn already_running(name: &str, subject: &str, team: Option<&str>) -> String {
     }
 }
 
+/// Focus the pane the lookup finds for the member `(kind, launch)`, its notices passed to
+/// `interaction`; `false` when no listed pane hosts it, or it left its pane during the
+/// wake, so nothing is focused.
 fn focus_existing(
     workspace: &crate::ResolvedWorkspace,
     backend: &dyn crate::mux::MuxBackend,
     store: &crate::Store,
-    pane_id: crate::ids::PaneId,
-) -> Result<()> {
+    kind: &crate::ids::AgentKind,
+    launch: &crate::ids::AgentSessionId,
+    interaction: &mut dyn Interaction,
+) -> Result<bool> {
     let runtime = crate::RuntimePaths::for_project_root(&workspace.project_root)?;
-    crate::harness::hibernate::wake_pane(store, &pane_id)?;
-    crate::mux::focus_anchor::execute_action(backend, &runtime, &workspace.session_name, pane_id)?;
-    Ok(())
+    let mut notices = Vec::new();
+    let found = crate::launcher::agent_pane::find(
+        workspace,
+        store,
+        Some(backend.name()),
+        kind,
+        launch,
+        &mut notices,
+    );
+    for notice in notices {
+        interaction.notice(Notice::Warning(&format!("note: {notice}")))?;
+    }
+    let pane = match found {
+        Ok(pane) => pane,
+        Err(
+            crate::launcher::agent_pane::FindErr::Nowhere
+            | crate::launcher::agent_pane::FindErr::Moved { .. },
+        ) => return Ok(false),
+        Err(err) => bail!("{err}; nothing was focused"),
+    };
+    crate::mux::focus_anchor::execute_action(
+        backend,
+        &runtime,
+        &workspace.session_name,
+        pane.pane_id,
+    )?;
+    Ok(true)
 }
 
 fn launch_fresh(

@@ -233,9 +233,11 @@ pub enum LaneResumeAction {
     List {
         lanes: Vec<LaneSummary>,
     },
+    /// The lane is live: focus the agent `(kind, launch)`, whose pane the caller finds.
     Focus {
         lane_label: String,
-        pane_id: PaneId,
+        kind: AgentKind,
+        launch: AgentSessionId,
     },
     SplitClosed {
         lane_label: String,
@@ -774,7 +776,8 @@ pub struct ResumePlan {
 pub enum CohortRelaunchState {
     Absent,
     Present {
-        focus_pane: Option<PaneId>,
+        /// The member to focus, `(kind, launch)`, whose pane the caller finds.
+        focus: Option<(AgentKind, AgentSessionId)>,
         leader: Option<AgentSessionId>,
         members: Vec<AgentSessionId>,
     },
@@ -1400,10 +1403,13 @@ pub fn plan_lane_resume(
     }
     if closed.is_empty() {
         let agent = live.first().ok_or(LaneResumeError::LiveNoFocus)?;
-        let pane = agent.pane.as_ref().ok_or(LaneResumeError::LiveNoPane)?;
+        if agent.pane.is_none() {
+            return Err(LaneResumeError::LiveNoPane);
+        }
         return Ok(LaneResumeAction::Focus {
             lane_label: lane.display,
-            pane_id: pane.pane_id.clone(),
+            kind: agent.kind.clone(),
+            launch: agent.launch_key().clone(),
         });
     }
     if !closed.iter().any(&session_backed) {
@@ -3634,14 +3640,13 @@ pub fn inspect_cohort_relaunch(
             .filter(|agent| cohort_member_is_present(agent))
             .map(|agent| agent.agent_id.clone())
     });
-    let focus_pane = present
+    let focus = present
         .iter()
         .filter(|agent| agent.pane.is_some())
         .max_by(|left, right| left.last_activity.cmp(&right.last_activity))
-        .and_then(|agent| agent.pane.as_ref())
-        .map(|pane| pane.pane_id.clone());
+        .map(|agent| (agent.kind.clone(), agent.launch_key().clone()));
     CohortRelaunchState::Present {
-        focus_pane,
+        focus,
         leader,
         members: present.iter().map(|agent| agent.agent_id.clone()).collect(),
     }
