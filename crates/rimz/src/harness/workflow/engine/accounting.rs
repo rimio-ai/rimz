@@ -26,6 +26,14 @@ pub(super) fn transition(t: &Transition<'_>, latched: bool) {
         .entries
         .iter()
         .any(|entry| matches!(entry.event, JournalEvent::Route { .. }));
+    // A try's end names the route its answer decided, not the done it ended in.
+    let tried = t.entries.iter().find_map(|entry| match &entry.event {
+        JournalEvent::Terminal {
+            tried: Some(target),
+            ..
+        } => Some(target.as_str()),
+        _ => None,
+    });
     for entry in &t.entries {
         if turn_end
             && matches!(
@@ -147,7 +155,7 @@ pub(super) fn transition(t: &Transition<'_>, latched: bool) {
             let target = match (count, t.record.state) {
                 (Some(_), _) => "@wait",
                 (_, RunState::Parked) => "@user",
-                (_, RunState::Done) => "@done",
+                (_, RunState::Done) => tried.unwrap_or("@done"),
                 (_, RunState::Failed) => "@failed",
                 (_, RunState::Active) if t.record.wait.is_some() => "@wait",
                 _ => &t.record.node,

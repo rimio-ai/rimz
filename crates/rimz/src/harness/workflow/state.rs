@@ -323,6 +323,18 @@ impl Transition<'_> {
         object: Value,
         reason: ParkReason,
     ) -> Result<(), TimeInputErr> {
+        self.route_as(target, object, reason, false)
+    }
+
+    /// Route as [`Self::route`] does, except that a misfit ends a try as it ends any run: a
+    /// definition the run stopped fitting is the run's failure, not the tried node's answer.
+    fn route_as(
+        &mut self,
+        target: &Target,
+        object: Value,
+        reason: ParkReason,
+        misfit: bool,
+    ) -> Result<(), TimeInputErr> {
         if self.record.state.is_terminal() {
             return Ok(());
         }
@@ -340,6 +352,25 @@ impl Transition<'_> {
                 reason,
             });
             self.record.attempt = None;
+            return Ok(());
+        }
+        // A try ends at its node's first answer that is not an unknown wait, whatever the route
+        // would have done; it enters, parks and hands on nothing.
+        if self.record.once
+            && !misfit
+            && !(*target == Target::Wait && object["outcome"] == "unknown")
+        {
+            self.close_wait();
+            self.record.state = RunState::Done;
+            self.record.terminal_at = Some(self.now);
+            self.record.attempt = None;
+            self.push(
+                None,
+                JournalEvent::Terminal {
+                    state: RunState::Done,
+                    tried: Some(target.to_string()),
+                },
+            );
             return Ok(());
         }
         if *target == Target::Wait {
@@ -495,6 +526,12 @@ impl Transition<'_> {
     pub(super) fn fault(&mut self, reason: String) -> Result<(), TimeInputErr> {
         let object = self.engine_object(json!({"outcome":"fault", "reason":reason}));
         self.route(&Target::Failed, object, ParkReason::Invalid)
+    }
+
+    /// End the run failed because its definition stopped fitting it; a try ends so too.
+    pub(super) fn misfit(&mut self, reason: String) -> Result<(), TimeInputErr> {
+        let object = self.engine_object(json!({"outcome":"fault", "reason":reason}));
+        self.route_as(&Target::Failed, object, ParkReason::Invalid, true)
     }
 
     pub(super) fn engine_route(
@@ -751,10 +788,12 @@ impl Transition<'_> {
             }
             self.record.node = verdict.node;
             self.record.entered_at = verdict.entered_at;
-            self.route(
+            // `fit::close` builds the only canceled ending that carries a route, for a misfit.
+            self.route_as(
                 &Target::parse(&verdict.target),
                 verdict.object,
                 verdict.reason,
+                ending.cause == EndCause::Cancel,
             )?;
             if ending.cause == EndCause::Resume {
                 // Journaled at the node the run moved to, after the attempt it ended.
@@ -860,10 +899,12 @@ impl Transition<'_> {
             self.abandon_check("canceled");
             self.record.node = verdict.node;
             self.record.entered_at = verdict.entered_at;
-            self.route(
+            // `fit::close` builds the only canceled ending that carries a route, for a misfit.
+            self.route_as(
                 &Target::parse(&verdict.target),
                 verdict.object,
                 verdict.reason,
+                ending.cause == EndCause::Cancel,
             )?;
             if ending.cause == EndCause::Resume {
                 self.push(

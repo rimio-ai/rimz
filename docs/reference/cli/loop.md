@@ -66,7 +66,7 @@ A launch task's fire starts its launch as a separate process in the fire's check
 
 | Kind | Outcome |
 | --- | --- |
-| workflow | the run's own outcome, recorded when it ends; a launch refused by a live run of the workflow in its checkout (another task's, or one started by hand) is `overlapped`, which is neutral and names that run, and the trigger is not held; any other launch that exits nonzero without starting a run is `error` |
+| workflow | the run's own outcome, recorded when it ends; a launch refused by a live run of the workflow in its checkout (another task's, or one started by hand, never a `workflow run --once` try) is `overlapped`, which is neutral and names that run, and the trigger is not held; any other launch that exits nonzero without starting a run is `error` |
 | agent and team | a published `-p` run or exit `0` is `launched`, which resets strikes, and the `-p` run's own ending is never recorded; exit `125` is the neutral budget skip; any other exit is `error`, a strike, with the launch's error text on the row; a launch ended by a signal is `canceled`. A `launched` fire's receipt and its `loop logs` block (`launched: …`) name what it launched that is alive then: each agent's `@<handle>#<lane>`, or the `-p` run's id |
 
 A workflow run's outcome, recorded after the fire, is written by the settle pass the tick runs once a minute, and before every `rimz loop run`. A fire whose `rimz loop run` died before its launch was settled is recorded by the same pass, `launched` when an agent or a `-p` run carries its fire id and `error` when nothing does.
@@ -606,7 +606,7 @@ In the human table, a condition key used by multiple terms shows a present readi
 Run records refused at the run lock carry `holder` when the lock names one, in the shape `{"pid": 42424, "started_at": "2026-01-01T00:00:00Z"}`. Older records and records without a known holder omit it. Their stored `error` names the policy outcome without a pid or an age. A fire that held the run lock records its own tenure as `run_lock` in the same shape, including when `loop stop` writes on its behalf. Older records and fires that never held the lock omit `run_lock`; human `loop logs` output does not print it. A fire that a live workflow run kept from starting (`overlapped` or `deferred`) carries that run's id as `blocking_run`; other records omit it. Its stored `error` names the run, in one of three shapes:
 
 - `run <id> still active — <outcome>`: the task's own run from an earlier fire is still active.
-- ``run <id> of `<workflow>` was started by hand — skipped``: a run of the task's workflow started by hand in the fire's checkout is live.
+- ``run <id> of `<workflow>` was started by hand — skipped``: a run of the task's workflow started by hand in the fire's checkout is live. A `workflow run --once` try never skips a fire.
 - `workflow run <id> holds the checkout — skipped`: a workflow task's launch was refused by a live run of its workflow in its checkout, which can be another task's run.
 
 A `○ no record` row uses the warning tone, never merges, and never adds `×N`. Its WHEN is the newest refused fire's age; NOTE has `pid <pid>`, the checkout prefix when present, and the usual waiting/skipped counts. TOOK, COST, TOKENS, and MODE are `-` when their columns appear, and this row alone never introduces MODE. It counts as one row toward the heading's row limit; the missing run itself adds no record. These rows are human-only: `--json` still has one entry per real fire and no synthetic missing-run entry.

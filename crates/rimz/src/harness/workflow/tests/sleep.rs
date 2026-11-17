@@ -115,6 +115,34 @@ fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_routed_ou
 }
 
 #[test]
+fn a_try_at_a_sleep_ends_at_its_first_evaluation() {
+    let (_dir, state, mut record) = attempts::setup(SLEEP);
+    record.once = true;
+    update(&state, &record);
+    let tried = advance_sleep(&state, &record);
+    assert_eq!(
+        (
+            tried.state,
+            tried.outcome.map(|outcome| outcome.ending),
+            tried.wait,
+            tried.recheck_at
+        ),
+        (RunState::Done, Some(records::RunEnding::Tried), None, None)
+    );
+    assert_eq!(evaluations(&state, &record)[0]["outcome"], "sleeping");
+    assert_eq!(
+        records::journal(&state.workflow(&record.id))
+            .unwrap()
+            .last()
+            .map(|entry| entry.event.clone()),
+        Some(JournalEvent::Terminal {
+            state: RunState::Done,
+            tried: Some("@wait".into())
+        })
+    );
+}
+
+#[test]
 fn sleep_deadline_clamps_the_wake_and_fails_with_the_failure_input() {
     let (_dir, state, mut record) = attempts::setup(SLEEP);
     record.input = Some(json!({"outcome":"repair", "key":7}));

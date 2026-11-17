@@ -113,6 +113,49 @@ fn a_rest_checked_session_follows_then_on_exit_without_its_rest_check() {
     );
 }
 
+/// A try at a session step stays live through a kept verdict and a push-back, which keep the
+/// session, and ends tried when a verdict leaves the step.
+#[test]
+fn a_try_at_a_session_lives_through_kept_and_pushed_verdicts_and_ends_when_it_closes() {
+    for (answer, action) in [("queued", "kept"), ("pending", "pushed")] {
+        let (dir, state, mut record) =
+            setup(&SESSION.replace("on.done", "on.queued='@wait'\non.done"));
+        record.once = true;
+        update(&state, &record);
+        let host = FakeHost::new();
+        advance_ok(&state, &record.id, &host);
+        check(dir.path(), json!({"outcome":answer}));
+        host.observed.borrow_mut().turn = Some(turn());
+        let mut live = advance_ok(&state, &record.id, &host);
+        assert_eq!(live.state, RunState::Active, "{answer}");
+        assert_eq!(decisions(&state, &record)[0]["action"], action, "{answer}");
+        check(dir.path(), json!({"outcome":"done"}));
+        let mut rest = turn();
+        rest.end.started_at += std::time::Duration::from_secs(5);
+        rest.end.ended_at += std::time::Duration::from_secs(6);
+        host.observed.borrow_mut().turn = Some(rest);
+        live.recheck_at = None;
+        update(&state, &live);
+        let tried = advance_ok(&state, &record.id, &host);
+        assert_eq!(
+            (tried.state, tried.outcome.map(|outcome| outcome.ending)),
+            (RunState::Done, Some(records::RunEnding::Tried)),
+            "{answer}"
+        );
+        assert_eq!(
+            records::journal(&state.workflow(&record.id))
+                .unwrap()
+                .last()
+                .map(|entry| entry.event.clone()),
+            Some(JournalEvent::Terminal {
+                state: RunState::Done,
+                tried: Some("@done".into())
+            }),
+            "{answer}"
+        );
+    }
+}
+
 pub(super) fn turn() -> LeaderTurn {
     LeaderTurn {
         end: TurnEnd {

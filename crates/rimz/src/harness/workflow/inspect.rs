@@ -23,15 +23,21 @@ pub struct Hop {
     pub kind: HopKind,
 }
 
-/// Distinguish routing decisions from resume, visit-reset, park, and terminal markers.
+/// Distinguish routing decisions from start, resume, visit-reset, park, and terminal markers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HopKind {
     Route,
+    /// A start placed by hand (`rimz workflow run --at` or `--input`), at its start node.
+    Start,
     Resume,
     Restart,
     VisitsReset,
-    Park { reason: ParkReason },
-    Terminal { state: RunState },
+    Park {
+        reason: ParkReason,
+    },
+    Terminal {
+        state: RunState,
+    },
 }
 
 impl Hop {
@@ -91,7 +97,8 @@ pub fn hops(spec: &Definition, journal: &[JournalEntry], held: Option<&HeldSessi
 }
 
 /// The latest resume at a node, a `resume --at` that moved the run there or replaced the
-/// attempt it held, or route into it, shared by arrival and park views.
+/// attempt it held, or route into it, or else the hand-placed start there, shared by arrival
+/// and park views.
 /// Active-run extensions do not replace the sender.
 pub fn routing_hop(
     spec: &Definition,
@@ -103,7 +110,7 @@ pub fn routing_hop(
     let mut resumed = None;
     for (index, hop) in hops.iter().cloned().enumerate().rev() {
         match hop.kind {
-            HopKind::Restart if hop.node == node => return Some(hop),
+            HopKind::Restart | HopKind::Start if hop.node == node => return Some(hop),
             HopKind::Resume if hop.node == node => {
                 if replaced_attempt(journal, &hop)
                     || hops[..index]
@@ -282,6 +289,7 @@ fn hop_kind(
                 Some(Target::parse(target)),
             ));
         }
+        JournalEvent::Start { .. } => return Some((HopKind::Start, None, None)),
         JournalEvent::Restart { .. } => return Some((HopKind::Restart, None, None)),
         JournalEvent::Resume { .. } => return Some((HopKind::Resume, None, None)),
         JournalEvent::VisitsReset { outcome, .. } => {

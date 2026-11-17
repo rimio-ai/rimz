@@ -88,13 +88,19 @@ pub enum DefinitionSource<'a> {
 }
 
 /// The arguments a start gives its run, whatever started it.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct StartArgs {
     /// The run's give-up time, for a capacity wait at a step without `admission.give-up`.
     pub give_up: Option<spec::When>,
     /// The run's deadline, in place of the definition's `[workflow].deadline`.
     pub deadline: Option<spec::When>,
     pub capacity: workflow::StartCapacity,
+    /// The node the run starts at, in place of the definition's `start`.
+    pub at: Option<String>,
+    /// The start node's input, as a route would have handed it on, with its `key` the run's.
+    pub input: Option<serde_json::Map<String, serde_json::Value>>,
+    /// The run is a try: it ends at its start node's first route ([`RunRecord::once`]).
+    pub once: bool,
 }
 
 /// What a workflow task's fire hands the `rimz workflow run` it spawns, as
@@ -205,6 +211,7 @@ pub fn create(
             .map(crate::ids::FireId::task)
             .as_ref(),
         &roots,
+        args.once,
     )?;
     let prompt = prompt().map_err(WorkflowErr::Refused)?;
     let id = WorkflowRunId::new();
@@ -291,6 +298,17 @@ fn publish(
             .transpose()
             .map_err(WorkflowErr::Refused)?,
     };
+    let node = match &args.at {
+        Some(node) if spec.node(node).is_none() => {
+            return Err(WorkflowErr::Refused(format!(
+                "unknown workflow node {node}"
+            )));
+        }
+        Some(node) => node.clone(),
+        None => spec.start().to_owned(),
+    };
+    let placed = args.at.is_some() || args.input.is_some();
+    let input = args.input.map(serde_json::Value::Object);
     let mut record = RunRecord {
         version: workflow::VERSION,
         id,
@@ -304,7 +322,7 @@ fn publish(
         task: start.task,
         loop_fire: start.loop_fire,
         manual,
-        once: false,
+        once: args.once,
         spec_dir: (start.origin == RunOrigin::Deployed).then_some(start.spec_dir),
         prompt,
         scope,
@@ -316,10 +334,13 @@ fn publish(
         notes: None,
         state: RunState::Active,
         park: None,
-        node: spec.start().to_owned(),
+        key: input
+            .as_ref()
+            .and_then(|input| input.get("key"))
+            .and_then(|key| serde_json::from_value(key.clone()).ok()),
+        input: input.clone(),
+        node,
         entered_at: now,
-        input: None,
-        key: None,
         recheck_at: None,
         wait: None,
         visits: BTreeMap::new(),
@@ -353,6 +374,7 @@ fn publish(
         &record.workflow,
         task.as_ref(),
         &roots,
+        record.once,
     )?;
     if keeps_notes {
         record.notes = Some(crate::store::notes::allocate(
@@ -366,6 +388,15 @@ fn publish(
         )?);
     }
     workflow::initialize(state, &record, &guard)?;
+    if placed {
+        let entry = JournalEntry {
+            seq: None,
+            at: now,
+            node: record.node.clone(),
+            event: JournalEvent::Start { input },
+        };
+        workflow::append(&state.workflow(&record.id), &entry, &guard)?;
+    }
     Ok(record)
 }
 
@@ -383,16 +414,22 @@ fn agent_definitions() -> crate::config::definitions::LoadedDefinitions {
 }
 
 /// A live run blocks a new one on the same scope when it shares the new run's origin and name,
-/// or its task, so a task cannot dodge overlap by changing what it runs.
+/// or its task, so a task cannot dodge overlap by changing what it runs. A try (`once`) never
+/// blocks and is never blocked.
 fn refuse_existing(
     state: &StatePaths,
     origin: RunOrigin,
     name: &str,
     task: Option<&crate::ids::TaskId>,
     roots: &ScopeRoots,
+    once: bool,
 ) -> Result<()> {
+    if once {
+        return Ok(());
+    }
     match workflow::live_runs(state)?.into_iter().find(|r| {
         !r.state.is_terminal()
+            && !r.once
             && r.scope.path == roots.path(r.scope.kind)
             && ((r.origin == origin && r.workflow == name)
                 || task.is_some_and(|task| r.ran_for(task)))
@@ -508,6 +545,7 @@ pub(super) fn outcome(
     acted: bool,
 ) -> workflow::RunOutcome {
     let ending = match record.state {
+        RunState::Done if record.once => workflow::RunEnding::Tried,
         RunState::Done => workflow::RunEnding::Done,
         RunState::Canceled => workflow::RunEnding::Canceled,
         _ => failure(journal),
@@ -2087,6 +2125,12 @@ pub fn resume(
             return Err(WorkflowErr::Refused(
                 "terminal workflow runs cannot resume".into(),
             ));
+        }
+        if at.is_some() && record.once {
+            return Err(WorkflowErr::Refused(format!(
+                "workflow run {id} is a try, which ends at its node and cannot be moved; cancel \
+                 it with `rimz workflow cancel {id}`"
+            )));
         }
         if let Some(node) = at
             && spec.node(node).is_none()

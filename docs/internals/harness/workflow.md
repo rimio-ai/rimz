@@ -219,12 +219,13 @@ Validation enforces each of these, and the engine the last. Each row says why th
 
 `engine::create` admits a run in this order:
 
-1. Compare every nonterminal run against the candidate. A run blocks when its scope path (`RunRecord.scope.path`) is the path `ScopeRoots::path` gives for that run's own scope kind, and it shares the candidate's origin and name, or its task. A match is the typed `WorkflowErr::Exists`.
+1. Compare every nonterminal run against the candidate, unless the candidate is a try (`StartArgs::once`, from `run --once`). A run blocks when it is not a try, when its scope path (`RunRecord.scope.path`) is the path `ScopeRoots::path` gives for that run's own scope kind, and it shares the candidate's origin and name, or its task. A match is the typed `WorkflowErr::Exists`.
 2. Read the prompt. An inline definition is written into the new run's `definition/` here (`seal_definition`, which creates the run's directory). A deployed run copies nothing. No record exists yet.
 3. Read the definition bytes, load them through `spec::parse`, and validate the lowered spec with `validate_spec` against the run's project, as every later advance read, `resume`, `restart`, and the signal wake do.
 4. Require the room's workspace record when the graph has an agent step, a message step, or an agent check, or when a loop task starts the run (`WorkflowErr::NoRoom`). `rimz start` creates the room. The library needs the room only in those cases, but `rimz workflow run` opens the room before it calls `create`, so a run a person starts always needs one.
-5. Under the workspace lock, repeat step 1, allocate the run's notes folder when it keeps one (`store::notes::allocate`), and write the run home (`store::workflow::initialize`).
-6. Spawn a detached `advance`.
+5. Place the start (`engine::publish`): the node `--at` names (`Definition::node`, reachability ignored; an unknown node refuses with `unknown workflow node <node>`) or the definition's start, the `--input` object as the node's `input` with its `key` as the run's key, and `RunRecord.once` for a try.
+6. Under the workspace lock, repeat step 1, allocate the run's notes folder when it keeps one (`store::notes::allocate`), and write the run home (`store::workflow::initialize`). A start given `--at` or `--input` then journals a `Start` entry at the node, the journal's first entry, with the input when there was one. A failed write fails the start.
+7. Spawn a detached `advance`.
 
 The order is deliberate:
 
@@ -232,6 +233,8 @@ The order is deliberate:
 - Comparing each existing run by its own scope kind keeps a worktree run at the project root from blocking a different worktree.
 - Matching by task means a task whose row changes what it runs still overlaps its own live run.
 - A failure after step 2 removes the run's directory, an inline run's `definition/` included, since no record exists to keep it.
+
+A try stops in `crates/rimz/src/harness/workflow/state.rs::Transition::route`, past the terminal return and the held-session branch: a route to `@wait` whose outcome is `unknown` waits as any run's does, and every other route, whatever its target (`@failed`, a failure or deadline route, a fault, a tripped visit bound), ends the run `done` with a `Terminal` entry naming that target in `tried`. The node is not entered and nothing is handed on, and `engine::outcome` names the ending `tried` from the record's `once` alone. Engine holds, a session's kept or pushed-back verdict, cancel (`canceled`), and a misfit (`failed`) never reach that branch. A live try collides with nothing: `create` skips step 1 for it and skips it as an existing run, and a workflow task's fire skips it as a hand-started run (`Fire::hand_started_run`).
 
 `rimz workflow run` validates the definition directory before it calls `create`, so a manual start of a broken definition refuses on the definition even while another run holds the slot. The CLI prints `Exists` as a refusal. A loop fire that reaches `create` follows its task's `overlap` policy instead ([Loop tasks](#loop-tasks)).
 
@@ -254,6 +257,7 @@ An optional cancel reason travels through `Ending` to settlement and the `Cancel
 - A parked run re-enters its current node, or `--at <node>`, with a fresh `entered_at` (so a fresh timeout clock), keeping its input, key, and every visit count.
 - `--at` on an active run moves it too (`move_live_attempt`). A live agent attempt stages a `canceled` end with `EndCause::Resume` and a saved route to the destination. A hosted child is killed and its attempt settled. The run journals `Resume` at the destination.
 - While an agent attempt at the current node is already ending and its host is live, `--at` refuses with `the attempt at <node> is settling; retry resume after it finishes`. `--extend` alone is still accepted.
+- `--at` on a try refuses before anything changes, with ``workflow run <id> is a try, which ends at its node and cannot be moved; cancel it with `rimz workflow cancel <id>` ``, since the move would route and so end it. `--extend`, `restart`, and `cancel` work on a try.
 - `--extend visits=+N` adds a run-wide `visit_grant` to every step's `max-visits`. Restarts leave the grant as it is.
 - `--extend deadline=<when>` replaces the deadline and re-arms it.
 
@@ -394,7 +398,7 @@ Engine callbacks that reload a run after off-lock work (`engine::reload`) treat 
 
 ### The journal and publication
 
-A journal entry carries its time, node, optional attempt sequence, and one event (`crates/rimz/src/store/workflow.rs::JournalEvent`): evaluation, attempt, visit reset, restart, turn-end decision, closed wait, explicit route, park, terminal, cancel, resume, signal wake, or forwarded signal.
+A journal entry carries its time, node, optional attempt sequence, and one event (`crates/rimz/src/store/workflow.rs::JournalEvent`): hand-placed start, evaluation, attempt, visit reset, restart, turn-end decision, closed wait, explicit route, park, terminal, cancel, resume, signal wake, or forwarded signal. A try's terminal entry carries `tried`, the target of the route it did not take.
 
 - An evaluation keeps the routed object and its `origin` (`check` or `engine`, defaulting to `check` when absent). An invalid answer also keeps a stderr tail.
 - Script and judge evaluations keep the digests published with the attempt's child, whichever process ends the attempt. An evaluation whose child never spawned has none.
@@ -687,7 +691,7 @@ An unreadable required room or stagger record holds a scheduled start as `store`
 
 `crates/rimz/src/harness/workflow/brief.rs::step` composes a separate `### Workflow` launch-reminder body off-lock in `engine::agent::launch`, from the definition the launch read and the published, bumped run record.
 
-- It reads the journal through the same `routing_hop` rule as `show`.
+- It reads the journal through the same `routing_hop` rule as `show`. A `Start` hop at the node says the user started the run there by hand, never that it is the run's first step, and names a given input as `input` in `context.json`.
 - It words the run's origin from what the record froze at the fire (`RunRecord::fire`: the task's name, and a scheduled fire's trigger clause), never from the task catalog or `RunRecord.task`. Editing, renaming, or removing the task mid-run leaves the sentence as it was, old task name included.
 - A resume counts as the sender after a park, even before its agent launches, and an active run's `--extend` does not replace that sender. Unreadable enrichment drops only the arrival sentence.
 - The rail follows `Definition::walk`, groups returning steps beside their check, and draws arrows only for live non-deadline routes. Unreachable nodes stay out even after an explicit resume there. Visit bounds include resume grants.
@@ -989,7 +993,7 @@ The fire takes no start-throttle turn, and an agent its command launches takes i
 A task-started run reports its outcome to the task once it ends. The scheduler, not the engine, delivers that report.
 
 1. `create` marks the record `loop_report = owed`.
-2. The record write that makes a run terminal also writes its typed outcome (`RunRecord.outcome`, a `store::workflow::RunOutcome`): the ending (`done`, `failed`, `canceled`, a capacity give-up with its wait and reason, or a budget end and whether an agent turn ran), the summed attempt and evaluation cost, whether the run entered an agent or message step, and a failed run's last reason. The ending comes from the record's state, whether it acted from its visit counts, and the cost and reason from the journal. A journal that cannot be read there does not hold the transition back: the outcome then carries the ending the state names, no cost, and no reason, with a warning.
+2. The record write that makes a run terminal also writes its typed outcome (`RunRecord.outcome`, a `store::workflow::RunOutcome`): the ending (`done`, `tried` for a try that ended done, `failed`, `canceled`, a capacity give-up with its wait and reason, or a budget end and whether an agent turn ran), the summed attempt and evaluation cost, whether the run entered an agent or message step, and a failed run's last reason. The ending comes from the record's state, whether it acted from its visit counts, and the cost and reason from the journal. A journal that cannot be read there does not hold the transition back: the outcome then carries the ending the state names, no cost, and no reason, with a warning.
 3. `crates/rimz/src/harness/schedule/run_log.rs::collect_run` collects. Under the workspace lock it reloads the record and, while the run is terminal and owed, appends the report row through `run_log::report_run`, notes its strike when the task's row exists, and then rewrites the mark as `sent`.
 
 The engine never reports and never rewrites the mark. Collection never reads the definition, so a run whose definition no longer loads is still collected. It reads the journal only for extra detail (a command check's exit and log), and an unreadable journal leaves that detail out. A quiet run (done with `engaged` false) of a task whose row exists instead notes the strike reset, adds itself to the task's quiet summary on its task record, and removes its home with no row and no mark ([quiet runs](./loops.md#run-reports-and-quiet-runs)).

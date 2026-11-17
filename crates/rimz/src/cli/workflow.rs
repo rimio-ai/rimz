@@ -342,6 +342,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
                 } else {
                     records::StartCapacity::Wait
                 },
+                ..Default::default()
             };
             let task = loop_fire_json
                 .as_deref()

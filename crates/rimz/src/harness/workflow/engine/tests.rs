@@ -256,6 +256,87 @@ fn accounting_uses_closed_waits_and_evaluation_origin() {
     );
 }
 
+/// A try's route assist names the target its answer decided, and its end assist says done.
+#[test]
+fn a_try_route_assist_names_the_decided_target() {
+    use crate::harness::assist_log;
+    if std::env::var_os("RIMZ_TEST_WORKFLOW_TRY_ACCOUNTING").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "harness::workflow::engine::tests::a_try_route_assist_names_the_decided_target",
+                "--nocapture",
+            ])
+            .env("RIMZ_TEST_WORKFLOW_TRY_ACCOUNTING", "1")
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let (_home, state, mut record, spec) = fixture(
+        "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\ntimeout='365d'\nrun='true'\non={red='fix',ok='@done'}\n[script.fix]\ntimeout='365d'\nrun='true'\non.ok='@done'\n",
+    );
+    record.once = true;
+    let paths = state.workflow(&record.id);
+    let mut t = Transition {
+        record,
+        spec: &spec,
+        paths: &paths,
+        now: Timestamp::UNIX_EPOCH,
+        entries: Vec::new(),
+    };
+    t.entries.push(serde_json::from_value(json!({"event":"evaluation", "seq":1, "node":"pr", "at":t.now, "outcome":"red", "object":{"outcome":"red"}, "digests":{}, "started_at":t.now, "ended_at":t.now, "origin":"check"})).unwrap());
+    t.route(&"fix".into(), json!({"outcome":"red"}), ParkReason::User)
+        .unwrap();
+    accounting::transition(&t, false);
+    let values = assist_log::recent(&crate::disk::paths::logs_dir(), None)
+        .iter()
+        .map(|record| serde_json::to_value(record).unwrap())
+        .collect::<Vec<_>>();
+    let route = values
+        .iter()
+        .find(|value| value["assist"] == "workflow_route")
+        .unwrap();
+    let end = values
+        .iter()
+        .find(|value| value["assist"] == "workflow_end")
+        .unwrap();
+    assert_eq!(
+        (&route["outcome"], &route["to"]),
+        (&json!("red"), &json!("fix"))
+    );
+    assert_eq!(end["state"], "done");
+}
+
+#[test]
+fn a_try_names_its_ending_from_the_record_alone() {
+    let (_home, _state, mut record, _) = fixture(
+        "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\ntimeout='365d'\nrun='true'\non.ok='@done'\n",
+    );
+    record.state = RunState::Done;
+    assert_eq!(
+        outcome(&record, &[], false).ending,
+        workflow::RunEnding::Done
+    );
+    record.once = true;
+    assert_eq!(
+        outcome(&record, &[], false).ending,
+        workflow::RunEnding::Tried
+    );
+    record.state = RunState::Failed;
+    assert_eq!(
+        outcome(&record, &[], false).ending,
+        workflow::RunEnding::Failed
+    );
+}
+
 fn fixture(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord, Definition) {
     let home = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
