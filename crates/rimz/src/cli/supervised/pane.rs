@@ -4,7 +4,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::cli::GlobalFlags;
 use rimz::ids::PaneId;
 use rimz::mux::{PaneListOptions, PaneReadConsistency};
 use rimz::store::run::RunRecord;
@@ -12,15 +11,6 @@ use rimz::store::snapshot::find_agent;
 
 pub(in crate::cli) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_BACKSTOP_POLL: Duration = Duration::from_millis(250);
-pub(super) fn backend_for_workspace_session(
-    workspace: &rimz::ResolvedWorkspace,
-    globals: &GlobalFlags,
-) -> Result<Box<dyn rimz::mux::MuxBackend>> {
-    let mux = crate::cli::render::room::present_mux_pick(
-        rimz::room::session::pick_mux_for_session(&workspace.session_name, globals.mux),
-    )?;
-    Ok(rimz::mux::backend_for(mux))
-}
 
 /// Close the recorded pane, then the agent row's; `Ok` when either close went
 /// through or the run has no pane.

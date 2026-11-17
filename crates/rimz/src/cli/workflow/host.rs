@@ -585,7 +585,10 @@ impl workflow::AttemptHost for Host<'_> {
             self.retire_push(&ctx, &run)?;
             let snapshot = ctx.cached_snapshot()?;
             let Some(cohort) = workflow::stop_cohort(&snapshot, &run) else {
-                supervised::stop_supervised_run(&ctx.workspace, &ctx.store, self.globals, &run)?;
+                let label = run.agent_name.as_deref().unwrap_or(run.run_id.as_str());
+                agents_cmd::stop_run_agent(&ctx, self.globals, &run)?
+                    .into_result(label)
+                    .context("stopping workflow attempt")?;
                 return Ok(Children::default());
             };
             let peers = rimz::address::addressable_agents(&snapshot);

@@ -811,10 +811,10 @@ fn mark_skips_an_agent_that_ended_by_act_time() {
     assert_eq!(marked, 1, "{}", text(&out));
 }
 
-/// A run line whose stop fails is that line's failed receipt: the agent after
-/// it is still stopped, and the command exits 1.
+/// A run line whose tree reaches a child a later line names: the child is stopped once,
+/// under the run line, and its own line is skipped as an agent the batch already closed.
 #[test]
-fn stop_carries_on_past_a_run_whose_stop_fails() {
+fn stop_skips_a_child_a_run_line_already_stopped() {
     use rimz::store::run::RunRecord;
     let env = seed_stoppable_room();
     let mut run = RunRecord::new(
@@ -824,10 +824,69 @@ fn stop_carries_on_past_a_run_whose_stop_fails() {
         "task".to_owned(),
         env.project_root.clone(),
     );
+    run.launch_id = Some("launch-parent".into());
+    run.agent_id = Some("parent".into());
+    rimz::harness::run::create(env.store().paths(), &run).expect("create run");
+    let lines = format!("{}\n@seat-kin\n", run.run_id);
+    let out = spawn_with(&env, &["agents", "stop", "-", "--all"], &lines, |_| {})
+        .wait_with_output()
+        .expect("rimz output");
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout.matches("@seat-kin").count(),
+        1,
+        "one receipt for the child: {}",
+        text(&out)
+    );
+    assert!(
+        stdout.contains(&format!("stopped {} (run)", run.run_id)),
+        "{}",
+        text(&out)
+    );
+}
+
+/// A run line whose stop fails is that line's failed receipt: the agent after
+/// it is still stopped, and the command exits 1.
+#[test]
+fn stop_carries_on_past_a_run_whose_stop_fails() {
+    use rimz::store::run::RunRecord;
+    let env = seed_stoppable_room();
+    let session_name = env.resolve_workspace(&env.project_root).session_name;
+    let mut observation =
+        AgentLifecycleObservation::new(Some("solo".into()), LifecycleSignal::Registered);
+    observation.agent_name = Some("seat-solo".to_owned());
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    observation.pane_id = Some(pane_id("terminal_9"));
+    observation.runtime_owner = Some(owner_process("solo"));
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .expect("register the run's agent");
+    // Its own file: every spawn rewrites the shared fixture with the seeded panes alone.
+    let pane_list = env.project_root.join("panes-with-the-run.json");
+    let panes = ["terminal_1", "terminal_2", "terminal_3", "terminal_9"]
+        .into_iter()
+        .map(|raw| frame_pane(&session_name, raw, &env.project_root))
+        .collect::<Vec<_>>();
+    std::fs::write(&pane_list, serde_json::to_vec(&panes).unwrap()).expect("write pane list");
+    let mut run = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".to_owned(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("solo".into());
     run.pane_id = Some(pane_id("terminal_9"));
     rimz::harness::run::create(env.store().paths(), &run).expect("create run");
-    // The run's pane stays listed and refuses to close; every other close
-    // goes through the trace shim.
+    // The run's agent stays listed in its pane, which refuses to close; every
+    // other close goes through the trace shim.
     let zellij = env.project_root.join("zellij-close-9");
     std::fs::write(
         &zellij,
@@ -842,10 +901,13 @@ fn stop_carries_on_past_a_run_whose_stop_fails() {
     std::fs::set_permissions(&zellij, mode).unwrap();
     let lines = format!("{}\n@seat-peer\n", run.run_id);
     let out = spawn_with(&env, &["agents", "stop", "-", "--all"], &lines, |command| {
-        command.env("RIMZ_ZELLIJ_BIN", &zellij).env(
-            "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            r#"[{"id":9,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
-        );
+        command
+            .env("RIMZ_ZELLIJ_BIN", &zellij)
+            .env("RIMZ_TEST_PANE_LIST", &pane_list)
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                r#"[{"id":9,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            );
     })
     .wait_with_output()
     .expect("rimz output");
@@ -855,6 +917,14 @@ fn stop_carries_on_past_a_run_whose_stop_fails() {
         stdout
             .lines()
             .any(|line| line.starts_with(&format!("error {}: ", run.run_id))),
+        "{}",
+        text(&out)
+    );
+    assert!(
+        stdout.contains(&format!(
+            "error {}: @seat-solo: a pane still hosts it: zellij:terminal_9; closing it failed: ",
+            run.run_id
+        )),
         "{}",
         text(&out)
     );

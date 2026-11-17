@@ -3562,6 +3562,7 @@ fn limit_parked_child_lists_paused_and_is_held_without_a_message() {
         (&parent_kind, &parent_id),
         (&child_kind, &child_id),
         jiff::Timestamp::now(),
+        None,
     );
     let reset = jiff::Timestamp::now() + std::time::Duration::from_secs(3600);
     publish_spent_window(&env, &child_kind, reset);
@@ -3769,6 +3770,7 @@ fn limit_held_child_lets_its_settled_sibling_report_with_its_held_line() {
         (&parent_kind, &parent_id),
         (&child_kind, &child_id),
         jiff::Timestamp::now(),
+        None,
     );
     store
         .append_event(&EventEnvelope::agent_launched(
@@ -3868,7 +3870,7 @@ fn limit_held_child_lets_its_settled_sibling_report_with_its_held_line() {
 }
 
 /// Seed a planner parent and its launched still-silver child, the child's turn started, every
-/// event stamped `at`.
+/// event stamped `at`. A `child_host` puts the child in that pane with that owner process.
 fn seed_parent_and_child(
     env: &Env,
     workspace: &rimz::ResolvedWorkspace,
@@ -3876,9 +3878,18 @@ fn seed_parent_and_child(
     (parent_kind, parent_id): (&AgentKind, &AgentSessionId),
     (child_kind, child_id): (&AgentKind, &AgentSessionId),
     at: jiff::Timestamp,
+    child_host: Option<(rimz::ids::PaneId, rimz::pane::RuntimeOwner)>,
 ) {
-    for (kind, id, name, launch) in [
-        (parent_kind, parent_id, "planner", LaunchParams::default()),
+    let (child_pane, child_owner) = child_host.unzip();
+    for (kind, id, name, launch, pane_id, runtime_owner) in [
+        (
+            parent_kind,
+            parent_id,
+            "planner",
+            LaunchParams::default(),
+            None,
+            None,
+        ),
         (
             child_kind,
             child_id,
@@ -3889,6 +3900,8 @@ fn seed_parent_and_child(
                 launch_depth: Some(1),
                 ..Default::default()
             },
+            child_pane,
+            child_owner,
         ),
     ] {
         let mut launched = EventEnvelope::agent_launched(
@@ -3904,8 +3917,8 @@ fn seed_parent_and_child(
                 launch,
                 state: AgentLaunchState::Bound,
                 run_id: None,
-                pane_id: None,
-                runtime_owner: None,
+                pane_id,
+                runtime_owner,
                 worktree_path: Some(env.project_root.display().to_string()),
                 worktree_branch: None,
                 prompt: None,
@@ -3929,6 +3942,119 @@ fn seed_parent_and_child(
     store
         .append_event(&started)
         .expect("start the child's turn");
+}
+
+/// The child as production hosts it: in the listed trace pane, with an owner process of its own
+/// that the park helper's reclaim ends.
+struct HostedChild {
+    pid: u32,
+}
+
+impl HostedChild {
+    fn spawn() -> Self {
+        let mut command = std::process::Command::new("sleep");
+        for key in [
+            rimz::harness::launch::ENV_AGENT_NAME,
+            rimz::harness::launch::ENV_AGENT_PROFILE,
+            rimz::harness::launch::ENV_AGENT_ROLE,
+            rimz::harness::launch::ENV_TEAM,
+            rimz::harness::launch::ENV_LAUNCH_GROUP,
+            rimz::harness::launch::ENV_LAUNCH_ORDINAL,
+            rimz::workspace::ENV_CHANNEL,
+            rimz::harness::launch::ENV_AGENT_MODEL,
+            rimz::harness::launch::ENV_AGENT_EFFORT,
+        ] {
+            command.env(key, "");
+        }
+        let mut child = command.arg("30").spawn().expect("spawn the child's owner");
+        let pid = child.id();
+        std::thread::spawn(move || child.wait());
+        Self { pid }
+    }
+
+    fn host(&self) -> (rimz::ids::PaneId, rimz::pane::RuntimeOwner) {
+        (
+            rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, crate::common::TRACE_PANE),
+            rimz::store::runtime::process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "gatekeeper-session",
+                self.pid,
+            ),
+        )
+    }
+
+    /// Point `command` at the traced multiplexer, where the room lists the child's pane.
+    fn trace<'a>(
+        &self,
+        env: &Env,
+        workspace: &rimz::ResolvedWorkspace,
+        command: &'a mut std::process::Command,
+    ) -> &'a mut std::process::Command {
+        let panes = env.project_root.join("child-panes.json");
+        std::fs::write(
+            &panes,
+            r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+        )
+        .expect("write the child's pane listing");
+        // Its foreground names codex: a lazily registering kind binds its stamped pane only
+        // with that evidence.
+        let (pane_id, _) = self.host();
+        let frame = rimz::pane::PaneRef {
+            pane_id,
+            session_name: workspace.session_name.clone(),
+            view_id: Some("1".to_owned()),
+            view_kind: Some(rimz::ids::ViewKind::Tab),
+            view_name: Some("room".to_owned()),
+            title: None,
+            is_floating: false,
+            command: Some("codex".to_owned()),
+            foreground_cmdline: None,
+            spawn_command: None,
+            cwd: Some(env.project_root.display().to_string()),
+            pane_pid: None,
+            pane_process_start: None,
+            hosted_agent_kind: None,
+            hosted_agent_process_start: None,
+            hosted_agent_lineage: Vec::new(),
+            resumed_session_id: None,
+            elevated_agent: None,
+            first_seen_at_ms: None,
+        };
+        let frames = env.project_root.join("child-frames.json");
+        std::fs::write(&frames, serde_json::to_vec(&[frame]).unwrap())
+            .expect("write the child's pane frame");
+        command
+            .env("RIMZ_TEST_PANE_LIST", frames)
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env(
+                "RIMZ_TEST_ZELLIJ_LOG",
+                env.project_root.join("reclaim-trace.log"),
+            )
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", panes)
+    }
+
+    /// The reclaim closed the child's pane and ended its process.
+    fn assert_reclaimed(&self, env: &Env) {
+        let trace =
+            std::fs::read_to_string(env.project_root.join("reclaim-trace.log")).unwrap_or_default();
+        assert!(
+            trace.lines().any(|line| line.contains("\tclose-pane\t")
+                && line.contains(&format!("\t{}", crate::common::TRACE_PANE))),
+            "{trace}"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while rimz::proc::process_is_live(self.pid, None) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child's process outlived the reclaim"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
 }
 
 /// Publish the kind's default account as spent until `reset`.
@@ -4539,6 +4665,7 @@ fn limit_parked_child_past_the_hold_limit_fails_at_once_with_its_typed_cause() {
     run.subagent = true;
     run.status = rimz::store::run::RunStatus::Running;
     rimz::harness::run::create(store.paths(), &run).expect("create open subagent run");
+    let child = HostedChild::spawn();
     seed_parent_and_child(
         &env,
         &workspace,
@@ -4546,6 +4673,7 @@ fn limit_parked_child_past_the_hold_limit_fails_at_once_with_its_typed_cause() {
         (&parent_kind, &parent_id),
         (&child_kind, &child_id),
         jiff::Timestamp::now(),
+        Some(child.host()),
     );
     let reset = jiff::Timestamp::now() + std::time::Duration::from_secs(9 * 3600);
     publish_spent_window(&env, &child_kind, reset);
@@ -4573,8 +4701,8 @@ fn limit_parked_child_past_the_hold_limit_fails_at_once_with_its_typed_cause() {
         horizon_secs: 6 * 3600,
         continuation: rimz::harness::park_notice::Continuation::On,
     };
-    let output = env
-        .rimz()
+    let output = child
+        .trace(&env, &workspace, &mut env.rimz())
         .args(rimz::child_process::agent_helper_argv(
             "park-notice",
             &request,
@@ -4589,6 +4717,7 @@ fn limit_parked_child_past_the_hold_limit_fails_at_once_with_its_typed_cause() {
 
     let failed = rimz::harness::run::load(store.paths(), &run.run_id).expect("load run");
     assert_eq!(failed.status, rimz::store::run::RunStatus::Failed);
+    child.assert_reclaimed(&env);
     assert_eq!(failed.limit_hold, None);
     let failure = failed.limit_failure.as_ref().expect("the typed cause");
     assert_eq!(
@@ -4681,6 +4810,7 @@ fn limit_parked_child_with_auto_continue_off_fails_after_the_window_with_its_ref
     run.subagent = true;
     run.status = rimz::store::run::RunStatus::Running;
     rimz::harness::run::create(store.paths(), &run).expect("create open subagent run");
+    let child = HostedChild::spawn();
     seed_parent_and_child(
         &env,
         &workspace,
@@ -4688,6 +4818,7 @@ fn limit_parked_child_with_auto_continue_off_fails_after_the_window_with_its_ref
         (&parent_kind, &parent_id),
         (&child_kind, &child_id),
         started,
+        Some(child.host()),
     );
     let reset = jiff::Timestamp::now() + std::time::Duration::from_secs(2 * 3600);
     publish_spent_window(&env, &child_kind, reset);
@@ -4716,7 +4847,8 @@ fn limit_parked_child_with_auto_continue_off_fails_after_the_window_with_its_ref
             horizon_secs: 6 * 3600,
             continuation: rimz::harness::park_notice::Continuation::Off,
         };
-        env.rimz()
+        child
+            .trace(&env, &workspace, &mut env.rimz())
             .args(rimz::child_process::agent_helper_argv(
                 "park-notice",
                 &request,
@@ -4736,6 +4868,7 @@ fn limit_parked_child_with_auto_continue_off_fails_after_the_window_with_its_ref
     seed_marker(jiff::Timestamp::now() - std::time::Duration::from_secs(11 * 60));
     let failed = help();
     assert_eq!(failed.status, rimz::store::run::RunStatus::Failed);
+    child.assert_reclaimed(&env);
     let failure = failed.limit_failure.as_ref().expect("the typed cause");
     assert_eq!(
         failure.cause,

@@ -40,18 +40,15 @@ pub fn repair_orphan(request: OrphanSubagentRequest, globals: &super::GlobalFlag
                 )
                 .context("canceling orphaned subagent run")?;
             }
-            super::supervised::stop_supervised_run(&ctx.workspace, &ctx.store, globals, run)
-                .context("reclaiming orphaned subagent run pane")
+            stop_error(super::stop::stop_run_tree(
+                &ctx,
+                globals,
+                run,
+                Some(&orphan.child),
+            )?)
         } else {
-            let pane = orphan
-                .child
-                .pane
-                .as_ref()
-                .context("orphaned subagent has no pane or run record")?;
-            rimz::harness::hibernate::wake_pane(&ctx.store, &pane.pane_id)?;
-            rimz::mux::backend_for(pane.pane_id.mux())
-                .close_pane(&ctx.workspace.session_name, &pane.pane_id)
-                .context("reclaiming orphaned subagent pane")
+            let snapshot = ctx.cached_snapshot()?;
+            stop_error(super::stop_resolved(&ctx, globals, &snapshot, &[&orphan.child])?.remove(0))
         }
     })();
     if let Err(err) = repair {
@@ -95,4 +92,12 @@ pub fn repair_orphan(request: OrphanSubagentRequest, globals: &super::GlobalFlag
         orphaned_at_ms: orphan.orphaned_at.as_millisecond().max(0) as u64,
     });
     Ok(())
+}
+
+/// The stop's failure as the repair's error.
+fn stop_error(stop: super::stop::TreeStop) -> Result<()> {
+    match stop.error() {
+        None => Ok(()),
+        Some(error) => Err(anyhow::anyhow!(error)),
+    }
 }

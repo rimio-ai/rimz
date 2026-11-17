@@ -47,54 +47,6 @@ use pane::{latest_resolved_run_pane, resolve_run_pane_in_snapshot};
 #[cfg(test)]
 use stream::{stream_attached_run, stream_blocking_run};
 
-/// Why a supervised stop did not end with the run terminal and no nameable pane left.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum StopRunErr {
-    /// The cancel failed; nothing was closed.
-    #[error(transparent)]
-    NotCanceled(anyhow::Error),
-    /// The run is terminal and its pane was not confirmed closed.
-    #[error("{0}; rerun the stop to close it")]
-    PaneOpen(pane::PaneOpen),
-    /// The run is terminal and its pane is gone, but its child's end was not recorded.
-    #[error("run stopped, but recording its child's end failed: {0:#}; rerun the stop")]
-    NotEnded(anyhow::Error),
-}
-
-/// Cancel a live supervised run, then reclaim its pane after the existing
-/// backend grace. Terminal `--keep` records remain terminal and only lose the
-/// pane. `Ok` means the run is terminal and no pane rimz can name for it
-/// remains: the pane is gone, its session is gone, or none was ever recorded or
-/// registered, so a pane nothing names can outlive an `Ok`.
-/// For a subagent run, `Ok` also means its still-un-ended card is ended,
-/// matched by the run's session id, else the newest same-kind namesake
-/// registered at or before the run finished. That bound holds for a run already
-/// finished when the stop began; a run still live then keeps the unbounded name
-/// match.
-pub(crate) fn stop_supervised_run(
-    workspace: &rimz::ResolvedWorkspace,
-    store: &rimz::Store,
-    globals: &GlobalFlags,
-    run: &RunRecord,
-) -> std::result::Result<(), StopRunErr> {
-    cancel_supervised_run(store, run).map_err(StopRunErr::NotCanceled)?;
-    let backend = pane::backend_for_workspace_session(workspace, globals).map_err(|err| {
-        StopRunErr::PaneOpen(pane::PaneOpen {
-            pane: None,
-            reason: format!("{err:#}"),
-        })
-    })?;
-    pane::close_stopped_run_pane_after_grace(
-        backend.as_ref(),
-        store,
-        &workspace.session_name,
-        run,
-        pane::STOP_BACKSTOP_GRACE,
-    )
-    .map_err(StopRunErr::PaneOpen)?;
-    stamp_stopped_subagent_end(store, &workspace.session_name, run).map_err(StopRunErr::NotEnded)
-}
-
 pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Result<()> {
     if !run.status.is_terminal() {
         rimz::harness::run::cancel_and_wake(store, &run.run_id)?;
@@ -102,12 +54,14 @@ pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Res
     Ok(())
 }
 
-/// Append the `Ended` lifecycle event for a stopped subagent run's un-ended card; a
-/// run that is not a subagent's records nothing.
+/// Append the `Ended` lifecycle event for the card a stop of a subagent run stopped (the
+/// `stopped` kind and session), while that card is un-ended and still the run's; a run that
+/// is not a subagent's records nothing.
 pub(super) fn stamp_stopped_subagent_end(
     store: &rimz::Store,
     session_name: &str,
     run: &RunRecord,
+    stopped: (&rimz::ids::AgentKind, &rimz::ids::AgentSessionId),
 ) -> Result<()> {
     if !run.subagent {
         return Ok(());
@@ -115,17 +69,11 @@ pub(super) fn stamp_stopped_subagent_end(
     let audit = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading stopped subagent card")?;
-    let Some(child) = audit
-        .agents
-        .iter()
-        .filter(|agent| agent.ended_at.is_none() && run.matches_stopped_agent(agent))
-        .max_by_key(|agent| {
-            (
-                run.agent_id.as_ref() == Some(&agent.agent_id),
-                agent.registered_at,
-            )
-        })
-    else {
+    let Some(child) = audit.agents.iter().find(|agent| {
+        (&agent.kind, &agent.agent_id) == stopped
+            && agent.ended_at.is_none()
+            && run.matches_stopped_agent(agent)
+    }) else {
         return Ok(());
     };
     let observation = rimz::agents::AgentLifecycleObservation::new(

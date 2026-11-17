@@ -122,8 +122,11 @@ fn reclaim_pane(ctx: &Ctx, globals: &super::GlobalFlags, record: &RunRecord) -> 
         // `--keep` retains the subagent pane until explicit stop or gc.
         return Ok(());
     }
-    super::supervised::stop_supervised_run(&ctx.workspace, &ctx.store, globals, record)?;
-    Ok(())
+    let stop = super::stop_run_agent(ctx, globals, record)?;
+    match stop.error() {
+        None => Ok(()),
+        Some(error) => anyhow::bail!("{error}"),
+    }
 }
 
 /// Whether the locked claim takes `rung`: the stop, still past the hook's lead

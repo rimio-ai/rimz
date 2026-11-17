@@ -178,7 +178,7 @@ fn stop_backstop_reports_a_pane_it_could_not_confirm_closed() {
                 }
             },
         );
-        let verdict = verdict.map_err(|open| StopRunErr::PaneOpen(open).to_string());
+        let verdict = verdict.map_err(|open| open.to_string());
         (verdict, closes, listed)
     };
     let settle = |listings: &[Listing], close_ok: bool, recorded: bool| {
@@ -186,7 +186,7 @@ fn stop_backstop_reports_a_pane_it_could_not_confirm_closed() {
         (verdict, closes)
     };
     let open = Err(
-        "pane tmux:%8 is still open: could not parse mux output from `tmux`: close refused; rerun the stop to close it"
+        "pane tmux:%8 is still open: could not parse mux output from `tmux`: close refused"
             .to_owned(),
     );
 
@@ -221,8 +221,8 @@ fn stop_backstop_reports_a_pane_it_could_not_confirm_closed() {
         reason: "no multiplexer found".to_owned(),
     };
     assert_eq!(
-        StopRunErr::PaneOpen(unresolved).to_string(),
-        "the run's pane was not closed: no multiplexer found; rerun the stop to close it"
+        unresolved.to_string(),
+        "the run's pane was not closed: no multiplexer found"
     );
 }
 
@@ -241,6 +241,18 @@ fn stream_event_shapes_are_ndjson_ready() {
             "last_message": "bye"
         })
     );
+}
+
+/// Stamp the end of the codex card `stopped`, as a stop of the fixture's run that stopped it.
+fn stamp_end(fixture: &RunFixture, stopped: &str) {
+    let kind = AgentKind::new_unchecked("codex");
+    stamp_stopped_subagent_end(
+        &fixture.store,
+        "room",
+        &fixture.record,
+        (&kind, &stopped.into()),
+    )
+    .unwrap();
 }
 
 struct RunFixture {
@@ -314,8 +326,8 @@ fn stopped_subagent_end_is_recorded_once() {
     assert!(fixture.record.matches_agent(&registered[0]));
     fixture.record.completed_at = registered[0].registered_at;
 
-    stamp_stopped_subagent_end(&fixture.store, "room", &fixture.record).unwrap();
-    stamp_stopped_subagent_end(&fixture.store, "room", &fixture.record).unwrap();
+    stamp_end(&fixture, "child");
+    stamp_end(&fixture, "child");
 
     let agents = fixture
         .store
@@ -373,13 +385,13 @@ fn stopped_subagent_end_skips_root_ended_and_unmatched_rows() {
             ))
             .unwrap();
         let before = fixture.store.read_events().unwrap();
-        stamp_stopped_subagent_end(&fixture.store, "room", &fixture.record).unwrap();
+        stamp_end(&fixture, "child");
         assert_eq!(fixture.store.read_events().unwrap(), before, "{case}");
     }
 }
 
 #[test]
-fn stopped_subagent_end_prefers_the_run_id_row_over_a_newer_namesake() {
+fn stopped_subagent_end_stamps_the_stopped_row_not_a_newer_namesake() {
     use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 
     let mut fixture = RunFixture::new(RunStatus::Completed);
@@ -411,7 +423,7 @@ fn stopped_subagent_end_prefers_the_run_id_row_over_a_newer_namesake() {
         "{before:?}"
     );
 
-    stamp_stopped_subagent_end(&fixture.store, "room", &fixture.record).unwrap();
+    stamp_end(&fixture, "older");
     let agents = fixture
         .store
         .runtime_projection(rimz::RuntimeScope::Audit)
@@ -472,7 +484,7 @@ fn stopped_subagent_end_skips_later_namesake_when_own_card_is_absent() {
     );
     let before = fixture.store.read_events().unwrap();
 
-    stamp_stopped_subagent_end(&fixture.store, "room", &fixture.record).unwrap();
+    stamp_end(&fixture, "old");
 
     let agents = fixture
         .store
@@ -530,7 +542,7 @@ fn stopped_subagent_end_skips_later_namesake_when_own_card_is_ended() {
         "{registered:?}"
     );
 
-    stamp_stopped_subagent_end(&fixture.store, "room", &fixture.record).unwrap();
+    stamp_end(&fixture, "old");
 
     let agents = fixture
         .store
@@ -546,7 +558,7 @@ fn stopped_subagent_end_skips_later_namesake_when_own_card_is_ended() {
 }
 
 #[test]
-fn stopped_subagent_end_prefers_the_newest_name_match_before_completion() {
+fn stopped_subagent_end_stamps_only_the_name_match_it_stopped() {
     let mut fixture = RunFixture::new(RunStatus::Completed);
     fixture.record.subagent = true;
     fixture.record.agent_name = Some("otter".to_owned());
@@ -559,7 +571,7 @@ fn stopped_subagent_end_prefers_the_newest_name_match_before_completion() {
         );
     }
 
-    stamp_stopped_subagent_end(&fixture.store, "room", &fixture.record).unwrap();
+    stamp_end(&fixture, "middle");
 
     let agents = fixture
         .store
@@ -570,7 +582,7 @@ fn stopped_subagent_end_prefers_the_newest_name_match_before_completion() {
     for agent in &agents {
         assert_eq!(
             agent.ended_at.is_some(),
-            agent.agent_id == "newest",
+            agent.agent_id == "middle",
             "{agents:?}"
         );
     }
