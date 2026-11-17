@@ -38,9 +38,9 @@ The checkout name is the basename of the run's recorded scope path, kept after t
 
 - A target with `#` but an empty workflow or checkout name, or with a second `#`, is a usage error (exit 2). When a target begins with `-`, put options before `--` and the target after it.
 - `resume`, `restart`, and `cancel` reach a finished run only by its id.
-- Two unfinished runs sharing an address refuse and list each id and checkout with a command for it.
+- Two unfinished runs sharing an address refuse and list each id and checkout with a command for it. A real run and a [try](#trying-one-node) sharing one do not: the address selects the real run.
 - For `resume`, `restart`, and `cancel`, a workflow name selects the run in the caller's checkout, or its project's project-scoped run, then the only unfinished run. Otherwise it lists commands to choose one.
-- Matching runs in the caller's room take precedence. Without a local match, matches in several rooms refuse with `--root` commands. Each listed command names its run by address, or by id where another candidate in the same room shares that address, and carries `--root` when the run is outside the current directory's room. The global `--root` chooses the caller's room.
+- Matching runs in the caller's room take precedence. Without a local match, matches in several rooms refuse with `--root` commands. Each listed command names its run by address, or by id where another candidate in the same room shares that address or the run is a try, and carries `--root` when the run is outside the current directory's room. The global `--root` chooses the caller's room.
 
 ## Run a workflow
 
