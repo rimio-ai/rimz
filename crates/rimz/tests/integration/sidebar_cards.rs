@@ -5,7 +5,8 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
-use rimz::ids::{MuxName, PaneId};
+use rimz::ids::{AgentKind, MuxName, PaneId};
+use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -288,12 +289,11 @@ fn close_process_does_not_record_an_entry_and_a_stop_failure_records_nothing() {
     assert!(!closed_path(&env).exists());
 }
 
-fn close_unbound_card(id: &str) {
+#[test]
+fn close_idle_agent_closes_the_row_pane_without_recording() {
+    let id = "zellij:terminal_7";
     let env = Env::new();
     env.record(&env.project_root);
-    if id == "unbound" {
-        seed(&env, id, |observation| observation.pane_id = None);
-    }
     let output = exchange(
         &env,
         json!({"command":"close_target"}),
@@ -311,14 +311,119 @@ fn close_unbound_card(id: &str) {
     assert!(!closed_path(&env).exists());
 }
 
-#[test]
-fn close_idle_agent_closes_the_row_pane_without_recording() {
-    close_unbound_card("zellij:terminal_7");
+/// Session `agent` of launch `launch-card` at `epoch`, bound in zellij `pane`.
+fn launched(env: &Env, agent: &str, epoch: u32, pane: &str) {
+    seed(env, agent, |observation| {
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, pane));
+    });
+    let row = env
+        .store()
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|row| row.agent_id == agent)
+        .cloned()
+        .unwrap();
+    env.store()
+        .append_event(&EventEnvelope::agent_launched(
+            env.workspace_id.clone(),
+            session(env),
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                agent_id: agent.into(),
+                launch_id: Some("launch-card".into()),
+                system_prompt_digest: None,
+                agent_name: "card".to_owned(),
+                agent_name_explicit: true,
+                launch: rimz::agents::LaunchParams {
+                    epoch: Some(epoch),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(PaneId::from_parts(MuxName::Zellij, pane)),
+                runtime_owner: row.runtime_owner,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
 }
 
+fn closes(env: &Env) -> Vec<String> {
+    trace_lines(&env.home_root.join("mux.log"))
+        .into_iter()
+        .filter(|line| line.contains("close-pane"))
+        .collect()
+}
+
+fn close_card(env: &Env, id: &str, command: Command) -> Output {
+    exchange(
+        env,
+        json!({"command":"close_target"}),
+        json!({"reply":"close_target", "agent": {
+            "kind":"claude", "agent_id":id, "pane":"zellij:terminal_7"
+        }}),
+        command,
+    )
+}
+
+/// A card that lags a swap names the replaced session: the close stops the launch's
+/// holder in its own pane, records the holder, and leaves the card's pane alone.
 #[test]
-fn close_unbound_session_closes_the_row_pane_without_recording() {
-    close_unbound_card("unbound");
+fn close_of_a_replaced_session_stops_and_records_the_holder() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    launched(&env, "sess-old", 0, "terminal_7");
+    launched(&env, "sess-new", 1, "terminal_8");
+    let output = close_card(&env, "sess-old", command(&env, &["close"]));
+    assert_exit(&output, 0);
+    let closes = closes(&env);
+    assert_eq!(closes.len(), 1, "{closes:?}");
+    assert!(closes[0].ends_with("8"), "{closes:?}");
+    let entries = read_closed(&env);
+    assert_eq!(entries.as_array().unwrap().len(), 1, "{entries}");
+    assert_eq!(entries[0]["agent_id"], "sess-new");
+}
+
+/// A stored session the lookup ties to no pane goes to the agent stop, whose verdict is
+/// the answer: the card's pane stays open.
+#[test]
+fn close_of_a_stored_session_hosted_nowhere_leaves_the_card_pane_open() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "unbound", |observation| observation.pane_id = None);
+    let output = close_card(&env, "unbound", command(&env, &["close"]));
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unbound"),
+        "{output:?}"
+    );
+    assert_eq!(closes(&env), Vec::<String>::new());
+    assert!(!closed_path(&env).exists());
+}
+
+/// A listing the multiplexer cannot give closes nothing and says so.
+#[test]
+fn close_with_a_failed_listing_closes_nothing() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "unbound", |observation| observation.pane_id = None);
+    let mut failed = command(&env, &["close"]);
+    let garbage = env.home_root.join("garbage-panes.json");
+    std::fs::write(&garbage, "not json").unwrap();
+    failed.env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", garbage);
+    let output = close_card(&env, "unbound", failed);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("the multiplexer could not be read")
+            && stderr.contains("nothing was closed"),
+        "{stderr}"
+    );
+    assert_eq!(closes(&env), Vec::<String>::new());
 }
 
 #[test]

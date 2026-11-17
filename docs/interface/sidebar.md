@@ -1163,7 +1163,7 @@ These keys work while the sidebar has focus. With native room style, `Alt+p` foc
 | `←` / `→` | switch the dashboard tab |
 | `<` / `>` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#setting-the-width)) |
 | `=` | return the sidebar to its configured width in every tab of the room, dropping a width set with `<` / `>` |
-| `d d` | close the selected card's pane, as [`rimz sidebar close`](../reference/cli/sidebar.md#close-and-reopen) does |
+| `d d` | close the selected card, stopping its agent in the pane it is in now, as [`rimz sidebar close`](../reference/cli/sidebar.md#close-and-reopen) does |
 | `:` | open the [command palette](../reference/cli/palette.md) in a popup, starting on the selected card |
 | `o` / `O` | open the palette's [`+` mode](../reference/cli/palette.md#launch-an-agent) in a popup to launch an agent, starting on the selected card; `O` selects `new worktree from trunk` in the where step |
 | `.` | run the room's [last palette launch](../reference/cli/palette.md#repeat-the-last-launch) again in a popup |
