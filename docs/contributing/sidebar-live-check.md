@@ -589,6 +589,7 @@ error: the calling agent has not registered a real session yet
 
 ```sh
 BIN="$PWD/target/debug/rimz"
+"$BIN" --version   # names +g<HEAD short hash>, no .dirty, before a branch check counts
 a() { target/debug/xtask sandbox in "$ROOT" --as '@coder' -- "$BIN" "--$MUX" "$@"; }
 rz() { target/debug/xtask sandbox in "$ROOT" -- "$BIN" "--$MUX" "$@"; }
 jq -n --arg session "$(cat /proc/sys/kernel/random/uuid)" --arg cwd "$ROOT/home/room-worktrees/probe" '{hook_event_name:"SessionStart",session_id:$session,cwd:$cwd,source:"startup"}' > "$ROOT/tmp/session-start.json"
@@ -596,6 +597,8 @@ a hooks feed --source claude < "$ROOT/tmp/session-start.json"
 a wait --check true
 target/debug/xtask sandbox in "$ROOT" --as-ancestor '@coder' -- "$BIN" "--$MUX" wait --check true
 ```
+
+A check of a branch builds the head first (`cargo build -p rimz --bin rimz --features testkit`) and confirms the version line names `git rev-parse --short=12 HEAD` with no `.dirty`.
 
 The room drains the fed SessionStart asynchronously, so the first command run right after the feed can still refuse with `the calling agent has not registered a real session yet`. Retry it after a few seconds.
 
@@ -606,6 +609,8 @@ A feed from another provider records its ask, and `rz asks --json` shows it, but
 To raise an ask, feed a Claude `PermissionRequest` event whose `tool_name` is an ordinary tool such as `Bash`; a `Notification` event maps to no lifecycle signal and leaves the card as it was.
 
 The room restarts the stub agent when its process is killed, so an agent leaves a tab only when its pane closes. No hand recipe makes an agent exit into a kept shell; the live `producer_*` backend tests cover that case.
+
+Closing a stub agent's pane ends its row, so its handle then matches no agent (`no agent matches target`). To check an agent whose row still binds a pane that left the room, seed a `Bound` launch on a dead pane id, as `backend::tmux::pane_io::pane_send_refuses_an_agent_whose_pane_left_the_room` does.
 
 `a` runs a RimZ command as the agent and `rz` runs one as the plain user shell (`rz agents`). Keep each prefix in a function, not a variable: zsh does not split an unquoted variable into words, so `$PREFIX agents` fails there as one unknown command.
 
