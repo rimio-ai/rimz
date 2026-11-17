@@ -420,3 +420,26 @@ fn a_try_whose_agent_step_stops_fitting_ends_failed_not_tried() {
         "build: the workflow definition changed under the run",
     );
 }
+
+#[test]
+fn a_try_whose_judge_stops_fitting_ends_failed_not_tried() {
+    let text = format!(
+        "{WATCH}[judge.review]\nagent='claude'\nsummary='Reviews the change'\n\
+         prompt-file='prompt.md'\ntimeout='1h'\non={{pass='@done',fail='build'}}\n"
+    );
+    let runs = misfit_both(&text, WATCH, "review", |state, record, host| {
+        advance(state, &record.id, host).unwrap();
+        assert!(load(state, record).attempt.is_some(), "the judge launched");
+        fs::copy(
+            record.scope.path.join("edited.toml"),
+            crate::disk::paths::workflow_spec_file(&record.scope.path),
+        )
+        .unwrap();
+        advance(state, &record.id, host).unwrap();
+        assert_eq!(host.stops.get(), 1);
+    });
+    assert_misfit_fails(
+        &runs,
+        "review: the workflow definition changed under the run",
+    );
+}
