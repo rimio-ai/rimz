@@ -94,10 +94,10 @@ fn bare_tmux_id_uses_the_selected_backend() {
             .global;
         let resolved = resolve_pane_target("%7", &globals);
         if mux == "tmux" {
-            assert_eq!(
-                resolved.expect("bare tmux id").pane,
-                PaneId::from_parts(MuxName::Tmux, "%7")
-            );
+            let Ok(ResolvedPaneTarget::Pane { pane, .. }) = resolved else {
+                panic!("bare tmux id resolves to a pane");
+            };
+            assert_eq!(pane, PaneId::from_parts(MuxName::Tmux, "%7"));
         } else {
             assert!(
                 resolved

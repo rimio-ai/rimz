@@ -183,8 +183,9 @@ A later successful wake withdraws the entry and its `wake_error` together, so a 
 | `rimz pane send` in a managed room | `crates/rimz/src/cli/pane.rs::send` | writes the keys |
 | Budget park helper | `crates/rimz/src/cli/agents_cmd/budget_park.rs::run_budget_park` | sends Esc. A wake failure ends the helper. |
 | Idle compaction helper | `crates/rimz/src/cli/agents_cmd/idle_compact.rs::run_idle_compact` | rechecks the cache window, then queues the compact command. A wake failure ends the helper. |
-| `rimz pane focus` | `crates/rimz/src/cli/pane.rs::focus` | focuses the pane |
-| `rimz agents focus`, `rimz teams focus` | `crates/rimz/src/cli/agents_cmd/show.rs::focus_resolved` | focuses the pane |
+| `rimz pane focus` of a pane id or the sidebar | `crates/rimz/src/cli/pane.rs::focus` | focuses the pane |
+| `rimz pane focus @agent` | `crates/rimz/src/cli/pane.rs::focus_agent`, through `crates/rimz/src/launcher/agent_pane.rs::find` | re-reads hosting after the wake, then focuses the pane, or nothing when the agent left it |
+| `rimz agents focus`, `rimz teams focus` | `crates/rimz/src/cli/agents_cmd/show.rs::focus_resolved`, through `crates/rimz/src/launcher/agent_pane.rs::find` | re-reads hosting after the wake, then focuses the pane, or nothing when the agent left it |
 | A resume that finds the agent live | `crates/rimz/src/cli/agents_cmd/resume.rs::resume_lane`, `crates/rimz/src/launcher/reconcile.rs::focus_existing` | focuses the pane |
 | `rimz agents restart` | `crates/rimz/src/cli/agents_cmd/restart.rs::restart_resolved` | closes the old pane |
 | `rimz agents stop` | `crates/rimz/src/cli/agents_cmd/stop.rs::Stopper::close` | re-reads hosting after the wake, then closes the pane |

@@ -83,6 +83,11 @@ impl Ctx {
         self.current_channel().address_context()
     }
 
+    /// The backend the command was pinned to with `--mux`, if any.
+    pub(crate) fn mux(&self) -> Option<MuxName> {
+        self.mux
+    }
+
     /// The runtime paths for this workspace, as the open store already resolved them.
     pub(crate) fn runtime(&self) -> &RuntimePaths {
         self.store.runtime_paths()

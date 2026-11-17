@@ -863,7 +863,7 @@ When the agent's temp directory exists, `show` prints its host path (`tmp:`) and
 
 | Flag | Effect |
 | --- | --- |
-| `--capture` | Append a Capture section framing the pane's visible area, with the pane id in the top border. An agent without a bound pane is an error. |
+| `--capture` | Append a Capture section framing the visible area of the pane the room's pane listing shows hosting the agent, with the pane id in the top border. An agent no listed pane hosts is an error (`agent <name> has no bound pane`), a stopped agent whose old pane is still open included. |
 | `--ansi` | Keep colors inside the capture frame. |
 | `--json` | Emit the report: the [`list` entry](#list) under `agent`, plus `stale`, the full `ask`, `run`, `messages` (the same filtered list, without the hidden count), `capture`, and `tmp_dir` when they apply. A stopped agent keeps the same entry shape, including `login` for a named account, with live-only fields such as context severity `null`. Active time includes its seat and launched children while their records are retained; it is `null` only when none remain. A child addressed directly reports its own seat alone. |
 
@@ -995,7 +995,7 @@ error: no lane '#nonsense' in this workspace; lanes: #auth-refresh, #main
 
 #### `focus`
 
-`rimz agents focus <REF>` moves your multiplexer focus to the agent's pane and prints `focused <address>`.
+`rimz agents focus <REF>` moves your multiplexer focus to the agent's pane and prints `focused <address>`. The pane is the one the room's pane listing shows hosting the agent when the command runs: focus wakes it, reads the listing again, and focuses it only when the agent is still there. An agent no listed pane hosts fails with `agent <name> has no bound pane`; an agent that left its pane while it was woken fails with `agent <name>: the agent left pane <id> while it was woken; nothing was focused`; a listing that cannot be read fails with `agent <name>: <error>; nothing was focused`. Each failure focuses nothing.
 
 #### `fork`
 

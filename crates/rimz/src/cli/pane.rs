@@ -158,11 +158,17 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             json,
             ansi,
         } => {
-            let target = resolve_pane_target(&target, globals)?;
-            let session_name = resolve_session_name(globals, target.session_name)?;
-            let backend = rimz::mux::backend_for(target.pane.mux());
-            backend.require_pane_in_session(&target.pane, &session_name)?;
-            capture(&*backend, &target.pane, &session_name, lines, json, ansi)
+            let (pane, session_name) = match resolve_pane_target(&target, globals)? {
+                ResolvedPaneTarget::Agent(agent) => locate_agent(&agent)?,
+                ResolvedPaneTarget::Pane { pane, session_name } => {
+                    let session_name = resolve_session_name(globals, session_name)?;
+                    rimz::mux::backend_for(pane.mux())
+                        .require_pane_in_session(&pane, &session_name)?;
+                    (pane, session_name)
+                }
+            };
+            let backend = rimz::mux::backend_for(pane.mux());
+            capture(&*backend, &pane, &session_name, lines, json, ansi)
         }
         PaneSubcmd::Send {
             target,
@@ -170,23 +176,37 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             key,
             text,
         } => {
-            let target = resolve_pane_target(&target, globals)?;
-            let session_name = resolve_session_name(globals, target.session_name)?;
-            rimz::mux::backend_for(target.pane.mux())
-                .require_pane_in_session(&target.pane, &session_name)?;
-            send(&target.pane, &session_name, text.as_deref(), &key, enter)
+            let (pane, session_name) = match resolve_pane_target(&target, globals)? {
+                ResolvedPaneTarget::Agent(agent) => {
+                    let pane = agent
+                        .stored_pane
+                        .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent.name))?;
+                    (pane, Some(agent.ctx.workspace.session_name.clone()))
+                }
+                ResolvedPaneTarget::Pane { pane, session_name } => (pane, session_name),
+            };
+            let session_name = resolve_session_name(globals, session_name)?;
+            rimz::mux::backend_for(pane.mux()).require_pane_in_session(&pane, &session_name)?;
+            send(&pane, &session_name, text.as_deref(), &key, enter)
         }
         PaneSubcmd::Focus {
             target,
             session_name,
             pane_process_start,
             ..
-        } => {
-            let target = resolve_pane_target(&target, globals)?;
-            let backend = rimz::mux::backend_for(target.pane.mux());
-            let session_name = resolve_session_name(globals, session_name.or(target.session_name))?;
-            focus(&*backend, &target.pane, &session_name, pane_process_start)
-        }
+        } => match resolve_pane_target(&target, globals)? {
+            ResolvedPaneTarget::Agent(agent) => {
+                focus_agent(&agent, session_name, pane_process_start)
+            }
+            ResolvedPaneTarget::Pane {
+                pane,
+                session_name: target_session,
+            } => {
+                let backend = rimz::mux::backend_for(pane.mux());
+                let session_name = resolve_session_name(globals, session_name.or(target_session))?;
+                focus(&*backend, &pane, &session_name, pane_process_start)
+            }
+        },
         PaneSubcmd::Zoom { session_name } => {
             let mux = rimz::mux::auto_detect_backend(globals.mux)?;
             let backend = rimz::mux::backend_for(mux);
@@ -212,9 +232,23 @@ enum PaneTarget {
     Sidebar,
 }
 
-struct ResolvedPaneTarget {
-    pane: PaneId,
-    session_name: Option<String>,
+enum ResolvedPaneTarget {
+    /// A pane the user named, or the sidebar: acted on as named, with no lookup read.
+    Pane {
+        pane: PaneId,
+        session_name: Option<String>,
+    },
+    /// An agent address: focus and capture ask the hosting lookup for its pane, while
+    /// send keeps the pane stored on the resolved row.
+    Agent(Box<AgentTarget>),
+}
+
+struct AgentTarget {
+    ctx: crate::cli::Ctx,
+    kind: rimz::ids::AgentKind,
+    launch: rimz::ids::AgentSessionId,
+    name: String,
+    stored_pane: Option<PaneId>,
 }
 
 fn classify_pane_target(raw: &str) -> Result<PaneTarget> {
@@ -241,13 +275,13 @@ fn resolve_pane_target(raw: &str, globals: &GlobalFlags) -> Result<ResolvedPaneT
         !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
     }) && rimz::mux::auto_detect_backend(globals.mux)? == rimz::MuxName::Tmux
     {
-        return Ok(ResolvedPaneTarget {
+        return Ok(ResolvedPaneTarget::Pane {
             pane: PaneId::from_parts(rimz::MuxName::Tmux, raw),
             session_name: None,
         });
     }
     match classify_pane_target(raw)? {
-        PaneTarget::Id(pane) => Ok(ResolvedPaneTarget {
+        PaneTarget::Id(pane) => Ok(ResolvedPaneTarget::Pane {
             pane,
             session_name: None,
         }),
@@ -261,15 +295,14 @@ fn resolve_pane_target(raw: &str, globals: &GlobalFlags) -> Result<ResolvedPaneT
                 None,
                 &ctx.address_context(),
             )?;
-            let pane = agent
-                .pane
-                .as_ref()
-                .map(|pane| pane.pane_id.clone())
-                .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
-            Ok(ResolvedPaneTarget {
-                pane,
-                session_name: Some(ctx.workspace.session_name.clone()),
-            })
+            let target = AgentTarget {
+                kind: agent.kind.clone(),
+                launch: agent.launch_key().clone(),
+                name: agent_name(agent).to_owned(),
+                stored_pane: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
+                ctx,
+            };
+            Ok(ResolvedPaneTarget::Agent(Box::new(target)))
         }
         PaneTarget::Sidebar => {
             let mux = rimz::mux::auto_detect_backend(globals.mux)?;
@@ -314,7 +347,7 @@ fn resolve_pane_target(raw: &str, globals: &GlobalFlags) -> Result<ResolvedPaneT
             let pane = rimz::pane::select_sidebar_pane(&listing.panes, &[own_view, focused_view])
                 .map(|pane| pane.pane_id.clone())
                 .ok_or_else(|| anyhow::anyhow!("session {session_name} has no sidebar pane"))?;
-            Ok(ResolvedPaneTarget {
+            Ok(ResolvedPaneTarget::Pane {
                 pane,
                 session_name: Some(session_name),
             })
@@ -679,6 +712,73 @@ fn focus(
     rimz::harness::hibernate::wake_pane_at(&paths, pane)?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace_id)?;
     rimz::mux::focus_anchor::execute_action(backend, &runtime, session_name, pane.clone())?;
+    Ok(())
+}
+
+/// The pane one lookup read hosts `agent` in, and its session; the capture wakes nothing.
+fn locate_agent(agent: &AgentTarget) -> Result<(PaneId, String)> {
+    let mut notices = Vec::new();
+    let hosting = rimz::launcher::agent_pane::locate(
+        &agent.ctx.workspace,
+        &agent.ctx.store,
+        agent.ctx.mux(),
+        &agent.kind,
+        &agent.launch,
+        &mut notices,
+    );
+    render::room::print_notices(notices)?;
+    match hosting {
+        Ok(Some(pane)) => Ok((pane.pane_id, pane.session_name)),
+        Ok(None) => bail!("agent {} has no bound pane", agent.name),
+        Err(err) => bail!("agent {}: {err}; nothing was captured", agent.name),
+    }
+}
+
+/// Focus the pane the lookup finds `agent` in, woken and read again first.
+fn focus_agent(
+    agent: &AgentTarget,
+    session_name: Option<String>,
+    pane_process_start: Option<String>,
+) -> Result<()> {
+    let mut notices = Vec::new();
+    let found = rimz::launcher::agent_pane::find(
+        &agent.ctx.workspace,
+        &agent.ctx.store,
+        agent.ctx.mux(),
+        &agent.kind,
+        &agent.launch,
+        &mut notices,
+    );
+    render::room::print_notices(notices)?;
+    let pane = match found {
+        Ok(pane) => pane,
+        Err(rimz::launcher::agent_pane::FindErr::Nowhere) => {
+            bail!("agent {} has no bound pane", agent.name)
+        }
+        Err(err) => bail!("agent {}: {err}; nothing was focused", agent.name),
+    };
+    if let Some(asked) = session_name.filter(|asked| *asked != pane.session_name) {
+        bail!(
+            "agent {} is in pane {} of session {}, not session {asked}; nothing was focused",
+            agent.name,
+            pane.pane_id,
+            pane.session_name
+        );
+    }
+    let backend = rimz::mux::backend_for(pane.pane_id.mux());
+    let session_name = pane.session_name;
+    validate_pane_not_reused(
+        &*backend,
+        &pane.pane_id,
+        Some(&session_name),
+        pane_process_start.as_deref(),
+    )?;
+    rimz::mux::focus_anchor::execute_action(
+        &*backend,
+        agent.ctx.runtime(),
+        &session_name,
+        pane.pane_id,
+    )?;
     Ok(())
 }
 

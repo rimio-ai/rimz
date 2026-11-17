@@ -143,10 +143,8 @@ fn permission_ask_visibility_uses_the_show_snapshot_clock() {
         jiff::Timestamp::from_second(1_059).unwrap(),
     )
     .with_live_panes(vec![pane.clone()], None);
-    let (report, error) = collect_show_report(
-        &store, &workspace, &runtime, &snapshot, "@codex", false, false,
-    )
-    .unwrap();
+    let (report, error) =
+        collect_show_report(&store, &workspace, &runtime, &snapshot, "@codex", None).unwrap();
     assert!(error.is_none());
     assert_eq!(report.agent.as_ref().unwrap().status, AgentStatus::Running);
     assert!(report.ask_next_step.is_none(), "{:?}", report.ask_next_step);
@@ -169,10 +167,8 @@ fn permission_ask_visibility_uses_the_show_snapshot_clock() {
         jiff::Timestamp::from_second(1_059).unwrap(),
     )
     .with_live_panes(vec![pane], None);
-    let (report, _) = collect_show_report(
-        &store, &workspace, &runtime, &snapshot, "@codex", false, false,
-    )
-    .unwrap();
+    let (report, _) =
+        collect_show_report(&store, &workspace, &runtime, &snapshot, "@codex", None).unwrap();
     assert!(report.ask_next_step.is_some());
 }
 
