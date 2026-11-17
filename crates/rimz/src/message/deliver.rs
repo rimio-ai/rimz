@@ -302,9 +302,18 @@ fn is_no_pane_blocker(blocker: &str) -> bool {
         || (blocker.starts_with(PINNED_PANE_PREFIX) && blocker.ends_with(PINNED_PANE_SUFFIX))
 }
 
-/// The wait a lookup that does not answer `bound`, the pane a record is bound to, puts it in.
-pub(super) fn not_hosted(miss: send::LookupMiss, bound: &PaneId) -> DeliveryVerdict {
-    match miss {
+/// The wait delivery puts a record bound to `target` in before its claim, when the hosting
+/// lookup does not answer that pane for the receiver; `None` when it does, or has no answer
+/// for a sessionless pane. Delivery, the fresh send, and `message show` all ask here.
+pub(super) fn hosting_wait(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    target: &PaneAgent,
+    bound: Option<&AgentState>,
+) -> Option<DeliveryVerdict> {
+    let miss = send::lookup_miss(workspace, store, target, bound)?;
+    let bound = &target.pane_id;
+    Some(match miss {
         send::LookupMiss::Nowhere => DeliveryVerdict::NoPane,
         send::LookupMiss::Elsewhere(found) => DeliveryVerdict::NotHosted {
             blocker: format!("{NOT_HOSTED_PREFIX}in pane {found}, not its bound pane {bound}"),
@@ -312,7 +321,7 @@ pub(super) fn not_hosted(miss: send::LookupMiss, bound: &PaneId) -> DeliveryVerd
         send::LookupMiss::Unread(error) => DeliveryVerdict::NotHosted {
             blocker: format!("{NOT_HOSTED_PREFIX}pane unreadable: {error}"),
         },
-    }
+    })
 }
 
 pub enum DeliveryReport {
@@ -428,11 +437,8 @@ fn attempt_delivery(
         };
     // Read before the claim, which a wait would only release again: a record waits here, with
     // no claim and no commit, until the lookup answers the pane it is bound to.
-    if let Some(miss) = send::lookup_miss(workspace, store, candidate.target, candidate.bound) {
-        return Ok(DeliveryReport::Refused(not_hosted(
-            miss,
-            &candidate.target.pane_id,
-        )));
+    if let Some(wait) = hosting_wait(workspace, store, candidate.target, candidate.bound) {
+        return Ok(DeliveryReport::Refused(wait));
     }
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_BEFORE_CLAIM");
@@ -1289,6 +1295,28 @@ pub fn explain(
     card_status: &CardStatus,
 ) -> DeliveryCheck {
     evaluate_delivery(message, pending, snapshot, now, card_status).check
+}
+
+/// [`explain`], with the verdict delivery reaches before its claim: when the snapshot's
+/// conditions pass, the hosting lookup is asked once, as delivery asks it.
+pub fn explain_before_claim(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    message: &MessageRecord,
+    pending: &[MessageRecord],
+    snapshot: &SidebarSnapshot,
+    now: Timestamp,
+    card_status: &CardStatus,
+) -> (DeliveryCheck, DeliveryVerdict) {
+    let evaluation = evaluate_delivery(message, pending, snapshot, now, card_status);
+    let verdict = evaluation.check.verdict();
+    let hosted = match (&verdict, &evaluation.binding) {
+        (DeliveryVerdict::Ready, Some(binding)) => {
+            hosting_wait(workspace, store, binding.pane, binding.exact_agent)
+        }
+        _ => None,
+    };
+    (evaluation.check, hosted.unwrap_or(verdict))
 }
 
 fn evaluate_delivery<'a>(

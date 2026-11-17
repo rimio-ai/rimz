@@ -1081,17 +1081,14 @@ fn dispatch_targets(
             (DispatchDecision::Live, Some(pane)) => {
                 // Read before the enqueue-and-claim: a receiver the lookup does not answer in
                 // its bound pane parks, as one with no pane does.
-                send::lookup_miss(
+                deliver::hosting_wait(
                     state.workspace,
                     state.store,
                     pane,
                     target.bound(state.snapshot),
                 )
-                .map_or(decision, |miss| DispatchDecision::Parked {
-                    reason: Some(ParkReason::from_verdict(deliver::not_hosted(
-                        miss,
-                        &pane.pane_id,
-                    ))),
+                .map_or(decision, |wait| DispatchDecision::Parked {
+                    reason: Some(ParkReason::from_verdict(wait)),
                 })
             }
             _ => decision,
