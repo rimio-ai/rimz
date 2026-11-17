@@ -3,6 +3,8 @@ use crate::cli::{render, select};
 use rimz::config::effective::ProfileScope;
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 use rimz::harness::launch::{ExecAction, ExecRequest};
+use rimz::launcher::agent_pane::AgentPane;
+use rimz::sidebar::produce::hosting::HostingErr;
 use rimz::store::writer::SwapAbort;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,11 +207,6 @@ pub(in crate::cli) fn restart_resolved(
 ) -> Result<String> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
-    let old_pane = agent
-        .pane
-        .as_ref()
-        .map(|pane| pane.pane_id.clone())
-        .ok_or_else(|| anyhow::anyhow!("agent has no bound pane; nothing to restart"))?;
     let cwd = agent
         .worktree_path
         .as_deref()
@@ -287,6 +284,26 @@ pub(in crate::cli) fn restart_resolved(
         &mut Default::default(),
         &mut crate::cli::render::err(),
     )?;
+    // Where the agent is once its login's hooks pass, before the folder-trust and process
+    // preflights; the swap replaces this pane, checked again once the preflights are done.
+    let mut notices = Vec::new();
+    let hosting = rimz::launcher::agent_pane::locate(
+        workspace,
+        store,
+        ctx.mux(),
+        &agent.kind,
+        agent.launch_key(),
+        &mut notices,
+    );
+    crate::cli::render::room::print_notices(notices)?;
+    let old_pane = match hosting {
+        Ok(Some(pane)) if !held_by(&pane, agent) => {
+            bail!("{}; nothing was restarted", held_elsewhere(&pane))
+        }
+        Ok(Some(pane)) => pane.pane_id,
+        Ok(None) => bail!("agent has no bound pane; nothing to restart"),
+        Err(err) => bail!("{err}; nothing was restarted"),
+    };
     let repo_root = if agent.checkout.is_none() {
         workspace.at_launch_dir(&cwd)?.cwd_project_root
     } else {
@@ -348,7 +365,10 @@ pub(in crate::cli) fn restart_resolved(
         skipped_continue.is_some(),
     );
     let handover = child_handover.or_else(|| open_session_run(&runs, agent));
-    rimz::harness::hibernate::wake_pane(store, &old_pane)?;
+    // An accepted window: the briefing and the reservation run after this read, so a move
+    // during them can place the split beside a pane the agent left, while the close stays
+    // guarded by `hosting_after_bind`.
+    find_replaced_pane(ctx, agent, &old_pane)?;
     let mut request = fresh_launch_request(agent, cell, posture.launch.mode)?;
     request.login = match (fresh_reason, flag_account) {
         (Some(_), None) => request.login,
@@ -412,8 +432,9 @@ pub(in crate::cli) fn restart_resolved(
             "warning: could not settle the peer's open turn before restart: {err:#}"
         );
     }
+    let after_bind = hosting_after_bind(ctx, agent, &old_pane);
     release_replaced(ctx, agent, &old_pane, fresh_reason.is_some());
-    close_replaced(ctx, backend.as_ref(), &old_pane);
+    close_replaced(ctx, backend.as_ref(), &old_pane, after_bind);
     if let Some(run) = child_handover {
         let caller = restart.as_ref().and_then(|restart| restart.caller);
         if let Err(err) = notify_parent_restarted(ctx, agents, agent, run, &account, caller) {
@@ -439,6 +460,74 @@ pub(in crate::cli) fn restart_resolved(
             agent.agent_id
         ),
     })
+}
+
+/// Wake the pane the restart replaces, `old_pane`, and refuse unless the lookup still finds
+/// the agent there after the wake.
+fn find_replaced_pane(ctx: &Ctx, agent: &AgentState, old_pane: &rimz::ids::PaneId) -> Result<()> {
+    let mut notices = Vec::new();
+    let found = rimz::launcher::agent_pane::find(
+        &ctx.workspace,
+        &ctx.store,
+        Some(old_pane.mux()),
+        &agent.kind,
+        agent.launch_key(),
+        &mut notices,
+    );
+    crate::cli::render::room::print_notices(notices)?;
+    match found {
+        Ok(pane) if !held_by(&pane, agent) => {
+            bail!("{}; nothing was restarted", held_elsewhere(&pane))
+        }
+        Ok(pane) if pane.pane_id == *old_pane => Ok(()),
+        Ok(pane) => bail!(
+            "the agent moved from pane {old_pane} to pane {} during the restart's checks; \
+             nothing was restarted",
+            pane.pane_id
+        ),
+        Err(rimz::launcher::agent_pane::FindErr::Nowhere) => bail!(
+            "the agent left pane {old_pane} during the restart's checks and is in no pane now; \
+             nothing was restarted"
+        ),
+        Err(err) => bail!("{err}; nothing was restarted"),
+    }
+}
+
+/// Whether the lookup holds `agent`'s own session in `pane`, not another session of its
+/// launch: a revival can leave two live rows of one launch in two panes.
+pub(super) fn held_by(pane: &AgentPane, agent: &AgentState) -> bool {
+    pane.holder.0 == agent.kind && pane.holder.1 == agent.agent_id
+}
+
+/// The refusal's cause when [`held_by`] is false.
+pub(super) fn held_elsewhere(pane: &AgentPane) -> String {
+    format!(
+        "another session of the agent, {}, holds its pane {}",
+        pane.holder.1, pane.pane_id
+    )
+}
+
+/// Where the agent is once its replacement bound, read on the replaced pane's backend before
+/// that session is released; [`close_replaced`] closes the pane only on this answer.
+pub(super) fn hosting_after_bind(
+    ctx: &Ctx,
+    agent: &AgentState,
+    old_pane: &rimz::ids::PaneId,
+) -> Result<Option<AgentPane>, HostingErr> {
+    let mut notices = Vec::new();
+    let hosting = rimz::launcher::agent_pane::locate(
+        &ctx.workspace,
+        &ctx.store,
+        Some(old_pane.mux()),
+        &agent.kind,
+        agent.launch_key(),
+        &mut notices,
+    );
+    warn_after_bound(
+        "the multiplexer's notices were not printed",
+        crate::cli::render::room::print_notices(notices),
+    );
+    hosting
 }
 
 /// Reserve a swap of `source`'s agent, naming a refusal for the command
@@ -533,16 +622,23 @@ pub(super) fn place_replacement(
         })
         .context("opening the replacement agent pane")?;
     #[cfg(any(test, feature = "testkit"))]
-    if std::env::var_os("RIMZ_TEST_SWAP_BIND_AS_WRAPPER").is_some_and(|value| value == "1") {
+    if let Some(bind) = std::env::var_os("RIMZ_TEST_SWAP_BIND_AS_WRAPPER")
+        .filter(|value| value == "1" || value == "old")
+    {
         // The integration mux shims never run the pane's command, so the
-        // test stands in for the replacement's wrapper and binds it here.
-        let pane = new_pane.unwrap_or_else(|| {
-            let raw = match old_pane.mux() {
-                rimz::ids::MuxName::Tmux => "%9999",
-                rimz::ids::MuxName::Zellij => "terminal_9999",
-            };
-            rimz::ids::PaneId::from_parts(old_pane.mux(), raw)
-        });
+        // test stands in for the replacement's wrapper and binds it here,
+        // in the replaced pane itself when it asks for `old`.
+        let pane = if bind == "old" {
+            old_pane.clone()
+        } else {
+            new_pane.unwrap_or_else(|| {
+                let raw = match old_pane.mux() {
+                    rimz::ids::MuxName::Tmux => "%9999",
+                    rimz::ids::MuxName::Zellij => "terminal_9999",
+                };
+                rimz::ids::PaneId::from_parts(old_pane.mux(), raw)
+            })
+        };
         store.bind_agent_launch(identity, &workspace.session_name, cwd, &pane, None)?;
     }
     #[cfg(not(any(test, feature = "testkit")))]
@@ -699,12 +795,33 @@ pub(super) fn release_replaced(
 }
 
 /// Close the pane of the session a swap replaced, warning with the pane left open when the
-/// multiplexer refuses.
+/// multiplexer refuses. Nothing is closed, with a warning, when the read after the bind
+/// still finds the agent in that pane or could not be made.
 pub(super) fn close_replaced(
     ctx: &Ctx,
     backend: &dyn rimz::mux::MuxBackend,
     old_pane: &rimz::ids::PaneId,
+    after_bind: Result<Option<AgentPane>, HostingErr>,
 ) {
+    match after_bind {
+        Ok(Some(pane)) if pane.pane_id == *old_pane => {
+            let _ = writeln!(
+                crate::cli::render::err(),
+                "warning: the agent is still in pane {old_pane} after its replacement bound; \
+                 the pane was not closed"
+            );
+            return;
+        }
+        Err(err) => {
+            let _ = writeln!(
+                crate::cli::render::err(),
+                "warning: the replaced session's pane {old_pane} was not closed: reading where \
+                 the agent is after its replacement bound: {err}"
+            );
+            return;
+        }
+        Ok(_) => {}
+    }
     warn_after_bound(
         &format!("the replaced session's pane {old_pane} is still open"),
         backend

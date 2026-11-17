@@ -5,6 +5,9 @@
 mod session_step;
 
 #[cfg(unix)]
+mod swap_pane;
+
+#[cfg(unix)]
 mod live_focus;
 
 #[cfg(unix)]
@@ -2625,7 +2628,8 @@ fn assert_planner_kept_what_it_was_owed(env: &Env) {
 /// wrapper; without it nothing binds and the swap's bind wait runs out.
 #[cfg(unix)]
 fn restart_owed_planner(resumed: bool, bound: bool) -> (Env, std::process::Output) {
-    let (env, mut command) = owed_planner_restart(resumed);
+    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude"}]"#;
+    let (env, mut command) = owed_planner_restart(resumed, panes);
     if bound {
         command.env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1");
     } else {
@@ -2635,8 +2639,21 @@ fn restart_owed_planner(resumed: bool, bound: bool) -> (Env, std::process::Outpu
     (env, output)
 }
 
-/// Seeds `@planner` with what it is owed and builds its restart command.
-fn owed_planner_restart(resumed: bool) -> (Env, std::process::Command) {
+/// The room of [`restart_owed_planner`], `@planner` in `zellij:terminal_1`, and the restart
+/// command, whose room lists the zellij `panes` (JSON) and whose mux calls go to `mux.log`
+/// under the fixture home.
+#[cfg(unix)]
+fn owed_planner_restart(resumed: bool, panes: &str) -> (Env, std::process::Command) {
+    owed_planner_restart_of("@planner", resumed, panes)
+}
+
+/// [`owed_planner_restart`], restarting the agent `target` names.
+#[cfg(unix)]
+fn owed_planner_restart_of(
+    target: &str,
+    resumed: bool,
+    panes: &str,
+) -> (Env, std::process::Command) {
     let env = Env::new();
     env.install_agent_hooks("claude");
     env.record(&env.project_root);
@@ -2657,7 +2674,6 @@ fn owed_planner_restart(resumed: bool) -> (Env, std::process::Command) {
     let shim = write_env_dump_shim(&env, "claude");
     let shell = write_fake_login_shell(&env, "swap-shell", &[]);
     let workspace = env.resolve_workspace(&env.project_root);
-    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude"}]"#;
     crate::common::room::seed_live_zellij_room(
         &env.runtime_paths(),
         &workspace.session_name,
@@ -2670,7 +2686,7 @@ fn owed_planner_restart(resumed: bool) -> (Env, std::process::Command) {
             "zellij",
             "agents",
             "restart",
-            "@planner",
+            target,
             "--no-continue",
         ])
         .env("SHELL", &shell)
@@ -2918,7 +2934,8 @@ fn restart_whose_replacement_never_binds_leaves_the_agent_in_its_old_session() {
 #[cfg(unix)]
 #[test]
 fn restart_whose_agent_a_stop_ends_meanwhile_says_the_stop_ended_it() {
-    let (env, mut command) = owed_planner_restart(false);
+    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude"}]"#;
+    let (env, mut command) = owed_planner_restart(false, panes);
     command.env("RIMZ_TEST_SWAP_BIND_WAIT_MS", "20000");
     let restart = std::thread::spawn(move || command.bounded_output().unwrap());
     let deadline = std::time::Instant::now() + crate::common::COMMAND_TIMEOUT;

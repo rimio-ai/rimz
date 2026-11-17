@@ -133,11 +133,28 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
             Some(store.runtime_paths()),
         )?;
     }
-    let old_pane = source
-        .pane
-        .as_ref()
-        .map(|pane| pane.pane_id.clone())
-        .context("molt needs the caller's own pane; nothing was changed")?;
+    let mut notices = Vec::new();
+    // An accepted window, as at restart's re-find: the briefing and the reservation run after
+    // this read, while the close stays guarded by `hosting_after_bind`.
+    let found = rimz::launcher::agent_pane::find(
+        workspace,
+        store,
+        ctx.mux(),
+        &source.kind,
+        source.launch_key(),
+        &mut notices,
+    );
+    crate::cli::render::room::print_notices(notices)?;
+    let old_pane = match found {
+        Ok(pane) if !restart::held_by(&pane, source) => {
+            bail!("{}; nothing was changed", restart::held_elsewhere(&pane))
+        }
+        Ok(pane) => pane.pane_id,
+        Err(rimz::launcher::agent_pane::FindErr::Nowhere) => {
+            bail!("molt needs the caller's own pane; nothing was changed")
+        }
+        Err(err) => bail!("{err}; nothing was changed"),
+    };
     let mut request = molt_request(&agent, &posture, login.clone())?;
     request.prompt = restart::swap_briefing(
         store,
@@ -220,8 +237,9 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
         "molted {handle} into a fresh session beside this one; this session closes now\nnext: rimz agents show {handle}"
     )
     .and_then(|()| out.flush());
+    let after_bind = restart::hosting_after_bind(&ctx, source, &old_pane);
     restart::release_replaced(&ctx, source, &old_pane, true);
-    restart::close_replaced(&ctx, backend.as_ref(), &old_pane);
+    restart::close_replaced(&ctx, backend.as_ref(), &old_pane, after_bind);
     Ok(receipt?)
 }
 
