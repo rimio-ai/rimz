@@ -2803,7 +2803,9 @@ fn assert_subagent_checkout_case(
             .args(["--mux", "zellij", "agents", "restart", &address])
             .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
             .envs(command.get_envs().filter_map(|(key, value)| value.map(|value| (key, value))))
-            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":1,"title":"codex"}]"#)
+            // The child's pane runs its provider, which the restart's lookup reads as the
+            // evidence that hosts a lazily registering child there.
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", format!(r#"[{{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"}},{{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}},{{"id":3,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"{}"}}]"#, child.kind))
             .bounded_output().unwrap();
         if empty == Some("revoked") {
             let stderr = String::from_utf8_lossy(&output.stderr);
