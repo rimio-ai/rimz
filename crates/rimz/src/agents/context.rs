@@ -1187,9 +1187,10 @@ pub struct RateLimitWindow {
     /// in-process session switch cannot freshen replayed content. An unknown
     /// owner falls back to capture. Replayed content keeps its prior stamp;
     /// new windows in an already populated sidecar take capture time.
-    /// For an [`WindowSource::Authoritative`] account usage window, the
-    /// probe's request start, before any retries. Reconfirming an unchanged
-    /// value is fresh information.
+    /// For a [`WindowSource::Authoritative`] window, a time taken before the
+    /// request that read it: an account usage probe's first attempt, or the
+    /// app-server read for a session sidecar. Reconfirming an unchanged value
+    /// is fresh information.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at: Option<Timestamp>,
     /// Where the reading came from, deciding how far the fusion trusts a drop.
