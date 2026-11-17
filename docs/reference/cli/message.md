@@ -96,6 +96,7 @@ The send prints one line per target:
 | `queued for @coder (msg_…) — when @coder idle 58m` | The first unmet `--when` condition. |
 | `queued for @coder (msg_…) — behind msg_…` | An older queued message, an in-flight write, or a prompt the agent has not yet acknowledged blocks delivery. |
 | `queued for @coder (msg_…) — no live pane` | No pane can receive the text (park mode or a single-target steer). |
+| `queued for @coder (msg_…) — receiver in pane <found>, not its bound pane <bound>` | The pane listing shows the agent in another pane than the one it is bound to; a listing that cannot be read prints `— receiver pane unreadable: <error>` instead. Any mode, `--interrupt` included, prints it with no `send now` hint, since that command would refuse with the same cause. |
 | `queued for @coder (msg_…)` | A live attempt deferred delivery without reporting a cause. |
 | `compacted @coder` | Printed before the delivery line when `--smart-compact` fired. |
 | `compacting @coder; queued msg_… (delivers when compaction completes)` | The compact command landed; the prompt follows once compaction ends. Steer prints `queued for @coder (msg_…; waiting for compaction)`. |

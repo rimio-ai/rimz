@@ -155,7 +155,7 @@ pub(crate) fn render_dispatch_outcome(
             DispatchOutcome::Queued {
                 label,
                 message_id,
-                reason: None | Some(ParkReason::NoPane | ParkReason::NotHosted { .. }),
+                reason: None | Some(ParkReason::NoPane),
             },
         ) => {
             return Some(format!(
