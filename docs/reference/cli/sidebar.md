@@ -19,6 +19,8 @@ Every command accepts `--session-name S`, and [`split`](#split-from-the-sidebar)
 
 `walk`, `slot`, `last`, `filter`, and `close` ask the room's sidebar host to act on its current view, including its selection, order, and layout freeze. The acting card is the highlight: it follows the focused card, but stays on the last card while focus is on the sidebar or another non-card pane. All attached clients must share one view. With no attached client, a client on a tab without a sidebar, or clients on different tabs, the command is a no-op rather than a guess at whose selection to change.
 
+A focus that `walk`, `slot`, or `last` moves onto an agent's card follows the [card click](../../interface/sidebar.md#mouse): when the agent has left the card's pane, focus stays where it was and the sidebar shows a `focus failed` notice with the reason, while the command still exits 0, since the host answers before the focus runs.
+
 An open help panel closes before the command acts. An unfinished search draft is cancelled; a committed search remains part of the lens.
 
 `close --pane` is the exception: it names its row, so it acts through any attached client's ready view, clients may view different tabs, and it leaves help and the search draft as they are. `reopen` does not use the sidebar host at all, so it works with no attached client.
