@@ -1562,7 +1562,8 @@ allowed-dependencies = [
 # WorkflowPaths::{history, relocate} name a run's saved history and map its journal's live paths onto its current home (+2).
 # RuntimePaths::bookings_path classes the sidebar's loop-bookings lane cache (+1).
 # loop_launch_logs_dir names the per-fire launch-child log directory beside the other loop paths (+1).
-surface-budget = 343
+# The model refusal record's path and lock are built here (+2).
+surface-budget = 345
 
 [[verdict]]
 kind = "item"

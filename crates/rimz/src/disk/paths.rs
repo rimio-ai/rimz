@@ -1478,6 +1478,10 @@ impl RuntimePaths {
         self.persistent_shared_root.join("model_refusals.v1.json")
     }
 
+    pub(crate) fn shared_model_refusals_lock(&self) -> PathBuf {
+        self.shared_root.join("model_refusals.v1.lock")
+    }
+
     pub(crate) fn shared_auto_redeem_path(&self, key: &crate::ids::LoginKey) -> PathBuf {
         self.persistent_shared_root
             .join(format!("auto_redeem.{key}.json"))

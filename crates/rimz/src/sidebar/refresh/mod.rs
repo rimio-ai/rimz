@@ -29,6 +29,7 @@ mod git_refs;
 pub mod git_stats;
 pub(super) mod keep_warm;
 pub(super) mod live_spend;
+mod model_refusals;
 pub(super) mod pipeline;
 mod pr;
 pub(super) mod rate_limits;
@@ -302,6 +303,14 @@ pub(super) fn refresh_heavy_lanes(
     });
     steps.step("account_usage", || {
         refresh_account_usage(&panels, runtime, &logins)
+    });
+    steps.step("model_refusals", || {
+        model_refusals::record_model_refusals(
+            &base.agents,
+            runtime,
+            &logins,
+            jiff::Timestamp::now(),
+        )
     });
     steps.step("auto_continue", || {
         let active: std::collections::HashSet<_> = base

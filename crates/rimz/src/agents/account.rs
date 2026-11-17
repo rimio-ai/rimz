@@ -573,6 +573,28 @@ impl ProviderCapacity {
                 .any(|window| window_spent_unreset(window, now))
     }
 
+    /// Whether a usage read confirms that the provider refuses `model` on this login, from a
+    /// limit marker `at`: every covering window (the unscoped duration windows and the model's
+    /// sub-caps) was observed after `at` and no later than
+    /// [`super::model_refusal::CONFIRM_WINDOW`] after it, and none reads spent. A login with no
+    /// windows never confirms.
+    pub(crate) fn confirms_refusal(&self, model: &str, at: Timestamp) -> bool {
+        let Ok(deadline) = at.checked_add(super::model_refusal::CONFIRM_WINDOW) else {
+            return false;
+        };
+        let mut covering = self
+            .duration_windows()
+            .chain(self.model_windows(Some(model)))
+            .peekable();
+        covering.peek().is_some()
+            && covering.all(|window| {
+                !window.is_spent()
+                    && window
+                        .observed_at
+                        .is_some_and(|observed| observed > at && observed <= deadline)
+            })
+    }
+
     fn model_windows(&self, model: Option<&str>) -> impl Iterator<Item = &RateLimitWindow> {
         let model = model.map(|model| {
             crate::agents::model_display::display_model(launch_model_id(model)).to_ascii_lowercase()
