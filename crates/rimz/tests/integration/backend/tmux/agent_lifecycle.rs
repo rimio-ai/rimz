@@ -9,13 +9,18 @@ use rimz::store::writer::AgentLifecycleIntent;
 #[cfg(target_os = "linux")]
 use rimz::testkit::sandbox::{SandboxSpec, sandbox_processes};
 
+/// The scoped park runs one thread the host park does not, the `scoped-binds` bind guard: its
+/// 256 KiB stack (16 KiB touched) and a jemalloc arena of its own measured 136 to 172 KiB on
+/// a THP `madvise` host, so the scoped wrapper is held to the host budget plus this.
+const SCOPED_BIND_GUARD_ALLOWANCE_KIB: u64 = 256;
+
 #[test]
 fn parked_wrapper_holds_under_8_mib() {
     parked_wrapper_memory_budget(rimz::config::Isolation::Host);
 }
 
 #[test]
-fn scoped_parked_wrapper_holds_under_8_mib() {
+fn scoped_parked_wrapper_holds_host_budget_plus_bind_guard() {
     if let Err(error) = rimz::sandbox::preflight(rimz::config::Isolation::Scoped) {
         crate::common::skip(&format!("bubblewrap unusable: {error}"));
         return;
@@ -34,6 +39,12 @@ fn parked_wrapper_memory_budget(isolation: rimz::config::Isolation) {
     }
     let budget_mib = std::env::var("RIMZ_TEST_PARK_BUDGET_MIB")
         .map_or(8, |value| value.parse::<u64>().expect("park budget in MiB"));
+    let budget_kib = budget_mib * 1024
+        + if isolation.is_scoped() {
+            SCOPED_BIND_GUARD_ALLOWANCE_KIB
+        } else {
+            0
+        };
     let mut figures = Vec::new();
     for subagent in [false, true] {
         let env = Env::new();
@@ -307,11 +318,11 @@ fn parked_wrapper_memory_budget(isolation: rimz::config::Isolation) {
             "parked wrapper plain"
         };
         figures.push(crate::common::measure_wrapper_memory(
-            label, wrapper, budget_mib,
+            label, wrapper, budget_kib,
         ));
     }
     for memory in &figures {
-        memory.assert_within(budget_mib);
+        memory.assert_within(budget_kib);
     }
 }
 

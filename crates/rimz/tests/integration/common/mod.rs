@@ -71,8 +71,8 @@ pub(crate) struct WrapperMemory {
     mode: String,
 }
 
-pub(crate) fn assert_wrapper_memory_budget(label: &str, wrapper: u32, budget_mib: u64) {
-    measure_wrapper_memory(label, wrapper, budget_mib).assert_within(budget_mib);
+pub(crate) fn assert_wrapper_memory_budget(label: &str, wrapper: u32, budget_kib: u64) {
+    measure_wrapper_memory(label, wrapper, budget_kib).assert_within(budget_kib);
 }
 
 /// Prints the wrapper's figures, and its mappings when they exceed a budget, without
@@ -81,7 +81,7 @@ pub(crate) fn assert_wrapper_memory_budget(label: &str, wrapper: u32, budget_mib
     clippy::print_stdout,
     reason = "live memory measurements are test output"
 )]
-pub(crate) fn measure_wrapper_memory(label: &str, wrapper: u32, budget_mib: u64) -> WrapperMemory {
+pub(crate) fn measure_wrapper_memory(label: &str, wrapper: u32, budget_kib: u64) -> WrapperMemory {
     let rollup = std::fs::read_to_string(format!("/proc/{wrapper}/smaps_rollup"))
         .expect("wrapper smaps_rollup");
     let field = |key: &str| -> u64 {
@@ -118,7 +118,7 @@ pub(crate) fn measure_wrapper_memory(label: &str, wrapper: u32, budget_mib: u64)
          pages; AnonHugePages {huge_kib} KiB; THP {mode}",
         field("Pss:")
     );
-    if outside_huge_kib > budget_mib * 1024 || huge_kib > WRAPPER_HUGE_BUDGET_MIB * 1024 {
+    if outside_huge_kib > budget_kib || huge_kib > WRAPPER_HUGE_BUDGET_MIB * 1024 {
         println!(
             "{label} mappings (load {}):\n{}",
             std::fs::read_to_string("/proc/loadavg")
@@ -135,7 +135,7 @@ impl WrapperMemory {
         self.private_kib.saturating_sub(self.huge_kib)
     }
 
-    pub(crate) fn assert_within(&self, budget_mib: u64) {
+    pub(crate) fn assert_within(&self, budget_kib: u64) {
         let Self {
             label,
             private_kib,
@@ -144,9 +144,9 @@ impl WrapperMemory {
         } = self;
         let outside_huge_kib = self.outside_huge_kib();
         assert!(
-            outside_huge_kib <= budget_mib * 1024,
-            "{label} {outside_huge_kib} KiB outside huge pages exceeds {budget_mib} MiB; \
-             private {private_kib} KiB; AnonHugePages {huge_kib} KiB; THP {mode}"
+            outside_huge_kib <= budget_kib,
+            "{label} {outside_huge_kib} KiB outside huge pages exceeds its {budget_kib} KiB \
+             budget; private {private_kib} KiB; AnonHugePages {huge_kib} KiB; THP {mode}"
         );
         assert!(
             *huge_kib <= WRAPPER_HUGE_BUDGET_MIB * 1024,

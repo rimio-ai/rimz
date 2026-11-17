@@ -139,7 +139,7 @@ fn check_command_pane(measure_memory: bool) {
             }
             candidates.extend(rimz::proc::children(pid));
         };
-        crate::common::assert_wrapper_memory_budget("command wrapper", wrapper, 8);
+        crate::common::assert_wrapper_memory_budget("command wrapper", wrapper, 8 * 1024);
     }
     rimz::harness::run::cancel(store.paths(), store.runtime_paths(), &record.run_id).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);

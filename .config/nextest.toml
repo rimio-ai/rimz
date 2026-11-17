@@ -112,10 +112,11 @@ status-level = "retry"
 failure-output = "immediate-final"
 fail-fast = { max-fail = 3 }
 
-# The wrapper budget tests print their memory figures; keep them in the final
-# summary on a pass too, so CI's log shows the margin under each budget.
+# The wrapper budget tests print their memory figures; keep them in nextest's
+# final summary on a pass too. xtask prints only its own summary line, so the
+# figures show under `cargo xtask test --no-capture`, not in CI's log.
 [[profile.live.overrides]]
-filter = 'package(rimz) & test(/wrapper_holds_under_8_mib$/)'
+filter = 'package(rimz) & test(/wrapper_holds_(under_8_mib|host_budget_plus_bind_guard)$/)'
 success-output = "final"
 
 # A retried pass hides its failed attempts from the console summary, so the
