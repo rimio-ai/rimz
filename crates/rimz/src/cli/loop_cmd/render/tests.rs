@@ -896,6 +896,32 @@ fn negated_leaf_glyphs_and_short_read_through_the_negation() {
 }
 
 #[test]
+fn a_window_reset_sits_only_beside_the_unmet_term_on_its_key() {
+    let expr =
+        rimz::harness::when::WhenExpr::parse(&["window.5h.left>=20 && window.5h.left<=60".into()])
+            .unwrap();
+    let reading = crate::cli::wake_view::ConditionReading {
+        unread: BTreeMap::new(),
+        verdict: Verdict {
+            truth: Some(false),
+            readings: BTreeMap::from([("window.5h.left".into(), Some("10".into()))]),
+            unread: BTreeMap::new(),
+        },
+        resets: BTreeMap::from([(
+            "window.5h.left".into(),
+            "2099-06-15T12:00:00Z".parse().unwrap(),
+        )]),
+    };
+    let mut out = Vec::new();
+    super::super::condition::write_terms(&mut out, &expr, &reading, &jiff::tz::TimeZone::UTC)
+        .unwrap();
+    assert_eq!(
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
+        "  window.5h.left>=20   ✗ 10 (resets 2099-06-15 12:00)\n  window.5h.left<=60   ✓ 10\n"
+    );
+}
+
+#[test]
 fn worktrees_order_counts_terms_and_fold_lines() {
     let view = worktree_view();
     let text = show_text(&view);
