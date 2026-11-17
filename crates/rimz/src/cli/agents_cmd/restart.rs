@@ -1072,7 +1072,23 @@ fn refuse_spent(
     {
         return Ok(());
     }
-    let reset = rimz::agents::account::ProviderCapacity::read(runtime, &key)
+    let capacity = rimz::agents::account::ProviderCapacity::read(runtime, &key);
+    if let Some(model) = model
+        && capacity
+            .as_ref()
+            .is_some_and(|capacity| capacity.model_refused(Some(model)))
+    {
+        bail!(
+            "restart refused: the provider refuses {} on {} account `{}`, so the continue for \
+             {}'s interrupted turn would stop again; pass `--account <other>` to run it on \
+             another account, or `--no-continue` to reopen it at rest",
+            rimz::agents::model_display::model_label_parts(model).0,
+            key.kind,
+            key.name,
+            handle(agent),
+        );
+    }
+    let reset = capacity
         .and_then(|capacity| capacity.latest_spent_window_reset_for_model(now, model))
         .map_or_else(String::new, |reset| {
             format!(

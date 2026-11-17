@@ -740,3 +740,210 @@ fn window_of_span_selects_the_unscoped_window_projected_at_now() {
         Some(10)
     );
 }
+
+#[test]
+fn a_standing_refusal_vetoes_its_model_on_its_login_only() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let (_dir, runtime) = runtime();
+    let unspent = |used| RateLimitCacheEntry {
+        limits: AgentRateLimits {
+            windows: vec![window(now, Some(used), 3_600, Some(300))],
+        },
+        ..Default::default()
+    };
+    write_cache(
+        &runtime,
+        &RateLimitsCache {
+            entries: [("claude@default", 20), ("claude@work", 20)]
+                .into_iter()
+                .map(|(key, used)| (key.parse().unwrap(), unspent(used)))
+                .collect(),
+            ..Default::default()
+        },
+    );
+    let refusals = |succeeded: &str| {
+        format!(
+            r#"{{"logins":{{"claude@default":{{"fable 5.2":{{"refused_at":"2033-05-18T03:00:00Z"{succeeded},"label":"Fable 5.2 requires usage credits."}}}}}}}}"#
+        )
+    };
+    std::fs::write(runtime.shared_model_refusals_path(), refusals("")).unwrap();
+    let default = login_key("claude");
+    let capacity = ProviderCapacity::read(&runtime, &default).unwrap();
+    for (model, refused) in [
+        (Some("claude-fable-5-2"), true),
+        (Some("claude-fable-5-2-20260801"), true),
+        (Some("Fable 5.2 (1M context)"), true),
+        (Some("fable"), true),
+        (Some("claude-fable-5-5"), false),
+        (Some("claude-opus-4-8"), false),
+        (None, false),
+    ] {
+        assert_eq!(capacity.model_exhausted(now, model), refused, "{model:?}");
+        assert_eq!(
+            capacity.subscription_exhausted_for_model(now, model),
+            refused,
+            "{model:?}"
+        );
+        assert_eq!(
+            capacity.subscription_budget_available_for_model(now, model),
+            !refused,
+            "{model:?}"
+        );
+        assert_eq!(
+            capacity.latest_spent_window_reset_for_model(now, model),
+            None
+        );
+    }
+    assert_eq!(
+        capacity
+            .refusal(Some("claude-fable-5-2"))
+            .and_then(|refusal| refusal.label.as_deref()),
+        Some("Fable 5.2 requires usage credits.")
+    );
+
+    // A family alias matches a recorded version of its family, never a key that only starts
+    // with the family's name.
+    std::fs::write(
+        runtime.shared_model_refusals_path(),
+        r#"{"logins":{"claude@default":{"fable plan":{"refused_at":"2033-05-18T03:00:00Z"}}}}"#,
+    )
+    .unwrap();
+    let unversioned = ProviderCapacity::read(&runtime, &default).unwrap();
+    assert!(!unversioned.model_refused(Some("fable")));
+    std::fs::write(runtime.shared_model_refusals_path(), refusals("")).unwrap();
+
+    // The ping and compaction tests read the agent's current model: the context's id, which an
+    // idle `/model` moves, ahead of the lifecycle model.
+    let mut agent = crate::agents::AgentState::seed(
+        AgentKind::new_unchecked("claude"),
+        "root".into(),
+        crate::agents::AgentStatus::Idle,
+        now,
+    );
+    agent.model = Some("claude-opus-4-8".to_owned());
+    agent.context = Some(crate::agents::AgentContext {
+        model_id: Some("claude-fable-5-2".to_owned()),
+        ..Default::default()
+    });
+    assert!(capacity.window_spent(&agent, now));
+    assert!(capacity.compaction_blocked(&agent, now, || true));
+    assert!(ProviderCapacity::login_window_spent(&runtime, &agent, now));
+    assert!(ProviderCapacity::login_compaction_blocked(
+        &runtime, &agent, now
+    ));
+    let mut moved = agent.clone();
+    moved.context = None;
+    assert!(!capacity.window_spent(&moved, now));
+    assert!(!capacity.compaction_blocked(&moved, now, || false));
+
+    // Another login of the same kind is not refused, through either reader.
+    let mut work = agent.clone();
+    work.login = Some("work".parse().unwrap());
+    assert!(!ProviderCapacity::login_window_spent(&runtime, &work, now));
+    let accounts = toml::from_str("[claude.work]\nhome = '/srv/work'\n").unwrap();
+    let catalog = crate::agents::LoginCatalog::from_config(&accounts).unwrap();
+    let logins = RoomLoginSet::new(Some(Default::default()), Some(catalog), BTreeMap::new())
+        .with_agents(&[agent.clone(), work]);
+    let all = ProviderCapacity::read_all(&runtime, &logins);
+    assert!(all[&default].model_refused(Some("claude-fable-5-2")));
+    assert!(!all[&"claude@work".parse().unwrap()].model_refused(Some("claude-fable-5-2")));
+
+    // A success after the refusal clears it; an unreadable file reads as no records.
+    std::fs::write(
+        runtime.shared_model_refusals_path(),
+        refusals(r#","succeeded_at":"2033-05-18T03:05:00Z""#),
+    )
+    .unwrap();
+    let cleared = ProviderCapacity::read(&runtime, &default).unwrap();
+    assert!(!cleared.model_refused(Some("claude-fable-5-2")));
+    assert!(cleared.refusal(Some("claude-fable-5-2")).is_some());
+    assert!(!cleared.window_spent(&agent, now));
+    std::fs::write(runtime.shared_model_refusals_path(), "{not json").unwrap();
+    let unreadable = ProviderCapacity::read(&runtime, &default).unwrap();
+    assert!(!unreadable.model_refused(Some("claude-fable-5-2")));
+    assert!(!unreadable.window_spent(&agent, now));
+}
+
+#[test]
+fn a_bare_alias_reads_a_standing_version_ahead_of_its_own_cleared_record() {
+    let (_dir, runtime) = runtime();
+    write_cache(
+        &runtime,
+        &RateLimitsCache {
+            entries: [(
+                "claude@default".parse().unwrap(),
+                RateLimitCacheEntry::default(),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        },
+    );
+    std::fs::write(
+        runtime.shared_model_refusals_path(),
+        r#"{"logins":{"claude@default":{
+            "fable":{"refused_at":"2033-05-18T03:00:00Z","succeeded_at":"2033-05-18T03:05:00Z"},
+            "fable 5.2":{"refused_at":"2033-05-18T04:00:00Z","label":"refused again"}}}}"#,
+    )
+    .unwrap();
+    let capacity = ProviderCapacity::read(&runtime, &login_key("claude")).unwrap();
+    assert!(
+        capacity.model_refused(Some("fable")),
+        "the standing version wins"
+    );
+    assert_eq!(
+        capacity
+            .refusal(Some("fable"))
+            .and_then(|refusal| refusal.label.as_deref()),
+        Some("refused again")
+    );
+    assert!(capacity.model_refused(Some("claude-fable-5-2")));
+    assert!(
+        !capacity.model_refused(Some("claude-fable-5-5")),
+        "a sibling version with neither its own record nor a standing family alias"
+    );
+
+    // A standing record under the alias holds every version of the family.
+    std::fs::write(
+        runtime.shared_model_refusals_path(),
+        r#"{"logins":{"claude@default":{
+            "fable":{"refused_at":"2033-05-18T03:00:00Z","label":"alias refused"},
+            "fable 5.2":{"refused_at":"2033-05-18T02:00:00Z","succeeded_at":"2033-05-18T02:30:00Z"}}}}"#,
+    )
+    .unwrap();
+    let capacity = ProviderCapacity::read(&runtime, &login_key("claude")).unwrap();
+    for model in ["claude-fable-5-2", "claude-fable-5-5"] {
+        assert_eq!(
+            capacity
+                .refusal(Some(model))
+                .filter(|refusal| refusal.stands())
+                .and_then(|refusal| refusal.label.as_deref()),
+            Some("alias refused"),
+            "{model}"
+        );
+    }
+}
+
+#[test]
+fn a_standing_refusal_vetoes_with_no_rate_limit_entry_for_its_login() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let (_dir, runtime) = runtime();
+    std::fs::write(
+        runtime.shared_model_refusals_path(),
+        r#"{"logins":{"claude@default":{"fable 5.2":{"refused_at":"2033-05-18T03:00:00Z"}}}}"#,
+    )
+    .unwrap();
+    let default = login_key("claude");
+    let capacity = ProviderCapacity::read(&runtime, &default).expect("the record alone reads");
+    assert!(capacity.model_exhausted(now, Some("claude-fable-5-2")));
+    let agent = crate::agents::AgentState::seed(
+        AgentKind::new_unchecked("claude"),
+        "root".into(),
+        crate::agents::AgentStatus::Idle,
+        now,
+    );
+    let logins =
+        RoomLoginSet::new(Some(Default::default()), None, BTreeMap::new()).with_agents(&[agent]);
+    let all = ProviderCapacity::read_all(&runtime, &logins);
+    assert!(all[&default].model_refused(Some("claude-fable-5-2")));
+}

@@ -2178,6 +2178,16 @@ impl AgentState {
         self.parent_agent_id.is_some()
     }
 
+    /// The model the agent's next request runs on: the context's model id when the provider
+    /// reported one (an idle `/model` moves only that), else the lifecycle model. The card's
+    /// model label reads the same precedence (`model_display::model_label_source`).
+    pub fn current_model(&self) -> Option<&str> {
+        self.context
+            .as_ref()
+            .and_then(|context| context.model_id.as_deref())
+            .or(self.model.as_deref())
+    }
+
     /// The provider account this session belongs to.
     pub fn login_key(&self) -> LoginKey {
         LoginKey::new(self.kind.clone(), self.login.clone().unwrap_or_default())
