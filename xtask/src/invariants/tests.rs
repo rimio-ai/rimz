@@ -1214,6 +1214,23 @@ fn ui_glyph_violations_flag_literals_but_skip_comments_and_tests() {
 }
 
 #[test]
+fn inline_tests_region_reads_a_commented_mount_as_a_mount() {
+    fn lines(text: &str) -> Vec<(usize, &str)> {
+        lines_outside_inline_tests(text).collect()
+    }
+    assert_eq!(
+        lines("mod tests; // sibling file\nfn prod() {}\n"),
+        [(1, "mod tests; // sibling file"), (2, "fn prod() {}")],
+        "a trailing comment does not hide the mount's `;`"
+    );
+    assert_eq!(
+        lines("fn prod() {}\nmod tests { // inline\nfn t() {}\n}\n"),
+        [(1, "fn prod() {}")],
+        "an inline body with a trailing comment still opens the region"
+    );
+}
+
+#[test]
 fn sidebar_render_clock_scans_past_a_tests_mount_but_skips_inline_tests() {
     let root = temp_repo_root("sidebar-render-clock");
     let path = root.join("crates/rimz/src/sidebar_pane/render/row.rs");

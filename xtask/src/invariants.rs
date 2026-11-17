@@ -1447,7 +1447,9 @@ fn lines_outside_inline_tests(text: &str) -> impl Iterator<Item = (usize, &str)>
         .map(|(index, line)| (index + 1, line))
         .filter(move |(_, line)| {
             // `mod tests;` mounts a sibling file; only an inline body starts the region.
-            if line.trim_start().starts_with("mod tests") && !line.trim_end().ends_with(';') {
+            // A trailing `//` comment is dropped first, so `mod tests; // note` stays a mount.
+            let code = line.split_once("//").map_or(*line, |(code, _)| code);
+            if code.trim_start().starts_with("mod tests") && !code.trim_end().ends_with(';') {
                 in_tests = true;
             }
             !in_tests
