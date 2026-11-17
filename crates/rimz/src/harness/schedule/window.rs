@@ -1,5 +1,5 @@
-//! The add-time window checks: whether a window trigger can read its provider's windows
-//! before the run, and the instant `--after-reset` resolves to, for both `loop add` paths.
+//! The add-time window check: whether a window condition can read its provider's windows
+//! before the run, for both `loop add` paths and `rimz wait`.
 
 use std::path::Path;
 
@@ -29,26 +29,6 @@ pub enum WindowRefusal {
     NoReading { kind: String, span: WindowSpan },
     #[error("{kind} has no {span} window")]
     NoWindow { kind: String, span: WindowSpan },
-    #[error(
-        "{kind} is not enforcing its {span} window, so it has no reset to wait for; use --after-reset {other}"
-    )]
-    Lifted {
-        kind: String,
-        span: WindowSpan,
-        other: WindowSpan,
-    },
-}
-
-/// When an `--after-reset` task fires: its provider's window as add read it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AfterReset {
-    pub kind: AgentKind,
-    pub span: WindowSpan,
-    pub left: Option<u8>,
-    pub resets_at: Timestamp,
-    /// A window that has not started fires now rather than a full span away.
-    pub started: bool,
-    pub fire_at: Timestamp,
 }
 
 /// A provider's window of one span as `rimz loop add` reads it.
@@ -128,44 +108,6 @@ fn window_at_add(
         kind: AgentKind::new_unchecked(kind),
         span,
         window,
-    })
-}
-
-/// Resolve `--after-reset <span>`: refused as a window term is, then for a
-/// lifted window and a window without a reset.
-pub fn after_reset(
-    span: WindowSpan,
-    kind: Option<&str>,
-    login: Option<&crate::ids::LoginKey>,
-    root: &Path,
-    runtime: &RuntimePaths,
-    now: Timestamp,
-) -> Result<AfterReset, WindowRefusal> {
-    let WindowAtAdd { kind, span, window } = window_at_add(kind, span, login, root, runtime, now)?;
-    let other = match span {
-        WindowSpan::FiveHour => WindowSpan::SevenDay,
-        WindowSpan::SevenDay => WindowSpan::FiveHour,
-    };
-    let refused_kind = || kind.as_str().to_owned();
-    if window.lifted {
-        return Err(WindowRefusal::Lifted {
-            kind: refused_kind(),
-            span,
-            other,
-        });
-    }
-    let resets_at = window.resets_at.ok_or_else(|| WindowRefusal::NoReading {
-        kind: refused_kind(),
-        span,
-    })?;
-    let started = !window.not_started(now);
-    Ok(AfterReset {
-        left: crate::harness::when::percent_left(&window),
-        resets_at,
-        started,
-        fire_at: if started { resets_at } else { now },
-        kind,
-        span,
     })
 }
 

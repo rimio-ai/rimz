@@ -2152,7 +2152,7 @@ path = "crates/rimz/src/harness"
 # `agents show` resolves an agent's temp unit through the launch owner rule (+1).
 # The `[agents] shell` refusal is shared by launch compile, room start, and config set (+2).
 # Window conditions: the lazy window reading both evaluation callers build, and the add-time resolver with its refusals (+4).
-# `--after-reset`: its add-time resolver and the reset it reports to both `loop add` paths (+2).
+# A retired loop trigger's add-time resolver and its result; the budget keeps their two slots as slack.
 # `rimz gc` sweeps orphan account budget ledgers and reports the typed sweep result (+2).
 # The prompt-submit Environment sampler and its launch switch cross the harness/CLI hook seam (+4).
 # A loop run in flight is looked up by name and root, its row gone or not (+1).
@@ -6015,7 +6015,6 @@ allowed-dependencies = [
 # Check-launch conversion shares ownership lookup and supervised-run shaping.
 # The hidden runner accepts typed condition evidence alongside signal evidence.
 # `window` now owns the add-time window resolver and its refusals, which serve both `loop add` paths.
-# `window` now owns the instant `--after-reset` resolves for both `loop add` paths.
 # `run_control` now owns `InFlightRun`, which carries the held lock's holder and run record to `loop show`/`logs`.
 # A task's account pin is a `LaunchLogin`, which `task_login::task_login` resolves for the runner and `loop add`.
 # Fan-out supplies its already-resolved marker checkout separately from task config.
