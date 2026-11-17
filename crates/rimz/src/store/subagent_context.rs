@@ -34,6 +34,24 @@ pub struct SubagentContextRecord {
     /// provider transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_cursor: Option<SubagentUsageCursor>,
+    /// Which producer wrote the record last. A record written before the field
+    /// existed came from the status line.
+    #[serde(default)]
+    pub reporter: SubagentReporter,
+}
+
+/// A producer of child sidecars. The mod's agent list outlives the child and
+/// carries every field, so once the mod has written a child's record a status
+/// line push for that child changes nothing: whole-record writes from the
+/// sparser status line would otherwise erase what the mod wrote.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentReporter {
+    /// Claude's `subagentStatusLine`, through `rimz statusline feed --subagent`.
+    #[default]
+    StatusLine,
+    /// RimZ's Claude mod, through `rimz mod feed`.
+    Mod,
 }
 
 impl sidecar::SidecarRecord for SubagentContextRecord {
@@ -50,11 +68,13 @@ impl sidecar::SidecarRecord for SubagentContextRecord {
 
 /// Read-modify-write one child sidecar under its per-record advisory lock.
 /// The caller receives the latest valid record and returns both the display
-/// context and resumable transcript-pricing cursor to publish.
+/// context and resumable transcript-pricing cursor to publish. A status line
+/// write over a record the mod wrote is skipped, `apply` unread.
 pub fn update(
     runtime: &RuntimePaths,
     kind: &str,
     agent_id: &str,
+    reporter: SubagentReporter,
     apply: impl FnOnce(Option<&SubagentContextRecord>) -> (SubagentContext, Option<SubagentUsageCursor>),
 ) -> Result<(), atomic::AtomicErr> {
     sidecar::update(
@@ -76,11 +96,19 @@ pub fn update(
                 observed_at: Timestamp::now(),
             },
             usage_cursor: None,
+            reporter,
         },
         |record, existed| {
+            if existed
+                && record.reporter == SubagentReporter::Mod
+                && reporter == SubagentReporter::StatusLine
+            {
+                return false;
+            }
             let (context, usage_cursor) = apply(existed.then_some(&*record));
             record.context = context;
             record.usage_cursor = usage_cursor;
+            record.reporter = reporter;
             true
         },
     )
@@ -148,12 +176,18 @@ mod tests {
         let (_dir, runtime) = runtime();
         let now = Timestamp::now();
         let context = ctx(now);
-        update(&runtime, "claude", "child-1", |prior| {
-            (
-                context.clone(),
-                prior.and_then(|record| record.usage_cursor.clone()),
-            )
-        })
+        update(
+            &runtime,
+            "claude",
+            "child-1",
+            SubagentReporter::StatusLine,
+            |prior| {
+                (
+                    context.clone(),
+                    prior.and_then(|record| record.usage_cursor.clone()),
+                )
+            },
+        )
         .unwrap();
         let all = read_all(&runtime);
         assert_eq!(all.len(), 1);
@@ -180,12 +214,18 @@ mod tests {
         let (_dir, runtime) = runtime();
         let old = Timestamp::from_second(0).unwrap();
         let context = ctx(old);
-        update(&runtime, "claude", "child-old", |prior| {
-            (
-                context.clone(),
-                prior.and_then(|record| record.usage_cursor.clone()),
-            )
-        })
+        update(
+            &runtime,
+            "claude",
+            "child-old",
+            SubagentReporter::StatusLine,
+            |prior| {
+                (
+                    context.clone(),
+                    prior.and_then(|record| record.usage_cursor.clone()),
+                )
+            },
+        )
         .unwrap();
 
         let all = read_all(&runtime);
@@ -211,9 +251,13 @@ mod tests {
             last_request: None,
         };
 
-        update(&runtime, "claude", "child-1", |_| {
-            (ctx(now), Some(cursor.clone()))
-        })
+        update(
+            &runtime,
+            "claude",
+            "child-1",
+            SubagentReporter::StatusLine,
+            |_| (ctx(now), Some(cursor.clone())),
+        )
         .unwrap();
 
         assert_eq!(read_all(&runtime)[0].usage_cursor, Some(cursor));
@@ -269,12 +313,18 @@ mod tests {
         let (_dir, runtime) = runtime();
         let now = Timestamp::now();
         let context = ctx(now);
-        update(&runtime, "claude", "child-1", |prior| {
-            (
-                context.clone(),
-                prior.and_then(|record| record.usage_cursor.clone()),
-            )
-        })
+        update(
+            &runtime,
+            "claude",
+            "child-1",
+            SubagentReporter::StatusLine,
+            |prior| {
+                (
+                    context.clone(),
+                    prior.and_then(|record| record.usage_cursor.clone()),
+                )
+            },
+        )
         .unwrap();
         let cursor = SubagentUsageCursor {
             anchor: None,
@@ -288,20 +338,83 @@ mod tests {
             last_request: None,
         };
 
-        update(&runtime, "claude", "child-1", |prior| {
-            let prior = prior.expect("prior record");
-            assert_eq!(
-                prior.context.description.as_deref(),
-                Some("locate the render seam")
-            );
-            let mut context = prior.context.clone();
-            context.cost_usd = cursor.display_cost();
-            (context, Some(cursor.clone()))
-        })
+        update(
+            &runtime,
+            "claude",
+            "child-1",
+            SubagentReporter::StatusLine,
+            |prior| {
+                let prior = prior.expect("prior record");
+                assert_eq!(
+                    prior.context.description.as_deref(),
+                    Some("locate the render seam")
+                );
+                let mut context = prior.context.clone();
+                context.cost_usd = cursor.display_cost();
+                (context, Some(cursor.clone()))
+            },
+        )
         .unwrap();
 
         let record = read_all(&runtime).into_iter().next().unwrap();
         assert_eq!(record.context.cost_usd, Some(0.12));
         assert_eq!(record.usage_cursor, Some(cursor));
+    }
+
+    #[test]
+    fn a_mod_record_stands_against_later_status_line_pushes() {
+        let (_dir, runtime) = runtime();
+        let now = Timestamp::now();
+        let sparse = SubagentContext {
+            description: None,
+            effort: None,
+            ..ctx(now)
+        };
+        update(
+            &runtime,
+            "claude",
+            "child-1",
+            SubagentReporter::StatusLine,
+            |_| (sparse.clone(), None),
+        )
+        .unwrap();
+        assert_eq!(
+            read_all(&runtime)[0].context,
+            sparse,
+            "the status line writes alone"
+        );
+
+        update(
+            &runtime,
+            "claude",
+            "child-1",
+            SubagentReporter::Mod,
+            |prior| {
+                assert_eq!(prior.unwrap().reporter, SubagentReporter::StatusLine);
+                (ctx(now), None)
+            },
+        )
+        .unwrap();
+        update(
+            &runtime,
+            "claude",
+            "child-1",
+            SubagentReporter::StatusLine,
+            |_| panic!("a status line push over a mod record is not applied"),
+        )
+        .unwrap();
+        let record = read_all(&runtime).into_iter().next().unwrap();
+        assert_eq!(record.reporter, SubagentReporter::Mod);
+        assert_eq!(record.context, ctx(now), "the mod's fields stand");
+
+        update(&runtime, "claude", "child-1", SubagentReporter::Mod, |_| {
+            (sparse.clone(), None)
+        })
+        .unwrap();
+        assert_eq!(
+            read_all(&runtime)[0].context,
+            sparse,
+            "a later mod report replaces"
+        );
     }
 }

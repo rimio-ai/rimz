@@ -153,5 +153,6 @@ fn record(agent_id: &str, context: SubagentContext) -> SubagentContextRecord {
         agent_id: agent_id.into(),
         context,
         usage_cursor: None,
+        reporter: Default::default(),
     }
 }

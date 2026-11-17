@@ -1498,6 +1498,46 @@ fn doctor_reports_a_legacy_cache_for_deletion_without_blocking_start() {
     assert!(!env.rimz_home().join("config.toml").exists());
 }
 
+/// A live Claude session the RimZ mod never reported for is a warning with its
+/// fix; its first mod report (any event) checks it in, and other kinds never
+/// show the finding.
+#[test]
+fn doctor_flags_a_live_claude_session_until_the_mod_checks_it_in() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    for (kind, id) in [("claude", "silent-session"), ("codex", "codex-session")] {
+        inject_lifecycle(&env, kind, id, LifecycleSignal::Registered, Some("main"));
+    }
+    let flagged = |report: &Value| -> Vec<String> {
+        report["agents"]["rows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|row| row["mod_missing"] == json!(true))
+            .map(|row| row["agent_id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(flagged(&report), ["silent-session"], "{report:#}");
+    let text = env.rimz().args(["doctor"]).output().unwrap();
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("the RimZ mod never reported"), "{text}");
+    assert!(text.contains("run `rimz hooks install claude`"), "{text}");
+
+    let envelope = json!({"v": "1.0.0", "event": "turn.complete", "session_id": "silent-session"});
+    let fed = env.run_mod_feed("claude", &envelope.to_string());
+    assert!(
+        fed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fed.stderr)
+    );
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert!(flagged(&report).is_empty(), "{report:#}");
+    let text = env.rimz().args(["doctor"]).output().unwrap();
+    assert!(!String::from_utf8_lossy(&text.stdout).contains("RimZ mod never reported"));
+}
+
 #[test]
 fn doctor_json_folds_one_row_per_agent() {
     let env = Env::new();

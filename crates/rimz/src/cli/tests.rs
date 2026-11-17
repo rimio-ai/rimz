@@ -54,6 +54,7 @@ fn hot_cli_preserves_values_and_defers_help_and_errors() {
             "--source",
             "qwen",
         ],
+        vec!["rimz", "mod", "feed", "--source", "claude"],
     ] {
         let actual = try_hot_cli(args.iter().map(OsString::from).collect());
         assert!(actual.is_some(), "hot path was not parsed: {args:?}");

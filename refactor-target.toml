@@ -653,6 +653,11 @@ reason = "Provider-neutral integer usage and limits cross the adapter, cache, pl
 
 [[verdict]]
 kind = "item"
+key = "agents::context::ModReport"
+reason = "ContextCapability::observe_mod_report hands the binary's `rimz mod feed` a provider mod's check-in and child observations."
+
+[[verdict]]
+kind = "item"
 key = "agents::tools::ToolSet"
 reason = "The public Profile carries parsed Markdown tools across the library and CLI boundary."
 
@@ -4510,7 +4515,9 @@ path = "crates/rimz/src/store"
 # RunFire::evidence hands a run's command steps and agent prompts the fire's trigger evidence (+1).
 # store::runtime::agent_is_runtime_visible is the visibility rule the point-of-use lookup shares (+1).
 # RunRecord::agent_launch_id names the launch a run's agent holds (+1).
-surface-budget = 661
+# store::mod_checkin::ModCheckinRecord, record and read_all hold the per-session check-in the mod
+# feed writes and doctor reads; SubagentReporter lets a mod child record stand against the status line (+4).
+surface-budget = 665
 
 [[verdict]]
 kind = "item"
@@ -8015,6 +8022,26 @@ reason = "Named by pub update, read_all and SidebarSnapshot::with_subagent_conte
 kind = "item"
 key = "store::subagent_context::read_all"
 reason = "Called by the sidebar enrichment and by the integration crate's env helper (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::subagent_context::SubagentReporter"
+reason = "The binary's mod and status-line feeds name their reporter to pub update, so a mod record stands against later status-line pushes."
+
+[[verdict]]
+kind = "item"
+key = "store::mod_checkin::ModCheckinRecord"
+reason = "Returned by pub read_all to the binary's doctor and to the integration crate's env helper."
+
+[[verdict]]
+kind = "item"
+key = "store::mod_checkin::record"
+reason = "Called by the binary's `rimz mod feed` on every mod report."
+
+[[verdict]]
+kind = "item"
+key = "store::mod_checkin::read_all"
+reason = "Called by the binary's doctor agent rollup and by the integration crate's env helper."
 
 [[verdict]]
 kind = "item"

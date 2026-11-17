@@ -715,12 +715,18 @@ fn read_published_snapshot_folds_subagent_context() {
         started_at: Some(now),
         observed_at: now,
     };
-    crate::store::subagent_context::update(&runtime, "claude", "child-1", |prior| {
-        (
-            context.clone(),
-            prior.and_then(|record| record.usage_cursor.clone()),
-        )
-    })
+    crate::store::subagent_context::update(
+        &runtime,
+        "claude",
+        "child-1",
+        crate::store::subagent_context::SubagentReporter::StatusLine,
+        |prior| {
+            (
+                context.clone(),
+                prior.and_then(|record| record.usage_cursor.clone()),
+            )
+        },
+    )
     .unwrap();
 
     let snapshot = read_published_snapshot(

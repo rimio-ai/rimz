@@ -944,11 +944,14 @@ pub(super) struct AgentRow {
     pub(super) phase: rimz::agents::TurnPhase,
     pub(super) last_seen: Timestamp,
     pub(super) handle: String,
-    pub(super) account: String,
+    pub(super) account: rimz::ids::LoginKey,
     pub(super) turn_error: Option<String>,
     pub(super) attributed_to_account: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) compaction_lowered: Option<CompactionLowered>,
+    /// A live Claude session the RimZ mod never checked in for.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(super) mod_missing: bool,
     #[serde(skip)]
     pub(super) restartable: bool,
     #[serde(skip)]

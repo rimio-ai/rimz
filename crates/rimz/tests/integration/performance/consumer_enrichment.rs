@@ -43,16 +43,22 @@ fn warm_fetch_reads_only_agent_keys_despite_orphan_contexts() {
     for slot in 0..200 {
         let id = format!("sess-{slot}");
         agent_context::write(runtime, "claude", &id, &context_at(now), None).unwrap();
-        rimz::store::subagent_context::update(runtime, "claude", &id, |_| {
-            (
-                serde_json::from_value(serde_json::json!({
-                    "description": "child context",
-                    "observed_at": now.to_string(),
-                }))
-                .unwrap(),
-                None,
-            )
-        })
+        rimz::store::subagent_context::update(
+            runtime,
+            "claude",
+            &id,
+            rimz::store::subagent_context::SubagentReporter::StatusLine,
+            |_| {
+                (
+                    serde_json::from_value(serde_json::json!({
+                        "description": "child context",
+                        "observed_at": now.to_string(),
+                    }))
+                    .unwrap(),
+                    None,
+                )
+            },
+        )
         .unwrap();
     }
     let mut cycle =
@@ -92,15 +98,21 @@ fn warm_fetch_sidecar_stats_depend_on_unheld_agents_not_frozen_fleet_size() {
         for slot in 0..total {
             let id = format!("agent-{slot}");
             agent_context::write(runtime, "claude", &id, &context_at(now), None).unwrap();
-            rimz::store::subagent_context::update(runtime, "claude", &id, |_| {
-                (
-                    serde_json::from_value(serde_json::json!({
-                        "description": "child", "observed_at": now.to_string(),
-                    }))
-                    .unwrap(),
-                    None,
-                )
-            })
+            rimz::store::subagent_context::update(
+                runtime,
+                "claude",
+                &id,
+                rimz::store::subagent_context::SubagentReporter::StatusLine,
+                |_| {
+                    (
+                        serde_json::from_value(serde_json::json!({
+                            "description": "child", "observed_at": now.to_string(),
+                        }))
+                        .unwrap(),
+                        None,
+                    )
+                },
+            )
             .unwrap();
             if slot < total - 20 {
                 rimz::store::hibernate::record(

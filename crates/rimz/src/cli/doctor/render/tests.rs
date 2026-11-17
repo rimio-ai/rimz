@@ -933,10 +933,11 @@ fn agents_keep_actionable_rows_counted_and_account_limits_contextual() {
                     phase: rimz::agents::TurnPhase::default(),
                     last_seen: Timestamp::now(),
                     handle: "@fox".into(),
-                    account: "codex@team".into(),
+                    account: "codex@team".parse().unwrap(),
                     turn_error: Some("reason".into()),
                     attributed_to_account: attributed,
                     compaction_lowered: None,
+                    mod_missing: false,
                     restartable,
                     historical: false,
                 }],
@@ -975,11 +976,12 @@ fn compaction_lowered_counts_one_or_several_agents_with_closing_fixes() {
                 phase: Default::default(),
                 last_seen: Timestamp::now(),
                 handle: handle.into(),
-                account: "codex@default".into(),
+                account: "codex@default".parse().unwrap(),
                 turn_error: None,
                 attributed_to_account: false,
                 restartable: true,
                 historical: false,
+                mod_missing: false,
                 compaction_lowered: Some(CompactionLowered {
                     configured: 372_000,
                     effective: 244_800,
@@ -1026,6 +1028,101 @@ fn compaction_lowered_counts_one_or_several_agents_with_closing_fixes() {
             format!("{body}\n{closing}")
         );
     }
+}
+
+#[test]
+fn mod_missing_warns_per_session_with_its_restart_in_the_closing_fix() {
+    use super::super::model::AgentRow;
+    for count in [1, 2] {
+        let rows = [("@otter", true), ("@fox", false)]
+            .into_iter()
+            .take(count)
+            .map(|(handle, restartable)| AgentRow {
+                kind: "claude".into(),
+                agent_id: handle.into(),
+                branch: Some("main".into()),
+                status: AgentStatus::Idle,
+                phase: Default::default(),
+                last_seen: Timestamp::now(),
+                handle: handle.into(),
+                account: "claude@default".parse().unwrap(),
+                turn_error: None,
+                attributed_to_account: false,
+                compaction_lowered: None,
+                mod_missing: true,
+                restartable,
+                historical: false,
+            })
+            .collect();
+        let report = DoctorReport {
+            agents: Some(AgentRollup::Observed {
+                counts: AgentCounts {
+                    idle: count,
+                    ..Default::default()
+                },
+                rows,
+            }),
+            ..report_fixture()
+        };
+        let mut tally = Tally::default();
+        let body = strip(|w| render_agents(w, &report, &mut tally));
+        assert_eq!(
+            body.matches("the RimZ mod never reported").count(),
+            count,
+            "{body}"
+        );
+        assert!(
+            !body.contains("hooks install"),
+            "remedies belong in the closing block"
+        );
+        assert_eq!(tally.warns.len(), count);
+        assert!(tally.alarms.is_empty());
+        let closing = strip(|w| render_tally(w, &tally));
+        assert_eq!(
+            closing
+                .matches("run `rimz hooks install claude`, then `rimz agents restart @otter`")
+                .count(),
+            1,
+            "{closing}"
+        );
+        assert_eq!(
+            closing
+                .matches("run `rimz hooks install claude`, then a new session")
+                .count(),
+            count - 1,
+            "{closing}"
+        );
+        assert!(closing.contains("`CLAUDE_CODE_PLUGIN_DIRS`"), "{closing}");
+    }
+}
+
+#[test]
+fn mod_missing_fix_installs_into_the_rows_own_login() {
+    use super::super::model::AgentRow;
+    let row = |account: &str| AgentRow {
+        kind: "claude".into(),
+        agent_id: "s".into(),
+        branch: None,
+        status: AgentStatus::Idle,
+        phase: Default::default(),
+        last_seen: Timestamp::now(),
+        handle: "@otter".into(),
+        account: account.parse().unwrap(),
+        turn_error: None,
+        attributed_to_account: false,
+        compaction_lowered: None,
+        mod_missing: true,
+        restartable: true,
+        historical: false,
+    };
+    assert!(
+        mod_missing_fix(&row("claude@default"))
+            .starts_with("run `rimz hooks install claude`, then `rimz agents restart @otter`")
+    );
+    assert!(
+        mod_missing_fix(&row("claude@work"))
+            .starts_with("run `rimz accounts add claude work`, then `rimz agents restart @otter`")
+    );
 }
 
 #[test]
@@ -3401,10 +3498,11 @@ fn audit_adds_agent_context_without_changing_findings() {
         phase: rimz::agents::TurnPhase::default(),
         last_seen: Timestamp::now(),
         handle: handle.into(),
-        account: "codex@team".into(),
+        account: "codex@team".parse().unwrap(),
         turn_error: None,
         attributed_to_account: false,
         compaction_lowered: None,
+        mod_missing: false,
         restartable: !historical,
         historical,
     };

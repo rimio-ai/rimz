@@ -4608,6 +4608,263 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
     );
 }
 
+/// A parent transcript beside one priced child transcript, `child-1`'s, under
+/// `subagents/` the way Claude lays them out.
+fn seed_child_transcript(env: &Env) -> (std::path::PathBuf, std::path::PathBuf) {
+    rimz::agents::pricing::testkit::seed_cache(
+        &env.runtime_paths(),
+        r#"{"child-model":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000005,"cache_read_input_token_cost":0.0000001,"cache_creation_input_token_cost":0.00000125}}"#,
+    );
+    let parent = env.project_root.join("claude-session/chat.jsonl");
+    let child = parent
+        .parent()
+        .unwrap()
+        .join("subagents/agent-child-1.jsonl");
+    std::fs::create_dir_all(child.parent().unwrap()).unwrap();
+    std::fs::write(&parent, "").unwrap();
+    append_child_request(&child, "req-1", 1000);
+    (parent, child)
+}
+
+fn append_child_request(child: &std::path::Path, request: &str, input_tokens: u64) {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(child)
+        .unwrap();
+    writeln!(
+        file,
+        "{}",
+        json!({
+            "type": "assistant",
+            "agentId": "child-1",
+            "requestId": request,
+            "message": {
+                "id": format!("msg-{request}"),
+                "model": "child-model",
+                "usage": {"input_tokens": input_tokens, "output_tokens": 100}
+            }
+        })
+    )
+    .unwrap();
+}
+
+/// A mod envelope as `rimz.ts` writes it: `$.agent.list()` as Claude returns it,
+/// plus a field a newer mod might add.
+fn mod_envelope(event: &str, parent: &std::path::Path) -> String {
+    json!({
+        "v": "1.0.0",
+        "event": event,
+        "session_id": "parent-session",
+        "transcript_path": parent,
+        "claude_version": "2.1.326",
+        "agent_id": "child-1",
+        "from_a_newer_mod": [1, 2],
+        "agents": [
+            {"id": "child-1", "type": "Explore", "description": "locate the render seam",
+             "status": "running", "kind": "local_agent", "startTime": 1_700_000_000_000_i64,
+             "model": "claude-haiku-5-5", "cost": {"usd": 9.0},
+             "lastRequest": {"effort": "low"}},
+            {"id": "child-2", "type": "review", "description": "audit the trust hash",
+             "effort": "high", "startTime": 1_700_000_055_000_i64}
+        ]
+    })
+    .to_string()
+}
+
+/// The mod feed checks the session in and writes one sidecar per listed child:
+/// the list's type, model, effort, description and start, and cost from the
+/// child's own transcript (never the list's `cost.usd`), advanced per report.
+#[test]
+fn mod_feed_writes_one_sidecar_per_listed_child_and_checks_the_session_in() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let (parent, child) = seed_child_transcript(&env);
+
+    let out = env.run_mod_feed("claude", &mod_envelope("agent.spawn", &parent));
+    assert!(
+        out.status.success(),
+        "feed stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty(), "the feed prints nothing");
+
+    let checkins = env.mod_checkins();
+    assert_eq!(checkins.len(), 1, "{checkins:?}");
+    assert_eq!(checkins[0].kind, "claude");
+    assert_eq!(checkins[0].agent_id, "parent-session");
+    assert_eq!(checkins[0].mod_version, "1.0.0");
+    assert_eq!(checkins[0].provider_version.as_deref(), Some("2.1.326"));
+
+    let mut records = env.subagent_contexts();
+    records.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+    assert_eq!(records.len(), 2, "one sidecar per listed child");
+    let first = &records[0];
+    assert_eq!(first.agent_id, "child-1");
+    assert_eq!(
+        first.reporter,
+        rimz::store::subagent_context::SubagentReporter::Mod
+    );
+    assert_eq!(first.context.agent_type.as_deref(), Some("Explore"));
+    assert_eq!(
+        first.context.description.as_deref(),
+        Some("locate the render seam")
+    );
+    assert_eq!(first.context.effort.as_deref(), Some("low"));
+    assert_eq!(
+        first.context.started_at,
+        Some(jiff::Timestamp::from_second(1_700_000_000).unwrap())
+    );
+    assert_eq!(
+        first.context.model.as_deref(),
+        Some("child-model"),
+        "the transcript's model names the newest request"
+    );
+    let first_cost = first.context.cost_usd.expect("priced child transcript");
+    assert!(first_cost > 0.0 && first_cost < 1.0, "{first_cost}");
+    assert!(
+        first
+            .usage_cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.offset > 0)
+    );
+    let second = &records[1];
+    assert_eq!(second.agent_id, "child-2");
+    assert_eq!(second.context.effort.as_deref(), Some("high"));
+    assert_eq!(second.context.model, None);
+    assert_eq!(second.context.cost_usd, None, "no transcript, no cost");
+    assert_eq!(second.usage_cursor, None);
+
+    append_child_request(&child, "req-2", 2000);
+    let out = env.run_mod_feed("claude", &mod_envelope("turn.complete", &parent));
+    assert!(out.status.success());
+    let grown = env
+        .subagent_contexts()
+        .into_iter()
+        .find(|record| record.agent_id == "child-1")
+        .unwrap();
+    assert!(grown.context.cost_usd.unwrap() > first_cost);
+    assert_eq!(
+        grown
+            .context
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.input_context_tokens()),
+        Some(2_000)
+    );
+
+    let shorter = json!({
+        "v": "1.0.0", "event": "tool.call", "session_id": "parent-session",
+        "transcript_path": parent, "agents": [{"id": "child-2", "type": "review"}]
+    })
+    .to_string();
+    assert!(env.run_mod_feed("claude", &shorter).status.success());
+    let kept = env
+        .subagent_contexts()
+        .into_iter()
+        .find(|record| record.agent_id == "child-1")
+        .unwrap();
+    assert_eq!(
+        kept, grown,
+        "a child the list no longer carries is left as it is"
+    );
+}
+
+/// What the feed cannot act on exits 0 and writes nothing: an empty, malformed,
+/// unknown-event or sessionless envelope, and any envelope outside a room.
+#[test]
+fn mod_feed_writes_nothing_for_reports_it_cannot_act_on() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let (parent, _child) = seed_child_transcript(&env);
+    let unknown_event = mod_envelope("session.measure", &parent);
+    let mut sessionless: Value = serde_json::from_str(&mod_envelope("tool.call", &parent)).unwrap();
+    sessionless.as_object_mut().unwrap().remove("session_id");
+    for envelope in [
+        String::new(),
+        "not json".to_owned(),
+        "[]".to_owned(),
+        unknown_event,
+        sessionless.to_string(),
+    ] {
+        let out = env.run_mod_feed("claude", &envelope);
+        assert!(out.status.success(), "{envelope:?}");
+        assert!(out.stdout.is_empty(), "{envelope:?}");
+    }
+    assert!(env.mod_checkins().is_empty());
+    assert!(env.subagent_contexts().is_empty());
+
+    let roomless = Env::new();
+    let out = roomless.run_mod_feed("claude", &mod_envelope("session.start", &parent));
+    assert!(
+        out.status.success(),
+        "outside a room: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty());
+    assert!(roomless.mod_checkins().is_empty());
+    assert!(roomless.subagent_contexts().is_empty());
+}
+
+/// Once the mod has written a child's sidecar, a child status line push for it
+/// changes nothing; before that, the status line writes as it always has.
+#[test]
+fn mod_report_stands_against_a_later_child_status_line_push() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let (parent, _child) = seed_child_transcript(&env);
+    let push = json!({
+        "transcript_path": parent,
+        "tasks": [{"id": "child-1", "agentType": "status-line-type", "startTime": 1_700_000_100}]
+    })
+    .to_string();
+    let child_1 = || {
+        env.subagent_contexts()
+            .into_iter()
+            .find(|record| record.agent_id == "child-1")
+            .unwrap()
+    };
+
+    assert!(
+        env.run_subagent_statusline_feed("claude", &push)
+            .status
+            .success()
+    );
+    let pushed = child_1();
+    assert_eq!(
+        pushed.context.agent_type.as_deref(),
+        Some("status-line-type")
+    );
+    assert_eq!(
+        pushed.reporter,
+        rimz::store::subagent_context::SubagentReporter::StatusLine
+    );
+
+    assert!(
+        env.run_mod_feed("claude", &mod_envelope("agent.spawn", &parent))
+            .status
+            .success()
+    );
+    let reported = child_1();
+    assert_eq!(reported.context.agent_type.as_deref(), Some("Explore"));
+    assert_eq!(
+        reported.usage_cursor, pushed.usage_cursor,
+        "the mod resumes the status line's cursor"
+    );
+
+    assert!(
+        env.run_subagent_statusline_feed("claude", &push)
+            .status
+            .success()
+    );
+    assert_eq!(
+        child_1(),
+        reported,
+        "the status line push leaves the mod's record"
+    );
+}
+
 /// Build the `rimz hooks feed --source codex` command with `RIMZ_CODEX_BIN`
 /// pointed at `codex_bin`, mirroring an installed hook. The detached
 /// `rimz agents refresh-context` child inherits this env, so it spawns

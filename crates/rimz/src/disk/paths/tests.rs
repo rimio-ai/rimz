@@ -172,6 +172,7 @@ impl RuntimePaths {
             self.read_marks_dir.clone(),
             self.agent_context_dir.clone(),
             self.subagent_context_dir.clone(),
+            self.mod_checkin_dir.clone(),
             self.agent_telemetry_dir.clone(),
             self.agent_activity_dir.clone(),
             self.active_time_dir.clone(),

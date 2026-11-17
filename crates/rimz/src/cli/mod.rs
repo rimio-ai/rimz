@@ -204,10 +204,13 @@ struct HotCli {
 enum HotSubcmd {
     Hooks(hooks::HooksArgs),
     Statusline(statusline::StatuslineArgs),
+    Mod(statusline::ModArgs),
 }
 
 fn try_hot_cli(args: Vec<OsString>) -> Option<(String, Cli)> {
-    if !args.iter().any(|arg| arg == "hooks" || arg == "statusline")
+    if !args
+        .iter()
+        .any(|arg| arg == "hooks" || arg == "statusline" || arg == "mod")
         || !args.iter().any(|arg| arg == "feed" || arg == "apply")
     {
         return None;
@@ -218,6 +221,7 @@ fn try_hot_cli(args: Vec<OsString>) -> Option<(String, Cli)> {
             ("hooks", Subcmd::Hooks(args))
         }
         HotSubcmd::Statusline(args) => ("statusline", Subcmd::Statusline(args)),
+        HotSubcmd::Mod(args) => ("mod", Subcmd::Mod(args)),
         _ => return None,
     };
     Some((
@@ -297,6 +301,7 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Tab(args)) => tab::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
+        Some(Subcmd::Mod(args)) => statusline::run_mod(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
         Some(Subcmd::Codex(args)) => codex::run(args, &globals),
         Some(Subcmd::Daemon(args)) => daemon::run(args, &globals),
@@ -785,6 +790,10 @@ enum Subcmd {
     /// humans do not.
     #[command(hide = true)]
     Statusline(statusline::StatuslineArgs),
+    /// Mod datasource. The mod RimZ installs for Claude calls this; humans do
+    /// not.
+    #[command(hide = true)]
+    Mod(statusline::ModArgs),
     /// Install or uninstall agent hooks.
     ///
     /// Internal hook entrypoints live here too.

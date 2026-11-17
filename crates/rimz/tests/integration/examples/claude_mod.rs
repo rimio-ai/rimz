@@ -6,7 +6,7 @@
 
 #[test]
 #[cfg(unix)]
-fn session_start_reports_after_next_and_never_changes_the_result() {
+fn each_hook_reports_after_next_and_never_changes_the_result() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let capability = std::process::Command::new("node")
@@ -80,7 +80,10 @@ const { register } = await import(pathToFileURL(modulePath).href);
 
 const hooks = new Map();
 register((event, hook) => hooks.set(event, hook));
-assert.deepEqual([...hooks.keys()], ["session.start"]);
+assert.deepEqual(
+  [...hooks.keys()],
+  ["session.start", "agent.spawn", "tool.call", "turn.complete"],
+);
 const sessionStart = hooks.get("session.start");
 
 const makeHost = ({ bin, agentList = () => [{ id: "a1", name: "explore" }] }) => {
@@ -172,6 +175,45 @@ for (const [label, options] of [
 const [listless] = captured();
 assert.equal(JSON.parse(listless.split("\t")[1]).agents, undefined);
 fs.rmSync(capture);
+
+// Every other report point: what it sends, after next, with next's result kept.
+// A main-loop tool call reports nothing; a child's reports with its id.
+for (const [event, input, resolved, agentId] of [
+  ["agent.spawn", { subagentType: "Explore" }, { model: "claude-haiku-5-5", agentId: "a1" }, "a1"],
+  ["tool.call", { tool: "Bash", agentId: "a1" }, { text: "ok" }, "a1"],
+  ["tool.call", { tool: "Bash" }, { text: "ok" }, null],
+  ["turn.complete", { reason: "answer", agentId: "a1" }, { text: "done" }, "a1"],
+  ["turn.complete", { reason: "aborted" }, { text: "" }, undefined],
+]) {
+  const label = `${event} ${JSON.stringify(input)}`;
+  const hook = hooks.get(event);
+  const host = makeHost({ bin: path.join(dir, "rimz-capture") });
+  const returned = await hook(host.$, input, async (e) => {
+    assert.equal(e, input, label);
+    assert.equal(captured().length, 0, `${label}: nothing is reported before next resolves`);
+    return resolved;
+  });
+  assert.equal(returned, resolved, `${label}: the hook returns next's own result`);
+  const lines = captured();
+  if (agentId === null) {
+    assert.equal(lines.length, 0, `${label}: a main-loop tool call is not reported`);
+    continue;
+  }
+  assert.equal(lines.length, 1, label);
+  const envelope = JSON.parse(lines[0].split("\t")[1]);
+  assert.equal(envelope.event, event, label);
+  assert.equal(envelope.agent_id, agentId, label);
+  assert.equal("agent_id" in envelope, agentId !== undefined, `${label}: absent, not null`);
+  assert.deepEqual(envelope.agents, [{ id: "a1", name: "explore" }], label);
+  fs.rmSync(capture);
+
+  for (const bin of ["rimz-failing", "no-such-rimz"]) {
+    const failing = makeHost({ bin: path.join(dir, bin) });
+    const kept = await hook(failing.$, input, async () => resolved);
+    assert.equal(kept, resolved, `${label} with ${bin}`);
+    assert.equal(failing.runs.length, 1, `${label} with ${bin}`);
+  }
+}
 
 // An unset RIMZ_BIN falls back to `rimz` on PATH.
 {

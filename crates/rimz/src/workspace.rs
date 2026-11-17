@@ -11,14 +11,15 @@
 //!
 //! Identity is then *pinned per session*: session birth stamps
 //! [`ENV_WORKSPACE_ID`]/[`ENV_PROJECT_ROOT`] into the mux environment, and
-//! participating commands (hooks, statusline helpers) resolve by ownership.
-//! Pane-owned participants use `--root`, the verified env pin, a recovered
-//! sibling pin, then the static ladder, so an agent in a nested repo inside a
-//! directory workspace still writes to the room it lives in. Daemon-owned
-//! hooks use `--root`, a recovered sibling pin, then the static ladder. Their
-//! shared daemon's environment belongs to whichever context launched it and
-//! may carry a valid pin for an unrelated room, so that ambient pin is
-//! excluded. Room-choosing commands (`rimz start`/`attach`) resolve statically via
+//! participating commands (hooks, statusline and mod feed helpers) resolve by
+//! ownership. Pane-owned participants use `--root`, the verified env pin, a
+//! recovered sibling pin, then the static ladder, so an agent in a nested repo
+//! inside a directory workspace still writes to the room it lives in.
+//! Daemon-owned hooks use `--root`, a recovered sibling pin, then the static
+//! ladder. Their shared daemon's environment belongs to whichever context
+//! launched it and may carry a valid pin for an unrelated room, so that
+//! ambient pin is excluded.
+//! Room-choosing commands (`rimz start`/`attach`) resolve statically via
 //! [`WorkspaceResolver::resolve`], keeping a deliberate per-repo room one
 //! `rimz start` away from inside a parent room. See `docs/internals` and
 //! `DESIGN.md` for the rules this implements.
@@ -386,7 +387,7 @@ enum ResolveMode {
     /// only, so a deliberate per-repo room can be created from inside a
     /// parent room. The directory tier accepts any directory.
     Create,
-    /// Room participation (hooks, statusline): the
+    /// Room participation (hooks, statusline, the mod feed): the
     /// session's env pin wins over the static ladder, so a pane's writes land
     /// in the room it lives in. Identity never refuses for lack of a room: it falls back to the static ladder. The participant store door, not the resolver, checks room existence.
     Participate,

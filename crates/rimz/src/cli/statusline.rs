@@ -17,6 +17,12 @@
 //!
 //! No pane stamping: the sidecar keys on the provider's session/conversation
 //! id, and the lifecycle-event `AgentState` already owns the pane binding.
+//!
+//! The same datasource serves `rimz mod feed`, the report of the mod RimZ
+//! installs for a provider (Claude's): one envelope on stdin, a check-in for
+//! its session and one child sidecar per child its agent list carries. It
+//! forwards nothing and prints nothing; every failure warns on stderr and exits
+//! 0, so a report never reaches the session that sent it.
 
 use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
@@ -28,10 +34,12 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::GlobalFlags;
+use rimz::agents::context::SubagentObservation;
 use rimz::agents::{
     AgentContext, AgentCost, AgentDefinition, PriceBook, StatusLineInvocation, SubagentContext,
     SubagentUsageCursor, definition_by_kind, pricing,
 };
+use rimz::store::subagent_context::SubagentReporter;
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -56,6 +64,69 @@ enum StatuslineSubcmd {
         #[arg(long)]
         subagent: bool,
     },
+}
+
+#[derive(Debug, Args)]
+pub struct ModArgs {
+    #[command(subcommand)]
+    command: ModSubcmd,
+}
+
+#[derive(Debug, Subcommand)]
+enum ModSubcmd {
+    /// Read one report of the RimZ mod on stdin: check its session in and
+    /// write a sidecar for each child its agent list carries.
+    #[command(hide = true)]
+    Feed {
+        /// Agent the mod belongs to (`claude`).
+        #[arg(long)]
+        source: String,
+    },
+}
+
+pub fn run_mod(args: ModArgs, globals: &GlobalFlags) -> Result<()> {
+    let ModSubcmd::Feed { source } = args.command;
+    let mut buf = Vec::new();
+    if let Err(err) = io::stdin().read_to_end(&mut buf) {
+        warn!(source = %source, error = %err, "mod feed: reading stdin failed");
+        return Ok(());
+    }
+    if let Err(err) = persist_mod_report(&source, &buf, globals) {
+        warn!(source = %source, error = %err, "mod feed: report capture failed");
+    }
+    Ok(())
+}
+
+/// Check the session in and write its children's sidecars. A report the
+/// adapter does not act on writes nothing, before the room is resolved.
+fn persist_mod_report(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<()> {
+    let Ok(payload) = serde_json::from_slice::<Value>(stdin) else {
+        return Ok(());
+    };
+    let agent = definition_by_kind(source)?;
+    let Some(report) = agent.observe_mod_report(&payload) else {
+        return Ok(());
+    };
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let runtime = runtime_paths_for_root(&workspace.project_root)?;
+    let kind = agent.spec().kind;
+    rimz::store::mod_checkin::record(
+        &runtime,
+        kind,
+        &report.session_id,
+        &report.mod_version,
+        report.provider_version.as_deref(),
+    )
+    .context("writing mod check-in")?;
+    write_subagent_sidecars(
+        &runtime,
+        agent,
+        &payload,
+        &report.subagents,
+        SubagentReporter::Mod,
+    )?;
+    let _ = rimz::wakeup::wake_store_delta(&runtime, None, None);
+    Ok(())
 }
 
 pub fn run(args: StatuslineArgs, globals: &GlobalFlags) -> Result<()> {
@@ -192,18 +263,41 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
     }
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let runtime = runtime_paths_for_root(&workspace.project_root)?;
+    write_subagent_sidecars(
+        &runtime,
+        agent,
+        &payload,
+        &observations,
+        SubagentReporter::StatusLine,
+    )?;
+    // Repaint the parent's expanded card within a wakeup rather than on the next
+    // poll tick. Best-effort, like every other wakeup.
+    let _ = rimz::wakeup::wake_store_delta(&runtime, None, None);
+    Ok(())
+}
+
+/// One sidecar per observed child, its cost cursor advanced from the child's
+/// transcript beside the payload's parent `transcript_path`.
+fn write_subagent_sidecars(
+    runtime: &rimz::RuntimePaths,
+    agent: &AgentDefinition,
+    payload: &Value,
+    observations: &[SubagentObservation],
+    reporter: SubagentReporter,
+) -> Result<()> {
     let (prices, book_fingerprint) =
         pricing::cached_book_with_fingerprint(&runtime.shared_pricing_table_path());
-    for observation in &observations {
+    for observation in observations {
         rimz::store::subagent_context::update(
-            &runtime,
+            runtime,
             agent.spec().kind,
             &observation.agent_id,
+            reporter,
             |prior| {
                 let prior_cursor = prior.and_then(|record| record.usage_cursor.as_ref());
                 let cursor = agent
                     .subagent_cost_cursor(
-                        &payload,
+                        payload,
                         &observation.agent_id,
                         prior_cursor,
                         &prices,
@@ -215,9 +309,6 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
         )
         .context("writing subagent-context sidecar")?;
     }
-    // Repaint the parent's expanded card within a wakeup rather than on the next
-    // poll tick. Best-effort, like every other wakeup.
-    let _ = rimz::wakeup::wake_store_delta(&runtime, None, None);
     Ok(())
 }
 

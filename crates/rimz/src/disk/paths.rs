@@ -938,6 +938,10 @@ pub struct RuntimePaths {
     /// Kept apart from `agent_context/` so each reader deserializes only its own
     /// record shape.
     pub(crate) subagent_context_dir: PathBuf,
+    /// Holds one check-in per session from a provider mod RimZ installs (the
+    /// Claude mod): its version and the provider's. Written by `rimz mod feed`,
+    /// read by `rimz doctor`.
+    pub(crate) mod_checkin_dir: PathBuf,
     /// Provider telemetry exported inside one room. This is disposable live
     /// cache data: provider processes append here while the room is alive and
     /// runtime GC reclaims stale files with the rest of the workspace root.
@@ -1051,6 +1055,7 @@ impl RuntimePaths {
         let read_marks_dir = live_dir.join("read-marks");
         let agent_context_dir = live_dir.join("agent_context");
         let subagent_context_dir = live_dir.join("subagent_context");
+        let mod_checkin_dir = live_dir.join("mod_checkin");
         let agent_telemetry_dir = live_dir.join("agent-telemetry");
         let agent_activity_dir = live_dir.join("agent-activity");
         let active_time_dir = live_dir.join("active-time");
@@ -1072,6 +1077,7 @@ impl RuntimePaths {
             read_marks_dir,
             agent_context_dir,
             subagent_context_dir,
+            mod_checkin_dir,
             agent_telemetry_dir,
             agent_activity_dir,
             active_time_dir,
@@ -1638,6 +1644,7 @@ impl RuntimePaths {
         mkdir_p(&self.read_marks_dir)?;
         mkdir_p(&self.agent_context_dir)?;
         mkdir_p(&self.subagent_context_dir)?;
+        mkdir_p(&self.mod_checkin_dir)?;
         mkdir_p(&self.agent_telemetry_dir)?;
         mkdir_p(&self.agent_activity_dir)?;
         mkdir_p(&self.active_time_dir)?;

@@ -55,6 +55,7 @@ pub(super) fn record_hot_command(cli: &super::Cli) {
     let command = match &cli.subcommand {
         Some(super::Subcmd::Hooks(args)) => args.scope().0,
         Some(super::Subcmd::Statusline(_)) => "statusline",
+        Some(super::Subcmd::Mod(_)) => "mod",
         _ => return,
     };
     let _ = log.command.set(command.to_owned());
