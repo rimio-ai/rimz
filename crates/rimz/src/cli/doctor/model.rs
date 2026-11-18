@@ -952,10 +952,24 @@ pub(super) struct AgentRow {
     /// A live Claude session the RimZ mod never checked in for.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(super) mod_missing: bool,
+    /// Each signal a checked-in Claude session's mod never sent across a turn
+    /// the row finished since.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) mod_signals_missing: Vec<ModSignal>,
     #[serde(skip)]
     pub(super) restartable: bool,
     #[serde(skip)]
     pub(super) historical: bool,
+}
+
+/// A signal the RimZ mod owes each Claude session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ModSignal {
+    /// A report whose usage carried a context window.
+    Readings,
+    /// A tool-call or turn-end report whose transcript the scan read.
+    TurnReport,
 }
 
 #[derive(Debug, Serialize)]

@@ -4,7 +4,7 @@ use rimz::trust::{self};
 use super::super::open_existing_store;
 use super::model::{
     AccountRow, Accounts, AgentCounts, AgentRollup, AgentRow, CompactionLowered, HookRow,
-    HookStatus, OutdatedIntegration, PluginProbeRow, PluginRow, Probe, Trust,
+    HookStatus, ModSignal, OutdatedIntegration, PluginProbeRow, PluginRow, Probe, Trust,
 };
 
 impl From<rimz::agents::BirthLoginErr> for super::model::AccountProblem {
@@ -339,7 +339,7 @@ pub(super) fn collect_agent_rollup(
             .collect(),
         mod_checked_in: rimz::store::mod_checkin::read_all(store.runtime_paths())
             .into_iter()
-            .map(|record| (record.kind, record.agent_id))
+            .map(|record| ((record.kind.clone(), record.agent_id.clone()), record))
             .collect(),
     };
     if audit {
@@ -400,25 +400,66 @@ pub(super) fn collect_agent_rollup(
 
 type SessionKey = (rimz::ids::AgentKind, rimz::ids::AgentSessionId);
 
-/// The sessions live in the room, and the sessions the RimZ mod checked in.
+/// The sessions live in the room, and the RimZ mod's check-in for each it
+/// reached.
 #[derive(Default)]
 struct LiveSessions {
     keys: std::collections::BTreeSet<SessionKey>,
-    mod_checked_in: std::collections::BTreeSet<SessionKey>,
+    mod_checked_in:
+        std::collections::BTreeMap<SessionKey, rimz::store::mod_checkin::ModCheckinRecord>,
 }
 
 impl LiveSessions {
-    /// A live, registered Claude session the mod never reported for, a child
+    /// A live, registered Claude session the mod owes reports for, a child
     /// launched through `rimz subagents` included. A provider-native child
     /// runs inside its parent's session, and a provisional row has no session
     /// yet. Only Claude ships a RimZ mod.
-    fn mod_missing(&self, agent: &rimz::agents::AgentState) -> bool {
-        let key = (agent.kind.clone(), agent.agent_id.clone());
+    fn owes_mod_reports(&self, agent: &rimz::agents::AgentState) -> bool {
         agent.kind.as_str() == "claude"
             && !agent.is_provider_subagent()
             && !agent.agent_id.is_provisional()
-            && self.keys.contains(&key)
-            && !self.mod_checked_in.contains(&key)
+            && self
+                .keys
+                .contains(&(agent.kind.clone(), agent.agent_id.clone()))
+    }
+
+    fn check_in(
+        &self,
+        agent: &rimz::agents::AgentState,
+    ) -> Option<&rimz::store::mod_checkin::ModCheckinRecord> {
+        self.mod_checked_in
+            .get(&(agent.kind.clone(), agent.agent_id.clone()))
+    }
+
+    /// A session the mod owes reports for that it never reported from.
+    fn mod_missing(&self, agent: &rimz::agents::AgentState) -> bool {
+        self.owes_mod_reports(agent) && self.check_in(agent).is_none()
+    }
+
+    /// Each signal a checked-in session's mod never sent although the row has
+    /// finished a turn since it checked in: every report of a working mod
+    /// carries readings, and a finished turn brings a turn report.
+    fn mod_signals_missing(&self, agent: &rimz::agents::AgentState) -> Vec<ModSignal> {
+        let Some(check_in) = self
+            .check_in(agent)
+            .filter(|_| self.owes_mod_reports(agent))
+        else {
+            return Vec::new();
+        };
+        if agent
+            .turn_ended_at
+            .is_none_or(|ended| ended <= check_in.checked_in_at())
+        {
+            return Vec::new();
+        }
+        [
+            (ModSignal::Readings, check_in.readings_at),
+            (ModSignal::TurnReport, check_in.turn_report_at),
+        ]
+        .into_iter()
+        .filter(|(_, stamp)| stamp.is_none())
+        .map(|(signal, _)| signal)
+        .collect()
     }
 }
 
@@ -450,6 +491,11 @@ fn project_agent_rollup(
                 .then(|| agent_compaction_lowered(agent))
                 .flatten();
             let mod_missing = !historical && live.mod_missing(agent);
+            let mod_signals_missing = if historical {
+                Vec::new()
+            } else {
+                live.mod_signals_missing(agent)
+            };
             let agent = if historical {
                 agent
             } else {
@@ -479,6 +525,7 @@ fn project_agent_rollup(
                 && !matches!(status, AgentStatus::Failed | AgentStatus::Paused)
                 && compaction_lowered.is_none()
                 && !mod_missing
+                && mod_signals_missing.is_empty()
             {
                 return None;
             }
@@ -517,6 +564,7 @@ fn project_agent_rollup(
                 attributed_to_account,
                 compaction_lowered,
                 mod_missing,
+                mod_signals_missing,
                 restartable: agent.pane.is_some() && agent.ended_at.is_none(),
                 historical,
             })

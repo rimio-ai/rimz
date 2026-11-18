@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::{AgentContext, TurnSettle};
 
 #[test]
 fn interrupted_turn_settles_running_to_idle_before_stall() {
@@ -106,5 +107,53 @@ fn turn_error_outranks_interruption_marker() {
         row.turn_error_label(),
         Some("API Error: Bad Request"),
         "the failure keeps the upstream reason on the card"
+    );
+}
+
+#[test]
+fn a_mod_stored_interruption_displays_until_a_hook_moves_past_it() {
+    // The marker reaches the row through `rimz mod feed`'s merge into the
+    // context sidecar. A hook that moved `last_activity` past its transcript
+    // stamp clears the display whether the hook landed before or after it.
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    let runtime = crate::disk::paths::RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mod_report = |marker_ago: u64| {
+        let mut reading = AgentContext::new("claude", epoch());
+        reading.settle = Some(TurnSettle::new(
+            epoch() - std::time::Duration::from_secs(marker_ago),
+            TurnSettleOutcome::Interrupted,
+        ));
+        crate::store::agent_context::merge_mod_reading(&runtime, "claude", "esc", reading, None)
+            .unwrap();
+    };
+    let display = |active_ago: i64| {
+        let mut session = agent("claude", "esc", AgentStatus::Running, 0)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .turn_started_ago(120)
+            .active_ago(active_ago);
+        session.context = crate::store::agent_context::read_one(&runtime, "claude", "esc")
+            .map(|record| record.context);
+        row(&room_with_agent_panes(vec![session]), "esc").status()
+    };
+
+    mod_report(10);
+    assert_eq!(
+        display(60),
+        Some(AgentStatus::Idle),
+        "the mod's marker settles the row"
+    );
+    assert_eq!(
+        display(5),
+        Some(AgentStatus::Running),
+        "a hook after the marker clears it"
+    );
+    mod_report(8);
+    assert_eq!(
+        display(5),
+        Some(AgentStatus::Running),
+        "a marker that lands after the hook but predates it stays cleared"
     );
 }

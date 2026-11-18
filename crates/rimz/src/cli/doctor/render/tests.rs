@@ -938,6 +938,7 @@ fn agents_keep_actionable_rows_counted_and_account_limits_contextual() {
                     attributed_to_account: attributed,
                     compaction_lowered: None,
                     mod_missing: false,
+                    mod_signals_missing: Vec::new(),
                     restartable,
                     historical: false,
                 }],
@@ -982,6 +983,7 @@ fn compaction_lowered_counts_one_or_several_agents_with_closing_fixes() {
                 restartable: true,
                 historical: false,
                 mod_missing: false,
+                mod_signals_missing: Vec::new(),
                 compaction_lowered: Some(CompactionLowered {
                     configured: 372_000,
                     effective: 244_800,
@@ -1050,6 +1052,7 @@ fn mod_missing_warns_per_session_with_its_restart_in_the_closing_fix() {
                 attributed_to_account: false,
                 compaction_lowered: None,
                 mod_missing: true,
+                mod_signals_missing: Vec::new(),
                 restartable,
                 historical: false,
             })
@@ -1097,6 +1100,71 @@ fn mod_missing_warns_per_session_with_its_restart_in_the_closing_fix() {
 }
 
 #[test]
+fn mod_signals_missing_warn_once_per_signal_with_the_reload_fix() {
+    use super::super::model::{AgentRow, ModSignal};
+    let row = |signals: Vec<ModSignal>| AgentRow {
+        kind: "claude".into(),
+        agent_id: "s".into(),
+        branch: None,
+        status: AgentStatus::Idle,
+        phase: Default::default(),
+        last_seen: Timestamp::now(),
+        handle: "@otter".into(),
+        account: "claude@default".parse().unwrap(),
+        turn_error: None,
+        attributed_to_account: false,
+        compaction_lowered: None,
+        mod_missing: false,
+        mod_signals_missing: signals,
+        restartable: true,
+        historical: false,
+    };
+    for (signals, expected) in [
+        (
+            vec![ModSignal::Readings, ModSignal::TurnReport],
+            vec![
+                "the RimZ mod sent no readings",
+                "the RimZ mod sent no turn report",
+            ],
+        ),
+        (
+            vec![ModSignal::TurnReport],
+            vec!["the RimZ mod sent no turn report"],
+        ),
+        (Vec::new(), Vec::new()),
+    ] {
+        let report = DoctorReport {
+            agents: Some(AgentRollup::Observed {
+                counts: AgentCounts {
+                    idle: 1,
+                    ..Default::default()
+                },
+                rows: vec![row(signals)],
+            }),
+            ..report_fixture()
+        };
+        let mut tally = Tally::default();
+        let body = strip(|w| render_agents(w, &report, &mut tally));
+        for reason in &expected {
+            assert_eq!(body.matches(reason).count(), 1, "{body}");
+        }
+        assert!(!body.contains("never reported"), "{body}");
+        assert_eq!(tally.warns.len(), expected.len(), "{body}");
+        let closing = strip(|w| render_tally(w, &tally));
+        assert_eq!(
+            closing
+                .matches(
+                    "run `rimz hooks install claude`, then `rimz agents restart @otter`, to load \
+                     the current mod"
+                )
+                .count(),
+            expected.len(),
+            "{closing}"
+        );
+    }
+}
+
+#[test]
 fn mod_missing_fix_installs_into_the_rows_own_login() {
     use super::super::model::AgentRow;
     let row = |account: &str| AgentRow {
@@ -1112,6 +1180,7 @@ fn mod_missing_fix_installs_into_the_rows_own_login() {
         attributed_to_account: false,
         compaction_lowered: None,
         mod_missing: true,
+        mod_signals_missing: Vec::new(),
         restartable: true,
         historical: false,
     };
@@ -3503,6 +3572,7 @@ fn audit_adds_agent_context_without_changing_findings() {
         attributed_to_account: false,
         compaction_lowered: None,
         mod_missing: false,
+        mod_signals_missing: Vec::new(),
         restartable: !historical,
         historical,
     };

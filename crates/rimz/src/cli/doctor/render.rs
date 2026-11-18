@@ -3056,16 +3056,27 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                         (Some(reason), Some(badge))
                     })
                     .unwrap_or_default();
-                let mod_reason = agent.mod_missing.then_some(MOD_MISSING_REASON);
-                let mod_badge = mod_reason.map(|reason| {
-                    counted(
-                        tally,
-                        Severity::Warning,
-                        format!("{}: {reason}", agent.handle),
-                        mod_missing_fix(agent),
-                    )
-                });
-                let compaction_badge = compaction_badge.or(mod_badge);
+                let mod_reasons: Vec<(&str, String)> =
+                    agent
+                        .mod_missing
+                        .then(|| (MOD_MISSING_REASON, mod_missing_fix(agent)))
+                        .into_iter()
+                        .chain(agent.mod_signals_missing.iter().map(|signal| {
+                            (mod_signal_reason(*signal), mod_signal_fix(agent, *signal))
+                        }))
+                        .collect();
+                let mod_badges: Vec<_> = mod_reasons
+                    .iter()
+                    .map(|(reason, fix)| {
+                        counted(
+                            tally,
+                            Severity::Warning,
+                            format!("{}: {reason}", agent.handle),
+                            fix,
+                        )
+                    })
+                    .collect();
+                let compaction_badge = compaction_badge.or(mod_badges.into_iter().next());
                 let badge = if agent.attributed_to_account
                     || agent.historical
                     || agent.status == AgentStatus::Waiting
@@ -3103,14 +3114,12 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                 } else {
                     compaction_badge.unwrap_or_else(|| badge(status_health(agent.status)))
                 };
-                let reasons: Vec<&str> = [
-                    agent.turn_error.as_deref(),
-                    compaction_reason.as_deref(),
-                    mod_reason,
-                ]
-                .into_iter()
-                .flatten()
-                .collect();
+                let reasons: Vec<&str> =
+                    [agent.turn_error.as_deref(), compaction_reason.as_deref()]
+                        .into_iter()
+                        .flatten()
+                        .chain(mod_reasons.iter().map(|(reason, _)| *reason))
+                        .collect();
                 let reason = if reasons.is_empty() {
                     "-".to_owned()
                 } else {
@@ -3137,6 +3146,16 @@ const MOD_MISSING_REASON: &str = "the RimZ mod never reported";
 /// Reinstall into the row's own login, then restart so Claude loads the mod;
 /// name what else can stop it.
 fn mod_missing_fix(agent: &super::model::AgentRow) -> String {
+    let (install, restart) = mod_reload_steps(agent);
+    format!(
+        "run `{install}`, then {restart}; an organization policy, or a \
+         `CLAUDE_CODE_PLUGIN_DIRS` set in Claude's own environment, can also keep the mod \
+         from loading"
+    )
+}
+
+/// The install into the row's own login, and the restart that reloads the mod.
+fn mod_reload_steps(agent: &super::model::AgentRow) -> (String, String) {
     let install = if agent.account.name.is_default() {
         "rimz hooks install claude".to_owned()
     } else {
@@ -3147,11 +3166,29 @@ fn mod_missing_fix(agent: &super::model::AgentRow) -> String {
     } else {
         "a new session".to_owned()
     };
-    format!(
-        "run `{install}`, then {restart}; an organization policy, or a \
-         `CLAUDE_CODE_PLUGIN_DIRS` set in Claude's own environment, can also keep the mod \
-         from loading"
-    )
+    (install, restart)
+}
+
+fn mod_signal_reason(signal: super::model::ModSignal) -> &'static str {
+    match signal {
+        super::model::ModSignal::Readings => "the RimZ mod sent no readings",
+        super::model::ModSignal::TurnReport => "the RimZ mod sent no turn report",
+    }
+}
+
+/// A mod that checks in without a signal is older than the one install
+/// writes, or cannot read what the signal needs.
+fn mod_signal_fix(agent: &super::model::AgentRow, signal: super::model::ModSignal) -> String {
+    let (install, restart) = mod_reload_steps(agent);
+    let cause = match signal {
+        super::model::ModSignal::Readings => {
+            "a mod that still sends none cannot read the session's usage"
+        }
+        super::model::ModSignal::TurnReport => {
+            "a session that still sends none names a transcript RimZ cannot read"
+        }
+    };
+    format!("run `{install}`, then {restart}, to load the current mod; {cause}")
 }
 
 fn agent_counts_line(counts: &AgentCounts, audit: bool) -> String {

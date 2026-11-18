@@ -126,18 +126,43 @@ fn non_empty<T: Default + PartialEq>(value: T) -> Option<T> {
     (value != T::default()).then_some(value)
 }
 
-fn parse_rate_window(
-    field: Option<RateWindowField>,
-    duration_mins: u32,
-) -> Option<RateLimitWindow> {
+fn parse_rate_window(field: Option<RateWindowField>, kind: &str) -> Option<RateLimitWindow> {
     let field = field?;
     let resets_at = field.resets_at.and_then(|s| Timestamp::from_second(s).ok());
-    super::account::budget_window(
-        field.used_percentage,
+    rate_window(kind, field.used_percentage, resets_at)
+}
+
+/// One of Claude's rate windows by its kind name (`five_hour`, `seven_day`,
+/// `spend_limit`), the name both the statusline and the mod's `rateLimits` use.
+/// An unknown kind is a newer Claude's and yields no window.
+pub(super) fn rate_window(
+    kind: &str,
+    used_percentage: Option<f64>,
+    resets_at: Option<Timestamp>,
+) -> Option<RateLimitWindow> {
+    let duration_mins = match kind {
+        "five_hour" => super::account::FIVE_HOUR_MINS,
+        "seven_day" => super::account::SEVEN_DAY_MINS,
+        "spend_limit" => 0,
+        _ => return None,
+    };
+    let window = super::account::budget_window(
+        used_percentage,
         resets_at,
         duration_mins,
         WindowSource::BestEffort,
-    )
+    )?;
+    if kind != "spend_limit" {
+        return Some(window);
+    }
+    Some(RateLimitWindow {
+        scope: Some(RateLimitWindowScope {
+            id: "spend".to_owned(),
+            label: "$".to_owned(),
+        }),
+        duration_mins: None,
+        ..window
+    })
 }
 
 fn current_usage(field: Option<AgentCurrentUsage>) -> Option<AgentCurrentUsage> {
@@ -169,7 +194,7 @@ pub(super) fn classify_api_error(
     }
 }
 
-enum RestingTurnOutcome {
+pub(super) enum RestingTurnOutcome {
     Interrupted(Timestamp),
     Died(AgentTurnError),
 }
@@ -211,6 +236,12 @@ pub(crate) fn detect_turn_interrupted(tail: &str) -> Option<Timestamp> {
         Some(RestingTurnOutcome::Interrupted(at)) => Some(at),
         Some(RestingTurnOutcome::Died(_)) | None => None,
     }
+}
+
+/// The root transcript's resting-turn outcome: an interruption, or a turn
+/// that died ([`detect_turn_error`]), whichever the newest entry decides.
+pub(super) fn detect_resting_turn(tail: &str) -> Option<RestingTurnOutcome> {
+    detect_resting_turn_outcome(tail, TranscriptScope::Root)
 }
 
 /// Prove from the transcript tail that the call `tool_use_id` resolved: the
@@ -556,16 +587,9 @@ impl StatuslinePayload {
             session_usage: None,
         });
         let windows: Vec<RateLimitWindow> = [
-            parse_rate_window(self.rate_limits.five_hour, super::account::FIVE_HOUR_MINS),
-            parse_rate_window(self.rate_limits.seven_day, super::account::SEVEN_DAY_MINS),
-            parse_rate_window(self.rate_limits.spend_limit, 0).map(|window| RateLimitWindow {
-                scope: Some(RateLimitWindowScope {
-                    id: "spend".to_owned(),
-                    label: "$".to_owned(),
-                }),
-                duration_mins: None,
-                ..window
-            }),
+            parse_rate_window(self.rate_limits.five_hour, "five_hour"),
+            parse_rate_window(self.rate_limits.seven_day, "seven_day"),
+            parse_rate_window(self.rate_limits.spend_limit, "spend_limit"),
         ]
         .into_iter()
         .flatten()

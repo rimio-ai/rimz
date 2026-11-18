@@ -122,7 +122,9 @@ fn mod_missing_flags_live_claude_sessions_without_a_check_in() {
     let key = |agent: &rimz::agents::AgentState| (agent.kind.clone(), agent.agent_id.clone());
     let live = LiveSessions {
         keys: agents.iter().map(key).collect(),
-        mod_checked_in: [key(&agents[1]), key(&agents[4])].into(),
+        mod_checked_in: [&agents[1], &agents[4]]
+            .map(|agent| (key(agent), check_in(agent, now)))
+            .into(),
     };
     for audit in [false, true] {
         let rollup = project_agent_rollup(
@@ -160,6 +162,103 @@ fn mod_missing_flags_live_claude_sessions_without_a_check_in() {
     assert!(
         !without_check_ins.mod_missing(&agents[2]),
         "only Claude ships a mod"
+    );
+}
+
+fn check_in(
+    agent: &rimz::agents::AgentState,
+    at: jiff::Timestamp,
+) -> rimz::store::mod_checkin::ModCheckinRecord {
+    rimz::store::mod_checkin::ModCheckinRecord {
+        kind: agent.kind.clone(),
+        agent_id: agent.agent_id.clone(),
+        mod_version: "1.1.0".into(),
+        provider_version: None,
+        reported_at: at,
+        first_reported_at: Some(at),
+        readings_at: None,
+        turn_report_at: None,
+    }
+}
+
+#[test]
+fn mod_signals_missing_flags_each_signal_a_finished_turn_lacked() {
+    use super::super::model::ModSignal;
+    let checked_in = jiff::Timestamp::now();
+    let later = checked_in + jiff::SignedDuration::from_secs(5);
+    let mut agent = rimz::testkit::agent_state("claude", "sess", checked_in);
+    let key = (agent.kind.clone(), agent.agent_id.clone());
+    let sessions = |record: rimz::store::mod_checkin::ModCheckinRecord| LiveSessions {
+        keys: [key.clone()].into(),
+        mod_checked_in: [(key.clone(), record)].into(),
+    };
+    let bare = check_in(&agent, checked_in);
+    let both = [ModSignal::Readings, ModSignal::TurnReport];
+    assert!(
+        sessions(bare.clone())
+            .mod_signals_missing(&agent)
+            .is_empty(),
+        "no finished turn since the check-in owes nothing"
+    );
+    agent.turn_ended_at = Some(checked_in);
+    assert!(
+        sessions(bare.clone())
+            .mod_signals_missing(&agent)
+            .is_empty()
+    );
+    agent.turn_ended_at = Some(later);
+    assert_eq!(sessions(bare.clone()).mod_signals_missing(&agent), both);
+    let readings = rimz::store::mod_checkin::ModCheckinRecord {
+        readings_at: Some(later),
+        ..bare.clone()
+    };
+    assert_eq!(
+        sessions(readings.clone()).mod_signals_missing(&agent),
+        [ModSignal::TurnReport]
+    );
+    let turn = rimz::store::mod_checkin::ModCheckinRecord {
+        turn_report_at: Some(later),
+        ..bare.clone()
+    };
+    assert_eq!(
+        sessions(turn).mod_signals_missing(&agent),
+        [ModSignal::Readings]
+    );
+    let all = rimz::store::mod_checkin::ModCheckinRecord {
+        turn_report_at: Some(later),
+        ..readings
+    };
+    assert!(sessions(all).mod_signals_missing(&agent).is_empty());
+    let unchecked = LiveSessions {
+        keys: [key.clone()].into(),
+        ..Default::default()
+    };
+    assert!(
+        unchecked.mod_signals_missing(&agent).is_empty(),
+        "a session that never checked in is flagged as mod_missing alone"
+    );
+
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/project")),
+        vec![agent.clone()],
+        later,
+    );
+    let rollup = project_agent_rollup(
+        std::slice::from_ref(&agent),
+        &snapshot,
+        &Default::default(),
+        &rimz::address::AddressContext {
+            channel: None,
+            origin: rimz::address::ChannelOrigin::Root,
+        },
+        &mut Probe::Ready(Accounts { rows: vec![] }),
+        false,
+        &sessions(bare),
+    );
+    let wire = serde_json::to_value(rollup).unwrap();
+    assert_eq!(
+        wire["rows"][0]["mod_signals_missing"],
+        serde_json::json!(["readings", "turn_report"])
     );
 }
 
