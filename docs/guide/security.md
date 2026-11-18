@@ -66,7 +66,7 @@ Room layout stays out of a repository's reach. A project config carrying a `[lay
 The hash covers every field that can cause a process to run:
 
 - `[[agents]]`: `name`, `launch_command`, `env`
-- `[profiles.<name>]`: `agent`, `skills`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args`
+- `[profiles.<name>]`: `agent`, `skills`, `mode`, `model`, `effort`, `auto-compact`, `fast`, `code-mode`, `system-prompt-file`, `append-system-prompt-files`, `args`
 - `[subagents.profiles.<name>]`: the same command-running profile fields, for supervised children
 - `[agents.teams.<name>]`: `layout`, `consensus-file`, `consensus`, `append-system-prompt-files`, and each role's profile, signal bindings, and launch fields
 - `[tasks.<name>]`: what each fire runs or launches (`kind`, `target`, `args`), the worktree it runs in (`worktree`), its `timeout`, and the schedule options (`every`, `cron`, `signal`, `match`, `repeat`). Every process a fire starts comes from the command these fields hold

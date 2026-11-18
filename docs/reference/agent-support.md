@@ -385,35 +385,35 @@ Amp has no model flag. Its `--mode` selects the agent mode, and RimZ passes the 
 
 ### Fast mode
 
-The `fast` profile and role field asks the provider for its fast mode (priority serving, at a higher price). Fast is on or off. On renders the switch below. Off renders nothing, so the provider's own default stands (a saved Claude `/fast`, a Codex `service_tier` in `config.toml`). The launch record keeps the effective value, so restart, fork, and resume replay it like the recorded model.
+The `fast` profile, kind-base, and role field asks the provider for its fast mode (priority serving, at a higher price). Fast is on, off, or `unset`. On renders the switch below. Off renders the off switch below, so a fast mode the provider saved (a Claude `/fast`, a Codex `service_tier` in `config.toml`) stays off for that launch. `unset`, and a profile chain and kind base that set nothing, render nothing, so the provider's own default stands. `--fast` and `--no-fast` force on and off for one launch. The launch record keeps the effective value, so restart, fork, and resume replay it like the recorded model; a record that predates off replays as unset.
 
-| Agent | Switch |
-| --- | --- |
-| Claude Code | `"fastMode": true` inside the launch's one `--settings` |
-| Codex | `-c service_tier=fast -c features.fast_mode=true` |
-| Amp | `--fast` |
-| Pi | `RIMZ_LAUNCH_FAST=1`, and the RimZ extension requests `service_tier: "priority"` through `openai` / `openai-responses` or `openai-codex` / `openai-codex-responses`, on the models each route lists ([limits](../internals/agents/adapter_pi.md#fast-mode)) |
-| Cursor | skipped with a warning: choose a fast model ID with `--model` (for example `claude-opus-5-5-fast`) |
-| Kimi | skipped with a warning: use `--model kimi-for-coding-highspeed` |
-| Droid | skipped with a warning: toggle `/fast` inside the session |
-| Every other built-in and process plugin | skipped with a warning |
+| Agent | On | Off |
+| --- | --- | --- |
+| Claude Code | `"fastMode": true` inside the launch's one `--settings` | `"fastMode": false` inside the same `--settings` |
+| Codex | `-c service_tier=fast -c features.fast_mode=true` | `-c service_tier=default` |
+| Amp | `--fast` | nothing: a thread without `--fast` is standard |
+| Pi | `RIMZ_LAUNCH_FAST=1`, and the RimZ extension requests `service_tier: "priority"` through `openai` / `openai-responses` or `openai-codex` / `openai-codex-responses`, on the models each route lists ([limits](../internals/agents/adapter_pi.md#fast-mode)) | nothing: the extension requests priority only on `RIMZ_LAUNCH_FAST=1` |
+| Cursor | skipped with a warning: choose a fast model ID with `--model` (for example `claude-opus-5-5-fast`) | nothing, silently |
+| Kimi | skipped with a warning: use `--model kimi-for-coding-highspeed` | nothing, silently |
+| Droid | skipped with a warning: toggle `/fast` inside the session | skipped with ``warning: `<profile>` fast off cannot be forced on droid; toggle /fast off inside the session`` |
+| Every other built-in and process plugin | skipped with a warning | nothing, silently |
 
-A definition that sets `fast: true` on a kind without a switch loads normally. Each launch warns with the alternative and records fast as off. The same rule applies to role fields, `--fast`, fast cells, and loop tasks. Claude merges `fastMode` into the same settings value as RimZ's other settings, since only the last `--settings` takes effect. Codex also turns on its `fast_mode` feature, since a user-level `fast_mode = false` otherwise drops the tier silently. A managed feature pin still wins without an error. Amp fixes fast when a thread is created. Current Amp builds leave RimZ no local token record, so no Amp turn is priced.
+A definition that sets `fast: on` on a kind without a switch loads normally. Each launch warns with the alternative and records fast as unset. The same rule applies to role fields, `--fast`, fast cells, and loop tasks. Claude merges `fastMode` into the same settings value as RimZ's other settings, since only the last `--settings` takes effect, and a flip between on and off leaves exactly one switch on the argv. Codex also turns on its `fast_mode` feature, since a user-level `fast_mode = false` otherwise drops the tier silently. A managed feature pin still wins without an error. Amp fixes fast when a thread is created. Current Amp builds leave RimZ no local token record, so no Amp turn is priced.
 
 The fast-mode badge follows the provider's live reading: Claude's statusline `fast_mode`, and between statusline runs the newest request's `usage.speed` in its transcript, Codex's latest `thread_settings_applied` service tier, or Pi's extension envelope `fast` (whether it would request priority for the current model, not the delivered tier). An explicit live off reading clears the badge even after a fast launch. Without a live reading, including Amp and older Pi extensions, RimZ falls back to the launch record, and a launch with fast off cannot rule out the provider's saved default. Droid has no live reading or launch switch, and Cursor's fast models already name their speed.
 
 ### Code mode
 
-The `code-mode` profile field launches the provider in its own code mode. It is a profile setting only: team roles, workflow steps, and launch flags have no override, and it follows the profile chain like `fast`. On renders the switch below, before the profile's raw `args`. Off and unset render nothing.
+The `code-mode` profile and kind-base field launches the provider in its own code mode. It is a profile and kind-base setting only: team roles, workflow steps, and launch flags have no override, and it follows the profile chain like `fast`. It is on, off, or `unset`. On renders the switch below, before the profile's raw `args`, and off renders the off switch below. `unset`, and a chain and kind base that set nothing, render nothing.
 
-| Agent | Switch |
-| --- | --- |
-| Claude Code | `REPL` and `Poll` appended to the rendered `--tools`, each once, and `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1` in the launch env. A profile with no tools list emits no `--tools` and sets the env variable alone. |
-| Pi | `codemode` appended to the mapped `--tools` list, each once; a list that maps to no Pi tool renders `--tools codemode` instead of `--no-tools`. A profile with no tools list renders `--tools +codemode`. `--no-skills` follows the list as it does without code mode. |
-| Codex | `-c features.code_mode=true` after the rendered tools settings, with or without a tools list. The model gains Codex's JavaScript cell tools while shell, `apply_patch`, and MCP tools stay directly callable; RimZ never sets `code_mode_only`, which hides them. Codex marks the feature as under development. The model's catalog entry can override the flag: a model the catalog runs code-mode-only (`gpt-6.2-sol`) runs that way with code mode off, and one the catalog runs direct (Vertex models) ignores it. |
-| Every other built-in and process plugin | skipped with a warning |
+| Agent | On | Off |
+| --- | --- | --- |
+| Claude Code | `REPL` and `Poll` appended to the rendered `--tools`, each once, and `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1` in the launch env. A profile with no tools list emits no `--tools` and sets the env variable alone. | `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0` in the launch env, over a value you exported or set in trusted `[[agents]]` `env` |
+| Pi | `codemode` appended to the mapped `--tools` list, each once; a list that maps to no Pi tool renders `--tools codemode` instead of `--no-tools`. A profile with no tools list renders `--tools +codemode`. `--no-skills` follows the list as it does without code mode. | `codemode` added to the last exclusion list on the final argv, spelled `--exclude-tools` or `-xt` and including profile `args` and `--` passthrough, or `--exclude-tools codemode` when the argv has none |
+| Codex | `-c features.code_mode=true` after the rendered tools settings, with or without a tools list. The model gains Codex's JavaScript cell tools while shell, `apply_patch`, and MCP tools stay directly callable; RimZ never sets `code_mode_only`, which hides them. Codex marks the feature as under development. The model's catalog entry can override the flag: a model the catalog runs code-mode-only (`gpt-6.2-sol`) runs that way with code mode off, and one the catalog runs direct (Vertex models) ignores it. | `-c features.code_mode=false` at the same position, over a `[features] code_mode = true` saved in `config.toml`; a model the catalog runs code-mode-only still runs that way |
+| Every other built-in and process plugin | skipped with a warning | nothing, silently |
 
-On a kind without a switch, each launch warns ``warning: `<profile>` code-mode is unsupported on <agent>; launching without it`` and renders as if code mode were off. A Claude launch with code mode on sets `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1` and records the pair in `RIMZ_CODE_MODE_ENV`. A later launch, of any kind, that does not set the variable itself removes it only while that record names it and its value is unchanged, so a nested launch from a code-mode agent does not inherit code mode. Your own value wins on such a launch: one exported in the environment RimZ starts from, or set in trusted `[[agents]]` `env`, passes through. The launch record keeps no code-mode value: restart, fork, and resume render it again from the current profile, and a relaunch that degrades to a bare resume (its profile deleted or failed) runs without it, as it runs without the profile's tools.
+On a kind without a switch, each launch warns ``warning: `<profile>` code-mode is unsupported on <agent>; launching without it`` and renders as if code mode were off. A Claude launch with code mode on sets `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1` and records the pair in `RIMZ_CODE_MODE_ENV`. A later launch, of any kind, that does not set the variable itself removes it only while that record names it and its value is unchanged, so a nested launch from a code-mode agent does not inherit code mode. Your own value wins on such a launch: one exported in the environment RimZ starts from, or set in trusted `[[agents]]` `env`, passes through. A Claude launch with code mode off sets the variable to `0` over either, and records it the same way. The launch record keeps no code-mode value: restart, fork, and resume render it again from the current profile, and a relaunch that degrades to a bare resume (its profile deleted or failed) runs without it, as it runs without the profile's tools.
 
 ### Launch-prompt replacement
 
@@ -451,7 +451,7 @@ OpenCode's project instructions and RimZ's launch reminder still follow the repl
 
 ### Auto-compaction window
 
-The `auto-compact` field on a profile or team role sets the agent's native auto-compaction window, as a token count from 100k through 1M inclusive: `"200k"`, `"200000"`, or `"1m"`. RimZ rejects anything outside that range before launch, so `"200"` fails instead of meaning something different to each CLI. This is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction), which uses a seat line for mid-turn wrap-up and compact-first delivery without changing the native window. Mid-turn participation derives from compact-command, context, and compaction coverage. The configuration guide lists skipped kinds, and `rimz doctor` reports detected skips. Which agents accept a trailing instruction when you compact by hand is in [`rimz agents compact`](./cli/agents.md#compact).
+The `auto-compact` field on a profile, kind base, or team role sets the agent's native auto-compaction window, as a token count from 100k through 1M inclusive: `"200k"`, `"200000"`, or `"1m"`. RimZ rejects anything outside that range before launch, so `"200"` fails instead of meaning something different to each CLI. This is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction), which uses a seat line for mid-turn wrap-up and compact-first delivery without changing the native window. Mid-turn participation derives from compact-command, context, and compaction coverage. The configuration guide lists skipped kinds, and `rimz doctor` reports detected skips. Which agents accept a trailing instruction when you compact by hand is in [`rimz agents compact`](./cli/agents.md#compact).
 
 | Agent | Auto-compaction window | How the agent receives it |
 | --- | :--: | --- |
@@ -459,7 +459,7 @@ The `auto-compact` field on a profile or team role sets the agent's native auto-
 | Codex | ✓ | `-c model_auto_compact_token_limit=<tokens>`. Codex clamps it to 90% of the raw model window, not the session's usable window (normally 95% of raw). The compaction-scaled card pairs the effective point with the model's maximum capacity. A raw 272k window gives a 244,800-token point and a 258,400-token usable window. |
 | Every other agent and process plugins | ✗ | skipped with a warning at launch |
 
-Profiles without an explicit or inherited `auto-compact` use the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default, `272k`, on Claude and Codex. This covers Markdown definitions and trusted project TOML profiles. Bare-kind launches get no injected window. A switch to a provider without a window flag silently drops this injected default, while a declared value warns instead. `"off"` passes no native window, leaving the provider's own default. The clamps above still apply.
+Profiles without an explicit or inherited `auto-compact` use their kind base's, then the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default, `272k`, on Claude and Codex. This covers Markdown definitions and trusted project TOML profiles. Bare-kind launches get no injected window. A switch to a provider without a window flag silently drops this injected default, while a declared value warns instead. `"off"` passes no native window, leaving the provider's own default. The clamps above still apply.
 
 ## The wiring matrix
 

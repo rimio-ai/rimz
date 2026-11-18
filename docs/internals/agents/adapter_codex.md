@@ -141,8 +141,8 @@ Rules are applied before the hook config is written, so a rules failure cannot l
 | Room paths, every isolation and mode | the selection-dependent [room-root grant](#room-root-grants) |
 | Model | `--model <model>` |
 | Effort | `-c model_reasoning_effort=<effort>` |
-| Fast | `-c service_tier=fast -c features.fast_mode=true`; core keeps the tier only with the feature on, and a user config can switch it off |
-| Profile `code-mode` on | `-c features.code_mode=true` after the tools settings, never `code_mode_only`; the model catalog's `tool_mode` overrides it ([code mode](../../reference/agent-support.md#code-mode)) |
+| Fast | `-c service_tier=fast -c features.fast_mode=true`; core keeps the tier only with the feature on, and a user config can switch it off. Forced off renders `-c service_tier=default` over a `service_tier` that `/fast` saved in `config.toml` |
+| Profile `code-mode` on or off | `-c features.code_mode=true` for on and `-c features.code_mode=false` for off, after the tools settings, never `code_mode_only`; off wins over a `[features] code_mode` saved in `config.toml`, and unset renders nothing. The model catalog's `tool_mode` overrides both, so a model the catalog runs code-mode-only stays so under off ([code mode](../../reference/agent-support.md#code-mode)) |
 | Profile `auto-compact` | `-c model_auto_compact_token_limit=<tokens>`; under the default `total` scope Codex caps it at 90% of the context window, and `model_auto_compact_token_limit_scope = body_after_prefix` leaves it unclamped ([upstream](../../externals/agent-adapter/codex-reference.md#cli-config-overrides)) |
 | System prompt replacement | `-c model_instructions_file=<path>`: the resolved base file, or a content-addressed composed file when fragments exist |
 | Appended text, such as the subagent no-delegation reminder | `-c developer_instructions=<text>`, a developer-role message that leaves the user prompt unchanged |
