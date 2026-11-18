@@ -1446,6 +1446,57 @@ fn an_unchanged_image_on_screen_is_never_sent_again() {
 }
 
 #[test]
+fn a_client_attach_resends_each_visible_image_once_in_place() {
+    if crate::tui::no_color() {
+        return;
+    }
+    let (_root, pool) = slot_pool();
+    for snapshot in [slot_snapshot(), logo_snapshot()] {
+        let mut painter = slot_painter(&pool, FULL_CAPS);
+        let mut ui = UiState::default();
+        let now = Instant::now();
+        let sent = |frame: &SlotFrame| {
+            kitty_commands(frame.bytes.as_bytes())
+                .into_iter()
+                .filter(|command| command["a"] == "t")
+                .map(|command| command["i"].parse::<u32>().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let first = paint_slot_frame(&mut painter, &snapshot, &mut ui, ROUTED, now);
+        let pixels = ui.meter_pixels.as_mut().expect("meter pixels");
+        assert!(pixels.logos.settle(std::time::Duration::from_secs(10)));
+        let landed = paint_slot_frame(&mut painter, &snapshot, &mut ui, ROUTED, now);
+        let mut shown = sent(&first);
+        shown.extend(sent(&landed));
+        shown.sort_unstable();
+        assert!(!shown.is_empty());
+
+        assert!(
+            painter.note_client_attaches(1),
+            "a held slot is due a resend"
+        );
+        let attach = paint_slot_frame(&mut painter, &snapshot, &mut ui, ROUTED, now);
+        let mut resent = sent(&attach);
+        resent.sort_unstable();
+        assert_eq!(resent, shown, "each visible image goes once, under its id");
+        assert!(!attach.bytes.contains("a=d"), "no delete: {}", attach.bytes);
+        let after = paint_slot_frame(&mut painter, &snapshot, &mut ui, ROUTED, now);
+        assert!(sent(&after).is_empty(), "the frame after sends nothing");
+        assert!(
+            !painter.note_client_attaches(1),
+            "the same count is no attach"
+        );
+
+        let mut off = snapshot.clone();
+        off.theme.display.pixel = crate::config::PixelMode::Off;
+        paint_slot_frame(&mut painter, &off, &mut ui, ROUTED, now);
+        painter.note_client_attaches(2);
+        let disabled = paint_slot_frame(&mut painter, &off, &mut ui, ROUTED, now);
+        assert!(!disabled.graphics(), "pixels off send nothing at an attach");
+    }
+}
+
+#[test]
 fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);

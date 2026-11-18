@@ -449,6 +449,10 @@ pub struct ClientPresence {
     pub unfocused_clients: BTreeSet<crate::ids::MuxClientId>,
     /// Non-normal modes, kept separate from pane-view identity.
     pub client_modes: BTreeMap<crate::ids::MuxClientId, crate::pane::RoomMode>,
+    /// Clients that draw pane output but route no view: tmux's `ignore-size`
+    /// clients without `no-output` (the read-only share). No presence figure
+    /// counts them; only the renderer's client attach count reads them.
+    pub(crate) unrouted_clients: BTreeSet<crate::ids::MuxClientId>,
 }
 
 impl ClientPresence {

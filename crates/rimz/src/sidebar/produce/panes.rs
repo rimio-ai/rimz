@@ -609,25 +609,38 @@ fn sample_client_presence(mux: MuxName, session: &str) -> Option<ClientSample> {
         .map(|view| presence_sample_from_client_view(&view, sampled_at_ms))
 }
 
-fn frame_client_view(
-    pushed: Option<crate::mux::ClientView>,
-    prior: Option<&PaneFrame>,
-    mux: MuxName,
-    read: impl FnOnce() -> Result<crate::mux::ClientView>,
-) -> (
+/// Viewed panes, routed clients, modes, presence, freshness, and the clients
+/// that draw pane output but route no view.
+type FrameClientView = (
     Vec<PaneId>,
     Vec<crate::pane::ClientPaneView>,
     Vec<crate::pane::ClientRoomMode>,
     Option<PresenceSample>,
     bool,
-) {
+    Vec<crate::ids::MuxClientId>,
+);
+
+fn frame_client_view(
+    pushed: Option<crate::mux::ClientView>,
+    prior: Option<&PaneFrame>,
+    mux: MuxName,
+    read: impl FnOnce() -> Result<crate::mux::ClientView>,
+) -> FrameClientView {
     let sampled_at_ms = unix_now_ms();
     if let Ok(view) = pushed.map_or_else(read, Ok) {
         let (presence, modes) = presence_sample_from_client_view(&view, sampled_at_ms);
-        return (view.viewed_panes, view.clients, modes, Some(presence), true);
+        let unrouted = view.presence.unrouted_clients.into_iter().collect();
+        return (
+            view.viewed_panes,
+            view.clients,
+            modes,
+            Some(presence),
+            true,
+            unrouted,
+        );
     }
     let Some(prior) = prior.filter(|_| mux == MuxName::Zellij) else {
-        return (Vec::new(), Vec::new(), Vec::new(), None, false);
+        return (Vec::new(), Vec::new(), Vec::new(), None, false, Vec::new());
     };
     (
         prior.viewed_panes.clone(),
@@ -635,6 +648,7 @@ fn frame_client_view(
         prior.client_modes.clone(),
         prior.presence.clone(),
         false,
+        prior.unrouted_clients.clone(),
     )
 }
 
@@ -1307,7 +1321,7 @@ impl FrameContext<'_> {
         // Renderer paint gating depends on fresh client focus. Zellij's
         // topology push carries it; backends without pushed presence fall back
         // to a direct client sample.
-        let (viewed_panes, client_views, client_modes, presence, client_view_resolved) =
+        let (viewed_panes, client_views, client_modes, presence, client_view_resolved, unrouted) =
             frame_client_view(pushed_client_view, prior, self.mux, || {
                 client_view(self.mux, self.session)
             });
@@ -1332,6 +1346,7 @@ impl FrameContext<'_> {
             });
         frame.presence = presence;
         frame.client_modes = client_modes;
+        frame.unrouted_clients = unrouted;
         emit_frame_diagnostics(self.diag, diagnostics);
         let hibernated = hibernated_panes_for(&frame, self.native_tenants, self.hibernated_panes);
         *self.native_tenants = frame

@@ -86,6 +86,7 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
     let mut client_input_ms = std::collections::BTreeMap::new();
     let mut unfocused_clients = std::collections::BTreeSet::new();
     let mut client_modes = std::collections::BTreeMap::new();
+    let mut unrouted_clients = std::collections::BTreeSet::new();
     for line in String::from_utf8_lossy(stdout).lines() {
         let mut cols = line.splitn(6, '|');
         let (Some(raw_client), Some(raw_pane)) = (cols.next(), cols.next()) else {
@@ -100,7 +101,11 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
         let key_table = cols.next().unwrap_or_default();
         let pane_mode = cols.next().unwrap_or_default();
         let flags = cols.next().unwrap_or_default();
-        if flags.split(',').any(|flag| flag.trim() == "ignore-size") {
+        let flagged = |name| flags.split(',').any(|flag| flag.trim() == name);
+        if flagged("ignore-size") {
+            if !flagged("no-output") {
+                unrouted_clients.insert(MuxClientId::Tmux(raw_client.to_owned()));
+            }
             continue;
         }
 
@@ -151,6 +156,7 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
             client_input_ms,
             unfocused_clients,
             client_modes,
+            unrouted_clients,
         },
     }
 }
@@ -416,6 +422,33 @@ mod tests {
         assert!(view.viewed_panes.is_empty());
         assert_eq!(view.presence.human_clients, 0);
         assert_eq!(view.presence.last_input_ms(), None);
+    }
+
+    #[test]
+    fn client_view_keeps_the_read_only_share_out_of_routing_but_lists_it_unrouted() {
+        let view = parse_client_view(
+            b"human|%10|1700000000|root||attached,focused,UTF-8\n\
+              share|%10|1700000001|root||attached,focused,ignore-size,read-only,UTF-8\n\
+              watch|%10|1700000002|root||attached,focused,control-mode,ignore-size,no-output,UTF-8\n",
+        );
+        let human = MuxClientId::Tmux("human".to_owned());
+        assert_eq!(
+            view.clients
+                .iter()
+                .map(|client| &client.client_id)
+                .collect::<Vec<_>>(),
+            [&human]
+        );
+        assert_eq!(view.presence.human_clients, 1);
+        assert_eq!(
+            view.presence.client_input_ms.keys().collect::<Vec<_>>(),
+            [&human]
+        );
+        assert_eq!(
+            view.presence.unrouted_clients,
+            [MuxClientId::Tmux("share".to_owned())].into(),
+            "the share draws output; the no-output watch draws nothing"
+        );
     }
 
     #[test]

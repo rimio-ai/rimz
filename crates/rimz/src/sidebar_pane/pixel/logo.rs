@@ -502,13 +502,22 @@ impl LogoReserve {
 #[derive(Debug)]
 pub(in crate::sidebar_pane) struct LogoPainter {
     residency: ImageResidency<u32, LogoImage>,
+    /// The next frame sends every logo it shows again, after deleting the rest.
+    resend: bool,
 }
 
 impl LogoPainter {
     pub(in crate::sidebar_pane) fn new(wrap: bool) -> Self {
         Self {
             residency: ImageResidency::new(wrap),
+            resend: false,
         }
+    }
+
+    /// Send each logo the next frame shows again under its id. The residency
+    /// forgets them only after that frame's deletes, which read what it holds.
+    pub(in crate::sidebar_pane) fn resend_in_place(&mut self) {
+        self.resend = true;
     }
 
     /// Transmit each visible logo once (and again when its box changes), and
@@ -525,6 +534,9 @@ impl LogoPainter {
             .collect::<BTreeSet<_>>();
         self.residency
             .delete_absent(writer, |image_id| visible.contains(image_id), permit)?;
+        if std::mem::take(&mut self.resend) {
+            self.residency.invalidate();
+        }
         for (image_id, image, mark) in logos.visible_images() {
             self.residency.ensure(
                 writer,

@@ -80,6 +80,12 @@ impl PixelPainter {
         self.residency.invalidate();
     }
 
+    /// Send each sprite again under its id at its next show, keeping the pet
+    /// (and with it the sheet and the residency's terminal ids).
+    pub(crate) fn resend_in_place(&mut self) {
+        self.residency.invalidate();
+    }
+
     pub(crate) fn image_id(&self, sprite_index: usize) -> u32 {
         sprite_image_id(self.id_base, sprite_index)
     }

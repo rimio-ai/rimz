@@ -480,6 +480,7 @@ fn no_prior_and_empty_fresh_are_not_ambiguous() {
 #[test]
 fn omitted_tab_is_recreated_from_prior_metadata() {
     let mut prior = PaneFrame {
+        unrouted_clients: Vec::new(),
         focus_origin: Default::default(),
         client_view_fresh: false,
         client_sample_withheld: false,

@@ -724,6 +724,7 @@ impl LoopState {
 
         self.run_maintenance(terminal);
         self.run_width_control_backstop(terminal);
+        self.repaint_for_client_attach();
         let (active, _) = self.frame_timing();
         self.paint_frame_if_due(terminal, active)?;
         let (_, timeout) = self.frame_timing();
@@ -800,6 +801,16 @@ impl LoopState {
         }
         std::hint::black_box(self.frame_timing());
         self.watched()
+    }
+
+    /// A client new to the session has received no image from this pane, so a
+    /// watched pane holding a slot paints now and resends them in place.
+    fn repaint_for_client_attach(&mut self) {
+        let attaches = self.views.record().client_attaches;
+        if self.pane.paint.note_client_attaches(attaches) && self.watched() {
+            self.pane.dirty = true;
+            self.pane.next_frame = self.pane.clock.now();
+        }
     }
 
     fn freeze_remaining(&mut self, now_ms: i64) -> Option<Duration> {
@@ -2495,6 +2506,8 @@ impl LoopState {
                 )
             });
             let permit = self.image_permit(now);
+            let attaches = self.views.record().client_attaches;
+            self.pane.paint.note_client_attaches(attaches);
             self.pane.paint.refresh_view(
                 &mut self.pane.ui,
                 &view,
