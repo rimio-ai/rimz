@@ -223,29 +223,36 @@ pub(crate) fn render_tool_args(
     }
 }
 
-/// A launch's tool argv, with the kind's code-mode tools when `code_mode` is on.
+/// A launch's tool argv, with the kind's code-mode tools or argv when `code_mode` is on.
 pub(crate) fn render_launch_tool_args(
     kind: &str,
     tools: Option<&ToolSet>,
     code_mode: bool,
 ) -> Result<(Vec<String>, Vec<ToolNotice>), ToolErr> {
     let switch = spec_by_kind(kind).map(|spec| spec.launch.presets.code_mode);
+    let switch_args = match switch {
+        Some(CodeModeSwitch::Args(args)) if code_mode => args,
+        _ => &[],
+    };
     let Some(tools) = tools else {
         let argv = match switch {
-            Some(CodeModeSwitch::Supported { without_tools, .. }) if code_mode => {
-                without_tools.iter().map(|arg| (*arg).to_owned()).collect()
-            }
-            _ => Vec::new(),
+            Some(CodeModeSwitch::Supported { without_tools, .. }) if code_mode => without_tools,
+            _ => switch_args,
         };
-        return Ok((argv, Vec::new()));
+        return Ok((
+            argv.iter().map(|arg| (*arg).to_owned()).collect(),
+            Vec::new(),
+        ));
     };
     let extra = switch.map_or(&[][..], |switch| switch.tools(code_mode));
-    match definitions(kind).tools {
-        DefinitionTools::Required(render) => Ok((render(tools, extra)?, Vec::new())),
-        DefinitionTools::Optional(render) => Ok(render(tools, extra)),
-        DefinitionTools::Unsupported => Ok((Vec::new(), vec![ToolNotice::NotApplied])),
-        DefinitionTools::Ignored => Ok((Vec::new(), Vec::new())),
-    }
+    let (mut argv, notices) = match definitions(kind).tools {
+        DefinitionTools::Required(render) => (render(tools, extra)?, Vec::new()),
+        DefinitionTools::Optional(render) => render(tools, extra),
+        DefinitionTools::Unsupported => (Vec::new(), vec![ToolNotice::NotApplied]),
+        DefinitionTools::Ignored => (Vec::new(), Vec::new()),
+    };
+    argv.extend(switch_args.iter().map(|arg| (*arg).to_owned()));
+    Ok((argv, notices))
 }
 
 #[cfg(test)]
@@ -417,7 +424,13 @@ mod tests {
             assert_eq!(launch(kind, entries, true), on, "{kind} {entries:?} on");
             assert_eq!(launch(kind, entries, false), off, "{kind} {entries:?} off");
         }
-        for kind in ["codex", "opencode", "omp", "unregistered"] {
+        // Codex takes the switch as config argv after any tools list.
+        for entries in [Some(read_bash), None] {
+            let mut on = launch("codex", entries, false);
+            on.extend(["-c".to_owned(), "features.code_mode=true".to_owned()]);
+            assert_eq!(launch("codex", entries, true), on, "codex {entries:?}");
+        }
+        for kind in ["opencode", "omp", "unregistered"] {
             for entries in [Some(read_bash), None] {
                 assert_eq!(
                     launch(kind, entries, true),

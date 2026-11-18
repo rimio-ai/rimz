@@ -297,7 +297,9 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
-            code_mode: super::CodeModeSwitch::Unsupported,
+            // `features.code_mode` adds the JavaScript cell tools beside the
+            // direct ones; `code_mode_only` would hide shell and apply_patch.
+            code_mode: super::CodeModeSwitch::Args(&["-c", "features.code_mode=true"]),
             auto_compact: Some(super::StaticPresetMatcher::ConfigKey {
                 flags: &["-c", "--config"],
                 key: "model_auto_compact_token_limit",
