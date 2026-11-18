@@ -1815,8 +1815,9 @@ pub fn align_submitted_prompt<'a>(
         return None;
     }
     for (start, _) in prompt.match_indices(&anchor) {
+        // A header before this occurrence is before every later one too.
         if first.sender == MessageSender::Human && header_line_before(prompt, start) {
-            continue;
+            break;
         }
         let Some((segments, trailing)) = align_submitted_prompt_from(&prompt[start..], &records)
         else {
