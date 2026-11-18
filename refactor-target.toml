@@ -4561,7 +4561,8 @@ path = "crates/rimz/src/store"
 # ModCheckinRecord::checked_in_at is the check-in instant doctor compares a turn end with (+2).
 # store::message::read_record finds a compaction continue's command anywhere in the queue or history (+1).
 # SidebarUpload carries the paste upload row the upload lane folds into the snapshot (+1).
-surface-budget = 669
+# store::message::paste_order is the one batch paste order the send path and the aligner share (+1).
+surface-budget = 670
 
 [[verdict]]
 kind = "item"

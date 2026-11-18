@@ -243,11 +243,7 @@ fn peer_ack_rejects_nonlauncher_and_uncorrelated_delivery() {
         *kind = AgentKind::new_unchecked("claude");
     }
     for (sender, prompt, body) in [
-        (
-            MessageSender::Human,
-            Some("Type: USER_MESSAGE\nFrom: @user\nContent:\nwork"),
-            MessageBody::Prompt,
-        ),
+        (MessageSender::Human, Some("work"), MessageBody::Prompt),
         (wrong_id, agent_prompt, MessageBody::Prompt),
         (missing_id, agent_prompt, MessageBody::Prompt),
         (wrong_kind, agent_prompt, MessageBody::Prompt),

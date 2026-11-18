@@ -1,7 +1,8 @@
 use super::*;
 
+/// A user-shell prompt as it is pasted and as the hook reads it: the text alone.
 fn user_message(text: &str) -> String {
-    format!("Type: USER_MESSAGE\nFrom: @user\nContent:\n{text}")
+    text.to_owned()
 }
 
 const BLOCKER: &str = "stuck: no live pane";
@@ -934,7 +935,7 @@ fn correlated_ack_aligns_headered_and_mixed_batches() {
             "first",
             "second",
             format!(
-                "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst\n\n{}",
+                "{}\n\nType: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst",
                 user_message("second")
             ),
         ),
@@ -950,7 +951,7 @@ fn correlated_ack_aligns_headered_and_mixed_batches() {
             "first",
             "second",
             format!(
-                "Type: AGENT_MESSAGE\nFrom: @planner, wants a reply\nContent:\nfirst\n\n{}",
+                "{}\n\nType: AGENT_MESSAGE\nFrom: @planner, wants a reply\nContent:\nfirst",
                 user_message("second")
             ),
         ),
@@ -1011,7 +1012,67 @@ fn correlated_ack_aligns_headered_and_mixed_batches() {
                 .collect::<Vec<_>>()
         );
         assert!(q.live().is_empty());
+        let later = Timestamp::now() + Duration::from_secs(3600);
+        q.reconcile_stale_messages("session", later, 3).unwrap();
+        assert!(
+            q.live().is_empty(),
+            "a confirmed batch is not written again"
+        );
     }
+}
+
+#[test]
+fn in_flight_user_text_inside_a_later_notice_does_not_confirm_the_user() {
+    use crate::store::message::{HarnessNotice, classify_submitted_prompt};
+    use crate::transcript::SectionOrigin;
+
+    let q = Queue::new();
+    let user = q.queue_with(1, |message| message.text = "go".to_owned());
+    let user = q.record_sent_batch(&[user], "session").unwrap();
+    let stage = q.queue_with(2, |message| {
+        message.text = "going on: Implement is yours.".to_owned();
+        message.sender = MessageSender::Harness {
+            notice: HarnessNotice::Stage,
+        };
+    });
+    let stage = q.record_sent_batch(&[stage], "session").unwrap();
+    let prompt = "Type: STAGE\nFrom: @rimz\nContent:\ngoing on: Implement is yours.";
+
+    let delivered = q
+        .confirm_delivered_for_card(
+            &stage[0].kind,
+            &stage[0].agent_id,
+            None,
+            DeliveryAck::TurnStarted {
+                prompt: Some(prompt),
+            },
+            "session",
+        )
+        .unwrap();
+
+    assert_eq!(
+        delivered
+            .iter()
+            .map(|message| &message.message_id)
+            .collect::<Vec<_>>(),
+        vec![&stage[0].message_id]
+    );
+    assert_eq!(
+        q.live()
+            .iter()
+            .map(|message| (&message.message_id, message.status))
+            .collect::<Vec<_>>(),
+        vec![(&user[0].message_id, MessageStatus::Sent)]
+    );
+    let delivered = delivered.iter().collect::<Vec<_>>();
+    let sections = classify_submitted_prompt(prompt, &delivered, &[]);
+    assert_eq!(
+        sections
+            .iter()
+            .map(|section| (section.origin.clone(), section.record.is_some()))
+            .collect::<Vec<_>>(),
+        vec![(SectionOrigin::Notice("@rimz".to_owned()), true)]
+    );
 }
 
 #[test]

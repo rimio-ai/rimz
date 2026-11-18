@@ -16532,8 +16532,9 @@ fn run_traced_smart_compact(env: &Env, trace_log: &Path, text: &str) -> std::pro
     output
 }
 
+/// A user-shell prompt as it is pasted and as the hook reads it: the text alone.
 fn user_message(text: &str) -> String {
-    format!("Type: USER_MESSAGE\nFrom: @user\nContent:\n{text}")
+    text.to_owned()
 }
 
 fn is_paste_to_any_pane(line: &str, text: &str) -> bool {

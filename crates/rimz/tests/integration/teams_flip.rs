@@ -3159,7 +3159,7 @@ fn resumed_lazy_leader_gets_its_resume_prompt_then_its_stage() {
     delivery.write_all(&[1]).unwrap();
 
     let paste = format!(
-        "Type: USER_MESSAGE\nFrom: @user\nContent:\nsay hi\n\nType: STAGE\nFrom: @rimz\nContent:\n{}",
+        "say hi\n\nType: STAGE\nFrom: @rimz\nContent:\n{}",
         stage.text
     );
     wait_for_text_then_enter(&fixture.trace, &paste);

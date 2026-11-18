@@ -1472,14 +1472,14 @@ fn signal_delivery_is_acknowledged_and_hidden_from_rendered_transcript() {
 }
 
 #[test]
-fn transcript_hook_strips_user_message_header_from_prompt_entry() {
+fn transcript_hook_records_a_bare_user_prompt_as_the_users() {
     let env = Env::new();
     env.record(&env.project_root);
     register_codex_turn(
         &env,
         "sess-hook-user",
         "hook-user-transcript",
-        "Type: USER_MESSAGE\nFrom: @user\nContent:\ncheck this",
+        "check this",
         "checked",
     );
 

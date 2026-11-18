@@ -111,7 +111,6 @@ fn render_history(
             Some((kind, sender, body)) => {
                 let from = match kind {
                     HeaderKind::Agent => sender,
-                    HeaderKind::User => "user".to_owned(),
                     HeaderKind::Notice(notice) => match notice {
                         HarnessNotice::SubagentReport
                         | HarnessNotice::AgentReport
@@ -294,7 +293,7 @@ mod tests {
                 "new notice",
             ),
             (
-                "Type: USER_MESSAGE\nFrom: @user\nContent:\nnext task",
+                "next task\n\nType: STAGE\nFrom: @rimz\nContent:\nImplement is yours.",
                 "user",
                 "next task",
             ),

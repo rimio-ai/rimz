@@ -746,11 +746,10 @@ impl MessageRecord {
 
     fn ships_headerless(&self) -> bool {
         match (&self.sender, self.body) {
-            (MessageSender::System, _) => true,
+            (MessageSender::System | MessageSender::Human, _) => true,
             (_, MessageBody::Command) => true,
             (
-                MessageSender::Human
-                | MessageSender::Agent { .. }
+                MessageSender::Agent { .. }
                 | MessageSender::Subagent { .. }
                 | MessageSender::Harness { .. },
                 MessageBody::Prompt,
@@ -1520,14 +1519,12 @@ pub fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HeaderKind {
     Agent,
-    User,
     Notice(HarnessNotice),
 }
 
 fn classify_header_start(line: &str, from: Option<&str>) -> Option<HeaderKind> {
     let token = match line {
         "Type: AGENT_MESSAGE" => return Some(HeaderKind::Agent),
-        "Type: USER_MESSAGE" => return Some(HeaderKind::User),
         _ => line.strip_prefix("Type: ")?,
     };
     let mut bytes = token.bytes();
@@ -1549,9 +1546,9 @@ pub(crate) const REPLY_WANTED_MARK: &str = ", wants a reply";
 
 /// Split a delivered prompt into its structured header and body.
 ///
-/// The handle keeps its leading `@` and any `#channel` suffix. System and
-/// `--no-from` text carry no header. Unknown uppercase notice types require
-/// exactly `From: @rimz`.
+/// The handle keeps its leading `@` and any `#channel` suffix. The user's own
+/// text, system text and `--no-from` text carry no header. Unknown uppercase
+/// notice types require exactly `From: @rimz`.
 pub fn parse_message_header(text: &str) -> Option<(HeaderKind, String, String)> {
     let (kind, rest) = text.split_once('\n')?;
     let (from, rest) = rest.split_once('\n')?;
@@ -1607,7 +1604,10 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
     }
 }
 
-/// True when every section has an agent or harness header; a `USER_MESSAGE` section or leading bare composer text makes the prompt the user's. Text appended to a header's body remains part of that message.
+/// True when every section has an agent or harness header; leading bare text,
+/// which is where a paste puts the user's own messages ([`paste_order`]) and
+/// where composer text sits, makes the prompt the user's. Text appended to a
+/// header's body remains part of that message.
 pub(crate) fn prompt_is_harness_delivered(prompt: &str) -> bool {
     if prompt.trim().is_empty() {
         return false;
@@ -1696,7 +1696,8 @@ pub fn classify_submitted_prompt<'a>(
     delivered: &[&'a MessageRecord],
     in_flight: &[&'a MessageRecord],
 ) -> Vec<PromptSection<'a>> {
-    let aligned = align_submitted_prompt(prompt, delivered);
+    let delivered = paste_order(delivered.iter().copied());
+    let aligned = align_submitted_prompt(prompt, &delivered);
     let batch_aligned = aligned.is_some();
     let segments = if let Some((leading, aligned, trailing)) = aligned {
         leading
@@ -1728,7 +1729,6 @@ pub fn classify_submitted_prompt<'a>(
                 let origin = match header {
                     HeaderKind::Agent => SectionOrigin::Agent(sender),
                     HeaderKind::Notice(notice) => notice.section_origin(sender),
-                    HeaderKind::User => SectionOrigin::Human,
                 };
                 (body.trim_end().to_owned(), Some(origin))
             }
@@ -1768,35 +1768,57 @@ pub fn classify_submitted_prompt<'a>(
     sections
 }
 
+/// The order a batch given in queue order is pasted in: the user's own prompts
+/// first, so their bare text never runs on under another member's header, then
+/// every other member; each group keeps its queue order.
+pub(crate) fn paste_order<'a>(
+    batch: impl IntoIterator<Item = &'a MessageRecord>,
+) -> Vec<&'a MessageRecord> {
+    let (user, rest): (Vec<_>, Vec<_>) = batch
+        .into_iter()
+        .partition(|record| record.sender == MessageSender::Human);
+    user.into_iter().chain(rest).collect()
+}
+
 /// Align one submitted pane paste with the records written as its batch.
 ///
-/// Record text supplies the otherwise ambiguous boundaries between adjacent
-/// messages. Agent-, subagent-, and human-authored records consume their
-/// rendered headers; system records stay verbatim. Interior record whitespace
-/// matches verbatim; only the paste's outer first/last whitespace follows hook
-/// normalization. Composer text around an intact batch is returned separately.
+/// `records` come in queue order and are matched in `paste_order`, which is
+/// the order of the returned segments. Record text supplies the otherwise
+/// ambiguous boundaries between adjacent messages. Agent-, subagent-, and
+/// harness-authored records consume their rendered headers; the user's and
+/// system records stay verbatim. Interior record whitespace matches verbatim;
+/// only the paste's outer first/last whitespace follows hook normalization.
+/// Composer text around an intact batch is returned separately; a batch led by
+/// a user record matches only where no recognized header line comes before it,
+/// so the user's text inside another sender's block is not its paste, and a
+/// batch led by a system record must be the whole prompt.
 pub fn align_submitted_prompt<'a>(
     prompt: &'a str,
     records: &[&MessageRecord],
 ) -> Option<(Option<&'a str>, Vec<&'a str>, Option<&'a str>)> {
-    if records.is_empty() {
-        return None;
-    }
+    let records = paste_order(records.iter().copied());
+    let first = records.first()?;
     let prompt = prompt.trim();
-    let anchor = match &records[0].sender {
+    let anchor = match &first.sender {
         MessageSender::Agent { .. } => "Type: AGENT_MESSAGE\nFrom: @".to_owned(),
         MessageSender::Subagent { .. } => "Type: SUBAGENT_REPORT\nFrom: @".to_owned(),
         MessageSender::Harness { notice } => {
             format!("Type: {}\nFrom: @rimz\nContent:\n", notice.header_type())
         }
-        MessageSender::Human => "Type: USER_MESSAGE\nFrom: @user\nContent:\n".to_owned(),
+        MessageSender::Human => first.text.trim().to_owned(),
         MessageSender::System => {
-            let (segments, trailing) = align_submitted_prompt_from(prompt, records)?;
+            let (segments, trailing) = align_submitted_prompt_from(prompt, &records)?;
             return trailing.is_empty().then_some((None, segments, None));
         }
     };
+    if anchor.is_empty() {
+        return None;
+    }
     for (start, _) in prompt.match_indices(&anchor) {
-        let Some((segments, trailing)) = align_submitted_prompt_from(&prompt[start..], records)
+        if first.sender == MessageSender::Human && header_line_before(prompt, start) {
+            continue;
+        }
+        let Some((segments, trailing)) = align_submitted_prompt_from(&prompt[start..], &records)
         else {
             continue;
         };
@@ -1807,6 +1829,20 @@ pub fn align_submitted_prompt<'a>(
         ));
     }
     None
+}
+
+/// Whether a line starting before `end` opens a recognized header, read with
+/// the line after it as `split_batched_prompt` reads one.
+fn header_line_before(prompt: &str, end: usize) -> bool {
+    let line_starts = std::iter::once(0).chain(
+        prompt[..end]
+            .match_indices('\n')
+            .map(|(index, _)| index + 1),
+    );
+    line_starts.take_while(|&start| start < end).any(|start| {
+        let mut lines = prompt[start..].split('\n');
+        classify_header_start(lines.next().unwrap_or_default(), lines.next()).is_some()
+    })
 }
 
 fn align_submitted_prompt_from<'a>(
@@ -1835,10 +1871,7 @@ fn align_submitted_prompt_from<'a>(
                 let header = format!("Type: {}\nFrom: @rimz\nContent:\n", notice.header_type());
                 body = body.strip_prefix(&header)?;
             }
-            MessageSender::Human => {
-                body = body.strip_prefix("Type: USER_MESSAGE\nFrom: @user\nContent:\n")?;
-            }
-            MessageSender::System => {}
+            MessageSender::Human | MessageSender::System => {}
         }
         let first = index == 0;
         let last = index + 1 == records.len();

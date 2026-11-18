@@ -69,7 +69,8 @@ pub const RESERVED_AGENT_WORDS: &[&str] = &[
     "wait",
 ];
 
-/// Handles used in message envelopes for senders that are not agents.
+/// Handles that name senders other than agents: `@rimz` in harness notice headers, `@user`
+/// as the teams board and stage-notice actor and a reserved workflow target.
 pub(crate) const HEADER_PSEUDO_HANDLES: &[&str] = &["user", "rimz"];
 
 pub(crate) fn mint(taken: impl Fn(&str) -> bool) -> String {
