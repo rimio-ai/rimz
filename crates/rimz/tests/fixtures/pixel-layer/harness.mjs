@@ -482,7 +482,38 @@ async function deleteFormsRetireImageAndPlacement() {
   }
 }
 
+async function evictionKeepsTheLatestSceneAndDropsTheLeastRecentlyDrawn() {
+  const maxImages = Number(source.match(/const MAX_IMAGES=(\d+);/)[1]);
+  const harness = createHarness({ cols: 2, rows: 1 });
+  const [kept, stale] = [1, 2];
+  for (const [col, id] of [[0, kept], [1, stale]]) {
+    harness.setPlaceholder(0, col, id, 0, 0);
+    harness.transmit(id);
+    harness.place(id, 1, 1);
+    await harness.resolveNext(10, 10);
+  }
+  harness.pumpFrames();
+  assert.equal(draws(harness.takeOps()).length, 2);
+  harness.setText(0, 1, "");
+  harness.handlers.render();
+  harness.pumpFrames();
+  assert.equal(draws(harness.takeOps()).length, 1);
+  for (let id = 3; id <= maxImages + 1; id++) {
+    harness.transmit(id);
+    harness.place(id, 1, 1);
+    await harness.resolveNext(10, 10);
+  }
+  harness.pumpFrames();
+  assert.equal(draws(harness.takeOps()).length, 1, "the image in the latest scene was evicted");
+  harness.setPlaceholder(0, 1, stale, 0, 0);
+  harness.place(stale, 1, 1);
+  harness.handlers.render();
+  harness.pumpFrames();
+  assert.equal(draws(harness.takeOps()).length, 1, "the image drawn longest ago was kept");
+}
+
 const scenarios = [
+  evictionKeepsTheLatestSceneAndDropsTheLeastRecentlyDrawn,
   deleteFormsRetireImageAndPlacement,
   placeholderClustersAreConcealedSafely,
   petStopsAtPaneBorder,
