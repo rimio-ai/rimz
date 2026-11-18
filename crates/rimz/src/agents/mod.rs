@@ -96,7 +96,7 @@ pub use credits::{
 };
 pub use definition::{
     AgentDefinition, AgentSpec, CapabilityLevel, ConcernCoverage, HookCoverage, IntegrationConcern,
-    LocalSessionDiscovery, PermissionMode, SamePaneSessionPolicy, UserCapability, Variant,
+    LocalSessionDiscovery, PermissionMode, SamePaneSessionPolicy, Toggle, UserCapability, Variant,
 };
 use definition::{
     CodeModeSwitch, CompactCommand, CompactInstruction, FastSwitch, LaunchPermissionArgs,
@@ -301,8 +301,9 @@ pub struct LaunchPreset {
     /// Absolute paths composed in order into the replacement system prompt.
     /// A non-empty launch override replaces the profile's complete list.
     pub append_system_prompt_files: Vec<PathBuf>,
-    /// Provider fast mode: `Some(true)` renders the adapter's fast switch,
-    /// `Some(false)` removes a rendered one, `None` leaves argv as it is.
+    /// Provider fast mode: `Some(true)` renders the adapter's fast switch and
+    /// `Some(false)` its off switch, each replacing a rendered one; `None`
+    /// leaves argv as it is.
     pub fast: Option<bool>,
 }
 

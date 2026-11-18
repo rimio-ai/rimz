@@ -500,7 +500,7 @@ fn role_report(role: String, cell: &AgentCell) -> RoleReport {
         kind: Some(cell.kind.to_string()),
         model: cell.launch.model.clone(),
         effort: cell.launch.effort.clone(),
-        fast: cell.launch.fast,
+        fast: cell.launch.fast == Some(true),
         mode: LaunchPermissionArgs::of_kind(&cell.kind)
             .resolve_mode(cell.launch.mode)
             .map(|mode| mode.to_string()),
@@ -539,7 +539,7 @@ fn unresolved_roles(team: &Team, profiles: &ProfilesConfig) -> Vec<RoleReport> {
                 fast: resolved
                     .as_ref()
                     .map_or(binding.fast, |profile| profile.fast)
-                    == Some(true),
+                    == Some(rimz::agents::Toggle::On),
                 mode: resolved
                     .as_ref()
                     .and_then(|profile| {

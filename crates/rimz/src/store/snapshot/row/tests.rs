@@ -277,7 +277,7 @@ fn opencode_meter_separates_the_published_size_from_both_scales() {
 fn card_fast_projects_live_precedence_and_omits_standard() {
     let mut agent = AgentState::stub("codex", "session", AgentStatus::Idle);
     agent.record = Some(Box::new(crate::agents::LaunchRecord {
-        fast: true,
+        fast: Some(true),
         ..Default::default()
     }));
     let card = AgentCard::from_agent(&agent, row_time());

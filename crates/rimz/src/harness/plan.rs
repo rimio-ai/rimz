@@ -376,8 +376,8 @@ pub struct ResumeLaunchPosture {
     pub mode: Option<PermissionMode>,
     pub model: Option<String>,
     pub effort: Option<String>,
-    pub fast: bool,
-    pub code_mode: bool,
+    pub fast: Option<bool>,
+    pub code_mode: Option<bool>,
     pub budget: Option<String>,
 }
 
@@ -1367,6 +1367,10 @@ impl fmt::Display for LaunchFinalizeWarning {
                             None => Ok(()),
                         }
                     }
+                    SkippedPresetField::FastOff { fix } => write!(
+                        formatter,
+                        "warning: `{profile}` fast off cannot be forced on {agent}; {fix}"
+                    ),
                     SkippedPresetField::CodeMode => write!(
                         formatter,
                         "warning: `{profile}` code-mode is unsupported on {agent}; launching without it"
@@ -1621,7 +1625,7 @@ pub(super) fn finalize_agent_cell(
             overridden.push(crate::agents::PresetField::Effort);
         }
         if let Some(fast) = options.preset.fast {
-            cell.launch.fast = fast;
+            cell.launch.fast = Some(fast);
         }
         apply_preset_args(&mut cell.args, adapter, options.preset, &overridden)?;
     }
@@ -1714,7 +1718,7 @@ pub(super) fn normalize_cell_preset(
             .normalize_preset(crate::agents::LaunchPreset {
                 auto_compact: cell.auto_compact.take(),
                 effort: cell.launch.effort.take(),
-                fast: Some(cell.launch.fast),
+                fast: cell.launch.fast,
                 ..Default::default()
             });
     if adapter.spec().launch.model_session_step
@@ -1723,16 +1727,16 @@ pub(super) fn normalize_cell_preset(
     {
         skipped.push(crate::agents::definition::SkippedPresetField::EffortNeedsModel(effort));
     }
-    if cell.launch.code_mode
-        && adapter.spec().launch.presets.code_mode
-            == crate::agents::definition::CodeModeSwitch::Unsupported
+    if adapter.spec().launch.presets.code_mode
+        == crate::agents::definition::CodeModeSwitch::Unsupported
+        && let Some(on) = cell.launch.code_mode.take()
+        && on
     {
-        cell.launch.code_mode = false;
         skipped.push(crate::agents::definition::SkippedPresetField::CodeMode);
     }
     cell.auto_compact = preset.auto_compact;
     cell.launch.effort = preset.effort;
-    cell.launch.fast = preset.fast == Some(true);
+    cell.launch.fast = preset.fast;
     if let Some(record) = &mut cell.launch.record {
         record.effort.clone_from(&cell.launch.effort);
         record.fast = cell.launch.fast;

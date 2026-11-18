@@ -124,6 +124,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
             code_mode: super::CodeModeSwitch::Unsupported,
             fast: super::FastSwitch::Unsupported {
                 fix: "toggle /fast inside the session",
+                off_fix: Some("toggle /fast off inside the session"),
             },
             ..super::PresetMatchers::EMPTY
         },

@@ -517,15 +517,17 @@ pub struct Profile {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
-    /// Launch in the provider's fast mode (priority serving). `false` and
-    /// unset render nothing, so the provider's own default stands; `true` on a
-    /// provider without a fast switch warns and launches without it.
+    /// Launch in the provider's fast mode (priority serving). On renders the
+    /// fast switch and off the provider's off switch where it has one; `unset`
+    /// stops inheritance and, like absent, leaves the provider's default. On
+    /// on a provider without a fast switch warns and launches without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fast: Option<bool>,
-    /// Launch in the provider's code mode. `false` and unset render nothing;
-    /// `true` on a provider without a code mode warns and launches without it.
+    pub fast: Option<crate::agents::Toggle>,
+    /// Launch in the provider's code mode. On and off render the provider's
+    /// switch; `unset` and absent render nothing. On on a provider without a
+    /// code mode warns and launches without it.
     #[serde(default, rename = "code-mode", skip_serializing_if = "Option::is_none")]
-    pub code_mode: Option<bool>,
+    pub code_mode: Option<crate::agents::Toggle>,
     #[serde(default)]
     pub budget: Option<String>,
     /// A subagent definition's run timeout, inherited up the `agent` chain; a launch's
@@ -817,9 +819,9 @@ pub struct RoleBinding {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
-    /// Launch this member in its provider's fast mode; overrides the profile.
+    /// This member's fast mode (on, off, or `unset`); overrides the profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fast: Option<bool>,
+    pub fast: Option<crate::agents::Toggle>,
     #[serde(default)]
     pub budget: Option<String>,
     /// The agent's native auto-compaction window as a token count; unsupported

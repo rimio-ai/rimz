@@ -623,14 +623,18 @@ fn resolve_posture_with_role(
     if let Some(record) = request.record {
         let mut record = record.clone();
         record.effort = record.effort.or_else(|| cell.launch.effort.clone());
-        // Only RimZ's own switch is the record's to replace: an off record
-        // strips the switch the profile's `fast` field rendered, and leaves a
-        // switch the profile writes in raw `args` alone, as a fresh launch does.
-        let fast = match (record.fast, cell.launch.fast) {
-            (true, _) => Some(true),
-            (false, true) => Some(false),
-            (false, false) => None,
-        };
+        // Only RimZ's own switch is the record's to replace, and only where it differs
+        // from what the profile's `fast` field rendered: a recorded on or off swaps the
+        // switch, a record without `fast` (unset, or written before off was forced)
+        // strips it, and a switch the profile writes in raw `args` stays where the
+        // record and the field agree, as a fresh launch keeps it.
+        let fast = record.fast.filter(|_| record.fast != cell.launch.fast);
+        if record.fast.is_none()
+            && cell.launch.fast.is_some()
+            && let Some(adapter) = find_definition(request.kind.as_str())
+        {
+            adapter.spec().launch.strip_fast_args(&mut cell.args);
+        }
         cell.launch.model.clone_from(&record.model);
         cell.launch.effort.clone_from(&record.effort);
         cell.launch.fast = record.fast;

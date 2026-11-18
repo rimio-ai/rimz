@@ -449,7 +449,7 @@ fn mixed_origin_report(fast_source: Option<&str>) -> Attribution {
 
     let mut parent = agent(Path::new("/repo/lane"), "parent", "claude", 10);
     parent.record = Some(Box::new(crate::agents::LaunchRecord {
-        fast: true,
+        fast: Some(true),
         ..Default::default()
     }));
     parent.team = Some("forge".to_owned());

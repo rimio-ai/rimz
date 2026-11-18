@@ -416,7 +416,10 @@ upward-dependencies = ["address"]
 # install preview, the start warning and the doctor row (+2).
 # CodeModeSwitch and CodeModeSwitch::env declare each adapter's code-mode argv and env beside
 # FastSwitch for the launch env and tool rendering (+2).
-surface-budget = 1288
+# Toggle, its agents re-export, and Toggle::enabled carry the written on/off/unset of fast and
+# code-mode to its effective value; LaunchSpec::rendered_fast and CodeModeSwitch::exclude_off
+# read and render the off switches (+5).
+surface-budget = 1293
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -681,6 +684,11 @@ reason = "Definition loading, launch routing, and engine re-basing read the mode
 kind = "item"
 key = "agents::tools::render_launch_tool_args"
 reason = "The harness renders tools once for the final provider, warning when a supplied list cannot be applied."
+
+[[verdict]]
+kind = "item"
+key = "agents::definition::Toggle"
+reason = "Definitions, repository TOML, roles and the trust projection share one written on/off/unset spelling for fast and code-mode."
 
 [[verdict]]
 kind = "item"

@@ -101,7 +101,11 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
             model: Some(super::StaticPresetMatcher::Flag(&["--mode"])),
             effort: None,
             system_prompt_file: None,
-            fast: super::FastSwitch::Args(&["--fast"]),
+            // A fresh thread without `--fast` is standard, so off has nothing to force.
+            fast: super::FastSwitch::Args {
+                on: &["--fast"],
+                off: &[],
+            },
         },
         ..super::LaunchSpec::EMPTY
     },

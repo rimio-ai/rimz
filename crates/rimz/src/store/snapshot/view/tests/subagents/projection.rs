@@ -87,7 +87,7 @@ fn launched_child_fast_uses_its_own_live_reading_and_never_marks_native_children
     let mut child = child_state("root", "child", AgentStatus::Running, 0);
     child.launch_depth = Some(1);
     child.record = Some(Box::new(crate::agents::LaunchRecord {
-        fast: true,
+        fast: Some(true),
         ..Default::default()
     }));
     child.context = None;

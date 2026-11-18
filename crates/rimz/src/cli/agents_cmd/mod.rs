@@ -440,7 +440,7 @@ pub(crate) struct LaunchOverrideArgs {
     /// Resumes replay it.
     #[arg(long, conflicts_with = "no_fast")]
     pub(crate) fast: bool,
-    /// Request no fast mode, even where the profile sets `fast`; resumes replay it.
+    /// Force fast mode off, even where the profile sets `fast`; resumes replay it.
     #[arg(long)]
     pub(crate) no_fast: bool,
     /// Run the launched agents under this isolation instead of machine `agents.isolation`.

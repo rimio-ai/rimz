@@ -1842,7 +1842,7 @@ impl AgentState {
         self.context
             .as_ref()
             .and_then(|context| context.fast)
-            .unwrap_or_else(|| self.record.as_ref().is_some_and(|record| record.fast))
+            .unwrap_or_else(|| self.record.as_ref().and_then(|record| record.fast) == Some(true))
     }
 
     /// Record a prompt and own the set-once rule for the first usable prompt.

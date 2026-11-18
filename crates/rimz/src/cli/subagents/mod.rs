@@ -151,7 +151,7 @@ struct FanoutTask {
     tier: Option<rimz::config::tiers::ModelTier>,
     agent: Option<String>,
     effort: Option<String>,
-    /// `true` requests the provider's fast mode; `false` requests none, as `--no-fast` does.
+    /// `true` requests the provider's fast mode; `false` forces it off, as `--no-fast` does.
     fast: Option<bool>,
     timeout: Option<String>,
     warn: Option<Vec<String>>,
@@ -201,7 +201,7 @@ struct SubagentLaunchArgs {
     /// Run the child in the provider's fast mode (Claude, Codex, Amp, Pi on OpenAI).
     #[arg(long, conflicts_with = "no_fast")]
     fast: bool,
-    /// Request no fast mode for the child, even where its profile sets `fast`.
+    /// Force fast mode off for the child, even where its profile sets `fast`.
     #[arg(long)]
     no_fast: bool,
     /// Run the child under this isolation instead of inheriting the parent's.

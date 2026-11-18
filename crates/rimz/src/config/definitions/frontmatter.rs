@@ -23,8 +23,8 @@ pub(super) struct AgentFrontmatter {
     pub tier: Option<String>,
     pub mode: Option<PermissionMode>,
     pub effort: Option<String>,
-    pub fast: Option<bool>,
-    pub code_mode: Option<bool>,
+    pub fast: Option<crate::agents::Toggle>,
+    pub code_mode: Option<crate::agents::Toggle>,
     #[serde(default, deserialize_with = "token_count")]
     pub auto_compact: Option<String>,
     #[serde(default, deserialize_with = "number_text")]
@@ -121,7 +121,7 @@ pub(super) struct RoleFrontmatter {
     pub tier: Option<String>,
     pub mode: Option<PermissionMode>,
     pub effort: Option<String>,
-    pub fast: Option<bool>,
+    pub fast: Option<crate::agents::Toggle>,
     #[serde(default, deserialize_with = "token_count")]
     pub auto_compact: Option<String>,
     #[serde(default, deserialize_with = "flip_compact")]

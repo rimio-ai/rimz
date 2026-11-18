@@ -350,7 +350,7 @@ fn team_restore_forwards_skipped_field_warnings_into_recovery() {
     let (teams, mut profiles, commands) = team_configs();
     for profile in profiles.0.values_mut() {
         profile.agent = "copilot".into();
-        profile.fast = Some(true);
+        profile.fast = Some(crate::agents::Toggle::On);
     }
     let planner = team_agent("copilot", "planner", "planner", "/repo/forge", 1);
     let team = plan_team_restore_tabs(
@@ -403,7 +403,7 @@ fn recorded_team_restore_keeps_role_layers() {
             Box::new(crate::agents::LaunchRecord {
                 model: Some("opus".into()),
                 effort: Some("high".into()),
-                fast: false,
+                fast: None,
                 agent: None,
                 auto_compact: None,
                 ..Default::default()
@@ -1009,7 +1009,7 @@ fn untiered_resume_rebuilds_the_record_and_saves_overrides() {
     agent.record = Some(Box::new(crate::agents::LaunchRecord {
         model: Some("opus[1m]".into()),
         effort: Some("high".into()),
-        fast: false,
+        fast: None,
         agent: None,
         auto_compact: None,
         ..Default::default()
@@ -1140,7 +1140,7 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
                 agent.record = Some(Box::new(crate::agents::LaunchRecord {
                     model: Some("opus[1m]".into()),
                     effort: Some("xhigh".into()),
-                    fast: false,
+                    fast: None,
                     agent: Some("reviewer".into()),
                     auto_compact: None,
                     ..Default::default()
@@ -1897,11 +1897,18 @@ fn stamped_cohort_resume_replays_and_rewrites_fast() {
             .filter(|arg| *arg == "service_tier=fast")
             .count()
     };
+    let off_args = |cell: &crate::harness::spec::AgentCell| {
+        cell.args
+            .iter()
+            .filter(|arg| *arg == "service_tier=default")
+            .count()
+    };
     for (recorded, flag, want) in [
-        (true, None, true),
-        (true, Some(false), false),
-        (false, Some(true), true),
-        (false, None, false),
+        (Some(true), None, Some(true)),
+        (Some(true), Some(false), Some(false)),
+        (Some(false), Some(true), Some(true)),
+        (Some(false), None, Some(false)),
+        (None, None, None),
     ] {
         let agent = AgentState {
             profile: Some("coder".into()),
@@ -1928,9 +1935,20 @@ fn stamped_cohort_resume_replays_and_rewrites_fast() {
         )
         .unwrap();
         let cell = layout.agent_cells().next().unwrap();
-        assert_eq!(cell.launch.fast, want, "{recorded} {flag:?}");
+        assert_eq!(cell.launch.fast, want, "{recorded:?} {flag:?}");
         assert_eq!(cell.launch.record.as_deref().unwrap().fast, want);
-        assert_eq!(fast_args(cell), usize::from(want), "{:?}", cell.args);
+        assert_eq!(
+            fast_args(cell),
+            usize::from(want == Some(true)),
+            "{:?}",
+            cell.args
+        );
+        assert_eq!(
+            off_args(cell),
+            usize::from(want == Some(false)),
+            "{:?}",
+            cell.args
+        );
     }
 }
 
@@ -3282,7 +3300,7 @@ fn explicit_resume_mode_beats_recorded_and_profile_modes() {
     agent.record = Some(Box::new(crate::agents::LaunchRecord {
         model: Some("opus".into()),
         effort: Some("high".into()),
-        fast: false,
+        fast: None,
         agent: None,
         auto_compact: None,
         ..Default::default()

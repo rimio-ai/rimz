@@ -193,11 +193,12 @@ pub struct ResolvedProfile {
     pub launch: crate::agents::LaunchParams,
     pub auto_compact: Option<String>,
     pub auto_compact_default: Option<String>,
-    /// Fast mode as the chain set it; unset is off. Kept apart from
-    /// `launch.fast` so a nearer layer's `false` wins over a base's `true`.
-    pub fast: Option<bool>,
-    /// Code mode as the chain set it; unset is off.
-    pub code_mode: Option<bool>,
+    /// Fast mode as the chain set it. A nearer layer's off or `unset` wins
+    /// over a farther on; on forces the switch, off forces it off, and unset
+    /// or absent leaves the provider's default.
+    pub fast: Option<crate::agents::Toggle>,
+    /// Code mode as the chain set it, under the same rule as `fast`.
+    pub code_mode: Option<crate::agents::Toggle>,
     pub system_prompt_file: Option<crate::config::PromptSource>,
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub skills: Option<Vec<crate::config::SkillName>>,
@@ -1722,8 +1723,8 @@ fn agent_cell_from(
             profile,
             mode,
             role,
-            fast: resolved.fast == Some(true),
-            code_mode: resolved.code_mode == Some(true),
+            fast: resolved.fast.and_then(crate::agents::Toggle::enabled),
+            code_mode: resolved.code_mode.and_then(crate::agents::Toggle::enabled),
             ..resolved.launch.clone()
         },
     }
@@ -1751,7 +1752,7 @@ fn render_profile_args(
     let (tools, notices) = crate::agents::render_launch_tool_args(
         &resolved.kind,
         resolved.tools.as_ref(),
-        resolved.code_mode == Some(true),
+        resolved.code_mode.and_then(crate::agents::Toggle::enabled),
     )
     .map_err(|error| LayoutErr::InvalidProfile {
         profile: name.to_owned(),
@@ -1787,7 +1788,7 @@ fn profile_preset(resolved: &ResolvedProfile) -> crate::agents::LaunchPreset {
         model: resolved.launch.model.clone(),
         effort: resolved.launch.effort.clone(),
         auto_compact: resolved.effective_auto_compact(),
-        fast: resolved.fast.filter(|fast| *fast),
+        fast: resolved.fast.and_then(crate::agents::Toggle::enabled),
         ..Default::default()
     };
     crate::agents::find_definition(&resolved.kind)
@@ -1919,7 +1920,7 @@ fn fast_suffix_cell(
     } else {
         return Ok(None);
     };
-    resolved.fast = Some(true);
+    resolved.fast = Some(crate::agents::Toggle::On);
     let Some(mode) = mode else {
         return Ok(Some(match profile_name {
             Some(name) => Cell::Agent(cell_from_profile(&name, &resolved)?),

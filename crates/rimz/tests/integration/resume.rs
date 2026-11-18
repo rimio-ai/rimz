@@ -139,7 +139,7 @@ fn recordless_resume_attach_preserves_mode_and_profile_replay() {
     );
     assert!(posture.degraded.is_none());
     assert_eq!(posture.launch.model.as_deref(), Some("sonnet"));
-    assert!(posture.launch.fast);
+    assert_eq!(posture.launch.fast, Some(true));
     let settings = posture
         .launch
         .args
@@ -468,7 +468,7 @@ mod agent_ref {
                                 None,
                                 Some("sonnet"),
                                 None,
-                                false,
+                                None,
                             )),
                             parent_agent_id: parent.map(Into::into),
                             ..launch
@@ -696,7 +696,7 @@ mod agent_ref {
         let record = params.record.as_ref().unwrap();
         assert_eq!(record.model.as_deref(), Some("opus"));
         assert_eq!(record.effort.as_deref(), Some("low"));
-        assert!(record.fast);
+        assert_eq!(record.fast, Some(true));
         fixture.attach_and_end(params, Some(rimz::config::Isolation::Host));
         let output = fixture.output("@bright-otter");
         assert!(
@@ -817,7 +817,7 @@ mod agent_ref {
                 None,
                 Some("opus"),
                 Some("low"),
-                true,
+                Some(true),
             )),
             ..Default::default()
         };
@@ -2134,8 +2134,8 @@ mod agent_ref {
             "{stderr}"
         );
         let params = fixture.request().identity.params;
-        assert!(params.fast);
-        assert!(params.record.unwrap().fast);
+        assert_eq!(params.fast, Some(true));
+        assert_eq!(params.record.unwrap().fast, Some(true));
     }
 
     #[test]

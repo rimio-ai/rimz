@@ -143,6 +143,73 @@ impl std::fmt::Display for PermissionMode {
     }
 }
 
+/// A written three-state launch switch (`fast`, `code-mode`): on, forced off, or `unset`,
+/// which stops inheritance and leaves the provider's own default. "Not written" is `None`
+/// around it. Reads `true`/`false`, the YAML 1.1 words (`on`, `off`, `yes`, `no`), and
+/// `"unset"`; writes `true`, `false`, and `"unset"`, so absent, `true`, and `false` keep
+/// the bytes a boolean had.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Toggle {
+    On,
+    Off,
+    Unset,
+}
+
+impl Toggle {
+    /// The effective value: `Some(false)` forces the provider's off switch, `None` renders
+    /// nothing.
+    pub fn enabled(self) -> Option<bool> {
+        match self {
+            Self::On => Some(true),
+            Self::Off => Some(false),
+            Self::Unset => None,
+        }
+    }
+}
+
+impl From<bool> for Toggle {
+    fn from(on: bool) -> Self {
+        if on { Self::On } else { Self::Off }
+    }
+}
+
+impl Serialize for Toggle {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::On => serializer.serialize_bool(true),
+            Self::Off => serializer.serialize_bool(false),
+            Self::Unset => serializer.serialize_str("unset"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Toggle {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = Toggle;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("`on`, `off`, `true`, `false`, or `unset`")
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, on: bool) -> Result<Toggle, E> {
+                Ok(on.into())
+            }
+
+            fn visit_str<E: serde::de::Error>(self, raw: &str) -> Result<Toggle, E> {
+                match raw.to_ascii_lowercase().as_str() {
+                    "on" | "true" | "yes" | "y" => Ok(Toggle::On),
+                    "off" | "false" | "no" | "n" => Ok(Toggle::Off),
+                    "unset" => Ok(Toggle::Unset),
+                    _ => Err(E::invalid_value(serde::de::Unexpected::Str(raw), &self)),
+                }
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
 /// A launch setting omitted because the final provider cannot apply it to this launch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SkippedPresetField {
@@ -155,6 +222,10 @@ pub enum SkippedPresetField {
     /// The provider's fast alternative, when it has one.
     Fast {
         alternative: Option<&'static str>,
+    },
+    /// Off on a provider that can hold a saved fast mode no launch switch forces out.
+    FastOff {
+        fix: &'static str,
     },
     CodeMode,
 }
@@ -348,13 +419,16 @@ impl LaunchSpec {
             || self.preset_arg_matcher(field).is_some()
     }
 
-    /// The provider argv that turns fast mode on (empty for an extension), or
-    /// the provider's alternative.
-    pub fn fast_args(self) -> Result<Vec<String>, &'static str> {
+    /// The provider argv that turns fast mode on or forces it off (empty for an extension,
+    /// or where off has nothing to force), or the provider's alternative to on.
+    pub fn fast_args(self, on: bool) -> Result<Vec<String>, &'static str> {
+        let owned = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect();
         match self.presets.fast {
-            FastSwitch::Args(args) => Ok(args.iter().map(|arg| (*arg).to_owned()).collect()),
+            FastSwitch::Args { on: args, .. } if on => Ok(owned(args)),
+            FastSwitch::Args { off, .. } => Ok(owned(off)),
             FastSwitch::ExtensionEnv => Ok(Vec::new()),
-            FastSwitch::Unsupported { fix } => Err(fix),
+            FastSwitch::Unsupported { fix, .. } if on => Err(fix),
+            FastSwitch::Unsupported { .. } => Ok(Vec::new()),
         }
     }
 
@@ -374,30 +448,55 @@ impl LaunchSpec {
         {
             skipped.push(SkippedPresetField::Effort(value));
         }
-        if preset.fast == Some(true)
-            && let Err(fix) = self.fast_args()
-        {
-            preset.fast = Some(false);
-            skipped.push(SkippedPresetField::Fast {
-                alternative: (self.presets.fast != FastSwitch::NONE).then_some(fix),
-            });
+        if let FastSwitch::Unsupported { fix, off_fix } = self.presets.fast {
+            match preset.fast {
+                Some(true) => skipped.push(SkippedPresetField::Fast {
+                    alternative: (self.presets.fast != FastSwitch::NONE).then_some(fix),
+                }),
+                Some(false) => {
+                    skipped.extend(off_fix.map(|fix| SkippedPresetField::FastOff { fix }))
+                }
+                None => {}
+            }
+            // Nothing renders either way, so the launch records fast as unset.
+            preset.fast = None;
         }
         (preset, skipped)
     }
 
-    /// Remove every exact rendered fast switch from launch argv.
+    /// Remove every exact rendered fast switch, on and off, from launch argv.
     pub fn strip_fast_args(self, args: &mut Vec<String>) {
-        let FastSwitch::Args(switch) = self.presets.fast else {
+        let FastSwitch::Args { on, off } = self.presets.fast else {
             return;
         };
-        if switch.is_empty() {
-            return;
+        for switch in [on, off] {
+            if switch.is_empty() {
+                continue;
+            }
+            while let Some(index) = args
+                .windows(switch.len())
+                .position(|part| part.iter().zip(switch).all(|(arg, want)| arg == want))
+            {
+                args.drain(index..index + switch.len());
+            }
         }
-        while let Some(index) = args
-            .windows(switch.len())
-            .position(|part| part.iter().zip(switch).all(|(arg, want)| arg == want))
-        {
-            args.drain(index..index + switch.len());
+    }
+
+    /// Which exact fast switch `args` carries, on before off.
+    pub fn rendered_fast(self, args: &[String]) -> Option<bool> {
+        let FastSwitch::Args { on, off } = self.presets.fast else {
+            return None;
+        };
+        let carries = |switch: &[&str]| {
+            !switch.is_empty()
+                && args
+                    .windows(switch.len())
+                    .any(|part| part.iter().zip(switch).all(|(arg, want)| arg == want))
+        };
+        if carries(on) {
+            Some(true)
+        } else {
+            carries(off).then_some(false)
         }
     }
 
@@ -473,11 +572,14 @@ impl LaunchSpec {
                 }
             }
         }
-        if preset.fast == Some(true) {
-            argv.extend(self.fast_args().map_err(|fix| PresetErr::UnsupportedFast {
-                agent: agent_kind,
-                fix,
-            })?);
+        if let Some(on) = preset.fast {
+            argv.extend(
+                self.fast_args(on)
+                    .map_err(|fix| PresetErr::UnsupportedFast {
+                        agent: agent_kind,
+                        fix,
+                    })?,
+            );
         }
         Ok(argv)
     }
@@ -675,34 +777,44 @@ impl PresetMatchers {
 
 /// How a provider is launched in its fast mode (priority serving).
 ///
-/// Fast is on or off: on renders argv or tells RimZ's extension through the
-/// launch env; off renders nothing, so the provider's own default stands. An
-/// unsupported provider carries the alternative its skip warning names.
+/// Fast takes three states: on renders the provider's on switch or tells RimZ's extension
+/// through the launch env; off renders its off switch, so a fast mode saved inside the
+/// provider no longer applies; unset renders nothing, so the provider's own default
+/// stands. An unsupported provider carries the alternative its skip warning names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FastSwitch {
-    /// Exact argv appended when fast is on and stripped when a launch turns it
-    /// off. Claude's inline `--settings` member is folded into the launch's one
-    /// `--settings` at the process boundary.
-    Args(&'static [&'static str]),
+    /// Exact argv appended for on and for off, each stripped when a launch flips it.
+    /// Claude's inline `--settings` member is folded into the launch's one `--settings` at
+    /// the process boundary. An empty `off` is a provider with nothing saved to force out.
+    Args {
+        on: &'static [&'static str],
+        off: &'static [&'static str],
+    },
     /// RimZ's extension requests priority serving through the launch env,
-    /// without adding provider argv.
+    /// without adding provider argv; off sends no request.
     ExtensionEnv,
-    /// No launch switch; `fix` tells the user what to do instead.
-    Unsupported { fix: &'static str },
+    /// No launch switch; `fix` tells the user what to do instead of on. `off_fix`, set
+    /// where the provider can hold a saved fast mode no launch forces out, makes off warn
+    /// with what to do instead.
+    Unsupported {
+        fix: &'static str,
+        off_fix: Option<&'static str>,
+    },
 }
 
 impl FastSwitch {
     /// A provider with no fast mode RimZ can reach and no alternative to name.
     pub const NONE: Self = Self::Unsupported {
         fix: "launch without --fast",
+        off_fix: None,
     };
 }
 
 /// What a provider's code mode adds to a launch.
 ///
-/// Code mode is on or off: on adds the provider's code-mode tools, argv, or
-/// env; off and unset render nothing. An unsupported provider warns and
-/// launches without it.
+/// Code mode takes three states: on adds the provider's code-mode tools, argv, or env;
+/// off forces it off where the provider can turn it on by itself; unset renders nothing.
+/// An unsupported provider warns on on and launches without it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CodeModeSwitch {
     Supported {
@@ -712,9 +824,19 @@ pub enum CodeModeSwitch {
         without_tools: &'static [&'static str],
         /// Env pair an on launch sets; a later launch clears it only where RimZ stamped it.
         env: Option<(&'static str, &'static str)>,
+        /// Env pair an off launch sets over any inherited or trusted value, stamped like
+        /// `env`.
+        off_env: Option<(&'static str, &'static str)>,
+        /// `(flags, tool)` an off launch excludes: the tool joins the list of the last of
+        /// these flags (one flag's spellings, the first appended when none is present) in
+        /// the final argv, since the provider honours only the last.
+        off_exclude: Option<(&'static [&'static str], &'static str)>,
     },
-    /// Exact argv an on launch appends, with or without a tools list.
-    Args(&'static [&'static str]),
+    /// Exact argv an on or an off launch appends, with or without a tools list.
+    Args {
+        on: &'static [&'static str],
+        off: &'static [&'static str],
+    },
     Unsupported,
 }
 
@@ -727,11 +849,38 @@ impl CodeModeSwitch {
         }
     }
 
-    /// The env pair an on launch sets.
-    pub fn env(self) -> Option<(&'static str, &'static str)> {
+    /// The env pair a launch in this state sets, on or forced off.
+    pub fn env(self, on: bool) -> Option<(&'static str, &'static str)> {
         match self {
-            Self::Supported { env, .. } => env,
-            Self::Args(_) | Self::Unsupported => None,
+            Self::Supported { env, .. } if on => env,
+            Self::Supported { off_env, .. } => off_env,
+            Self::Args { .. } | Self::Unsupported => None,
+        }
+    }
+
+    /// Join an off launch's exclusion into its final `argv`, into the last exclusion list
+    /// it carries under any spelling.
+    pub fn exclude_off(self, argv: &mut Vec<String>) {
+        let Self::Supported {
+            off_exclude: Some((flags, tool)),
+            ..
+        } = self
+        else {
+            return;
+        };
+        let last = argv
+            .iter()
+            .rposition(|arg| flags.contains(&arg.as_str()))
+            .filter(|at| at + 1 < argv.len());
+        match last {
+            Some(at) => {
+                let list = &mut argv[at + 1];
+                if !list.split(',').any(|entry| entry == tool) {
+                    list.push(',');
+                    list.push_str(tool);
+                }
+            }
+            None => argv.extend([flags[0].to_owned(), tool.to_owned()]),
         }
     }
 }

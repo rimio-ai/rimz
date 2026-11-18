@@ -884,8 +884,8 @@ fn fast_switch_characterization() {
         ));
     }
     insta::assert_snapshot!(cases.join("\n"), @r#"
-    claude: on=["--settings", "{\"fastMode\":true}"] off=Ok([])
-    codex: on=["-c", "service_tier=fast", "-c", "features.fast_mode=true"] off=Ok([])
+    claude: on=["--settings", "{\"fastMode\":true}"] off=Ok(["--settings", "{\"fastMode\":false}"])
+    codex: on=["-c", "service_tier=fast", "-c", "features.fast_mode=true"] off=Ok(["-c", "service_tier=default"])
     amp: on=["--fast"] off=Ok([])
     copilot: on=agent `copilot` has no fast-mode launch switch; launch without --fast off=Ok([])
     kimi: on=agent `kimi` has no fast-mode launch switch; use --model kimi-for-coding-highspeed off=Ok([])
@@ -917,12 +917,12 @@ fn code_mode_switch_characterization() {
         })
         .collect();
     insta::assert_snapshot!(cases.join("\n"), @r#"
-    claude: Supported { tools: ["REPL", "Poll"], without_tools: [], env: Some(("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "1")) }
-    codex: Args(["-c", "features.code_mode=true"])
+    claude: Supported { tools: ["REPL", "Poll"], without_tools: [], env: Some(("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "1")), off_env: Some(("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "0")), off_exclude: None }
+    codex: Args { on: ["-c", "features.code_mode=true"], off: ["-c", "features.code_mode=false"] }
     amp: Unsupported
     copilot: Unsupported
     kimi: Unsupported
-    pi: Supported { tools: ["codemode"], without_tools: ["--tools", "+codemode"], env: None }
+    pi: Supported { tools: ["codemode"], without_tools: ["--tools", "+codemode"], env: None, off_env: None, off_exclude: Some((["--exclude-tools", "-xt"], "codemode")) }
     opencode: Unsupported
     antigravity: Unsupported
     cursor: Unsupported
