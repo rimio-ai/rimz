@@ -4,7 +4,10 @@ const installPixelLayer=term=>{
   const ESC=0x1b;
   const MAX_APC_BYTES=8*1024*1024;
   const MAX_IMAGE_BYTES=4*1024*1024;
-  const MAX_IMAGES=128;
+  // About ten pixel slots' full id ranges (72 sprites, 64 logos and 256 meter
+  // rasters each). A sidebar sends an image once, so eviction goes by last draw.
+  const MAX_IMAGES=4096;
+  const MAX_PENDING_DECODES=128;
   const UTF8_MASKS=[0,0x7f,0x1f,0x0f,0x07];
   const UTF8_MINIMUMS=[0,0,0x80,0x800,0x10000];
   const encoder=new TextEncoder();
@@ -17,6 +20,7 @@ const installPixelLayer=term=>{
   const images=new Map();
   const placements=new Map();
   const pendingDecodes=new Map();
+  let drawnIds=new Set();
   let transfer=null;
   let decodeToken=0;
   let carry=new Uint8Array();
@@ -79,13 +83,22 @@ const installPixelLayer=term=>{
     sceneRevision++;
     clearCanvas();
   };
-  const evictOldest=(map,onEvict)=>{
+  // Each map is ordered by last draw (`draw` moves the scene's ids to the end),
+  // and an id in the latest scene goes last.
+  const evictLeastRecentlyDrawn=(map,onEvict)=>{
     while(map.size>=MAX_IMAGES){
-      const oldest=map.keys().next().value;
-      const value=map.get(oldest);
-      map.delete(oldest);
-      onEvict(oldest,value);
+      let victim=map.keys().next().value;
+      for(const id of map.keys())if(!drawnIds.has(id)){victim=id;break;}
+      const value=map.get(victim);
+      map.delete(victim);
+      onEvict(victim,value);
     }
+  };
+  const moveToEnd=(map,id)=>{
+    if(!map.has(id))return;
+    const value=map.get(id);
+    map.delete(id);
+    map.set(id,value);
   };
   const retainImage=(id,bitmap)=>{
     const previous=images.get(id);
@@ -93,14 +106,14 @@ const installPixelLayer=term=>{
       images.delete(id);
       closeBitmap(previous);
     }else{
-      evictOldest(images,(_id,image)=>closeBitmap(image));
+      evictLeastRecentlyDrawn(images,(_id,image)=>closeBitmap(image));
     }
     images.set(id,bitmap);
     sceneRevision++;
     scheduleDraw();
   };
   const decodeImage=(id,payload)=>{
-    if(pendingDecodes.has(id)||pendingDecodes.size>=MAX_IMAGES)return;
+    if(pendingDecodes.has(id)||pendingDecodes.size>=MAX_PENDING_DECODES)return;
     let binary;
     try{binary=atob(payload);}catch(_){return;}
     const bytes=new Uint8Array(binary.length);
@@ -127,7 +140,7 @@ const installPixelLayer=term=>{
   const rememberPlacement=(id,cols,rows)=>{
     const previous=placements.get(id);
     const changed=!previous||previous.cols!==cols||previous.rows!==rows;
-    if(!placements.has(id))evictOldest(placements,()=>{});
+    if(!placements.has(id))evictLeastRecentlyDrawn(placements,()=>{});
     else placements.delete(id);
     placements.set(id,{cols,rows});
     if(changed)sceneRevision++;
@@ -328,6 +341,7 @@ const installPixelLayer=term=>{
     const workCell=buffer.getNullCell();
     const groups=new Map();
     const scene=[];
+    const sceneIds=new Set();
     for(let row=0;row<term.rows;row++){
       const line=buffer.getLine(viewport+row);
       if(!line||line.translateToString(true).indexOf(placeholderString)<0)continue;
@@ -358,10 +372,16 @@ const installPixelLayer=term=>{
           group={image:images.get(id),placement,x:originCol*size.width,y:originRow*size.height,cells:[]};
           groups.set(key,group);
         }
+        sceneIds.add(id);
         group.cells.push({x,y});
         scene.push(id,originCol,originRow,col,row);
       }
     }
+    for(const id of sceneIds){
+      moveToEnd(images,id);
+      moveToEnd(placements,id);
+    }
+    drawnIds=sceneIds;
     const dpr=window.devicePixelRatio||1;
     const sceneKey=`${rect.width}:${rect.height}:${dpr}:${sceneRevision}:${scene.join(",")}`;
     if(sceneKey===paintedScene)return;
