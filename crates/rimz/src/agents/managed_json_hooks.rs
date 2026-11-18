@@ -39,8 +39,8 @@ impl ManagedJsonHookSpec {
         self.install_into_with(path, &[])
     }
 
-    /// [`Self::install_into`], also listing each of `env_paths` in the settings
-    /// `env` block.
+    /// [`Self::install_into`], also listing each wanted entry of `env_paths` in
+    /// the settings `env` block and removing each unwanted one.
     pub(super) fn install_into_with(
         &self,
         path: &Path,
@@ -197,8 +197,8 @@ impl ManagedJsonHookSpec {
         self.outdated_at_with(path, &[])
     }
 
-    /// [`Self::outdated_at`], where an owned install that lacks one of
-    /// `env_paths` is outdated too.
+    /// [`Self::outdated_at`], where an owned install that lacks one of the
+    /// wanted `env_paths`, or still lists an unwanted one, is outdated too.
     pub(super) fn outdated_at_with(&self, path: &Path, env_paths: &[ManagedEnvPath<'_>]) -> bool {
         let Ok(root) = self.read_json(path) else {
             return false;
@@ -218,7 +218,9 @@ impl ManagedJsonHookSpec {
                     managed_statusline::managed_value(&root, spec)
                         != managed_statusline::managed_value(&candidate, spec)
                 })
-                || env_paths.iter().any(|entry| !entry.is_listed(&root)))
+                || env_paths
+                    .iter()
+                    .any(|entry| entry.is_listed(&root) != entry.wanted))
     }
 
     fn owned_hooks(&self, root: &Map<String, Value>) -> Map<String, Value> {
@@ -267,6 +269,10 @@ impl ManagedJsonHookSpec {
             managed_statusline::upsert(&mut root, spec);
         }
         for entry in env_paths {
+            if !entry.wanted {
+                entry.strip(&mut root);
+                continue;
+            }
             entry
                 .upsert(&mut root)
                 .map_err(|reason| AgentErr::Install {

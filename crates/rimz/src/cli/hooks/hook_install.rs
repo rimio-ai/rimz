@@ -5,7 +5,7 @@ use std::io::{BufRead, Write};
 
 use anyhow::Result;
 use rimz::agents::{
-    HookInstallFilePreview, HookInstallPreview, HookInstallReport, StatusLineChange,
+    HookInstallFilePreview, HookInstallPreview, HookInstallReport, ModPlan, StatusLineChange,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -434,10 +434,11 @@ fn write_agent_table_entry(
         )?;
     }
 
-    let mod_summary = preview.plugin_dir.as_ref().map(|_| {
-        "loads the RimZ mod in every Claude session — it reports to rimz, never changes what Claude does"
+    let mod_summary = preview.plugin_dir.as_ref().map(|plan| match plan {
+        ModPlan::Listed(_) => "loads the RimZ mod in every Claude session — it reports to rimz, never changes what Claude does".to_owned(),
+        ModPlan::Skipped(blocker) => format!("skips the RimZ mod: {blocker}"),
     });
-    for summary in [status_line_summary(preview), mod_summary]
+    for summary in [status_line_summary(preview).map(str::to_owned), mod_summary]
         .into_iter()
         .flatten()
     {
@@ -666,10 +667,8 @@ fn agent_file_cell(
 ) -> String {
     let label = if index == 0 {
         format!("{} hooks", preview.planned_events.len())
-    } else if preview
-        .plugin_dir
-        .as_ref()
-        .is_some_and(|dir| file.path.starts_with(dir))
+    } else if let Some(ModPlan::Listed(dir)) = &preview.plugin_dir
+        && file.path.starts_with(dir)
     {
         "mod".to_owned()
     } else {

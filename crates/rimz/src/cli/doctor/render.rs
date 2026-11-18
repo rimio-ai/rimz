@@ -3114,12 +3114,22 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                 } else {
                     compaction_badge.unwrap_or_else(|| badge(status_health(agent.status)))
                 };
-                let reasons: Vec<&str> =
-                    [agent.turn_error.as_deref(), compaction_reason.as_deref()]
-                        .into_iter()
-                        .flatten()
-                        .chain(mod_reasons.iter().map(|(reason, _)| *reason))
-                        .collect();
+                let blocked_reason = agent.mod_blocked.as_ref().map(|blocker| {
+                    format!(
+                        "RimZ mod blocked by `{}` in {}",
+                        blocker.key,
+                        blocker.file.display()
+                    )
+                });
+                let reasons: Vec<&str> = [
+                    agent.turn_error.as_deref(),
+                    compaction_reason.as_deref(),
+                    blocked_reason.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .chain(mod_reasons.iter().map(|(reason, _)| *reason))
+                .collect();
                 let reason = if reasons.is_empty() {
                     "-".to_owned()
                 } else {

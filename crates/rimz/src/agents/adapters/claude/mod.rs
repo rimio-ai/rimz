@@ -25,6 +25,7 @@ mod json_edit;
 mod local_context;
 mod local_sessions;
 mod managed_pricing;
+mod mod_policy;
 pub(in crate::agents) mod oauth_usage;
 mod payloads;
 mod remote_consent;

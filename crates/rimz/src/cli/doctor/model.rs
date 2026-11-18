@@ -956,10 +956,34 @@ pub(super) struct AgentRow {
     /// the row finished since.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) mod_signals_missing: Vec<ModSignal>,
+    /// The provider policy that keeps the RimZ mod from this live session's
+    /// login, shown in place of `mod_missing` and `mod_signals_missing`.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_mod_blocker"
+    )]
+    pub(super) mod_blocked: Option<rimz::agents::ModBlocker>,
     #[serde(skip)]
     pub(super) restartable: bool,
     #[serde(skip)]
     pub(super) historical: bool,
+}
+
+/// `{"key", "file", "disables_hooks"}`, the policy as `rimz doctor --json`
+/// names it.
+fn serialize_mod_blocker<S: serde::Serializer>(
+    blocker: &Option<rimz::agents::ModBlocker>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeStruct;
+    let Some(blocker) = blocker else {
+        return serializer.serialize_none();
+    };
+    let mut policy = serializer.serialize_struct("ModBlocker", 3)?;
+    policy.serialize_field("key", blocker.key)?;
+    policy.serialize_field("file", &blocker.file)?;
+    policy.serialize_field("disables_hooks", &blocker.disables_hooks)?;
+    policy.end()
 }
 
 /// A signal the RimZ mod owes each Claude session.

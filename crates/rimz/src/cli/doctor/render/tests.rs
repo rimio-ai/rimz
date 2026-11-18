@@ -939,6 +939,7 @@ fn agents_keep_actionable_rows_counted_and_account_limits_contextual() {
                     compaction_lowered: None,
                     mod_missing: false,
                     mod_signals_missing: Vec::new(),
+                    mod_blocked: None,
                     restartable,
                     historical: false,
                 }],
@@ -984,6 +985,7 @@ fn compaction_lowered_counts_one_or_several_agents_with_closing_fixes() {
                 historical: false,
                 mod_missing: false,
                 mod_signals_missing: Vec::new(),
+                mod_blocked: None,
                 compaction_lowered: Some(CompactionLowered {
                     configured: 372_000,
                     effective: 244_800,
@@ -1053,6 +1055,7 @@ fn mod_missing_warns_per_session_with_its_restart_in_the_closing_fix() {
                 compaction_lowered: None,
                 mod_missing: true,
                 mod_signals_missing: Vec::new(),
+                mod_blocked: None,
                 restartable,
                 historical: false,
             })
@@ -1116,6 +1119,7 @@ fn mod_signals_missing_warn_once_per_signal_with_the_reload_fix() {
         compaction_lowered: None,
         mod_missing: false,
         mod_signals_missing: signals,
+        mod_blocked: None,
         restartable: true,
         historical: false,
     };
@@ -1181,6 +1185,7 @@ fn mod_missing_fix_installs_into_the_rows_own_login() {
         compaction_lowered: None,
         mod_missing: true,
         mod_signals_missing: Vec::new(),
+        mod_blocked: None,
         restartable: true,
         historical: false,
     };
@@ -3573,6 +3578,7 @@ fn audit_adds_agent_context_without_changing_findings() {
         compaction_lowered: None,
         mod_missing: false,
         mod_signals_missing: Vec::new(),
+        mod_blocked: None,
         restartable: !historical,
         historical,
     };

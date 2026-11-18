@@ -983,7 +983,7 @@ To show that the provider's model received RimZ's text, ask a question that only
 
 ### Time a Claude child's interrupt marker
 
-A Claude interrupt reaches RimZ at the RimZ mod's `turn.complete` report or at Claude's next statusline run, whichever comes first; each writes `context.settle` into the child's context sidecar. To time that, run the check from an agent pane in a room the user started, on the binary that room runs, so the child uses a real Claude login. Launch a child that blocks in one foreground command: Claude's own harness refuses a foreground `sleep`, so use `perl`, and give it a unique argument so you can find the process later.
+A Claude interrupt reaches RimZ at the RimZ mod's `turn.complete` report, at the room's next local refresh of the child's transcript, or at Claude's next statusline run, whichever comes first; each writes `context.settle` into the child's context sidecar. To time that, run the check from an agent pane in a room the user started, on the binary that room runs, so the child uses a real Claude login. Launch a child that blocks in one foreground command: Claude's own harness refuses a foreground `sleep`, so use `perl`, and give it a unique argument so you can find the process later.
 
 ```sh
 rimz subagents claude 'Run exactly this foreground command and nothing else: perl -e "select(undef,undef,undef,347)"' --description 'interrupt marker probe'

@@ -212,6 +212,11 @@ pub(super) fn judge(
             }
         }
     }
+    for blocker in crate::agents::all_definitions()
+        .filter_map(|definition| definition.managed_integration()?.mod_blocker(&ambient))
+    {
+        warn(blocker.file.display().to_string(), blocker.to_string());
+    }
     if let Some(default) = machine.mux.default
         && which::which(default.as_str()).is_err()
     {

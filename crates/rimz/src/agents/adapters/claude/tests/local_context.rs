@@ -768,3 +768,74 @@ fn session_only_refresh_preserves_an_established_current_window() {
         Some(90)
     );
 }
+
+/// The resting-turn scan runs in the stat-gated refresh, so an Esc, a turn
+/// death and a turn-ending denial land without a status line or a mod. Each
+/// marker is set only to advance a stored one, and an unchanged transcript
+/// refreshes nothing.
+#[test]
+fn local_refresh_scans_the_resting_turn() {
+    let interrupted = concat!(
+        r#"{"type":"user","timestamp":"2026-06-04T03:01:00.000Z","message":{"content":"[Request interrupted by user]"}}"#,
+        "\n"
+    );
+    let died = concat!(
+        r#"{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-06-04T03:02:00.000Z","message":{"content":[{"type":"text","text":"API Error: Overloaded"}]}}"#,
+        "\n"
+    );
+    let denied = concat!(
+        r#"{"type":"user","timestamp":"2026-06-04T03:03:00.000Z","message":{"role":"user","content":[{"type":"tool_result","content":"Bash was not run and this turn has ended.","is_error":true,"tool_use_id":"toolu_1"}]},"toolDenialEndsTurn":true}"#,
+        "\n"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session-1.jsonl");
+    let at = |text: &str| text.parse::<Timestamp>().unwrap();
+
+    std::fs::write(
+        &path,
+        format!("{}\n{interrupted}", usage_line("one", 10, 5, 0, 0)),
+    )
+    .unwrap();
+    let first = refresh(&path, None, None).unwrap();
+    assert!(first.context.markers_advance);
+    assert_eq!(
+        first.context.settle,
+        FieldPatch::Set(TurnSettle::new(
+            at("2026-06-04T03:01:00Z"),
+            TurnSettleOutcome::Interrupted
+        ))
+    );
+    assert_eq!(first.context.turn_error, FieldPatch::Keep);
+    assert!(
+        refresh(
+            &path,
+            first.transcript_stat.as_ref(),
+            first.spend_fold.as_set()
+        )
+        .is_none(),
+        "an unchanged transcript refreshes nothing"
+    );
+
+    std::fs::write(&path, format!("{interrupted}{died}")).unwrap();
+    let error = refresh(&path, None, None).unwrap().context.turn_error;
+    let error = error.as_set().expect("turn death lands");
+    assert_eq!(error.at, at("2026-06-04T03:02:00Z"));
+    assert_eq!(error.class, crate::agents::TurnErrorClass::PausedOverloaded);
+
+    std::fs::write(&path, format!("{interrupted}{denied}")).unwrap();
+    let denial = refresh(&path, None, None).unwrap().context;
+    assert_eq!(
+        denial.turn_error.as_set().map(|error| error.at),
+        Some(at("2026-06-04T03:03:00Z")),
+        "a turn-ending denial lands"
+    );
+    assert_eq!(denial.settle, FieldPatch::Keep);
+
+    std::fs::write(&path, format!("{}\n", usage_line("two", 10, 5, 0, 0))).unwrap();
+    let working = refresh(&path, None, None).unwrap().context;
+    assert_eq!(
+        (working.settle, working.turn_error),
+        (FieldPatch::Keep, FieldPatch::Keep),
+        "a turn not at rest keeps the stored markers"
+    );
+}

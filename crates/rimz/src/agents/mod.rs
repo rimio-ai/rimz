@@ -679,8 +679,58 @@ pub struct HookInstallPreview {
     /// The RimZ mod folder the install lists in the provider's plugin-folder
     /// setting (Claude's `env.CLAUDE_CODE_PLUGIN_DIRS`), named in the consent
     /// summary because the provider loads its code into every session of the
-    /// account. `None` for agents RimZ ships no mod for.
-    pub plugin_dir: Option<PathBuf>,
+    /// account, or the policy that keeps the install from listing it. `None`
+    /// for agents RimZ ships no mod for.
+    pub plugin_dir: Option<ModPlan>,
+}
+
+/// What a hook install does with the RimZ mod.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ModPlan {
+    /// Writes the folder and lists it in the provider's plugin-folder setting.
+    Listed(PathBuf),
+    /// Writes no folder and removes RimZ's own entry from the setting.
+    Skipped(ModBlocker),
+}
+
+/// A provider's managed policy that keeps RimZ's mod from loading: the key and
+/// the managed settings file that sets it. The room runs as if the mod were
+/// absent, so this warns and never refuses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModBlocker {
+    pub agent: &'static str,
+    pub key: &'static str,
+    pub file: PathBuf,
+    /// The key also turns off the provider's settings hooks, RimZ's included.
+    pub disables_hooks: bool,
+}
+
+impl std::fmt::Display for ModBlocker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            agent, key, file, ..
+        } = self;
+        write!(
+            f,
+            "{agent}'s managed setting `{key}` in {} keeps the RimZ mod from loading",
+            file.display()
+        )?;
+        if self.disables_hooks {
+            write!(
+                f,
+                " and turns off RimZ's settings hooks, so {agent} sessions send RimZ no hook \
+                 events; once an administrator removes the key, `rimz hooks install {agent}` \
+                 restores both"
+            )
+        } else {
+            write!(
+                f,
+                "; RimZ reads {agent} sessions from its hooks and transcripts instead, and \
+                 `rimz hooks install {agent}` restores the mod once an administrator removes \
+                 the key"
+            )
+        }
+    }
 }
 
 /// One exact config-file change in a hook-install preview.

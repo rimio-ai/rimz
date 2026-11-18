@@ -16,6 +16,9 @@ const SEPARATOR: char = ':';
 pub(super) struct ManagedEnvPath<'a> {
     pub key: &'static str,
     pub path: &'a str,
+    /// Whether install lists the path; `false` makes install remove RimZ's
+    /// entry instead, as uninstall does.
+    pub wanted: bool,
 }
 
 impl ManagedEnvPath<'_> {
@@ -100,6 +103,7 @@ mod tests {
     const ENTRY: ManagedEnvPath<'static> = ManagedEnvPath {
         key: "CLAUDE_CODE_PLUGIN_DIRS",
         path: "/home/u/.rimz/mods/claude",
+        wanted: true,
     };
 
     fn object(value: Value) -> Map<String, Value> {

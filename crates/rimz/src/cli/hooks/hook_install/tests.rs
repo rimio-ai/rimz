@@ -306,7 +306,7 @@ fn consent_and_dry_run_name_the_claude_mod_and_its_entry() {
         candidate: "on('session.start', ...)\n".to_owned(),
         existed: false,
     });
-    claude.plugin_dir = Some(mod_dir);
+    claude.plugin_dir = Some(rimz::agents::ModPlan::Listed(mod_dir));
     let summary = "+ loads the RimZ mod in every Claude session — it reports to rimz, never changes what Claude does";
     let file = "mod → ~/.rimz/mods/claude/hooks/rimz.ts";
 

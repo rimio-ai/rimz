@@ -4939,6 +4939,125 @@ fn mod_feed_merges_the_readings_and_the_turn_scan_into_the_session_sidecar() {
     assert_eq!(died.settle, Some(settle), "the interruption stays");
 }
 
+/// With no mod report and no status-line push, a Claude session's context,
+/// cost and fast badge land from its hooks' transcript reads, and its
+/// interruption, turn death and turn-ending denial from the watch refresh.
+#[test]
+fn claude_session_without_mod_or_status_line_lands_every_reading_and_marker() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    rimz::agents::pricing::testkit::seed_cache(
+        &env.runtime_paths(),
+        r#"{"claude-opus-5-5":{"input_cost_per_token":0.000005,"output_cost_per_token":0.000025,"cache_read_input_token_cost":0.0000005,"cache_creation_input_token_cost":0.00000625,"max_input_tokens":200000}}"#,
+    );
+    let session = "quiet-session";
+    let transcript = env.project_root.join("quiet.jsonl");
+    std::fs::write(&transcript, format!("{PROMPT_ROW}\n{FAST_ROW}\n")).unwrap();
+    let hook = |event: &str| {
+        let payload = json!({
+            "hook_event_name": event, "session_id": session, "source": "startup",
+            "prompt": "run it", "transcript_path": transcript,
+            "tool_name": "Read", "tool_input": {"file_path": "src/lib.rs"}, "tool_response": {},
+        });
+        let output = env.run_hook("claude", &payload.to_string());
+        assert!(
+            output.status.success(),
+            "{event}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    let shown = || {
+        let snapshot = env
+            .store()
+            .snapshot()
+            .unwrap()
+            .with_agent_context(env.agent_contexts());
+        let agent = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == session)
+            .unwrap();
+        (
+            agent.effective_status(snapshot.now),
+            agent.context_used_tokens(),
+        )
+    };
+    let mut bumps = 0;
+    let mut rest_on = |row: &str, stamp: &str| {
+        hook("UserPromptSubmit");
+        let row = row.replace(stamp, &Timestamp::now().to_string());
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        writeln!(file, "{row}").unwrap();
+        bumps += 1;
+        file.set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::SystemTime::now() + Duration::from_secs(60 + bumps)),
+        )
+        .unwrap();
+        drop(file);
+        rimz::sidebar::refresh::refresh_session_transcript_context_from_watch(
+            &env.runtime_paths(),
+            "claude",
+            session,
+            None,
+            None,
+            None,
+        );
+        let (status, _) = shown();
+        (status, root_context(&env, session))
+    };
+
+    for event in ["SessionStart", "UserPromptSubmit", "PostToolUse"] {
+        hook(event);
+    }
+    let context = root_context(&env, session);
+    assert_eq!(
+        shown().1,
+        Some(20_003),
+        "context from the hook-time transcript read: {context:?}"
+    );
+    assert_eq!(context.fast, Some(true), "fast from the request's speed");
+    hook("Stop");
+    let cost = root_context(&env, session)
+        .cost
+        .and_then(|cost| cost.total_cost_usd);
+    assert!(
+        cost.is_some_and(|usd| usd > 0.0),
+        "cost at turn close: {cost:?}"
+    );
+
+    let (status, context) = rest_on(INTERRUPTED_ROW, "2026-11-18T02:08:34.490Z");
+    assert_eq!(
+        context.settle.map(|settle| settle.outcome),
+        Some(rimz::agents::TurnSettleOutcome::Interrupted)
+    );
+    assert_eq!(status, rimz::agents::AgentStatus::Idle, "{context:?}");
+
+    let (status, context) = rest_on(DIED_ROW, "2026-11-18T02:08:40.000Z");
+    assert!(context.turn_error.is_some(), "the turn death lands");
+    assert_eq!(status, rimz::agents::AgentStatus::Paused, "{context:?}");
+
+    let denied = json!({
+        "type": "user", "timestamp": "STAMP", "toolDenialEndsTurn": true,
+        "message": {"role": "user", "content": [{"type": "tool_result", "is_error": true,
+            "content": "Bash was not run and this turn has ended.", "tool_use_id": "toolu_1"}]},
+    });
+    let before = context.turn_error;
+    let (status, context) = rest_on(&denied.to_string(), "STAMP");
+    assert_ne!(
+        context.turn_error, before,
+        "the denial lands as its own marker"
+    );
+    assert_eq!(status, rimz::agents::AgentStatus::Failed, "{context:?}");
+    assert!(
+        env.mod_checkins().is_empty(),
+        "no mod report in this session"
+    );
+}
+
 /// An `aborted` turn end over a transcript still missing its row reads again
 /// until the row lands, and stores nothing when it never does; either way the
 /// feed ends well inside the mod's 2-second report cap.

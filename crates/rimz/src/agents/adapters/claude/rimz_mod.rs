@@ -56,8 +56,9 @@ pub(super) fn dir(login_env: &BTreeMap<String, String>) -> PathBuf {
     crate::disk::paths::claude_mod_dir_in(login_env)
 }
 
-/// The settings entry that lists `dir` in `env.CLAUDE_CODE_PLUGIN_DIRS`.
-pub(super) fn env_path(dir: &Path) -> Result<ManagedEnvPath<'_>> {
+/// The settings entry that lists `dir` in `env.CLAUDE_CODE_PLUGIN_DIRS`, or,
+/// when not `wanted`, that install removes from it.
+pub(super) fn env_path(dir: &Path, wanted: bool) -> Result<ManagedEnvPath<'_>> {
     let path = dir.to_str().ok_or_else(|| AgentErr::Install {
         agent: "claude",
         reason: format!(
@@ -68,6 +69,7 @@ pub(super) fn env_path(dir: &Path) -> Result<ManagedEnvPath<'_>> {
     Ok(ManagedEnvPath {
         key: PLUGIN_DIRS_KEY,
         path,
+        wanted,
     })
 }
 

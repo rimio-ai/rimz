@@ -53,6 +53,14 @@ pub trait ManagedIntegration: Sync {
         None
     }
 
+    /// The provider's managed policy that keeps RimZ's mod from loading in this
+    /// login's sessions. Install then writes no mod and lists none, `rimz start`
+    /// warns, and `rimz doctor` shows it in place of a missing mod signal.
+    /// Reads files only; an unreadable or malformed policy file sets nothing.
+    fn mod_blocker(&self, _login_env: &BTreeMap<String, String>) -> Option<super::ModBlocker> {
+        None
+    }
+
     /// A [`super::HookPreflightErr::HooksDisabled`] when the provider's own
     /// policy keeps RimZ's hooks from running, so installing them cannot help.
     /// Runs on every hook preflight, so it reads files and never spawns.

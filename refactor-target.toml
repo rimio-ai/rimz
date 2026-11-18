@@ -412,7 +412,9 @@ upward-dependencies = ["address"]
 # AgentCardRef::with_launch lets a parked record's card match the agent that holds its launch (+1).
 # AgentDefinition::parent_owner_start floors the mod feed's first windows at its claude parent's
 # start; AgentContextRecord::merge_mod_reading is the sparse merge a mod reading lands through (+2).
-surface-budget = 1284
+# ModPlan and ModBlocker carry a managed policy that keeps the Claude mod from loading to the
+# install preview, the start warning and the doctor row (+2).
+surface-budget = 1286
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
