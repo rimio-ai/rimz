@@ -1455,6 +1455,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         append_system_prompt_files: vec![PathBuf::from("append.md").into()],
         team_prompt: None,
         skills: Some(vec!["merge".parse().unwrap()]),
+        mcps: Some(vec!["rimz-lsp".parse().unwrap()]),
         no_skill_tool: true,
         allowed_tools: Some(vec!["Read".parse().unwrap()]),
         launch: LaunchParams {
@@ -1480,6 +1481,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         append_system_prompt_files,
         team_prompt,
         skills,
+        mcps,
         no_skill_tool,
         allowed_tools,
         launch,
@@ -1501,6 +1503,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             append_system_prompt_files,
             team_prompt,
             skills,
+            mcps,
             no_skill_tool,
             allowed_tools,
             mode: launch.mode,
@@ -1514,6 +1517,23 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
     for skills in [None, Some(Vec::new())] {
         cell.skills.clone_from(&skills);
         assert_eq!(ResumeLaunchPosture::from(&cell).skills, skills);
+    }
+    for mcps in [None, Some(Vec::new())] {
+        cell.mcps.clone_from(&mcps);
+        let posture = ResumeLaunchPosture::from(&cell);
+        assert_eq!(posture.mcps, mcps);
+        assert_eq!(
+            posture
+                .exec_request(
+                    cell.kind.clone(),
+                    crate::harness::launch::ExecAction::Launch {
+                        prompt: None,
+                        extra_args: Vec::new()
+                    }
+                )
+                .mcps,
+            mcps
+        );
     }
     cell.isolation_default = Some(crate::config::Isolation::Host);
     assert_eq!(
@@ -1559,6 +1579,7 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         launch: LaunchParams {
@@ -1657,6 +1678,7 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         launch: LaunchParams {
@@ -1725,6 +1747,7 @@ fn configured_profile(
         system_prompt_file: system_prompt_file.map(Into::into),
         append_system_prompt_files: Vec::new(),
         skills: None,
+        mcps: None,
         allowed_tools: None,
         args: args.map(str::to_owned),
     }
@@ -3393,6 +3416,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            mcps: None,
             no_skill_tool: false,
             allowed_tools: None,
             launch: LaunchParams {
@@ -3495,6 +3519,7 @@ fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         launch: LaunchParams {
@@ -3953,6 +3978,7 @@ fn launch_request_names_and_metadata() {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         launch: LaunchParams {
@@ -4631,6 +4657,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: Some(vec!["merge".parse().unwrap()]),
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         launch: LaunchParams::default(),
@@ -4749,6 +4776,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: Some(Vec::new()),
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         launch: LaunchParams {

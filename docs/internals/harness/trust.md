@@ -26,7 +26,7 @@ The pin covers the surface itself because agents in the room can write `.rimz/co
 | Config table | Hashed keys |
 | --- | --- |
 | `[[agents]]` | `name`, `launch_command`, `env` |
-| `[profiles.<name>]` | `agent`, `skills`, `mode`, `model`, `effort`, `fast`, `code-mode`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
+| `[profiles.<name>]` | `agent`, `skills`, `mcps`, `mode`, `model`, `effort`, `fast`, `code-mode`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
 | `[subagents.profiles.<name>]` | the same keys as `[profiles.<name>]`, in the child-launch namespace |
 | `[agents.teams.<name>]` | `layout`, `consensus-file`, `consensus` (the piece names), `append-system-prompt-files`. Per role: `role`, `profile`, `signals`, `mode`, `model`, `effort`, `fast`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
 | `[tasks.<name>]` | `kind`, `target` and `args` (what each fire runs or launches), `worktree` (the RimZ-owned worktree each fire runs or launches in), the old `command` key, `timeout`, `at` (a key the loop loader refuses, hashed as written like `command`), `every`, `cron`, `signal`, `match`, `repeat`. A shell fire runs the hashed argv as the one check of an inline workflow run ([loops.md](./loops.md#the-compiled-graph)); a workflow, agent or team fire launches the hashed target with the hashed arguments. `kind`, `target`, `args`, `worktree`, `command`, `timeout` and `repeat` are hashed as written, so a value of the wrong type still changes the hash and leaves the rest of the file loading; the loop loader refuses that row alone |
@@ -42,7 +42,7 @@ A field added to the projection after grants existed is left out of the JSON whi
 | Projection | Left out when |
 | --- | --- |
 | top level | `lsp_servers`, `subagent_profiles`, and `accounts` are empty |
-| profile and subagent profile | `skills`, `auto_compact`, `fast`, and `code_mode` are unset |
+| profile and subagent profile | `skills`, `mcps`, `auto_compact`, `fast`, and `code_mode` are unset |
 | team | `consensus_file` is unset, or `consensus` or `append_system_prompt_files` is empty |
 | team role | `signals` is empty, or `auto_compact` and `fast` are unset |
 | task | `repeat` is unset |

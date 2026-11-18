@@ -1436,6 +1436,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         skills: None,
+        mcps: None,
         args: args.map(ToOwned::to_owned),
     }
 }

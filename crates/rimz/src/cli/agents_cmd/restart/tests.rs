@@ -433,6 +433,7 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
             append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
             team_prompt: posture.launch.team_prompt.clone(),
             skills: posture.launch.skills.clone(),
+            mcps: None,
             no_skill_tool: posture.launch.no_skill_tool,
             allowed_tools: posture.launch.allowed_tools.clone(),
             provider_account: rimz::harness::launch::ProviderAccountState::Unbound,

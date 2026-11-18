@@ -46,6 +46,27 @@ pub struct LaunchFrontend {
     pub extension_auto_approve: bool,
 }
 
+/// RimZ's MCP server as a launch hands it to the provider, and the launch's
+/// `mcps` list over the user's own servers.
+pub struct McpLaunch<'a> {
+    pub server: Option<McpServer>,
+    /// `None` leaves the user's servers as the provider loads them.
+    pub mcps: Option<&'a [crate::config::McpName]>,
+    /// The provider login environment, where the account's config is read.
+    pub login_env: &'a BTreeMap<String, String>,
+}
+
+/// One `rimz mcp serve` entry.
+pub struct McpServer {
+    pub command: PathBuf,
+    pub args: Vec<String>,
+    /// Its tools run unasked (`allow-routine-rimz`).
+    pub grant: bool,
+    /// Every variable the provider is spawned with, for a provider that clears
+    /// a server's environment to the names it is given.
+    pub env_names: std::collections::BTreeSet<String>,
+}
+
 /// A single-line reason the provider's session preparation refused the launch.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -600,6 +621,25 @@ pub trait LaunchCapability: CoreCapability {
         _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {
         Ok(())
+    }
+
+    /// Whether a launch hands this agent RimZ's MCP server and applies a
+    /// profile's `mcps` list.
+    fn takes_mcp_servers(&self) -> bool {
+        false
+    }
+
+    /// Register RimZ's MCP server and keep only the user's servers a `mcps`
+    /// list names, within what the provider can switch off per launch.
+    /// Returns warnings for a list it could not apply in full.
+    fn mcp_server_args(
+        &self,
+        _launch: &McpLaunch<'_>,
+        _paths: (&Path, &Path),
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<Vec<String>, super::skills::LaunchSettingsErr> {
+        Ok(Vec::new())
     }
 
     /// Grant native file access to a notes folder (the checkout's team or

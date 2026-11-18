@@ -364,6 +364,7 @@ fn profile(agent: &str) -> Profile {
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         skills: None,
+        mcps: None,
         args: None,
     }
 }
@@ -615,6 +616,41 @@ fn rebased_profile_skills_preserve_explicit_empty() {
     let mut cleared = original;
     cleared.skills = Some(Vec::new());
     assert_eq!(rebase_onto(cleared, Some(&base)).skills, Some(Vec::new()));
+}
+
+#[test]
+fn profile_mcps_inherit_replace_clear_and_survive_a_rebase() {
+    let parent = Profile {
+        mcps: Some(vec!["rimz-lsp".parse().unwrap()]),
+        ..profile("claude")
+    };
+    for child_mcps in [
+        None,
+        Some(Vec::new()),
+        Some(vec!["github".parse().unwrap()]),
+    ] {
+        let expected = child_mcps.clone().or_else(|| parent.mcps.clone());
+        let profiles = ProfilesConfig(BTreeMap::from([
+            ("parent".to_owned(), parent.clone()),
+            (
+                "child".to_owned(),
+                Profile {
+                    mcps: child_mcps.clone(),
+                    ..profile("parent")
+                },
+            ),
+        ]));
+        assert_eq!(resolve_profile("child", &profiles).unwrap().mcps, expected);
+        assert_eq!(
+            agent_cell("child", &profiles, &CommandsConfig::default()).mcps,
+            expected
+        );
+        let mut base = ResolvedProfile::bare("codex");
+        base.mcps.clone_from(&parent.mcps);
+        let mut original = ResolvedProfile::bare("claude");
+        original.mcps.clone_from(&child_mcps);
+        assert_eq!(rebase_onto(original, Some(&base)).mcps, expected);
+    }
 }
 
 #[test]
@@ -1445,6 +1481,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
             system_prompt_file: Some("/prompts/system.md".into()),
             append_system_prompt_files: vec!["/prompts/fragment.md".into()],
             skills: None,
+            mcps: None,
             args: Some("--strict-mcp-config".to_owned()),
         },
     )]);

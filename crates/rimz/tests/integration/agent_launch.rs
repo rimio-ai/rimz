@@ -192,6 +192,7 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
@@ -7487,6 +7488,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            mcps: None,
             no_skill_tool: false,
             allowed_tools: None,
             provider_account: ProviderAccountState::Unbound,
@@ -7644,6 +7646,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            mcps: None,
             no_skill_tool: false,
             allowed_tools: None,
             provider_account: ProviderAccountState::Unbound,
@@ -7757,6 +7760,7 @@ esac"#,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
@@ -7962,6 +7966,7 @@ esac"#,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
@@ -8357,7 +8362,7 @@ fn missing_shell_path_falls_back_to_direct_exec() {
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
-        dumped.lines().any(|line| line == "ARGC=7") && dumped.contains("<system_reminder>"),
+        dumped.lines().any(|line| line == "ARGC=17") && dumped.contains("<system_reminder>"),
         "direct fallback did not run the agent shim:\n{dumped}"
     );
     assert!(dumped.lines().any(|line| line == "ARGV_2=-c"), "{dumped}");
@@ -9373,7 +9378,7 @@ fn prompt_with_shell_metacharacters_stays_one_argument_after_terminator() {
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
-        dumped.lines().any(|line| line == "ARGC=9"),
+        dumped.lines().any(|line| line == "ARGC=19"),
         "launch argv did not contain the reminder, terminator, and prompt:\n{dumped}"
     );
     assert!(dumped.lines().any(|line| line == "ARGV_2=-c"), "{dumped}");
@@ -9384,13 +9389,13 @@ fn prompt_with_shell_metacharacters_stays_one_argument_after_terminator() {
         "{dumped}"
     );
     assert!(
-        dumped.lines().any(|line| line == "ARGV_8=--"),
+        dumped.lines().any(|line| line == "ARGV_18=--"),
         "launch argv did not protect the prompt with --:\n{dumped}"
     );
     assert!(
         dumped
             .lines()
-            .any(|line| line == format!("ARGV_9={prompt}")),
+            .any(|line| line == format!("ARGV_19={prompt}")),
         "prompt argv element was changed by the shell wrapper:\n{dumped}"
     );
 }

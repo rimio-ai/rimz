@@ -420,7 +420,9 @@ upward-dependencies = ["address"]
 # Toggle, its agents re-export, and Toggle::enabled carry the written on/off/unset of fast and
 # code-mode to its effective value; LaunchSpec::rendered_fast and CodeModeSwitch::exclude_off
 # read and render the off switches (+5).
-surface-budget = 1293
+# McpLaunch, McpServer, LaunchCapability::{takes_mcp_servers, mcp_server_args} hand RimZ's MCP
+# server and a profile's mcps list to the Claude and Codex launch argv (+4).
+surface-budget = 1297
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -820,6 +822,26 @@ reason = "Launch reminders take provider-specific unloaded-file wording from the
 kind = "item"
 key = "agents::capabilities::LaunchCapability::allow_added_dirs_args"
 reason = "Launch compilation delegates non-trusting additional-directory settings to the provider."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability::takes_mcp_servers"
+reason = "Launch planning and agent validation ask whether a kind takes RimZ's MCP server."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability::mcp_server_args"
+reason = "Launch compilation delegates the MCP server entry, its grant, and the mcps allowlist to the provider."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::McpLaunch"
+reason = "Launch compilation hands the adapter the server, the profile's mcps list, and the login env in one value."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::McpServer"
+reason = "Launch planning builds the server's command, arguments, grant, and spawn env names for either adapter."
 
 [[verdict]]
 kind = "item"
@@ -5627,6 +5649,7 @@ allowed-dependencies = [
     "harness::team_prompt",
     "ids",
     "lsp::registry",
+    "mcp::catalog",
     "mux::domain",
     "sandbox",
     # Compile reads the pinned run's definition folder for workflow environment pins.

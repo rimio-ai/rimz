@@ -79,6 +79,10 @@ pub enum LaunchPlanWarning {
         "{kind} has no per-launch permission rules; allowed-tools is not applied and the agent prompts as usual: remove allowed-tools from the definition or run it on claude"
     )]
     ToolRulesUnsupported { kind: crate::ids::AgentKind },
+    #[error(
+        "{kind} takes no per-launch MCP servers; the profile's mcps list is not applied and the agent loads its MCP servers as usual"
+    )]
+    McpsUnsupported { kind: crate::ids::AgentKind },
     #[error("{kind} has no added-directory permission channel; --add-dir is ignored")]
     AddedDirsUnsupported { kind: crate::ids::AgentKind },
     #[error("launching with default RimZ launch reminders")]
@@ -898,6 +902,25 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         .is_none_or(|effective| effective.allow_routine_rimz)
     {
         reminders.routine_rimz = Some((inputs.runtime.prompt_dir(), [tmp.clone(), shared.clone()]));
+    }
+    let capabilities = crate::config::mcp_capabilities(request.mcps.as_deref());
+    if inputs.machine.agents.mcp_tools && adapter.takes_mcp_servers() && !capabilities.is_empty() {
+        let program = if inputs.state.room_bin.is_file() {
+            inputs.state.room_bin.clone()
+        } else {
+            inputs.rimz_bin.to_path_buf()
+        };
+        let only = if request.mcps.is_some() {
+            capabilities.as_slice()
+        } else {
+            &[]
+        };
+        reminders.mcp_server = Some((program, crate::mcp::catalog::serve_args(only)));
+    }
+    if request.mcps.is_some() && !adapter.takes_mcp_servers() {
+        warnings.push(LaunchPlanWarning::McpsUnsupported {
+            kind: request.kind.clone(),
+        });
     }
     for key in ["TMPDIR"].iter().chain(adapter.temp_dir_env_keys()) {
         extra_env.insert((*key).to_owned(), tmp.display().to_string());

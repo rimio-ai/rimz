@@ -491,6 +491,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
@@ -1187,7 +1188,7 @@ fn configured_lsp_denies_native_tool_on_every_launch_action() {
         for (subagent, no_skill_tool) in
             [(false, false), (false, true), (true, false), (true, true)]
         {
-            for configured in [false, true] {
+            for (configured, tool) in [(false, false), (false, true), (true, false), (true, true)] {
                 for (skills, callable) in [
                     (None, true),
                     (Some(vec!["rimz-lsp"]), true),
@@ -1207,12 +1208,13 @@ fn configured_lsp_denies_native_tool_on_every_launch_action() {
                         &BTreeMap::new(),
                         &LaunchReminders {
                             lsp_configured: configured,
+                            mcp_server: tool.then(|| ("/bin/rimz".into(), Vec::new())),
                             ..LaunchReminders::default()
                         },
                     )
                     .expect("process");
                     let case = format!(
-                        "{action:?} child={subagent} configured={configured} no_skill_tool={no_skill_tool} skills={:?}",
+                        "{action:?} child={subagent} configured={configured} tool={tool} no_skill_tool={no_skill_tool} skills={:?}",
                         invocation.skills
                     );
                     actual.push((
@@ -1220,7 +1222,11 @@ fn configured_lsp_denies_native_tool_on_every_launch_action() {
                         process.provider_argv.iter().any(|arg| arg == "LSP"),
                         process.provider_argv.iter().any(|arg| arg == "Agent"),
                     ));
-                    expected.push((case, configured && callable && !no_skill_tool, subagent));
+                    expected.push((
+                        case,
+                        configured && (tool || (callable && !no_skill_tool)),
+                        subagent,
+                    ));
                 }
             }
         }
@@ -2848,6 +2854,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: Some(vec!["merge".parse().unwrap(), "rebase".parse().unwrap()]),
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,

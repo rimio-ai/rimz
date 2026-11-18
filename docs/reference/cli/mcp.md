@@ -52,3 +52,39 @@ The server speaks newline-delimited JSON-RPC 2.0 on stdin and stdout, and writes
 | Any other request, `server/discover` included | Error `-32601` |
 
 A line that is not JSON gets error `-32700`, and the server goes on reading. The server exits 0 when stdin ends or on SIGINT or SIGTERM, after killing the commands still running. A watcher that a `wait` call detached keeps running.
+
+## Launch registration
+
+RimZ hands its server to a Claude or Codex launch when `[agents] mcp-tools` is on (the default, set in the [machine config](../../guide/configuration.md#rimz-tools-over-mcp)) and the profile's `mcps` list is absent or names at least one capability. The server's command is the room's `rimz` link, so it survives `rimz update`. Every spawn path does the same, and `rimz agents explain <profile>` prints the arguments in the provider argv.
+
+- **Claude** gets one `--mcp-config` holding the `rimz` server, after every other provider argument and before the `--` that precedes a prompt, since the flag takes several values. With [`allow-routine-rimz`](../../guide/configuration.md#routine-rimz-commands) on, `mcp__rimz__*` joins `permissions.allow` in the launch's `--settings`, so the tools run without asking; with it off, Claude asks before each call.
+- **Codex** gets `-c mcp_servers.rimz.*` overrides: the command and its arguments, `--parent-env` among them, `env_vars` naming every variable RimZ spawns Codex with (Codex clears a server's environment to a few names otherwise), `tool_timeout_sec=600`, and `default_tools_approval_mode` set to `"approve"` with `allow-routine-rimz` on and `"prompt"` with it off. The `env_vars` names are collected before the user's login shell runs its startup files, so on Linux and macOS `--parent-env` takes what those files export from Codex's own environment; elsewhere the commands see the `env_vars` set alone.
+
+### The `mcps` profile key
+
+A profile's [`mcps`](../definitions.md) list chooses both RimZ's capabilities and the user's own MCP servers:
+
+| `mcps` | RimZ's server | The user's servers |
+| --- | --- | --- |
+| Absent | Every capability | As without RimZ. A Claude profile with a `tools` list carries `--strict-mcp-config`, so it loads none. |
+| A list | Only the named capabilities, as `--only` arguments; none when no capability is named | Only the named servers, within each provider's reach below |
+| `[]` | Not handed over | None, within each provider's reach below |
+
+A list's entries are capability names (`rimz-lsp`, `rimz-wait`, `rimz-control`, `rimz-notes`) and the names of the user's servers. A name that matches no configured server is ignored, since accounts and projects define different servers. An empty entry, `rimz`, and any other name starting `rimz-` refuse the definition at load. RimZ never switches a server on: a listed server the user's config disables stays off.
+
+- **Claude**: a list sets `allowedMcpServers` in the launch's `--settings` to exactly `rimz`, when the server is handed over, plus each other entry, and drops `--strict-mcp-config`. Claude applies it to servers from every source (`--mcp-config`, a project's `.mcp.json`, claude.ai connectors) and prints `Warning: MCP server blocked by enterprise policy: <name>` for each one it blocks.
+- **Codex** has no allowlist. A list sets `enabled = false` for each server defined under `mcp_servers` in the account's `config.toml` or the profile file that `--profile`, `-p`, or `-p<name>` selects that the list does not name. Servers from Codex plugins, connectors, trusted project config, managed config, `-c` arguments, and Codex's built-ins stay on. A config file that cannot be read or parsed switches nothing off, and the launch warns.
+- **Other kinds** get no server. A list warns at launch that it is not applied, and the launch proceeds.
+
+### Cases RimZ does not handle
+
+In each case, `[agents] mcp-tools = false` keeps RimZ's server out of every launch; a profile's `mcps` list still filters the user's servers.
+
+- A user's own server already named `rimz`.
+- A user's own Codex `-c mcp_servers={...}` table in a profile's or launch's arguments: it replaces the table RimZ places first, so the switch-offs a `mcps` list adds are lost. The `rimz` server stays: its dotted keys follow every user argument, and Codex merges dotted keys given after a table.
+- A user's Codex `shell_environment_policy`: it filters what Codex's shell commands see, not what the tools' commands see, so a `wait` command armed through the tool can read a variable the policy withholds from the shell.
+- Variables Codex sets for itself after it starts, such as those in the `.env` file of its home: a tool's command gets one only when the `env_vars` list names it, since `--parent-env` reads the environment Codex was started with.
+- Claude run with `CLAUDE_CODE_MCP_ALLOWLIST_ENV=1`, which keeps the room pin out of the server's environment.
+- Claude under a managed MCP policy.
+- A user's own Claude settings file that sets `allowedMcpServers`: how Claude combines it with the launch's list is untested.
+- A Codex launch forced to a never-ask approval policy with a sandbox while `allow-routine-rimz` is off: Codex refuses every tool call that needs approval, so every call is refused.

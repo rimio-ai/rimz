@@ -47,6 +47,8 @@ pub(super) struct AgentFrontmatter {
     pub subagents: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
     pub skills: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
+    pub mcps: Option<Vec<String>>,
 }
 
 impl AgentFrontmatter {
@@ -75,6 +77,7 @@ impl AgentFrontmatter {
             tools,
             allowed_tools,
             skills,
+            mcps,
             subagents,
             model_reminder,
             keep_warm,
@@ -154,6 +157,8 @@ pub(super) struct RoleFrontmatter {
     #[serde(default, deserialize_with = "list")]
     pub skills: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
+    pub mcps: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
     pub signals: Option<Vec<SignalFrontmatter>>,
     #[serde(rename = "meka", default, deserialize_with = "retired_role_meka")]
     _meka: (),
@@ -176,6 +181,7 @@ impl RoleFrontmatter {
             allowed_tools: self.allowed_tools.clone(),
             subagents: self.subagents.clone(),
             skills: self.skills.clone(),
+            mcps: self.mcps.clone(),
             ..AgentFrontmatter::default()
         }
     }

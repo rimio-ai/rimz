@@ -419,6 +419,73 @@ fn a_call_as_an_agent_resolves_its_home_room_and_caller() {
     );
 }
 
+/// Codex hands the server only the variables its entry's `env_vars` names, so
+/// the same calls pass under an environment cleared to the names a Codex
+/// launch's rendered entry lists.
+#[test]
+fn a_call_under_the_codex_entrys_env_vars_resolves_the_same_agent() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let output = crate::common::wait::agent_wait(&env)
+        .args(["agents", "explain", "codex", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let argv: Vec<&str> = report["provider_argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap())
+        .collect();
+    let listed = argv
+        .iter()
+        .find_map(|arg| arg.strip_prefix("mcp_servers.rimz.env_vars="))
+        .unwrap_or_else(|| panic!("no env_vars entry in {argv:?}"));
+    let names: Vec<String> =
+        toml::from_str::<toml::Table>(&format!("names = {listed}")).unwrap()["names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap().to_owned())
+            .collect();
+
+    let mut command = crate::common::wait::agent_wait(&env);
+    command.args(["mcp", "serve"]);
+    let mut spawned: std::collections::BTreeMap<_, _> = std::env::vars_os().collect();
+    for (key, value) in command.get_envs() {
+        match value {
+            Some(value) => spawned.insert(key.to_owned(), value.to_owned()),
+            None => spawned.remove(key),
+        };
+    }
+    let kept: Vec<_> = spawned
+        .into_iter()
+        .filter(|(key, _)| names.iter().any(|name| key == name.as_str()))
+        .collect();
+    command.env_clear().envs(kept);
+    let mut server = McpServer::spawn(command);
+    server.initialize();
+    let (text, is_error) = server.call(1, "wait", json!({"in": "1h", "label": "cleared"}));
+    assert!(!is_error, "{text}");
+    let (text, is_error) = server.call(2, "wait_list", json!({}));
+    assert!(!is_error, "{text}");
+    assert!(text.contains("cleared"), "{text}");
+    let (text, is_error) = server.call(
+        3,
+        "notes_add",
+        json!({"kind": "diary", "title": "Day", "body": "text\n"}),
+    );
+    assert!(!is_error, "{text}");
+    let note = std::fs::read_to_string(text.lines().next().unwrap()).expect("read note");
+    assert!(note.contains("author: \"planner\"\n"), "{note}");
+}
+
 /// `--parent-env` under a shell that stays the server's parent, as Codex
 /// does: the shell holds the fixture's environment, while the server starts
 /// from `env -i` with only `own` set.

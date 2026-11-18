@@ -1342,6 +1342,7 @@ fn check_cell(
         });
     request.identity.params.login = (!login.is_default()).then(|| login.name().clone());
     request.skills.clone_from(&cell.skills);
+    request.mcps.clone_from(&cell.mcps);
     request.no_skill_tool = cell.no_skill_tool;
     request.isolation_default = cell.isolation_default;
     request.action = match start {

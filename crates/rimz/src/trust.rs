@@ -866,6 +866,7 @@ pub struct AgentConfig {
 pub struct ProjectProfile {
     pub agent: String,
     pub skills: Option<Vec<crate::config::SkillName>>,
+    pub mcps: Option<Vec<crate::config::McpName>>,
     pub mode: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -954,6 +955,10 @@ struct ExecutableProfile<'a> {
     agent: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     skills: Option<&'a [crate::config::SkillName]>,
+    // MCP servers shape provider argv; serialized only when set, so pinned
+    // hashes hold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mcps: Option<&'a [crate::config::McpName]>,
     mode: Option<&'a str>,
     model: Option<&'a str>,
     effort: Option<&'a str>,
@@ -1088,6 +1093,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     name: name.as_str(),
                     agent: p.agent.as_str(),
                     skills: p.skills.as_deref(),
+                    mcps: p.mcps.as_deref(),
                     mode: p.mode.as_deref(),
                     model: p.model.as_deref(),
                     effort: p.effort.as_deref(),
@@ -1107,6 +1113,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     name: name.as_str(),
                     agent: p.agent.as_str(),
                     skills: p.skills.as_deref(),
+                    mcps: p.mcps.as_deref(),
                     mode: p.mode.as_deref(),
                     model: p.model.as_deref(),
                     effort: p.effort.as_deref(),

@@ -42,6 +42,7 @@ RimZ also gives Claude and Codex a curated permission list for [routine coordina
 - The `rimz answer` rule lets an agent answer another agent's permission prompt, approving it on your behalf.
 - The `rimz notes add` rule lets an agent write a Markdown file under `~/.rimz/notes/` with no prompt, even when its sandbox grants no write outside the room's directories. With `--file`, the note's body is any file the command can read, so a note can copy a file the agent's own sandbox would not let it read. RimZ never deletes a note; the store is owner-only (`0700` folders, `0600` files). Separately, and even with `allow-routine-rimz` off, every Claude launch gets the store as an added working directory once it exists, so a Claude agent can read and edit any saved note without a prompt.
 - The `rimz wait` rule lets an agent run any shell command through `--run` or `--check` without a prompt. For Codex, it runs outside Codex's command sandbox. For Claude, it skips Claude's permission prompt at every isolation level, and at `sandbox` isolation it runs outside Claude's sandbox. Under scoped isolation, it still runs inside RimZ's view.
+- The same switch lets Claude and Codex call the tools of [RimZ's MCP server](./configuration.md#rimz-tools-over-mcp) with no prompt. Each tool runs one of the commands above (`rimz lsp`, `rimz wait`, `rimz agents` on the agent itself, `rimz notes add` and `list`), so the tools grant nothing the rules do not.
 
 To remove all of these rules, set `allow-routine-rimz = false` under `[agents]` in `~/.rimz/config.toml` ([routine RimZ commands](./configuration.md#routine-rimz-commands)). Restart Claude to drop its launch settings; the next `rimz start` consent or `rimz hooks install` removes Codex's managed rules file. This is a machine setting, so a repository cannot turn it back on. Codex also reads that user-level rules directory outside RimZ. Named accounts share it, including Codex's own “don't ask again” rules; an existing account-local `rules/` directory is moved aside with a warning when the shared link is reconciled.
 
@@ -66,7 +67,7 @@ Room layout stays out of a repository's reach. A project config carrying a `[lay
 The hash covers every field that can cause a process to run:
 
 - `[[agents]]`: `name`, `launch_command`, `env`
-- `[profiles.<name>]`: `agent`, `skills`, `mode`, `model`, `effort`, `auto-compact`, `fast`, `code-mode`, `system-prompt-file`, `append-system-prompt-files`, `args`
+- `[profiles.<name>]`: `agent`, `skills`, `mcps`, `mode`, `model`, `effort`, `auto-compact`, `fast`, `code-mode`, `system-prompt-file`, `append-system-prompt-files`, `args`
 - `[subagents.profiles.<name>]`: the same command-running profile fields, for supervised children
 - `[agents.teams.<name>]`: `layout`, `consensus-file`, `consensus`, `append-system-prompt-files`, and each role's profile, signal bindings, and launch fields
 - `[tasks.<name>]`: what each fire runs or launches (`kind`, `target`, `args`), the worktree it runs in (`worktree`), its `timeout`, and the schedule options (`every`, `cron`, `signal`, `match`, `repeat`). Every process a fire starts comes from the command these fields hold
