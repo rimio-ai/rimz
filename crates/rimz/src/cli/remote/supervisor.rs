@@ -32,6 +32,7 @@ use super::keyboard::{KeyboardPty, KeyboardRelay};
 use super::outage_ui::{OutageUi, PANEL_TICK, UiEvent};
 use super::ports::ForwardPublisher;
 use super::relay::{OutputRelay, RelayOutput};
+use super::upload_client::UploadRoute;
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 const CONTROL_MASTER_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
@@ -265,7 +266,7 @@ pub(super) fn supervise_remote(
     let mut port_sync = ForwardPublisher::new(setup_hint, host, auto_forward);
     let mut first_attempt = true;
     let guard = super::tty::TtyGuard::acquire();
-    let paste = rimz::config::MachineConfig::load_lenient().remote.paste;
+    let remote = rimz::config::MachineConfig::load_lenient().remote.clone();
     let Some(mut supervisor) =
         LinkSupervisor::connect(plan, control_path, HandoffStage::Multiplexer)?
     else {
@@ -305,7 +306,8 @@ pub(super) fn supervise_remote(
         let terminal = SessionTerminal {
             guard: &guard,
             output: RelayOutput::new(supervisor.held_screen.take(), setup_hint, !first_attempt),
-            paste,
+            paste: remote.paste,
+            upload: probe.upload_route(&target, remote.paste_max_bytes()),
         };
         first_attempt = false;
         let spec = probe.attach_spec(&attempt);
@@ -500,6 +502,9 @@ struct SessionTerminal<'a> {
     output: RelayOutput,
     /// Whether ssh reads the keyboard relay's pty instead of the terminal.
     paste: bool,
+    /// Where the relay's uploads go; none on an attach without a control
+    /// socket, whose triggers forward as typed.
+    upload: Option<UploadRoute>,
 }
 
 /// Opens the keyboard relay for a session on a terminal, with the slave for
@@ -507,13 +512,14 @@ struct SessionTerminal<'a> {
 /// no terminal, or the pty fails.
 fn open_keyboard(terminal: &SessionTerminal<'_>) -> Option<(KeyboardPty, std::os::fd::OwnedFd)> {
     let saved = terminal.guard.saved().filter(|_| terminal.paste)?;
-    let opened = KeyboardPty::open(saved).and_then(|pty| match pty.slave() {
-        Ok(slave) => Ok((pty, slave)),
-        Err(err) => {
-            pty.abandon();
-            Err(err)
-        }
-    });
+    let opened =
+        KeyboardPty::open(saved, terminal.upload.clone()).and_then(|pty| match pty.slave() {
+            Ok(slave) => Ok((pty, slave)),
+            Err(err) => {
+                pty.abandon();
+                Err(err)
+            }
+        });
     opened
         .inspect_err(|err| {
             let _ = writeln!(
@@ -1695,6 +1701,14 @@ impl ProbeHandle {
             control_path: None,
             remove_control_path: false,
         }
+    }
+
+    fn upload_route(&self, target: &RemoteTarget, limit: u64) -> Option<UploadRoute> {
+        Some(UploadRoute {
+            target: target.clone(),
+            control_path: self.control_path.clone()?,
+            limit,
+        })
     }
 
     fn attach_spec(&self, attempt: &SshAttachAttempt<'_>) -> rimz::mux::CommandSpec {

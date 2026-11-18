@@ -16,6 +16,7 @@ use rimz::remote::{
     infocmp_program, remote_lineage, term_plan_from,
 };
 
+mod clipboard;
 mod keyboard;
 mod link_stats;
 mod list;
@@ -25,6 +26,7 @@ mod relay;
 mod setup;
 mod supervisor;
 mod tty;
+mod upload_client;
 mod upload_receiver;
 mod web;
 

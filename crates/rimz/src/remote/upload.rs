@@ -6,10 +6,13 @@
 //! header order, and one JSON result line. Unknown fields are ignored on both
 //! sides, so either end may add one without a version change.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+use super::RemoteTarget;
+use crate::mux::CommandSpec;
 
 const UPLOAD_SCHEMA_VERSION: &str = "rimz.upload.v1";
 const UPLOAD_LANE_VERSION: &str = "rimz.upload-lane.v1";
@@ -149,9 +152,55 @@ pub fn lane_path(runtime: &crate::RuntimePaths) -> PathBuf {
     runtime.lane_path(UPLOAD_LANE_FILE)
 }
 
+/// The upload channel: the host's receiver for the room the attach targets,
+/// as a second exec over the attach's control socket.
+pub fn upload_stream_spec(target: &RemoteTarget, control_path: &Path) -> CommandSpec {
+    CommandSpec::new(super::ssh_program())
+        .args([
+            "-S".to_owned(),
+            control_path.display().to_string(),
+            "-o".to_owned(),
+            "BatchMode=yes".to_owned(),
+            // A remote tty would rewrite the binary stream, whatever the
+            // user's `RequestTTY` says.
+            "-T".to_owned(),
+            "--".to_owned(),
+        ])
+        .arg(target.ssh_destination().as_str())
+        .arg(format!(
+            "{}; {}",
+            super::remote_path_prefix(),
+            target.exec_snippet("rimz remote upload --dir", "rimz remote upload --session"),
+        ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_upload_channel_runs_the_receiver_over_the_control_socket() {
+        let target = RemoteTarget::parse("dev-box:/srv/app").expect("target");
+        let spec = upload_stream_spec(&target, Path::new("/tmp/rimz-ctl"));
+        let args = spec.args.iter().map(String::as_str).collect::<Vec<_>>();
+        assert_eq!(
+            args[..7],
+            [
+                "-S",
+                "/tmp/rimz-ctl",
+                "-o",
+                "BatchMode=yes",
+                "-T",
+                "--",
+                "dev-box"
+            ]
+        );
+        assert!(
+            args[7].contains("; exec rimz remote upload --dir ") && args[7].contains("/srv/app"),
+            "{}",
+            args[7]
+        );
+    }
 
     #[test]
     fn wire_lines_match_the_documented_shapes() {

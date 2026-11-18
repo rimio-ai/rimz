@@ -86,12 +86,12 @@ impl Drop for Receiver {
     }
 }
 
-fn room(env: &Env) -> rimz::StatePaths {
+pub(super) fn room(env: &Env) -> rimz::StatePaths {
     env.record(&env.project_root);
     env.state_path_for(&env.project_root)
 }
 
-fn upload_units(state: &rimz::StatePaths) -> Vec<PathBuf> {
+pub(super) fn upload_units(state: &rimz::StatePaths) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(&state.tmp_dir) else {
         return Vec::new();
     };
@@ -105,7 +105,7 @@ fn upload_units(state: &rimz::StatePaths) -> Vec<PathBuf> {
         .collect()
 }
 
-fn lane(env: &Env) -> Option<rimz::remote::upload::UploadLane> {
+pub(super) fn lane(env: &Env) -> Option<rimz::remote::upload::UploadLane> {
     let bytes = std::fs::read(rimz::remote::upload::lane_path(&env.runtime_paths())).ok()?;
     Some(serde_json::from_slice(&bytes).expect("upload lane json"))
 }
