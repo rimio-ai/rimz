@@ -1,4 +1,4 @@
-//! Tracks pane-local pixel-pet image residency so dropped or evicted sprites self-heal.
+//! Tracks pane-local pixel-pet image residency, so a sprite is sent once per pet and slot.
 //! PNG payloads come from the shared prepared sheet, not a pane-local cache.
 //! One painter lives per take of a pixel slot, so its ids and residency end with the slot.
 
@@ -36,7 +36,6 @@ impl PixelPainter {
         writer: &mut W,
         pixel: &PetPixelView,
         png: Arc<[u8]>,
-        now_ms: u64,
         permit: &ImagePermit,
     ) -> io::Result<()> {
         let pet_changed = self.pet_id.as_deref() != Some(pixel.pet_id.as_str());
@@ -55,7 +54,6 @@ impl PixelPainter {
                 key: pixel.sprite_index,
                 image_id,
                 content: pixel.pet_id.clone(),
-                now_ms,
                 cols: pixel.size.cols,
                 rows: pixel.size.rows,
             },
@@ -112,7 +110,7 @@ impl PixelPainter {
         let image_id = self.image_id(sprite_index);
         self.pet_id = Some(pet_id.to_owned());
         self.residency
-            .mark_resident(sprite_index, image_id, pet_id.to_owned(), 0);
+            .mark_resident(sprite_index, image_id, pet_id.to_owned());
     }
 }
 
@@ -120,9 +118,7 @@ impl PixelPainter {
 mod tests {
     use super::*;
     use crate::sidebar_pane::pets::PetGridSize;
-    use crate::sidebar_pane::pixel::{
-        BEGIN_SYNC, MIN_RESEND_SPACING_MS, RESIDENT_REFRESH_MS, sprite_image_id,
-    };
+    use crate::sidebar_pane::pixel::{BEGIN_SYNC, sprite_image_id};
 
     fn permit() -> ImagePermit {
         ImagePermit::for_test()
@@ -151,7 +147,7 @@ mod tests {
         let pixel = view("codex", 0);
         let mut first = Vec::new();
         painter
-            .ensure_transmitted(&mut first, &pixel, image(), 0, &permit())
+            .ensure_transmitted(&mut first, &pixel, image(), &permit())
             .expect("first transmit");
 
         assert!(contains(&first, b"a=t,f=100,i=5373952,q=2"));
@@ -159,52 +155,9 @@ mod tests {
         assert!(!first.starts_with(BEGIN_SYNC));
         let mut repeat = Vec::new();
         painter
-            .ensure_transmitted(&mut repeat, &pixel, image(), 1, &permit())
+            .ensure_transmitted(&mut repeat, &pixel, image(), &permit())
             .expect("repeat transmit");
         assert!(repeat.is_empty());
-    }
-
-    #[test]
-    fn stale_sprites_share_frame_resends_then_obey_spacing() {
-        let mut painter = PixelPainter::with_slot(PixelSlot::new(0), true);
-        let first = view("codex", 0);
-        let second = view("codex", 1);
-        let third = view("codex", 2);
-        for pixel in [&first, &second, &third] {
-            painter
-                .ensure_transmitted(&mut Vec::new(), pixel, image(), 0, &permit())
-                .expect("initial transmit");
-        }
-
-        for pixel in [&first, &second] {
-            let mut stale = Vec::new();
-            painter
-                .ensure_transmitted(&mut stale, pixel, image(), RESIDENT_REFRESH_MS, &permit())
-                .expect("same-frame resend");
-            assert!(!stale.is_empty());
-        }
-        let mut too_soon = Vec::new();
-        painter
-            .ensure_transmitted(
-                &mut too_soon,
-                &third,
-                image(),
-                RESIDENT_REFRESH_MS + MIN_RESEND_SPACING_MS - 1,
-                &permit(),
-            )
-            .expect("throttled resend");
-        assert!(too_soon.is_empty());
-        let mut spaced = Vec::new();
-        painter
-            .ensure_transmitted(
-                &mut spaced,
-                &third,
-                image(),
-                RESIDENT_REFRESH_MS + MIN_RESEND_SPACING_MS,
-                &permit(),
-            )
-            .expect("spaced resend");
-        assert!(!spaced.is_empty());
     }
 
     #[test]
@@ -212,12 +165,12 @@ mod tests {
         let mut painter = PixelPainter::with_slot(PixelSlot::new(0), true);
         for pixel in [view("codex", 0), view("codex", 1)] {
             painter
-                .ensure_transmitted(&mut Vec::new(), &pixel, image(), 0, &permit())
+                .ensure_transmitted(&mut Vec::new(), &pixel, image(), &permit())
                 .expect("initial pet");
         }
         let mut changed = Vec::new();
         painter
-            .ensure_transmitted(&mut changed, &view("claude", 0), image(), 0, &permit())
+            .ensure_transmitted(&mut changed, &view("claude", 0), image(), &permit())
             .expect("pet change");
         assert!(!contains(&changed, b"a=d,d=I"));
         assert!(painter.transmitted_contains(0));

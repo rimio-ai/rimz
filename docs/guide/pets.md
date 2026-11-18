@@ -111,7 +111,7 @@ Two things outside `[theme.pets]` override the tier. `[theme.display] pixel = "o
 
 **There is an empty box where the pet should be.** A sidebar in a tab you are not looking at draws an empty box in the pet's place, and a sidebar shows the same box for a moment when you arrive at its tab by switching tabs yourself, until RimZ next reads which tab each terminal shows. A jump from a sidebar card shows the pet at once. Pixel pets draw from a pool of image slots shared by all your rooms, and a sidebar holds one only while it is on screen. A box that stays on screen means every slot is held, usually by rooms still running an older RimZ that keeps its slot for its whole life; restart those rooms. The sidebar retries every two seconds, and the host log warns once each time it runs short.
 
-**The mouse pointer flickers on macOS.** Some macOS terminals re-check the pointer shape every time an image updates. RimZ sends each sprite once and refreshes a given sprite at most every two seconds to keep that traffic down; `rimz config set theme.pets.glyphs sextant` removes it completely, because cell art sends no images.
+**The mouse pointer flickers on macOS.** Some macOS terminals re-check the pointer shape every time an image updates. RimZ sends each sprite once and never resends one that has not changed, to keep that traffic down; `rimz config set theme.pets.glyphs sextant` removes it completely, because cell art sends no images.
 
 ## What leaves your machine
 

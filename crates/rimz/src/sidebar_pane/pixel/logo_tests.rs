@@ -371,25 +371,25 @@ fn a_logo_transmits_once_moves_with_its_box_and_is_deleted_when_gone() {
     let (three, four) = (LogoBox::centred_on(3), LogoBox::centred_on(4));
     let mut logos = ready(&[(shipped("codex"), RGB)], three);
     let mut painter = LogoPainter::new(false);
-    let frame = |logos: &mut LogoPixels, painter: &mut LogoPainter, logo_box, now_ms| {
+    let frame = |logos: &mut LogoPixels, painter: &mut LogoPainter, logo_box| {
         let image_id = logos.intern(shipped("codex"), RGB, 9, logo_box);
         let lines = image_id.map(placeholder).into_iter().collect::<Vec<_>>();
         logos.observe_visible(&lines);
         let mut out = Vec::new();
         painter
-            .ensure_transmitted(&mut out, logos, now_ms, &permit)
+            .ensure_transmitted(&mut out, logos, &permit)
             .expect("write");
         (image_id, String::from_utf8_lossy(&out).into_owned())
     };
 
-    let (first, out) = frame(&mut logos, &mut painter, three, 0);
+    let (first, out) = frame(&mut logos, &mut painter, three);
     let first = first.expect("an id");
     assert!(out.contains(&format!("a=t,f=100,i={first}")), "{out}");
     assert!(out.contains(&format!("i={first},p=1,c=9,r=3")), "{out}");
-    let (_, out) = frame(&mut logos, &mut painter, three, 100);
+    let (_, out) = frame(&mut logos, &mut painter, three);
     assert!(out.is_empty(), "an unchanged logo is not sent again: {out}");
 
-    let (moved, out) = frame(&mut logos, &mut painter, four, 200);
+    let (moved, out) = frame(&mut logos, &mut painter, four);
     let moved = moved.expect("an id");
     assert!(out.contains(&format!("i={moved},p=1,c=9,r=4")), "{out}");
     assert!(
@@ -400,7 +400,7 @@ fn a_logo_transmits_once_moves_with_its_box_and_is_deleted_when_gone() {
     let mut out = Vec::new();
     logos.observe_visible(&[]);
     painter
-        .ensure_transmitted(&mut out, &logos, 300, &permit)
+        .ensure_transmitted(&mut out, &logos, &permit)
         .expect("write");
     let out = String::from_utf8_lossy(&out);
     assert!(out.contains(&format!("a=d,d=I,i={moved}")), "{out}");

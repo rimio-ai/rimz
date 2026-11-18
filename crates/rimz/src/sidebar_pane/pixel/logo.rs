@@ -517,7 +517,6 @@ impl LogoPainter {
         &mut self,
         writer: &mut W,
         logos: &LogoPixels,
-        now_ms: u64,
         permit: &ImagePermit,
     ) -> io::Result<()> {
         let visible = logos
@@ -533,7 +532,6 @@ impl LogoPainter {
                     key: image_id,
                     image_id,
                     content: image.clone(),
-                    now_ms,
                     cols: image.cols,
                     rows: image.rows(),
                 },

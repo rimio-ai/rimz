@@ -892,7 +892,7 @@ fn tmux_hidden_mirrors_defer_pixel_transmissions_until_arrival() {
             rig.state
                 .pane
                 .paint
-                .ensure_pixel_transmitted(&mut Vec::new(), &rig.state.pane.ui, 0, &permit)
+                .ensure_pixel_transmitted(&mut Vec::new(), &rig.state.pane.ui, &permit)
                 .unwrap();
         }
         let rig = &mut pair.panes[1];
