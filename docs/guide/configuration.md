@@ -853,7 +853,7 @@ Delete a skill and its stale link goes at the next host launch for that root. `r
 
 **The list.** In scoped mode, `skills: [merge, review]` in a Markdown profile keeps those two model-callable and turns every other skill RimZ can prepare into one you invoke by name. `skills: []` makes all of them user-invoked; it does not hide the view. Entries are bare directory names, never paths. A child list replaces its parent's rather than appending, omitting the field inherits, and once a parent sets a list no child can go back to unconfigured behaviour. With no list anywhere in the chain, invocation behaviour is the provider's own, except that a [launched subagent](./subagents.md#children-cannot-delegate) withholds `rimz-subagents` wherever skill restrictions are supported.
 
-The tools and skills lists together decide which RimZ skills the [launch reminder](../internals/harness/fleet.md#launch-reminders) names, in every isolation level. On Claude, Codex, or Pi, an explicit `tools:` list without `Skill` makes no skill callable, regardless of the skills list. Otherwise, no skills list makes every skill callable for the reminder; a list makes only its exact names callable, without checking installation. The Subagents catalog requires callable `rimz-subagents`, and the Environment language-server bullet requires callable `rimz-lsp`. Every child instead gets a fixed assignment-and-report paragraph with no skill names. A Skills paragraph tells the agent to invoke a skill whose description matches the work when tools permit skills and the skills list is either absent or names any `rimz-*` skill; `skills: []` and lists containing only other skills omit it. Without a callable replacement skill, RimZ leaves native delegation and LSP tools as the tools list renders them; children still have native delegation disabled.
+The tools and skills lists together decide which RimZ skills the [launch reminder](../internals/harness/fleet.md#launch-reminders) names, in every isolation level. On Claude, Codex, or Pi, an explicit `tools:` list without `Skill` makes no skill callable, regardless of the skills list. Otherwise, no skills list makes every skill callable for the reminder; a list makes only its exact names callable, without checking installation. The Subagents catalog requires callable `rimz-subagents`, and the Environment language-server bullet requires callable `rimz-lsp` or the [MCP `lsp` tool](#rimz-tools-over-mcp). Every child instead gets a fixed assignment-and-report paragraph with no skill names. A Skills paragraph tells the agent to invoke a skill whose description matches the work when tools permit skills and the skills list is either absent or names any `rimz-*` skill; `skills: []` and lists containing only other skills omit it. Without a callable replacement skill (or, for LSP, the MCP tool), RimZ leaves native delegation and LSP tools as the tools list renders them; children still have native delegation disabled.
 
 For an enforced list, three rules decide whether it loads. It requires the `Skill` tool, except on a Pi definition that leaves out `tools`. Every listed name must resolve through the provider, library, and pack chain; a missing name lists the searched paths and a conflicted pack name fails with the conflict. And listing a skill cannot lift a restriction its author set, so a skill already marked user-only is refused with two fixes: drop it from `skills:`, or remove the marker. Host providers without a skill switch warn and skip skill lookup and marker checks.
 
@@ -942,7 +942,7 @@ Claude and Codex agents get the facts that change instead with the prompt. The f
 runtime-env = false
 ```
 
-`runtime-env` is a machine setting; a project's config cannot change it. `env-reminder` is the one a project can: a trusted room's `.rimz/config.toml` can set `env-reminder` to override the machine value in either direction. With `env-reminder` off, team members still receive cwd and their memory-file listing, and a shared language server still appears when the [skill policy](#skills) makes `rimz-lsp` callable. `rimz agents explain <spec> --prompt` shows the reminder before launching. See [launch reminders](../internals/harness/fleet.md#launch-reminders) for the full reminder.
+`runtime-env` is a machine setting; a project's config cannot change it. `env-reminder` is the one a project can: a trusted room's `.rimz/config.toml` can set `env-reminder` to override the machine value in either direction. With `env-reminder` off, team members still receive cwd and their memory-file listing, and a shared language server still appears when the launch has the [MCP `lsp` tool](#rimz-tools-over-mcp) or the [skill policy](#skills) makes `rimz-lsp` callable. `rimz agents explain <spec> --prompt` shows the reminder before launching. See [launch reminders](../internals/harness/fleet.md#launch-reminders) for the full reminder.
 
 #### Agent shell
 
@@ -963,6 +963,8 @@ This key is machine-only: project config cannot override it, so a repository can
 
 Claude and Codex can otherwise pause for permission just to coordinate with another agent. RimZ defaults `allow-routine-rimz` to `true`. For Claude, it adds curated command permissions and the launch's scratch/shared directories through `--settings`, plus auto-mode context describing those commands and directories. Your Claude settings are preserved; RimZ does not edit `~/.claude/settings.json`. For Codex, `rimz hooks install` writes the same command prefixes into `$CODEX_HOME/rules/rimz.rules` (`~/.codex/rules/rimz.rules` by default); matching commands run unsandboxed without Guardian review. The file is shared by named accounts, including standalone accounts. See [permission modes](./fleet.md#set-a-permission-mode) for what this covers.
 
+The switch also lets Claude and Codex agents call the [RimZ MCP tools](#rimz-tools-over-mcp) without asking: Claude through a `mcp__rimz__*` permission in the same `--settings`, Codex through the server's `default_tools_approval_mode`. Every command those tools run is already on the curated list.
+
 The curated commands include `rimz packs list`, `rimz packs show`, and `rimz packs diff`, not pack mutations or the bare `rimz packs` spelling. They also include `rimz notes add` and `rimz notes list`, so a sandboxed agent can save a note to `~/.rimz/notes/` outside the room directories its sandbox may write. The [complete prefix list](../reference/agent-support.md#permission-modes) is shared by Claude and Codex.
 
 The switch also covers your installed `rimz-*` skills in Claude's skill directory, the RimZ library, or packs, in that precedence order with owned links skipped. Only exact directory names with a `SKILL.md` receive rules, never a wildcard grant. Turning it off does not remove the permissions from a profile's own `skills:` list.
@@ -975,6 +977,19 @@ allow-routine-rimz = false
 ```
 
 This key is machine-only: project config cannot override it. It applies to every RimZ-launched Claude agent, including subagents, restarts, resumes, and forks, under host or scoped isolation and in every permission mode. For Codex, switching it off removes the managed rules file at the next `rimz start` consent or `rimz hooks install`; `rimz hooks uninstall` removes it too. Your own unmarked file is left alone during preview and install, never replaced or removed; your own rules still apply. Other providers are unchanged. `rimz agents explain claude` shows the launch settings without starting an agent; `rimz hooks install --dry-run codex` previews Codex's file changes.
+
+#### RimZ tools over MCP
+
+The `rimz-*` skills teach an agent RimZ commands it runs through its shell, and a model can get their flags, quoting, or exit codes wrong. So every Claude and Codex launch also starts `rimz mcp serve`, a small MCP server that offers the language-server queries, waits, the agent's own stop, compaction and tuning, and notes as typed tools. Each tool call runs the matching `rimz` command as that agent and returns its output. The [`rimz mcp` reference](../reference/cli/mcp.md) lists the tools, the arguments RimZ adds to each launch, and the cases it does not handle.
+
+A profile's `mcps:` list narrows it: `mcps: [rimz-lsp, github]` keeps only the language-server tools and your own `github` server, and `mcps: []` turns MCP off for that agent. On Codex the list switches off only the servers your `config.toml` and the selected profile file define. To keep the server out of every launch, set this in `~/.rimz/config.toml`:
+
+```toml
+[agents]
+mcp-tools = false
+```
+
+This key is machine-only: project config cannot override it. With it off, a profile's `mcps:` list still filters your own servers. `rimz agents explain claude` shows the launch arguments without starting an agent.
 
 #### Subagent launches
 

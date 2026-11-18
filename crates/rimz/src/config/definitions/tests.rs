@@ -1441,6 +1441,82 @@ fn team_skill_clear_and_custom_model_keep_the_original_kind() {
 }
 
 #[test]
+fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "model: astra\ntools: [Bash]\nmcps: [' rimz-lsp ', github, rimz-lsp]",
+        "",
+    );
+    definition(root.path(), "agents/child.md", "agent: parent", "");
+    definition(
+        root.path(),
+        "agents/cleared.md",
+        "agent: parent\nmcps: null",
+        "",
+    );
+    let loaded = clean(root.path());
+    let names = |name: &str| {
+        loaded.agent_profiles.0[name].mcps.as_ref().map(|mcps| {
+            mcps.iter()
+                .map(|mcp| mcp.as_str().to_owned())
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        names("parent"),
+        Some(vec!["rimz-lsp".to_owned(), "github".to_owned()])
+    );
+    assert_eq!(names("child"), names("parent"));
+    assert_eq!(names("cleared"), Some(Vec::new()));
+    for (entry, shown) in [
+        ("''", ""),
+        ("rimz", "rimz"),
+        ("rimz-message", "rimz-message"),
+    ] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/probe.md",
+            &format!("agent: claude\ntools: [Bash]\nmcps: [{entry}]"),
+            "",
+        );
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &root.path().join("config.toml"),
+            &crate::config::tiers::TierConfig::default(),
+            Some(272_000),
+        );
+        assert_eq!(
+            loaded
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>(),
+            [format!(
+                "sets `mcps:` with an invalid mcps entry `{shown}`: name a RimZ capability \
+                 (rimz-lsp, rimz-wait, rimz-control, rimz-notes) or one of your own MCP servers"
+            )]
+        );
+    }
+    let root = team_fixture();
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        &format!("{TEAM_ROLES}\n    mcps: [rimz-notes]"),
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    assert_eq!(
+        loaded.agent_profiles.0["probe.judge"].mcps,
+        Some(vec!["rimz-notes".parse().unwrap()])
+    );
+}
+
+#[test]
 fn team_signal_wildcards_preserve_branch_scope_but_reject_self_wakes() {
     for (signal, key, valid) in [
         ("ci.failed", "branch", true),

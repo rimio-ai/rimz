@@ -8080,6 +8080,7 @@ fn assert_parent_follow_up_case(
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,

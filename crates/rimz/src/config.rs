@@ -47,6 +47,7 @@ pub mod keys;
 mod logo;
 mod loop_;
 mod lsp;
+mod mcps;
 mod mux;
 mod notifications;
 mod pets;
@@ -111,6 +112,7 @@ pub use loop_::{
     RefusedRow, TaskEntry, TaskTarget, Tasks, ThrottleSwitch, WatchSpec, has_absolute_task_root,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
+pub use mcps::{McpListErr, McpName, mcp_capabilities};
 pub use mux::{MultiplexerConfig, MuxStatusBar, RoomStyle};
 pub(crate) use mux::{MuxConfig, RoomConfig};
 pub(crate) use mux::{TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderStatus, ZellijConfig};

@@ -34,6 +34,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         isolation: None,
         empty_dir: None,
         skills: None,
+        mcps: None,
         allowed_tools: None,
         description: None,
         subagents: None,
@@ -599,6 +600,11 @@ impl Resolver<'_> {
             skill_check,
             self.scope.skills,
         )?;
+        profile.mcps = fm
+            .mcps
+            .as_deref()
+            .map(|listed| mcp_names(path, listed))
+            .transpose()?;
         profile.tools = tools;
         profile.kind_defaults = true;
         profile.isolation = fm.isolation;
@@ -699,6 +705,22 @@ fn names(path: &Path, key: &str, listed: &[String]) -> Result<Vec<String>, Defin
         }
         if !names.iter().any(|existing| existing == name) {
             names.push(name.to_owned());
+        }
+    }
+    Ok(names)
+}
+
+fn mcp_names(path: &Path, listed: &[String]) -> Result<Vec<crate::config::McpName>, DefinitionErr> {
+    let mut names: Vec<crate::config::McpName> = Vec::new();
+    for name in listed {
+        let name = name
+            .trim()
+            .parse()
+            .map_err(|error: crate::config::McpListErr| {
+                DefinitionErr::new(path, format!("sets `mcps:` with an {error}"))
+            })?;
+        if !names.contains(&name) {
+            names.push(name);
         }
     }
     Ok(names)

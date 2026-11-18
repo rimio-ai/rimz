@@ -119,6 +119,7 @@ pub struct AgentCell {
     /// cell of a staged team whose prompt has a base.
     pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
     pub skills: Option<Vec<crate::config::SkillName>>,
+    pub mcps: Option<Vec<crate::config::McpName>>,
     pub no_skill_tool: bool,
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
     /// Canonical shared launch identity selected by profiles, roles, and CLI overlays.
@@ -151,6 +152,7 @@ impl Cell {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            mcps: None,
             no_skill_tool: false,
             allowed_tools: None,
             isolation_default: None,
@@ -268,6 +270,7 @@ pub struct ResolvedProfile {
     pub system_prompt_file: Option<crate::config::PromptSource>,
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub skills: Option<Vec<crate::config::SkillName>>,
+    pub mcps: Option<Vec<crate::config::McpName>>,
     pub tools: Option<crate::agents::ToolSet>,
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
     pub args: Option<String>,
@@ -300,6 +303,7 @@ impl ResolvedProfile {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
+            mcps: None,
             tools: None,
             allowed_tools: None,
             isolation_default: None,
@@ -325,6 +329,9 @@ impl ResolvedProfile {
         self.isolation_default = self.isolation_default.or(layer.isolation);
         if self.skills.is_none() {
             self.skills.clone_from(&layer.skills);
+        }
+        if self.mcps.is_none() {
+            self.mcps.clone_from(&layer.mcps);
         }
         if self.tools.is_none() {
             self.tools.clone_from(&layer.tools);
@@ -1865,6 +1872,7 @@ fn agent_cell_from(
         append_system_prompt_files: resolved.append_system_prompt_files.clone(),
         team_prompt: None,
         skills: resolved.skills.clone(),
+        mcps: resolved.mcps.clone(),
         no_skill_tool: crate::agents::skills_lack_skill_tool(
             resolved.kind.as_str(),
             resolved.tools.as_ref(),
@@ -2592,6 +2600,9 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     }
     if original.skills.is_none() {
         original.skills.clone_from(&base.skills);
+    }
+    if original.mcps.is_none() {
+        original.mcps.clone_from(&base.mcps);
     }
     if original.tools.is_none() {
         original.tools.clone_from(&base.tools);

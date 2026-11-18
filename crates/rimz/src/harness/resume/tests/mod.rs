@@ -148,6 +148,7 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            mcps: None,
             no_skill_tool: false,
             allowed_tools: None,
             provider_account: crate::harness::launch::ProviderAccountState::Unbound,

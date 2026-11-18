@@ -12,6 +12,9 @@ mod idle_compact;
 #[path = "auto_continue_tests.rs"]
 mod auto_continue;
 
+#[path = "mcp_tests.rs"]
+mod mcp;
+
 fn long_cache_env(
     project: &Path,
     machine: &crate::config::MachineConfig,
@@ -1183,6 +1186,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
@@ -2110,6 +2114,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
                 system_prompt_file: None,
                 append_system_prompt_files: Vec::new(),
                 skills: None,
+                mcps: None,
                 allowed_tools: None,
                 args: None,
             },
@@ -2147,6 +2152,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
                 system_prompt_file: None,
                 append_system_prompt_files: Vec::new(),
                 skills: None,
+                mcps: None,
                 allowed_tools: None,
                 args: None,
             },

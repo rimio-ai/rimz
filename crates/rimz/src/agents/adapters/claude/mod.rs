@@ -904,6 +904,73 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         deny_native_tool(extra_args, "Agent");
     }
 
+    fn takes_mcp_servers(&self) -> bool {
+        true
+    }
+
+    fn mcp_server_args(
+        &self,
+        launch: &crate::agents::capabilities::McpLaunch<'_>,
+        (cwd, artifact_dir): (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<Vec<String>, crate::agents::skills::LaunchSettingsErr> {
+        let grant = launch.server.as_ref().is_some_and(|server| server.grant);
+        if launch.mcps.is_some() {
+            extra_args.retain(|arg| arg != "--strict-mcp-config");
+        }
+        if grant || launch.mcps.is_some() {
+            *artifact = merge_settings(
+                cwd,
+                artifact_dir,
+                extra_args,
+                artifact.as_ref(),
+                false,
+                |object| {
+                    if grant {
+                        union_settings_array(
+                            object,
+                            "permissions",
+                            "allow",
+                            [format!("mcp__{}__*", crate::mcp::catalog::SERVER_NAME)],
+                        )?;
+                    }
+                    if let Some(mcps) = launch.mcps {
+                        let allowed = launch
+                            .server
+                            .as_ref()
+                            .map(|_| crate::mcp::catalog::SERVER_NAME)
+                            .into_iter()
+                            .chain(
+                                mcps.iter()
+                                    .filter(|name| name.capability().is_none())
+                                    .map(crate::config::McpName::as_str),
+                            )
+                            .map(|name| serde_json::json!({"serverName": name}))
+                            .collect();
+                        object.insert(
+                            "allowedMcpServers".to_owned(),
+                            serde_json::Value::Array(allowed),
+                        );
+                    }
+                    Ok(())
+                },
+            )?;
+        }
+        if let Some(server) = &launch.server {
+            let config = serde_json::json!({"mcpServers": {crate::mcp::catalog::SERVER_NAME: {
+                "type": "stdio",
+                "command": server.command,
+                "args": server.args,
+            }}});
+            // `--mcp-config` takes several values, so it goes last: only the
+            // `--` before the prompt, or a flag, can follow it, never a
+            // passthrough positional.
+            extra_args.extend(["--mcp-config".to_owned(), config.to_string()]);
+        }
+        Ok(Vec::new())
+    }
+
     fn take_fast_settings(&self, extra_args: &mut Vec<String>) -> Option<bool> {
         let rendered = CLAUDE_DESCRIPTOR.launch.rendered_fast(extra_args);
         CLAUDE_DESCRIPTOR.launch.strip_fast_args(extra_args);

@@ -763,6 +763,8 @@ pub struct ExecRequest {
         deserialize_with = "crate::config::deserialize_optional_skill_list"
     )]
     pub skills: Option<Vec<crate::config::SkillName>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcps: Option<Vec<crate::config::McpName>>,
     /// Whether the applied tools list excludes `Skill`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_skill_tool: bool,
@@ -829,6 +831,7 @@ impl ExecRequest {
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
             team_prompt: cell.team_prompt.clone(),
             skills: cell.skills.clone(),
+            mcps: cell.mcps.clone(),
             no_skill_tool: cell.no_skill_tool,
             allowed_tools: cell.allowed_tools.clone(),
             isolation_default: cell.isolation_default,
@@ -850,6 +853,7 @@ impl ExecRequest {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            mcps: None,
             no_skill_tool: false,
             allowed_tools: None,
             isolation_default: None,
@@ -1108,7 +1112,7 @@ fn compile_agent_process_with_extra_env(
             crate::agents::LaunchDirMode::Added,
         )?;
     }
-    let env_warnings = adapter.finalize_launch_env(
+    let mut env_warnings = adapter.finalize_launch_env(
         &login_env,
         &mut env,
         reminders.disable_native_subagents(request),
@@ -1141,9 +1145,7 @@ fn compile_agent_process_with_extra_env(
         });
     }
     let mut action = request.action.clone();
-    if reminders.lsp_configured
-        && crate::config::skill_is_callable(request.callable_skills(), "rimz-lsp")
-    {
+    if reminders.lsp_configured && reminders.lsp_callable(request) {
         adapter.disable_native_lsp_args(action.extra_args_mut());
     }
     if reminders.disable_native_subagents(request) {
@@ -1313,17 +1315,6 @@ fn compile_agent_process_with_extra_env(
             .exclude_off(action.extra_args_mut());
     }
     let frontend = adapter.take_frontend(action.extra_args_mut());
-    let mut provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
-    if let Some(subcommand) = frontend.subcommand {
-        provider_argv.insert(1, subcommand.to_owned());
-    }
-    let provider_program =
-        provider_argv
-            .first()
-            .cloned()
-            .ok_or_else(|| AgentProcessCompileErr::EmptyCommand {
-                kind: kind.to_owned(),
-            })?;
     if channel == Some(SystemTextChannel::ExtensionEnv) {
         env.insert(ENV_LAUNCH_REMINDERS.to_owned(), reminder.clone());
     }
@@ -1390,6 +1381,37 @@ fn compile_agent_process_with_extra_env(
             unset.insert(key.to_owned());
         }
     }
+    if adapter.takes_mcp_servers() {
+        let server = reminders.mcp_server.as_ref().map(|(command, args)| {
+            crate::agents::capabilities::McpServer {
+                command: command.clone(),
+                args: args.clone(),
+                grant: reminders.routine_rimz.is_some(),
+                env_names: spawn_env_names(&skill_env, &env),
+            }
+        });
+        env_warnings.extend(adapter.mcp_server_args(
+            &crate::agents::capabilities::McpLaunch {
+                server,
+                mcps: request.mcps.as_deref(),
+                login_env: &skill_env,
+            },
+            (cwd, artifact_dir),
+            action.extra_args_mut(),
+            &mut settings_artifact,
+        )?);
+    }
+    let mut provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
+    if let Some(subcommand) = frontend.subcommand {
+        provider_argv.insert(1, subcommand.to_owned());
+    }
+    let provider_program =
+        provider_argv
+            .first()
+            .cloned()
+            .ok_or_else(|| AgentProcessCompileErr::EmptyCommand {
+                kind: kind.to_owned(),
+            })?;
     let mut process = CompiledAgentProcess {
         host_skills,
         env_warnings,
@@ -1407,6 +1429,29 @@ fn compile_agent_process_with_extra_env(
     };
     process.rebuild_argv();
     Ok(process)
+}
+
+/// The variables the provider is spawned with: the login environment, the
+/// compiled one, and the pins the plan and a scoped view set after compile.
+/// A name the provider ends up without is harmless to list.
+fn spawn_env_names(
+    login_env: &BTreeMap<String, String>,
+    env: &BTreeMap<String, String>,
+) -> BTreeSet<String> {
+    login_env
+        .keys()
+        .chain(env.keys())
+        .map(String::as_str)
+        .chain([
+            "RIMZ_WORKFLOW_RUN",
+            "RIMZ_WORKFLOW_DIR",
+            "RIMZ_WORKFLOW_DEFINITION",
+            "TMPDIR",
+            "SCCACHE_CLIENT_SIDE",
+            crate::config::Isolation::SCOPED_HOST_PATHS_ENV,
+        ])
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The argv shape a channel occupies; the extension channel has none.

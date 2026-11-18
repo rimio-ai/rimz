@@ -144,6 +144,45 @@ fn shared_lsp_reminder_is_in_environment_for_peers_and_children() {
     }
 }
 
+#[test]
+fn lsp_bullet_names_the_mcp_tool_when_live_and_the_skill_when_only_it_is_callable() {
+    let mut actual = Vec::new();
+    for tool in [false, true] {
+        for skills in [None, Some(Vec::new())] {
+            let mut request = ExecRequest::bare_launch(
+                crate::ids::AgentKind::new_unchecked("claude"),
+                Vec::new(),
+            );
+            request.skills = skills;
+            let reminders = LaunchReminders {
+                lsp_configured: true,
+                lsp_servers: vec!["rust".to_owned()],
+                mcp_server: tool.then(|| ("/bin/rimz".into(), Vec::new())),
+                ..LaunchReminders::default()
+            };
+            let text = render(&request, &reminders, Path::new("/checkout"), None);
+            actual.push((
+                tool,
+                request.skills.is_none(),
+                text.lines()
+                    .find(|line| line.starts_with("- lsp:"))
+                    .map(str::to_owned),
+            ));
+        }
+    }
+    let tool = Some("- lsp: rust, via the `lsp` tool of the `rimz` MCP server".to_owned());
+    let skill = Some("- lsp: rust, via Skill(rimz-lsp)".to_owned());
+    assert_eq!(
+        actual,
+        [
+            (false, true, skill),
+            (false, false, None),
+            (true, true, tool.clone()),
+            (true, false, tool),
+        ]
+    );
+}
+
 fn team_reminder(team: Team) -> TeamReminder {
     TeamReminder::new(team)
 }

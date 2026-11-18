@@ -92,6 +92,9 @@ pub struct AgentsConfig {
     /// Allow routine RimZ coordination through Claude launch settings and Codex installed rules.
     #[serde(rename = "allow-routine-rimz")]
     pub allow_routine_rimz: bool,
+    /// Hand RimZ's own MCP server to every Claude and Codex launch.
+    #[serde(rename = "mcp-tools")]
+    pub mcp_tools: bool,
     /// The shell every agent launch runs under in place of the user's own;
     /// validated at use, since a lenient load would turn a bad path into a
     /// silent fallback.
@@ -121,6 +124,7 @@ impl Default for AgentsConfig {
             env_reminder: true,
             runtime_env: true,
             allow_routine_rimz: true,
+            mcp_tools: true,
             shell: None,
             worktree: WorktreeConfig::default(),
             attention: AttentionConfig::default(),
@@ -498,6 +502,14 @@ pub struct Profile {
         deserialize_with = "super::skills::deserialize_optional_skill_list"
     )]
     pub skills: Option<Vec<super::SkillName>>,
+    /// The RimZ MCP capabilities and the user's own MCP servers a launch keeps;
+    /// unset serves every capability and leaves the user's servers alone.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::mcps::deserialize_optional_mcp_list"
+    )]
+    pub mcps: Option<Vec<super::McpName>>,
     #[serde(skip)]
     pub allowed_tools: Option<Vec<super::ToolRule>>,
     #[serde(skip)]

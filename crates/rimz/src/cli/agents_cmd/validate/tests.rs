@@ -464,17 +464,41 @@ fn shared_lsp_warning_requires_machine_servers_and_named_tool() {
         )
         .unwrap();
     }
+    std::fs::write(
+        root.path().join("agents/listed.md"),
+        "---\ndescription: Test\nagent: claude\ntools: [Bash, LSP]\nmcps: [github]\n---\n",
+    )
+    .unwrap();
     std::fs::write(root.path().join("teams/probe.md"), "---\nleader: lead\nstages: [Plan]\nroles:\n  - agent: native\n    role: lead\n    owns: [Plan]\n---\nPipeline.").unwrap();
     let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     assert!(lsp_warnings(&loaded, &rimz::config::MachineConfig::default()).is_empty());
-    let machine = toml::from_str("[lsp.servers.rust]\ncommand = ['rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']").unwrap();
-    let warnings = lsp_warnings(&loaded, &machine);
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].path.ends_with("navigator.md"));
+    let servers = "[lsp.servers.rust]\ncommand = ['rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']";
+    let warned = |machine: &str| {
+        let mut names: Vec<_> = lsp_warnings(&loaded, &toml::from_str(machine).unwrap())
+            .into_iter()
+            .map(|warning| warning.message)
+            .collect();
+        names.sort();
+        names
+    };
     assert_eq!(
-        warnings[0].message,
-        "profile navigator: tools names LSP, which a room with a shared language server strips"
+        warned(&format!("[agents]\nmcp-tools = false\n{servers}")),
+        ["profile navigator: tools names LSP, which a room with a shared language server strips"]
+    );
+    let names: Vec<_> = warned(servers)
+        .into_iter()
+        .map(|message| message.split(':').next().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "profile child",
+            "profile empty",
+            "profile native",
+            "profile navigator",
+            "profile skillless"
+        ]
     );
 }
 

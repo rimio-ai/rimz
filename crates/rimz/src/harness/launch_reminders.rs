@@ -33,6 +33,9 @@ pub(super) struct LaunchReminders {
     /// dir, then the temp unit and shared dir as the agent sees them. `None` for
     /// preflight compiles and when `allow-routine-rimz` is off.
     pub routine_rimz: Option<(std::path::PathBuf, [std::path::PathBuf; 2])>,
+    /// RimZ's MCP server for the launch: its program and arguments. `None` for
+    /// preflight compiles and when the launch hands over no server.
+    pub mcp_server: Option<(std::path::PathBuf, Vec<String>)>,
     /// Room-root write grants; absent in preflight compiles.
     pub permission_roots: Option<[PathBuf; 3]>,
     /// The canonical automation and team notes runs; empty in preflight compiles.
@@ -74,6 +77,7 @@ impl Default for LaunchReminders {
             agent_shell: None,
             settings: None,
             routine_rimz: None,
+            mcp_server: None,
             permission_roots: None,
             notes_runs: Vec::new(),
             notes_store: None,
@@ -91,6 +95,19 @@ impl Default for LaunchReminders {
 }
 
 impl LaunchReminders {
+    /// The `lsp` tool of RimZ's MCP server is live for the launch.
+    pub(super) fn lsp_tool(&self, request: &ExecRequest) -> bool {
+        self.mcp_server.is_some()
+            && crate::config::mcp_capabilities(request.mcps.as_deref())
+                .contains(&crate::mcp::catalog::Capability::Lsp)
+    }
+
+    /// The launch can query the room's shared language servers, through the
+    /// MCP tool or the skill.
+    pub(super) fn lsp_callable(&self, request: &ExecRequest) -> bool {
+        self.lsp_tool(request) || skill_is_callable(request.callable_skills(), "rimz-lsp")
+    }
+
     pub(super) fn disable_native_subagents(&self, request: &ExecRequest) -> bool {
         request.subagent
             || (skill_is_callable(request.callable_skills(), "rimz-subagents")
@@ -151,10 +168,15 @@ pub(super) fn render(
         };
         paragraphs.push(format!("### {heading}\n\n{body}"));
     }
-    let lsp_servers = if skill_is_callable(skills, "rimz-lsp") {
+    let lsp_servers = if reminders.lsp_callable(request) {
         reminders.lsp_servers.as_slice()
     } else {
         &[]
+    };
+    let lsp_via = if reminders.lsp_tool(request) {
+        "via the `lsp` tool of the `rimz` MCP server"
+    } else {
+        "via Skill(rimz-lsp)"
     };
     if reminders.env
         || !lsp_servers.is_empty()
@@ -165,7 +187,7 @@ pub(super) fn render(
     {
         paragraphs.push(env_paragraph(
             reminders,
-            lsp_servers,
+            (lsp_servers, lsp_via),
             reminders.env.then_some(shell).flatten(),
             cwd,
             team_context.as_ref(),
@@ -192,7 +214,7 @@ pub(super) fn render(
 
 fn env_paragraph(
     reminders: &LaunchReminders,
-    lsp_servers: &[String],
+    (lsp_servers, lsp_via): (&[String], &str),
     shell: Option<&Path>,
     cwd: &Path,
     team: Option<&launch_context::TeamLaunchContext>,
@@ -261,7 +283,7 @@ fn env_paragraph(
     }
     if !lsp_servers.is_empty() {
         lines.push(format!(
-            "- lsp: {}, via Skill(rimz-lsp)",
+            "- lsp: {}, {lsp_via}",
             lsp_servers
                 .iter()
                 .map(|server| escape_reminder_text(server))

@@ -2893,6 +2893,7 @@ fn team_machine() -> MachineConfig {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
+            mcps: None,
             args: None,
         },
     );
@@ -2928,6 +2929,7 @@ fn team_machine() -> MachineConfig {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
+            mcps: None,
             args: None,
         },
     );

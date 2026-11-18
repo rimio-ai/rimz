@@ -408,9 +408,15 @@ fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfi
             let Some(profile) = profiles.0.get(&row.name) else {
                 return false;
             };
-            if rimz::agents::skills_lack_skill_tool(&row.kind, profile.tools.as_ref())
-                || !rimz::config::skill_is_callable(profile.skills.as_deref(), "rimz-lsp")
-            {
+            let lsp_tool = machine.agents.mcp_tools
+                && rimz::agents::find_definition(&row.kind)
+                    .is_some_and(|definition| definition.takes_mcp_servers())
+                && rimz::config::mcp_capabilities(profile.mcps.as_deref())
+                    .contains(&rimz::mcp::catalog::Capability::Lsp);
+            let lsp_skill =
+                !rimz::agents::skills_lack_skill_tool(&row.kind, profile.tools.as_ref())
+                    && rimz::config::skill_is_callable(profile.skills.as_deref(), "rimz-lsp");
+            if !lsp_tool && !lsp_skill {
                 return false;
             }
             loaded

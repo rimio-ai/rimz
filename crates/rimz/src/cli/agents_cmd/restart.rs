@@ -1337,6 +1337,7 @@ pub(super) fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell 
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: posture.launch.skills.clone(),
+        mcps: posture.launch.mcps.clone(),
         no_skill_tool: posture.launch.no_skill_tool,
         allowed_tools: posture.launch.allowed_tools.clone(),
         isolation_default: posture.launch.isolation_default,

@@ -1030,6 +1030,76 @@ fn forward_login_env(command: &mut std::process::Command, login_env: &BTreeMap<S
 
 const MIN_MANAGED_LAUNCH: super::version::CliVersion = super::version::CliVersion::new(0, 163, 0);
 
+/// The account's `config.toml` and the profile file `--profile` selects, each
+/// read as a table; a missing file reads as empty.
+struct AccountConfig {
+    path: Option<PathBuf>,
+    base: Result<toml::Table>,
+    profile: Result<toml::Table>,
+}
+
+impl AccountConfig {
+    fn read(extra_args: &[String], login_env: &BTreeMap<String, String>) -> Self {
+        let path = install::codex_config_path(login_env).ok();
+        let profile = selected_profile(extra_args)
+            .and_then(|name| Some(path.as_ref()?.parent()?.join(format!("{name}.config.toml"))));
+        let read = |path: Option<&Path>| {
+            path.map_or_else(|| Ok(toml::Table::new()), install::read_existing_table)
+        };
+        Self {
+            base: read(path.as_deref()),
+            profile: read(profile.as_deref()),
+            path,
+        }
+    }
+}
+
+/// The profile a Codex argv selects, the last one winning: `--profile NAME`,
+/// `--profile=NAME`, `-p NAME`, or the attached `-pNAME`.
+fn selected_profile(extra_args: &[String]) -> Option<&str> {
+    let mut selected = None;
+    let mut args = extra_args.iter();
+    while let Some(arg) = args.next() {
+        selected = match arg.as_str() {
+            "--" => break,
+            "--profile" | "-p" => args.next().map(String::as_str),
+            arg => arg
+                .strip_prefix("--profile=")
+                .or_else(|| arg.strip_prefix("-p").filter(|name| !name.is_empty()))
+                .map(|name| name.strip_prefix('=').unwrap_or(name))
+                .or(selected),
+        };
+    }
+    selected
+}
+
+/// `{ <name> = { enabled = false }, ... }` for each server the account's
+/// config defines that `mcps` does not name.
+fn unlisted_servers(
+    mcps: &[crate::config::McpName],
+    extra_args: &[String],
+    login_env: &BTreeMap<String, String>,
+) -> Result<toml_edit::InlineTable> {
+    let config = AccountConfig::read(extra_args, login_env);
+    let mut disabled = toml_edit::InlineTable::new();
+    for table in [config.base?, config.profile?] {
+        let Some(servers) = table.get("mcp_servers").and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for name in servers.keys() {
+            if name == crate::mcp::catalog::SERVER_NAME
+                || mcps.iter().any(|listed| listed.as_str() == name)
+            {
+                continue;
+            }
+            let mut entry = toml_edit::InlineTable::new();
+            entry.insert("enabled", false.into());
+            disabled.insert(name, entry.into());
+        }
+    }
+    Ok(disabled)
+}
+
 impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
     fn shared_home_entries(&self) -> &'static [crate::agents::capabilities::SharedHomeEntry] {
         use crate::agents::capabilities::{
@@ -1175,6 +1245,66 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         );
     }
 
+    fn takes_mcp_servers(&self) -> bool {
+        true
+    }
+
+    fn mcp_server_args(
+        &self,
+        launch: &crate::agents::capabilities::McpLaunch<'_>,
+        _paths: (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        _artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<Vec<String>, crate::agents::skills::LaunchSettingsErr> {
+        let mut warnings = Vec::new();
+        if let Some(mcps) = launch.mcps {
+            match unlisted_servers(mcps, extra_args, launch.login_env) {
+                Ok(disabled) if disabled.is_empty() => {}
+                // Before any dotted `mcp_servers.*` override: the table form
+                // given after one drops the server that override named.
+                Ok(disabled) => {
+                    extra_args.splice(0..0, ["-c".to_owned(), format!("mcp_servers={disabled}")]);
+                }
+                Err(error) => warnings.push(format!(
+                    "the profile's mcps list switches off none of the account's Codex MCP \
+                     servers: {error}"
+                )),
+            }
+        }
+        if let Some(server) = &launch.server {
+            let mode = if server.grant { "approve" } else { "prompt" };
+            // Codex clears a server's environment down to `env_vars`, named
+            // before the login shell's startup files ran: the server takes the
+            // rest from its Codex parent.
+            let args: toml_edit::Array = server
+                .args
+                .iter()
+                .map(String::as_str)
+                .chain(["--parent-env"])
+                .collect();
+            let entries: [(&str, toml_edit::Value); 5] = [
+                ("command", server.command.to_string_lossy().as_ref().into()),
+                ("args", args.into()),
+                (
+                    "env_vars",
+                    server.env_names.iter().collect::<toml_edit::Array>().into(),
+                ),
+                ("tool_timeout_sec", 600.into()),
+                ("default_tools_approval_mode", mode.into()),
+            ];
+            for (field, value) in entries {
+                extra_args.extend([
+                    "-c".to_owned(),
+                    format!(
+                        "mcp_servers.{}.{field}={value}",
+                        crate::mcp::catalog::SERVER_NAME
+                    ),
+                ]);
+            }
+        }
+        Ok(warnings)
+    }
+
     fn has_native_sandbox(&self) -> bool {
         true
     }
@@ -1220,22 +1350,10 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
                     .unwrap_or_else(|_| toml::Value::String(entry.value.clone()))
             })
         };
-        let config_path = install::codex_config_path(login_env).ok();
-        let base = config_path
-            .as_deref()
-            .and_then(|path| install::read_existing_table(path).ok())
-            .unwrap_or_default();
-        let profile = flag_value(&["--profile", "-p"])
-            .and_then(|name| {
-                Some(
-                    config_path
-                        .as_ref()?
-                        .parent()?
-                        .join(format!("{name}.config.toml")),
-                )
-            })
-            .and_then(|path| install::read_existing_table(&path).ok())
-            .unwrap_or_default();
+        let config = AccountConfig::read(extra_args, login_env);
+        let config_path = config.path;
+        let base = config.base.unwrap_or_default();
+        let profile = config.profile.unwrap_or_default();
         let markers = config_value("project_root_markers").or_else(|| {
             profile
                 .get("project_root_markers")
