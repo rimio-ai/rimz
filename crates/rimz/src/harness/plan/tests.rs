@@ -200,7 +200,7 @@ fn code_mode_warns_once_and_launches_without_it_where_unsupported() {
     finalize(&mut off, &Default::default(), &[]).unwrap();
     assert_eq!(cell.args, off.agent_cells().next().unwrap().args);
 
-    for kind in ["claude", "pi"] {
+    for kind in ["claude", "codex", "pi"] {
         let mut layout = code_mode_cell(kind);
         let warnings = finalize(&mut layout, &Default::default(), &[]).unwrap();
         assert!(warnings.is_empty(), "{kind}: {warnings:?}");

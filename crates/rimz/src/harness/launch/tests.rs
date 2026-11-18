@@ -2092,9 +2092,18 @@ fn process_compiler_stamps_or_clears_the_declared_code_mode_env() {
             "pi",
             false,
             vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
+            cleared.clone(),
+        ),
+        ("pi", true, vec![(CODE_MODE_KEY, "1")], untouched.clone()),
+        // Codex switches by argv and declares no variable: an on launch stamps nothing,
+        // yet still clears what an outer Claude launch stamped.
+        (
+            "codex",
+            true,
+            vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
             cleared,
         ),
-        ("pi", true, vec![(CODE_MODE_KEY, "1")], untouched),
+        ("codex", true, vec![(CODE_MODE_KEY, "1")], untouched),
     ];
     let actual: Vec<_> = cases
         .iter()

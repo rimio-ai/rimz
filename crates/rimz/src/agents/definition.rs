@@ -700,9 +700,9 @@ impl FastSwitch {
 
 /// What a provider's code mode adds to a launch.
 ///
-/// Code mode is on or off: on adds the provider's code-mode tools and env;
-/// off and unset render nothing. An unsupported provider warns and launches
-/// without it.
+/// Code mode is on or off: on adds the provider's code-mode tools, argv, or
+/// env; off and unset render nothing. An unsupported provider warns and
+/// launches without it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CodeModeSwitch {
     Supported {
@@ -713,6 +713,8 @@ pub enum CodeModeSwitch {
         /// Env pair an on launch sets; a later launch clears it only where RimZ stamped it.
         env: Option<(&'static str, &'static str)>,
     },
+    /// Exact argv an on launch appends, with or without a tools list.
+    Args(&'static [&'static str]),
     Unsupported,
 }
 
@@ -729,7 +731,7 @@ impl CodeModeSwitch {
     pub fn env(self) -> Option<(&'static str, &'static str)> {
         match self {
             Self::Supported { env, .. } => env,
-            Self::Unsupported => None,
+            Self::Args(_) | Self::Unsupported => None,
         }
     }
 }

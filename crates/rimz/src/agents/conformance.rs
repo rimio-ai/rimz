@@ -918,7 +918,7 @@ fn code_mode_switch_characterization() {
         .collect();
     insta::assert_snapshot!(cases.join("\n"), @r#"
     claude: Supported { tools: ["REPL", "Poll"], without_tools: [], env: Some(("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "1")) }
-    codex: Unsupported
+    codex: Args(["-c", "features.code_mode=true"])
     amp: Unsupported
     copilot: Unsupported
     kimi: Unsupported
