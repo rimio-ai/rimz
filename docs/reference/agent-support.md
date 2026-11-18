@@ -240,7 +240,7 @@ A profile `skills` list keeps the listed skills model-callable and makes the res
 
 ## Launch flags
 
-RimZ launches each agent with the provider's own flags. An unsupported typed `model` or system-prompt field fails the launch before any pane opens, naming the field. Unsupported `effort`, `auto-compact`, and `fast` warn and launch without that setting. Three refusals remain: Hermes refuses effort outside its supported level list, OpenCode refuses effort outside the chosen model's live variants, and an invalid auto-compact count refuses. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`.
+RimZ launches each agent with the provider's own flags. An unsupported typed `model` or system-prompt field fails the launch before any pane opens, naming the field. Unsupported `effort`, `auto-compact`, `fast`, and `code-mode` warn and launch without that setting. Three refusals remain: Hermes refuses effort outside its supported level list, OpenCode refuses effort outside the chosen model's live variants, and an invalid auto-compact count refuses. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`.
 
 Codex rejects `--remote X` or `--remote=X` from either source, because managed panes run embedded with `--no-daemon`. Remove `--remote` to launch. Codex requires 0.163.0 or newer for embedded sessions (`--no-daemon`) and Guardian review on every launch, resume, and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper. An unreadable version passes without a verdict.
 
@@ -401,6 +401,18 @@ The `fast` profile and role field asks the provider for its fast mode (priority 
 A definition that sets `fast: true` on a kind without a switch loads normally. Each launch warns with the alternative and records fast as off. The same rule applies to role fields, `--fast`, fast cells, and loop tasks. Claude merges `fastMode` into the same settings value as RimZ's other settings, since only the last `--settings` takes effect. Codex also turns on its `fast_mode` feature, since a user-level `fast_mode = false` otherwise drops the tier silently. A managed feature pin still wins without an error. Amp fixes fast when a thread is created. Current Amp builds leave RimZ no local token record, so no Amp turn is priced.
 
 The fast-mode badge follows the provider's live reading: Claude's statusline `fast_mode`, and between statusline runs the newest request's `usage.speed` in its transcript, Codex's latest `thread_settings_applied` service tier, or Pi's extension envelope `fast` (whether it would request priority for the current model, not the delivered tier). An explicit live off reading clears the badge even after a fast launch. Without a live reading, including Amp and older Pi extensions, RimZ falls back to the launch record, and a launch with fast off cannot rule out the provider's saved default. Droid has no live reading or launch switch, and Cursor's fast models already name their speed.
+
+### Code mode
+
+The `code-mode` profile field launches the provider in its own code mode. It is a profile setting only: team roles, workflow steps, and launch flags have no override, and it follows the profile chain like `fast`. On renders the switch below, before the profile's raw `args`. Off and unset render nothing.
+
+| Agent | Switch |
+| --- | --- |
+| Claude Code | `REPL` and `Poll` appended to the rendered `--tools`, each once, and `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1` in the launch env. A profile with no tools list emits no `--tools` and sets the env variable alone. |
+| Pi | `codemode` appended to the mapped `--tools` list, each once; a list that maps to no Pi tool renders `--tools codemode` instead of `--no-tools`. A profile with no tools list renders `--tools +codemode`. `--no-skills` follows the list as it does without code mode. |
+| Every other built-in and process plugin | skipped with a warning |
+
+On a kind without a switch, each launch warns ``warning: `<profile>` code-mode is unsupported on <agent>; launching without it`` and renders as if code mode were off. A Claude launch with code mode on sets `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1` and records the pair in `RIMZ_CODE_MODE_ENV`. A later launch, of any kind, that is not on removes the variable only while that record names it and its value is unchanged, so a nested launch from a code-mode agent does not inherit code mode. Your own value wins on such a launch: one exported in the environment RimZ starts from, or set in trusted `[[agents]]` `env`, passes through. The launch record keeps no code-mode value: restart, fork, and resume render it again from the current profile, and a relaunch that degrades to a bare resume (its profile deleted or failed) runs without it, as it runs without the profile's tools.
 
 ### Launch-prompt replacement
 

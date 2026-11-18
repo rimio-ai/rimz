@@ -37,7 +37,7 @@ Some launch text and profile settings never reach Qoder:
 | Launch input | What happens |
 | --- | --- |
 | system-prompt replacement | refused: `presets` declares no system-prompt matcher |
-| auto-compact and fast | skipped with a launch warning: `presets` declares no switches for them |
+| auto-compact, fast, and code mode | skipped with a launch warning: `presets` declares no switches for them |
 | hook-context replies, including the deadline stop rung | not sent: `hook_context` is `None`, so a supervised run's stop rung goes through the pane (`crates/rimz/src/harness/deadline.rs::stop_due_by_pane`) |
 | per-turn prompt context | not sent: `prompt_context` is `false` |
 | a profile's tool rules | dropped with a launch warning (`ToolRules::Unsupported`) |
