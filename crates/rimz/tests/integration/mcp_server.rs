@@ -1,0 +1,599 @@
+//! `rimz mcp serve` integration tests: the stdio protocol a provider speaks to
+//! a spawned server, and the `rimz` one-shots its tool calls run.
+
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+use crate::common::Env;
+
+const REPLY_DEADLINE: Duration = Duration::from_secs(60);
+
+const ALL_TOOLS: [&str; 9] = [
+    "lsp",
+    "wait",
+    "wait_list",
+    "wait_cancel",
+    "self_stop",
+    "self_compact",
+    "self_tune",
+    "notes_add",
+    "notes_list",
+];
+
+/// A spawned server, leading its own process group as a provider starts one.
+struct McpServer {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    lines: Receiver<String>,
+    seen: Vec<String>,
+    unclaimed: Vec<Value>,
+}
+
+impl McpServer {
+    fn spawn(mut command: Command) -> Self {
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn rimz mcp serve");
+        let stdout = child.stdout.take().expect("server stdout");
+        let (tx, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            stdin: child.stdin.take(),
+            child,
+            lines,
+            seen: Vec::new(),
+            unclaimed: Vec::new(),
+        }
+    }
+
+    fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    fn send_raw(&mut self, bytes: &[u8]) {
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        stdin.write_all(bytes).expect("write request");
+        stdin.flush().expect("flush request");
+    }
+
+    fn send(&mut self, message: &Value) {
+        let mut line = serde_json::to_vec(message).unwrap();
+        line.push(b'\n');
+        self.send_raw(&line);
+    }
+
+    fn next_line(&mut self, deadline: Instant) -> Option<Value> {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        match self.lines.recv_timeout(wait) {
+            Ok(line) => {
+                let value = serde_json::from_str(&line)
+                    .unwrap_or_else(|err| panic!("stdout line is not JSON ({err}): {line:?}"));
+                self.seen.push(line);
+                Some(value)
+            }
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => None,
+        }
+    }
+
+    /// The reply to `id`, holding any other reply for a later claim.
+    fn reply(&mut self, id: &Value) -> Value {
+        if let Some(index) = self.unclaimed.iter().position(|reply| &reply["id"] == id) {
+            return self.unclaimed.remove(index);
+        }
+        let deadline = Instant::now() + REPLY_DEADLINE;
+        loop {
+            let reply = self
+                .next_line(deadline)
+                .unwrap_or_else(|| panic!("no reply to {id}; saw {:?}", self.seen));
+            if &reply["id"] == id {
+                return reply;
+            }
+            self.unclaimed.push(reply);
+        }
+    }
+
+    fn request(&mut self, id: i64, method: &str, params: Value) -> Value {
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        self.reply(&json!(id))
+    }
+
+    fn initialize(&mut self) -> Value {
+        let reply = self.request(
+            0,
+            "initialize",
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0"},
+            }),
+        );
+        self.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+        reply
+    }
+
+    fn start_call(&mut self, id: i64, tool: &str, arguments: Value) {
+        self.send(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments},
+        }));
+    }
+
+    /// A tool call's result: its text and whether it is an error.
+    fn call(&mut self, id: i64, tool: &str, arguments: Value) -> (String, bool) {
+        self.start_call(id, tool, arguments);
+        tool_result(&self.reply(&json!(id)))
+    }
+
+    fn assert_silent_for(&mut self, wait: Duration) {
+        if let Some(line) = self.next_line(Instant::now() + wait) {
+            panic!("unexpected output: {line}");
+        }
+    }
+
+    fn wait_exit(&mut self) -> ExitStatus {
+        let deadline = Instant::now() + REPLY_DEADLINE;
+        loop {
+            if let Some(status) = self.child.try_wait().expect("poll server") {
+                return status;
+            }
+            assert!(Instant::now() < deadline, "server did not exit");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Close stdin, wait for the exit, and return the status with every line
+    /// the server wrote.
+    fn close(mut self) -> (ExitStatus, Vec<String>) {
+        drop(self.stdin.take());
+        let status = self.wait_exit();
+        while self
+            .next_line(Instant::now() + Duration::from_secs(5))
+            .is_some()
+        {}
+        (status, std::mem::take(&mut self.seen))
+    }
+}
+
+impl Drop for McpServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn tool_result(reply: &Value) -> (String, bool) {
+    let result = reply
+        .get("result")
+        .unwrap_or_else(|| panic!("a tool result: {reply}"));
+    let text = result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("text content: {reply}"))
+        .to_owned();
+    (text, result["isError"] == json!(true))
+}
+
+fn serve(env: &Env, args: &[&str]) -> McpServer {
+    let mut command = env.rimz();
+    command.args(["mcp", "serve"]).args(args);
+    McpServer::spawn(command)
+}
+
+/// The server as the calling agent of `common::wait` starts it.
+fn serve_as_agent(env: &Env) -> McpServer {
+    let mut command = crate::common::wait::agent_wait(env);
+    command.args(["mcp", "serve"]);
+    McpServer::spawn(command)
+}
+
+fn assert_protocol_lines(lines: &[String]) {
+    assert!(!lines.is_empty());
+    for line in lines {
+        let value: Value = serde_json::from_str(line).expect("protocol line");
+        assert_eq!(value["jsonrpc"], "2.0", "{line}");
+    }
+}
+
+fn notes_written(env: &Env) -> Vec<std::path::PathBuf> {
+    fn walk(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.map(Result::unwrap) {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&env.rimz_home().join("notes"), &mut found);
+    found
+}
+
+#[test]
+fn handshake_lists_the_tools_and_answers_only_known_methods() {
+    let env = Env::new();
+    let mut server = serve(&env, &[]);
+    let discover = server.request(1, "server/discover", json!({}));
+    assert_eq!(discover["error"]["code"], -32601, "{discover}");
+
+    let init = server.initialize();
+    let result = &init["result"];
+    assert_eq!(result["protocolVersion"], "2025-06-18", "{init}");
+    assert_eq!(result["capabilities"], json!({"tools": {}}), "{init}");
+    assert_eq!(result["serverInfo"]["name"], "rimz", "{init}");
+    let instructions = result["instructions"].as_str().expect("instructions");
+    let first = instructions.lines().next().expect("a first line");
+    assert!(
+        !first.is_empty() && first.chars().count() < 250,
+        "{first:?}"
+    );
+    server.assert_silent_for(Duration::from_millis(300));
+
+    let older = server.request(
+        2,
+        "initialize",
+        json!({"protocolVersion": "2024-11-05", "capabilities": {}}),
+    );
+    assert_eq!(older["result"]["protocolVersion"], "2025-11-25", "{older}");
+
+    assert_eq!(server.request(3, "ping", json!({}))["result"], json!({}));
+    let tools = server.request(4, "tools/list", json!({}));
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name"))
+        .collect();
+    assert_eq!(names, ALL_TOOLS);
+    for tool in tools["result"]["tools"].as_array().unwrap() {
+        assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
+        assert!(
+            tool["description"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty())
+        );
+    }
+
+    let unknown = server.request(5, "resources/list", json!({}));
+    assert_eq!(unknown["error"]["code"], -32601, "{unknown}");
+
+    server.send_raw(b"{not json\n");
+    let parse = server.reply(&Value::Null);
+    assert_eq!(parse["error"]["code"], -32700, "{parse}");
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": {"requestId": 999},
+    }));
+    assert_eq!(server.request(6, "ping", json!({}))["result"], json!({}));
+
+    let (status, lines) = server.close();
+    assert_eq!(status.code(), Some(0), "{status:?}");
+    assert_protocol_lines(&lines);
+}
+
+#[test]
+fn only_serves_the_named_capability() {
+    let env = Env::new();
+    let mut server = serve(&env, &["--only", "rimz-lsp"]);
+    server.initialize();
+    let tools = server.request(1, "tools/list", json!({}));
+    assert_eq!(
+        tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].clone())
+            .collect::<Vec<_>>(),
+        [json!("lsp")]
+    );
+    server.start_call(2, "wait", json!({"in": "5m"}));
+    let wait = server.reply(&json!(2));
+    assert!(wait["error"]["code"].is_i64(), "{wait}");
+    server.start_call(3, "no_such_tool", json!({}));
+    assert!(server.reply(&json!(3))["error"]["code"].is_i64());
+
+    let output = env
+        .rimz()
+        .args(["mcp", "serve", "--only", "rimz-loop"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn signals_end_the_server_cleanly() {
+    let env = Env::new();
+    for signal in [
+        nix::sys::signal::Signal::SIGINT,
+        nix::sys::signal::Signal::SIGTERM,
+    ] {
+        let mut server = serve(&env, &[]);
+        server.initialize();
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(server.pid() as i32), signal).unwrap();
+        assert_eq!(server.wait_exit().code(), Some(0), "{signal}");
+    }
+}
+
+/// The body crosses as bytes on the one-shot's stdin, the title and an LSP
+/// target that begin with `--` stay data, and the one-shot's stderr comes back
+/// in the result rather than on the server's stdout.
+#[test]
+fn notes_add_keeps_the_body_bytes_and_the_server_keeps_parsing() {
+    let env = Env::new();
+    let mut server = serve(&env, &[]);
+    server.initialize();
+    let body = "say \"hi\" and 'bye'\n$(touch pwned) `id`\n\n\\n not a newline\n";
+    let (text, is_error) = server.call(
+        1,
+        "notes_add",
+        json!({
+            "kind": "handoff",
+            "title": "--force",
+            "body": body,
+            "meta": {"author": "mallory", "ticket": "42"},
+        }),
+    );
+    assert!(!is_error, "{text}");
+    assert!(
+        text.contains("--meta author dropped: RimZ writes that header key itself"),
+        "the one-shot's stderr is in the result: {text}"
+    );
+    let path = std::path::PathBuf::from(text.lines().next().expect("the note's path"));
+    let note = std::fs::read_to_string(&path).expect("read note");
+    assert!(note.ends_with(&format!("\n---\n{body}")), "{note}");
+    assert!(note.contains("title: \"--force\"\n"), "{note}");
+    assert!(note.contains("ticket: \"42\"\n"), "{note}");
+    assert!(!env.project_root.join("pwned").exists());
+    assert_eq!(server.request(2, "ping", json!({}))["result"], json!({}));
+
+    let (text, is_error) = server.call(3, "notes_add", json!({"kind": "log", "title": 7}));
+    assert!(is_error, "{text}");
+    let (text, is_error) = server.call(
+        4,
+        "notes_add",
+        json!({"kind": "log", "title": "x", "body": "y", "cwd": "/no/such/dir"}),
+    );
+    assert!(is_error, "{text}");
+    assert_eq!(notes_written(&env), [path]);
+
+    let (text, is_error) = server.call(5, "lsp", json!({"verb": "find", "targets": ["--help"]}));
+    assert!(!text.contains("Usage:"), "{text}");
+    assert!(!text.contains("unexpected argument"), "{text}");
+    assert!(is_error, "{text}");
+    assert!(text.contains("no language server"), "{text}");
+    assert_eq!(text.lines().last(), Some("exit code 3"), "{text}");
+
+    let (_, lines) = server.close();
+    assert_protocol_lines(&lines);
+}
+
+/// A call as an agent in a test room resolves the agent's home, room and
+/// caller: the wait it arms is its own, and the note it writes names it.
+#[test]
+fn a_call_as_an_agent_resolves_its_home_room_and_caller() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (text, is_error) = server.call(1, "wait", json!({"in": "1h", "label": "via mcp"}));
+    assert!(!is_error, "{text}");
+    let (text, is_error) = server.call(2, "wait_list", json!({}));
+    assert!(!is_error, "{text}");
+    assert!(text.contains("via mcp"), "{text}");
+    let (text, is_error) = server.call(
+        3,
+        "notes_add",
+        json!({"kind": "diary", "title": "Day", "body": "text\n"}),
+    );
+    assert!(!is_error, "{text}");
+    let note = std::fs::read_to_string(text.lines().next().unwrap()).expect("read note");
+    assert!(note.contains("author: \"planner\"\n"), "{note}");
+    assert!(
+        note.starts_with(&env.rimz_home().display().to_string())
+            || text.starts_with(&env.rimz_home().display().to_string()),
+        "{text}"
+    );
+}
+
+/// `--parent-env` under a shell that stays the server's parent, as Codex
+/// does: the shell holds the fixture's environment, while the server starts
+/// from `env -i` with only `own` set.
+#[cfg(unix)]
+fn serve_under_parent(env: &Env, own: &[(&str, &std::path::Path)]) -> McpServer {
+    let rimz = env.rimz();
+    let mut shell = Command::new("/bin/sh");
+    for (key, value) in rimz.get_envs() {
+        match value {
+            Some(value) => shell.env(key, value),
+            None => shell.env_remove(key),
+        };
+    }
+    // A one-shot without a home falls back under `TMPDIR`: keep it in the fixture.
+    let tmp = env.home_root.join("own-tmp");
+    let own: Vec<String> = [("TMPDIR", tmp.as_path())]
+        .iter()
+        .chain(own)
+        .map(|(key, value)| format!("{key}={}", value.display()))
+        .collect();
+    // The trailing `exit` keeps the shell from exec'ing into `env`.
+    shell
+        .arg("-c")
+        .arg(r#"env -i XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" "$@"; exit $?"#)
+        .arg("sh")
+        .args(own)
+        .arg(rimz.get_program())
+        .args(["mcp", "serve", "--parent-env"]);
+    McpServer::spawn(shell)
+}
+
+#[cfg(unix)]
+fn note_home(server: &mut McpServer, id: i64) -> String {
+    let (text, is_error) = server.call(
+        id,
+        "notes_add",
+        json!({"kind": "diary", "title": format!("Day {id}"), "body": "text\n"}),
+    );
+    assert!(!is_error, "{text}");
+    text.lines().next().expect("the note's path").to_owned()
+}
+
+/// A one-shot sees what only the parent's environment holds (the fixture's
+/// `RIMZ_HOME`), while a name the server's own environment holds keeps the
+/// server's value.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn parent_env_fills_the_names_the_servers_own_environment_lacks() {
+    let env = Env::new();
+    let mut server = serve_under_parent(&env, &[]);
+    server.initialize();
+    let path = note_home(&mut server, 1);
+    assert!(
+        path.starts_with(&env.rimz_home().display().to_string()),
+        "{path}"
+    );
+    drop(server);
+
+    let own_home = env.home_root.join("own-rimz-home");
+    let mut server = serve_under_parent(&env, &[("RIMZ_HOME", &own_home)]);
+    server.initialize();
+    let path = note_home(&mut server, 1);
+    assert!(path.starts_with(&own_home.display().to_string()), "{path}");
+}
+
+/// The watcher a `rimz wait` one-shot detached outlives the provider ending
+/// the server's whole process group.
+#[cfg(unix)]
+#[test]
+fn a_wait_armed_through_the_server_fires_after_its_group_is_terminated() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (text, is_error) = server.call(1, "wait", json!({"run": "sleep 1; printf fired"}));
+    assert!(!is_error, "{text}");
+    nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(server.pid() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    assert_eq!(server.wait_exit().code(), Some(0));
+
+    let runs = env.rimz_home().join("logs/loop-runs.log.jsonl");
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    let record = loop {
+        let records: Vec<rimz::harness::schedule::run_log::LoopRunRecord> =
+            std::fs::read_to_string(&runs)
+                .unwrap_or_default()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+        if let Some(record) = records.into_iter().next() {
+            break record;
+        }
+        assert!(Instant::now() < deadline, "the wait never fired");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let check = record.check.expect("a watch record");
+    assert_eq!(check.code, Some(0));
+    assert_eq!(
+        std::fs::read_to_string(check.output_path.expect("output file")).unwrap(),
+        "fired"
+    );
+}
+
+/// Calls run concurrently, so a later call may answer first, and a cancel
+/// kills that call's one-shot and withholds its reply.
+#[cfg(target_os = "linux")]
+#[test]
+fn calls_run_concurrently_and_a_cancel_kills_its_one_shot() {
+    let env = Env::new();
+    let fifo = env.home_root.join("mcp-body-fifo-5b1e");
+    nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+    let marker = fifo.to_str().unwrap().to_owned();
+    let one_shots = || -> Vec<u32> {
+        std::fs::read_dir("/proc")
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| {
+                std::fs::read(format!("/proc/{pid}/cmdline"))
+                    .is_ok_and(|cmdline| String::from_utf8_lossy(&cmdline).contains(&marker))
+            })
+            .collect()
+    };
+
+    let mut server = serve(&env, &[]);
+    server.initialize();
+    server.start_call(
+        1,
+        "notes_add",
+        json!({"kind": "log", "title": "Blocked", "file": marker}),
+    );
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    while one_shots().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the blocked one-shot never started"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (text, is_error) = server.call(2, "notes_list", json!({}));
+    assert!(!is_error, "{text}");
+    assert!(server.unclaimed.is_empty(), "{:?}", server.unclaimed);
+
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": {"requestId": 1, "reason": "test"},
+    }));
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    while !one_shots().is_empty() {
+        assert!(Instant::now() < deadline, "the cancelled one-shot lives on");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(server.request(3, "ping", json!({}))["result"], json!({}));
+    let (status, lines) = server.close();
+    assert_eq!(status.code(), Some(0));
+    assert!(
+        lines.iter().all(|line| !line.contains("\"id\":1,")),
+        "a cancelled call is not answered: {lines:?}"
+    );
+}
+
+/// An idle server holds the parked wrapper's private-memory budget.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_idle_server_stays_inside_its_memory_budget() {
+    let env = Env::new();
+    let mut server = serve(&env, &[]);
+    server.initialize();
+    server.request(1, "tools/list", json!({}));
+    std::thread::sleep(Duration::from_millis(500));
+    crate::common::assert_wrapper_memory_budget("idle mcp server", server.pid(), 8 * 1024);
+}

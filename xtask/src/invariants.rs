@@ -41,6 +41,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_banned_imports(root, &files)?;
     ensure_classed_paths(root, &files)?;
     ensure_thin_park_image(root)?;
+    ensure_thin_mcp_server(root, &files)?;
     ensure_hook_stdio(root, &files)?;
     ensure_child_env_resets(root, &files)?;
     ensure_normalized_agent_process_decisions(root, &files)?;
@@ -85,6 +86,45 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_stable_release_dispatches_docs(root)?;
     ensure_inline_tests_stay_small(&files)?;
     ensure_deep_journeys_name_their_backend(root)?;
+    Ok(())
+}
+
+/// `rimz mcp serve` runs every tool call as a `rimz` one-shot, so its own
+/// modules never open a store, load config, or resolve a room.
+fn ensure_thin_mcp_server(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let module = root.join("crates/rimz/src/mcp");
+    let cli = root.join("crates/rimz/src/cli/mcp.rs");
+    for path in files
+        .iter()
+        .filter(|path| path.starts_with(&module) || **path == cli)
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+    {
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("read MCP server source {}", path.display()))?;
+        for (line_number, line) in lines_outside_inline_tests(&source) {
+            if let Some(entry) = [
+                concat!("Store", "::"),
+                concat!("open_", "store("),
+                concat!("crate::", "store"),
+                concat!("rimz::", "store"),
+                concat!("crate::", "config"),
+                concat!("rimz::", "config"),
+                concat!("Machine", "Config"),
+                concat!("crate::", "workspace"),
+                concat!("rimz::", "workspace"),
+                concat!("Workspace", "Resolver"),
+            ]
+            .iter()
+            .find(|entry| line.contains(*entry))
+            {
+                bail!(
+                    "{}:{line_number}: the MCP server runs tool calls as one-shots and must not \
+                     reach `{entry}`",
+                    path.display()
+                );
+            }
+        }
+    }
     Ok(())
 }
 

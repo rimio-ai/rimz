@@ -243,6 +243,7 @@ Agent hibernation spans `harness/hibernate.rs` (read-only selection and wake-hel
 - Install lifecycle — `update` install-origin detection, release verification, and atomic binary replacement; `uninstall` machine-wide removal mechanics.
 - Pack sources: `packs/` source grammar and manifests, Git staging into owned checkouts, durable install records, exclusions, and shared namespace claims; definition and skill readers own item scanning.
 - Shared language servers — `lsp/` admission, process leases, registry, cost history, broker, editor attachment, saved-file watching, memory watchdog, and read-only queries.
+- MCP server — `mcp/` the tool catalog (capabilities, argument schemas, one-shot argv) and the stdio JSON-RPC loop of `rimz mcp serve`, which runs each tool call as a `rimz` one-shot.
 
 ## Documentation map
 

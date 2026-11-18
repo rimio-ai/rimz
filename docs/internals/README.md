@@ -66,6 +66,7 @@ Each of these subsystems is one page at the top of `docs/internals/`.
 | [web.md](./web.md) | Browser access: the writable and broadcast daemons, the token gate, room attach and the session picker, sharing a room, the token store, the browser client, configuration, remote rooms, and the security boundaries. |
 | [stats.md](./stats.md) | The `rimz stats` surfaces (one-shot report, held dashboard, JSON): where the figures come from, windows, the heatmap, breakdowns, insights, terminal fitting, and the assist rollup. |
 | [lsp.md](./lsp.md) | Shared language servers: lifecycle and stop reasons, memory pressure, learned cost, the broker, freshness, editors, state and query usage, configuration, what agents see, the query surface, anchor checks, and the status commands. |
+| [mcp.md](./mcp.md) | The MCP server: the thin front over `rimz` one-shots, the tool catalog and its argument schemas, argv that keeps agent strings as data, the serve loop, cancellation, and shutdown. |
 
 ## Debugging and performance
 
@@ -94,6 +95,7 @@ Twelve trees under `crates/rimz/src/` carry their own `AGENTS.md` contract, whic
 | [`harness/`](../../crates/rimz/src/harness/AGENTS.md) | [fleet.md](./harness/fleet.md), then the other [harness pages](#the-harness) |
 | `launcher/` | [fleet.md § Where the code lives](./harness/fleet.md#where-the-code-lives) |
 | `lsp/` | [lsp.md](./lsp.md) |
+| `mcp/`, `cli/mcp.rs` | [mcp.md](./mcp.md) |
 | [`message/`](../../crates/rimz/src/message/AGENTS.md) | [messaging.md](./harness/messaging.md) |
 | [`mux/`](../../crates/rimz/src/mux/AGENTS.md) | [multiplexers.md](./multiplexers.md) |
 | `packs/` | No internals page. Sources, the manifest, and the installation record are in the [packs reference](../reference/cli/packs.md), and the record's durability in [store.md § Write classes](./store.md#write-classes) |

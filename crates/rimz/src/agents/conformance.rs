@@ -46,6 +46,28 @@ fn routine_rimz_prefixes_match_documented_list() {
     assert_eq!(published, super::ROUTINE_RIMZ_PREFIXES);
 }
 
+/// The MCP tools are granted with the routine commands, so each command a tool
+/// runs must already be one an agent runs unasked.
+#[test]
+fn every_mcp_tool_command_is_a_routine_command() {
+    let commands: Vec<String> = crate::mcp::catalog::TOOLS
+        .iter()
+        .flat_map(crate::mcp::catalog::Tool::commands)
+        .collect();
+    assert!(
+        commands.contains(&"rimz lsp check".to_owned()),
+        "{commands:?}"
+    );
+    for command in commands {
+        assert!(
+            super::ROUTINE_RIMZ_PREFIXES
+                .iter()
+                .any(|prefix| command == *prefix || command.starts_with(&format!("{prefix} "))),
+            "`{command}` is not under a routine prefix"
+        );
+    }
+}
+
 #[test]
 fn unsupported_account_spend_exposes_no_spending_sources() {
     let env = std::collections::BTreeMap::from([("HOME".into(), "/fixture/home".into())]);
