@@ -4298,13 +4298,15 @@ fn stop_closes_the_agents_listed_pane_when_its_ended_run_names_a_gone_one() {
     assert!(process.try_wait().unwrap().is_some(), "its process is gone");
 }
 
-/// With no program in the pane to go on, the owner's process chain alone decides the
-/// lookup: a pane whose root is on the chain (the test process, the owner's parent) takes
-/// the message and the stop, and a pane whose root is another live process takes neither.
-/// The raw Zellij listing carries no pid, so the root comes from the cached topology.
+/// With no program in the pane to go on, the owner's process chain decides the lookup: a
+/// pane whose root is on the chain (the test process, the owner's parent) takes the message
+/// and the stop, and a pane whose root is another live process takes neither. A proven pane
+/// whose foreground names another provider's program takes neither too. The raw Zellij
+/// listing carries no pid, so the root comes from the cached topology.
 #[test]
-fn the_owners_process_chain_alone_decides_whether_a_pane_hosts_it() {
-    for proven in [true, false] {
+fn the_owners_process_chain_and_the_panes_foreground_decide_whether_a_pane_hosts_it() {
+    for (on_chain, command) in [(true, "zsh"), (false, "zsh"), (true, "codex")] {
+        let proven = on_chain && command == "zsh";
         let env = Env::new();
         env.record(&env.project_root);
         env.install_agent_hooks("claude");
@@ -4316,7 +4318,7 @@ fn the_owners_process_chain_alone_decides_whether_a_pane_hosts_it() {
             TRACE_PANE,
             Some(agent_owner("chain", &process)),
         );
-        let root = if proven {
+        let root = if on_chain {
             std::process::id()
         } else {
             other.id()
@@ -4327,7 +4329,7 @@ fn the_owners_process_chain_alone_decides_whether_a_pane_hosts_it() {
             &workspace.session_name,
             vec![
                 serde_json::from_value(json!({
-                    "id": 3, "tab_id": 1, "pane_command": "zsh", "pane_pid": root,
+                    "id": 3, "tab_id": 1, "pane_command": command, "pane_pid": root,
                 }))
                 .unwrap(),
             ],
@@ -4335,7 +4337,10 @@ fn the_owners_process_chain_alone_decides_whether_a_pane_hosts_it() {
         let panes = env.project_root.join("stop-panes.json");
         std::fs::write(
             &panes,
-            r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh","pane_command":"zsh"}]"#,
+            json!([{
+                "id": 3, "is_plugin": false, "tab_id": 1, "title": "sh", "pane_command": command,
+            }])
+            .to_string(),
         )
         .unwrap();
 
@@ -4350,7 +4355,10 @@ fn the_owners_process_chain_alone_decides_whether_a_pane_hosts_it() {
         } else {
             MessageStatus::Queued
         };
-        assert_eq!(message.status, expected, "proven={proven} {message:?}");
+        assert_eq!(
+            message.status, expected,
+            "on_chain={on_chain} {command} {message:?}"
+        );
 
         let stop = stop_command(&env, &panes, 2000)
             .args(["agents", "stop", "@chain"])

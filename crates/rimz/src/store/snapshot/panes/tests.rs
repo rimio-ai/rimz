@@ -399,6 +399,76 @@ fn a_proven_owner_binds_without_clock_program_or_start_evidence() {
 }
 
 #[test]
+fn a_proven_owner_rejects_a_pane_whose_foreground_names_another_kind() {
+    for kind in ["claude", "codex"] {
+        let other = if kind == "claude" { "codex" } else { "claude" };
+        let mut row = agent(kind, "sess", AgentStatus::Idle, 1)
+            .worktree("/repo/main")
+            .active_ago(5)
+            .in_pane("%4");
+        row.runtime_owner = Some(owner("sess", 90, &[84, 12]));
+        for command in [kind, "zsh", "node", ""] {
+            assert!(
+                binds(&row, &rooted("%4", Some(84), command)),
+                "{kind}: foreground {command:?}"
+            );
+        }
+        let suspended = rooted("%4", Some(84), other);
+        assert!(!binds(&row, &suspended), "{kind}: foreground {other}");
+        let commandless = PaneRef {
+            command: None,
+            ..rooted("%4", Some(84), "zsh")
+        };
+        assert!(binds(&row, &commandless), "{kind}: no command");
+        let hosted_self = PaneRef {
+            hosted_agent_kind: Some(AgentKind::new_unchecked(kind)),
+            ..suspended.clone()
+        };
+        assert!(
+            binds(&row, &hosted_self),
+            "{kind}: its own hosted kind outranks the foreground {other}"
+        );
+
+        let sibling = rooted("%5", Some(95), kind);
+        let snapshot = room(vec![row]).with_live_panes(vec![suspended, sibling], None);
+        assert!(
+            snapshot.rows().all(|shown| shown.id != "sess"),
+            "{kind}: neither pane shows the rejected card"
+        );
+        assert!(
+            snapshot.agent_panes.iter().all(|bound| bound
+                .agent_id
+                .as_ref()
+                .is_none_or(|id| id.as_str() != "sess")),
+            "{kind}: the row is paired with no pane by cwd"
+        );
+    }
+}
+
+#[test]
+fn two_proven_rows_on_one_pane_follow_the_foreground() {
+    let row = |kind: &str, id: &str| {
+        let mut row = agent(kind, id, AgentStatus::Idle, 1)
+            .worktree("/repo/main")
+            .active_ago(5)
+            .in_pane("%4");
+        row.runtime_owner = Some(owner(id, 90, &[84, 12]));
+        row
+    };
+    let claude = row("claude", "sess-claude");
+    let codex = row("codex", "sess-codex");
+    for (foreground, claude_binds, codex_binds) in [
+        ("claude", true, false),
+        ("codex", false, true),
+        ("zsh", true, true),
+    ] {
+        let live = rooted("%4", Some(84), foreground);
+        assert_eq!(binds(&claude, &live), claude_binds, "claude, {foreground}");
+        assert_eq!(binds(&codex, &live), codex_binds, "codex, {foreground}");
+    }
+}
+
+#[test]
 fn a_disproven_owner_never_binds_though_kind_and_clocks_agree() {
     for kind in ["claude", "codex"] {
         let mut elsewhere = agent(kind, "sess-elsewhere", AgentStatus::Idle, 1)
@@ -487,6 +557,16 @@ fn an_unknown_owner_binds_an_eager_kind_only_with_its_program_and_fresh_clocks()
     }
 }
 
+/// A foreground program that names a built-in kind other than `kind`.
+fn other_kind_program(kind: &str) -> &'static str {
+    let program = if kind == "claude" { "codex" } else { "claude" };
+    assert_eq!(
+        crate::agents::registry::command_agent_kind(program),
+        Some(program)
+    );
+    program
+}
+
 #[test]
 fn every_built_in_kind_is_proven_and_disproven_by_its_owner() {
     for definition in crate::agents::all_definitions() {
@@ -497,6 +577,11 @@ fn every_built_in_kind_is_proven_and_disproven_by_its_owner() {
             .in_pane("%4");
         row.runtime_owner = Some(owner("sess", 90, &[84, 12]));
         assert!(binds(&row, &rooted("%4", Some(84), "zsh")), "{kind} proven");
+        let foreign = other_kind_program(kind);
+        assert!(
+            !binds(&row, &rooted("%4", Some(84), foreign)),
+            "{kind} proven, but {foreign} holds the foreground"
+        );
         row.runtime_owner = Some(owner("sess", 90, &[85, 12]));
         assert!(
             !binds(&row, &rooted("%4", Some(84), "zsh")),
@@ -573,18 +658,29 @@ fn tenant_rows_between_shell_and_card_follow_the_verdict() {
         spawn_command: Some("rimz agents exec claude --worktree-path /repo/main".to_owned()),
         ..rooted("%4", Some(84), "rimz")
     };
-    for (label, live, unknown_binds) in [
+    let zellij_other = PaneRef {
+        command: Some("codex".to_owned()),
+        ..zellij.clone()
+    };
+    for (label, live, unknown_binds, proven_binds) in [
         (
             "the pulled process row",
             rooted("%4", Some(84), "zsh"),
             false,
+            true,
         ),
-        ("launch plumbing", plumbing, true),
-        ("Zellij's unbound agent row", zellij, true),
+        ("launch plumbing", plumbing, true, true),
+        ("Zellij's unbound agent row", zellij, true, true),
+        (
+            "Zellij's unbound agent row of another kind",
+            zellij_other,
+            false,
+            false,
+        ),
     ] {
         for (verdict, recorded, expect_card) in [
             ("unknown", None, unknown_binds),
-            ("proven", Some(owner("sess", 90, &[84, 12])), true),
+            ("proven", Some(owner("sess", 90, &[84, 12])), proven_binds),
             ("disproven", Some(owner("sess", 90, &[85, 12])), false),
         ] {
             let mut row = agent("claude", "sess", AgentStatus::Idle, 1)
@@ -641,4 +737,17 @@ fn tenant_rows_between_shell_and_card_follow_the_verdict() {
             "{verdict}: the overlay shows the new command's process row"
         );
     }
+
+    // On the next pull, a Proven row whose pane now runs another kind in the
+    // foreground (no hosted kind) gives the pane up.
+    let mut row = agent("claude", "sess", AgentStatus::Idle, 1)
+        .worktree("/repo/main")
+        .active_ago(5)
+        .in_pane("%4");
+    row.runtime_owner = Some(owner("sess", 90, &[84, 12]));
+    let snapshot = room(vec![row]).with_live_panes(vec![rooted("%4", Some(84), "codex")], None);
+    assert!(
+        snapshot.rows().all(|shown| shown.id != "sess"),
+        "proven: another kind in the foreground unbinds the card"
+    );
 }

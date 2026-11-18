@@ -625,6 +625,14 @@ fn overlay_binds_a_row_its_owner_chain_proves_from_the_raw_listing() {
             .map(|bound| bound.kind.as_str()),
         Some("codex")
     );
+    let other_kind = PaneRef {
+        command: Some("claude".to_owned()),
+        ..listed.clone()
+    };
+    assert!(
+        snapshot.agent_bound_to_pane(&other_kind).is_none(),
+        "another kind in the foreground rejects the proven row"
+    );
     let elsewhere = PaneRef {
         pane_pid: Some(85),
         ..listed

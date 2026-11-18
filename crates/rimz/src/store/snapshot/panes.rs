@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::process::{pane_agent_kind, pane_worktree_path};
 use crate::agents::AgentState;
+use crate::agents::registry::command_agent_kind;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwnerKind};
 use crate::store::session_death::agent_owner_pid;
@@ -441,7 +442,9 @@ fn owner_proof(agent: &AgentState, pane: &PaneRef) -> OwnerProof {
 /// evidence, a disproven one never binds, and an unknown one binds only while
 /// the pane's start, activity clocks and program agree with the row.
 /// Ancestry proves containment, not tenancy, so a pane whose hosted process
-/// names another kind rejects the row in every tier.
+/// names another kind rejects the row in every tier, and a proven row on a
+/// pane with no hosted kind is also rejected while the foreground command
+/// names another kind (a provider started beside a suspended one).
 fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: &PaneRef) -> bool {
     if stamped.pane_id != pane.pane_id {
         return false;
@@ -451,7 +454,14 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
         .as_ref()
         .is_some_and(|kind| kind != &agent.kind);
     match owner_proof(agent, pane) {
-        OwnerProof::Proven => !hosts_other_kind,
+        OwnerProof::Proven => match &pane.hosted_agent_kind {
+            Some(kind) => kind == &agent.kind,
+            None => pane
+                .command
+                .as_deref()
+                .and_then(command_agent_kind)
+                .is_none_or(|kind| kind == agent.kind.as_str()),
+        },
         OwnerProof::Disproven => false,
         OwnerProof::Unknown => {
             pane_start_matches_agent_stamp(stamped, pane)
