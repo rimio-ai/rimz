@@ -30,8 +30,8 @@ fn apply_removes_owned_keys_restores_mode_keys_and_preserves_foreign_bindings() 
         .filter(|line| line.contains("Mouse"))
         .map(str::to_owned)
         .collect();
-    apply(&server, "[sidebar]\nfocus_key='Alt+x'", bin);
-    assert!(has_key(&server.list_keys("root"), "M-x"));
+    apply(&server, "[sidebar]\nfocus_key='Alt+e'", bin);
+    assert!(has_key(&server.list_keys("root"), "M-e"));
     assert_eq!(server.show_option(&["-gw"], "mode-keys"), "vi");
     server.output(&["set-option", "-gw", "mode-keys", "emacs"]);
     apply(
@@ -40,7 +40,7 @@ fn apply_removes_owned_keys_restores_mode_keys_and_preserves_foreign_bindings() 
         bin,
     );
     let root = server.list_keys("root");
-    assert!(!has_key(&root, "M-x"));
+    assert!(!has_key(&root, "M-e"));
     for key in ["M-J", "M-S-J", "M-;", "M-?"] {
         assert!(has_key(&root, key), "{root}");
     }
