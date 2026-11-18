@@ -211,6 +211,11 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Trailing,
         }),
         presets: super::PresetMatchers {
+            code_mode: super::CodeModeSwitch::Supported {
+                tools: &["REPL", "Poll"],
+                without_tools: &[],
+                env: Some(("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "1")),
+            },
             auto_compact: Some(super::StaticPresetMatcher::Flag(&["--autocompact"])),
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
@@ -671,6 +676,7 @@ fn render_tool_rules(
 
 fn render_definition_tools(
     tools: &crate::agents::ToolSet,
+    extra: &[&str],
 ) -> std::result::Result<Vec<String>, crate::agents::ToolErr> {
     for name in tools.agent_types() {
         if !CLAUDE_AGENT_TYPES.contains(&name.as_str()) {
@@ -689,7 +695,14 @@ fn render_definition_tools(
         args.push("--disallowedTools".to_owned());
         args.extend(denied.into_iter().map(|name| format!("Agent({name})")));
     }
-    args.extend(["--tools".to_owned(), tools.bases().join(",")]);
+    let mut names = tools.bases().to_vec();
+    names.extend(
+        extra
+            .iter()
+            .filter(|name| !tools.has(name))
+            .map(|name| (*name).to_owned()),
+    );
+    args.extend(["--tools".to_owned(), names.join(",")]);
     Ok(args)
 }
 

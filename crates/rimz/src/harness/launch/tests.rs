@@ -2012,6 +2012,141 @@ fn process_compiler_stamps_or_clears_extension_fast_off_argv() {
     );
 }
 
+const CODE_MODE_KEY: &str = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE";
+const CODE_MODE_MARKER: &str = "RIMZ_CODE_MODE_ENV";
+
+/// The code-mode key and its marker as one launch leaves them: each value set, and whether
+/// each is unset.
+fn code_mode_env(
+    project: &Path,
+    kind: &str,
+    code_mode: bool,
+    inherited: &[(&str, &str)],
+) -> (Option<String>, bool, Option<String>, bool) {
+    let mut invocation = team_request(kind);
+    invocation.identity.params.code_mode = code_mode;
+    let process = compile_agent_process_with_extra_env(
+        None,
+        project,
+        &invocation,
+        project,
+        &BTreeMap::new(),
+        &LaunchReminders {
+            settings: Some((project.into(), env(inherited))),
+            ..Default::default()
+        },
+    )
+    .expect("process");
+    assert!(
+        process
+            .provider_argv
+            .iter()
+            .all(|arg| !arg.contains(CODE_MODE_KEY)),
+        "{:?}",
+        process.provider_argv
+    );
+    (
+        process.env.get(CODE_MODE_KEY).cloned(),
+        process.unset.contains(CODE_MODE_KEY),
+        process.env.get(CODE_MODE_MARKER).cloned(),
+        process.unset.contains(CODE_MODE_MARKER),
+    )
+}
+
+#[test]
+fn process_compiler_stamps_or_clears_the_declared_code_mode_env() {
+    let project = tempfile::tempdir().expect("project");
+    let stamped = (
+        Some("1".into()),
+        false,
+        Some(format!("{CODE_MODE_KEY}=1")),
+        false,
+    );
+    let cleared = (None, true, None, true);
+    let untouched = (None, false, None, true);
+    let marker = format!("{CODE_MODE_KEY}=1");
+    let cases = [
+        ("claude", true, vec![], stamped.clone()),
+        // The profile is the authority on a launch it turns on.
+        ("claude", true, vec![(CODE_MODE_KEY, "0")], stamped),
+        (
+            "claude",
+            false,
+            vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
+            cleared.clone(),
+        ),
+        (
+            "claude",
+            false,
+            vec![(CODE_MODE_KEY, "1")],
+            untouched.clone(),
+        ),
+        (
+            "claude",
+            false,
+            vec![(CODE_MODE_KEY, "0"), (CODE_MODE_MARKER, &marker)],
+            untouched.clone(),
+        ),
+        // Pi declares no variable, yet clears what an outer Claude launch stamped.
+        (
+            "pi",
+            false,
+            vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
+            cleared,
+        ),
+        ("pi", true, vec![(CODE_MODE_KEY, "1")], untouched),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(kind, on, inherited, _)| code_mode_env(project.path(), kind, *on, inherited))
+        .collect();
+    let expected: Vec<_> = cases.into_iter().map(|(.., env)| env).collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn process_compiler_keeps_a_trusted_code_mode_value_over_an_inherited_marker() {
+    if std::env::var_os("RIMZ_TEST_CODE_MODE_TRUSTED_ENV").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "harness::launch::tests::process_compiler_keeps_a_trusted_code_mode_value_over_an_inherited_marker",
+                "--nocapture",
+            ])
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path().join(".rimz"))
+            .env("RIMZ_TEST_CODE_MODE_TRUSTED_ENV", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        format!("[[agents]]\nname = 'claude'\nenv = {{{CODE_MODE_KEY} = '1'}}\n"),
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), &crate::disk::paths::rimz_home()).unwrap();
+    let marker = format!("{CODE_MODE_KEY}=1");
+    let inherited = [(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, marker.as_str())];
+    assert_eq!(
+        [&inherited[..], &[]].map(|inherited| code_mode_env(
+            project.path(),
+            "claude",
+            false,
+            inherited
+        )),
+        [0, 1].map(|_| (Some("1".into()), false, None, true))
+    );
+}
+
 #[test]
 fn process_compiler_places_mini_before_options_and_translates_auto_approve() {
     let project = tempfile::tempdir().unwrap();

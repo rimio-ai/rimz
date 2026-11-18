@@ -1,6 +1,6 @@
 //! Definition model defaults and provider-neutral tool vocabulary.
 
-use super::definition::{DefinitionSpec, DefinitionTools};
+use super::definition::{CodeModeSwitch, DefinitionSpec, DefinitionTools};
 use super::{all_definitions, spec_by_kind};
 
 /// RimZ tool names beside Pi's, read forward by Pi's renderer and backward by parsing.
@@ -217,23 +217,34 @@ pub(crate) fn render_tool_args(
     tools: Option<&ToolSet>,
 ) -> Result<Vec<String>, ToolErr> {
     match (definitions(kind).tools, tools) {
-        (DefinitionTools::Required(render), tools) => render(tools.ok_or(ToolErr::Missing)?),
-        (DefinitionTools::Optional(render), Some(tools)) => Ok(render(tools).0),
+        (DefinitionTools::Required(render), tools) => render(tools.ok_or(ToolErr::Missing)?, &[]),
+        (DefinitionTools::Optional(render), Some(tools)) => Ok(render(tools, &[]).0),
         _ => Ok(Vec::new()),
     }
 }
 
+/// A launch's tool argv, with the kind's code-mode tools when `code_mode` is on.
 pub(crate) fn render_launch_tool_args(
     kind: &str,
     tools: Option<&ToolSet>,
+    code_mode: bool,
 ) -> Result<(Vec<String>, Vec<ToolNotice>), ToolErr> {
+    let switch = spec_by_kind(kind).map(|spec| spec.launch.presets.code_mode);
     let Some(tools) = tools else {
-        return Ok((Vec::new(), Vec::new()));
+        let argv = match switch {
+            Some(CodeModeSwitch::Supported { without_tools, .. }) if code_mode => {
+                without_tools.iter().map(|arg| (*arg).to_owned()).collect()
+            }
+            _ => Vec::new(),
+        };
+        return Ok((argv, Vec::new()));
     };
+    let extra = switch.map_or(&[][..], |switch| switch.tools(code_mode));
     match definitions(kind).tools {
-        DefinitionTools::Optional(render) => Ok(render(tools)),
+        DefinitionTools::Required(render) => Ok((render(tools, extra)?, Vec::new())),
+        DefinitionTools::Optional(render) => Ok(render(tools, extra)),
         DefinitionTools::Unsupported => Ok((Vec::new(), vec![ToolNotice::NotApplied])),
-        _ => Ok((render_tool_args(kind, Some(tools))?, Vec::new())),
+        DefinitionTools::Ignored => Ok((Vec::new(), Vec::new())),
     }
 }
 
@@ -312,7 +323,7 @@ mod tests {
             "WebFetch(url)",
             "Bash(git *)",
         ]);
-        let (args, notices) = render_launch_tool_args("pi", Some(&parsed)).unwrap();
+        let (args, notices) = render_launch_tool_args("pi", Some(&parsed), false).unwrap();
         assert_eq!(args, ["--tools", "read,bash", "--no-skills"]);
         assert_eq!(
             notices,
@@ -339,9 +350,81 @@ mod tests {
                 vec![ToolNotice::Dropped(vec!["Skill".into()])],
             ),
         ] {
-            let (args, notices) = render_launch_tool_args("pi", Some(&tools(&entries))).unwrap();
+            let (args, notices) =
+                render_launch_tool_args("pi", Some(&tools(&entries)), false).unwrap();
             assert_eq!(args, expected_args, "{entries:?}");
             assert_eq!(notices, expected_notices, "{entries:?}");
+        }
+    }
+
+    #[test]
+    fn code_mode_appends_each_declared_tool_once_and_off_renders_as_today() {
+        let launch = |kind: &str, entries: Option<&[&str]>, code_mode: bool| {
+            let parsed = entries.map(tools);
+            render_launch_tool_args(kind, parsed.as_ref(), code_mode)
+                .unwrap()
+                .0
+        };
+        let read_bash: &[&str] = &["Read", "Bash"];
+        // Kind, profile tools, argv with code mode on, argv with it off.
+        type Case = (
+            &'static str,
+            Option<&'static [&'static str]>,
+            &'static [&'static str],
+            &'static [&'static str],
+        );
+        let cases: [Case; 8] = [
+            (
+                "claude",
+                Some(read_bash),
+                &["--strict-mcp-config", "--tools", "Read,Bash,REPL,Poll"],
+                &["--strict-mcp-config", "--tools", "Read,Bash"],
+            ),
+            (
+                "claude",
+                Some(&["REPL", "Read"]),
+                &["--strict-mcp-config", "--tools", "REPL,Read,Poll"],
+                &["--strict-mcp-config", "--tools", "REPL,Read"],
+            ),
+            (
+                "claude",
+                Some(&[]),
+                &["--strict-mcp-config", "--tools", "REPL,Poll"],
+                &["--strict-mcp-config", "--tools", ""],
+            ),
+            ("claude", None, &[], &[]),
+            ("pi", None, &["--tools", "+codemode"], &[]),
+            (
+                "pi",
+                Some(read_bash),
+                &["--tools", "read,bash,codemode", "--no-skills"],
+                &["--tools", "read,bash", "--no-skills"],
+            ),
+            (
+                "pi",
+                Some(&["WebSearch"]),
+                &["--tools", "codemode", "--no-skills"],
+                &["--no-tools", "--no-skills"],
+            ),
+            (
+                "pi",
+                Some(&["codemode", "Read", "Skill"]),
+                &["--tools", "read,codemode"],
+                &["--tools", "read"],
+            ),
+        ];
+        for (kind, entries, on, off) in cases {
+            assert_eq!(launch(kind, entries, true), on, "{kind} {entries:?} on");
+            assert_eq!(launch(kind, entries, false), off, "{kind} {entries:?} off");
+        }
+        for kind in ["codex", "opencode", "omp", "unregistered"] {
+            for entries in [Some(read_bash), None] {
+                assert_eq!(
+                    launch(kind, entries, true),
+                    launch(kind, entries, false),
+                    "{kind} {entries:?}"
+                );
+            }
         }
     }
 

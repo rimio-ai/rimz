@@ -1428,6 +1428,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         model: None,
         effort: None,
         fast: None,
+        code_mode: None,
         budget: None,
         timeout: None,
         auto_compact: None,

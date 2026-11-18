@@ -341,6 +341,7 @@ fn profile(agent: &str) -> Profile {
         model: None,
         effort: None,
         fast: None,
+        code_mode: None,
         budget: None,
         timeout: None,
         auto_compact: None,
@@ -1420,6 +1421,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
             model: Some("claude-model".to_owned()),
             effort: Some("high".to_owned()),
             fast: None,
+            code_mode: None,
             budget: Some("$4".to_owned()),
             timeout: None,
             auto_compact: Some("200k".to_owned()),
@@ -2257,6 +2259,73 @@ fn profile_fast_follows_the_chain_and_skips_where_unsupported() {
         ..role("coder", "swift")
     };
     assert!(!resolve_role(&role, &profiles).unwrap().fast.unwrap());
+}
+
+#[test]
+fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
+    let code_mode = |agent: &str, code_mode: Option<bool>| Profile {
+        code_mode,
+        ..profile(agent)
+    };
+    let profiles = ProfilesConfig(BTreeMap::from([
+        (
+            "coder".to_owned(),
+            Profile {
+                args: Some("--raw".to_owned()),
+                ..code_mode("pi", Some(true))
+            },
+        ),
+        ("plain".to_owned(), code_mode("coder", Some(false))),
+        ("heir".to_owned(), code_mode("coder", None)),
+        ("tooled".to_owned(), code_mode("claude", Some(true))),
+        ("pilot".to_owned(), code_mode("copilot", Some(true))),
+        ("base".to_owned(), code_mode("pi", None)),
+    ]));
+    let switch = ["--tools", "+codemode"];
+    for (name, want) in [("coder", true), ("plain", false), ("heir", true)] {
+        let cell = profile_cell(name, &profiles).unwrap();
+        assert_eq!(cell.launch.code_mode, want, "{name}");
+        let at = cell.args.windows(2).position(|part| part == switch);
+        assert_eq!(at.is_some(), want, "{name}: {:?}", cell.args);
+        let raw = cell.args.iter().position(|arg| arg == "--raw");
+        assert!(at < raw, "{name}: {:?}", cell.args);
+    }
+    let off = profile_cell("plain", &profiles).unwrap();
+    assert!(
+        !off.args.iter().any(|arg| arg.contains("codemode")),
+        "{:?}",
+        off.args
+    );
+
+    // Claude without a tools list carries code mode on the cell for the env alone.
+    let claude = profile_cell("tooled", &profiles).unwrap();
+    assert!(claude.launch.code_mode);
+    assert!(
+        !claude.args.iter().any(|arg| arg == "--tools"),
+        "{:?}",
+        claude.args
+    );
+    assert_eq!(
+        claude.args,
+        profile_cell("claude", &profiles).unwrap().args,
+        "on renders the argv off renders"
+    );
+
+    let pilot = profile_cell("pilot", &profiles).expect("unsupported code mode renders nothing");
+    assert!(pilot.launch.code_mode, "the finalizer clears it and warns");
+    assert!(pilot.args.is_empty(), "{:?}", pilot.args);
+
+    // A kind change through `--agent` takes the base's setting.
+    let base = resolve_agent_override(Some("base"), &profiles).unwrap();
+    let rebased =
+        profile_cell_with_base_override("tooled", &profiles, base.as_ref(), None).unwrap();
+    assert_eq!(rebased.kind.as_str(), "pi");
+    assert!(!rebased.launch.code_mode);
+    assert!(
+        !rebased.args.iter().any(|arg| arg.contains("codemode")),
+        "{:?}",
+        rebased.args
+    );
 }
 
 #[test]

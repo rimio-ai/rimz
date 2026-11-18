@@ -711,7 +711,7 @@ fn provider_sandbox_defaults_only_without_a_selection_and_reads_profile_layers()
 #[test]
 fn native_subagent_denial_replaces_codex_multi_agent_overrides() {
     let tools = crate::agents::ToolSet::parse(&["Agent".into()]).unwrap();
-    let rendered = render_definition_tools(&tools).unwrap();
+    let rendered = render_definition_tools(&tools, &[]).unwrap();
     let mut args: Vec<String> = rendered
         .windows(2)
         .filter(|args| {

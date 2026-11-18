@@ -1906,6 +1906,40 @@ fn unsupported_tuning_fields_load_for_launch_time_normalization() {
 }
 
 #[test]
+fn code_mode_reads_on_and_off_and_follows_the_parent_chain() {
+    let root = fixture();
+    for (name, frontmatter) in [
+        ("coder", "agent: pi\ncode-mode: on"),
+        ("calm", "agent: pi\ncode-mode: off"),
+        ("heir", "agent: coder"),
+        ("steady", "agent: coder\ncode-mode: off"),
+        ("odd", "agent: pi\ncode-mode: sometimes"),
+    ] {
+        definition(root.path(), &format!("agents/{name}.md"), frontmatter, "");
+    }
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &root.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    let code_mode = |name: &str| loaded.agent_profiles.0.get(name).map(|p| p.code_mode);
+    assert_eq!(code_mode("coder"), Some(Some(true)));
+    assert_eq!(code_mode("calm"), Some(Some(false)));
+    assert_eq!(code_mode("heir"), Some(Some(true)));
+    assert_eq!(code_mode("steady"), Some(Some(false)));
+    assert_eq!(code_mode("odd"), None);
+    assert_eq!(loaded.errors.len(), 1, "{:?}", loaded.errors);
+    assert!(
+        loaded.errors[0].path.ends_with("agents/odd.md"),
+        "{:?}",
+        loaded.errors
+    );
+}
+
+#[test]
 fn duplicate_team_names_remove_all_seats_and_sources() {
     let root = team_fixture();
     team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");

@@ -115,6 +115,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Trailing,
         }),
         presets: super::PresetMatchers {
+            code_mode: super::CodeModeSwitch::Unsupported,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--reasoning-effort"])),
             ..super::PresetMatchers::EMPTY

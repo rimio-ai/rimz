@@ -2102,6 +2102,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
                 model: None,
                 effort: None,
                 fast: None,
+                code_mode: None,
                 budget: None,
                 timeout: None,
                 auto_compact: None,
@@ -2137,6 +2138,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
                 model: None,
                 effort: None,
                 fast: None,
+                code_mode: None,
                 budget: None,
                 timeout: None,
                 auto_compact: None,
@@ -3548,6 +3550,7 @@ fn a_provider_temp_root_follows_tmpdir() {
                             | "RIMZ_LAUNCH_FAST"
                             | "RIMZ_LAUNCH_AUTO_APPROVE"
                             | "RIMZ_LONG_CACHE_ENV"
+                            | "RIMZ_CODE_MODE_ENV"
                     )
                         && *key != crate::harness::launch::ENV_RUNTIME_ENV
                         && *key != crate::harness::launch::ENV_AGENT_MODEL

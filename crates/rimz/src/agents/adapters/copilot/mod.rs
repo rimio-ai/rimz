@@ -127,6 +127,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
+            code_mode: super::CodeModeSwitch::Unsupported,
             auto_compact: None,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&[

@@ -252,6 +252,56 @@ fn recorded_posture_replays_verbatim_model_without_observed_switch() {
 }
 
 #[test]
+fn relaunch_renders_code_mode_from_the_current_profile() {
+    let resolve = |text: &str, kind: &str, record: Option<&crate::agents::LaunchRecord>| {
+        let profile: Profile = toml::from_str(text).unwrap();
+        resolve_posture(
+            PostureRequest {
+                record,
+                profile: Some("coder"),
+                kind: &AgentKind::new_unchecked(kind),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles("coder", profile),
+        )
+    };
+    let switch = ["--tools", "+codemode"];
+    let record = crate::agents::LaunchRecord::default();
+    for record in [None, Some(&record)] {
+        let on = resolve("agent = \"pi\"\ncode-mode = true", "pi", record);
+        assert!(on.degraded.is_none(), "{:?}", on.degraded);
+        assert!(on.launch.code_mode);
+        let fresh = crate::harness::spec::profile_cell(
+            "coder",
+            &profiles(
+                "coder",
+                toml::from_str("agent = \"pi\"\ncode-mode = true").unwrap(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(on.launch.args, fresh.args);
+        assert!(
+            on.launch.args.windows(2).any(|part| part == switch),
+            "{:?}",
+            on.launch.args
+        );
+
+        let off = resolve("agent = \"pi\"\ncode-mode = false", "pi", record);
+        assert!(!off.launch.code_mode);
+        assert!(!off.launch.args.iter().any(|arg| arg.contains("codemode")));
+
+        let claude = resolve("agent = \"claude\"\ncode-mode = true", "claude", record);
+        assert!(claude.launch.code_mode, "the env rides the posture");
+    }
+
+    // A profile that moved to another kind degrades and loses it with the rest.
+    let moved = resolve("agent = \"pi\"\ncode-mode = true", "claude", Some(&record));
+    assert!(moved.degraded.is_some());
+    assert!(!moved.launch.code_mode);
+}
+
+#[test]
 fn recorded_fast_replays_over_the_current_profile() {
     let switch = ["-c", "service_tier=fast", "-c", "features.fast_mode=true"];
     let resolve = |profile: Profile, record: Option<&crate::agents::LaunchRecord>| {

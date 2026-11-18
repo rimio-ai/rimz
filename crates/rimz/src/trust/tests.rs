@@ -744,6 +744,10 @@ fn hash_covers_every_documented_surface_field() {
         "[subagents.profiles.x]\nagent = \"claude\"\nfast = true\n",
         "[profiles.x]\nagent = \"claude\"\nfast = false\n",
         "[subagents.profiles.x]\nagent = \"claude\"\nfast = false\n",
+        "[profiles.x]\nagent = \"claude\"\ncode-mode = true\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\ncode-mode = true\n",
+        "[profiles.x]\nagent = \"claude\"\ncode-mode = false\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\ncode-mode = false\n",
         "[profiles.y]\nagent = \"claude\"\n",
         "[agents.teams.review]\nlayout = \"planner,coder\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
@@ -849,6 +853,7 @@ fn unset_fast_profile_keeps_its_executable_surface_shape() {
     let surface =
         serde_json::to_value(ExecutableSurface::from(&bare).profiles).expect("profile surface");
     assert!(surface[0].get("fast").is_none(), "{surface}");
+    assert!(surface[0].get("code_mode").is_none(), "{surface}");
 }
 
 #[test]

@@ -121,6 +121,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Trailing,
         }),
         presets: super::PresetMatchers {
+            code_mode: super::CodeModeSwitch::Unsupported,
             fast: super::FastSwitch::Unsupported {
                 fix: "toggle /fast inside the session",
             },

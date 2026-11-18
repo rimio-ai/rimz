@@ -196,6 +196,8 @@ pub struct ResolvedProfile {
     /// Fast mode as the chain set it; unset is off. Kept apart from
     /// `launch.fast` so a nearer layer's `false` wins over a base's `true`.
     pub fast: Option<bool>,
+    /// Code mode as the chain set it; unset is off.
+    pub code_mode: Option<bool>,
     pub system_prompt_file: Option<crate::config::PromptSource>,
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub skills: Option<Vec<crate::config::SkillName>>,
@@ -226,6 +228,7 @@ impl ResolvedProfile {
             auto_compact: None,
             auto_compact_default: None,
             fast: None,
+            code_mode: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
@@ -270,6 +273,7 @@ impl ResolvedProfile {
                 .clone_from(&layer.auto_compact_default);
         }
         self.fast = self.fast.or(layer.fast);
+        self.code_mode = self.code_mode.or(layer.code_mode);
         if self.system_prompt_file.is_none() {
             self.system_prompt_file
                 .clone_from(&layer.system_prompt_file);
@@ -1719,6 +1723,7 @@ fn agent_cell_from(
             mode,
             role,
             fast: resolved.fast == Some(true),
+            code_mode: resolved.code_mode == Some(true),
             ..resolved.launch.clone()
         },
     }
@@ -1743,13 +1748,15 @@ fn render_profile_args(
     if let Some(mode) = resolved.launch.mode {
         argv.extend(adapter.spec().launch.permission_args(mode));
     }
-    let (tools, notices) =
-        crate::agents::render_launch_tool_args(&resolved.kind, resolved.tools.as_ref()).map_err(
-            |error| LayoutErr::InvalidProfile {
-                profile: name.to_owned(),
-                reason: error.to_string(),
-            },
-        )?;
+    let (tools, notices) = crate::agents::render_launch_tool_args(
+        &resolved.kind,
+        resolved.tools.as_ref(),
+        resolved.code_mode == Some(true),
+    )
+    .map_err(|error| LayoutErr::InvalidProfile {
+        profile: name.to_owned(),
+        reason: error.to_string(),
+    })?;
     argv.extend(tools);
     if let Some(raw) = resolved
         .args
@@ -2469,11 +2476,15 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
         if base.fast.is_some() {
             original.fast = base.fast;
         }
+        if base.code_mode.is_some() {
+            original.code_mode = base.code_mode;
+        }
         if original.args.is_none() {
             original.args.clone_from(&base.args);
         }
     } else {
         original.fast = base.fast;
+        original.code_mode = base.code_mode;
         original.args.clone_from(&base.args);
     }
 

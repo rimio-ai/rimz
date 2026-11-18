@@ -377,6 +377,7 @@ pub struct ResumeLaunchPosture {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub fast: bool,
+    pub code_mode: bool,
     pub budget: Option<String>,
 }
 
@@ -406,6 +407,7 @@ impl ResumeLaunchPosture {
                 model: self.model,
                 effort: self.effort,
                 fast: self.fast,
+                code_mode: self.code_mode,
                 budget: self.budget,
                 ..Default::default()
             },
@@ -461,6 +463,7 @@ impl From<&AgentCell> for ResumeLaunchPosture {
             model: cell.launch.model.clone(),
             effort: cell.launch.effort.clone(),
             fast: cell.launch.fast,
+            code_mode: cell.launch.code_mode,
             budget: cell.launch.budget.clone(),
         }
     }
@@ -1364,6 +1367,10 @@ impl fmt::Display for LaunchFinalizeWarning {
                             None => Ok(()),
                         }
                     }
+                    SkippedPresetField::CodeMode => write!(
+                        formatter,
+                        "warning: `{profile}` code-mode is unsupported on {agent}; launching without it"
+                    ),
                 }
             }
             Self::SmartCompactSkipped {
@@ -1715,6 +1722,13 @@ pub(super) fn normalize_cell_preset(
         && let Some(effort) = preset.effort.take()
     {
         skipped.push(crate::agents::definition::SkippedPresetField::EffortNeedsModel(effort));
+    }
+    if cell.launch.code_mode
+        && adapter.spec().launch.presets.code_mode
+            == crate::agents::definition::CodeModeSwitch::Unsupported
+    {
+        cell.launch.code_mode = false;
+        skipped.push(crate::agents::definition::SkippedPresetField::CodeMode);
     }
     cell.auto_compact = preset.auto_compact;
     cell.launch.effort = preset.effort;
@@ -2069,6 +2083,7 @@ pub(super) fn resume_command(
         model: posture.model.clone(),
         effort: posture.effort.clone(),
         fast: posture.fast,
+        code_mode: posture.code_mode,
         budget: posture.budget.clone(),
         tier: posture.tier.clone(),
         record: posture.record.clone(),

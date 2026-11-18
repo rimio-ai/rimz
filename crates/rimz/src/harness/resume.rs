@@ -3373,6 +3373,7 @@ fn restore_resume_cell(
     cell.launch.model = posture.model;
     cell.launch.effort = posture.effort;
     cell.launch.fast = posture.fast;
+    cell.launch.code_mode = posture.code_mode;
     cell.launch.mode = posture.mode;
     cell.launch.tier = posture.tier;
     cell.launch.record = posture.record;

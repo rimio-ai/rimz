@@ -132,6 +132,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
+            code_mode: super::CodeModeSwitch::Unsupported,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             system_prompt_file: Some(super::StaticPresetMatcher::EnvPathVar("QWEN_SYSTEM_MD")),
             ..super::PresetMatchers::EMPTY

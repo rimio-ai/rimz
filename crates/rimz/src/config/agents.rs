@@ -522,6 +522,10 @@ pub struct Profile {
     /// provider without a fast switch warns and launches without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast: Option<bool>,
+    /// Launch in the provider's code mode. `false` and unset render nothing;
+    /// `true` on a provider without a code mode warns and launches without it.
+    #[serde(default, rename = "code-mode", skip_serializing_if = "Option::is_none")]
+    pub code_mode: Option<bool>,
     #[serde(default)]
     pub budget: Option<String>,
     /// A subagent definition's run timeout, inherited up the `agent` chain; a launch's

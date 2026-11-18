@@ -877,6 +877,8 @@ pub struct ProjectProfile {
     pub append_system_prompt_files: Option<Vec<String>>,
     pub args: Option<String>,
     pub fast: Option<bool>,
+    #[serde(rename = "code-mode")]
+    pub code_mode: Option<bool>,
 }
 
 /// A project loop row as the trust hash reads it. Its command-executing fields stay raw TOML: a
@@ -967,6 +969,10 @@ struct ExecutableProfile<'a> {
     // unset; serialized only when set, so pinned hashes hold.
     #[serde(skip_serializing_if = "Option::is_none")]
     fast: Option<bool>,
+    // Code mode shapes provider argv and env; serialized only when set, so
+    // pinned hashes hold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_mode: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -1090,6 +1096,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     append_system_prompt_files: p.append_system_prompt_files.as_deref(),
                     args: p.args.as_deref(),
                     fast: p.fast,
+                    code_mode: p.code_mode,
                 })
                 .collect(),
             subagent_profiles: config
@@ -1108,6 +1115,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     append_system_prompt_files: p.append_system_prompt_files.as_deref(),
                     args: p.args.as_deref(),
                     fast: p.fast,
+                    code_mode: p.code_mode,
                 })
                 .collect(),
             teams: config

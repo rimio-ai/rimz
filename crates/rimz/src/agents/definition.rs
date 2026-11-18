@@ -156,6 +156,7 @@ pub enum SkippedPresetField {
     Fast {
         alternative: Option<&'static str>,
     },
+    CodeMode,
 }
 
 /// Static launch shapes shared by built-in and process-plugin adapters.
@@ -521,12 +522,15 @@ pub(super) struct DefinitionModel {
     pub effort: Option<&'static str>,
 }
 
+/// Renders a tools list, plus provider tool names to append, each once.
+type ToolRenderer<T> = fn(&super::tools::ToolSet, &[&str]) -> T;
+
 #[derive(Clone, Copy, Debug)]
 pub(super) enum DefinitionTools {
     Unsupported,
     Ignored,
-    Required(fn(&super::tools::ToolSet) -> Result<Vec<String>, super::tools::ToolErr>),
-    Optional(fn(&super::tools::ToolSet) -> (Vec<String>, Vec<super::tools::ToolNotice>)),
+    Required(ToolRenderer<Result<Vec<String>, super::tools::ToolErr>>),
+    Optional(ToolRenderer<(Vec<String>, Vec<super::tools::ToolNotice>)>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -655,6 +659,7 @@ pub struct PresetMatchers {
     pub auto_compact: Option<StaticPresetMatcher>,
     pub system_prompt_file: Option<StaticPresetMatcher>,
     pub fast: FastSwitch,
+    pub code_mode: CodeModeSwitch,
 }
 
 impl PresetMatchers {
@@ -664,6 +669,7 @@ impl PresetMatchers {
         auto_compact: None,
         system_prompt_file: None,
         fast: FastSwitch::NONE,
+        code_mode: CodeModeSwitch::Unsupported,
     };
 }
 
@@ -690,6 +696,42 @@ impl FastSwitch {
     pub const NONE: Self = Self::Unsupported {
         fix: "launch without --fast",
     };
+}
+
+/// What a provider's code mode adds to a launch.
+///
+/// Code mode is on or off: on adds the provider's code-mode tools and env;
+/// off and unset render nothing. An unsupported provider warns and launches
+/// without it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodeModeSwitch {
+    Supported {
+        /// Provider tool names appended, each once, to a rendered tools list.
+        tools: &'static [&'static str],
+        /// Argv added when the launch renders no tools list.
+        without_tools: &'static [&'static str],
+        /// Env pair an on launch sets; a later launch clears it only where RimZ stamped it.
+        env: Option<(&'static str, &'static str)>,
+    },
+    Unsupported,
+}
+
+impl CodeModeSwitch {
+    /// The tool names a rendered tools list gains.
+    pub(super) fn tools(self, on: bool) -> &'static [&'static str] {
+        match self {
+            Self::Supported { tools, .. } if on => tools,
+            _ => &[],
+        }
+    }
+
+    /// The env pair an on launch sets.
+    pub fn env(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Supported { env, .. } => env,
+            Self::Unsupported => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
