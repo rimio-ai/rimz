@@ -2771,9 +2771,17 @@ fn gc_older_than_is_a_validated_duration_string() {
             );
         }
     }
-    let key = parse_key("gc.tmp_floor_min").unwrap();
-    assert!(validate_set_value(&key, &Value::from("10x")).is_err());
-    assert_eq!(parse_set_value(&key, "0").as_str(), Some("0"));
+    for name in ["gc.tmp_floor_min", "remote.paste_max"] {
+        let key = parse_key(name).unwrap();
+        let refused = validate_set_value(&key, &Value::from("10x"))
+            .expect_err(name)
+            .to_string();
+        assert!(refused.contains(&format!("{name} ")), "{refused}");
+        assert_eq!(parse_set_value(&key, "0").as_str(), Some("0"));
+        let value = parse_set_value(&key, "1024");
+        assert_eq!(value.as_str(), Some("1024"), "{name}");
+        validate_set_value(&key, &value).expect(name);
+    }
     let key = parse_key("gc.tmp_floor_percent").unwrap();
     for bad in [-1, 101] {
         assert!(validate_set_value(&key, &Value::from(bad)).is_err());

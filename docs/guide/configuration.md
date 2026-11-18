@@ -626,6 +626,16 @@ A hand edit does not reach a running room the same way. A Claude host catches up
 
 A `codex` CLI on `PATH` adds its per-session app-server broker whatever this toggle says. When an enabled host is installed but misconfigured, such as an incompatible Claude version, room start warns and runs that host off for this run without asking or editing the file. The dashboard shows a muted `rc off`, and `rimz doctor` keeps the warning and fixes visible. When the host's account is unavailable, the remote-control warning points at the account warning instead of repeating it. Re-entering a live room warns without changing its applied policy. An enabled host whose agent is not installed at all is skipped, and `rimz doctor` reports the install fix. The live Claude enable command still refuses a blocked host. The security boundary is in [security.md](./security.md).
 
+### Remote connect paste
+
+```toml
+[remote]
+paste = true
+paste_max = "1GiB"
+```
+
+These settings live on the machine you run `rimz remote connect` from, not on the host. With `paste` on, a supervised attach puts a pty between your terminal and `ssh` and relays every keystroke through RimZ ([what crosses the link](./remote.md#what-crosses-the-link)). RimZ reads the keyboard only while `ssh` holds its terminal raw, so a password or host-key prompt reads your terminal as before. `paste = false` leaves `ssh` reading the terminal itself. `paste_max` caps the total size of one upload and takes the same sizes as `gc.tmp_floor_min`; `GiB` is binary, `G` decimal. Each `rimz remote connect` reads both once at its start. An invalid `paste_max` makes `config.toml` unreadable, which [falls back to defaults](#when-a-file-is-broken) with a warning.
+
 ### Daemon view
 
 ```toml

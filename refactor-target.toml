@@ -1144,7 +1144,8 @@ upward-dependencies = [
 # RoomStyle's export lets setup's room-keys question name the stored style (+1).
 # ConsensusPieces carries the definitions' trait claims on MachineConfig to project teams' `consensus` (+1).
 # read_logo_file and parse_logo_svg give the sidebar's logo worker the checks config validates with (+2).
-surface-budget = 297
+# RemoteConfig carries the laptop's `[remote]` paste settings to `remote connect` (+1).
+surface-budget = 298
 
 [[verdict]]
 kind = "item"
@@ -3951,7 +3952,9 @@ path = "crates/rimz/src/remote"
 # Listener, its inode field, candidate_listeners and LinkAck.ports_scope scope discovery (+4).
 # ForwardRecord, ForwardEntry, their fields, PortSync::snapshot, probe/sidecar fields and expiry (+17).
 # PortsScope types the listener-report scope with an unknown-value fallback (+1).
-surface-budget = 213
+# The paste module: Input and its bytes, paste_payload, InputScanner's feed/expire/hold_deadline/in_paste, and the parse_drop/encode_drop/drop_paste codec (+12).
+# The upload module: the stale and failed-hold windows, UploadFile, UploadHeader and its new/version_ok/total, UploadReply and its ready/done/failed, UploadState, UploadLane and its running/failed/live_at, and lane_path (+18).
+surface-budget = 243
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
