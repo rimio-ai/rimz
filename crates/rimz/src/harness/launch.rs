@@ -42,6 +42,10 @@ const ENV_LAUNCH_AUTO_APPROVE: &str = "RIMZ_LAUNCH_AUTO_APPROVE";
 const ENV_LONG_CACHE_ENV: &str = "RIMZ_LONG_CACHE_ENV";
 /// The exact `KEY=VALUE` pair this launch set for the provider's code mode.
 const ENV_CODE_MODE_ENV: &str = "RIMZ_CODE_MODE_ENV";
+/// The config member (`CodeModeSwitch::Config`'s marker) a launch wrote for the provider's
+/// code mode. Only a launch of the kind that declares the marker clears it, so it outlives
+/// launches of other kinds in between.
+const ENV_CODE_MODE_CONFIG: &str = "RIMZ_CODE_MODE_CONFIG";
 /// Stable RimZ launch identity. The provider may replace the provisional
 /// session key after startup, so launch ancestry resolves this value through
 /// the durable `AgentState::launch_id` stamp.
@@ -1112,11 +1116,21 @@ fn compile_agent_process_with_extra_env(
             crate::agents::LaunchDirMode::Added,
         )?;
     }
+    let code_mode = request.identity.params.code_mode;
+    let release_code_mode = match adapter.spec().launch.presets.code_mode {
+        crate::agents::definition::CodeModeSwitch::Config { marker } => {
+            code_mode.is_none()
+                && login_env.get(ENV_CODE_MODE_CONFIG).map(String::as_str) == Some(marker)
+        }
+        _ => false,
+    };
     let mut env_warnings = adapter.finalize_launch_env(
         &login_env,
         &mut env,
         reminders.disable_native_subagents(request),
         reminders.system_prompt_file.as_deref(),
+        code_mode,
+        release_code_mode,
     );
     let ask = adapter
         .spec()
@@ -1344,10 +1358,19 @@ fn compile_agent_process_with_extra_env(
     );
     // On and forced off both stamp, so a nested unset launch releases either; off sets
     // its value over the user's export and a trusted `[[agents]]` env value alike.
-    if let Some(on) = request.identity.params.code_mode
-        && let Some((key, value)) = adapter.spec().launch.presets.code_mode.env(on)
-    {
-        stamp_pair(&mut env, &mut unset, ENV_CODE_MODE_ENV, key, value);
+    if let Some(on) = request.identity.params.code_mode {
+        let switch = adapter.spec().launch.presets.code_mode;
+        if let Some((key, value)) = switch.env(on) {
+            stamp_pair(&mut env, &mut unset, ENV_CODE_MODE_ENV, key, value);
+        }
+        if let crate::agents::definition::CodeModeSwitch::Config { marker } = switch {
+            env.insert(ENV_CODE_MODE_CONFIG.to_owned(), marker.to_owned());
+            unset.remove(ENV_CODE_MODE_CONFIG);
+        }
+    }
+    if release_code_mode {
+        env.remove(ENV_CODE_MODE_CONFIG);
+        unset.insert(ENV_CODE_MODE_CONFIG.to_owned());
     }
     if frontend.extension_auto_approve {
         env.insert(ENV_LAUNCH_AUTO_APPROVE.to_owned(), "1".to_owned());

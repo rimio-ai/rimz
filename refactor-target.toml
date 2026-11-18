@@ -415,8 +415,8 @@ upward-dependencies = ["address"]
 # start; AgentContextRecord::merge_mod_reading is the sparse merge a mod reading lands through (+2).
 # ModPlan and ModBlocker carry a managed policy that keeps the Claude mod from loading to the
 # install preview, the start warning and the doctor row (+2).
-# CodeModeSwitch and CodeModeSwitch::env declare each adapter's code-mode argv and env beside
-# FastSwitch for the launch env and tool rendering (+2).
+# CodeModeSwitch and CodeModeSwitch::env declare each adapter's code-mode argv, env, or config
+# member beside FastSwitch for the launch env and tool rendering (+2).
 # Toggle, its agents re-export, and Toggle::enabled carry the written on/off/unset of fast and
 # code-mode to its effective value; LaunchSpec::rendered_fast and CodeModeSwitch::exclude_off
 # read and render the off switches (+5).

@@ -837,6 +837,14 @@ pub enum CodeModeSwitch {
         on: &'static [&'static str],
         off: &'static [&'static str],
     },
+    /// A member the adapter writes into the provider config it composes in
+    /// `finalize_launch_env`: the provider's on value or its off value. An on or an off launch
+    /// records `marker` in `RIMZ_CODE_MODE_CONFIG`, which launches of other kinds pass through,
+    /// so a nested unset launch of this kind can take the member back out of the config it
+    /// inherits.
+    Config {
+        marker: &'static str,
+    },
     Unsupported,
 }
 
@@ -854,7 +862,7 @@ impl CodeModeSwitch {
         match self {
             Self::Supported { env, .. } if on => env,
             Self::Supported { off_env, .. } => off_env,
-            Self::Args { .. } | Self::Unsupported => None,
+            Self::Args { .. } | Self::Config { .. } | Self::Unsupported => None,
         }
     }
 

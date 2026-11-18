@@ -149,7 +149,9 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
-            code_mode: super::CodeModeSwitch::Unsupported,
+            code_mode: super::CodeModeSwitch::Config {
+                marker: "OPENCODE_CONFIG_CONTENT:experimental.full_codemode",
+            },
             system_prompt_file: Some(super::StaticPresetMatcher::EnvConfigMember {
                 var: "OPENCODE_CONFIG_CONTENT",
                 member: "agents.build.system",
@@ -433,26 +435,54 @@ impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
         env: &mut BTreeMap<String, String>,
         disable_native_subagents: bool,
         system_prompt_file: Option<&Path>,
+        code_mode: Option<bool>,
+        release_code_mode: bool,
     ) -> Vec<String> {
-        let mut warnings =
-            edit_core_config(login_env, env, disable_native_subagents, system_prompt_file);
+        let mut warnings = edit_core_config(
+            login_env,
+            env,
+            disable_native_subagents,
+            system_prompt_file,
+            code_mode,
+            release_code_mode,
+        );
         warnings.extend(hide_tabs(login_env, env));
         warnings
     }
 }
 
-/// Writes `OPENCODE_CONFIG_CONTENT` when this launch switches native delegation off or
-/// delivers a system prompt, keeping every inherited key. Otherwise the inherited value,
-/// valid or not, passes through untouched.
+/// Writes `OPENCODE_CONFIG_CONTENT` when this launch switches native delegation off,
+/// delivers a system prompt, turns Full Code Mode on or forces it off, or takes back the Full
+/// Code Mode member an outer launch wrote into the inherited value, keeping every other
+/// inherited key.
+/// Otherwise the inherited value, valid or not, passes through untouched.
 fn edit_core_config(
     login_env: &BTreeMap<String, String>,
     env: &mut BTreeMap<String, String>,
     disable_native_subagents: bool,
     system_prompt_file: Option<&Path>,
+    code_mode: Option<bool>,
+    release_code_mode: bool,
 ) -> Vec<String> {
     const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
     const SELECTOR: &str = "-opencode.tool.subagent";
-    if !disable_native_subagents && system_prompt_file.is_none() {
+    const FULL_CODE_MODE: &str = "/experimental/full_codemode";
+    // A value the launch env sets itself (trusted `[[agents]] env`) is the user's own.
+    let release_code_mode = release_code_mode
+        && !env.contains_key(CONFIG_ENV)
+        && login_env
+            .get(CONFIG_ENV)
+            .and_then(|raw| crate::agents::jsonc::from_slice::<Value>(raw.as_bytes()).ok())
+            .is_some_and(|config| {
+                config
+                    .pointer(FULL_CODE_MODE)
+                    .is_some_and(Value::is_boolean)
+            });
+    if !disable_native_subagents
+        && system_prompt_file.is_none()
+        && code_mode.is_none()
+        && !release_code_mode
+    {
         return Vec::new();
     }
     let mut members: Vec<InlineConfigMember> = Vec::new();
@@ -462,6 +492,9 @@ fn edit_core_config(
     if system_prompt_file.is_some() {
         members.push(("/agents", "an object", Value::is_object));
         members.push(("/agents/build", "an object", Value::is_object));
+    }
+    if code_mode.is_some() || release_code_mode {
+        members.push(("/experimental", "an object", Value::is_object));
     }
     let (mut config, warning) = parse_inline_config(
         CONFIG_ENV,
@@ -492,6 +525,27 @@ fn edit_core_config(
         // parse_inline_config admitted agents and agents.build only as objects or absent,
         // so indexing creates the missing levels and cannot hit a non-object.
         config["agents"]["build"]["system"] = Value::String(format!("{{file:{}}}", path.display()));
+    }
+    if let Some(on) = code_mode {
+        if let Some(prior) = config
+            .pointer(FULL_CODE_MODE)
+            .filter(|prior| **prior != Value::Bool(on))
+        {
+            let (state, other) = if on { ("on", "off") } else { ("off", "on") };
+            warnings.push(format!(
+                "OPENCODE_CONFIG_CONTENT set experimental.full_codemode to {prior}; the profile's \
+                 code-mode {state} replaced it with {on} for this launch; remove it from the \
+                 variable, or turn code-mode {other} in the profile"
+            ));
+        }
+        // parse_inline_config admitted experimental only as an object or absent.
+        config["experimental"]["full_codemode"] = Value::Bool(on);
+    } else if release_code_mode
+        && let Some(experimental) = config
+            .get_mut("experimental")
+            .and_then(Value::as_object_mut)
+    {
+        experimental.remove("full_codemode");
     }
     env.insert(CONFIG_ENV.to_owned(), config.to_string());
     warnings

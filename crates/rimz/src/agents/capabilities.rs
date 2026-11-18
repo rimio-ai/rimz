@@ -782,8 +782,13 @@ pub trait LaunchCapability: CoreCapability {
     }
 
     /// Apply final environment overrides on every managed launch, reading the
-    /// effective login environment after composition. The delegation decision
-    /// and optional env-config prompt artifact share one edit of provider config.
+    /// effective login environment after composition. The delegation decision,
+    /// the optional env-config prompt artifact, and a
+    /// [`CodeModeSwitch::Config`](super::definition::CodeModeSwitch::Config) code mode
+    /// share one edit of provider config: `code_mode` is the launch's on, off, or unset.
+    /// `release_code_mode` is set on an unset launch whose inherited `RIMZ_CODE_MODE_CONFIG`
+    /// holds this kind's config marker, so the member an outer launch wrote can be taken back
+    /// out.
     /// Returns warnings in order; the default leaves the environment unchanged.
     fn finalize_launch_env(
         &self,
@@ -791,6 +796,8 @@ pub trait LaunchCapability: CoreCapability {
         _env: &mut BTreeMap<String, String>,
         _disable_native_subagents: bool,
         _system_prompt_file: Option<&Path>,
+        _code_mode: Option<bool>,
+        _release_code_mode: bool,
     ) -> Vec<String> {
         Vec::new()
     }

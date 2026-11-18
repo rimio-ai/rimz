@@ -2153,9 +2153,16 @@ fn process_compiler_stamps_or_clears_the_declared_code_mode_env() {
             "codex",
             Some(true),
             vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
-            cleared,
+            cleared.clone(),
         ),
         ("codex", Some(true), vec![(CODE_MODE_KEY, "1")], untouched),
+        // OpenCode switches in its composed config, yet clears Claude's pair like any kind.
+        (
+            "opencode",
+            Some(true),
+            vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
+            cleared,
+        ),
     ];
     let actual: Vec<_> = cases
         .iter()
@@ -2163,6 +2170,140 @@ fn process_compiler_stamps_or_clears_the_declared_code_mode_env() {
         .collect();
     let expected: Vec<_> = cases.into_iter().map(|(.., env)| env).collect();
     assert_eq!(actual, expected);
+}
+
+const CODE_MODE_CONFIG_MARKER: &str = "RIMZ_CODE_MODE_CONFIG";
+const OPENCODE_CODE_MODE_MARKER: &str = "OPENCODE_CONFIG_CONTENT:experimental.full_codemode";
+
+/// A launch of another kind, code mode on, off, or unset, keeps the config marker an outer
+/// OpenCode launch left, so an OpenCode launch nested below it can still release the member.
+#[test]
+fn process_compiler_keeps_an_opencode_code_mode_marker_across_other_kinds() {
+    let project = tempfile::tempdir().expect("project");
+    let inherited = env(&[
+        (
+            "OPENCODE_CONFIG_CONTENT",
+            r#"{"experimental":{"full_codemode":true}}"#,
+        ),
+        (CODE_MODE_CONFIG_MARKER, OPENCODE_CODE_MODE_MARKER),
+    ]);
+    let actual: Vec<_> = [
+        ("claude", None),
+        ("claude", Some(true)),
+        ("claude", Some(false)),
+        ("codex", Some(false)),
+    ]
+    .into_iter()
+    .map(|(kind, code_mode)| {
+        let mut invocation = team_request(kind);
+        invocation.identity.params.code_mode = code_mode;
+        let process = compile_agent_process_with_extra_env(
+            None,
+            project.path(),
+            &invocation,
+            project.path(),
+            &BTreeMap::new(),
+            &LaunchReminders {
+                settings: Some((project.path().into(), inherited.clone())),
+                ..Default::default()
+            },
+        )
+        .expect("process");
+        [CODE_MODE_CONFIG_MARKER, "OPENCODE_CONFIG_CONTENT"].map(|key| {
+            (
+                process
+                    .env
+                    .get(key)
+                    .is_none_or(|value| Some(value) == inherited.get(key)),
+                process.unset.contains(key),
+            )
+        })
+    })
+    .collect();
+    assert_eq!(actual, [[(true, false), (true, false)]; 4]);
+}
+
+#[test]
+fn process_compiler_writes_opencode_full_code_mode_on_or_off_and_takes_back_an_outer_one() {
+    let project = tempfile::tempdir().expect("project");
+    let on = r#"{"theme":"dark","experimental":{"full_codemode":true}}"#;
+    let off = r#"{"experimental":{"full_codemode":false}}"#;
+    let cases = [
+        (Some(true), vec![]),
+        // Off forces the member false, over an inherited true too.
+        (Some(false), vec![("OPENCODE_CONFIG_CONTENT", on)]),
+        (None, vec![("OPENCODE_CONFIG_CONTENT", on)]),
+        (
+            None,
+            vec![
+                ("OPENCODE_CONFIG_CONTENT", on),
+                (CODE_MODE_CONFIG_MARKER, OPENCODE_CODE_MODE_MARKER),
+            ],
+        ),
+        // A nested unset launch releases an outer launch's forced off as it releases on.
+        (
+            None,
+            vec![
+                ("OPENCODE_CONFIG_CONTENT", off),
+                (CODE_MODE_CONFIG_MARKER, OPENCODE_CODE_MODE_MARKER),
+            ],
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(code_mode, inherited)| {
+            let mut invocation = team_request("opencode");
+            invocation.identity.params.code_mode = *code_mode;
+            let process = compile_agent_process_with_extra_env(
+                None,
+                project.path(),
+                &invocation,
+                project.path(),
+                &BTreeMap::new(),
+                &LaunchReminders {
+                    settings: Some((project.path().into(), env(inherited))),
+                    ..Default::default()
+                },
+            )
+            .expect("process");
+            // What the provider reads: the composed value, else the inherited one.
+            let config = process
+                .env
+                .get("OPENCODE_CONFIG_CONTENT")
+                .map(String::as_str)
+                .or_else(|| {
+                    inherited
+                        .iter()
+                        .find(|(key, _)| *key == "OPENCODE_CONFIG_CONTENT")
+                        .map(|(_, value)| *value)
+                })
+                .map(|raw| serde_json::from_str::<serde_json::Value>(raw).unwrap());
+            (
+                config.and_then(|config| config.pointer("/experimental/full_codemode").cloned()),
+                process.env.get(CODE_MODE_CONFIG_MARKER).cloned(),
+                process.unset.contains(CODE_MODE_CONFIG_MARKER),
+            )
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            (
+                Some(serde_json::Value::Bool(true)),
+                Some(OPENCODE_CODE_MODE_MARKER.into()),
+                false
+            ),
+            (
+                Some(serde_json::Value::Bool(false)),
+                Some(OPENCODE_CODE_MODE_MARKER.into()),
+                false
+            ),
+            // No marker: the inherited value is the user's own.
+            (Some(serde_json::Value::Bool(true)), None, false),
+            (None, None, true),
+            (None, None, true),
+        ]
+    );
 }
 
 #[test]

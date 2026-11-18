@@ -3559,6 +3559,7 @@ fn a_provider_temp_root_follows_tmpdir() {
                             | "RIMZ_LAUNCH_AUTO_APPROVE"
                             | "RIMZ_LONG_CACHE_ENV"
                             | "RIMZ_CODE_MODE_ENV"
+                            | "RIMZ_CODE_MODE_CONFIG"
                     )
                         && *key != crate::harness::launch::ENV_RUNTIME_ENV
                         && *key != crate::harness::launch::ENV_AGENT_MODEL
