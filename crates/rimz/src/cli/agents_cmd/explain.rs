@@ -55,7 +55,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     let runtime = rimz::RuntimePaths::for_state(&state)?;
     let channel = cli::current_channel(&workspace, store.as_ref());
     let mut warnings = Vec::new();
-    let (request, cwd, action_note, system_prompt_digest, profiles) = if args
+    let (request, cwd, action_note, system_prompt_digest, profiles, tuning) = if args
         .target
         .starts_with('@')
     {
@@ -101,6 +101,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             note.map(str::to_owned),
             agent.system_prompt_digest.clone(),
             profiles,
+            posture.launch.tuning.clone(),
         )
     } else {
         let finalized = launch_resolve::resolve_finalized_layout(
@@ -201,6 +202,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             &machine.accounts,
         )?;
         params.login = (!login.is_default()).then(|| login.name().clone());
+        let tuning = cell.tuning.clone();
         let request = ExecRequest::fresh(
             cell,
             ExecIdentity {
@@ -220,6 +222,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             None,
             None,
             &effective.profiles,
+            tuning,
         )
     };
     let adapter = rimz::agents::find_definition(request.kind.as_str())
@@ -264,6 +267,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         &args,
         &plan,
         profiles,
+        &tuning,
         bwrap.as_deref(),
         warnings,
         action_note,
@@ -324,7 +328,13 @@ struct ExplainReport<'a> {
     #[serde(skip)]
     tier_stamp: Option<&'a rimz::agents::TierStamp>,
     effort: Option<&'a str>,
-    fast: bool,
+    effort_source: Option<String>,
+    fast: Option<bool>,
+    fast_source: Option<String>,
+    code_mode: Option<bool>,
+    code_mode_source: Option<String>,
+    auto_compact: Option<u64>,
+    auto_compact_source: Option<String>,
     budget: Option<&'a str>,
     skills: SkillsReport<'a>,
     program: &'a str,
@@ -397,6 +407,7 @@ impl<'a> ExplainReport<'a> {
         args: &'a ExplainArgs,
         plan: &'a LaunchPlan,
         profiles: &ProfilesConfig,
+        tuning: &rimz::harness::spec::TuningSources,
         bwrap: Option<&'a Path>,
         mut warnings: Vec<String>,
         action_note: Option<String>,
@@ -420,16 +431,30 @@ impl<'a> ExplainReport<'a> {
             });
         let adapter = rimz::agents::find_definition(request.kind.as_str())
             .expect("compiled agent has an adapter");
-        let profile = params.profile.as_deref().map(|name| ProfileReport {
-            name,
-            chain: rimz::harness::spec::resolve_profile_rebased(
+        let resolved = params.profile.as_deref().and_then(|name| {
+            rimz::harness::spec::resolve_profile_rebased(
                 name,
                 rimz::harness::plan::normalized_preset_value(args.overrides.agent.as_deref())
                     .as_deref(),
                 profiles,
             )
-            .map(rimz::harness::spec::ResolvedProfile::into_chain)
-            .unwrap_or_default(),
+            .ok()
+        });
+        // A source names the layer that supplied the planned value; a value the plan
+        // dropped or leaves unset has none.
+        let source = |source: &Option<rimz::harness::spec::TuningSource>, planned: bool| {
+            source.as_ref().filter(|_| planned).map(ToString::to_string)
+        };
+        let auto_compact = params
+            .record
+            .as_ref()
+            .and_then(|record| record.auto_compact);
+        let profile = params.profile.as_deref().map(|name| ProfileReport {
+            name,
+            chain: resolved
+                .clone()
+                .map(rimz::harness::spec::ResolvedProfile::into_chain)
+                .unwrap_or_default(),
             role: params.role.as_deref(),
             team: params.team.as_deref(),
         });
@@ -585,7 +610,13 @@ impl<'a> ExplainReport<'a> {
                 })
             },
             effort: params.effort.as_deref(),
-            fast: params.fast == Some(true),
+            effort_source: source(&tuning.effort, params.effort.is_some()),
+            fast: params.fast,
+            fast_source: source(&tuning.fast, params.fast.is_some()),
+            code_mode: params.code_mode,
+            code_mode_source: source(&tuning.code_mode, params.code_mode.is_some()),
+            auto_compact,
+            auto_compact_source: source(&tuning.auto_compact, auto_compact.is_some()),
             tier_skipped: params
                 .tier
                 .as_ref()
@@ -633,6 +664,14 @@ impl<'a> ExplainReport<'a> {
             skill_links: plan.skill_links.as_ref(),
             warnings,
         })
+    }
+}
+
+/// The plan's text row for a tuning value, marked when the kind base supplied it.
+fn with_base_mark(value: &str, source: Option<&str>) -> String {
+    match source.filter(|source| source.starts_with("kind base")) {
+        Some(source) => format!("{value} ({source})"),
+        None => value.to_owned(),
     }
 }
 
@@ -771,11 +810,39 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
                 .map_or_else(|| "provider default".to_owned(), |mode| mode.to_string()),
         ),
     );
-    for (label, value) in [("model", report.model), ("effort", report.effort)] {
-        plan.push(label, render::cell(value.unwrap_or("provider default")));
+    plan.push(
+        "model",
+        render::cell(report.model.unwrap_or("provider default")),
+    );
+    plan.push(
+        "effort",
+        render::cell(report.effort.map_or_else(
+            || "provider default".to_owned(),
+            |effort| with_base_mark(effort, report.effort_source.as_deref()),
+        )),
+    );
+    for (label, value, source) in [
+        ("fast", report.fast, &report.fast_source),
+        ("code-mode", report.code_mode, &report.code_mode_source),
+    ] {
+        let value = match value {
+            Some(true) => "on",
+            Some(false) => "off",
+            None => "unset",
+        };
+        plan.push(
+            label,
+            render::cell(with_base_mark(value, source.as_deref())),
+        );
     }
-    if report.fast {
-        plan.push("fast", render::cell("on"));
+    if let Some(tokens) = report.auto_compact {
+        plan.push(
+            "auto-compact",
+            render::cell(with_base_mark(
+                &tokens.to_string(),
+                report.auto_compact_source.as_deref(),
+            )),
+        );
     }
     if let Some(tier) = report.tier {
         plan.push(

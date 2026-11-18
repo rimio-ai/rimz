@@ -27,6 +27,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         variant: None,
         definition_renders: None,
         kind_defaults: false,
+        kind_base: false,
         tools: None,
         model_tier: None,
         tier_stamp: None,

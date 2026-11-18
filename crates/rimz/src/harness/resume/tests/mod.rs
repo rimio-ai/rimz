@@ -420,9 +420,11 @@ fn routed_profile(effort: Option<&str>) -> Profile {
             preference: Default::default(),
             renders: BTreeMap::from([(
                 "codex".to_owned(),
+                // As the loader renders a definition: its kind's defaults apply.
                 Profile {
                     args: Some("--search".to_owned()),
                     effort: Some("low".to_owned()),
+                    kind_defaults: true,
                     ..profile("codex")
                 },
             )]),

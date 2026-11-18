@@ -73,7 +73,7 @@ fn agents_message(
                     profile.model.as_deref(),
                     profile.model_tier.as_ref().map(|tier| tier.tier),
                     profile.model_tier.as_ref().map(|tier| tier.fell_back),
-                    profile.effective_effort().as_deref(),
+                    profile.effort.as_deref(),
                     profile.fast == Some(rimz::agents::Toggle::On),
                 )),
             ),

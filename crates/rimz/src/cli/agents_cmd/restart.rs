@@ -1332,6 +1332,7 @@ pub(super) fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell 
         kind: agent.kind.clone(),
         args: posture.launch.args.clone(),
         auto_compact: posture.launch.auto_compact.clone(),
+        tuning: posture.launch.tuning.clone(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,

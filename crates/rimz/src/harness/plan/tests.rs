@@ -1450,6 +1450,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "o3".to_owned()],
         auto_compact: None,
+        tuning: Default::default(),
         system_prompt_file: Some(PathBuf::from("system.md").into()),
         append_system_prompt_files: vec![PathBuf::from("append.md").into()],
         team_prompt: None,
@@ -1473,6 +1474,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         isolation_default,
         kind: _,
         auto_compact,
+        tuning,
         args,
         system_prompt_file,
         append_system_prompt_files,
@@ -1494,6 +1496,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             isolation: launch.isolation,
             args,
             auto_compact,
+            tuning,
             system_prompt_file,
             append_system_prompt_files,
             team_prompt,
@@ -1550,6 +1553,7 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         auto_compact: None,
+        tuning: Default::default(),
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
@@ -1647,6 +1651,7 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
         isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         auto_compact: None,
+        tuning: Default::default(),
         args: args.iter().map(|value| (*value).to_owned()).collect(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
@@ -1696,6 +1701,7 @@ fn configured_profile(
         variant: None,
         definition_renders: None,
         kind_defaults: false,
+        kind_base: false,
         tools: None,
         auto_compact_default: None,
         model_tier: None,
@@ -3381,6 +3387,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
             isolation_default: None,
             kind: AgentKind::new_unchecked("codex"),
             auto_compact: None,
+            tuning: Default::default(),
             args,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
@@ -3482,6 +3489,7 @@ fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         auto_compact: None,
+        tuning: Default::default(),
         args: vec!["--model".to_owned(), "gpt-6-astra".to_owned()],
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
@@ -3939,6 +3947,7 @@ fn launch_request_names_and_metadata() {
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         auto_compact: None,
+        tuning: Default::default(),
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
@@ -4616,6 +4625,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         auto_compact: None,
+        tuning: Default::default(),
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
@@ -4733,6 +4743,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         auto_compact: None,
+        tuning: Default::default(),
         args: vec!["--profile-declared".to_owned()],
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
@@ -5726,5 +5737,67 @@ fn supervised_finalize_refusal_keeps_its_warnings() {
     assert_eq!(
         warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
         ["warning: profile `coder` args set --model first; later model second wins"]
+    );
+}
+
+#[test]
+fn kind_base_code_mode_on_a_kind_without_it_warns_and_launches_without_it() {
+    let base = |agent: &str| Profile {
+        kind_base: true,
+        code_mode: Some(crate::agents::Toggle::On),
+        ..configured_profile(agent, None, None, None, None, None)
+    };
+    let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([
+        ("copilot".into(), base("copilot")),
+        ("claude".into(), base("claude")),
+        ("codex".into(), base("codex")),
+        (
+            "worker".into(),
+            configured_profile("copilot", None, None, None, None, None),
+        ),
+    ]));
+    let mut actual = Vec::new();
+    for (spec, agent) in [
+        ("copilot", None),
+        ("worker", None),
+        ("worker", Some("claude")),
+        ("worker", Some("codex")),
+    ] {
+        let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
+            Some(spec),
+            &profiles,
+            &profiles,
+            &crate::config::CommandsConfig::default(),
+            &crate::config::TeamsConfig::default(),
+            agent,
+        )
+        .unwrap();
+        let warnings = finalize(&mut layout, &Default::default(), &[]).unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        actual.push((
+            warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            cell.launch.code_mode,
+        ));
+    }
+    assert_eq!(
+        actual,
+        [
+            (
+                vec![
+                    "warning: `copilot` code-mode is unsupported on copilot; launching without it"
+                        .to_owned()
+                ],
+                None
+            ),
+            (
+                vec![
+                    "warning: `worker` code-mode is unsupported on copilot; launching without it"
+                        .to_owned()
+                ],
+                None
+            ),
+            (Vec::new(), Some(true)),
+            (Vec::new(), Some(true)),
+        ]
     );
 }

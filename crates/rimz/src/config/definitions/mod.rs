@@ -526,7 +526,37 @@ fn load_resolved(
                 let (yaml, body) = frontmatter::split(path, &text)?;
                 if kind_base.is_some() {
                     let fm: BaseFrontmatter = frontmatter::parse(path, yaml)?;
+                    if !fm.other.is_empty() {
+                        let keys = fm.other.keys().map(|key| format!("`{key}`"));
+                        return Err(DefinitionErr::new(
+                            path,
+                            format!(
+                                "a kind base takes only `description`, `fast`, `code-mode`, \
+                                 `effort`, and `auto-compact`, not {}; put those on a profile \
+                                 that names the kind with `agent:`",
+                                keys.collect::<Vec<_>>().join(", ")
+                            ),
+                        ));
+                    }
                     let description = frontmatter::description(path, fm.description.as_deref())?;
+                    if let Some(effort) = fm
+                        .effort
+                        .as_deref()
+                        .filter(|effort| super::tiers::relative_effort(effort))
+                    {
+                        return Err(DefinitionErr::new(
+                            path,
+                            format!(
+                                "effort {effort} is relative; set an absolute effort or omit it \
+                                 for the chosen model's default"
+                            ),
+                        ));
+                    }
+                    let auto_compact = fm
+                        .auto_compact
+                        .as_deref()
+                        .map(|value| agent::auto_compact(path, value))
+                        .transpose()?;
                     if body.trim().is_empty() {
                         return Err(DefinitionErr::new(
                             path,
@@ -538,6 +568,11 @@ fn load_resolved(
                     }
                     let mut profile = agent::empty_profile(&stem);
                     profile.description = Some(description);
+                    profile.kind_base = true;
+                    profile.fast = fm.fast;
+                    profile.code_mode = fm.code_mode;
+                    profile.effort = fm.effort;
+                    profile.auto_compact = auto_compact;
                     profile.system_prompt_file = Some(PromptSource::Text {
                         origin: path.clone(),
                         text: body.trim().to_owned(),
@@ -759,11 +794,23 @@ fn load_resolved(
             error.cause = DefinitionCause::PackProblem;
         }
     }
+    loaded.list_tuning();
     loaded.pack_items = sources.pack_items(&loaded, &catalog);
     loaded
 }
 
 impl LoadedDefinitions {
+    fn list_tuning(&mut self) {
+        for row in &mut self.rows {
+            let profiles = if row.namespace == "subagents" {
+                &self.subagent_profiles
+            } else {
+                &self.agent_profiles
+            };
+            (row.effort, row.fast) = crate::harness::spec::listed_tuning(&row.name, profiles);
+        }
+    }
+
     fn insert(
         &mut self,
         namespace: &str,
@@ -788,8 +835,9 @@ impl LoadedDefinitions {
             model: profile.model.clone(),
             tier: profile.model_tier.as_ref().map(|tier| tier.tier),
             tier_fallback: profile.model_tier.as_ref().map(|tier| tier.fell_back),
-            effort: profile.effective_effort(),
-            fast: profile.fast == Some(crate::agents::Toggle::On),
+            // Set by `list_tuning` once every definition, its kind base included, has loaded.
+            effort: None,
+            fast: false,
             source: source.to_owned(),
             origin: origin.clone(),
             team: None,

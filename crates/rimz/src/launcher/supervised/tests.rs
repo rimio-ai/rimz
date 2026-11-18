@@ -52,6 +52,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             .kind_id(),
         args: permission_args.to_vec(),
         auto_compact: None,
+        tuning: Default::default(),
         system_prompt_file: Some(system_prompt.clone()),
         append_system_prompt_files: appended.to_vec(),
         team_prompt: Some(team_prompt.clone()),

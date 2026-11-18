@@ -59,7 +59,7 @@ fn compaction_lowered_fix_reduces_the_count_at_model_capacity() {
         agent_compaction_lowered(&agent).map(|lowered| lowered.fix),
         Some(
             "lower `auto-compact` to 784800 or less where this launch sets it: its team \
-             role, its profile, else `[harness] auto_compact`"
+             role, its profile, its kind base, else `[harness] auto_compact`"
                 .into()
         )
     );
@@ -69,7 +69,7 @@ fn compaction_lowered_fix_reduces_the_count_at_model_capacity() {
         agent_compaction_lowered(&profiled).map(|lowered| lowered.fix),
         Some(
             "lower `auto-compact` to 784800 or less where this launch sets it: its team \
-             role, the `big` profile, else `[harness] auto_compact`"
+             role, the `big` profile, its kind base, else `[harness] auto_compact`"
                 .into()
         )
     );

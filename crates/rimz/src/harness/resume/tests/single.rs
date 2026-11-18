@@ -294,6 +294,38 @@ fn recorded_tier_override_selects_same_provider_and_records_model() {
 }
 
 #[test]
+fn recorded_tier_override_takes_the_kind_base_effort_a_fresh_tier_launch_takes() {
+    let tiers = crate::config::tiers::TierConfig::default();
+    let mut saved = saved();
+    saved.tier = Some(tier_stamp("opus"));
+    let mut planner = routed_profile(None);
+    planner
+        .definition_renders
+        .as_mut()
+        .unwrap()
+        .renders
+        .insert("claude".into(), profile("claude"));
+    let mut profiles = profiles("planner", planner);
+    let mut base = profile("claude");
+    base.kind_base = true;
+    base.effort = Some("low".into());
+    profiles.0.insert("claude".into(), base);
+    let (plan, _) = single(
+        &saved,
+        &profiles,
+        SingleResumeOptions {
+            overrides: ResumeOverrides {
+                tier: Some((crate::config::tiers::ModelTier::Junior, &tiers)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    let request = decode_exec_request(&single_pane_argv(&plan));
+    assert_eq!(request.identity.params.effort.as_deref(), Some("low"));
+}
+
+#[test]
 fn isolation_only_changes_the_isolation_even_without_a_record() {
     for recorded in [true, false] {
         let mut saved = saved();

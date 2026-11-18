@@ -446,7 +446,8 @@ pub struct HarnessConfig {
     /// Default per-turn dollar cap for every agent in the room.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_budget: Option<TurnCap>,
-    /// Native auto-compaction window for capable profiles without `auto-compact`; unset means 272k tokens, `off` passes no window.
+    /// Native auto-compaction window for capable profiles whose chain and kind base set no
+    /// `auto-compact`; unset means 272k tokens, `off` passes no window.
     #[serde(with = "auto_compact_serde")]
     pub auto_compact: Option<u64>,
     /// Wrap up a filling turn and compact at rest, or compact before a message or

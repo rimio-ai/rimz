@@ -634,7 +634,7 @@ fn agent_compaction_lowered(agent: &rimz::agents::AgentState) -> Option<Compacti
         );
         format!(
             "lower `auto-compact` to {} or less where this launch sets it: its team role, \
-             {profile}, else `[harness] auto_compact`",
+             {profile}, its kind base, else `[harness] auto_compact`",
             compaction.point
         )
     } else {

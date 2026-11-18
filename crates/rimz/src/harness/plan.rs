@@ -15,7 +15,7 @@ use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::budget::{BudgetSpec, DailyBudgetScope};
 use crate::harness::prompt_compose::SystemPromptSources;
-use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
+use crate::harness::spec::{AgentCell, Cell, LayoutSpec, TuningSource};
 use crate::harness::spend_ladder::{SpendFacts, SpendStep};
 use crate::ids::{AgentKind, AgentSessionId, EventId, LaneName};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};
@@ -367,6 +367,7 @@ pub struct ResumeLaunchPosture {
     pub isolation: Option<crate::config::Isolation>,
     pub args: Vec<String>,
     pub auto_compact: Option<String>,
+    pub tuning: crate::harness::spec::TuningSources,
     pub system_prompt_file: Option<crate::config::PromptSource>,
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
@@ -389,6 +390,7 @@ impl ResumeLaunchPosture {
             empty_dir: None,
             timeout: None,
             auto_compact: self.auto_compact,
+            tuning: self.tuning,
             resume_model_override: self.resume_model_override,
             isolation_default: self.isolation_default,
             args: self.args,
@@ -452,6 +454,7 @@ impl From<&AgentCell> for ResumeLaunchPosture {
             isolation: cell.launch.isolation,
             args: cell.args.clone(),
             auto_compact: cell.auto_compact.clone(),
+            tuning: cell.tuning.clone(),
             system_prompt_file: cell.system_prompt_file.clone(),
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
             team_prompt: cell.team_prompt.clone(),
@@ -1622,10 +1625,16 @@ pub(super) fn finalize_agent_cell(
             .filter(|value| !value.is_empty())
         {
             cell.launch.effort = Some(effort.clone());
+            cell.tuning.effort = Some(TuningSource::Flag("--effort"));
             overridden.push(crate::agents::PresetField::Effort);
         }
         if let Some(fast) = options.preset.fast {
             cell.launch.fast = Some(fast);
+            cell.tuning.fast = Some(TuningSource::Flag(if fast {
+                "--fast"
+            } else {
+                "--no-fast"
+            }));
         }
         apply_preset_args(&mut cell.args, adapter, options.preset, &overridden)?;
     }

@@ -110,6 +110,8 @@ pub struct AgentCell {
     pub kind: AgentKind,
     pub args: Vec<String>,
     pub auto_compact: Option<String>,
+    /// Where the cell's effort, fast, code mode, and auto-compact came from.
+    pub tuning: TuningSources,
     pub system_prompt_file: Option<crate::config::PromptSource>,
     /// Ordered prompt fragments composed into the replacement system prompt.
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
@@ -144,6 +146,7 @@ impl Cell {
             kind,
             args: Vec::new(),
             auto_compact: None,
+            tuning: TuningSources::default(),
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
@@ -178,12 +181,75 @@ impl Cell {
     }
 }
 
+/// A kind base's tuning, held apart from the chain's written values: the kind-defaults
+/// step fills from it what nothing nearer wrote.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct KindBase {
+    effort: Option<String>,
+    auto_compact: Option<String>,
+    fast: Option<crate::agents::Toggle>,
+    code_mode: Option<crate::agents::Toggle>,
+}
+
+/// Where a launch tuning value came from, as the resolution that set it records it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TuningSource {
+    /// The profile layer that writes it.
+    Profile(String),
+    /// The team role that writes it.
+    Role(String),
+    /// The final kind's base definition, below every written value.
+    KindBase(AgentKind),
+    /// The built-in effort a Markdown profile takes for its kind and model.
+    BuiltIn,
+    /// The machine's `[harness] auto_compact`.
+    MachineDefault,
+    /// The launch flag that set it.
+    Flag(&'static str),
+    /// The `<base>-fast` target that stamps fast on.
+    Target(String),
+    /// The launch record a relaunch replays.
+    Recorded,
+}
+
+impl TuningSource {
+    /// The kind-defaults step's own fill, cleared when a role override or a re-base fills again.
+    fn is_kind_default(source: &Option<Self>) -> bool {
+        matches!(source, Some(Self::KindBase(_) | Self::BuiltIn))
+    }
+}
+
+impl std::fmt::Display for TuningSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Profile(name) => write!(f, "profile {name}"),
+            Self::Role(role) => write!(f, "role {role}"),
+            Self::KindBase(kind) => write!(f, "kind base {kind}"),
+            Self::BuiltIn => f.write_str("built-in default"),
+            Self::MachineDefault => f.write_str("machine default"),
+            Self::Flag(flag) => f.write_str(flag),
+            Self::Target(target) => f.write_str(target),
+            Self::Recorded => f.write_str("recorded"),
+        }
+    }
+}
+
+/// The source of each tuning value a cell plans; a value the cell leaves unset has none.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TuningSources {
+    pub effort: Option<TuningSource>,
+    pub fast: Option<TuningSource>,
+    pub code_mode: Option<TuningSource>,
+    pub auto_compact: Option<TuningSource>,
+}
+
 /// A profile chain flattened to the concrete adapter kind that can be executed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedProfile {
     notices: Vec<CellNotice>,
     kind_defaults: bool,
-    filled_effort: bool,
+    kind_base: KindBase,
+    sources: TuningSources,
     pub empty_dir: Option<bool>,
     pub timeout: Option<std::time::Duration>,
     pub isolation_default: Option<crate::config::Isolation>,
@@ -219,7 +285,8 @@ impl ResolvedProfile {
         Self {
             notices: Vec::new(),
             kind_defaults: false,
-            filled_effort: false,
+            kind_base: KindBase::default(),
+            sources: TuningSources::default(),
             kind: AgentKind::new_unchecked(kind),
             variant: None,
             empty_dir: None,
@@ -240,7 +307,17 @@ impl ResolvedProfile {
         }
     }
 
-    fn fill_missing(&mut self, layer: &Profile) {
+    fn fill_missing(&mut self, layer: &Profile, name: &str) {
+        if layer.kind_base {
+            self.kind_base = KindBase {
+                effort: layer.effort.clone(),
+                auto_compact: layer.auto_compact.clone(),
+                fast: layer.fast,
+                code_mode: layer.code_mode,
+            };
+        }
+        let written = !layer.kind_base;
+        let source = || Some(TuningSource::Profile(name.to_owned()));
         self.variant = self.variant.or(layer.variant);
         self.kind_defaults |= layer.kind_defaults;
         self.empty_dir = self.empty_dir.or(layer.empty_dir);
@@ -260,21 +337,29 @@ impl ResolvedProfile {
             self.launch.model.clone_from(&layer.model);
             self.launch.tier.clone_from(&layer.tier_stamp);
         }
-        if self.launch.effort.is_none() {
+        if written && self.launch.effort.is_none() && layer.effort.is_some() {
             self.launch.effort.clone_from(&layer.effort);
+            self.sources.effort = source();
         }
         if self.launch.budget.is_none() {
             self.launch.budget.clone_from(&layer.budget);
         }
-        if self.auto_compact.is_none() {
+        if written && self.auto_compact.is_none() && layer.auto_compact.is_some() {
             self.auto_compact.clone_from(&layer.auto_compact);
+            self.sources.auto_compact = source();
         }
         if self.auto_compact_default.is_none() {
             self.auto_compact_default
                 .clone_from(&layer.auto_compact_default);
         }
-        self.fast = self.fast.or(layer.fast);
-        self.code_mode = self.code_mode.or(layer.code_mode);
+        if written && self.fast.is_none() && layer.fast.is_some() {
+            self.fast = layer.fast;
+            self.sources.fast = source();
+        }
+        if written && self.code_mode.is_none() && layer.code_mode.is_some() {
+            self.code_mode = layer.code_mode;
+            self.sources.code_mode = source();
+        }
         if self.system_prompt_file.is_none() {
             self.system_prompt_file
                 .clone_from(&layer.system_prompt_file);
@@ -289,21 +374,60 @@ impl ResolvedProfile {
         }
     }
 
+    /// Fill what nothing wrote: the kind base's tuning first, then the built-in effort a
+    /// Markdown profile takes for its final kind and model.
     fn fill_kind_defaults(&mut self) {
-        if !self.kind_defaults {
+        let base = &self.kind_base;
+        let from_base = || Some(TuningSource::KindBase(self.kind.clone()));
+        if self.fast.is_none() && base.fast.is_some() {
+            self.fast = base.fast;
+            self.sources.fast = from_base();
+        }
+        if self.code_mode.is_none() && base.code_mode.is_some() {
+            self.code_mode = base.code_mode;
+            self.sources.code_mode = from_base();
+        }
+        if self.auto_compact.is_none() && base.auto_compact.is_some() {
+            self.auto_compact.clone_from(&base.auto_compact);
+            self.sources.auto_compact = from_base();
+        }
+        if self.launch.effort.is_none() && base.effort.is_some() {
+            self.launch.effort.clone_from(&base.effort);
+            self.sources.effort = from_base();
+        }
+        if !self.kind_defaults || self.launch.effort.is_some() {
             return;
         }
         let defaults = crate::agents::definition_defaults(&self.kind, self.launch.model.as_deref());
-        if self.launch.effort.is_none() {
-            self.launch.effort = defaults.effort.map(str::to_owned);
-            self.filled_effort = self.launch.effort.is_some();
-        }
+        self.launch.effort = defaults.effort.map(str::to_owned);
+        self.sources.effort = self.launch.effort.as_ref().map(|_| TuningSource::BuiltIn);
     }
 
     fn clear_kind_defaults(&mut self) {
-        if self.filled_effort {
+        let sources = &mut self.sources;
+        if TuningSource::is_kind_default(&sources.effort) {
             self.launch.effort = None;
-            self.filled_effort = false;
+            sources.effort = None;
+        }
+        if TuningSource::is_kind_default(&sources.auto_compact) {
+            self.auto_compact = None;
+            sources.auto_compact = None;
+        }
+        if TuningSource::is_kind_default(&sources.fast) {
+            self.fast = None;
+            sources.fast = None;
+        }
+        if TuningSource::is_kind_default(&sources.code_mode) {
+            self.code_mode = None;
+            sources.code_mode = None;
+        }
+    }
+
+    /// A role's own `fast`, on, off, or `unset`, over everything the chain and a re-base set.
+    fn apply_role_fast(&mut self, binding: &RoleBinding) {
+        if binding.fast.is_some() {
+            self.fast = binding.fast;
+            self.sources.fast = Some(TuningSource::Role(binding.role.clone()));
         }
     }
 
@@ -325,14 +449,19 @@ impl ResolvedProfile {
         if let Some(mode) = binding.mode {
             self.launch.mode = Some(mode);
         }
-        if binding.fast.is_some() {
-            self.fast = binding.fast;
+        self.apply_role_fast(binding);
+        let role = || Some(TuningSource::Role(binding.role.clone()));
+        if binding.effort.is_some() {
+            self.launch.effort.clone_from(&binding.effort);
+            self.sources.effort = role();
+        }
+        if binding.auto_compact.is_some() {
+            self.auto_compact.clone_from(&binding.auto_compact);
+            self.sources.auto_compact = role();
         }
         for (target, source) in [
             (&mut self.launch.model, &binding.model),
-            (&mut self.launch.effort, &binding.effort),
             (&mut self.launch.budget, &binding.budget),
-            (&mut self.auto_compact, &binding.auto_compact),
         ] {
             if source.is_some() {
                 target.clone_from(source);
@@ -365,6 +494,7 @@ pub struct SpecCandidate {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SpecKind {
+    /// The profile as a listing shows it: its effort and fast as [`listed_tuning`] gives them.
     Profile(Box<Profile>),
     Command,
     Team(Option<String>),
@@ -1332,10 +1462,10 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
     };
 
     let mut resolved = ResolvedProfile::bare(terminal.kind());
-    resolved.layers = seen;
-    for layer in layers {
-        resolved.fill_missing(layer);
+    for (layer, name) in layers.into_iter().zip(&seen) {
+        resolved.fill_missing(layer, name);
     }
+    resolved.layers = seen;
     if terminal.variant.is_some()
         && !resolved.layers.iter().any(|layer| layer == terminal.kind())
         && let Some(base) = profiles
@@ -1344,11 +1474,12 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
             .filter(|base| base.agent == terminal.kind())
     {
         resolved.layers.push(terminal.kind().to_owned());
-        resolved.fill_missing(base);
+        resolved.fill_missing(base, terminal.kind());
     }
     resolved.variant = resolved.variant.or(terminal.variant);
     resolved.fill_kind_defaults();
     normalize_auto_compact(&mut resolved.auto_compact, name)?;
+    normalize_auto_compact(&mut resolved.kind_base.auto_compact, name)?;
     let adapter = crate::agents::find_definition(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
     adapter
@@ -1360,6 +1491,18 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
         })?;
     normalize_budget(&mut resolved.launch.budget, name)?;
     Ok(resolved)
+}
+
+/// The effort and fast mode a listing shows for profile `name`: what its launch takes through
+/// the kind base and the built-in default, or what the profile writes when it does not resolve.
+pub fn listed_tuning(name: &str, profiles: &ProfilesConfig) -> (Option<String>, bool) {
+    let on = |fast| fast == Some(crate::agents::Toggle::On);
+    match resolve_profile(name, profiles) {
+        Ok(resolved) => (resolved.launch.effort, on(resolved.fast)),
+        Err(_) => profiles.0.get(name).map_or((None, false), |profile| {
+            (profile.effort.clone(), on(profile.fast))
+        }),
+    }
 }
 
 /// Resolve a profile with the same replacement base used by launch layouts.
@@ -1710,6 +1853,14 @@ fn agent_cell_from(
         isolation_default: resolved.isolation_default,
         args,
         auto_compact: resolved.effective_auto_compact(),
+        tuning: TuningSources {
+            auto_compact: resolved.sources.auto_compact.clone().or_else(|| {
+                resolved
+                    .effective_auto_compact()
+                    .map(|_| TuningSource::MachineDefault)
+            }),
+            ..resolved.sources.clone()
+        },
         system_prompt_file: resolved.system_prompt_file.clone(),
         append_system_prompt_files: resolved.append_system_prompt_files.clone(),
         team_prompt: None,
@@ -1921,6 +2072,7 @@ fn fast_suffix_cell(
         return Ok(None);
     };
     resolved.fast = Some(crate::agents::Toggle::On);
+    resolved.sources.fast = Some(TuningSource::Target(raw.to_owned()));
     let Some(mode) = mode else {
         return Ok(Some(match profile_name {
             Some(name) => Cell::Agent(cell_from_profile(&name, &resolved)?),
@@ -2307,7 +2459,9 @@ fn prepare_team<'a>(
         }
         let mut resolved = resolve_role(binding, profiles)?;
         normalize_auto_compact(&mut resolved.auto_compact, &binding.profile)?;
-        let resolved = rebase_onto(resolved, base_override);
+        let mut resolved = rebase_onto(resolved, base_override);
+        // The role is the nearest layer, so its fast outlives the re-base, as on replay.
+        resolved.apply_role_fast(binding);
         if resolved.empty_dir == Some(true) {
             return Err(LayoutErr::TeamEmptyDir {
                 definition: binding.profile.clone(),
@@ -2418,6 +2572,10 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     };
     original.clear_kind_defaults();
     original.kind_defaults |= base.kind_defaults;
+    original.kind_base.clone_from(&base.kind_base);
+    let mut base = base.clone();
+    base.clear_kind_defaults();
+    let base = &base;
     let same_kind = original.kind == base.kind;
     if !same_kind || base.layers.iter().any(|layer| layer != base.kind.as_str()) {
         original.launch.tier = None;
@@ -2428,8 +2586,9 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     original.variant = base.variant;
     original.layers.retain(|layer| !base.layers.contains(layer));
     original.layers.extend_from_slice(&base.layers);
-    if !base.filled_effort && base.launch.effort.is_some() {
+    if base.launch.effort.is_some() {
         original.launch.effort.clone_from(&base.launch.effort);
+        original.sources.effort.clone_from(&base.sources.effort);
     }
     if original.skills.is_none() {
         original.skills.clone_from(&base.skills);
@@ -2450,6 +2609,10 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     }
     if original.auto_compact.is_none() {
         original.auto_compact.clone_from(&base.auto_compact);
+        original
+            .sources
+            .auto_compact
+            .clone_from(&base.sources.auto_compact);
     }
     if original.auto_compact_default.is_none() {
         original
@@ -2476,9 +2639,14 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     if same_kind {
         if base.fast.is_some() {
             original.fast = base.fast;
+            original.sources.fast.clone_from(&base.sources.fast);
         }
         if base.code_mode.is_some() {
             original.code_mode = base.code_mode;
+            original
+                .sources
+                .code_mode
+                .clone_from(&base.sources.code_mode);
         }
         if original.args.is_none() {
             original.args.clone_from(&base.args);
@@ -2486,6 +2654,11 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     } else {
         original.fast = base.fast;
         original.code_mode = base.code_mode;
+        original.sources.fast.clone_from(&base.sources.fast);
+        original
+            .sources
+            .code_mode
+            .clone_from(&base.sources.code_mode);
         original.args.clone_from(&base.args);
     }
 
@@ -2562,9 +2735,13 @@ fn cell_candidates(profiles: &ProfilesConfig, commands: &CommandsConfig) -> Vec<
     }
     for (name, profile) in &profiles.0 {
         if crate::agents::find_runtime(name).is_none() {
-            candidates
-                .entry(name.clone())
-                .or_insert_with(|| SpecKind::Profile(Box::new(profile.clone())));
+            candidates.entry(name.clone()).or_insert_with(|| {
+                let mut listed = profile.clone();
+                let fast;
+                (listed.effort, fast) = listed_tuning(name, profiles);
+                listed.fast = fast.then_some(crate::agents::Toggle::On);
+                SpecKind::Profile(Box::new(listed))
+            });
         }
     }
     let mut cells = cell_names(profiles, commands);
