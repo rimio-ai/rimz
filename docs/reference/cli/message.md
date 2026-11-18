@@ -156,12 +156,12 @@ When `--create --worktree NAME` finds an existing unoccupied RimZ-owned tree, it
 | `--force` | Deliver even while an open prompt in the agent's pane reserves its input. |
 | `--no-enter` | Type the text and leave it unsubmitted in the composer. |
 | `--smart-compact <PCT\|TOKENS>` | When a resting agent's context is at least this full, send its compact command first. Boundary delivery waits for compaction to end; steer and interrupt paste the prompt after the command without waiting for completion. A busy agent gets no compact command. Takes a percentage (`70%`, at most 100) or an occupied-token count (`120000`, `180k`, `1m`). A context below the threshold sends the message alone. Unset, the recipient's session [`tune`](./agents.md#tune) override wins, then its role or profile-chain [`smart-compact`](../definitions.md#smart-compaction), then `[harness] smart_compact` (default `258k`); `off` stops inheritance. A bare pane bound to an agent uses that agent's policy; an unbound pane uses the harness setting. `[harness] compact_instruction` rides agents whose compact command accepts guidance. The flag overrides only this delivery, not the mid-turn trigger; queued messages retain their enqueue-time line. |
-| `--no-from` | Send the text with no message header. |
+| `--no-from` | Send the text with no message header, recorded as RimZ's (`rimz`) rather than yours. From a user shell the pasted text is the same as a default send, which carries no header either. |
 | `--reply-wanted` | End the header's `From:` line with `, wants a reply`, so the receiver knows you want a message back. RimZ does nothing else with it. Refused with `--no-from` and with `--create`, which deliver no header to carry it, and from a user shell, which has no inbox a reply could reach. `message list --json` and `message show` print it as `reply_wanted`, and `message requeue` keeps it. |
 
 ## The message header
 
-Unless `--no-from` is set, every delivery starts with a three-line header before the text:
+A send from an agent, and every RimZ notice, starts with a three-line header before the text. A send from a user shell, and `--no-from` text, carry none: the receiver reads it as the user's own words, as if typed in its pane.
 
 ```text
 Type: AGENT_MESSAGE
@@ -172,7 +172,6 @@ Read plan.md when the planner finishes.
 
 | `Type` | Sent for | `From` |
 | --- | --- | --- |
-| `USER_MESSAGE` | A send from a user shell | `@user` |
 | `AGENT_MESSAGE` | A send from an agent, whether RimZ launched it or only saw it running | Reply address: role, else explicit name, else pet name; kind only when no role or name exists. Adds `#channel` when crossing channels, then the profile (else kind) in parentheses unless it repeats the handle base. A `--reply-wanted` send ends the line with `, wants a reply`: `From: @swift-otter (planner), wants a reply`. |
 | `SUBAGENT_REPORT` | The status digest sent once all of an agent's [subagents](./subagents.md) settle | `@rimz` |
 | `AGENT_REPORT` | The status digest for a fleet containing solo agents, including background runs and interactive peers | `@rimz` |
@@ -187,6 +186,8 @@ Read plan.md when the planner finishes.
 | `CACHE_KEEPALIVE` | A facts-only prompt-cache ping for a sleeping agent | `@rimz` |
 | `SIGNAL` | A [signal-triggered loop](./loop.md#signals) delivery, or a signal a workflow step [subscribes](./workflow.md#wake-and-subscribe) to | `@rimz` |
 | `STAGE` | A [team stage](./teams.md) opening | `@rimz` |
+
+When one delivery carries several queued messages, the user-shell sends come first, in the order they were queued, then the other messages in theirs, separated by blank lines. Text before the first header is the user's, or text RimZ records as its own with no header, such as an agent's `--no-from` send.
 
 Agent senders receive at most one `MESSAGE_UNDELIVERED` and one `MESSAGE_QUEUED` notice per message. A queued notice does not expire or resend the message. Unmet `--schedule`, `--after`, and `--when` conditions suppress queued notices. Notices go to the sender's live card and appear in `rimz message list --system`.
 

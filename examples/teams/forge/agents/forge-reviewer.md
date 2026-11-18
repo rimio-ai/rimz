@@ -162,7 +162,7 @@ Content:
 <message>
 ```
 
-`Type` names the sender class: `AGENT_MESSAGE` for a teammate, `USER_MESSAGE` for a human who ran `rimz message`, `STAGE` for a stage opening, `SIGNAL` for an event subscription RimZ routed to you, `SUBAGENT_REPORT` for a settled fleet of your own children. `From` names who sent it, never who it is for; the block landed in your prompt, so it is for you. One prompt may carry several blocks, possibly from different senders: treat each as its own message. A prompt with no header block is the user typing directly in your UI.
+`Type` names the sender class: `AGENT_MESSAGE` for a teammate, `STAGE` for a stage opening, `SIGNAL` for an event subscription RimZ routed to you, `SUBAGENT_REPORT` for a settled fleet of your own children. `From` names who sent it, never who it is for; the block landed in your prompt, so it is for you. One prompt may carry several blocks, possibly from different senders: treat each as its own message. Text with no header block, the whole prompt or the part before its first block, is the user's own, typed in your UI or sent with `rimz message`; answer it in your turn text.
 
 Turn output is not delivery: an answer merely printed in your turn text never reaches the sender, and the asker stays blocked. Only `rimz message @<sender>` does.
 

@@ -252,7 +252,7 @@ A prompt sent while an agent is starting after a resume also stays `sent`, keepi
 
 ## Agents message each other
 
-`rimz message` is the same command whether you type it or an agent runs it, so a teammate hands work over exactly as you do. The receiving agent sees a three-line header above the text, naming where the prompt came from:
+`rimz message` is the same command whether you type it or an agent runs it, so a teammate hands work over exactly as you do. When an agent sends, the receiving agent sees a three-line header above the text, naming where the prompt came from:
 
 ```text
 Type: AGENT_MESSAGE
@@ -280,7 +280,7 @@ The receiver answers with a message of its own, here `rimz message @swift-otter 
 
 An agent should not have to wait forever on a handoff that never arrived. RimZ tells a live agent sender when its message ends undelivered, or stays queued for five minutes with a receiver not working or twenty minutes with a receiver busy in a turn. A queued message stays queued; the notice lets the sender check the receiver or withdraw the message, not resend it blindly. Time spent waiting on the sender's schedule or conditions does not trigger a notice while those conditions remain unmet.
 
-Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come from `@rimz`, with the `Type` naming what produced them:
+Your own sends carry no header: the agent reads them as your words, as if you had typed them in its pane, and answers in its turn text. When one delivery carries your message beside others, yours comes first, so any text before the first header is yours. RimZ's own deliveries come from `@rimz`, with the `Type` naming what produced them:
 
 - `SUBAGENT_REPORT`, the digest sent once an agent's launched subagents have all settled; `AGENT_REPORT` when the fleet includes solo agents.
 - `TEAM_REPORT`, the leader's final response and the team's board path when an agent-launched team reaches `Done` or ends before `Done`.

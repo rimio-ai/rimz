@@ -94,11 +94,10 @@ A batched delivery splits at each blank line that is followed by a recognized he
 | `AGENT_MESSAGE` | `Message`, with the header's sender as `from` |
 | `AGENT_REPORT`, `TEAM_REPORT`, or `SUBAGENT_REPORT` | `SubagentReport`, with the header's sender as `from` |
 | Any other harness notice, including an unknown `@rimz` type | `Wait`, with the header's sender as `from` |
-| `USER_MESSAGE` | `Prompt`, header removed, no `from` |
 | No recognized header, and a confirmed or in-flight record accounts for it | The record sender's origin: human is `Prompt` without `from`, agent is `Message` from its handle, a child or report is `SubagentReport`, any other harness notice is `Wait`, system is `Prompt` with `from: "rimz"` |
 | No recognized header, and nothing accounts for it | Human `Prompt`, subject to the cases below |
 
-A header's origin wins over a matched record's sender. An unaligned section matches a confirmed record by exact body text, in order. A section with no header can also match an in-flight record, but only one that ships headerless (a system prompt or any command) with the same trimmed text, and each record matches once. A system `/compact` is therefore harness-authored even before its compaction acknowledgement, while an operator's command keeps that operator's human or agent origin.
+A header's origin wins over a matched record's sender. An unaligned section matches a confirmed record by exact body text, in order. A section with no header can also match an in-flight record, but only one that ships headerless (the user's or a system prompt, or any command) with the same trimmed text, and each record matches once. A system `/compact` is therefore harness-authored even before its compaction acknowledgement, while an operator's command keeps that operator's human or agent origin.
 
 Three cases change the mapping:
 

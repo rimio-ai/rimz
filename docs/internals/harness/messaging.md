@@ -101,6 +101,9 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Site | Module and composing symbol | Sender / body queued |
 | --- | --- | --- |
 | Human or agent message | `crates/rimz/src/cli/message/dispatch.rs::send_message`, caller text. `crates/rimz/src/launcher/context.rs::sender_for` resolves identity | `Human` or `Agent` / `Prompt`. `--no-from` uses `System` / `Prompt` |
+| Answer to a raised ask | `crates/rimz/src/cli/answer.rs::answer_raised`, the chosen label or text, `sender_for` on the caller | `Human` or `Agent` / `Prompt` |
+| Prompt for a cohort already running | `crates/rimz/src/launcher/reconcile.rs::reconcile_cohort_launch`, the launch prompt sent to the running leader, `sender_for` on the launcher | `Human` or `Agent` / `Prompt` |
+| Resume prompt | `crates/rimz/src/launcher/mod.rs::queue_resume_prompt`, called by `launch_resume_layout` with the resume's prompt | `Human` / `Prompt`, whatever the caller |
 | Fleet digest | `crates/rimz/src/cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `compose_digest` | `Harness { notice: SubagentReport }` when every row is a subagent run, else `AgentReport` / `Prompt` |
 | Team report | `crates/rimz/src/cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
 | Child restarted with its run open | `crates/rimz/src/cli/agents_cmd/restart.rs::notify_parent_restarted`, through `SyntheticMessage` | `Harness { notice: SubagentRestarted }` / `Prompt` |
@@ -132,7 +135,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Supervised retry | `crates/rimz/src/harness/prompt_compose.rs::retry_prompt` | No queue record. Keeps the run's origin |
 | `message --create` on a missing recipient | `crates/rimz/src/cli/message/dispatch.rs::recipient_miss`, caller text passed as a launch prompt | No queue record. Agent-sender preservation is deferred |
 
-Run-origin matching and the wrapper registry are in [transcript.md § Writing entries](./transcript.md#writing-entries). Text outside this table has no message record. Direct typing and `rimz pane send` are raw keystrokes whose caller is the author. Ordinary root launch text is not queued. Team system prompts use the system-text channel. Restart, resume, and rebirth open a turn only through queued records: the restart continue and a team member's stage notice (rows above), each carrying a not-prompted-since premise so a prompt the member takes first withdraws it. Fork injects no turn-opening text. Provider control payloads pass through `SanitizedPrompt`, process plugins included, before they can become lifecycle prompts.
+Run-origin matching and the wrapper registry are in [transcript.md § Writing entries](./transcript.md#writing-entries). Text outside this table has no message record. Direct typing and `rimz pane send` are raw keystrokes whose caller is the author. Ordinary root launch text is not queued. Team system prompts use the system-text channel. Restart, resume, and rebirth open a turn only through queued records: the restart continue, a resume's own prompt, and a team member's stage notice (rows above), the continue and the notice each carrying a not-prompted-since premise so a prompt the member takes first withdraws it. Fork injects no turn-opening text. Provider control payloads pass through `SanitizedPrompt`, process plugins included, before they can become lifecycle prompts.
 
 ## Status lifecycle
 
@@ -461,26 +464,26 @@ When a queued head delivers, the helper extends the claim through the contiguous
 
 The first deliverable record on the card's lane that fails a rule ends the batch (`crates/rimz/src/store/message.rs::delivery_batch_indices`). `Resume` control messages never batch.
 
-Sender, sender channel, and type do not split a batch: a person's message, a peer's message from another channel, a harness notice, and a fleet digest (`SUBAGENT_REPORT`, `AGENT_REPORT`) land in one paste, in queue order. Every claimed member passes the [join guard](#the-subagent-digest-join-guard) and the [retirement guards](#the-run-linked-notice-guard) before the paste, so a digest needs no claim of its own. A join check, or the queue read behind a still-queued warning, that fails with an error releases the whole claimed set; an unreadable linked run leaves its notice deliverable, as the run-link guard says, and an unreadable stage board holds its premise.
+Sender, sender channel, and type do not split a batch: a person's message, a peer's message from another channel, a harness notice, and a fleet digest (`SUBAGENT_REPORT`, `AGENT_REPORT`) land in one paste. Selection is in queue order, and so is the batch id and every gate the head decides; the paste order is `store::message::paste_order`: the person's own messages (`MessageSender::Human`) first, in queue order, then every other member in queue order, so the person's bare text never runs on under another sender's header body. Every claimed member passes the [join guard](#the-subagent-digest-join-guard) and the [retirement guards](#the-run-linked-notice-guard) before the paste, so a digest needs no claim of its own. A join check, or the queue read behind a still-queued warning, that fails with an error releases the whole claimed set; an unreadable linked run leaves its notice deliverable, as the run-link guard says, and an unreadable stage board holds its premise.
 
 Whole-turn readers see a mixed paste as one turn. `rimz agents history` labels it by its first section, so later senders and types stay out of its row. The turn counts as opened by the person when any section is a person's message (`store::message::human_opened_turn`), and as wake-only only when every section is a `WAIT` or `SIGNAL`.
 
-The batch lands as one paste and one submit. Attributed members keep their own [header](#the-message-header), system members stay verbatim, and a blank line separates sections. Claim, `Sent`, release, and pre-send failure each change the whole batch in one queue transaction. One exception: a cold-cache stop on a keepalive at the head errors the keepalive records in one commit and releases the rest in a second (see [the ping](#the-ping)).
+The batch lands as one paste and one submit, in paste order. Attributed members keep their own [header](#the-message-header), the person's and system members stay verbatim, and a blank line separates sections. Claim, `Sent`, release, and pre-send failure each change the whole batch in one queue transaction. One exception: a cold-cache stop on a keepalive at the head errors the keepalive records in one commit and releases the rest in a second (see [the ping](#the-ping)).
 
 ### Confirmation and retry
 
-A `TurnStarted` hook aligns the submitted prompt against the candidate `Prompt` batches for its card through [`align_submitted_prompt`](../../../crates/rimz/src/store/message.rs). Record text supplies the boundaries between adjacent messages. Attributed and harness records match through their structured headers, and system records match verbatim. Inside a batch the text and the blank-line joins must match exactly. Only the outer whitespace follows the hook payload's normalization.
+A `TurnStarted` hook aligns the submitted prompt against the candidate `Prompt` batches for its card through [`align_submitted_prompt`](../../../crates/rimz/src/store/message.rs). It matches the batch in the same `paste_order` the paste used. Record text supplies the boundaries between adjacent messages. Attributed and harness records match through their structured headers, and the person's and system records match verbatim. Inside a batch the text and the blank-line joins must match exactly. Only the outer whitespace follows the hook payload's normalization.
 
 | Record state and event | Result |
 | --- | --- |
 | `Sent` + submission containing the batch exactly | `Delivered` |
-| `Sent` headered batch + submission with surrounding text | `Delivered` with a mixed-submit reason and the stray byte counts. The surrounding text becomes direct-input transcript entries |
-| `Sent` system batch + submission with surrounding text | No transition. Headerless text needs an exact whole-prompt match |
+| `Sent` batch led by a header or by the person's message + submission with surrounding text | `Delivered` with a mixed-submit reason and the stray byte counts. The surrounding text becomes direct-input transcript entries |
+| `Sent` batch led by a system record + submission with surrounding text | No transition. Such a batch needs an exact whole-prompt match |
 | `Sent` + submission without the batch | No transition. The submission is direct pane input |
 | `Queued` after an unconfirmed write + correlated submission | `Delivered`, with no time limit |
 | `Claimed` + any submission | Ignored. The in-flight write owns the pane |
 
-Stray composer text around a headered batch is never a reason to write the pane again. A headerless system batch needs an exact match because its text alone cannot tell a delivery from the user's own words.
+Stray composer text around a headered batch, or around the person's own message, is never a reason to write the pane again. The person's message is found at any occurrence of its text that no recognized header line precedes, trying each until the rest of the batch follows, since text the person typed around it is theirs too. Paste order puts the person's messages before the first header, so an occurrence after one is inside another sender's block and is not their paste. A batch led by a system record needs an exact match because its text alone cannot tell a delivery from the user's own words.
 
 When a turn-start adapter reports no usable prompt text, confirmation selects the oldest `Sent` prompt batch with at least one record still inside its hold deadline. If every candidate batch has expired, it falls back to the oldest, which preserves late acknowledgements. Selection confirms the whole batch, expired members included. A `Compacting` hook selects the oldest `Sent` batch of `Command` records regardless of age. Neither uncorrelated selection takes a record whose `sent_epoch` is below the epoch the hook's event carries: that text went into a session a [swap](../agents/instances.md#agents-sessions-and-epochs) replaced, so the holder's first turn did not receive it. Such a prompt stays `Sent` until reconciliation re-queues it, and its card then follows the agent to the holder; such a command times out unresent. A record without `sent_epoch` is selected as before, and the prompt-correlated selection does not read the field.
 
@@ -591,7 +594,6 @@ Content:
 | `Type` | Sent for | `From` |
 | --- | --- | --- |
 | `AGENT_MESSAGE` | A send from an identified agent caller | Stable reply address, followed by the profile (else kind) in parentheses unless it repeats the handle base, then `, wants a reply` when the record's `reply_wanted` is set |
-| `USER_MESSAGE` | A human's `rimz message` | `@user` |
 | `SUBAGENT_REPORT` | The status-only fleet digest when every row is a `rimz subagents` run | `@rimz` |
 | `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `-p --bg` runs and launcher-opened interactive peer turns | `@rimz` |
 | `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done` or the cohort ends before `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
@@ -607,7 +609,7 @@ Content:
 | `STAGE` | A prose-only stage-open delivery from a flip or a resume or registration re-wake | `@rimz` |
 | The notice name, upper-cased | A harness notice this binary does not know (`HarnessNotice::Other`) | `@rimz` |
 
-Commands carry no header, whatever their sender (`MessageRecord::ships_headerless`), and neither do system records or `--no-from` sends. An unknown harness notice keeps its string and takes ordinary harness delivery ([store.md § What is in it](../store.md#what-is-in-it) explains why the string survives).
+Commands carry no header, whatever their sender (`MessageRecord::ships_headerless`), and neither do system records, `--no-from` sends, or the person's own prompts (`MessageSender::Human`: a user-shell `rimz message`, `rimz answer` on a raised ask, a prompt sent to a running cohort's leader, a resume prompt), which reach the pane as the bare text a person would type. An unknown harness notice keeps its string and takes ordinary harness delivery ([store.md § What is in it](../store.md#what-is-in-it) explains why the string survives).
 
 A handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched teammate in the same lane does not gain a spurious suffix before pane capture lands.
 
@@ -893,7 +895,7 @@ The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `
 
 ### Mixed binaries
 
-A room can be shared by binaries of different versions, and eight record changes have a compatibility edge:
+A room can be shared by binaries of different versions, and these changes have a compatibility edge:
 
 - `Expired` is a status an older binary cannot decode. Once an expired record is in `audit/messages/`, older binaries fail the history reads behind `message list`, `message show`, `message requeue`, and `send_compact`'s settled lookup. The terminal commit removes the record from the live queue, so older queue transactions never meet the status. Event-log readers keep unknown methods through their catch-all.
 - `queued_notice_at` is dropped by an older binary that rewrites the queue, so a later sweep by a newer binary can send a second still-queued notice. No status or event method marks this.
@@ -903,6 +905,7 @@ A room can be shared by binaries of different versions, and eight record changes
 - Harness notice strings a binary does not know survive its queue rewrites as `HarnessNotice::Other`.
 - `reply_wait` and `reply_wait_lease`, which an older binary's `rimz message --wait` writes, decode and are dropped. A newer binary sends such a record's agent sender the ordinary undelivered and still-queued notices, and its queue rewrite removes both keys, so the older wait's cycle detection stops seeing that record.
 - `reply_wanted` is dropped by an older binary that rewrites the queue, so a later delivery prints the header without the mark. Unmarked records retain their existing JSON shape. A receiver whose turn-start hook runs an older binary cannot parse a marked `From:` line: the delivery stays unconfirmed and is resent like any unacknowledged prompt, and its transcript section is attributed to the user.
+- The person's own prompts carry no header. An older binary pasted them under a three-line user header, which a newer binary does not parse: a hook on a newer binary reads such a prompt as the person's text with the three header lines inside it (its transcript entry and `agents history` row carry them), and confirms the record by containment, the header counted as stray bytes, when the record was pasted alone or first. A bare prompt a newer binary pasted is not confirmed by a turn-start hook that runs an older binary, which looks for the header: the delivery stays `Sent` and is pasted again, up to the resend cap, like the `reply_wanted` case above.
 
 ## The inbox verbs
 
