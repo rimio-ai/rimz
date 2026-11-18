@@ -175,6 +175,22 @@ pub(super) fn check_cards(
         );
         output
     };
+    // Reopen skips an agent the sidebar's published frame still lists as alive, so a reopen
+    // right after a close can find nothing to reopen until the host republishes.
+    let reopen = || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let output = card(&["reopen"]);
+            if output.stderr != b"sidebar reopen: no closed card to reopen\n" {
+                break output;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the closed card never left the alive view"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
     let a = &agents[0].pane.as_ref().unwrap().pane_id;
     let b = &agents[1].pane.as_ref().unwrap().pane_id;
     let focus = |pane: &PaneId| {
@@ -222,7 +238,7 @@ pub(super) fn check_cards(
         !surviving_views.contains_key(b),
         "closed pane still exists: {b}"
     );
-    quiet(card(&["reopen"]));
+    quiet(reopen());
     let deadline = Instant::now() + Duration::from_secs(30);
     let reopened = loop {
         let snapshot = store.snapshot().unwrap();
@@ -267,7 +283,7 @@ pub(super) fn check_cards(
         );
         std::thread::sleep(Duration::from_millis(50));
     }
-    quiet(card(&["reopen"]));
+    quiet(reopen());
     let deadline = Instant::now() + Duration::from_secs(30);
     while !store.snapshot().unwrap().agents.iter().any(|agent| {
         agent.agent_id == agents[1].agent_id
