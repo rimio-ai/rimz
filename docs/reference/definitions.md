@@ -129,7 +129,7 @@ Quote entries containing commas in a YAML flow list: `tools: ["Agent(Explore, Pl
 | Kind | Rendering |
 | --- | --- |
 | Claude | Requires `tools`, even if empty. Emits `--strict-mcp-config`, then optional `--disallowedTools`, then `--tools` with comma-joined bases. A nonempty `Agent(...)` allowlist denies every unnamed type from `Explore`, `Plan`, `general-purpose`, `statusline-setup`, `fork`, in that order. Unknown native types fail. Bare `Agent` adds no type restriction. With [code mode](./agent-support.md#code-mode) on, `REPL` and `Poll` end the list, each once. |
-| Codex | Requires `tools`, even if empty. Emits `--strict-config` and the ordered `-c` settings below. Native `Agent(...)` type names do not restrict Codex child types. With [code mode](./agent-support.md#code-mode) on, `-c features.code_mode=true` follows the settings. |
+| Codex | Requires `tools`, even if empty. Emits `--strict-config` and the ordered `-c` settings below. Native `Agent(...)` type names do not restrict Codex child types. With [code mode](./agent-support.md#code-mode) on, `-c features.code_mode=true` follows the settings; with it off, `-c features.code_mode=false` does. |
 | Pi | Optional. Emits `--tools` with the mapped names below, or `--no-tools` for an empty or all-dropped list, then `--no-skills` when the list omits `Skill`. An absent list emits no flag. With [code mode](./agent-support.md#code-mode) on, `codemode` ends the mapped list (`--tools codemode` instead of `--no-tools`), and an absent list emits `--tools +codemode`. |
 | OMP | Accepts or omits `tools`; ignores the list silently. |
 | Other kinds | Accepts or omits `tools`; a supplied list warns at launch and is not applied. |
