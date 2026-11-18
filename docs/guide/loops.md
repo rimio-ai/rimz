@@ -334,7 +334,7 @@ RimZ applies each fix as a configurable reflex. The room recognizes the stop fro
 rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
 rimz config set resume.auto_redeem true       # spend Codex reset credits when they buy real time
 rimz config set harness.idle_compact off      # opt out of idle compaction
-rimz config set harness.smart_compact 200k    # wrap up a filling turn, compact before the next prompt
+rimz config set harness.smart_compact 200k    # remind a filling turn to compact, compact before the next prompt
 ```
 
 A related cleanup is not a reflex but a request: `rimz agents stop @coder --when-idle` stops an agent once it has rested three minutes with nothing owed to it ([stop reference](../reference/cli/agents.md#stop)).
@@ -377,10 +377,10 @@ Every agent CLI compacts on its own when the context hits its ceiling, wherever 
 
 Smart compaction watches each agent's context against a token line and acts at two moments:
 
-- **During a turn, RimZ asks the agent to wrap up.** It sends a steer asking the agent to finish its current step without leaving files half-edited, start nothing new, and end its turn. When the turn ends, RimZ compacts if context is still above the line, then sends `continue`. Interrupting the agent cancels the continue.
+- **During a turn, RimZ reminds the agent to compact itself.** Once per compaction or `/clear`, it steers a note into the turn: at a good stopping point, run `rimz agents compact @me` with a brief of what to keep (on an agent whose compaction takes no brief, note it in the reply first). The agent picks the moment, and [`rimz agents compact`](../reference/cli/agents.md#compact) compacts it when the turn ends and then sends `continue`. An agent that ignores the reminder is left to the provider's own auto-compaction. Interrupting the agent, `/clear`, or a prompt you type cancels the continue.
 - **Before a message reaches a resting agent above the line, RimZ compacts first.** A `rimz message` or a scheduled wait then lands in the fresh context.
 
-The line is `harness.smart_compact`, default `258k` tokens. Set a token count like `200k`, a percentage like `70%`, or `off`. A profile or team role can set its own `smart-compact`, and [`rimz agents tune @coder smart-compact 70%`](../reference/cli/agents.md#tune) overrides it for one session. While the account's usage window is spent and no paid extra usage carries it, RimZ sends no wrap-up and holds `continue` until the reset. The provider's own auto-compaction stays as the backstop. [Configuration](./configuration.md#smart-compaction) lists the adapters that skip it, and [messaging](./messaging.md#compact-before-the-message-lands) gives the delivery rules.
+The line is `harness.smart_compact`, default `258k` tokens. Set a token count like `200k`, a percentage like `70%`, or `off`. A profile or team role can set its own `smart-compact`, and [`rimz agents tune @coder smart-compact 70%`](../reference/cli/agents.md#tune) overrides it for one session. While the account's usage window is spent and no paid extra usage carries it, RimZ sends no reminder. The provider's own auto-compaction stays as the backstop. [Configuration](./configuration.md#smart-compaction) lists the adapters that skip it, and [messaging](./messaging.md#compact-before-the-message-lands) gives the delivery rules.
 
 ## Permissions for an unattended run
 

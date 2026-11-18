@@ -78,7 +78,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 - `rimz agents -p` is `claude -p` for every agent that can run headless, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows.
 - `rimz loop` runs a command on a clock (interval, cron, or once at a time), on a signal, or when a condition holds: a test suite, a script, or a `rimz agents` launch that starts an agent. RimZ emits CI, pull request, agent, and team signals itself, and anything else can emit its own.
 - `rimz wait` lets an agent arm its own timer, clock time, state condition, command, process, polled check, or file watch and end its turn instead of sleeping.
-- A rate-limit pause resumes the moment the budget window resets, transient API overload retries on a backoff ramp, and smart compaction asks a filling turn to wrap up before compacting and continuing, so agents keep working while you are gone.
+- A rate-limit pause resumes the moment the budget window resets, transient API overload retries on a backoff ramp, and smart compaction reminds a filling turn to compact itself, after which RimZ continues it, so agents keep working while you are gone.
 - Dollar budgets cap one turn, one agent, the room, or a provider account. A turn that crosses a cap is stopped and parked.
 - Notification handlers run your own command the moment a row needs eyes: a push to your phone, or a script that answers the routine prompt for you.
 
@@ -315,7 +315,7 @@ rimz config set theme.pets.enabled true       # an animated pet; `rimz list-pets
 
 # Hands-off work: recover and keep going while you're away
 rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
-rimz config set harness.smart_compact 200k    # wrap up a filling turn; compact before the next prompt
+rimz config set harness.smart_compact 200k    # remind a filling turn to compact; compact before the next prompt
 rimz config set harness.budget 50/day         # cap what the room spends in a day
 
 # Answer asks from your phone (the move above)
@@ -326,7 +326,7 @@ rimz config set remote_control.codex true
 What each group does, with the depth one link away:
 
 - The modern look wants a truecolor terminal (Ghostty, WezTerm, Kitty, Alacritty) and a Nerd Font, inside RimZ tmux rooms and over `rimz remote` too. The color scheme defaults to TokyoNight Night; `rimz config set theme "Catppuccin Mocha"` picks any bundled scheme from `rimz list-themes`. Pets render as crisp pixels in Ghostty and kitty (tmux additionally needs 3.6+ with `allow-passthrough on`) and as cell art everywhere else, Zellij included. → [theming](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
-- Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction asks a filling turn to wrap up, compacts at rest, and continues, or compacts ahead of a message to an already-resting agent. Between them the pauses that would have stalled the fleet until morning clear themselves, and you are left with the decisions that actually need you. The room budget caps what that freedom costs, and the same cap exists per turn, per agent, and per provider account. → [loops → keep the fleet moving](./docs/guide/loops.md#keep-the-fleet-moving) · [budgets](./docs/guide/budget.md)
+- Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction reminds a filling turn to compact itself and continues it afterward, or compacts ahead of a message to an already-resting agent. Between them the pauses that would have stalled the fleet until morning clear themselves, and you are left with the decisions that actually need you. The room budget caps what that freedom costs, and the same cap exists per turn, per agent, and per provider account. → [loops → keep the fleet moving](./docs/guide/loops.md#keep-the-fleet-moving) · [budgets](./docs/guide/budget.md)
 - The remote-control toggles are the [answer-from-your-phone move](#step-away) above; the [remote guide](./docs/guide/remote.md#answer-asks-from-your-phone) shows exactly what each one runs.
 
 Two more settings change what a room launches under:

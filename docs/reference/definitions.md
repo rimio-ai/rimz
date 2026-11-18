@@ -257,7 +257,7 @@ Resolution follows the team role's TOML override, then the first setting in the 
 
 [`rimz agents tune <AGENT> smart-compact <VALUE>`](./cli/agents.md#tune) replaces this configured resolution for one session; `reset` restores it. An explicit message threshold takes precedence over that override.
 
-The same line drives [mid-turn soft compaction](../guide/loops.md#smart-compaction) and compact-first message delivery to a resting agent. Mid-turn detection resolves current definitions; a queued message retains the line selected at enqueue. `rimz message --smart-compact` changes only that send's line.
+The same line drives the [mid-turn compaction reminder](../guide/loops.md#smart-compaction) and compact-first message delivery to a resting agent. Mid-turn detection resolves current definitions; a queued message retains the line selected at enqueue. `rimz message --smart-compact` changes only that send's line.
 
 ### Idle compaction
 

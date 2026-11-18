@@ -1233,7 +1233,7 @@ impl MessageRecord {
     /// their control lane. Every queued record arms its lifespan's end, which the reconciler
     /// withdraws at. `queue_wake_deadline` adds active typing holds and expired-hold
     /// retries for replay and resume records. Claimed and sent resume records still arm recovery.
-    /// Steer-only wrap-ups arm cleanup after the claim TTL, including while queued.
+    /// Steer-only reminders arm cleanup after the claim TTL, including while queued.
     pub fn wake_deadline(&self, now: Timestamp) -> Option<Timestamp> {
         match self.status {
             MessageStatus::Queued if self.soft_compact == Some(SoftCompactStep::WrapUp) => {

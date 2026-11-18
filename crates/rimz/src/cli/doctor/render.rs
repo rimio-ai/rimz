@@ -2305,7 +2305,7 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
         note(
             w,
             Health::Neutral,
-            &format!("mid-turn soft compaction skipped: {skipped}"),
+            &format!("smart-compaction reminder skipped: {skipped}"),
         )?;
         detail(
             w,

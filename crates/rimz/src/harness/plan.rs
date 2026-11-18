@@ -1391,7 +1391,7 @@ impl fmt::Display for LaunchFinalizeWarning {
                 reason,
             } => write!(
                 formatter,
-                "warning: `{profile}` smart-compact {line}: {agent} skips mid-turn soft compaction ({reason})"
+                "warning: `{profile}` smart-compact {line}: {agent} skips the smart-compaction reminder ({reason})"
             ),
             Self::SmartCompactNativeWindow {
                 profile,

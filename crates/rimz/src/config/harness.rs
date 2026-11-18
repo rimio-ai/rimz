@@ -450,7 +450,7 @@ pub struct HarnessConfig {
     /// `auto-compact`; unset means 272k tokens, `off` passes no window.
     #[serde(with = "auto_compact_serde")]
     pub auto_compact: Option<u64>,
-    /// Wrap up a filling turn and compact at rest, or compact before a message or
+    /// Remind a filling turn to compact itself, or compact before a message or
     /// scheduled wait. The fallback line is 258,000 tokens; `off` disables it.
     #[serde(with = "smart_compact_serde")]
     pub smart_compact: Option<AutoCompact>,

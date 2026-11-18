@@ -1849,21 +1849,21 @@ roles = [{role = "reviewer", profile = "coder", smart-compact = "70%", flip-comp
             "coder",
             Agents,
             vec![
-                "warning: `coder` smart-compact 200000 tokens: amp skips mid-turn soft compaction (no compact command)",
+                "warning: `coder` smart-compact 200000 tokens: amp skips the smart-compaction reminder (no compact command)",
             ],
         ),
         (
             "forge.reviewer",
             Agents,
             vec![
-                "warning: `coder` smart-compact 70%: amp skips mid-turn soft compaction (no compact command)",
+                "warning: `coder` smart-compact 70%: amp skips the smart-compaction reminder (no compact command)",
             ],
         ),
         (
             "coder",
             Subagents,
             vec![
-                "warning: `coder` smart-compact 60%: kiro skips mid-turn soft compaction (no compaction signal)",
+                "warning: `coder` smart-compact 60%: kiro skips the smart-compaction reminder (no compaction signal)",
             ],
         ),
         ("muted", Agents, vec![]),
