@@ -491,7 +491,7 @@ fn a_user_logo_outranks_the_shipped_one_and_waits_on_the_next_tier() {
 }
 
 #[test]
-fn a_reserved_box_keeps_tall_user_art_inside_it() {
+fn a_reserved_box_draws_no_art_and_keeps_the_logos_rows() {
     let dir = tempfile::tempdir().expect("tempdir");
     let good = dir.path().join("mine.svg");
     std::fs::write(
@@ -549,8 +549,8 @@ fn a_reserved_box_keeps_tall_user_art_inside_it() {
         .collect::<Vec<_>>()
         .join("|");
     assert!(
-        kept.contains("666") && !kept.contains("111"),
-        "the bottom rows of the art are kept: {kept}"
+        kept.chars().all(|cell| cell == ' ' || cell == '|'),
+        "the reserved box is empty: {kept}"
     );
 }
 

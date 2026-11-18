@@ -798,6 +798,7 @@ fn an_arrival_draws_a_landed_logo_in_its_first_frame_with_the_mirrors_rows() {
 
     let grant = mirror_queue::Grant::for_test(PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     let mirror = wide(&mut painter, &mut ui, paint::PaintKind::Mirror(&grant));
+    assert!(ui.meter_pixels.is_none(), "the mirror draws the cell bar");
     painter.release_slot(&mut ui);
     painter.clear_slot_retry();
     assert!(!mirror.graphics() && mirror.placeholders().next().is_none());
@@ -805,8 +806,8 @@ fn an_arrival_draws_a_landed_logo_in_its_first_frame_with_the_mirrors_rows() {
         .trim()
         .to_owned();
     assert!(
-        mirror.row_of(&emblem).is_some(),
-        "the mirror draws the text emblem"
+        mirror.row_of(&emblem).is_none(),
+        "the mirror draws no emblem in the reserved box"
     );
     let arrival = wide(&mut painter, &mut ui, ROUTED);
     assert!(
