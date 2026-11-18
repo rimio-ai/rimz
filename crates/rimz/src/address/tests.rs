@@ -1080,11 +1080,7 @@ fn message_header_parser_round_trips_attributed_senders() {
         ))
     );
 
-    let human = message_header(&MessageSender::Human, &[], None).unwrap() + body;
-    assert_eq!(
-        parse_message_header(&human),
-        Some((HeaderKind::User, "@user".to_owned(), body.to_owned()))
-    );
+    assert_eq!(message_header(&MessageSender::Human, &[], None), None);
     assert_eq!(message_header(&MessageSender::System, &[], None), None);
 
     let subagent = MessageSender::Harness {

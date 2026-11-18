@@ -216,7 +216,7 @@ fn human_turn_on_peer_run_withdraws_idle_stop_without_spend_input() {
 #[test]
 fn user_shell_message_withdraws_idle_stop() {
     idle_stop_turn(
-        "Type: USER_MESSAGE\nFrom: @user\nContent:\nkeep working",
+        "keep working",
         Some(rimz::store::message::MessageSender::Human),
         1,
         IdleStopRun::None,

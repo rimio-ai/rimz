@@ -430,7 +430,8 @@ fn submitted_sections_cover_every_sender_and_body() {
             record.text = " /compact ".to_owned();
             record.status = MessageStatus::Sent;
             assert_eq!(record.sender.section_origin(), origin);
-            let headerless = sender == MessageSender::System || body == MessageBody::Command;
+            let headerless = matches!(sender, MessageSender::System | MessageSender::Human)
+                || body == MessageBody::Command;
             assert_eq!(record.ships_headerless(), headerless);
             assert!(record.in_flight());
             let sections = classify_submitted_prompt("/compact", &[], &[&record]);
@@ -590,7 +591,7 @@ fn prompt_origin_requires_only_non_user_headers() {
     let wait = "Type: WAIT\nFrom: @rimz\nContent:\ncheck back";
     let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI failed";
     let stage = "Type: STAGE\nFrom: @rimz\nContent:\nImplement is yours.";
-    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nnext task";
+    let human = "next task";
     for prompt in [
         agent.to_owned(),
         report.to_owned(),
@@ -612,9 +613,10 @@ fn prompt_origin_requires_only_non_user_headers() {
         human.to_owned(),
         "bare composer text".to_owned(),
         format!("composer text\n\n{agent}"),
-        format!("{agent}\n\n{human}"),
-        format!("{stage}\n\n{human}"),
+        format!("{human}\n\n{agent}"),
+        format!("{human}\n\n{stage}"),
         format!("{human}\n\n{wait}"),
+        format!("{OLD_USER_HEADER}{human}"),
         format!("{agent}\n\nType: WAIT\nFrom: rimz\nContent:\ninvalid"),
         "Type: FUTURE_NOTICE\nFrom: @coder\nContent:\nunknown".to_owned(),
         String::new(),
@@ -643,7 +645,6 @@ fn keepalive_only_prompt_requires_every_section_to_be_a_keepalive() {
         format!("{keepalive}\n\nType: STAGE\nFrom: @rimz\nContent:\nImplement is yours."),
         format!("Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst\n\n{keepalive}"),
         "bare composer text".to_owned(),
-        "Type: USER_MESSAGE\nFrom: @user\nContent:\nnext task".to_owned(),
         "Type: CACHE_KEEPALIVE\nFrom: rimz\nContent:\nmalformed".to_owned(),
         String::new(),
         " \n\t\n".to_owned(),
@@ -686,7 +687,7 @@ fn wake_only_prompt_requires_every_section_to_be_a_wake() {
         .chain([HarnessNotice::Other("future_notice".to_owned())])
         .filter(|notice| !matches!(notice, HarnessNotice::Wait | HarnessNotice::Signal))
         .map(|notice| notice.header_type())
-        .chain(["AGENT_MESSAGE".to_owned(), "USER_MESSAGE".to_owned()]);
+        .chain(["AGENT_MESSAGE".to_owned()]);
     for header in other_headers {
         let other = format!("Type: {header}\nFrom: @rimz\nContent:\nNext task.");
         for prompt in [other.clone(), format!("{wait}\n\n{other}")] {
@@ -914,9 +915,8 @@ fn signal_headers_split_mixed_batches() {
     let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
     let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI failed\n\ninspect the log";
     let wait = "Type: WAIT\nFrom: @rimz\nContent:\ncheck back";
-    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
     let report = "Type: AGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
-    let sections = [agent, signal, wait, report, human, signal];
+    let sections = [agent, signal, wait, report, signal];
     let prompt = sections.join("\n\n");
     assert_eq!(split_batched_prompt(&prompt), sections);
     assert!(
@@ -937,22 +937,22 @@ fn signal_headers_split_mixed_batches() {
 fn split_batched_prompt_splits_only_on_typed_sections() {
     let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
     let subagent = "Type: AGENT_REPORT\nFrom: @rimz\nContent:\nreport";
-    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
+    let wait = "Type: WAIT\nFrom: @rimz\nContent:\nsecond";
     assert_eq!(
-        split_batched_prompt(&format!("{agent}\n\n{human}")),
-        vec![agent, human]
+        split_batched_prompt(&format!("{agent}\n\n{wait}")),
+        vec![agent, wait]
     );
     assert_eq!(
         split_batched_prompt(&format!("human note\n\n{agent}")),
         vec!["human note", agent]
     );
     assert_eq!(
-        split_batched_prompt(&format!("{agent}\n\n\n{human}")),
-        vec![agent, human]
+        split_batched_prompt(&format!("{agent}\n\n\n{wait}")),
+        vec![agent, wait]
     );
     assert_eq!(
-        split_batched_prompt(&format!("{agent}\n\n{subagent}\n\n{human}")),
-        vec![agent, subagent, human]
+        split_batched_prompt(&format!("{agent}\n\n{subagent}\n\n{wait}")),
+        vec![agent, subagent, wait]
     );
     assert_eq!(
         split_batched_prompt(&format!("{agent}\n\nsecond paragraph")),
@@ -2368,8 +2368,12 @@ pub(crate) fn when_condition(
     }
 }
 
+/// The removed user header, spelled in pieces so the tree holds neither
+/// token: a prompt an older binary pasted still reaches a new hook.
+const OLD_USER_HEADER: &str = concat!("Type: USER", "_MESSAGE\nFrom: @", "user\nContent:\n");
+
 #[test]
-fn align_submitted_prompt_consumes_human_header() {
+fn align_submitted_prompt_finds_a_bare_human_record_inside_composer_text() {
     let recipient = agent("session-recipient", None);
     let record = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
@@ -2377,12 +2381,38 @@ fn align_submitted_prompt_consumes_human_header() {
         "ship it".to_owned(),
         crate::store::message::DeliveryGate::Done,
     );
-    let prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nship it";
-
-    let (leading, segments, trailing) =
-        align_submitted_prompt(prompt, &[&record]).expect("aligned prompt");
-    assert_eq!((leading, trailing), (None, None));
-    assert_eq!(segments, vec![prompt]);
+    assert_eq!(record.sender, MessageSender::Human);
+    for (prompt, leading, trailing) in [
+        ("ship it", None, None),
+        ("first: ship it", Some("first:"), None),
+        ("ship it, then rest", None, Some(", then rest")),
+        ("so ship it now", Some("so"), Some("now")),
+    ] {
+        assert_eq!(
+            align_submitted_prompt(prompt, &[&record]),
+            Some((leading, vec!["ship it"], trailing)),
+            "{prompt}"
+        );
+    }
+    let old = format!("{OLD_USER_HEADER}ship it");
+    assert_eq!(
+        align_submitted_prompt(&old, &[&record]),
+        Some((Some(OLD_USER_HEADER.trim()), vec!["ship it"], None)),
+        "an older binary's headered paste confirms with the header as stray bytes"
+    );
+    assert_eq!(align_submitted_prompt("ship", &[&record]), None);
+    assert_eq!(align_submitted_prompt("unrelated", &[&record]), None);
+    for prompt in [
+        "Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nplease ship it today",
+        "Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nship it today",
+        "Type: STAGE\nFrom: @rimz\nContent:\nyou may\nship it",
+    ] {
+        assert_eq!(
+            align_submitted_prompt(prompt, &[&record]),
+            None,
+            "the user's text inside another sender's block is not its paste: {prompt}"
+        );
+    }
 }
 
 #[test]
@@ -2501,22 +2531,15 @@ fn align_submitted_prompt_separates_stray_composer_text() {
         "second".to_owned(),
         crate::store::message::DeliveryGate::Done,
     );
-    let first_prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nfirst";
-    let second_prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
-    let prompt = format!(
-        "decoy Type: USER_MESSAGE\nFrom: @user\nContent:\nnot it before{first_prompt}\n\n{second_prompt}after"
-    );
+    // The first occurrence of "first" is not followed by the batch, so the
+    // aligner tries the next one, as the headered anchor loop does.
+    let prompt = "noted first then first\n\nsecond after";
 
     let (leading, segments, trailing) =
-        align_submitted_prompt(&prompt, &[&first, &second]).expect("embedded batch aligned");
-    assert_eq!(
-        leading,
-        Some("decoy Type: USER_MESSAGE\nFrom: @user\nContent:\nnot it before")
-    );
-    assert_eq!(segments, vec![first_prompt, second_prompt]);
+        align_submitted_prompt(prompt, &[&first, &second]).expect("embedded batch aligned");
+    assert_eq!(leading, Some("noted first then"));
+    assert_eq!(segments, vec!["first", "second"]);
     assert_eq!(trailing, Some("after"));
-    assert_eq!(leading.map_or(0, str::len), 59);
-    assert_eq!(trailing.map_or(0, str::len), 5);
 }
 
 #[test]
@@ -2543,15 +2566,16 @@ fn labeled_agent_batch_aligns_and_strips_labels() {
         DeliveryGate::Done,
     );
     let labeled = "Type: AGENT_MESSAGE\nFrom: @calm-fox#docs (planner)\nContent:\nfirst";
-    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
-    let prompt = format!("{labeled}\n\n{human}");
+    // The user's record is queued second and pasted first.
+    let prompt = format!("second\n\n{labeled}");
     let (leading, segments, trailing) =
         align_submitted_prompt(&prompt, &[&first, &second]).expect("labeled batch aligns");
     assert_eq!(leading, None);
     assert_eq!(trailing, None);
-    assert_eq!(segments, [labeled, human]);
+    assert_eq!(segments, ["second", labeled]);
+    assert_eq!(parse_message_header(segments[0]), None);
     assert_eq!(
-        parse_message_header(segments[0]),
+        parse_message_header(segments[1]),
         Some((
             HeaderKind::Agent,
             "@calm-fox#docs".to_owned(),
@@ -2559,9 +2583,117 @@ fn labeled_agent_batch_aligns_and_strips_labels() {
         ))
     );
     assert_eq!(
-        parse_message_header(segments[1]),
-        Some((HeaderKind::User, "@user".to_owned(), "second".to_owned()))
+        align_submitted_prompt(&format!("{labeled}\n\nsecond"), &[&first, &second]),
+        None,
+        "the queue order is not the paste order"
     );
+}
+
+#[test]
+fn paste_order_leads_with_the_users_prompts_in_queue_order() {
+    let recipient = agent("sess", None);
+    let record =
+        |id, sender| delivery_message(id, &recipient, DeliveryGate::Done, None).with_sender(sender);
+    let agent_first = record(1, agent_sender("coder", None));
+    let human_first = record(2, MessageSender::Human);
+    let system = record(3, MessageSender::System);
+    let human_second = record(4, MessageSender::Human);
+    let notice = record(
+        5,
+        MessageSender::Harness {
+            notice: HarnessNotice::Stage,
+        },
+    );
+    let ids = |order: Vec<&MessageRecord>| {
+        order
+            .into_iter()
+            .map(|record| record.message_id.clone())
+            .collect::<Vec<_>>()
+    };
+    let queue = [&agent_first, &human_first, &system, &human_second, &notice];
+    assert_eq!(
+        ids(paste_order(queue)),
+        [&human_first, &human_second, &agent_first, &system, &notice]
+            .map(|record| record.message_id.clone())
+    );
+    let owned = [agent_first.clone(), system.clone(), notice.clone()];
+    assert_eq!(
+        ids(paste_order(&owned)),
+        owned.each_ref().map(|record| record.message_id.clone()),
+        "a batch with no user prompt keeps its queue order"
+    );
+}
+
+#[test]
+fn mixed_batch_aligns_and_classifies_with_the_user_first() {
+    let recipient = agent("sess", None);
+    let mut review = delivery_message(1, &recipient, DeliveryGate::Done, None)
+        .with_sender(agent_sender("coder", None));
+    review.text = "review".to_owned();
+    let mut hello = delivery_message(2, &recipient, DeliveryGate::Done, None);
+    hello.text = "say hi".to_owned();
+    let mut resume = delivery_message(3, &recipient, DeliveryGate::Done, None)
+        .with_sender(MessageSender::System);
+    resume.text = "continue".to_owned();
+    let agent_block = "Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nreview";
+    let prompt = format!("say hi\n\n{agent_block}\n\ncontinue");
+    let queue = [&review, &hello, &resume];
+
+    assert_eq!(
+        align_submitted_prompt(&prompt, &queue),
+        Some((None, vec!["say hi", agent_block, "continue"], None))
+    );
+    let sections = classify_submitted_prompt(&prompt, &queue, &[]);
+    assert_eq!(
+        sections
+            .iter()
+            .map(|section| (
+                section.text.as_str(),
+                section.origin.clone(),
+                section.record.map(|record| &record.message_id)
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("say hi", SectionOrigin::Human, Some(&hello.message_id)),
+            (
+                "review",
+                SectionOrigin::Agent("@coder".to_owned()),
+                Some(&review.message_id)
+            ),
+            ("continue", SectionOrigin::Harness, Some(&resume.message_id)),
+        ]
+    );
+    let observation = crate::agents::AgentLifecycleObservation::new(
+        Some("sess".into()),
+        crate::agents::LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    let delivered = [review.clone(), hello.clone(), resume.clone()];
+    assert!(human_opened_turn(
+        &observation,
+        &serde_json::Value::Null,
+        &sections,
+        &delivered,
+        false
+    ));
+    assert!(!prompt_is_harness_delivered(&prompt));
+
+    let in_flight = classify_submitted_prompt("say hi", &[], &[&hello]);
+    assert_eq!(
+        in_flight[0].record.map(|record| &record.message_id),
+        Some(&hello.message_id),
+        "a bare section binds to its in-flight user record before acknowledgement"
+    );
+}
+
+#[test]
+fn an_old_user_header_is_the_users_text_and_no_header() {
+    let prompt = format!("{OLD_USER_HEADER}ship it");
+    assert_eq!(parse_message_header(&prompt), None);
+    assert_eq!(split_batched_prompt(&format!("note\n\n{prompt}")).len(), 1);
+    let sections = classify_submitted_prompt(&prompt, &[], &[]);
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].origin, SectionOrigin::Human);
+    assert_eq!(sections[0].text, prompt);
 }
 
 #[test]
@@ -2574,13 +2706,7 @@ fn align_submitted_prompt_rejects_a_truncated_record() {
         crate::store::message::DeliveryGate::Done,
     );
 
-    assert_eq!(
-        align_submitted_prompt(
-            "Type: USER_MESSAGE\nFrom: @user\nContent:\nship",
-            &[&record]
-        ),
-        None
-    );
+    assert_eq!(align_submitted_prompt("ship", &[&record]), None);
 }
 
 #[test]

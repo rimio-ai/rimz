@@ -79,7 +79,7 @@ fn harness_prompt_keeps_finished_children_listed() {
         );
 
         for prompt in [
-            Some("Type: USER_MESSAGE\nFrom: @user\nContent:\nnext"),
+            Some("next\n\nType: AGENT_MESSAGE\nFrom: @coder\nContent:\nreview"),
             Some("next"),
             None,
         ] {

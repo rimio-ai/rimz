@@ -838,17 +838,7 @@ fn write_text(
                     .all(|message| message.body == MessageBody::Prompt)
             );
             let peers = crate::address::addressable_agents(snapshot);
-            let payload = batch
-                .iter()
-                .map(
-                    |message| match crate::address::record_header(message, &peers) {
-                        Some(header) => format!("{header}{}", message.text),
-                        None => message.text.clone(),
-                    },
-                )
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            writer.paste(&payload)?;
+            writer.paste(&prompt_payload(batch, &peers))?;
         }
     }
     // Record the send once the text lands and before the submit keystroke, so a
@@ -887,6 +877,21 @@ fn write_text(
         writer.press(NamedKey::Enter)?;
     }
     Ok(())
+}
+
+/// One paste of a prompt batch: each member's header and text in paste order, joined by a
+/// blank line.
+fn prompt_payload(batch: &[MessageRecord], peers: &[&AgentState]) -> String {
+    crate::store::message::paste_order(batch)
+        .into_iter()
+        .map(
+            |message| match crate::address::record_header(message, peers) {
+                Some(header) => format!("{header}{}", message.text),
+                None => message.text.clone(),
+            },
+        )
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// The receiver's own compaction command for a queued compaction its agent's molt to another kind
@@ -1015,6 +1020,35 @@ mod tests {
             crate::store::message::DeliveryGate::Done,
         )
         .with_body(MessageBody::Command)
+    }
+
+    #[test]
+    fn a_batch_pastes_the_users_bare_text_ahead_of_headered_members() {
+        use crate::store::message::MessageSender;
+        let receiver = AgentState::stub("claude", "sess", crate::agents::AgentStatus::Idle);
+        let prompt = |text: &str, sender| {
+            MessageRecord::new(
+                crate::ids::WorkspaceId::parse("ws_000000000000000000000000").unwrap(),
+                &receiver,
+                text.to_owned(),
+                crate::store::message::DeliveryGate::Done,
+            )
+            .with_sender(sender)
+        };
+        let stage = MessageSender::Harness {
+            notice: crate::store::message::HarnessNotice::Stage,
+        };
+        let batch = [
+            prompt("go on", stage),
+            prompt("say hi", MessageSender::Human),
+            prompt("continue", MessageSender::System),
+            prompt("and this", MessageSender::Human),
+        ];
+        assert_eq!(
+            prompt_payload(&batch, &[]),
+            "say hi\n\nand this\n\nType: STAGE\nFrom: @rimz\nContent:\ngo on\n\ncontinue"
+        );
+        assert_eq!(prompt_payload(&batch[1..2], &[]), "say hi");
     }
 
     #[test]

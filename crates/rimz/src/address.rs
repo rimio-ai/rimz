@@ -1594,12 +1594,12 @@ pub fn paste_address(
     Roster::of(snapshot).paste_address(agent, reader)
 }
 
-/// The structured header for a human-, agent-, subagent-, or harness-authored record.
+/// The structured header for an agent-, subagent-, or harness-authored record.
 ///
 /// Agent-authored text uses a stable reply handle and a profile or kind label,
 /// taking live identity when visible and launch identity otherwise, and ends its
 /// `From:` line with [`REPLY_WANTED_MARK`] when the sender wants a reply.
-/// System-authored text stays verbatim.
+/// The user's own text and system-authored text stay verbatim.
 pub(crate) fn record_header(record: &MessageRecord, peers: &[&AgentState]) -> Option<String> {
     header(
         &record.sender,
@@ -1625,9 +1625,6 @@ fn header(
     peers: &[&AgentState],
     target_channel: Option<&LaneName>,
 ) -> Option<String> {
-    if matches!(sender, MessageSender::Human) {
-        return Some("Type: USER_MESSAGE\nFrom: @user\nContent:\n".to_owned());
-    }
     if let MessageSender::Subagent { name, .. } = sender {
         return Some(format!("Type: SUBAGENT_REPORT\nFrom: @{name}\nContent:\n"));
     }

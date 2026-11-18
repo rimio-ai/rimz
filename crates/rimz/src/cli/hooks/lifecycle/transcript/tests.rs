@@ -617,7 +617,7 @@ fn mixed_submit_records_stray_text_as_direct_input() {
 }
 
 #[test]
-fn user_message_header_records_prompt_without_envelope() {
+fn user_shell_message_records_the_users_prompt_with_its_message_id() {
     let (_dir, store) = store();
     let workspace = workspace();
     let agent = rimz::testkit::agent_state("claude", "sess-1", recent_at());
@@ -628,9 +628,7 @@ fn user_message_header_records_prompt_without_envelope() {
         rimz::store::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
-    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(
-        "Type: USER_MESSAGE\nFrom: @user\nContent:\nfrom a human",
-    ));
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("from a human"));
 
     record_conversation(
         &workspace,
@@ -1288,7 +1286,15 @@ fn agent_message_does_not_answer_open_ask() {
         &agent,
         "new context".to_owned(),
         rimz::store::message::DeliveryGate::Done,
-    );
+    )
+    .with_sender(rimz::store::message::MessageSender::Agent {
+        kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        agent_id: None,
+        name: Some("planner".into()),
+        profile: None,
+        role: None,
+        channel: None,
+    });
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.receipt.waiting_cleared = true;
     started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(

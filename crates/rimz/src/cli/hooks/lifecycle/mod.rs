@@ -1050,9 +1050,7 @@ mod tests {
             Some(agent.agent_id.clone()),
             LifecycleSignal::TurnStarted { turn_id: None },
         );
-        real_observation.prompt = rimz::agents::SanitizedPrompt::new(Some(
-            "Type: USER_MESSAGE\nFrom: @user\nContent:\nreal prompt",
-        ));
+        real_observation.prompt = rimz::agents::SanitizedPrompt::new(Some("real prompt"));
         confirm_sent_message_for_lifecycle(
             &store,
             rimz::agents::definition_by_kind("claude").unwrap(),

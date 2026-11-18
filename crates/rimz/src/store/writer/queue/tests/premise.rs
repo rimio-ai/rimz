@@ -20,8 +20,9 @@ fn agent_sender() -> MessageSender {
     }
 }
 
+/// A user-shell prompt as it is pasted and as the hook reads it: the text alone.
 fn turn_start(text: &str) -> String {
-    format!("Type: USER_MESSAGE\nFrom: @user\nContent:\n{text}")
+    text.to_owned()
 }
 
 /// The card row after a real prompt at `at`, as the hook reads it.
