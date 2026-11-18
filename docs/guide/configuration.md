@@ -634,7 +634,7 @@ paste = true
 paste_max = "1GiB"
 ```
 
-These settings live on the machine you run `rimz remote connect` from, not on the host. With `paste` on, a supervised attach puts a pty between your terminal and `ssh` and relays every keystroke through RimZ ([what crosses the link](./remote.md#what-crosses-the-link)). RimZ reads the keyboard only while `ssh` holds its terminal raw, so a password or host-key prompt reads your terminal as before. `paste = false` leaves `ssh` reading the terminal itself. `paste_max` caps the total size of one upload and takes the same sizes as `gc.tmp_floor_min`; `GiB` is binary, `G` decimal. Each `rimz remote connect` reads both once at its start. An invalid `paste_max` makes `config.toml` unreadable, which [falls back to defaults](#when-a-file-is-broken) with a warning.
+These settings live on the machine you run `rimz remote connect` from, not on the host. With `paste` on, a supervised attach relays your keystrokes to `ssh` through RimZ ([what crosses the link](./remote.md#what-crosses-the-link)); `paste = false` leaves `ssh` reading the terminal itself. `paste_max` caps the total size of one upload and takes the same sizes as `gc.tmp_floor_min`; `GiB` is binary, `G` decimal. Each `rimz remote connect` reads both once at its start. An invalid `paste_max` makes `config.toml` unreadable, which [falls back to defaults](#when-a-file-is-broken) with a warning.
 
 ### Daemon view
 

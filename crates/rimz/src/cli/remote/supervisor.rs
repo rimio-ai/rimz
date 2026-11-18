@@ -28,6 +28,7 @@ use rimz::remote::recovery::{
 };
 use rimz::remote::{RemoteTarget, SshAttachAttempt, SshAttachPlan};
 
+use super::keyboard::{KeyboardPty, KeyboardRelay};
 use super::outage_ui::{OutageUi, PANEL_TICK, UiEvent};
 use super::ports::ForwardPublisher;
 use super::relay::{OutputRelay, RelayOutput};
@@ -264,6 +265,7 @@ pub(super) fn supervise_remote(
     let mut port_sync = ForwardPublisher::new(setup_hint, host, auto_forward);
     let mut first_attempt = true;
     let guard = super::tty::TtyGuard::acquire();
+    let paste = rimz::config::MachineConfig::load_lenient().remote.paste;
     let Some(mut supervisor) =
         LinkSupervisor::connect(plan, control_path, HandoffStage::Multiplexer)?
     else {
@@ -303,6 +305,7 @@ pub(super) fn supervise_remote(
         let terminal = SessionTerminal {
             guard: &guard,
             output: RelayOutput::new(supervisor.held_screen.take(), setup_hint, !first_attempt),
+            paste,
         };
         first_attempt = false;
         let spec = probe.attach_spec(&attempt);
@@ -495,6 +498,68 @@ fn interrupted_message(
 struct SessionTerminal<'a> {
     guard: &'a super::tty::TtyGuard,
     output: RelayOutput,
+    /// Whether ssh reads the keyboard relay's pty instead of the terminal.
+    paste: bool,
+}
+
+/// Opens the keyboard relay for a session on a terminal, with the slave for
+/// ssh's stdin, or leaves ssh on inherited stdin when paste is off, stdin is
+/// no terminal, or the pty fails.
+fn open_keyboard(terminal: &SessionTerminal<'_>) -> Option<(KeyboardPty, std::os::fd::OwnedFd)> {
+    let saved = terminal.guard.saved().filter(|_| terminal.paste)?;
+    let opened = KeyboardPty::open(saved).and_then(|pty| match pty.slave() {
+        Ok(slave) => Ok((pty, slave)),
+        Err(err) => {
+            pty.abandon();
+            Err(err)
+        }
+    });
+    opened
+        .inspect_err(|err| {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: keyboard relay unavailable, ssh reads the terminal: {err}"
+            );
+        })
+        .ok()
+}
+
+fn finish_keyboard(keyboard: Option<KeyboardRelay>) {
+    if let Some(Err(err)) = keyboard.map(KeyboardRelay::finish) {
+        report_keyboard_stop(&err);
+    }
+}
+
+fn report_keyboard_stop(err: &std::io::Error) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "rimz: keyboard relay stopped: {err}"
+    );
+}
+
+/// How long a stopped keyboard relay's ssh gets to show that its own end
+/// raised the error, before the error ends the attach.
+const KEYBOARD_STOP_GRACE: Duration = Duration::from_millis(100);
+
+/// Ends the attach when the keyboard relay stopped with an error while ssh
+/// still runs, since the session would take no key; an error raised by the
+/// session's own end leaves the outcome to the exit the loop reads next.
+fn check_keyboard(keyboard: &mut Option<KeyboardRelay>, child: &mut Child) -> Result<()> {
+    if !keyboard.as_ref().is_some_and(KeyboardRelay::is_finished) {
+        return Ok(());
+    }
+    let Some(Err(err)) = keyboard.take().map(KeyboardRelay::finish) else {
+        return Ok(());
+    };
+    std::thread::sleep(KEYBOARD_STOP_GRACE);
+    if child.try_wait().context("polling ssh session")?.is_some() {
+        report_keyboard_stop(&err);
+        return Ok(());
+    }
+    anyhow::bail!(
+        "keyboard relay stopped while ssh was running: {err}; \
+         `[remote] paste = false` connects without it"
+    )
 }
 
 fn run_ssh_session(
@@ -511,15 +576,32 @@ fn run_ssh_session(
     if capture_stderr {
         command.stderr(Stdio::piped());
     }
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("running `{}`", rimz::remote::display_ssh_command(spec)))?;
+    let keyboard = open_keyboard(&terminal).map(|(pty, slave)| {
+        command.stdin(slave);
+        pty
+    });
+    let spawned = command.spawn();
+    // The command keeps a copy of the slave; ssh must hold the only one, or
+    // its exit leaves the relay without the hangup.
+    drop(command);
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(err) => {
+            if let Some(pty) = keyboard {
+                pty.abandon();
+            }
+            return Err(err)
+                .with_context(|| format!("running `{}`", rimz::remote::display_ssh_command(spec)));
+        }
+    };
+    let mut keyboard = keyboard.map(|pty| pty.spawned(child.id()));
     let relay = match OutputRelay::start(child.stdout.take(), child.stderr.take(), terminal.output)
     {
         Ok(relay) => relay,
         Err(err) => {
             let _ = child.kill();
             let _ = child.wait();
+            finish_keyboard(keyboard);
             terminal.guard.restore();
             terminal.guard.reset_emulator();
             return Err(err).context("starting local output relay");
@@ -543,6 +625,7 @@ fn run_ssh_session(
         if relay.is_finished() {
             anyhow::bail!("local output relay stopped while ssh was running");
         }
+        check_keyboard(&mut keyboard, &mut child)?;
         let elapsed = started.elapsed();
         let poll = session_poll_interval(elapsed, update.next_deadline);
         let event = recv_link_event(events, poll);
@@ -562,6 +645,7 @@ fn run_ssh_session(
         let _ = child.kill();
         let _ = child.wait();
     }
+    finish_keyboard(keyboard);
     let output = relay.finish();
     terminal.guard.restore();
     let (room_opened, stderr) = output?.complete(terminal.guard)?;

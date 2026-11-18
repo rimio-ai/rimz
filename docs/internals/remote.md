@@ -22,10 +22,13 @@ The second split is library versus process. [`crates/rimz/src/remote/`](../../cr
 | [`remote/setup.rs`](../../crates/rimz/src/remote/setup.rs) | The `rimz remote setup` installer snippet. |
 | [`remote/tty.rs`](../../crates/rimz/src/remote/tty.rs) | Termios damage detection, flag repair, the DSR status-reply and supervised-output scanners, and the emulator reset string. |
 | [`remote/version.rs`](../../crates/rimz/src/remote/version.rs) | Client/host version-skew classification. |
+| [`remote/paste.rs`](../../crates/rimz/src/remote/paste.rs) | The keyboard-input scanner (Ctrl+V in its three encodings, bracketed pastes held while they can still be a path list) and the Ghostty drop-path codec. |
+| [`remote/upload.rs`](../../crates/rimz/src/remote/upload.rs) | The upload wire lines and the room's upload lane record. |
 | [`cli/remote.rs`](../../crates/rimz/src/cli/remote.rs) | The clap surface, alias resolution, and the print, one-shot, and supervise fork. |
 | [`cli/remote/supervisor.rs`](../../crates/rimz/src/cli/remote/supervisor.rs) | The supervision loop: background masters, foreground attach, probe threads, reachability workers, forwards, local notifications, and the `LinkSupervisor` shared by terminal attaches and web tunnels. |
 | [`cli/remote/outage_ui.rs`](../../crates/rimz/src/cli/remote/outage_ui.rs) | The alternate-screen connection panel and its plain-line fallback. |
 | [`cli/remote/relay.rs`](../../crates/rimz/src/cli/remote/relay.rs) | Per-attach stdout relay, bounded output drain, scrollback framing, and screen-aware session-end cleanup. |
+| [`cli/remote/keyboard.rs`](../../crates/rimz/src/cli/remote/keyboard.rs) | Per-attach keyboard relay: the pty pair in front of SSH, raw-follows-slave, resize, and input dispatch. |
 | [`cli/remote/web.rs`](../../crates/rimz/src/cli/remote/web.rs) | Web prep, the local auth relay, and tunnel supervision. |
 | [`cli/remote/link_stats.rs`](../../crates/rimz/src/cli/remote/link_stats.rs) | The remote-side `rimz remote link-stats ingest` service and listener sampling. |
 | [`cli/remote/ports.rs`](../../crates/rimz/src/cli/remote/ports.rs) | The lifetime-locked local forward record and the machine/connection views of `rimz remote ports`. |
@@ -221,6 +224,24 @@ A local relay failure kills SSH and fails the connect instead of reconnecting.
 
 A one-shot `--no-reconnect` attach runs no relay. It owns the alternate-scroll (mode 1007) save, disable, and restore bracket in the local process and exports `RIMZ_OUTER_SCROLL_BRACKET`, so the remote does not nest a second bracket. Under reconnect supervision the local side sets no bracket, and the remote RimZ owns it.
 
+### The keyboard relay
+
+With `[remote] paste` on (the default) and a terminal on stdin, every supervised attach runs SSH on a pty pair that `KeyboardPty` in `cli/remote/keyboard.rs` opens before the spawn. SSH's stdin is the slave; its stdout and stderr stay as above. The slave starts with the `TtyGuard` snapshot and the terminal's size, so SSH reads the shell's modes and size from it as it would from the terminal. The child is not moved to a new session: `/dev/tty` stays the real terminal, so a password or host-key prompt reads the keyboard itself. With `paste = false`, or stdin not a terminal, no pty exists and SSH inherits stdin. A pty or relay-thread start failure prints `rimz: keyboard relay unavailable, ssh reads the terminal: <error>` and the session runs on inherited stdin.
+
+The relay thread owns the terminal only while SSH holds the slave raw (its `ICANON` flag clear). It checks the slave every 10ms while cooked and every 100ms while raw. On the raw flip it makes the terminal raw (`cfmakeraw` of the snapshot), copies the terminal's size to the slave, and sends SSH `SIGWINCH`, so a resize that arrived while cooked applies then. While raw it reads the terminal and writes the master; a resize copies the size and signals SSH again. When SSH leaves raw mode the relay gives the terminal back in the snapshot's modes and stops reading it, so a prompt SSH then writes through `/dev/tty` reads the terminal unrelayed. Anything written to the slave is copied to stdout: SSH writes nothing there, but a local client such as `tmux attach` in the test shim paints through its stdin terminal.
+
+The master is checked before the terminal on every wake. A master read that returns 0 or an error, or a failed master write, is the hangup: the relay stops in that pass, so input typed after the session ends stays queued for the shell. `run_ssh_session` drops its copy of the slave right after the spawn, since an open slave would hide the hangup. It stops the relay (`KeyboardRelay::finish`) before the output drain, so nothing reads the terminal while `TtyGuard::restore`, the reply fence, or the connection panel run. Any other relay error stops the relay, and the session loop (`check_keyboard`) reads it while the session runs: when SSH is still running 100 ms later, the attach fails as a stopped output relay does (SSH is killed, the terminal restored, no reconnect), with an error naming the keyboard relay, its cause, and `[remote] paste = false` as the way to connect without it, since a session left running would draw and take no key. When SSH has already exited, the error is one `rimz: keyboard relay stopped: <error>` line and the session's outcome stands.
+
+Input passes through `InputScanner` (`remote/paste.rs`), which holds an escape sequence until it completes (50ms for a lone `Esc`) and a bracketed paste while it can still be a path list (starts with `/`, at most 64 KiB, closes without a 200ms pause). Each scanned input gets a verdict:
+
+| Input | Verdict |
+| --- | --- |
+| `Forward` (every byte outside a trigger) | `Verdict::Forward`, written unchanged and in order |
+| `CtrlV` (`0x16`, `ESC[118;5u`, `ESC[27;5;118~`, outside a paste) | `Verdict::Forward` until the clipboard upload acts on it; `Verdict::Upload` holds it back while its upload runs |
+| `Paste` (a whole held bracketed paste) | `Verdict::Forward` until the drop upload acts on it; `Verdict::Upload` holds it back while its upload runs |
+
+`Relay::write_result` writes an upload's paste result at once when no bracketed paste is open in the input, and otherwise as soon as the open one closes, so a result never lands inside the user's paste.
+
 ### Classifying the end
 
 `ReconnectState::settle` turns a finished `ssh` into a `Verdict`, checking rows in this order. `attach_interrupted` checks the Ctrl-C row before `settle` runs, and only when the relay captured stderr (an attach over a confirmed master). The evidence is `(control alive, lived past gatetime)`, supplied only when a master exists.
@@ -266,14 +287,15 @@ Exit paths and the initial attach never drain terminal input, so the shell that 
 
 Every session end runs one fixed sequence, in `run_ssh_session` and `RelayOutput::complete`:
 
-1. Drain SSH pipe reads to EOF or a 200ms deadline. The bound does not cover synchronous stdout writes: a consumer that stops reading can block the relay, as it blocked SSH when stdout was inherited.
-2. Restore the termios snapshot.
-3. Resolve the panel guard's terminal modes without flushing its captured logs. If the host never entered the alternate screen, the guard restores its modes. Otherwise it is disarmed without writing terminal modes.
-4. Leave the alternate screen when the relay's tracked screen is alternate or unknown.
-5. Write `EMULATOR_RESET` (in `remote/tty.rs`). It pops kitty keyboard enhancement, disables bracketed paste, focus, and mouse reporting, enables autowrap, shows the cursor, resets the scroll region inside a cursor save and restore, resets SGR, and selects the normal keypad. It carries no alternate-screen leave and no cursor move.
-6. Replay captured logs to stderr on the main screen from column 0, then any unpainted mux tail behind a separator, then the local end line. A CRLF is supplied wherever those writes leave an unfinished line.
+1. Stop the keyboard relay, which leaves the terminal in the snapshot's modes.
+2. Drain SSH pipe reads to EOF or a 200ms deadline. The bound does not cover synchronous stdout writes: a consumer that stops reading can block the relay, as it blocked SSH when stdout was inherited.
+3. Restore the termios snapshot.
+4. Resolve the panel guard's terminal modes without flushing its captured logs. If the host never entered the alternate screen, the guard restores its modes. Otherwise it is disarmed without writing terminal modes.
+5. Leave the alternate screen when the relay's tracked screen is alternate or unknown.
+6. Write `EMULATOR_RESET` (in `remote/tty.rs`). It pops kitty keyboard enhancement, disables bracketed paste, focus, and mouse reporting, enables autowrap, shows the cursor, resets the scroll region inside a cursor save and restore, resets SGR, and selects the normal keypad. It carries no alternate-screen leave and no cursor move.
+7. Replay captured logs to stderr on the main screen from column 0, then any unpainted mux tail behind a separator, then the local end line. A CRLF is supplied wherever those writes leave an unfinished line.
 
-While a panel guard owns the terminal, the tracing writer buffers warnings instead of writing through the frame. When the connect showed a panel, the relay keeps that log capture for the whole session, even after host speech steps off the panel, so step 6 replays it. A connection that lands inside the grace shows no panel and captures nothing, so its warnings write live through the multiplexer's frame. Fatal failures return immediately with their error in scrollback, without waiting for input.
+While a panel guard owns the terminal, the tracing writer buffers warnings instead of writing through the frame. When the connect showed a panel, the relay keeps that log capture for the whole session, even after host speech steps off the panel, so step 7 replays it. A connection that lands inside the grace shows no panel and captures nothing, so its warnings write live through the multiplexer's frame. Fatal failures return immediately with their error in scrollback, without waiting for input.
 
 ## Reconnect pacing and reachability
 
@@ -320,7 +342,7 @@ Exactly one row animates: the Internet row while waiting for the network, the SS
 
 Once shown, the panel stays at least 1.5s (`RECOVERY_MIN_DISPLAY`), so a fast reconnect spends the remaining hold on the attaching animation instead of flashing. A connection that lands inside the grace never shows a panel, a local ✓, or a handoff frame. Fatal failures release the panel and return their error and fix directly to scrollback, after the host startup text the relay surfaced.
 
-Ctrl-C is polled as a terminal event in raw mode while the panel owns the terminal. It kills a pending master, restores the terminal, prints `rimz: connect to <host> stopped` (or `reconnect`) with the last error, and stops the supervisor. Once SSH owns the terminal, OpenSSH reports a remote command interrupted by Ctrl-C as status 255 plus `Killed by signal 2.`, which `attach_interrupted` recognizes before transport classification when the stderr was captured ([the interactive fallback](#the-interactive-fallback) is the exception).
+Ctrl-C is polled as a terminal event in raw mode while the panel owns the terminal. It kills a pending master, restores the terminal, prints `rimz: connect to <host> stopped` (or `reconnect`) with the last error, and stops the supervisor. Once SSH owns the session's input (the keyboard relay forwards Ctrl-C as a byte, as the terminal did), OpenSSH reports a remote command interrupted by Ctrl-C as status 255 plus `Killed by signal 2.`, which `attach_interrupted` recognizes before transport classification when the stderr was captured ([the interactive fallback](#the-interactive-fallback) is the exception).
 
 ## Link health
 

@@ -230,6 +230,18 @@ impl FakeTerminal {
             .expect("terminal writer alive");
     }
 
+    /// Resizes the terminal, which signals its foreground process group.
+    pub(crate) fn resize(&self, rows: u16, cols: u16) {
+        self.master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("resize terminal");
+    }
+
     pub(crate) fn queries_seen(&self) -> Counts {
         self.counts.load()
     }

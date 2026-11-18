@@ -102,6 +102,8 @@ Run `rimz remote ports` to find the local URL or why a listener has not been for
 
 The room crosses as a screen. The agents, their transcripts, the git work, and the store all run on the host; SSH carries the multiplexer's rendered output one way and your keystrokes the other, the same bytes a local attach would paint. The multiplexer redraws only the focused tab and diffs each frame, and every attach turns on SSH compression, so an idle room is nearly silent and a busy pane costs about what watching it locally would. Forwarded ports are the exception: that traffic is your own dev server's, and it flows only while you are attached.
 
+Your keystrokes pass through `rimz remote connect` on the way out. While SSH holds the terminal raw, `rimz` reads the keyboard and hands SSH every byte unchanged and in order, mouse reports and pastes included; a password or host-key prompt reads the keyboard directly. `[remote] paste = false` leaves SSH reading the terminal itself ([remote connect paste](./configuration.md#remote-connect-paste)).
+
 To measure the actual traffic, attach, then run `rimz pane bandwidth` from inside the remote shell. It belongs on the Linux host serving the room, where the write-rate counters live; from your own machine it has nothing to read. It samples for five seconds and attributes the output rate per pane, with the compressed SSH wire-rate alongside:
 
 ```sh
