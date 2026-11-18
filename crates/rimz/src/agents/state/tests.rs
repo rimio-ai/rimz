@@ -2702,3 +2702,92 @@ fn session_row_moves_a_provisional_key_only_to_its_one_unended_adopter() {
         "only a provisional key moves"
     );
 }
+
+#[test]
+fn an_owed_continue_is_withdrawn_only_by_an_interrupt_settled_after_its_queue() {
+    let queued_at = Timestamp::from_second(1_000).unwrap();
+    let mut row = crate::testkit::agent_state("claude", "sess", queued_at);
+    row.status = AgentStatus::Idle;
+    row.soft_compact = Some(SoftCompactMark {
+        compactions: Some(0),
+        continue_owed: Some(OwedContinue {
+            message_id: crate::ids::MessageId::new(),
+            queued_at,
+        }),
+    });
+    for (label, context, owed) in [
+        ("no settle", None, true),
+        (
+            "an interrupt before the queue",
+            Some(context_settle(Some(999), TurnSettleOutcome::Interrupted)),
+            true,
+        ),
+        (
+            "an interrupt at the queue",
+            Some(context_settle(Some(1_000), TurnSettleOutcome::Interrupted)),
+            true,
+        ),
+        (
+            "an interrupt after the queue",
+            Some(context_settle(Some(1_001), TurnSettleOutcome::Interrupted)),
+            false,
+        ),
+        (
+            "another settle after the queue",
+            Some(context_settle(Some(1_001), TurnSettleOutcome::NativeWait)),
+            true,
+        ),
+    ] {
+        row.context = context;
+        assert_eq!(row.soft_compact_in_flight(), owed, "{label}");
+        let shown = if owed {
+            AgentStatus::Running
+        } else {
+            AgentStatus::Idle
+        };
+        assert_eq!(row.display_rest_status(AgentStatus::Idle), shown, "{label}");
+    }
+}
+
+#[test]
+fn the_mark_stays_decodable_by_trunk_and_ignores_trunks_mark() {
+    #[derive(serde::Deserialize)]
+    struct TrunkMark {
+        #[expect(dead_code, reason = "decoded only to prove the shape")]
+        steered_at: Timestamp,
+        #[expect(dead_code, reason = "decoded only to prove the shape")]
+        compactions: Option<u32>,
+        #[expect(dead_code, reason = "decoded only to prove the shape")]
+        progress: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct TrunkRow {
+        #[serde(default)]
+        soft_compact: Option<TrunkMark>,
+    }
+    let at = Timestamp::from_second(1_000).unwrap();
+    let mut row = crate::testkit::agent_state("claude", "sess", at);
+    row.soft_compact = Some(SoftCompactMark {
+        compactions: Some(1),
+        continue_owed: Some(OwedContinue {
+            message_id: crate::ids::MessageId::new(),
+            queued_at: at,
+        }),
+    });
+    let written = serde_json::to_value(&row).unwrap();
+    let trunk: TrunkRow = serde_json::from_value(written.clone()).unwrap();
+    assert!(trunk.soft_compact.is_none(), "{written}");
+    let decoded: AgentState = serde_json::from_value(written).unwrap();
+    assert_eq!(decoded.soft_compact, row.soft_compact);
+
+    let mut trunk_row =
+        serde_json::to_value(crate::testkit::agent_state("claude", "old", at)).unwrap();
+    trunk_row["soft_compact"] = serde_json::json!({
+        "steered_at": at, "compactions": 1, "progress": "wrapping_up"
+    });
+    let decoded: AgentState = serde_json::from_value(trunk_row).unwrap();
+    assert_eq!(
+        decoded.soft_compact, None,
+        "trunk's mark is not this binary's"
+    );
+}

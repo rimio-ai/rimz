@@ -153,29 +153,12 @@ fn child_wait_chain_follows_background_shell() {
 }
 
 #[test]
-fn child_wait_chain_follows_soft_compaction_cycle() {
-    use crate::agents::state::{SoftCompactMark, SoftCompactProgress};
-    for (progress, compacting, expected) in [
-        (
-            Some(SoftCompactProgress::TurnEnded),
-            true,
-            PendingWaitClass::Working,
-        ),
-        (
-            Some(SoftCompactProgress::TurnEnded),
-            false,
-            PendingWaitClass::Working,
-        ),
-        (
-            Some(SoftCompactProgress::ContinueQueued),
-            false,
-            PendingWaitClass::Working,
-        ),
-        (
-            Some(SoftCompactProgress::Continued),
-            true,
-            PendingWaitClass::Inert,
-        ),
+fn child_wait_chain_follows_an_owed_compaction_continue() {
+    use crate::agents::state::SoftCompactMark;
+    for (owed, compacting, expected) in [
+        (Some(true), true, PendingWaitClass::Working),
+        (Some(true), false, PendingWaitClass::Working),
+        (Some(false), true, PendingWaitClass::Inert),
         (None, true, PendingWaitClass::Inert),
     ] {
         let snapshot = projected_child_chain_with(
@@ -188,16 +171,19 @@ fn child_wait_chain_follows_soft_compaction_cycle() {
             |agents| {
                 let child = &mut agents[1];
                 child.compacting_since = compacting.then_some(child.last_activity);
-                child.soft_compact = progress.map(|progress| SoftCompactMark {
-                    steered_at: child.last_activity,
+                let queued_at = child.last_activity;
+                child.soft_compact = owed.map(|owed| SoftCompactMark {
                     compactions: Some(0),
-                    progress,
+                    continue_owed: owed.then(|| crate::agents::state::OwedContinue {
+                        message_id: crate::ids::MessageId::new(),
+                        queued_at,
+                    }),
                 });
             },
         );
         assert_eq!(
             snapshot.agents[0].pending_waits[0].class, expected,
-            "{progress:?} compacting={compacting}"
+            "{owed:?} compacting={compacting}"
         );
     }
 }

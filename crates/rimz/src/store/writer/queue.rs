@@ -890,14 +890,24 @@ impl Store {
         })
     }
 
+    /// Queue `message` and `tail` in one commit, `tail` at its card's FIFO tail behind
+    /// `message` with its ID assigned there; the queued `tail`.
     #[must_use = "durability barrier; check the result"]
-    pub fn queue_tail_message(
+    pub fn queue_message_with_tail(
         &self,
         message: &MessageRecord,
+        tail: &MessageRecord,
         session_name: &str,
     ) -> Result<MessageRecord> {
         self.commit_queue(|queue| {
-            let queued = queue.at_tail(message);
+            queue.upsert(message.clone());
+            queue.stage_event(EventEnvelope::message_event(
+                message,
+                session_name,
+                MessageEventMethod::Queued,
+                None,
+            ));
+            let queued = queue.at_tail(tail);
             queue.upsert(queued.clone());
             queue.stage_event(EventEnvelope::message_event(
                 &queued,

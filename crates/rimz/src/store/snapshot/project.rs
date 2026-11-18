@@ -10,14 +10,14 @@ use tracing::debug;
 
 use crate::agents::lifecycle::{self, Transition};
 use crate::agents::petname::valid_agent_name;
-use crate::agents::state::{SoftCompactMark, SoftCompactProgress, TransitionMode};
+use crate::agents::state::{OwedContinue, SoftCompactMark, TransitionMode};
 use crate::agents::{AgentLifecycleObservation, AgentUsageSummary, LaunchParams, SessionOrigin};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
     self, AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, AgentLifecyclePayload,
-    EventEnvelope, EventKind, MessageEventPayload,
+    EventEnvelope, EventKind, MessageEventMethod, MessageEventPayload,
 };
 use crate::store::message::{MessageBody, MessageStatus, SoftCompactStep};
 
@@ -400,8 +400,8 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                     agent_mut(agent).workflow = None;
                 }
             }
-            EventKind::Message { payload, .. } => {
-                stamp_message(&mut state.map, payload, envelope.timestamp);
+            EventKind::Message { method, payload } => {
+                stamp_message(&mut state.map, *method, payload, envelope.timestamp);
             }
             EventKind::SessionDeath(_) => {}
             EventKind::Signal(_) => {}
@@ -664,6 +664,7 @@ impl ReducerState {
                     self.map
                         .get(&(kind.clone(), predecessor.clone()))?
                         .soft_compact
+                        .clone()
                 })
                 .map(|mark| SoftCompactMark {
                     compactions: None,
@@ -904,6 +905,7 @@ pub(super) fn message_agent_key<'a>(
 
 fn stamp_message(
     agents: &mut BTreeMap<AgentKey, Arc<AgentState>>,
+    method: MessageEventMethod,
     payload: &MessageEventPayload,
     timestamp: Timestamp,
 ) {
@@ -914,26 +916,30 @@ fn stamp_message(
         return;
     };
     let agent = agent_mut(agent);
+    // Only the enqueue owes a continue. A rewrite back to queued (a released
+    // claim, a requeue, an edit, the Codex rebind) carries a reason and must
+    // not re-owe one an interrupt or a user prompt already cleared.
+    let enqueued = method == MessageEventMethod::Queued && payload.reason.is_none();
     match (payload.soft_compact, payload.status) {
         (Some(SoftCompactStep::WrapUp), MessageStatus::Sent) => {
-            agent.soft_compact = Some(SoftCompactMark {
-                steered_at: timestamp,
-                compactions: Some(agent.compaction_count),
-                progress: SoftCompactProgress::WrappingUp,
+            agent.soft_compact.get_or_insert_default().compactions = Some(agent.compaction_count);
+        }
+        (Some(SoftCompactStep::Continue), MessageStatus::Queued) if enqueued => {
+            agent.soft_compact.get_or_insert_default().continue_owed = Some(OwedContinue {
+                message_id: payload.message_id.clone(),
+                queued_at: timestamp,
             });
         }
-        (Some(SoftCompactStep::Continue), MessageStatus::Queued) => {
-            if let Some(mark) = &mut agent.soft_compact {
-                mark.progress = SoftCompactProgress::ContinueQueued;
-            }
-        }
-        // Only the continue this cycle queued finishes it, so a stale one
-        // settling cannot drop an owed step.
+        // Only the owed continue's own ending settles it: an older continue, its
+        // command canceled, can end after a newer compaction queued the one owed.
         (Some(SoftCompactStep::Continue), status) if status.is_terminal() => {
             if let Some(mark) = &mut agent.soft_compact
-                && mark.progress == SoftCompactProgress::ContinueQueued
+                && mark
+                    .continue_owed
+                    .as_ref()
+                    .is_some_and(|owed| owed.message_id == payload.message_id)
             {
-                mark.progress = SoftCompactProgress::Continued;
+                mark.continue_owed = None;
             }
         }
         _ => {}
@@ -1012,7 +1018,7 @@ fn carried_base(
         state.tune.clone_from(&prior.tune);
         state.usage = prior.usage.clone();
         state.compaction_count = prior.compaction_count;
-        state.soft_compact = prior.soft_compact;
+        state.soft_compact = prior.soft_compact.clone();
         state.tool_calls = prior.tool_calls.clone();
         state.background_shells = prior.background_shells.clone();
         state.last_compact_command_tokens = prior.last_compact_command_tokens;
@@ -1480,6 +1486,14 @@ fn assemble_launch_state(
     state
 }
 
+/// Drop the continue a compaction command owes this row: the queue withdraws it at delivery
+/// (`MessageRecord::broken_row_premise`).
+fn clear_owed_continue(state: &mut AgentState) {
+    if let Some(mark) = &mut state.soft_compact {
+        mark.continue_owed = None;
+    }
+}
+
 /// Returns whether this event retires the usage measured before a
 /// compaction: a completed bracket close, or a successful end whose open was
 /// lost. `compaction_count` stays on the bracket close alone.
@@ -1534,11 +1548,12 @@ fn fold_lifecycle(
             lifecycle::LifecycleSignal::CompactionEnded { failed: true, .. }
         );
     state.compaction_count += u32::from(completed_compaction);
-    if matches!(
-        signal,
-        lifecycle::LifecycleSignal::TurnInterrupted { .. } | lifecycle::LifecycleSignal::Registered
-    ) {
-        state.soft_compact = None;
+    // A registration (`/clear`) drops the whole mark, so the reminder re-arms;
+    // an interrupt drops only the owed continue and leaves the epoch spent.
+    match signal {
+        lifecycle::LifecycleSignal::Registered => state.soft_compact = None,
+        lifecycle::LifecycleSignal::TurnInterrupted { .. } => clear_owed_continue(state),
+        _ => {}
     }
     match &signal {
         // A close that lands at rest compacted a context no prompt has used
@@ -1604,17 +1619,6 @@ fn fold_lifecycle(
                 | lifecycle::LifecycleSignal::TurnInterrupted { .. }
                 | lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
         );
-    if closes_request
-        && matches!(
-            signal,
-            lifecycle::LifecycleSignal::TurnEnded { errored: false, .. }
-        )
-        && let Some(mark) = &mut state.soft_compact
-        && timestamp >= mark.steered_at
-        && mark.progress == SoftCompactProgress::WrappingUp
-    {
-        mark.progress = SoftCompactProgress::TurnEnded;
-    }
     state.turn_ended_at = if closes_request {
         Some(timestamp)
     } else {
@@ -1638,16 +1642,14 @@ fn fold_lifecycle(
     if turn_started && !keepalive_turn {
         state.last_prompt_at = Some(timestamp);
     }
-    // Once a real turn opens the row is working again, so a continue still
-    // undelivered is the queue's to hold, and a terminal event that settles
-    // elsewhere cannot leave the cycle open at the next rest.
+    // A turn the user opened takes over from the compaction's owed continue; a harness
+    // notice landing first leaves it owed.
     if turn_started
         && !keepalive_turn
+        && !harness_prompt
         && !matches!(kind, lifecycle::TransitionKind::Ignored { .. })
-        && let Some(mark) = &mut state.soft_compact
-        && mark.progress == SoftCompactProgress::ContinueQueued
     {
-        mark.progress = SoftCompactProgress::Continued;
+        clear_owed_continue(state);
     }
     if resets_context || ((opened_turn || turn_started) && !keepalive_turn) {
         state.keepalive_since = None;

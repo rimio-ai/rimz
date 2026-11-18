@@ -147,9 +147,10 @@ impl TurnWaitView {
         })
     }
 
-    /// A non-terminal soft continuation still owed to this live card.
+    /// A non-terminal compaction continue still owed to this live card: queued, and not yet
+    /// canceled on the row by an interrupt, a `/clear`, or a user-authored prompt.
     pub(crate) fn soft_compact_in_flight(&self, agent: &AgentState) -> bool {
-        agent.ended_at.is_none()
+        agent.soft_compact_in_flight()
             && self.messages.iter().any(|message| {
                 message.soft_compact == Some(SoftCompactStep::Continue)
                     && !message.status.is_terminal()

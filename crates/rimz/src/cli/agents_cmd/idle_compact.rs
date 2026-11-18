@@ -111,11 +111,12 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
             command: expected_command,
             sender: MessageSender::System,
             automated: true,
+            continue_text: None,
         },
     );
     let delivery_error = match &outcome {
         Ok(CompactOutcome::Sent) => None,
-        Ok(CompactOutcome::Queued) => Some("compaction delivery gate closed".to_owned()),
+        Ok(CompactOutcome::Queued { .. }) => Some("compaction delivery gate closed".to_owned()),
         Err(err) => Some(err.to_string()),
     };
     append_assist(

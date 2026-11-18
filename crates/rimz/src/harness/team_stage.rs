@@ -1155,6 +1155,7 @@ fn compact_flipper(
                 command,
                 sender: MessageSender::System,
                 automated: true,
+                continue_text: None,
             },
         )
         .map_err(FlipCompactErr::from)
@@ -1194,7 +1195,7 @@ fn compact_flipper(
             occupied_tokens,
             threshold,
         },
-        Ok(CompactOutcome::Queued) => Compaction::Queued {
+        Ok(CompactOutcome::Queued { .. }) => Compaction::Queued {
             message_id,
             occupied_tokens,
             threshold,

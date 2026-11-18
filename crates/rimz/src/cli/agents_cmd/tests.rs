@@ -521,14 +521,29 @@ fn compact_accepts_hyphen_instruction_and_flags() {
             let Some(AgentsSubcmd::Compact {
                 reference,
                 instruction: actual,
+                no_continue,
             }) = args.command
             else {
                 panic!("compact")
             };
             assert_eq!(reference, "@coder");
             assert_eq!(actual.as_deref(), Some(instruction));
+            assert!(!no_continue);
         }
     }
+    let args = parse_agents(&["rimz", "compact", "@me", "keep the plan", "--no-continue"]);
+    let Some(AgentsSubcmd::Compact {
+        instruction,
+        no_continue,
+        ..
+    }) = args.command
+    else {
+        panic!("compact")
+    };
+    assert_eq!(
+        (instruction.as_deref(), no_continue),
+        (Some("keep the plan"), true)
+    );
     for instruction in ["-h", "--help", "--color"] {
         let args = parse_agents(&["rimz", "compact", "@coder", "--", instruction]);
         let Some(AgentsSubcmd::Compact {

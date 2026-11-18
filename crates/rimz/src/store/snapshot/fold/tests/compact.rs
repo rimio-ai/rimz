@@ -43,14 +43,17 @@ fn soft_compact_events_hydrate_and_update_carried_receivers() {
         event_log::append(&paths.events_log, &event).unwrap();
         let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
         write_rollup_cache(&paths, &cache).unwrap();
-        outcomes.push(serde_json::to_value(&agents[0]).unwrap()["soft_compact"].clone());
+        outcomes.push(serde_json::to_value(&agents[0]).unwrap()["soft_compact_mark"].clone());
     }
     assert_eq!(
         outcomes,
         vec![
-            serde_json::json!({"steered_at": epoch(), "compactions": 0, "progress": "wrapping_up"}),
-            serde_json::json!({"steered_at": epoch(), "compactions": 0, "progress": "continue_queued"}),
-            serde_json::json!({"steered_at": epoch(), "compactions": 0, "progress": "continued"}),
+            serde_json::json!({"compactions": 0}),
+            serde_json::json!({"compactions": 0, "continue_owed": {
+                "message_id": record.message_id.as_str(),
+                "queued_at": epoch(),
+            }}),
+            serde_json::json!({"compactions": 0}),
         ]
     );
 }

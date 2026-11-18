@@ -10,7 +10,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agent_activity::ToolRepeat;
-use crate::ids::{AgentKind, AgentSessionId, AskId, LoginKey, LoginName};
+use crate::ids::{AgentKind, AgentSessionId, AskId, LoginKey, LoginName, MessageId};
 use crate::pane::{PaneRef, RuntimeOwner};
 
 use super::background_shell::BackgroundShell;
@@ -1106,26 +1106,30 @@ impl<'a> AgentCardRef<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SoftCompactProgress {
-    WrappingUp,
-    TurnEnded,
-    /// The continue is queued: it has not reached a terminal status, and the
-    /// row has opened no real turn since.
-    ContinueQueued,
-    /// The cycle is finished: its continue reached a terminal status, or a real
-    /// turn opened after it was queued.
-    Continued,
+/// What smart compaction holds on a card: the compaction epoch its reminder went out in, and
+/// the continue queued behind a compaction command that is still owed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoftCompactMark {
+    /// The local compaction epoch the reminder was steered in, or `None` when none was steered
+    /// on this session (a mark inherited after compaction, or one a continue set alone). A
+    /// registration (`/clear`) drops the whole mark, which re-arms the reminder; an interrupt
+    /// clears only `continue_owed` and leaves the epoch spent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compactions: Option<u32>,
+    /// The continue most recently enqueued behind a compaction command, while that record has
+    /// not reached a terminal status and no interrupt, registration, or user-authored turn
+    /// start in the fold has cleared it; another continue's terminal event leaves it. An
+    /// interrupt only a provider's turn settle reports (Claude's Esc) withdraws it at read
+    /// time, in `AgentState::soft_compact_in_flight`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continue_owed: Option<OwedContinue>,
 }
 
-/// The wrap-up sent in one compaction epoch and its clean-turn continuation progress.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SoftCompactMark {
-    pub steered_at: Timestamp,
-    /// The steer's local epoch, or `None` for a continue inherited after compaction.
-    pub compactions: Option<u32>,
-    pub progress: SoftCompactProgress,
+/// The compaction continue a card is owed: its message and the instant it was enqueued.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwedContinue {
+    pub message_id: MessageId,
+    pub queued_at: Timestamp,
 }
 
 /// The session settings accepted by the tuning audit wire.
@@ -1619,10 +1623,17 @@ pub struct AgentState {
     /// of completed compaction brackets. Derived by the rollup from the state
     /// machine's bracket-close fact, carried forward unchanged on every other
     /// event, and rendered by the card as `↻ N` from the first completed
-    /// compaction. Also re-arms the mid-turn soft-compaction trigger.
+    /// compaction. Also re-arms the smart-compaction reminder.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compaction_count: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Serialized as `soft_compact_mark`: the unversioned carryover keeps rows an older
+    /// binary must decode, and its `soft_compact` key held a mark of another shape, which this
+    /// binary reads as absent.
+    #[serde(
+        default,
+        rename = "soft_compact_mark",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub soft_compact: Option<SoftCompactMark>,
     /// Named tool calls observed for this session.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -2559,20 +2570,30 @@ impl AgentState {
         }
     }
 
-    /// Whether this live card's soft-compaction cycle is open: from the
-    /// wrap-up turn's clean end until its continue reaches a terminal status.
-    /// A compaction at rest with no mark, or after a finished cycle, is not.
+    /// Whether this live card is still owed the continue queued behind its compaction command:
+    /// the fold's mark owes it and no interrupt the provider settled after its queue withdrew it.
+    /// A settle is compared with the queue instant, not `last_activity`, since the compaction's
+    /// own hooks move activity past an Esc that came before them.
     pub(crate) fn soft_compact_in_flight(&self) -> bool {
-        self.ended_at.is_none()
-            && self.soft_compact.is_some_and(|mark| {
-                matches!(
-                    mark.progress,
-                    SoftCompactProgress::TurnEnded | SoftCompactProgress::ContinueQueued
-                )
-            })
+        let Some(queued_at) = self
+            .soft_compact
+            .as_ref()
+            .and_then(|mark| mark.continue_owed.as_ref())
+            .map(|owed| owed.queued_at)
+        else {
+            return false;
+        };
+        let interrupted = self
+            .context
+            .as_ref()
+            .and_then(|context| context.settle)
+            .is_some_and(|settle| {
+                settle.outcome == TurnSettleOutcome::Interrupted && settle.at > queued_at
+            });
+        self.ended_at.is_none() && !interrupted
     }
 
-    /// A resting status as displayed: an open soft-compaction cycle, a
+    /// A resting status as displayed: an owed compaction continue, a
     /// background shell, or a `Working` wait lifts it to running, and a
     /// `Sleeping` wait to sleeping.
     pub(crate) fn display_rest_status(&self, status: AgentStatus) -> AgentStatus {
@@ -2890,8 +2911,8 @@ impl AgentState {
     /// row of its own. A displayed fatal or unknown marker reads `failed`, on a
     /// raw-`failed` row too, and so does a displayed pausing marker the card's
     /// [`super::ParkDemotion`] counts as spent; otherwise this is the rested
-    /// status lifted by in-flight waits or shells, or by an open
-    /// soft-compaction cycle. A limit marker on a model the live agent has
+    /// status lifted by in-flight waits or shells, or by an owed
+    /// compaction continue. A limit marker on a model the live agent has
     /// since left rests as if it were gone (a raw-`running` or raw-`failed` row
     /// reads `idle`) unless a budget park outranks it, and a resting agent the
     /// provider [refuses](super::ParkDemotion::refused) then reads `failed`. The

@@ -1,4 +1,5 @@
-//! Mid-turn soft-compaction decisions, detached helpers, and disposable spawn pacing.
+//! The smart-compaction reminder: whether it is due mid-turn, its detached helper, and
+//! disposable spawn pacing.
 
 use std::time::Duration;
 
@@ -7,7 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::agents::AgentState;
-use crate::agents::state::SoftCompactProgress;
 use crate::config::MachineConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::cache_keepalive::{RoomCapacities, SeatPolicy};
@@ -18,14 +18,13 @@ use crate::store::snapshot::SidebarSnapshot;
 // A minute gives ordinary delivery time to settle, past one 30s lock or mux
 // timeout, without spending the default 14k headroom on a ten-minute retry.
 // Helpers have no overall deadline: a stalled helper may overlap a retry, so
-// the helper's fresh due_step recheck, not this cache, guards durable state.
+// the helper's fresh reminder_due recheck, not this cache, guards durable state.
 const RESPAWN_THROTTLE: Duration = Duration::from_secs(60);
 
 #[derive(Serialize, Deserialize)]
 struct FireRecord {
     fired_at: Timestamp,
     compactions: u32,
-    steered_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,24 +34,27 @@ pub struct SoftCompactRequest {
     pub agent_id: AgentSessionId,
     pub pane_id: PaneId,
     pub label: String,
+    /// Always `WrapUp`, the reminder's stored tag; kept so a request an older binary
+    /// spawned still decodes.
     pub step: SoftCompactStep,
 }
 
-/// The smart-compaction step due for `agent`, if any: the continue once the wrapped-up turn
-/// ended, otherwise the wrap-up steer into an open turn above its line. Neither is due while
-/// the agent's login's usage holds a compaction back. `compaction_blocked` answers that, as
+/// Whether the smart-compaction reminder is due for `agent`: an open turn above its line, once
+/// per compaction epoch, with a continue to follow a self-compaction (blank continue text
+/// withholds it) and no compaction open, pending, or owed a continue. It is not due while the
+/// agent's login's usage holds a compaction back; `compaction_blocked` answers that, as
 /// `RoomCapacities::compaction_blocked` in the host pass and as
 /// [`login_compaction_blocked`](crate::agents::ProviderCapacity::login_compaction_blocked) in
-/// the helper, only for a step otherwise due. The mark is left as it is, so a withheld continue
-/// stays owed and is proposed again once the window resets.
-pub fn due_step(
+/// the helper, only for a reminder otherwise due. The helper also refuses one while a
+/// compaction command is still pending in the queue, which this row-only read cannot see.
+pub fn reminder_due(
     snapshot: &SidebarSnapshot,
     agent: &AgentState,
     threshold: Option<AutoCompact>,
     continue_text: &str,
     now: Timestamp,
     compaction_blocked: impl FnOnce() -> bool,
-) -> Option<SoftCompactStep> {
+) -> bool {
     if continue_text.trim().is_empty()
         || agent.ended_at.is_some()
         || agent.is_provider_subagent()
@@ -61,28 +63,25 @@ pub fn due_step(
             .live_agent_pane(&agent.kind, &agent.agent_id)
             .is_none()
     {
-        return None;
+        return false;
     }
-    if agent
-        .soft_compact
-        .is_some_and(|mark| mark.progress == SoftCompactProgress::TurnEnded)
-    {
-        return (!compaction_blocked()).then_some(SoftCompactStep::Continue);
-    }
-    let definition = crate::agents::definition_by_kind(agent.kind.as_str()).ok()?;
+    let Ok(definition) = crate::agents::definition_by_kind(agent.kind.as_str()) else {
+        return false;
+    };
     if crate::agents::soft_compact_skip(definition).is_some()
         || !threshold.is_some_and(|threshold| threshold.triggered(agent))
         || !agent.holds_open_turn()
         || agent.is_compacting(now)
         || agent.compaction_unprompted(now)
+        || agent.soft_compact_in_flight()
         || agent
             .soft_compact
             .as_ref()
             .is_some_and(|mark| mark.compactions == Some(agent.compaction_count))
     {
-        return None;
+        return false;
     }
-    (!compaction_blocked()).then_some(SoftCompactStep::WrapUp)
+    !compaction_blocked()
 }
 
 pub fn spawn_soft_compact(runtime: &RuntimePaths, request: &SoftCompactRequest) -> bool {
@@ -129,36 +128,27 @@ fn compact_agents_with(
     mut spawn: impl FnMut(&SoftCompactRequest) -> bool,
 ) {
     for agent in snapshot.agents.iter() {
-        let Some(step) = due_step(
+        if !reminder_due(
             snapshot,
             agent,
             policy.smart_compact(agent, &config.harness),
             &config.resume.auto_continue_text,
             snapshot.now,
             || capacities.compaction_blocked(agent, snapshot.now),
-        ) else {
+        ) {
             continue;
-        };
-        // Two files per card, replaced on each epoch rather than accumulated.
-        let suffix = match step {
-            SoftCompactStep::WrapUp => "wrap-up",
-            SoftCompactStep::Continue => "continue",
-        };
+        }
+        // One file per card, replaced on each epoch rather than accumulated.
         let path = runtime.live_path("soft-compact").join(format!(
-            "{}-{suffix}.json",
+            "{}-wrap-up.json",
             crate::store::sidecar::digest(agent.kind.as_str(), agent.agent_id.as_str())
         ));
         let record = std::fs::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<FireRecord>(&bytes).ok());
         let fired_at = now();
-        let steered_at = agent.soft_compact.as_ref().map(|mark| mark.steered_at);
         if record.is_some_and(|record| {
-            let same_epoch = match step {
-                SoftCompactStep::WrapUp => record.compactions == agent.compaction_count,
-                SoftCompactStep::Continue => record.steered_at == steered_at,
-            };
-            same_epoch
+            record.compactions == agent.compaction_count
                 && fired_at.duration_since(record.fired_at).as_secs()
                     < RESPAWN_THROTTLE.as_secs() as i64
         }) {
@@ -174,7 +164,7 @@ fn compact_agents_with(
             agent_id: agent.agent_id.clone(),
             pane_id,
             label: crate::address::agent_handle(agent, &peers, false),
-            step,
+            step: SoftCompactStep::WrapUp,
         };
         if !spawn(&request) {
             continue;
@@ -184,7 +174,6 @@ fn compact_agents_with(
             &FireRecord {
                 fired_at,
                 compactions: agent.compaction_count,
-                steered_at,
             },
         ) {
             tracing::warn!(

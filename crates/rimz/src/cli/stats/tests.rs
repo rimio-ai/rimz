@@ -3310,7 +3310,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert!(
         categories
             .iter()
-            .any(|line| line == "Soft compact: 1 (1 held)")
+            .any(|line| line == "Compact reminder: 1 (1 held)")
     );
     assert!(
         categories

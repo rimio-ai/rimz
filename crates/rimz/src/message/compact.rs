@@ -1,4 +1,5 @@
-//! Standalone native compaction through the durable, boundary-only command queue.
+//! Standalone native compaction through the durable, boundary-only command queue, and the
+//! continue a compaction of a busy agent owes it afterward.
 
 use jiff::Timestamp;
 
@@ -6,7 +7,8 @@ use crate::Store;
 use crate::agents::AgentState;
 use crate::ids::{MessageId, PaneId};
 use crate::store::message::{
-    DeliveryGate, MessageBody, MessageSender, MessageStatus, idle_compaction_edge,
+    DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus, SoftCompactStep,
+    idle_compaction_edge,
 };
 use crate::store::writer::DeliveryFailureDisposition;
 use crate::workspace::ResolvedWorkspace;
@@ -59,7 +61,10 @@ impl CompactErr {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompactOutcome {
     Sent,
-    Queued,
+    /// The command waits for a turn boundary; `continues` when a continue is queued behind it.
+    Queued {
+        continues: bool,
+    },
 }
 
 pub struct CompactRequest<'a> {
@@ -72,6 +77,9 @@ pub struct CompactRequest<'a> {
     pub idle: bool,
     /// What must still hold for the compaction to be worth sending, beside the idle tag.
     pub premises: Vec<crate::store::message::Premise>,
+    /// The continue owed once the compaction ends, queued behind the command when `agent`
+    /// holds an open turn and the command queues; `None` owes none.
+    pub continue_text: Option<String>,
 }
 
 pub fn refuse_repeat(store: &Store, agent: &AgentState, now: Timestamp) -> Result<()> {
@@ -119,14 +127,37 @@ pub fn send_compact(
     if request.idle {
         message.idle_since = idle_compaction_edge(request.agent);
     }
-    if synthetic::deliver_now(
+    let continuation = request
+        .continue_text
+        .filter(|_| request.agent.holds_open_turn())
+        .map(|text| continue_record(workspace, request.agent, &message.message_id, text));
+    let continuation = match continuation {
+        Some(tail) => {
+            Some(store.queue_message_with_tail(&message, &tail, &workspace.session_name)?)
+        }
+        None => {
+            store.queue_message(&message, &workspace.session_name)?;
+            None
+        }
+    };
+    let withdraw_continue = |reason: String| -> Result<()> {
+        if let Some(tail) = &continuation {
+            store.withdraw_messages(&workspace.session_name, |live| {
+                (live.message_id == tail.message_id).then(|| reason.clone())
+            })?;
+        }
+        Ok(())
+    };
+    let typed_now = format!("compaction {} was typed at once", message.message_id);
+    if synthetic::attempt_now(
         workspace,
         store,
-        &message,
+        &message.message_id,
         Some(&request.pane_id),
         DeliveryFailureDisposition::Retry,
         "compaction delivery gate closed",
     )? {
+        withdraw_continue(typed_now)?;
         return Ok(CompactOutcome::Sent);
     }
     if store
@@ -134,7 +165,9 @@ pub fn send_compact(
         .iter()
         .any(|queued| queued.message_id == message.message_id)
     {
-        return Ok(CompactOutcome::Queued);
+        return Ok(CompactOutcome::Queued {
+            continues: continuation.is_some(),
+        });
     }
     let settled = store
         .list_message_history()?
@@ -144,7 +177,16 @@ pub fn send_compact(
         .as_ref()
         .is_some_and(|record| record.status == MessageStatus::Delivered)
     {
+        withdraw_continue(typed_now)?;
         return Ok(CompactOutcome::Sent);
+    }
+    if let Some(reason) = continuation
+        .as_ref()
+        .map(|tail| super::premise::unsent_command(store, tail))
+        .transpose()?
+        .flatten()
+    {
+        withdraw_continue(reason)?;
     }
     let reason = settled.map_or_else(
         || "outcome is no longer in the message history".to_owned(),
@@ -158,6 +200,28 @@ pub fn send_compact(
         message_id: message.message_id,
         reason,
     })
+}
+
+/// The continue for the compaction command `command_id` on `agent`'s card: a system prompt at
+/// the `Done` gate, which the fold marks owed (`SoftCompactMark::continue_owed`) once queued and
+/// delivery withdraws once that mark clears or the command ends unsent.
+fn continue_record(
+    workspace: &ResolvedWorkspace,
+    agent: &AgentState,
+    command_id: &MessageId,
+    text: String,
+) -> MessageRecord {
+    let mut message = SyntheticMessage {
+        agent,
+        text,
+        sender: MessageSender::System,
+        gate: DeliveryGate::Done,
+        premises: crate::store::message::Premise::NONE,
+    }
+    .record(workspace);
+    message.soft_compact = Some(SoftCompactStep::Continue);
+    message.follows_command = Some(command_id.clone());
+    message
 }
 
 #[cfg(test)]
@@ -298,10 +362,11 @@ mod tests {
                         sender: MessageSender::System,
                         automated: true,
                         idle,
+                        continue_text: None,
                     },
                 )
                 .unwrap();
-                assert_eq!(outcome, CompactOutcome::Queued);
+                assert_eq!(outcome, CompactOutcome::Queued { continues: false });
                 let queued = store
                     .list_messages()
                     .unwrap()

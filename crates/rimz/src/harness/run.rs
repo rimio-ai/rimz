@@ -464,15 +464,16 @@ pub enum ParkCheck {
     Live,
     /// Nothing owed under this `parked_at`; an identical second check settles.
     Stranded(Timestamp),
-    /// This check settled the run: completed a park on a withdrawn message,
-    /// or failed any other park.
+    /// This check settled the run: completed a park on a withdrawn message or
+    /// compaction continue, or failed any other park.
     Settled,
 }
 
 /// Settle only after two nothing-owed checks under the same park timestamp.
-/// A park on a message completes with the parked turn's answer, since the
-/// prompt it waited for was withdrawn before opening a turn; any other park,
-/// or one an older binary took with no cause, fails as a lost wake.
+/// A park on a message or a compaction continue completes with the parked
+/// turn's answer, since the prompt it waited for was withdrawn before opening a
+/// turn; any other park, or one an older binary took with no cause, fails as a
+/// lost wake.
 ///
 /// The CAS protects work resuming between the read and lock: the first
 /// in-turn signal (`TurnStarted`, `ToolUsed`, or `AwaitingInput`) clears
@@ -512,8 +513,11 @@ pub fn settle_stranded_park(
             if record.parked_at != Some(parked_at) {
                 return false;
             }
-            // A withdrawn message leaves the parked turn's answer as the finish.
-            if record.parked_on == Some(ParkCause::Message) {
+            // A withdrawn message or continue leaves the parked turn's answer as the finish.
+            if matches!(
+                record.parked_on,
+                Some(ParkCause::Message | ParkCause::SoftCompact)
+            ) {
                 return record.mark_terminal(RunStatus::Completed, now);
             }
             if !record.mark_terminal(RunStatus::Failed, now) {
