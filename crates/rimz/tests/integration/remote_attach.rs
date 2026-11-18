@@ -29,6 +29,8 @@ use crate::common::ssh_trace::{
 };
 use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env};
 
+#[path = "remote_keyboard.rs"]
+mod keyboard;
 #[path = "remote_ports.rs"]
 mod ports;
 
@@ -2182,6 +2184,7 @@ fn supervised_clean_exit_preserves_shell_typeahead() {
     const TYPEAHEAD: &[u8] = b"rimz-shell-typeahead\n";
 
     let env = Env::new();
+    keyboard::write_paste_config(&env, false);
     let log = env.project_root.join("ssh-trace.log");
     let pair = remote_connect_pty();
     let tty_name = pair.master.tty_name().expect("remote connect pty name");

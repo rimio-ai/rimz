@@ -23,6 +23,10 @@ enum Settled {
     Interrupted,
 }
 
+/// The shell's terminal modes for one `rimz remote connect`, restored after
+/// every session. During a session the keyboard relay (`keyboard.rs`) makes
+/// the terminal raw while ssh holds its pty raw; with `[remote] paste = false`
+/// ssh reads the terminal and sets its modes itself.
 pub(super) struct TtyGuard {
     saved: Option<Termios>,
 }
@@ -32,6 +36,11 @@ impl TtyGuard {
         Self {
             saved: sanitize_and_snapshot(),
         }
+    }
+
+    /// The shell's modes, when stdin is a terminal.
+    pub(super) fn saved(&self) -> Option<&Termios> {
+        self.saved.as_ref()
     }
 
     pub(super) fn restore(&self) {

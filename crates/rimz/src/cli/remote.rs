@@ -16,6 +16,7 @@ use rimz::remote::{
     infocmp_program, remote_lineage, term_plan_from,
 };
 
+mod keyboard;
 mod link_stats;
 mod list;
 mod outage_ui;

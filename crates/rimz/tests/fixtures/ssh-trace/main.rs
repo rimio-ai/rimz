@@ -11,7 +11,15 @@
 //! override, never PATH.
 //! `$RIMZ_TEST_SSH_RAW_TTY` simulates OpenSSH leaving the controlling tty raw;
 //! `$RIMZ_TEST_SSH_TTY_STATE_LOG` records whether each attach inherited sane
-//! shell flags before that transition.
+//! shell flags before that transition. `$RIMZ_TEST_SSH_RAW_DELAY_MS` waits
+//! before going raw, and `$RIMZ_TEST_SSH_COOKED_AFTER_MS` restores the shell
+//! flags that long after it, logging `cooked` to the state log.
+//! `$RIMZ_TEST_SSH_TTY_WRITE` is written to the stdin terminal once it is raw,
+//! as a local client drawing on its terminal does.
+//! `$RIMZ_TEST_SSH_TTY_NAME_LOG` records the terminal each attach's stdin
+//! names, and `$RIMZ_TEST_SSH_PID_FILE` receives the attach's pid.
+//! `$RIMZ_TEST_SSH_SIZE_LOG` records each window size stdin reports while
+//! stdin is recorded.
 //! `$RIMZ_TEST_SSH_STDIN_PLAN` chooses whether each visible attach ignores or
 //! records stdin, and `$RIMZ_TEST_SSH_STDIN_LOG` receives the recorded bytes.
 //! `$RIMZ_TEST_SSH_SUSPEND` stops the visible client until its process group
@@ -107,7 +115,9 @@ fn main() {
 
     publish_control_master_if_requested(&argv);
     wait_for_probe_if_requested(&log_path);
+    record_attach_identity_if_requested();
     record_and_enter_raw_tty_if_requested();
+    write_tty_if_requested();
     if let Ok(stdout) = env::var("RIMZ_TEST_SSH_STDOUT") {
         let mut stream = std::io::stdout().lock();
         stream
@@ -199,10 +209,65 @@ fn record_and_enter_raw_tty_if_requested() {
         log.write_all(if sane { b"sane\n" } else { b"damaged\n" })
             .expect("write ssh trace tty state");
     }
-    if enter_raw {
-        termios::cfmakeraw(&mut settings);
-        termios::tcsetattr(&stdin, SetArg::TCSANOW, &settings).expect("set ssh trace tty raw");
+    if !enter_raw {
+        return;
     }
+    if let Some(ms) = env_millis("RIMZ_TEST_SSH_RAW_DELAY_MS") {
+        std::thread::sleep(ms);
+    }
+    let shell = settings.clone();
+    termios::cfmakeraw(&mut settings);
+    termios::tcsetattr(&stdin, SetArg::TCSANOW, &settings).expect("set ssh trace tty raw");
+    let Some(ms) = env_millis("RIMZ_TEST_SSH_COOKED_AFTER_MS") else {
+        return;
+    };
+    std::thread::sleep(ms);
+    termios::tcsetattr(&stdin, SetArg::TCSANOW, &shell).expect("leave ssh trace tty raw");
+    if let Some(path) = env::var_os("RIMZ_TEST_SSH_TTY_STATE_LOG") {
+        let mut log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("open ssh trace tty state log");
+        log.write_all(b"cooked\n")
+            .expect("write ssh trace tty state");
+    }
+}
+
+fn write_tty_if_requested() {
+    use std::os::fd::AsFd as _;
+
+    if let Ok(text) = env::var("RIMZ_TEST_SSH_TTY_WRITE") {
+        nix::unistd::write(std::io::stdin().as_fd(), text.as_bytes())
+            .expect("write ssh trace stdin terminal");
+    }
+}
+
+fn env_millis(key: &str) -> Option<std::time::Duration> {
+    let ms = env::var(key).ok()?.parse().ok()?;
+    Some(std::time::Duration::from_millis(ms))
+}
+
+/// Records the attach's pid and the terminal its stdin names, so a test can
+/// tell the relay's pty from its own terminal and wait for this attach's exit.
+fn record_attach_identity_if_requested() {
+    use std::os::fd::AsFd as _;
+
+    if let Some(path) = env::var_os("RIMZ_TEST_SSH_PID_FILE") {
+        std::fs::write(path, std::process::id().to_string()).expect("write ssh trace pid");
+    }
+    let Some(path) = env::var_os("RIMZ_TEST_SSH_TTY_NAME_LOG") else {
+        return;
+    };
+    let name = nix::unistd::ttyname(std::io::stdin().as_fd())
+        .map_or_else(|_| "none".to_owned(), |name| name.display().to_string());
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .expect("open ssh trace tty name log");
+    log.write_all(format!("{name}\n").as_bytes())
+        .expect("write ssh trace tty name");
 }
 
 fn exit_web_prep() -> ! {
@@ -468,8 +533,12 @@ fn record_stdin_until_sentinel() {
         .expect("open ssh trace stdin log");
     let mut recorded = Vec::new();
     let mut buffer = [0u8; 256];
+    let mut size_log = env::var_os("RIMZ_TEST_SSH_SIZE_LOG").map(|path| (path, None));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
+        if let Some((path, last)) = &mut size_log {
+            record_size_change(&stdin, path, last);
+        }
         let mut fds = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
         if poll(&mut fds, 50u16).expect("poll ssh trace stdin") == 0 {
             continue;
@@ -491,6 +560,29 @@ fn record_stdin_until_sentinel() {
         }
     }
     panic!("ssh trace stdin sentinel was not received before deadline");
+}
+
+/// Appends `<rows> <cols>` whenever the size stdin reports changes.
+fn record_size_change(
+    stdin: &std::io::Stdin,
+    path: &std::ffi::OsStr,
+    last: &mut Option<(u16, u16)>,
+) {
+    let Ok(size) = rustix::termios::tcgetwinsize(stdin) else {
+        return;
+    };
+    let size = (size.ws_row, size.ws_col);
+    if *last == Some(size) {
+        return;
+    }
+    *last = Some(size);
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .expect("open ssh trace size log");
+    log.write_all(format!("{} {}\n", size.0, size.1).as_bytes())
+        .expect("write ssh trace size");
 }
 
 fn is_config_query(argv: &[String]) -> bool {
