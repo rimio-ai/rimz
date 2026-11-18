@@ -225,7 +225,7 @@ fn code_mode_warns_once_and_launches_without_it_where_unsupported() {
     finalize(&mut off, &Default::default(), &[]).unwrap();
     assert_eq!(cell.args, off.agent_cells().next().unwrap().args);
 
-    for kind in ["claude", "codex", "pi"] {
+    for kind in ["claude", "codex", "opencode", "pi"] {
         let mut layout = code_mode_cell(kind);
         let warnings = finalize(&mut layout, &Default::default(), &[]).unwrap();
         assert!(warnings.is_empty(), "{kind}: {warnings:?}");
@@ -609,7 +609,7 @@ fn compaction_default_follows_the_engine_but_declared_values_warn() {
     for namespace in ["agents", "subagents", "teams"] {
         std::fs::create_dir(root.path().join(namespace)).unwrap();
     }
-    for kind in ["claude", "codex", "pi"] {
+    for kind in ["claude", "codex", "opencode", "pi"] {
         std::fs::write(
             root.path().join(format!("agents/{kind}.md")),
             "---\ndescription: Foundation.\n---\nBase.",

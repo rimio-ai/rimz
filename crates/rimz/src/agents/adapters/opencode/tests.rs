@@ -170,6 +170,8 @@ fn composed_system_prompt_preserves_config_with_or_without_delegation() {
             &mut env,
             disable_delegation,
             Some(Path::new("/runtime/prompt.md")),
+            None,
+            false,
         );
         actual.push((
             env.get("OPENCODE_CONFIG_CONTENT")
@@ -211,6 +213,8 @@ fn composed_system_prompt_replaces_inherited_system_with_one_warning() {
             &mut env,
             false,
             Some(Path::new("/runtime/prompt.md")),
+            None,
+            false,
         );
         actual.push((
             env.get("OPENCODE_CONFIG_CONTENT")
@@ -265,6 +269,8 @@ fn malformed_prompt_and_delegation_config_warns_once_and_keeps_both_edits() {
             &mut env,
             true,
             Some(Path::new("/runtime/prompt.md")),
+            None,
+            false,
         );
         let expected_warning = format!(
             "OPENCODE_CONFIG_CONTENT {problem}; this launch ignored the configured value; \
@@ -301,10 +307,162 @@ fn unmanaged_core_config_is_untouched_without_prompt_or_delegation() {
             .map(|raw| BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]))
             .unwrap_or_default();
         let mut env = BTreeMap::new();
-        let warnings = OpencodeAdapter.finalize_launch_env(&inherited, &mut env, false, None);
+        let warnings =
+            OpencodeAdapter.finalize_launch_env(&inherited, &mut env, false, None, None, false);
         actual.push((env.contains_key("OPENCODE_CONFIG_CONTENT"), warnings));
     }
     assert_eq!(actual, vec![(false, Vec::<String>::new()); 3]);
+}
+
+/// The composed core config and warnings of one OpenCode launch over an inherited value.
+fn code_mode_config(
+    raw: Option<&str>,
+    code_mode: Option<bool>,
+    release_code_mode: bool,
+) -> (Option<Value>, Vec<String>) {
+    let inherited = raw
+        .map(|raw| BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]))
+        .unwrap_or_default();
+    let mut env = BTreeMap::new();
+    let warnings = OpencodeAdapter.finalize_launch_env(
+        &inherited,
+        &mut env,
+        false,
+        None,
+        code_mode,
+        release_code_mode,
+    );
+    (
+        env.get("OPENCODE_CONFIG_CONTENT")
+            .map(|raw| serde_json::from_str(raw).unwrap()),
+        warnings,
+    )
+}
+
+#[test]
+fn code_mode_on_turns_full_code_mode_on_keeping_inherited_config() {
+    let actual = [
+        None,
+        Some(r#"{/* JSONC */"theme":"dark","experimental":{"other":1,},}"#),
+        Some(r#"{"experimental":{"full_codemode":true}}"#),
+    ]
+    .map(|raw| code_mode_config(raw, Some(true), false));
+    assert_eq!(
+        actual,
+        [
+            (Some(json!({"experimental":{"full_codemode":true}})), vec![]),
+            (
+                Some(json!({"theme":"dark","experimental":{"other":1,"full_codemode":true}})),
+                vec![]
+            ),
+            (Some(json!({"experimental":{"full_codemode":true}})), vec![]),
+        ]
+    );
+}
+
+#[test]
+fn code_mode_on_warns_when_it_replaces_or_ignores_inherited_config() {
+    let actual = [
+        r#"{"theme":"dark","experimental":{"full_codemode":false}}"#,
+        r#"{"theme":"dark","experimental":true}"#,
+    ]
+    .map(|raw| code_mode_config(Some(raw), Some(true), false));
+    assert_eq!(
+        actual,
+        [
+            (
+                Some(json!({"theme":"dark","experimental":{"full_codemode":true}})),
+                vec![
+                    "OPENCODE_CONFIG_CONTENT set experimental.full_codemode to false; the \
+                     profile's code-mode on replaced it with true for this launch; remove it \
+                     from the variable, or turn code-mode off in the profile"
+                        .to_owned()
+                ]
+            ),
+            (
+                Some(json!({"experimental":{"full_codemode":true}})),
+                vec![
+                    "OPENCODE_CONFIG_CONTENT sets experimental to a value that is not an \
+                     object; this launch ignored the configured value; set it to a JSON object \
+                     whose experimental is an object, or unset it"
+                        .to_owned()
+                ]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn code_mode_off_forces_full_code_mode_off_over_inherited_config() {
+    let actual = [
+        None,
+        Some(r#"{"theme":"dark","experimental":{"other":1}}"#),
+        Some(r#"{"theme":"dark","experimental":{"full_codemode":true}}"#),
+    ]
+    .map(|raw| code_mode_config(raw, Some(false), false));
+    assert_eq!(
+        actual,
+        [
+            (
+                Some(json!({"experimental":{"full_codemode":false}})),
+                vec![]
+            ),
+            (
+                Some(json!({"theme":"dark","experimental":{"other":1,"full_codemode":false}})),
+                vec![]
+            ),
+            (
+                Some(json!({"theme":"dark","experimental":{"full_codemode":false}})),
+                vec![
+                    "OPENCODE_CONFIG_CONTENT set experimental.full_codemode to true; the \
+                     profile's code-mode off replaced it with false for this launch; remove it \
+                     from the variable, or turn code-mode on in the profile"
+                        .to_owned()
+                ]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn code_mode_unset_takes_out_only_the_member_an_outer_launch_wrote() {
+    let on = r#"{"theme":"dark","experimental":{"other":1,"full_codemode":true}}"#;
+    let actual = [
+        (Some(on), true),
+        // Without RimZ's marker the value is the user's own and passes through.
+        (Some(on), false),
+        // An outer launch's forced off is released as its on is.
+        (Some(r#"{"experimental":{"full_codemode":false}}"#), true),
+        (Some(r#"{"experimental":{"full_codemode":"yes"}}"#), true),
+        (None, true),
+    ]
+    .map(|(raw, release)| code_mode_config(raw, None, release));
+    assert_eq!(
+        actual,
+        [
+            (
+                Some(json!({"theme":"dark","experimental":{"other":1}})),
+                vec![]
+            ),
+            (None, vec![]),
+            (Some(json!({"experimental":{}})), vec![]),
+            (None, vec![]),
+            (None, vec![]),
+        ]
+    );
+
+    // A value the launch env sets itself (trusted `[[agents]] env`) is the user's too.
+    let inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), on.into())]);
+    let mut env = inherited.clone();
+    let warnings =
+        OpencodeAdapter.finalize_launch_env(&inherited, &mut env, false, None, None, true);
+    assert_eq!(
+        (
+            env.get("OPENCODE_CONFIG_CONTENT").map(String::as_str),
+            warnings
+        ),
+        (Some(on), Vec::new())
+    );
 }
 
 #[test]
@@ -325,7 +483,7 @@ fn native_subagent_denial_preserves_opencode_config_and_appends_plugin_selector(
             .unwrap_or_default();
         let mut env = BTreeMap::new();
         let warning = OpencodeAdapter
-            .finalize_launch_env(&inherited, &mut env, true, None)
+            .finalize_launch_env(&inherited, &mut env, true, None, None, false)
             .into_iter()
             .next();
         actual.push((
@@ -357,7 +515,7 @@ fn native_subagent_denial_warns_when_opencode_config_is_ignored() {
         let inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]);
         let mut env = BTreeMap::new();
         let warning = OpencodeAdapter
-            .finalize_launch_env(&inherited, &mut env, true, None)
+            .finalize_launch_env(&inherited, &mut env, true, None, None, false)
             .into_iter()
             .next()
             .unwrap_or_default();
@@ -401,7 +559,7 @@ fn managed_launch_hides_tabs_preserving_other_cli_config() {
         }
         let mut env = BTreeMap::new();
         let warning = OpencodeAdapter
-            .finalize_launch_env(&inherited, &mut env, false, None)
+            .finalize_launch_env(&inherited, &mut env, false, None, None, false)
             .into_iter()
             .next();
         actual.push((
@@ -453,7 +611,7 @@ fn managed_launch_warns_when_opencode_cli_config_is_ignored() {
         let inherited = BTreeMap::from([("OPENCODE_CLI_CONFIG_CONTENT".into(), raw.into())]);
         let mut env = BTreeMap::new();
         let warning = OpencodeAdapter
-            .finalize_launch_env(&inherited, &mut env, false, None)
+            .finalize_launch_env(&inherited, &mut env, false, None, None, false)
             .into_iter()
             .next()
             .unwrap_or_default();

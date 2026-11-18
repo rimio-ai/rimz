@@ -945,7 +945,7 @@ fn code_mode_switch_characterization() {
     copilot: Unsupported
     kimi: Unsupported
     pi: Supported { tools: ["codemode"], without_tools: ["--tools", "+codemode"], env: None, off_env: None, off_exclude: Some((["--exclude-tools", "-xt"], "codemode")) }
-    opencode: Unsupported
+    opencode: Config { marker: "OPENCODE_CONFIG_CONTENT:experimental.full_codemode" }
     antigravity: Unsupported
     cursor: Unsupported
     droid: Unsupported
