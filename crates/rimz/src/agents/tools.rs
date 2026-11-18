@@ -223,17 +223,20 @@ pub(crate) fn render_tool_args(
     }
 }
 
-/// A launch's tool argv, with the kind's code-mode tools or argv when `code_mode` is on.
+/// A launch's tool argv, with the kind's code-mode tools or argv when `code_mode` is on, and
+/// its off argv when the kind switches off by argv.
 pub(crate) fn render_launch_tool_args(
     kind: &str,
     tools: Option<&ToolSet>,
-    code_mode: bool,
+    code_mode: Option<bool>,
 ) -> Result<(Vec<String>, Vec<ToolNotice>), ToolErr> {
     let switch = spec_by_kind(kind).map(|spec| spec.launch.presets.code_mode);
-    let switch_args = match switch {
-        Some(CodeModeSwitch::Args(args)) if code_mode => args,
+    let switch_args = match (switch, code_mode) {
+        (Some(CodeModeSwitch::Args { on, .. }), Some(true)) => on,
+        (Some(CodeModeSwitch::Args { off, .. }), Some(false)) => off,
         _ => &[],
     };
+    let code_mode = code_mode == Some(true);
     let Some(tools) = tools else {
         let argv = match switch {
             Some(CodeModeSwitch::Supported { without_tools, .. }) if code_mode => without_tools,
@@ -330,7 +333,7 @@ mod tests {
             "WebFetch(url)",
             "Bash(git *)",
         ]);
-        let (args, notices) = render_launch_tool_args("pi", Some(&parsed), false).unwrap();
+        let (args, notices) = render_launch_tool_args("pi", Some(&parsed), None).unwrap();
         assert_eq!(args, ["--tools", "read,bash", "--no-skills"]);
         assert_eq!(
             notices,
@@ -358,7 +361,7 @@ mod tests {
             ),
         ] {
             let (args, notices) =
-                render_launch_tool_args("pi", Some(&tools(&entries)), false).unwrap();
+                render_launch_tool_args("pi", Some(&tools(&entries)), None).unwrap();
             assert_eq!(args, expected_args, "{entries:?}");
             assert_eq!(notices, expected_notices, "{entries:?}");
         }
@@ -366,11 +369,14 @@ mod tests {
 
     #[test]
     fn code_mode_appends_each_declared_tool_once_and_off_renders_as_today() {
-        let launch = |kind: &str, entries: Option<&[&str]>, code_mode: bool| {
+        let launch_in = |kind: &str, entries: Option<&[&str]>, code_mode: Option<bool>| {
             let parsed = entries.map(tools);
             render_launch_tool_args(kind, parsed.as_ref(), code_mode)
                 .unwrap()
                 .0
+        };
+        let launch = |kind: &str, entries: Option<&[&str]>, on: bool| {
+            launch_in(kind, entries, on.then_some(true))
         };
         let read_bash: &[&str] = &["Read", "Bash"];
         // Kind, profile tools, argv with code mode on, argv with it off.
@@ -423,12 +429,26 @@ mod tests {
         for (kind, entries, on, off) in cases {
             assert_eq!(launch(kind, entries, true), on, "{kind} {entries:?} on");
             assert_eq!(launch(kind, entries, false), off, "{kind} {entries:?} off");
+            // Claude's off rides the env and Pi's the final argv, so the tools render as unset.
+            assert_eq!(
+                launch_in(kind, entries, Some(false)),
+                off,
+                "{kind} {entries:?}"
+            );
         }
         // Codex takes the switch as config argv after any tools list.
         for entries in [Some(read_bash), None] {
             let mut on = launch("codex", entries, false);
             on.extend(["-c".to_owned(), "features.code_mode=true".to_owned()]);
             assert_eq!(launch("codex", entries, true), on, "codex {entries:?}");
+            // Off renders its own setting at the same position, over a saved config value.
+            let mut off = launch("codex", entries, false);
+            off.extend(["-c".to_owned(), "features.code_mode=false".to_owned()]);
+            assert_eq!(
+                launch_in("codex", entries, Some(false)),
+                off,
+                "codex {entries:?}"
+            );
         }
         for kind in ["opencode", "omp", "unregistered"] {
             for entries in [Some(read_bash), None] {

@@ -585,7 +585,7 @@ impl<'a> ExplainReport<'a> {
                 })
             },
             effort: params.effort.as_deref(),
-            fast: params.fast,
+            fast: params.fast == Some(true),
             tier_skipped: params
                 .tier
                 .as_ref()

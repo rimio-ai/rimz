@@ -215,12 +215,18 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
                 tools: &["REPL", "Poll"],
                 without_tools: &[],
                 env: Some(("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "1")),
+                // Removing the variable is not off: settings `env` can still supply it.
+                off_env: Some(("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "0")),
+                off_exclude: None,
             },
             auto_compact: Some(super::StaticPresetMatcher::Flag(&["--autocompact"])),
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
             system_prompt_file: Some(super::StaticPresetMatcher::Flag(&["--system-prompt-file"])),
-            fast: super::FastSwitch::Args(&["--settings", CLAUDE_FAST_SETTINGS]),
+            fast: super::FastSwitch::Args {
+                on: &["--settings", CLAUDE_FAST_SETTINGS],
+                off: &["--settings", CLAUDE_FAST_OFF_SETTINGS],
+            },
         },
     },
 };
@@ -229,6 +235,8 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
 /// inline settings member and merged into the launch's one `--settings` by the
 /// process compiler, since Claude honours only the last `--settings`.
 const CLAUDE_FAST_SETTINGS: &str = r#"{"fastMode":true}"#;
+/// Claude's off switch: a flag-level `fastMode: false` outranks a saved `/fast`.
+const CLAUDE_FAST_OFF_SETTINGS: &str = r#"{"fastMode":false}"#;
 
 fn system_prompt_snapshot_args(version: Option<CliVersion>) -> Vec<String> {
     const MIN_VERSION: CliVersion = CliVersion::new(2, 1, 257);
@@ -896,15 +904,16 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         deny_native_tool(extra_args, "Agent");
     }
 
-    fn take_fast_settings(&self, extra_args: &mut Vec<String>) -> bool {
-        let before = extra_args.len();
+    fn take_fast_settings(&self, extra_args: &mut Vec<String>) -> Option<bool> {
+        let rendered = CLAUDE_DESCRIPTOR.launch.rendered_fast(extra_args);
         CLAUDE_DESCRIPTOR.launch.strip_fast_args(extra_args);
-        extra_args.len() != before
+        rendered
     }
 
     fn merge_fast_settings(
         &self,
         (cwd, artifact_dir): (&Path, &Path),
+        on: bool,
         extra_args: &mut Vec<String>,
         artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
@@ -915,7 +924,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
             artifact.as_ref(),
             false,
             |object| {
-                object.insert("fastMode".to_owned(), serde_json::Value::Bool(true));
+                object.insert("fastMode".to_owned(), serde_json::Value::Bool(on));
                 Ok(())
             },
         )?;

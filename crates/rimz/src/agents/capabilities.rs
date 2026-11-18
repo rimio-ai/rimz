@@ -668,20 +668,21 @@ pub trait LaunchCapability: CoreCapability {
     }
 
     /// Take a fast switch that belongs inside the provider's settings document
-    /// out of launch argv, reporting whether one was there. The process
+    /// out of launch argv, reporting which one was there, on or off. The process
     /// compiler merges it back through [`Self::merge_fast_settings`] after
     /// every other settings mutation, so the launch still carries one
     /// settings document. The default leaves argv alone: a provider whose fast
     /// switch is plain argv keeps it where it was rendered.
-    fn take_fast_settings(&self, _extra_args: &mut Vec<String>) -> bool {
-        false
+    fn take_fast_settings(&self, _extra_args: &mut Vec<String>) -> Option<bool> {
+        None
     }
 
-    /// Merge the fast member taken by [`Self::take_fast_settings`] into the
+    /// Merge the fast member taken by [`Self::take_fast_settings`], on or off, into the
     /// launch's settings document.
     fn merge_fast_settings(
         &self,
         _paths: (&Path, &Path),
+        _on: bool,
         _extra_args: &mut Vec<String>,
         _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {

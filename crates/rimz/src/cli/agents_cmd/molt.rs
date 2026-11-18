@@ -415,7 +415,7 @@ mod tests {
         agent.record = Some(Box::new(rimz::agents::LaunchRecord {
             model: Some("old-record".into()),
             effort: Some("xhigh".into()),
-            fast: true,
+            fast: Some(true),
             agent: None,
             auto_compact: None,
             notes: Some("20261107/002336Z-loop-review".into()),
@@ -434,7 +434,7 @@ mod tests {
             agent.record.as_ref().unwrap().notes,
             "changing the provider must keep this run's notes"
         );
-        assert!(!posture.launch.fast);
+        assert_eq!(posture.launch.fast, None);
         assert_eq!(
             serde_json::to_value(&posture.launch.record).unwrap()["loop_section"],
             "The original loop fire",

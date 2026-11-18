@@ -46,7 +46,7 @@ fn fast_mode_prefers_live_reading_then_launch_then_standard() {
         });
         agent.record = launch.map(|fast| {
             Box::new(crate::agents::LaunchRecord {
-                fast,
+                fast: Some(fast),
                 ..Default::default()
             })
         });

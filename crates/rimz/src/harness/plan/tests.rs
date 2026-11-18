@@ -73,7 +73,7 @@ fn finalized_launch_stamps_verbatim_record() {
         Some(&crate::agents::LaunchRecord {
             model: Some("opus[1m]".into()),
             effort: Some("high".into()),
-            fast: false,
+            fast: None,
             agent: None,
             auto_compact: None,
             ..Default::default()
@@ -99,7 +99,7 @@ fn pi_fast_keeps_the_launch_and_record_on_without_argv_or_warnings() {
             cell.launch.fast,
             cell.launch.record.as_deref().unwrap().fast
         ),
-        (true, true)
+        (Some(true), Some(true))
     );
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(cell.args.is_empty(), "{:?}", cell.args);
@@ -115,26 +115,37 @@ fn fast_override_renders_strips_stamps_and_skips_where_unsupported() {
         fast: Some(false),
         ..Default::default()
     };
+    let codex_on = ["-c", "service_tier=fast", "-c", "features.fast_mode=true"];
+    let codex_off = ["-c", "service_tier=default"];
     let mut layout = LayoutSpec::single(preset_cell("codex", &["--search"], None, None));
     finalize(&mut layout, &on, &[]).unwrap();
     let cell = layout.agent_cells().next().unwrap();
-    assert!(cell.launch.fast);
-    assert!(cell.launch.record.as_deref().unwrap().fast);
+    assert_eq!(cell.launch.fast, Some(true));
+    assert_eq!(cell.launch.record.as_deref().unwrap().fast, Some(true));
     assert_eq!(
         cell.args,
-        with_auto_args(
-            "codex",
-            &[
-                "--search",
-                "-c",
-                "service_tier=fast",
-                "-c",
-                "features.fast_mode=true"
-            ]
-        )
+        with_auto_args("codex", &[&["--search"][..], &codex_on[..]].concat())
     );
 
-    // `--no-fast` over a profile that rendered fast removes the switch.
+    // A flip either way leaves exactly one of the two switches.
+    for (rendered, flag, want, gone) in [
+        (&codex_on[..], &off, &codex_off[..], &codex_on[..]),
+        (&codex_off[..], &on, &codex_on[..], &codex_off[..]),
+    ] {
+        let mut layout = LayoutSpec::single(preset_cell("codex", rendered, None, None));
+        finalize(&mut layout, flag, &[]).unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        let count = |switch: &[&str]| {
+            cell.args
+                .windows(switch.len())
+                .filter(|part| part.iter().zip(switch).all(|(arg, want)| arg == want))
+                .count()
+        };
+        assert_eq!((count(want), count(gone)), (1, 0), "{:?}", cell.args);
+        assert_eq!(cell.launch.record.as_deref().unwrap().fast, flag.fast);
+    }
+
+    // `--no-fast` over a profile that rendered fast removes the switch; Amp has no off.
     let mut layout = LayoutSpec::single(preset_cell(
         "amp",
         &["--fast", "--dangerously-allow-all"],
@@ -142,22 +153,24 @@ fn fast_override_renders_strips_stamps_and_skips_where_unsupported() {
         None,
     ));
     if let Some(cell) = layout.agent_cells_mut().next() {
-        cell.launch.fast = true;
+        cell.launch.fast = Some(true);
     }
-    finalize(&mut layout, &off, &[]).unwrap();
+    let warnings = finalize(&mut layout, &off, &[]).unwrap();
     let cell = layout.agent_cells().next().unwrap();
-    assert!(!cell.launch.fast);
-    assert!(!cell.launch.record.as_deref().unwrap().fast);
+    assert_eq!(cell.launch.fast, Some(false));
+    assert_eq!(cell.launch.record.as_deref().unwrap().fast, Some(false));
     assert_eq!(cell.args, ["--dangerously-allow-all"]);
+    assert!(warnings.is_empty(), "{warnings:?}");
 
-    // Off stays quiet; on skips with the adapter's alternative.
+    // Off stays quiet where no saved fast mode exists; on skips with the alternative.
     let mut layout = LayoutSpec::single(preset_cell("cursor", &[], None, None));
-    finalize(&mut layout, &off, &[]).unwrap();
+    let warnings = finalize(&mut layout, &off, &[]).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
     let mut layout = LayoutSpec::single(preset_cell("cursor", &[], None, None));
     let warnings = finalize(&mut layout, &on, &[]).expect("unsupported fast still launches");
     let cell = layout.agent_cells().next().unwrap();
-    assert!(!cell.launch.fast);
-    assert!(!cell.launch.record.as_deref().unwrap().fast);
+    assert_eq!(cell.launch.fast, None);
+    assert_eq!(cell.launch.record.as_deref().unwrap().fast, None);
     assert!(cell.args.is_empty());
     assert_eq!(warnings.len(), 1);
     let warning = warnings[0].to_string();
@@ -168,6 +181,18 @@ fn fast_override_renders_strips_stamps_and_skips_where_unsupported() {
     assert!(
         warning.contains("launching without") && warning.contains("fast model id"),
         "{warning}"
+    );
+
+    // Droid can hold a saved `/fast` that no launch switch forces out, so off warns.
+    let mut layout = LayoutSpec::single(preset_cell("droid", &[], None, None));
+    let warnings = finalize(&mut layout, &off, &[]).expect("unforced off still launches");
+    let cell = layout.agent_cells().next().unwrap();
+    assert_eq!(cell.launch.record.as_deref().unwrap().fast, None);
+    assert_eq!(
+        warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        [
+            "warning: `droid-coder` fast off cannot be forced on droid; toggle /fast off inside the session"
+        ]
     );
 
     // Finalization requires a registered adapter; Copilot has no fast alternative.
@@ -184,7 +209,7 @@ fn code_mode_warns_once_and_launches_without_it_where_unsupported() {
     let code_mode_cell = |kind: &str| {
         let mut cell = preset_cell(kind, &["--raw"], None, None);
         if let Cell::Agent(cell) = &mut cell {
-            cell.launch.code_mode = true;
+            cell.launch.code_mode = Some(true);
         }
         LayoutSpec::single(cell)
     };
@@ -195,7 +220,7 @@ fn code_mode_warns_once_and_launches_without_it_where_unsupported() {
         ["warning: `copilot-coder` code-mode is unsupported on copilot; launching without it"]
     );
     let cell = layout.agent_cells().next().unwrap();
-    assert!(!cell.launch.code_mode);
+    assert_eq!(cell.launch.code_mode, None);
     let mut off = LayoutSpec::single(preset_cell("copilot", &["--raw"], None, None));
     finalize(&mut off, &Default::default(), &[]).unwrap();
     assert_eq!(cell.args, off.agent_cells().next().unwrap().args);
@@ -204,8 +229,9 @@ fn code_mode_warns_once_and_launches_without_it_where_unsupported() {
         let mut layout = code_mode_cell(kind);
         let warnings = finalize(&mut layout, &Default::default(), &[]).unwrap();
         assert!(warnings.is_empty(), "{kind}: {warnings:?}");
-        assert!(
+        assert_eq!(
             layout.agent_cells().next().unwrap().launch.code_mode,
+            Some(true),
             "{kind}"
         );
     }
@@ -689,7 +715,7 @@ fn off_launch_record_keeps_its_wire_bytes() {
         model: Some("opus".into()),
         effort: None,
         agent: None,
-        fast: false,
+        fast: None,
         auto_compact: None,
         ..Default::default()
     };
@@ -697,8 +723,21 @@ fn off_launch_record_keeps_its_wire_bytes() {
         serde_json::to_string(&record).unwrap(),
         r#"{"model":"opus","effort":null,"agent":null}"#
     );
+    let forced_off = crate::agents::LaunchRecord {
+        fast: Some(false),
+        ..record.clone()
+    };
+    let wire = serde_json::to_string(&forced_off).unwrap();
+    assert_eq!(
+        wire,
+        r#"{"model":"opus","effort":null,"agent":null,"fast":false}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<crate::agents::LaunchRecord>(&wire).unwrap(),
+        forced_off
+    );
     let fast = crate::agents::LaunchRecord {
-        fast: true,
+        fast: Some(true),
         ..record
     };
     let wire = serde_json::to_string(&fast).unwrap();
@@ -1422,7 +1461,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             model: Some("o3".to_owned()),
             effort: Some("high".to_owned()),
             budget: Some("$10".to_owned()),
-            code_mode: true,
+            code_mode: Some(true),
             ..Default::default()
         },
     };
@@ -1464,7 +1503,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             mode: launch.mode,
             model: launch.model,
             effort: launch.effort,
-            fast: false,
+            fast: launch.fast,
             code_mode: launch.code_mode,
             budget: launch.budget,
         }

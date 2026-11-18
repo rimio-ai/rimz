@@ -854,6 +854,32 @@ fn unset_fast_profile_keeps_its_executable_surface_shape() {
         serde_json::to_value(ExecutableSurface::from(&bare).profiles).expect("profile surface");
     assert!(surface[0].get("fast").is_none(), "{surface}");
     assert!(surface[0].get("code_mode").is_none(), "{surface}");
+
+    // `true` and `false` keep a boolean's bytes; `"unset"` hashes apart from absent.
+    let hash = |fields: &str| {
+        let config: ProjectConfig =
+            toml::from_str(&format!("[profiles.x]\nagent = \"claude\"\n{fields}"))
+                .expect("profile");
+        let surface = serde_json::to_value(ExecutableSurface::from(&config).profiles).unwrap();
+        (surface, executable_surface_hash(&config))
+    };
+    for (written, spelled) in [("true", "\"on\""), ("false", "\"off\"")] {
+        let (surface, boolean) = hash(&format!("fast = {written}\ncode-mode = {written}\n"));
+        assert_eq!(
+            surface[0]["fast"],
+            serde_json::json!(written == "true"),
+            "{surface}"
+        );
+        assert_eq!(
+            surface[0]["code_mode"],
+            serde_json::json!(written == "true")
+        );
+        let (_, word) = hash(&format!("fast = {spelled}\ncode-mode = {spelled}\n"));
+        assert_eq!(boolean, word, "{written} and {spelled} are one choice");
+    }
+    let (surface, unset) = hash("fast = \"unset\"\ncode-mode = \"unset\"\n");
+    assert_eq!(surface[0]["fast"], "unset", "{surface}");
+    assert_ne!(unset, hash("").1);
 }
 
 #[test]

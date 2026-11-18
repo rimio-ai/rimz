@@ -109,7 +109,7 @@ fn tier_role_reports_keep_concrete_models_and_show_fallback() {
     assert_eq!(json["roles"][0]["model"], "fable");
     assert_eq!(json["roles"][0]["tier_fallback"], true);
     assert!(json["roles"][0].get("fast").is_none());
-    team.roles[0].fast = Some(true);
+    team.roles[0].fast = Some(rimz::agents::Toggle::On);
     let report = definition_report(
         "forge",
         &team,
@@ -151,7 +151,7 @@ fn unresolved_role_reports_the_profile_fast_field() {
     assert_eq!(json["roles"][0]["fast"], true);
 
     // The binding's `fast = false` folds over the profile's field.
-    team.roles[0].fast = Some(false);
+    team.roles[0].fast = Some(rimz::agents::Toggle::Off);
     assert!(report(&team)["roles"][0].get("fast").is_none());
 }
 

@@ -1294,12 +1294,23 @@ fn compile_agent_process_with_extra_env(
             &mut settings_artifact,
         )?;
     }
-    if fast_settings {
+    if let Some(on) = fast_settings {
         adapter.merge_fast_settings(
             (cwd, artifact_dir),
+            on,
             action.extra_args_mut(),
             &mut settings_artifact,
         )?;
+    }
+    // After the passthrough joined the args, so the exclusion lands in the list the
+    // provider honours.
+    if request.identity.params.code_mode == Some(false) {
+        adapter
+            .spec()
+            .launch
+            .presets
+            .code_mode
+            .exclude_off(action.extra_args_mut());
     }
     let frontend = adapter.take_frontend(action.extra_args_mut());
     let mut provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
@@ -1325,7 +1336,7 @@ fn compile_agent_process_with_extra_env(
         env.remove(ENV_RUNTIME_ENV);
         unset.insert(ENV_RUNTIME_ENV.to_owned());
     }
-    if request.identity.params.fast
+    if request.identity.params.fast == Some(true)
         && adapter.spec().launch.presets.fast == crate::agents::definition::FastSwitch::ExtensionEnv
     {
         env.insert(ENV_LAUNCH_FAST.to_owned(), "1".to_owned());
@@ -1340,8 +1351,10 @@ fn compile_agent_process_with_extra_env(
         &secret_keys,
         ENV_CODE_MODE_ENV,
     );
-    if request.identity.params.code_mode
-        && let Some((key, value)) = adapter.spec().launch.presets.code_mode.env()
+    // On and forced off both stamp, so a nested unset launch releases either; off sets
+    // its value over the user's export and a trusted `[[agents]]` env value alike.
+    if let Some(on) = request.identity.params.code_mode
+        && let Some((key, value)) = adapter.spec().launch.presets.code_mode.env(on)
     {
         stamp_pair(&mut env, &mut unset, ENV_CODE_MODE_ENV, key, value);
     }

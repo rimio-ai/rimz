@@ -159,6 +159,10 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
                 tools: &["codemode"],
                 without_tools: &["--tools", "+codemode"],
                 env: None,
+                // Settings `defaultTools`, MCP activation, and session restore can turn
+                // it on with nothing on argv; an exclusion holds against all three.
+                off_env: None,
+                off_exclude: Some((&["--exclude-tools", "-xt"], "codemode")),
             },
             auto_compact: None,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),

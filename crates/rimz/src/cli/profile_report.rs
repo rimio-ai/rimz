@@ -72,7 +72,7 @@ pub(crate) fn available_profiles(
             tier: profile.model_tier.as_ref().map(|tier| tier.tier),
             tier_fallback: profile.model_tier.as_ref().map(|tier| tier.fell_back),
             effort: profile.effective_effort(),
-            fast: profile.fast == Some(true),
+            fast: profile.fast == Some(rimz::agents::Toggle::On),
             description: profile.description.clone(),
             allowed_tools: profile.allowed_tools.clone().unwrap_or_default(),
             path: sources.profile(scope, name).map(PathBuf::from),
@@ -155,7 +155,7 @@ fn subagent_report(
     let fast = profiles
         .0
         .get(&profile.name)
-        .is_some_and(|profile| profile.fast == Some(true));
+        .is_some_and(|profile| profile.fast == Some(rimz::agents::Toggle::On));
     AgentProfileReport {
         allowed_tools: profiles
             .0

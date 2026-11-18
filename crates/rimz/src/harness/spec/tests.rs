@@ -2224,46 +2224,82 @@ fn profile_resolution_rejects_invalid_chains_and_fields() {
 
 #[test]
 fn profile_fast_follows_the_chain_and_skips_where_unsupported() {
-    let fast = |agent: &str, fast: Option<bool>| Profile {
+    use crate::agents::Toggle;
+    let fast = |agent: &str, fast: Option<Toggle>| Profile {
         fast,
         ..profile(agent)
     };
     let profiles = ProfilesConfig(BTreeMap::from([
-        ("swift".to_owned(), fast("codex", Some(true))),
-        ("steady".to_owned(), fast("swift", Some(false))),
+        ("swift".to_owned(), fast("codex", Some(Toggle::On))),
+        ("steady".to_owned(), fast("swift", Some(Toggle::Off))),
         ("heir".to_owned(), fast("swift", None)),
-        ("quick".to_owned(), fast("cursor", Some(true))),
-        ("calm".to_owned(), fast("cursor", Some(false))),
+        ("cleared".to_owned(), fast("swift", Some(Toggle::Unset))),
+        ("plain".to_owned(), fast("codex", None)),
+        ("quick".to_owned(), fast("cursor", Some(Toggle::On))),
+        ("calm".to_owned(), fast("cursor", Some(Toggle::Off))),
     ]));
-    let switch = ["-c", "service_tier=fast", "-c", "features.fast_mode=true"];
+    let on = ["-c", "service_tier=fast", "-c", "features.fast_mode=true"];
+    let off = ["-c", "service_tier=default"];
+    let has =
+        |args: &[String], switch: &[&str]| args.windows(switch.len()).any(|part| part == switch);
     for (name, want) in [
-        ("swift", true),
-        ("steady", false),
-        ("heir", true),
-        ("calm", false),
+        ("swift", Some(true)),
+        ("steady", Some(false)),
+        ("heir", Some(true)),
+        ("cleared", None),
+        ("plain", None),
     ] {
         let cell = profile_cell(name, &profiles).unwrap();
         assert_eq!(cell.launch.fast, want, "{name}");
         assert_eq!(
-            cell.args.windows(switch.len()).any(|part| part == switch),
-            want,
+            has(&cell.args, &on),
+            want == Some(true),
+            "{name}: {:?}",
+            cell.args
+        );
+        assert_eq!(
+            has(&cell.args, &off),
+            want == Some(false),
             "{name}: {:?}",
             cell.args
         );
     }
+    assert_eq!(
+        profile_cell("cleared", &profiles).unwrap().args,
+        profile_cell("plain", &profiles).unwrap().args,
+        "a written unset renders what an unwritten fast does"
+    );
     let quick = profile_cell("quick", &profiles).expect("unsupported fast renders no switch");
-    assert!(quick.launch.fast, "the finalizer clears it and warns");
+    assert_eq!(
+        quick.launch.fast,
+        Some(true),
+        "the finalizer clears it and warns"
+    );
     assert!(quick.args.is_empty());
-    let role = RoleBinding {
-        fast: Some(false),
+    let calm = profile_cell("calm", &profiles).expect("unsupported off renders no switch");
+    assert!(calm.args.is_empty(), "{:?}", calm.args);
+    let off = RoleBinding {
+        fast: Some(Toggle::Off),
         ..role("coder", "swift")
     };
-    assert!(!resolve_role(&role, &profiles).unwrap().fast.unwrap());
+    assert_eq!(
+        resolve_role(&off, &profiles).unwrap().fast,
+        Some(Toggle::Off)
+    );
+    let unset = RoleBinding {
+        fast: Some(Toggle::Unset),
+        ..role("coder", "swift")
+    };
+    assert_eq!(
+        resolve_role(&unset, &profiles).unwrap().fast,
+        Some(Toggle::Unset)
+    );
 }
 
 #[test]
 fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
-    let code_mode = |agent: &str, code_mode: Option<bool>| Profile {
+    use crate::agents::Toggle;
+    let code_mode = |agent: &str, code_mode: Option<Toggle>| Profile {
         code_mode,
         ..profile(agent)
     };
@@ -2272,34 +2308,124 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
             "coder".to_owned(),
             Profile {
                 args: Some("--raw".to_owned()),
-                ..code_mode("pi", Some(true))
+                ..code_mode("pi", Some(Toggle::On))
             },
         ),
-        ("plain".to_owned(), code_mode("coder", Some(false))),
+        ("plain".to_owned(), code_mode("coder", Some(Toggle::Off))),
         ("heir".to_owned(), code_mode("coder", None)),
-        ("tooled".to_owned(), code_mode("claude", Some(true))),
-        ("pilot".to_owned(), code_mode("copilot", Some(true))),
+        (
+            "cleared".to_owned(),
+            code_mode("coder", Some(Toggle::Unset)),
+        ),
+        (
+            "excluding".to_owned(),
+            Profile {
+                args: Some("--exclude-tools read,grep".to_owned()),
+                ..code_mode("pi", Some(Toggle::Off))
+            },
+        ),
+        ("tooled".to_owned(), code_mode("claude", Some(Toggle::On))),
+        ("muted".to_owned(), code_mode("claude", Some(Toggle::Off))),
+        ("pilot".to_owned(), code_mode("copilot", Some(Toggle::On))),
         ("base".to_owned(), code_mode("pi", None)),
+        (
+            "cdx".to_owned(),
+            Profile {
+                args: Some("--raw".to_owned()),
+                ..code_mode("codex", Some(Toggle::On))
+            },
+        ),
+        ("cdx-off".to_owned(), code_mode("cdx", Some(Toggle::Off))),
+        ("cdx-heir".to_owned(), code_mode("cdx", None)),
+        (
+            "cdx-unset".to_owned(),
+            code_mode("cdx", Some(Toggle::Unset)),
+        ),
+        ("cdx-base".to_owned(), code_mode("codex", Some(Toggle::Off))),
+        ("cdx-bare".to_owned(), code_mode("codex", None)),
     ]));
+    // Codex renders exactly one of on and off, before the raw args, wherever the setting
+    // came from.
+    let codex_switch = |args: &[String]| {
+        let settings: Vec<_> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, arg)| arg.starts_with("features.code_mode="))
+            .map(|(at, arg)| (at, arg.clone()))
+            .collect();
+        assert!(settings.len() <= 1, "{args:?}");
+        settings.into_iter().next()
+    };
+    for (name, want) in [
+        ("cdx", Some("features.code_mode=true")),
+        ("cdx-off", Some("features.code_mode=false")),
+        ("cdx-heir", Some("features.code_mode=true")),
+        ("cdx-unset", None),
+    ] {
+        let cell = profile_cell(name, &profiles).unwrap();
+        let setting = codex_switch(&cell.args);
+        assert_eq!(
+            setting.as_ref().map(|(_, arg)| arg.as_str()),
+            want,
+            "{name}"
+        );
+        if let Some((at, _)) = setting {
+            assert_eq!(cell.args[at - 1], "-c", "{name}: {:?}", cell.args);
+            let raw = cell.args.iter().position(|arg| arg == "--raw").unwrap();
+            assert!(at < raw, "{name}: {:?}", cell.args);
+        }
+    }
+    for (name, want) in [
+        ("cdx-base", Some("features.code_mode=false")),
+        ("cdx-bare", None),
+    ] {
+        let base = resolve_agent_override(Some(name), &profiles).unwrap();
+        let rebased =
+            profile_cell_with_base_override("tooled", &profiles, base.as_ref(), None).unwrap();
+        assert_eq!(rebased.kind.as_str(), "codex");
+        let setting = codex_switch(&rebased.args);
+        assert_eq!(
+            setting.as_ref().map(|(_, arg)| arg.as_str()),
+            want,
+            "{name}"
+        );
+    }
     let switch = ["--tools", "+codemode"];
-    for (name, want) in [("coder", true), ("plain", false), ("heir", true)] {
+    for (name, want) in [
+        ("coder", Some(true)),
+        ("plain", Some(false)),
+        ("heir", Some(true)),
+        ("cleared", None),
+    ] {
         let cell = profile_cell(name, &profiles).unwrap();
         assert_eq!(cell.launch.code_mode, want, "{name}");
         let at = cell.args.windows(2).position(|part| part == switch);
-        assert_eq!(at.is_some(), want, "{name}: {:?}", cell.args);
+        assert_eq!(at.is_some(), want == Some(true), "{name}: {:?}", cell.args);
         let raw = cell.args.iter().position(|arg| arg == "--raw");
         assert!(at < raw, "{name}: {:?}", cell.args);
     }
-    let off = profile_cell("plain", &profiles).unwrap();
+    let cleared = profile_cell("cleared", &profiles).unwrap();
     assert!(
-        !off.args.iter().any(|arg| arg.contains("codemode")),
+        !cleared.args.iter().any(|arg| arg.contains("codemode")),
         "{:?}",
-        off.args
+        cleared.args
+    );
+
+    // Off excludes on the final argv, past any passthrough, so the cell keeps its lists as
+    // written; `harness::launch::tests` pins the join.
+    let excluding = profile_cell("excluding", &profiles).unwrap();
+    assert_eq!(excluding.launch.code_mode, Some(false));
+    assert!(
+        excluding
+            .args
+            .ends_with(&["--exclude-tools".to_owned(), "read,grep".to_owned()]),
+        "{:?}",
+        excluding.args
     );
 
     // Claude without a tools list carries code mode on the cell for the env alone.
     let claude = profile_cell("tooled", &profiles).unwrap();
-    assert!(claude.launch.code_mode);
+    assert_eq!(claude.launch.code_mode, Some(true));
     assert!(
         !claude.args.iter().any(|arg| arg == "--tools"),
         "{:?}",
@@ -2308,11 +2434,18 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
     assert_eq!(
         claude.args,
         profile_cell("claude", &profiles).unwrap().args,
-        "on renders the argv off renders"
+        "on renders the argv unset renders"
     );
+    let muted = profile_cell("muted", &profiles).unwrap();
+    assert_eq!(muted.launch.code_mode, Some(false));
+    assert_eq!(muted.args, claude.args, "Claude's off rides the env alone");
 
     let pilot = profile_cell("pilot", &profiles).expect("unsupported code mode renders nothing");
-    assert!(pilot.launch.code_mode, "the finalizer clears it and warns");
+    assert_eq!(
+        pilot.launch.code_mode,
+        Some(true),
+        "the finalizer clears it and warns"
+    );
     assert!(pilot.args.is_empty(), "{:?}", pilot.args);
 
     // A kind change through `--agent` takes the base's setting.
@@ -2320,7 +2453,7 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
     let rebased =
         profile_cell_with_base_override("tooled", &profiles, base.as_ref(), None).unwrap();
     assert_eq!(rebased.kind.as_str(), "pi");
-    assert!(!rebased.launch.code_mode);
+    assert_eq!(rebased.launch.code_mode, None);
     assert!(
         !rebased.args.iter().any(|arg| arg.contains("codemode")),
         "{:?}",
@@ -2418,12 +2551,12 @@ fn fast_suffix_cells_stamp_fast_on_their_base() {
             .expect("kind")
             .spec()
             .launch
-            .fast_args()
+            .fast_args(true)
             .expect("fast switch")
     };
     let claude = agent_cell("claude-fast", &no_profiles(), &no_commands());
     assert_eq!(claude.kind.as_str(), "claude");
-    assert!(claude.launch.fast);
+    assert_eq!(claude.launch.fast, Some(true));
     assert_eq!(claude.launch.profile, None);
     assert!(
         claude
@@ -2450,12 +2583,19 @@ fn fast_suffix_cells_stamp_fast_on_their_base() {
                 ..profile("claude")
             },
         ),
+        (
+            "calm",
+            Profile {
+                fast: Some(crate::agents::Toggle::Off),
+                ..profile("codex")
+            },
+        ),
     ]);
     let reviewer = agent_cell("reviewer-fast", &profiles, &no_commands());
     assert_eq!(reviewer.kind.as_str(), "codex");
     assert_eq!(reviewer.launch.profile.as_deref(), Some("reviewer"));
     assert_eq!(reviewer.launch.effort.as_deref(), Some("high"));
-    assert!(reviewer.launch.fast);
+    assert_eq!(reviewer.launch.fast, Some(true));
     assert!(
         reviewer
             .args
@@ -2468,7 +2608,7 @@ fn fast_suffix_cells_stamp_fast_on_their_base() {
     let yolo = agent_cell("codex-yolo-fast", &no_profiles(), &no_commands());
     assert_eq!(yolo.kind.as_str(), "codex");
     assert_eq!(yolo.launch.mode, Some(PermissionMode::Yolo));
-    assert!(yolo.launch.fast);
+    assert_eq!(yolo.launch.fast, Some(true));
     for arg in crate::agents::find_definition("codex")
         .expect("codex")
         .spec()
@@ -2481,11 +2621,31 @@ fn fast_suffix_cells_stamp_fast_on_their_base() {
     // An exact profile name wins over the suffix reading.
     let exact = agent_cell("x-fast", &profiles, &no_commands());
     assert_eq!(exact.launch.profile.as_deref(), Some("x-fast"));
-    assert!(!exact.launch.fast);
+    assert_eq!(exact.launch.fast, None);
+
+    // The suffix forces on over a profile that writes off.
+    let calm = agent_cell("calm-fast", &profiles, &no_commands());
+    assert_eq!(calm.launch.fast, Some(true));
+    assert!(
+        calm.args
+            .windows(4)
+            .any(|window| window == fast_args("codex").as_slice()),
+        "{:?}",
+        calm.args
+    );
+    assert!(
+        !calm.args.iter().any(|arg| arg == "service_tier=default"),
+        "{:?}",
+        calm.args
+    );
 
     let cursor = agent_cell("cursor-fast", &no_profiles(), &no_commands());
     assert_eq!(cursor.kind, "cursor");
-    assert!(cursor.launch.fast, "the finalizer clears it and warns");
+    assert_eq!(
+        cursor.launch.fast,
+        Some(true),
+        "the finalizer clears it and warns"
+    );
     assert!(cursor.args.is_empty());
     assert!(matches!(
         parse_layout_spec("nosuch-fast", &no_profiles(), &no_commands()),

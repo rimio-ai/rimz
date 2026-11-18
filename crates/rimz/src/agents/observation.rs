@@ -50,10 +50,11 @@ pub struct LaunchRecord {
     /// The `--agent <PROFILE|KIND>` re-base this launch replays on restart, or `None`. Not
     /// the launched profile: that is `AgentState::profile`.
     pub agent: Option<String>,
-    /// Provider fast mode, replayed like `model`. Omitted when off, so a
-    /// record written for an agent without fast keeps its bytes.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub fast: bool,
+    /// Provider fast mode, replayed like `model`: `true` on, `false` forced off, omitted
+    /// unset. A record written before off was forced omits it for off too, and replays as
+    /// unset, rendering nothing, as it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<bool>,
     /// Configured native compaction count in tokens, before the provider's runtime cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact: Option<u64>,
@@ -70,7 +71,7 @@ impl LaunchRecord {
         record: Option<&Self>,
         model: Option<&str>,
         effort: Option<&str>,
-        fast: bool,
+        fast: Option<bool>,
     ) -> Box<Self> {
         Box::new(record.cloned().unwrap_or_else(|| Self {
             model: model.map(str::to_owned),
@@ -288,14 +289,14 @@ pub struct LaunchParams {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
-    /// The effective provider fast mode for this cell, stamped into `record`.
-    /// Omitted when off, so off launches keep their wire bytes.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub fast: bool,
-    /// The profile's provider code mode for this cell. Omitted when off, so
-    /// off launches keep their wire bytes.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub code_mode: bool,
+    /// The effective provider fast mode for this cell, stamped into `record`: `true` on,
+    /// `false` forced off, omitted unset, so unset launches keep their wire bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<bool>,
+    /// The profile's provider code mode for this cell, in the same three states as
+    /// `fast`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_mode: Option<bool>,
     /// The launcher-selected dollar cap, passed through `RIMZ_AGENT_BUDGET`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<String>,

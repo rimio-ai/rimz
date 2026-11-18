@@ -147,6 +147,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
             model: Some(super::StaticPresetMatcher::Flag(&["--model", "-m"])),
             fast: super::FastSwitch::Unsupported {
                 fix: "use --model kimi-for-coding-highspeed",
+                off_fix: None,
             },
             ..super::PresetMatchers::EMPTY
         },

@@ -1963,10 +1963,11 @@ fn process_compiler_carries_only_the_temp_lines_when_nothing_else_applies() {
 fn process_compiler_stamps_or_clears_extension_fast_off_argv() {
     let project = tempfile::tempdir().expect("project");
     let cases = [
-        ("pi", true, false),
-        ("pi", false, false),
-        ("codex", true, true),
-        ("pi", false, true),
+        ("pi", Some(true), false),
+        ("pi", None, false),
+        ("codex", Some(true), true),
+        ("pi", None, true),
+        ("pi", Some(false), true),
     ];
     let actual: Vec<_> = cases
         .into_iter()
@@ -2008,6 +2009,7 @@ fn process_compiler_stamps_or_clears_extension_fast_off_argv() {
             (None, true),
             (None, true),
             (None, true),
+            (None, true),
         ]
     );
 }
@@ -2020,7 +2022,7 @@ const CODE_MODE_MARKER: &str = "RIMZ_CODE_MODE_ENV";
 fn code_mode_env(
     project: &Path,
     kind: &str,
-    code_mode: bool,
+    code_mode: Option<bool>,
     inherited: &[(&str, &str)],
 ) -> (Option<String>, bool, Option<String>, bool) {
     let mut invocation = team_request(kind);
@@ -2062,48 +2064,92 @@ fn process_compiler_stamps_or_clears_the_declared_code_mode_env() {
         Some(format!("{CODE_MODE_KEY}=1")),
         false,
     );
+    let forced_off = (
+        Some("0".into()),
+        false,
+        Some(format!("{CODE_MODE_KEY}=0")),
+        false,
+    );
     let cleared = (None, true, None, true);
     let untouched = (None, false, None, true);
     let marker = format!("{CODE_MODE_KEY}=1");
+    let off_marker = format!("{CODE_MODE_KEY}=0");
     let cases = [
-        ("claude", true, vec![], stamped.clone()),
+        ("claude", Some(true), vec![], stamped.clone()),
         // The profile is the authority on a launch it turns on.
-        ("claude", true, vec![(CODE_MODE_KEY, "0")], stamped),
         (
             "claude",
-            false,
+            Some(true),
+            vec![(CODE_MODE_KEY, "0")],
+            stamped.clone(),
+        ),
+        // Off zeroes the variable, over the user's own export too.
+        ("claude", Some(false), vec![], forced_off.clone()),
+        (
+            "claude",
+            Some(false),
+            vec![(CODE_MODE_KEY, "1")],
+            forced_off.clone(),
+        ),
+        (
+            "claude",
+            Some(false),
             vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
+            forced_off,
+        ),
+        (
+            "claude",
+            None,
+            vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
+            cleared.clone(),
+        ),
+        // A nested unset launch releases an outer launch's forced off as it releases on.
+        (
+            "claude",
+            None,
+            vec![(CODE_MODE_KEY, "0"), (CODE_MODE_MARKER, &off_marker)],
             cleared.clone(),
         ),
         (
             "claude",
-            false,
+            None,
             vec![(CODE_MODE_KEY, "1")],
             untouched.clone(),
         ),
         (
             "claude",
-            false,
+            None,
             vec![(CODE_MODE_KEY, "0"), (CODE_MODE_MARKER, &marker)],
             untouched.clone(),
         ),
         // Pi declares no variable, yet clears what an outer Claude launch stamped.
         (
             "pi",
-            false,
+            None,
             vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
             cleared.clone(),
         ),
-        ("pi", true, vec![(CODE_MODE_KEY, "1")], untouched.clone()),
+        (
+            "pi",
+            Some(false),
+            vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
+            cleared.clone(),
+        ),
+        (
+            "pi",
+            Some(true),
+            vec![(CODE_MODE_KEY, "1")],
+            untouched.clone(),
+        ),
         // Codex switches by argv and declares no variable: an on launch stamps nothing,
         // yet still clears what an outer Claude launch stamped.
         (
             "codex",
-            true,
+            Some(true),
             vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
             cleared,
         ),
-        ("codex", true, vec![(CODE_MODE_KEY, "1")], untouched),
+        ("codex", Some(true), vec![(CODE_MODE_KEY, "1")], untouched),
     ];
     let actual: Vec<_> = cases
         .iter()
@@ -2111,6 +2157,39 @@ fn process_compiler_stamps_or_clears_the_declared_code_mode_env() {
         .collect();
     let expected: Vec<_> = cases.into_iter().map(|(.., env)| env).collect();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn pi_code_mode_off_joins_the_last_exclusion_list_of_the_final_argv() {
+    let project = tempfile::tempdir().expect("project");
+    let lists = |extra: &[&str]| {
+        let mut invocation = team_request("pi");
+        invocation.identity.params.code_mode = Some(false);
+        *invocation.action.extra_args_mut() = extra.iter().map(|arg| (*arg).to_owned()).collect();
+        let process = compile_agent_process_with_extra_env(
+            None,
+            project.path(),
+            &invocation,
+            project.path(),
+            &BTreeMap::new(),
+            &LaunchReminders::default(),
+        )
+        .expect("process");
+        process
+            .provider_argv
+            .windows(2)
+            .filter(|part| part[0] == "--exclude-tools" || part[0] == "-xt")
+            .map(|part| part[1].clone())
+            .collect::<Vec<_>>()
+    };
+    // Pi keeps only the last list of either spelling, so off joins it and no earlier list
+    // is replaced: a profile's `-xt`, and a passthrough list appended after the profile's.
+    assert_eq!(lists(&["-xt", "bash"]), ["bash,codemode"]);
+    assert_eq!(
+        lists(&["--exclude-tools", "read", "--exclude-tools", "bash"]),
+        ["read", "bash,codemode"]
+    );
+    assert_eq!(lists(&[]), ["codemode"]);
 }
 
 #[test]
@@ -2149,10 +2228,25 @@ fn process_compiler_keeps_a_trusted_code_mode_value_over_an_inherited_marker() {
         [&inherited[..], &[]].map(|inherited| code_mode_env(
             project.path(),
             "claude",
-            false,
+            None,
             inherited
         )),
         [0, 1].map(|_| (Some("1".into()), false, None, true))
+    );
+    // Off wins over the trusted value as well as over the user's export.
+    assert_eq!(
+        [&inherited[..], &[]].map(|inherited| code_mode_env(
+            project.path(),
+            "claude",
+            Some(false),
+            inherited
+        )),
+        [0, 1].map(|_| (
+            Some("0".into()),
+            false,
+            Some(format!("{CODE_MODE_KEY}=0")),
+            false
+        ))
     );
 }
 

@@ -11,7 +11,7 @@ fn saved() -> AgentState {
         record: Some(Box::new(LaunchRecord {
             model: Some("opus".into()),
             effort: Some("high".into()),
-            fast: false,
+            fast: None,
             agent: None,
             auto_compact: None,
             ..Default::default()
@@ -120,7 +120,7 @@ fn recorded_effort_override_rebuilds_record_without_overriding_model() {
 fn recorded_fast_override_saves_both_values() {
     for fast in [true, false] {
         let mut saved = saved();
-        saved.record.as_mut().unwrap().fast = !fast;
+        saved.record.as_mut().unwrap().fast = Some(!fast);
         let (plan, _) = single(
             &saved,
             &profiles("planner", profile("claude")),
@@ -136,7 +136,7 @@ fn recorded_fast_override_saves_both_values() {
             },
         );
         let request = decode_exec_request(&single_pane_argv(&plan));
-        assert_eq!(request.identity.params.record.unwrap().fast, fast);
+        assert_eq!(request.identity.params.record.unwrap().fast, Some(fast));
         assert!(!request.identity.resume_model_override);
     }
 }
@@ -165,7 +165,7 @@ fn unsupported_fast_warns_and_resumes_without_stamping_it() {
     assert!(plan.warnings[0].contains("copilot"));
     assert!(plan.warnings[0].contains("launching without"));
     let request = decode_exec_request(&single_pane_argv(&plan));
-    assert!(!request.identity.params.record.unwrap().fast);
+    assert_eq!(request.identity.params.record.unwrap().fast, None);
 }
 
 #[test]

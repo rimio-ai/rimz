@@ -125,6 +125,7 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             fast: super::FastSwitch::Unsupported {
                 fix: "choose a fast model id with --model, e.g. claude-opus-5-5-fast",
+                off_fix: None,
             },
             ..super::PresetMatchers::EMPTY
         },

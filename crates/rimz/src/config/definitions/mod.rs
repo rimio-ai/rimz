@@ -789,7 +789,7 @@ impl LoadedDefinitions {
             tier: profile.model_tier.as_ref().map(|tier| tier.tier),
             tier_fallback: profile.model_tier.as_ref().map(|tier| tier.fell_back),
             effort: profile.effective_effort(),
-            fast: profile.fast == Some(true),
+            fast: profile.fast == Some(crate::agents::Toggle::On),
             source: source.to_owned(),
             origin: origin.clone(),
             team: None,

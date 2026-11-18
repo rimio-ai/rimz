@@ -211,7 +211,7 @@ fn recorded_posture_replays_verbatim_model_without_observed_switch() {
     let record = crate::agents::LaunchRecord {
         model: Some("opus[1m]".into()),
         effort: Some("high".into()),
-        fast: false,
+        fast: None,
         agent: None,
         auto_compact: None,
         ..Default::default()
@@ -271,7 +271,7 @@ fn relaunch_renders_code_mode_from_the_current_profile() {
     for record in [None, Some(&record)] {
         let on = resolve("agent = \"pi\"\ncode-mode = true", "pi", record);
         assert!(on.degraded.is_none(), "{:?}", on.degraded);
-        assert!(on.launch.code_mode);
+        assert_eq!(on.launch.code_mode, Some(true));
         let fresh = crate::harness::spec::profile_cell(
             "coder",
             &profiles(
@@ -288,17 +288,30 @@ fn relaunch_renders_code_mode_from_the_current_profile() {
         );
 
         let off = resolve("agent = \"pi\"\ncode-mode = false", "pi", record);
-        assert!(!off.launch.code_mode);
-        assert!(!off.launch.args.iter().any(|arg| arg.contains("codemode")));
+        // The exclusion joins the final argv at compile, from this replayed state.
+        assert_eq!(off.launch.code_mode, Some(false));
+        let unset = resolve("agent = \"pi\"\ncode-mode = \"unset\"", "pi", record);
+        assert_eq!(unset.launch.code_mode, None);
+        assert!(!unset.launch.args.iter().any(|arg| arg.contains("codemode")));
 
         let claude = resolve("agent = \"claude\"\ncode-mode = true", "claude", record);
-        assert!(claude.launch.code_mode, "the env rides the posture");
+        assert_eq!(
+            claude.launch.code_mode,
+            Some(true),
+            "the env rides the posture"
+        );
+        let claude = resolve("agent = \"claude\"\ncode-mode = \"off\"", "claude", record);
+        assert_eq!(
+            claude.launch.code_mode,
+            Some(false),
+            "the env rides the posture"
+        );
     }
 
     // A profile that moved to another kind degrades and loses it with the rest.
     let moved = resolve("agent = \"pi\"\ncode-mode = true", "claude", Some(&record));
     assert!(moved.degraded.is_some());
-    assert!(!moved.launch.code_mode);
+    assert_eq!(moved.launch.code_mode, None);
 }
 
 #[test]
@@ -323,37 +336,54 @@ fn recorded_fast_replays_over_the_current_profile() {
         ..Default::default()
     };
     let fast_profile: Profile = toml::from_str("agent = \"codex\"\nfast = true").unwrap();
-    let has_switch = |args: &[String]| args.windows(switch.len()).any(|part| part == switch);
+    let off_profile: Profile = toml::from_str("agent = \"codex\"\nfast = false").unwrap();
+    let off = ["-c", "service_tier=default"];
+    let count = |args: &[String], switch: &[&str]| {
+        args.windows(switch.len())
+            .filter(|part| part.iter().zip(switch).all(|(arg, want)| arg == want))
+            .count()
+    };
 
-    // A `--fast` launch replays over a profile without it.
-    let posture = resolve(profile("codex"), Some(&record(true)));
-    assert!(posture.fast);
-    assert!(has_switch(&posture.args), "{:?}", posture.args);
-    assert!(posture.record.as_deref().unwrap().fast);
-
-    // The record wins over the profile, like model: a `--no-fast` launch stays
-    // off, and a launch that was fast stays fast after the profile drops it.
-    let posture = resolve(fast_profile.clone(), Some(&record(false)));
-    assert!(!posture.fast);
-    assert!(!has_switch(&posture.args), "{:?}", posture.args);
+    // The record wins over the profile, like model, and leaves at most one switch: a
+    // `--fast` launch stays on, a `--no-fast` launch stays forced off, and a record
+    // without `fast` (unset, or written before off was forced) renders nothing.
+    for (profile, recorded, want) in [
+        (profile("codex"), Some(true), Some(true)),
+        (off_profile.clone(), Some(true), Some(true)),
+        (fast_profile.clone(), Some(false), Some(false)),
+        (profile("codex"), Some(false), Some(false)),
+        (fast_profile.clone(), None, None),
+        (off_profile.clone(), None, None),
+    ] {
+        let posture = resolve(profile.clone(), Some(&record(recorded)));
+        let case = format!("{:?} over {:?}: {:?}", recorded, profile.fast, posture.args);
+        assert_eq!(posture.fast, want, "{case}");
+        assert_eq!(posture.record.as_deref().unwrap().fast, want, "{case}");
+        assert_eq!(
+            count(&posture.args, &switch),
+            usize::from(want == Some(true)),
+            "{case}"
+        );
+        assert_eq!(
+            count(&posture.args, &off),
+            usize::from(want == Some(false)),
+            "{case}"
+        );
+    }
 
     // A legacy row without a record follows the profile.
     let posture = resolve(fast_profile, None);
-    assert!(posture.fast);
-    assert_eq!(
-        posture
-            .args
-            .iter()
-            .filter(|arg| *arg == "service_tier=fast")
-            .count(),
-        1
-    );
+    assert_eq!(posture.fast, Some(true));
+    assert_eq!(count(&posture.args, &switch), 1);
+    let posture = resolve(off_profile, None);
+    assert_eq!(posture.fast, Some(false));
+    assert_eq!(count(&posture.args, &off), 1);
 }
 
 #[test]
 fn pi_recorded_fast_replays_without_argv_or_warnings() {
     let record = crate::agents::LaunchRecord {
-        fast: true,
+        fast: Some(true),
         ..Default::default()
     };
     let posture = resolve_posture(
@@ -372,7 +402,10 @@ fn pi_recorded_fast_replays_without_argv_or_warnings() {
         posture.launch.effort.as_deref(),
         posture.launch.fast,
     );
-    assert_eq!((posture.launch.fast, replayed.fast), (true, true));
+    assert_eq!(
+        (posture.launch.fast, replayed.fast),
+        (Some(true), Some(true))
+    );
     assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
     assert!(
         posture.launch.notices.is_empty(),
@@ -477,7 +510,7 @@ fn resume_posture_normalizes_unmapped_flags_before_recording() {
         toml::from_str("agent = 'copilot'\nfast = true\nauto-compact = '272000'").unwrap(),
     );
     let record = crate::agents::LaunchRecord {
-        fast: true,
+        fast: Some(true),
         auto_compact: Some(372_000),
         ..Default::default()
     };
@@ -493,7 +526,11 @@ fn resume_posture_normalizes_unmapped_flags_before_recording() {
             &profiles,
         );
         assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
-        assert!(!posture.launch.fast, "{record:?}: {:?}", posture.launch);
+        assert_eq!(
+            posture.launch.fast, None,
+            "{record:?}: {:?}",
+            posture.launch
+        );
         assert!(posture.launch.args.is_empty(), "{:?}", posture.launch.args);
         let replayed = crate::agents::LaunchRecord::replay_or_new(
             posture.launch.record.as_deref(),
@@ -501,7 +538,7 @@ fn resume_posture_normalizes_unmapped_flags_before_recording() {
             posture.launch.effort.as_deref(),
             posture.launch.fast,
         );
-        assert!(!replayed.fast, "{replayed:?}");
+        assert_eq!(replayed.fast, None, "{replayed:?}");
         assert_eq!(replayed.auto_compact, None);
     }
 }
@@ -529,20 +566,22 @@ fn off_record_keeps_a_fast_switch_the_profile_writes_in_raw_args() {
     let count = |args: &[String]| args.iter().filter(|arg| *arg == "--fast").count();
 
     // A raw `--fast` the profile carries is the user's argv, not RimZ's switch:
-    // an off record leaves it alone, and an on record does not double it.
+    // a record without `fast` leaves it alone, and an on record does not double it.
     let raw: Profile = toml::from_str("agent = \"amp\"\nargs = \"--fast\"").unwrap();
-    let posture = resolve(raw.clone(), false);
+    let posture = resolve(raw.clone(), None);
     assert_eq!(count(&posture.args), 1, "{:?}", posture.args);
-    let posture = resolve(raw, true);
-    assert!(posture.fast);
+    let posture = resolve(raw, Some(true));
+    assert_eq!(posture.fast, Some(true));
     assert_eq!(count(&posture.args), 1, "{:?}", posture.args);
 
-    // The profile's `fast = true` field is RimZ's switch, so an off record
-    // (a `--no-fast` launch) still drops it.
+    // The profile's `fast = true` field is RimZ's switch, so an off record (a
+    // `--no-fast` launch) and an unset one (no `fast` in the record) still drop it.
     let field: Profile = toml::from_str("agent = \"amp\"\nfast = true").unwrap();
-    let posture = resolve(field, false);
-    assert!(!posture.fast);
-    assert_eq!(count(&posture.args), 0, "{:?}", posture.args);
+    for recorded in [Some(false), None] {
+        let posture = resolve(field.clone(), recorded);
+        assert_eq!(posture.fast, recorded);
+        assert_eq!(count(&posture.args), 0, "{:?}", posture.args);
+    }
 }
 
 #[test]
@@ -551,7 +590,7 @@ fn recorded_model_override_keeps_the_stamped_family_render() {
     let record = crate::agents::LaunchRecord {
         model: Some("gpt-6-sol".into()),
         effort: Some("high".into()),
-        fast: false,
+        fast: None,
         agent: None,
         auto_compact: None,
         ..Default::default()
@@ -894,7 +933,7 @@ fn recorded_base_replays_and_missing_base_degrades() {
     let record = crate::agents::LaunchRecord {
         model: Some("opus[1m]".into()),
         effort: Some("medium".into()),
-        fast: false,
+        fast: None,
         agent: Some("reviewer".into()),
         auto_compact: None,
         notes: Some("20261107/002336Z-loop-review".into()),
@@ -937,7 +976,7 @@ fn recorded_base_replays_and_missing_base_degrades() {
         if Some(body.as_str()) == record.loop_section.as_deref()));
     assert!(bare.launch.model.is_none());
     assert!(bare.launch.effort.is_none());
-    assert!(!bare.launch.fast);
+    assert_eq!(bare.launch.fast, None);
     assert!(bare.degraded.unwrap().to_string().contains("reviewer"));
 }
 

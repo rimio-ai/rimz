@@ -299,7 +299,11 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         presets: super::PresetMatchers {
             // `features.code_mode` adds the JavaScript cell tools beside the
             // direct ones; `code_mode_only` would hide shell and apply_patch.
-            code_mode: super::CodeModeSwitch::Args(&["-c", "features.code_mode=true"]),
+            // Off wins over a `code_mode` saved in `config.toml`.
+            code_mode: super::CodeModeSwitch::Args {
+                on: &["-c", "features.code_mode=true"],
+                off: &["-c", "features.code_mode=false"],
+            },
             auto_compact: Some(super::StaticPresetMatcher::ConfigKey {
                 flags: &["-c", "--config"],
                 key: "model_auto_compact_token_limit",
@@ -314,13 +318,12 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
                 key: "model_instructions_file",
             }),
             // Core keeps the tier only with feature `fast_mode` on, and a user
-            // config may switch the feature off.
-            fast: super::FastSwitch::Args(&[
-                "-c",
-                "service_tier=fast",
-                "-c",
-                "features.fast_mode=true",
-            ]),
+            // config may switch the feature off. Off selects the standard tier over a
+            // `service_tier` that `/fast` saved in `config.toml`.
+            fast: super::FastSwitch::Args {
+                on: &["-c", "service_tier=fast", "-c", "features.fast_mode=true"],
+                off: &["-c", "service_tier=default"],
+            },
         },
     },
 };

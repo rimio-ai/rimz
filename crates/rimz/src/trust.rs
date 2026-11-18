@@ -876,9 +876,9 @@ pub struct ProjectProfile {
     #[serde(rename = "append-system-prompt-files")]
     pub append_system_prompt_files: Option<Vec<String>>,
     pub args: Option<String>,
-    pub fast: Option<bool>,
+    pub fast: Option<crate::agents::Toggle>,
     #[serde(rename = "code-mode")]
-    pub code_mode: Option<bool>,
+    pub code_mode: Option<crate::agents::Toggle>,
 }
 
 /// A project loop row as the trust hash reads it. Its command-executing fields stay raw TOML: a
@@ -968,11 +968,11 @@ struct ExecutableProfile<'a> {
     // Fast shapes provider argv and cost, and an explicit off differs from
     // unset; serialized only when set, so pinned hashes hold.
     #[serde(skip_serializing_if = "Option::is_none")]
-    fast: Option<bool>,
+    fast: Option<crate::agents::Toggle>,
     // Code mode shapes provider argv and env; serialized only when set, so
     // pinned hashes hold.
     #[serde(skip_serializing_if = "Option::is_none")]
-    code_mode: Option<bool>,
+    code_mode: Option<crate::agents::Toggle>,
 }
 
 #[derive(Serialize)]
@@ -1012,7 +1012,7 @@ struct ExecutableRole<'a> {
     args: Option<&'a str>,
     // A role's `fast` override; serialized only when set, so pinned hashes hold.
     #[serde(skip_serializing_if = "Option::is_none")]
-    fast: Option<bool>,
+    fast: Option<crate::agents::Toggle>,
 }
 
 #[derive(Serialize)]

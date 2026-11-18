@@ -74,7 +74,7 @@ fn agents_message(
                     profile.model_tier.as_ref().map(|tier| tier.tier),
                     profile.model_tier.as_ref().map(|tier| tier.fell_back),
                     profile.effective_effort().as_deref(),
-                    profile.fast == Some(true),
+                    profile.fast == Some(rimz::agents::Toggle::On),
                 )),
             ),
             SpecKind::Command => ("command", None),

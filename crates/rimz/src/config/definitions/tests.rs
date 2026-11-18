@@ -1839,6 +1839,12 @@ fn unsupported_tuning_fields_load_for_launch_time_normalization() {
         "agent: swift\nfast: false",
         "",
     );
+    definition(
+        root.path(),
+        "agents/cleared.md",
+        "agent: swift\nfast: unset",
+        "",
+    );
     for kind in ["amp", "opencode"] {
         definition(
             root.path(),
@@ -1872,25 +1878,27 @@ fn unsupported_tuning_fields_load_for_launch_time_normalization() {
             );
         }
     }
-    assert_eq!(loaded.agent_profiles.0["quick"].fast, Some(true));
+    use crate::agents::Toggle;
+    assert_eq!(loaded.agent_profiles.0["quick"].fast, Some(Toggle::On));
     assert_eq!(
         loaded.agent_profiles.0["compact"].auto_compact.as_deref(),
         Some("200k")
     );
     assert_eq!(
         loaded.agent_profiles.0.get("off").map(|p| p.fast),
-        Some(Some(false)),
+        Some(Some(Toggle::Off)),
         "{:?}",
         loaded.errors
     );
     assert_eq!(
         loaded.agent_profiles.0.get("swift").map(|p| p.fast),
-        Some(Some(true)),
+        Some(Some(Toggle::On)),
         "{:?}",
         loaded.errors
     );
-    // A child's own `fast: false` wins over its parent's `true`.
-    assert_eq!(loaded.agent_profiles.0["steady"].fast, Some(false));
+    // A child's own `fast: false` wins over its parent's `true`, and its `unset` stops it.
+    assert_eq!(loaded.agent_profiles.0["steady"].fast, Some(Toggle::Off));
+    assert_eq!(loaded.agent_profiles.0["cleared"].fast, Some(Toggle::Unset));
     let row_fast = |name: &str| {
         loaded
             .rows
@@ -1913,6 +1921,8 @@ fn code_mode_reads_on_and_off_and_follows_the_parent_chain() {
         ("calm", "agent: pi\ncode-mode: off"),
         ("heir", "agent: coder"),
         ("steady", "agent: coder\ncode-mode: off"),
+        ("cleared", "agent: coder\ncode-mode: unset"),
+        ("agreeable", "agent: pi\ncode-mode: yes"),
         ("odd", "agent: pi\ncode-mode: sometimes"),
     ] {
         definition(root.path(), &format!("agents/{name}.md"), frontmatter, "");
@@ -1926,10 +1936,13 @@ fn code_mode_reads_on_and_off_and_follows_the_parent_chain() {
         None,
     );
     let code_mode = |name: &str| loaded.agent_profiles.0.get(name).map(|p| p.code_mode);
-    assert_eq!(code_mode("coder"), Some(Some(true)));
-    assert_eq!(code_mode("calm"), Some(Some(false)));
-    assert_eq!(code_mode("heir"), Some(Some(true)));
-    assert_eq!(code_mode("steady"), Some(Some(false)));
+    use crate::agents::Toggle;
+    assert_eq!(code_mode("coder"), Some(Some(Toggle::On)));
+    assert_eq!(code_mode("calm"), Some(Some(Toggle::Off)));
+    assert_eq!(code_mode("heir"), Some(Some(Toggle::On)));
+    assert_eq!(code_mode("steady"), Some(Some(Toggle::Off)));
+    assert_eq!(code_mode("cleared"), Some(Some(Toggle::Unset)));
+    assert_eq!(code_mode("agreeable"), Some(Some(Toggle::On)));
     assert_eq!(code_mode("odd"), None);
     assert_eq!(loaded.errors.len(), 1, "{:?}", loaded.errors);
     assert!(

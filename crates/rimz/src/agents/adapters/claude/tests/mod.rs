@@ -51,16 +51,31 @@ fn fast_mode_merges_into_the_one_settings_flag() {
     let root = tempfile::tempdir().unwrap();
     let fast = || vec!["--settings".to_owned(), r#"{"fastMode":true}"#.to_owned()];
 
-    let mut off = vec!["--settings".to_owned(), r#"{"theme":"dark"}"#.to_owned()];
-    assert!(!ClaudeAdapter.take_fast_settings(&mut off));
-    assert_eq!(off, vec!["--settings", r#"{"theme":"dark"}"#]);
+    let mut unset = vec!["--settings".to_owned(), r#"{"theme":"dark"}"#.to_owned()];
+    assert_eq!(ClaudeAdapter.take_fast_settings(&mut unset), None);
+    assert_eq!(unset, vec!["--settings", r#"{"theme":"dark"}"#]);
+
+    // Off forces `fastMode: false` over a saved `/fast`, in the same one document.
+    let mut off = [
+        vec!["--settings".to_owned(), r#"{"theme":"dark"}"#.to_owned()],
+        vec!["--settings".to_owned(), r#"{"fastMode":false}"#.to_owned()],
+    ]
+    .concat();
+    assert_eq!(ClaudeAdapter.take_fast_settings(&mut off), Some(false));
+    let mut artifact = None;
+    ClaudeAdapter
+        .merge_fast_settings((root.path(), root.path()), false, &mut off, &mut artifact)
+        .unwrap();
+    assert_eq!(off.iter().filter(|arg| *arg == "--settings").count(), 1);
+    let settings: serde_json::Value = serde_json::from_str(off.last().unwrap()).unwrap();
+    assert_eq!(settings, json!({"theme": "dark", "fastMode": false}));
 
     let mut alone = [vec!["--model".to_owned(), "opus".to_owned()], fast()].concat();
-    assert!(ClaudeAdapter.take_fast_settings(&mut alone));
+    assert_eq!(ClaudeAdapter.take_fast_settings(&mut alone), Some(true));
     assert_eq!(alone, vec!["--model", "opus"]);
     let mut artifact = None;
     ClaudeAdapter
-        .merge_fast_settings((root.path(), root.path()), &mut alone, &mut artifact)
+        .merge_fast_settings((root.path(), root.path()), true, &mut alone, &mut artifact)
         .unwrap();
     assert_eq!(
         alone,
@@ -75,7 +90,7 @@ fn fast_mode_merges_into_the_one_settings_flag() {
         fast(),
     ]
     .concat();
-    assert!(ClaudeAdapter.take_fast_settings(&mut inline));
+    assert_eq!(ClaudeAdapter.take_fast_settings(&mut inline), Some(true));
     let mut artifact = None;
     ClaudeAdapter
         .allow_listed_skill_args(
@@ -86,7 +101,7 @@ fn fast_mode_merges_into_the_one_settings_flag() {
         )
         .unwrap();
     ClaudeAdapter
-        .merge_fast_settings((root.path(), root.path()), &mut inline, &mut artifact)
+        .merge_fast_settings((root.path(), root.path()), true, &mut inline, &mut artifact)
         .unwrap();
     assert_eq!(inline.iter().filter(|arg| *arg == "--settings").count(), 1);
     let settings: serde_json::Value = serde_json::from_str(inline.last().unwrap()).unwrap();
@@ -101,10 +116,10 @@ fn fast_mode_merges_into_the_one_settings_flag() {
         vec!["--settings".to_owned(), "profile.json".to_owned()],
     ]
     .concat();
-    assert!(ClaudeAdapter.take_fast_settings(&mut file));
+    assert_eq!(ClaudeAdapter.take_fast_settings(&mut file), Some(true));
     let mut artifact = None;
     ClaudeAdapter
-        .merge_fast_settings((root.path(), root.path()), &mut file, &mut artifact)
+        .merge_fast_settings((root.path(), root.path()), true, &mut file, &mut artifact)
         .unwrap();
     assert_eq!(file.iter().filter(|arg| *arg == "--settings").count(), 1);
     let (path, settings, _) = artifact.unwrap();
