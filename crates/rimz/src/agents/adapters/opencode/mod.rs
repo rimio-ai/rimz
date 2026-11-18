@@ -149,6 +149,7 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
+            code_mode: super::CodeModeSwitch::Unsupported,
             system_prompt_file: Some(super::StaticPresetMatcher::EnvConfigMember {
                 var: "OPENCODE_CONFIG_CONTENT",
                 member: "agents.build.system",

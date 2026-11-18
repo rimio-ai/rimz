@@ -27,10 +27,10 @@ use super::AskKind;
 use super::LaunchPreset;
 use super::account::AccountProbe;
 use super::definition::{
-    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    FastSwitch, HookCoverage, LaunchPermissionArgs, LaunchSpec, LifecycleAnnotations,
-    LocalSessionDiscovery, PlanLabel, PresetMatchers, PromptStyle, RemoteControlCapability,
-    StaticPresetMatcher, ThreadKey, ToolClassification, UserCoverage,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, CodeModeSwitch, ConcernCoverage,
+    CoverageAnnotations, FastSwitch, HookCoverage, LaunchPermissionArgs, LaunchSpec,
+    LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, PresetMatchers, PromptStyle,
+    RemoteControlCapability, StaticPresetMatcher, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
@@ -397,6 +397,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
                     }
                 }),
                 presets: PresetMatchers {
+                    code_mode: CodeModeSwitch::Unsupported,
                     auto_compact: None,
                     model: flag(&launch.model_flag),
                     effort: flag(&launch.effort_flag),

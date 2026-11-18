@@ -180,6 +180,38 @@ fn fast_override_renders_strips_stamps_and_skips_where_unsupported() {
 }
 
 #[test]
+fn code_mode_warns_once_and_launches_without_it_where_unsupported() {
+    let code_mode_cell = |kind: &str| {
+        let mut cell = preset_cell(kind, &["--raw"], None, None);
+        if let Cell::Agent(cell) = &mut cell {
+            cell.launch.code_mode = true;
+        }
+        LayoutSpec::single(cell)
+    };
+    let mut layout = code_mode_cell("copilot");
+    let warnings = finalize(&mut layout, &Default::default(), &[]).unwrap();
+    assert_eq!(
+        warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ["warning: `copilot-coder` code-mode is unsupported on copilot; launching without it"]
+    );
+    let cell = layout.agent_cells().next().unwrap();
+    assert!(!cell.launch.code_mode);
+    let mut off = LayoutSpec::single(preset_cell("copilot", &["--raw"], None, None));
+    finalize(&mut off, &Default::default(), &[]).unwrap();
+    assert_eq!(cell.args, off.agent_cells().next().unwrap().args);
+
+    for kind in ["claude", "pi"] {
+        let mut layout = code_mode_cell(kind);
+        let warnings = finalize(&mut layout, &Default::default(), &[]).unwrap();
+        assert!(warnings.is_empty(), "{kind}: {warnings:?}");
+        assert!(
+            layout.agent_cells().next().unwrap().launch.code_mode,
+            "{kind}"
+        );
+    }
+}
+
+#[test]
 fn unsupported_effort_override_warns_and_leaves_no_launch_stamp() {
     let preset = crate::agents::LaunchPreset {
         effort: Some("high".into()),
@@ -1390,6 +1422,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             model: Some("o3".to_owned()),
             effort: Some("high".to_owned()),
             budget: Some("$10".to_owned()),
+            code_mode: true,
             ..Default::default()
         },
     };
@@ -1432,6 +1465,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             model: launch.model,
             effort: launch.effort,
             fast: false,
+            code_mode: launch.code_mode,
             budget: launch.budget,
         }
     );
@@ -1639,6 +1673,7 @@ fn configured_profile(
         model: model.map(str::to_owned),
         effort: effort.map(str::to_owned),
         fast: None,
+        code_mode: None,
         budget: None,
         timeout: None,
         auto_compact: None,

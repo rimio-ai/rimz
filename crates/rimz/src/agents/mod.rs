@@ -99,8 +99,9 @@ pub use definition::{
     LocalSessionDiscovery, PermissionMode, SamePaneSessionPolicy, UserCapability, Variant,
 };
 use definition::{
-    CompactCommand, CompactInstruction, FastSwitch, LaunchPermissionArgs, LaunchSpec,
-    PresetMatchers, PromptStyle, SessionCommand, StaticPresetMatcher, program_names_kind,
+    CodeModeSwitch, CompactCommand, CompactInstruction, FastSwitch, LaunchPermissionArgs,
+    LaunchSpec, PresetMatchers, PromptStyle, SessionCommand, StaticPresetMatcher,
+    program_names_kind,
 };
 pub use delegated_account::expects_usage_reading;
 pub use emblems::{Emblem, EmblemTint};

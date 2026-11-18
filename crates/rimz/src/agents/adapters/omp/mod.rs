@@ -498,6 +498,7 @@ static OMP_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: CompactInstruction::Trailing,
         }),
         presets: definition::PresetMatchers {
+            code_mode: definition::CodeModeSwitch::Unsupported,
             model: Some(definition::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(definition::StaticPresetMatcher::Flag(&["--thinking"])),
             system_prompt_file: Some(definition::StaticPresetMatcher::TextFlag(&[

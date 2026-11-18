@@ -414,7 +414,9 @@ upward-dependencies = ["address"]
 # start; AgentContextRecord::merge_mod_reading is the sparse merge a mod reading lands through (+2).
 # ModPlan and ModBlocker carry a managed policy that keeps the Claude mod from loading to the
 # install preview, the start warning and the doctor row (+2).
-surface-budget = 1286
+# CodeModeSwitch and CodeModeSwitch::env declare each adapter's code-mode argv and env beside
+# FastSwitch for the launch env and tool rendering (+2).
+surface-budget = 1288
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

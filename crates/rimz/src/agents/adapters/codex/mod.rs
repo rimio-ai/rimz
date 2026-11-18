@@ -297,6 +297,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
+            code_mode: super::CodeModeSwitch::Unsupported,
             auto_compact: Some(super::StaticPresetMatcher::ConfigKey {
                 flags: &["-c", "--config"],
                 key: "model_auto_compact_token_limit",
@@ -696,6 +697,7 @@ fn render_host_skills(
 
 fn render_definition_tools(
     tools: &crate::agents::ToolSet,
+    _extra: &[&str],
 ) -> std::result::Result<Vec<String>, crate::agents::ToolErr> {
     let bash = tools.has("Bash");
     let agent = tools.has("Agent");

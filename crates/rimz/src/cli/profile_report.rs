@@ -739,6 +739,7 @@ mod tests {
             model: None,
             effort: None,
             fast: None,
+            code_mode: None,
             budget: None,
             timeout: None,
             system_prompt_file: None,

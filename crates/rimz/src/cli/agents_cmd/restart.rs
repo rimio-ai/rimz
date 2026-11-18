@@ -1234,6 +1234,7 @@ pub(in crate::cli) fn relaunch_request(
         model: posture.launch.model.clone(),
         effort: posture.launch.effort.clone(),
         fast: posture.launch.fast,
+        code_mode: posture.launch.code_mode,
         budget: posture.launch.budget.clone(),
         epoch: fresh_identity.map_or((agent.epoch > 0).then_some(agent.epoch), |identity| {
             identity.launch.epoch
@@ -1357,6 +1358,7 @@ pub(super) fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell 
             model: posture.launch.model.clone(),
             effort: posture.launch.effort.clone(),
             fast: posture.launch.fast,
+            code_mode: posture.launch.code_mode,
             budget: posture.launch.budget.clone(),
             ..Default::default()
         },

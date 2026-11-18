@@ -195,6 +195,7 @@ static MINIMAX_SPEC: AgentSpec = AgentSpec {
             instruction: CompactInstruction::Trailing,
         }),
         presets: PresetMatchers {
+            code_mode: CodeModeSwitch::Unsupported,
             model: Some(StaticPresetMatcher::Flag(&["--model", "-m"])),
             system_prompt_file: Some(StaticPresetMatcher::Flag(&[
                 "--append-system-prompt-file",

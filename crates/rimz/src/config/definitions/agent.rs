@@ -44,6 +44,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         model: None,
         effort: None,
         fast: None,
+        code_mode: None,
         budget: None,
         timeout: None,
         auto_compact: None,
@@ -612,6 +613,7 @@ impl Resolver<'_> {
         profile.auto_compact_default =
             super::super::agents::native_auto_compact(self.scope.native_auto_compact, kind);
         profile.fast = fm.fast;
+        profile.code_mode = fm.code_mode;
         profile.budget = fm.budget.clone();
         if let Some(value) = fm.timeout.as_deref() {
             if self.namespace != "subagents" {

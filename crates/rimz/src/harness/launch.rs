@@ -40,6 +40,8 @@ const ENV_LAUNCH_FAST: &str = "RIMZ_LAUNCH_FAST";
 const ENV_LAUNCH_AUTO_APPROVE: &str = "RIMZ_LAUNCH_AUTO_APPROVE";
 /// The exact `KEY=VALUE` pair this launch set for long prompt-cache retention.
 const ENV_LONG_CACHE_ENV: &str = "RIMZ_LONG_CACHE_ENV";
+/// The exact `KEY=VALUE` pair this launch set for the provider's code mode.
+const ENV_CODE_MODE_ENV: &str = "RIMZ_CODE_MODE_ENV";
 /// Stable RimZ launch identity. The provider may replace the provisional
 /// session key after startup, so launch ancestry resolves this value through
 /// the durable `AgentState::launch_id` stamp.
@@ -1331,33 +1333,37 @@ fn compile_agent_process_with_extra_env(
         env.remove(ENV_LAUNCH_FAST);
         unset.insert(ENV_LAUNCH_FAST.to_owned());
     }
+    release_stamped_pair(
+        &mut env,
+        &mut unset,
+        &skill_env,
+        &secret_keys,
+        ENV_CODE_MODE_ENV,
+    );
+    if request.identity.params.code_mode
+        && let Some((key, value)) = adapter.spec().launch.presets.code_mode.env()
+    {
+        stamp_pair(&mut env, &mut unset, ENV_CODE_MODE_ENV, key, value);
+    }
     if frontend.extension_auto_approve {
         env.insert(ENV_LAUNCH_AUTO_APPROVE.to_owned(), "1".to_owned());
     } else {
         env.remove(ENV_LAUNCH_AUTO_APPROVE);
         unset.insert(ENV_LAUNCH_AUTO_APPROVE.to_owned());
     }
-    let inherited_cache = skill_env
-        .get(ENV_LONG_CACHE_ENV)
-        .and_then(|marker| marker.split_once('='))
-        .filter(|(key, value)| {
-            !secret_keys.contains(*key) && skill_env.get(*key).map(String::as_str) == Some(*value)
-        });
-    if let Some((key, _)) = inherited_cache {
-        env.remove(key);
-        unset.insert(key.to_owned());
-    }
-    env.remove(ENV_LONG_CACHE_ENV);
-    unset.insert(ENV_LONG_CACHE_ENV.to_owned());
+    let inherited_cache = release_stamped_pair(
+        &mut env,
+        &mut unset,
+        &skill_env,
+        &secret_keys,
+        ENV_LONG_CACHE_ENV,
+    );
     if reminders.long_cache
         && let Some((key, value)) = adapter.spec().launch.long_cache_env
         && (!skill_env.contains_key(key)
             || inherited_cache.is_some_and(|(owned_key, _)| owned_key == key))
     {
-        env.insert(key.to_owned(), value.to_owned());
-        unset.remove(key);
-        env.insert(ENV_LONG_CACHE_ENV.to_owned(), format!("{key}={value}"));
-        unset.remove(ENV_LONG_CACHE_ENV);
+        stamp_pair(&mut env, &mut unset, ENV_LONG_CACHE_ENV, key, value);
     }
     // A launch carries its own model, team, and role, never its caller's.
     let params = &request.identity.params;
@@ -1684,6 +1690,46 @@ fn compose_agent_env(
         });
     }
     Ok(env)
+}
+
+/// Removes the inherited provider pair an outer launch stamped under `marker`, and the
+/// marker itself, returning that pair. The pair is RimZ's only while its key still holds
+/// the stamped value and is not a trusted `[[agents]]` env key; any other value is the
+/// user's and passes through.
+fn release_stamped_pair<'a>(
+    env: &mut BTreeMap<String, String>,
+    unset: &mut BTreeSet<String>,
+    inherited: &'a BTreeMap<String, String>,
+    secret_keys: &BTreeSet<String>,
+    marker: &str,
+) -> Option<(&'a str, &'a str)> {
+    let owned = inherited
+        .get(marker)
+        .and_then(|stamp| stamp.split_once('='))
+        .filter(|(key, value)| {
+            !secret_keys.contains(*key) && inherited.get(*key).map(String::as_str) == Some(*value)
+        });
+    if let Some((key, _)) = owned {
+        env.remove(key);
+        unset.insert(key.to_owned());
+    }
+    env.remove(marker);
+    unset.insert(marker.to_owned());
+    owned
+}
+
+/// Sets a provider pair and stamps `marker` so a nested launch can tell it is RimZ's.
+fn stamp_pair(
+    env: &mut BTreeMap<String, String>,
+    unset: &mut BTreeSet<String>,
+    marker: &str,
+    key: &str,
+    value: &str,
+) {
+    env.insert(key.to_owned(), value.to_owned());
+    unset.remove(key);
+    env.insert(marker.to_owned(), format!("{key}={value}"));
+    unset.remove(marker);
 }
 
 fn trusted_agent_env(

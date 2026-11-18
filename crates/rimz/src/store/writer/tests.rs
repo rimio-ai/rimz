@@ -139,6 +139,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             model: Some("gpt-5.6-sol".to_owned()),
             effort: Some("xhigh".to_owned()),
             fast: false,
+            code_mode: false,
             budget: Some("$2.00/day".to_owned()),
             team: Some("forge".to_owned()),
             loop_task: None,

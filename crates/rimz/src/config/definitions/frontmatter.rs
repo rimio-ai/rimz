@@ -24,6 +24,7 @@ pub(super) struct AgentFrontmatter {
     pub mode: Option<PermissionMode>,
     pub effort: Option<String>,
     pub fast: Option<bool>,
+    pub code_mode: Option<bool>,
     #[serde(default, deserialize_with = "token_count")]
     pub auto_compact: Option<String>,
     #[serde(default, deserialize_with = "number_text")]
@@ -67,6 +68,7 @@ impl AgentFrontmatter {
             mode,
             effort,
             fast,
+            code_mode,
             auto_compact,
             budget,
             timeout,

@@ -96,6 +96,7 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
         interrupt_key: None,
         compact_command: None,
         presets: super::PresetMatchers {
+            code_mode: super::CodeModeSwitch::Unsupported,
             auto_compact: None,
             model: Some(super::StaticPresetMatcher::Flag(&["--mode"])),
             effort: None,

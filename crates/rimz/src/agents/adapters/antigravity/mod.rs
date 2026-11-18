@@ -220,6 +220,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         interrupt_key: None,
         compact_command: None,
         presets: super::PresetMatchers {
+            code_mode: super::CodeModeSwitch::Unsupported,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
             ..super::PresetMatchers::EMPTY

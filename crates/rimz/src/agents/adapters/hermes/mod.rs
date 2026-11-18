@@ -204,6 +204,7 @@ static HERMES_SPEC: AgentSpec = AgentSpec {
             instruction: CompactInstruction::Trailing,
         }),
         presets: PresetMatchers {
+            code_mode: CodeModeSwitch::Unsupported,
             model: Some(StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(StaticPresetMatcher::ValueFlag {
                 flags: &["--reasoning"],

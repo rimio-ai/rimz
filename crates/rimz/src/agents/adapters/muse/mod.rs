@@ -91,6 +91,7 @@ static MUSE_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: crate::agents::CompactInstruction::Unsupported,
         }),
         presets: crate::agents::PresetMatchers {
+            code_mode: crate::agents::CodeModeSwitch::Unsupported,
             model: Some(crate::agents::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(crate::agents::StaticPresetMatcher::Flag(&[
                 "--reasoning-effort",

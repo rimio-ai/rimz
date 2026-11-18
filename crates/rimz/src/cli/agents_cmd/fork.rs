@@ -115,6 +115,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     seed.launch.model.clone_from(&posture.launch.model);
     seed.launch.effort.clone_from(&posture.launch.effort);
     seed.launch.fast = posture.launch.fast;
+    seed.launch.code_mode = posture.launch.code_mode;
     seed.launch.budget.clone_from(&posture.launch.budget);
     seed.launch.tier.clone_from(&posture.launch.tier);
     seed.launch.record = Some(rimz::agents::LaunchRecord::replay_or_new(

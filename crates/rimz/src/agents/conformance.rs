@@ -839,8 +839,8 @@ system-prompt-file-flag = "--system-prompt-file"
     "#);
 }
 
-#[test]
-fn fast_switch_characterization() {
+/// Every built-in adapter and a minimal process plugin, whose root the guard keeps.
+fn registry_with_fixture_plugin() -> (tempfile::TempDir, Vec<&'static AgentDefinition>) {
     let root = tempfile::TempDir::new().expect("plugin root");
     let plugin_dir = root.path().join("fixturebot");
     fs::create_dir(&plugin_dir).expect("plugin dir");
@@ -852,12 +852,19 @@ fn fast_switch_characterization() {
     .expect("manifest");
     let loaded = super::plugins::load_from_root(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    let mut cases = Vec::new();
-    for adapter in BUILTINS
+    let adapters = BUILTINS
         .iter()
         .copied()
         .chain(loaded.definitions.iter().copied())
-    {
+        .collect();
+    (root, adapters)
+}
+
+#[test]
+fn fast_switch_characterization() {
+    let (_root, adapters) = registry_with_fixture_plugin();
+    let mut cases = Vec::new();
+    for adapter in adapters {
         let spec = adapter.spec();
         let on = spec.render_preset(&LaunchPreset {
             fast: Some(true),
@@ -896,6 +903,39 @@ fn fast_switch_characterization() {
     muse: on=agent `muse` has no fast-mode launch switch; launch without --fast off=Ok([])
     minimax: on=agent `minimax` has no fast-mode launch switch; launch without --fast off=Ok([])
     fixturebot: on=agent `fixturebot` has no fast-mode launch switch; launch without --fast off=Ok([])
+    "#);
+}
+
+#[test]
+fn code_mode_switch_characterization() {
+    let (_root, adapters) = registry_with_fixture_plugin();
+    let cases: Vec<_> = adapters
+        .into_iter()
+        .map(|adapter| {
+            let spec = adapter.spec();
+            format!("{}: {:?}", spec.kind, spec.launch.presets.code_mode)
+        })
+        .collect();
+    insta::assert_snapshot!(cases.join("\n"), @r#"
+    claude: Supported { tools: ["REPL", "Poll"], without_tools: [], env: Some(("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "1")) }
+    codex: Unsupported
+    amp: Unsupported
+    copilot: Unsupported
+    kimi: Unsupported
+    pi: Supported { tools: ["codemode"], without_tools: ["--tools", "+codemode"], env: None }
+    opencode: Unsupported
+    antigravity: Unsupported
+    cursor: Unsupported
+    droid: Unsupported
+    kiro: Unsupported
+    qwen: Unsupported
+    grok: Unsupported
+    hermes: Unsupported
+    qoder: Unsupported
+    omp: Unsupported
+    muse: Unsupported
+    minimax: Unsupported
+    fixturebot: Unsupported
     "#);
 }
 

@@ -155,6 +155,11 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
+            code_mode: super::CodeModeSwitch::Supported {
+                tools: &["codemode"],
+                without_tools: &["--tools", "+codemode"],
+                env: None,
+            },
             auto_compact: None,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--thinking"])),
@@ -341,6 +346,7 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
 
 fn render_definition_tools(
     tools: &crate::agents::ToolSet,
+    extra: &[&str],
 ) -> (Vec<String>, Vec<crate::agents::ToolNotice>) {
     use crate::agents::ToolNotice;
 
@@ -351,7 +357,7 @@ fn render_definition_tools(
     // is enabled, and the model loads them with that tool.
     let skills_load = tools.has("Skill") && (tools.has("Read") || tools.has("Bash"));
     for name in tools.bases() {
-        if skills_load && name == "Skill" {
+        if (skills_load && name == "Skill") || extra.contains(&name.as_str()) {
             continue;
         }
         let Some(tool) = crate::agents::tools::PI_TOOL_NAMES
@@ -362,6 +368,11 @@ fn render_definition_tools(
             restrictions.retain(|base| base != name);
             continue;
         };
+        if !mapped.contains(&tool) {
+            mapped.push(tool);
+        }
+    }
+    for &tool in extra {
         if !mapped.contains(&tool) {
             mapped.push(tool);
         }

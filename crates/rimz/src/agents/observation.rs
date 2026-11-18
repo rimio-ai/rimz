@@ -292,6 +292,10 @@ pub struct LaunchParams {
     /// Omitted when off, so off launches keep their wire bytes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fast: bool,
+    /// The profile's provider code mode for this cell. Omitted when off, so
+    /// off launches keep their wire bytes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub code_mode: bool,
     /// The launcher-selected dollar cap, passed through `RIMZ_AGENT_BUDGET`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<String>,
