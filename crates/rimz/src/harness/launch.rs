@@ -1431,9 +1431,12 @@ fn compile_agent_process_with_extra_env(
     Ok(process)
 }
 
-/// The variables the provider is spawned with: the login environment, the
+/// The variables RimZ sets for the provider: the login environment, the
 /// compiled one, and the pins the plan and a scoped view set after compile.
-/// A name the provider ends up without is harmless to list.
+/// The names are taken before the launch is wrapped in the user's login
+/// shell, so a variable that shell's startup files export is absent; on
+/// Codex, `rimz mcp serve --parent-env` covers those. A name the provider
+/// ends up without is harmless to list.
 fn spawn_env_names(
     login_env: &BTreeMap<String, String>,
     env: &BTreeMap<String, String>,
