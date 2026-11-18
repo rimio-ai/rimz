@@ -54,6 +54,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
 
     Some(LocalContextRefresh {
         context: LocalContextPatch {
+            fast: usage.fast.map_or(FieldPatch::Keep, FieldPatch::Set),
             tokens,
             post_compaction_tokens: match usage.source {
                 TranscriptUsageSource::Boundary => usage

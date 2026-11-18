@@ -850,6 +850,17 @@ impl AgentDefinition {
         )
     }
 
+    /// The same floor for a reading reported by a child of the provider
+    /// process itself (a mod's `$.process.run`): its parent is the owner.
+    pub fn parent_owner_start(&self) -> Option<jiff::Timestamp> {
+        context_owner_start_with(
+            self.spec(),
+            Some(&std::os::unix::process::parent_id().to_string()),
+            crate::proc::comm,
+            crate::proc::process_start,
+        )
+    }
+
     pub fn is_foreign_hook_payload(&self, payload: &Value) -> bool {
         super::registry::all_definitions().any(|definition| {
             definition.spec().kind != self.spec().kind

@@ -983,7 +983,7 @@ To show that the provider's model received RimZ's text, ask a question that only
 
 ### Time a Claude child's interrupt marker
 
-A Claude interrupt reaches RimZ only when Claude next runs its statusline, which writes `context.settle` into the child's context sidecar. To time that, run the check from an agent pane in a room the user started, on the binary that room runs, so the child uses a real Claude login. Launch a child that blocks in one foreground command: Claude's own harness refuses a foreground `sleep`, so use `perl`, and give it a unique argument so you can find the process later.
+A Claude interrupt reaches RimZ at the RimZ mod's `turn.complete` report or at Claude's next statusline run, whichever comes first; each writes `context.settle` into the child's context sidecar. To time that, run the check from an agent pane in a room the user started, on the binary that room runs, so the child uses a real Claude login. Launch a child that blocks in one foreground command: Claude's own harness refuses a foreground `sleep`, so use `perl`, and give it a unique argument so you can find the process later.
 
 ```sh
 rimz subagents claude 'Run exactly this foreground command and nothing else: perl -e "select(undef,undef,undef,347)"' --description 'interrupt marker probe'
@@ -993,7 +993,7 @@ rimz pane send @<child> --key escape
 jq .context.settle "$f"    # poll until it reads {"at": ..., "outcome": "interrupted"}
 ```
 
-The marker sits at `.context.settle`, not at the top level of the sidecar. Compare its `at` with the moment you pressed Escape. On Claude 2.1.322 with the account's `statusLine.refreshInterval` set to 10, the marker landed 9 s after Escape: Escape itself does not run the statusline, so an account with no refresh interval waits for Claude's next render trigger instead.
+The marker sits at `.context.settle`, not at the top level of the sidecar. Compare its `at` with the moment you pressed Escape. On Claude 2.1.322, before the mod reported turn ends, with the account's `statusLine.refreshInterval` set to 10, the marker landed 9 s after Escape: Escape itself does not run the statusline, so without the mod an account with no refresh interval waits for Claude's next render trigger instead. The mod path has not been timed this way.
 
 ### Bring an OpenCode login into a held room
 

@@ -4806,6 +4806,237 @@ fn mod_feed_writes_nothing_for_reports_it_cannot_act_on() {
     assert!(roomless.subagent_contexts().is_empty());
 }
 
+/// What `$.session.usage()` answered in the live probe.
+fn probe_usage() -> Value {
+    json!({
+        "startedAt": 1_794_967_641_885_i64,
+        "context": {"tokens": 38_328, "window": 1_000_000, "percent": 4},
+        "rateLimits": [{"kind": "seven_day", "percentUsed": 45,
+                        "resetsAt": "2026-11-23T06:00:00.000Z"}],
+        "cost": {"usd": 0.00459113}
+    })
+}
+
+/// A main-loop report of a 1.1.0 mod over `transcript`.
+fn main_loop_report(
+    session: &str,
+    event: &str,
+    transcript: &std::path::Path,
+    extra: Value,
+) -> String {
+    let mut envelope = json!({
+        "v": "1.1.0", "event": event, "session_id": session,
+        "transcript_path": transcript, "claude_version": "2.1.327",
+        "usage": probe_usage(),
+    });
+    envelope
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    envelope.to_string()
+}
+
+const PROMPT_ROW: &str = r#"{"type":"user","timestamp":"2026-11-18T02:08:30.000Z","message":{"role":"user","content":"run it"}}"#;
+const FAST_ROW: &str = r#"{"type":"assistant","timestamp":"2026-11-18T02:08:31.000Z","message":{"model":"claude-opus-5-5","usage":{"input_tokens":3,"cache_read_input_tokens":20000,"output_tokens":9,"speed":"fast"}}}"#;
+const INTERRUPTED_ROW: &str = r#"{"type":"user","timestamp":"2026-11-18T02:08:34.490Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#;
+const DIED_ROW: &str = r#"{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-11-18T02:08:40.000Z","message":{"content":[{"type":"text","text":"API Error: Overloaded"}]}}"#;
+
+fn root_context(env: &Env, session: &str) -> rimz::agents::AgentContext {
+    env.agent_contexts()
+        .into_iter()
+        .find(|record| record.agent_id == session)
+        .unwrap_or_else(|| panic!("no sidecar for {session}"))
+        .context
+}
+
+/// A main-loop report merges the probe's readings and the transcript's fast
+/// badge and markers into the session's own sidecar, the same markers a
+/// status line push stores for that transcript, and stamps each signal.
+#[test]
+fn mod_feed_merges_the_readings_and_the_turn_scan_into_the_session_sidecar() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let transcript = env.project_root.join("main.jsonl");
+    std::fs::write(
+        &transcript,
+        format!("{PROMPT_ROW}\n{FAST_ROW}\n{INTERRUPTED_ROW}\n"),
+    )
+    .unwrap();
+
+    let out = env.run_mod_feed(
+        "claude",
+        &main_loop_report("sess", "tool.call", &transcript, json!({})),
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty());
+    let context = root_context(&env, "sess");
+    let tokens = context.tokens.as_ref().expect("readings");
+    assert_eq!(
+        (
+            tokens.current_context_tokens,
+            tokens.context_window_size,
+            tokens.used_percentage
+        ),
+        (Some(38_328), Some(1_000_000), Some(4))
+    );
+    assert_eq!(
+        context.cost.as_ref().unwrap().total_cost_usd,
+        Some(0.00459113)
+    );
+    let window = &context.rate_limits.as_ref().unwrap().windows[0];
+    assert_eq!(window.used_percentage, Some(45));
+    assert_eq!(
+        window.resets_at,
+        Some(Timestamp::from_second(1_795_413_600).unwrap()),
+        "ISO resetsAt is the status line's epoch seconds"
+    );
+    assert_eq!(
+        context.fast,
+        Some(true),
+        "fast from the request's usage.speed"
+    );
+    let checkin = &env.mod_checkins()[0];
+    assert!(checkin.readings_at.is_some() && checkin.turn_report_at.is_some());
+
+    let statusline = json!({"session_id": "line", "transcript_path": transcript}).to_string();
+    assert!(
+        env.run_statusline_feed("claude", &statusline)
+            .status
+            .success()
+    );
+    let settle = context.settle.expect("the scan's interruption");
+    assert_eq!(settle.outcome, rimz::agents::TurnSettleOutcome::Interrupted);
+    assert_eq!(
+        Some(settle),
+        root_context(&env, "line").settle,
+        "the status line's marker"
+    );
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    writeln!(file, "{DIED_ROW}").unwrap();
+    let report = main_loop_report(
+        "sess",
+        "turn.complete",
+        &transcript,
+        json!({"reason": "answer"}),
+    );
+    assert!(env.run_mod_feed("claude", &report).status.success());
+    assert!(
+        env.run_statusline_feed("claude", &statusline)
+            .status
+            .success()
+    );
+    let died = root_context(&env, "sess");
+    assert!(died.turn_error.is_some(), "the scan's turn death");
+    assert_eq!(died.turn_error, root_context(&env, "line").turn_error);
+    assert_eq!(died.settle, Some(settle), "the interruption stays");
+}
+
+/// An `aborted` turn end over a transcript still missing its row reads again
+/// until the row lands, and stores nothing when it never does; either way the
+/// feed ends well inside the mod's 2-second report cap.
+#[test]
+fn mod_feed_rereads_an_aborted_turn_end_inside_the_report_cap() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let report = |session: &str, transcript: &std::path::Path| {
+        main_loop_report(
+            session,
+            "turn.complete",
+            transcript,
+            json!({"reason": "aborted"}),
+        )
+    };
+
+    let late = env.project_root.join("late.jsonl");
+    std::fs::write(&late, format!("{PROMPT_ROW}\n")).unwrap();
+    let writer = {
+        let late = late.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let mut file = std::fs::OpenOptions::new().append(true).open(late).unwrap();
+            writeln!(file, "{INTERRUPTED_ROW}").unwrap();
+        })
+    };
+    let started = std::time::Instant::now();
+    assert!(
+        env.run_mod_feed("claude", &report("late", &late))
+            .status
+            .success()
+    );
+    let late_took = started.elapsed();
+    writer.join().unwrap();
+    assert_eq!(
+        root_context(&env, "late")
+            .settle
+            .map(|settle| settle.outcome),
+        Some(rimz::agents::TurnSettleOutcome::Interrupted),
+        "the row that landed inside the window"
+    );
+
+    let never = env.project_root.join("never.jsonl");
+    std::fs::write(&never, format!("{PROMPT_ROW}\n")).unwrap();
+    let started = std::time::Instant::now();
+    assert!(
+        env.run_mod_feed("claude", &report("never", &never))
+            .status
+            .success()
+    );
+    let never_took = started.elapsed();
+    let context = root_context(&env, "never");
+    assert_eq!(context.settle, None, "the reason itself is no marker");
+    assert!(context.tokens.is_some(), "the readings still land");
+    for took in [late_took, never_took] {
+        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+    }
+}
+
+/// A report whose usage has an unexpected shape still checks in, and one whose
+/// transcript cannot be read still writes its readings without a turn report.
+#[test]
+fn mod_feed_keeps_what_it_can_from_a_partial_report() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let missing = env.project_root.join("no-such.jsonl");
+    let odd = main_loop_report(
+        "odd",
+        "tool.call",
+        &missing,
+        json!({"usage": "soon", "reason": 7}),
+    );
+    let out = env.run_mod_feed("claude", &odd);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let unread = main_loop_report("unread", "tool.call", &missing, json!({}));
+    assert!(env.run_mod_feed("claude", &unread).status.success());
+
+    let mut checkins = env.mod_checkins();
+    checkins.sort_by(|left, right| left.agent_id.as_str().cmp(right.agent_id.as_str()));
+    assert_eq!(checkins.len(), 2);
+    assert_eq!(checkins[0].agent_id, "odd");
+    assert_eq!(
+        (checkins[0].readings_at, checkins[0].turn_report_at),
+        (None, None)
+    );
+    assert_eq!(checkins[1].agent_id, "unread");
+    assert!(checkins[1].readings_at.is_some());
+    assert_eq!(
+        checkins[1].turn_report_at, None,
+        "no transcript, no turn report"
+    );
+    assert!(root_context(&env, "unread").tokens.is_some());
+}
+
 /// Once the mod has written a child's sidecar, a child status line push for it
 /// changes nothing; before that, the status line writes as it always has.
 #[test]

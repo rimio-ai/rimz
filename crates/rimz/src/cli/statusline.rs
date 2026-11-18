@@ -20,7 +20,8 @@
 //!
 //! The same datasource serves `rimz mod feed`, the report of the mod RimZ
 //! installs for a provider (Claude's): one envelope on stdin, a check-in for
-//! its session and one child sidecar per child its agent list carries. It
+//! its session, the session's readings and resting-turn markers merged into
+//! its own sidecar, and one child sidecar per child its agent list carries. It
 //! forwards nothing and prints nothing; every failure warns on stderr and exits
 //! 0, so a report never reaches the session that sent it.
 
@@ -74,8 +75,8 @@ pub struct ModArgs {
 
 #[derive(Debug, Subcommand)]
 enum ModSubcmd {
-    /// Read one report of the RimZ mod on stdin: check its session in and
-    /// write a sidecar for each child its agent list carries.
+    /// Read one report of the RimZ mod on stdin: check its session in, merge
+    /// its readings, and write a sidecar for each child its agent list carries.
     #[command(hide = true)]
     Feed {
         /// Agent the mod belongs to (`claude`).
@@ -97,8 +98,9 @@ pub fn run_mod(args: ModArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-/// Check the session in and write its children's sidecars. A report the
-/// adapter does not act on writes nothing, before the room is resolved.
+/// Check the session in, merge its reading into its own sidecar, and write its
+/// children's sidecars. A report the adapter does not act on writes nothing,
+/// before the room is resolved.
 fn persist_mod_report(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<()> {
     let Ok(payload) = serde_json::from_slice::<Value>(stdin) else {
         return Ok(());
@@ -110,14 +112,15 @@ fn persist_mod_report(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Resu
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let runtime = runtime_paths_for_root(&workspace.project_root)?;
     let kind = agent.spec().kind;
-    rimz::store::mod_checkin::record(
+    rimz::store::mod_checkin::record(&runtime, kind, &report).context("writing mod check-in")?;
+    rimz::store::agent_context::merge_mod_reading(
         &runtime,
         kind,
         &report.session_id,
-        &report.mod_version,
-        report.provider_version.as_deref(),
+        report.context.clone(),
+        agent.parent_owner_start(),
     )
-    .context("writing mod check-in")?;
+    .context("merging the mod reading")?;
     write_subagent_sidecars(
         &runtime,
         agent,

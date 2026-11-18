@@ -1500,7 +1500,8 @@ fn doctor_reports_a_legacy_cache_for_deletion_without_blocking_start() {
 
 /// A live Claude session the RimZ mod never reported for is a warning with its
 /// fix; its first mod report (any event) checks it in, and other kinds never
-/// show the finding.
+/// show the finding. A checked-in session whose row finished a turn without a
+/// signal is flagged per missing signal until a report brings both.
 #[test]
 fn doctor_flags_a_live_claude_session_until_the_mod_checks_it_in() {
     let env = Env::new();
@@ -1536,6 +1537,59 @@ fn doctor_flags_a_live_claude_session_until_the_mod_checks_it_in() {
     assert!(flagged(&report).is_empty(), "{report:#}");
     let text = env.rimz().args(["doctor"]).output().unwrap();
     assert!(!String::from_utf8_lossy(&text.stdout).contains("RimZ mod never reported"));
+
+    // That check-in carried no readings and read no transcript: once the row
+    // finishes a turn, each missing signal is its own warning.
+    let signals = |report: &Value| report["agents"]["rows"][0]["mod_signals_missing"].clone();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(
+        signals(&report),
+        Value::Null,
+        "no turn finished since: {report:#}"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    for signal in [
+        LifecycleSignal::TurnStarted { turn_id: None },
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    ] {
+        inject_lifecycle(&env, "claude", "silent-session", signal, Some("main"));
+    }
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(
+        signals(&report),
+        json!(["readings", "turn_report"]),
+        "{report:#}"
+    );
+    let text = env.rimz().args(["doctor"]).output().unwrap();
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("the RimZ mod sent no readings"), "{text}");
+    assert!(text.contains("the RimZ mod sent no turn report"), "{text}");
+
+    let transcript = env.project_root.join("silent.jsonl");
+    std::fs::write(&transcript, "").unwrap();
+    let envelope = json!({
+        "v": "1.1.0", "event": "turn.complete", "session_id": "silent-session",
+        "transcript_path": transcript, "reason": "answer",
+        "usage": {"context": {"tokens": 10, "window": 200_000, "percent": 0}}
+    });
+    assert!(
+        env.run_mod_feed("claude", &envelope.to_string())
+            .status
+            .success()
+    );
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert!(
+        report["agents"]["rows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|row| row.get("mod_signals_missing").is_none()),
+        "{report:#}"
+    );
 }
 
 #[test]

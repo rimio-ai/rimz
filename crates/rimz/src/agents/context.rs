@@ -789,14 +789,21 @@ pub struct SubagentObservation {
 }
 
 /// One report of a provider mod RimZ installs, as the adapter reads it: the
-/// session it came from, the versions it checks in with, and one observation
-/// per child its agent list carries.
+/// session it came from, the versions it checks in with, one observation per
+/// child its agent list carries, and the session's own readings and markers.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModReport {
     pub session_id: String,
     pub mod_version: String,
     pub provider_version: Option<String>,
     pub subagents: Vec<SubagentObservation>,
+    /// The session's sparse reading: context, rate windows and cost from the
+    /// mod, fast mode and any resting-turn marker from the transcript it names.
+    pub context: AgentContext,
+    /// The report's usage carried a context window.
+    pub readings: bool,
+    /// A tool-call or turn-end report whose transcript the scan could read.
+    pub turn_report: bool,
 }
 
 /// The provider account/plan a session authenticates against. The dashboard

@@ -410,7 +410,9 @@ upward-dependencies = ["address"]
 # that the store, address, fleet and the swap routine read (+8).
 # AgentState::{stands, session_over, launch_key} feed those predicates (+3).
 # AgentCardRef::with_launch lets a parked record's card match the agent that holds its launch (+1).
-surface-budget = 1282
+# AgentDefinition::parent_owner_start floors the mod feed's first windows at its claude parent's
+# start; AgentContextRecord::merge_mod_reading is the sparse merge a mod reading lands through (+2).
+surface-budget = 1284
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -4523,7 +4525,9 @@ path = "crates/rimz/src/store"
 # RunRecord::agent_launch_id names the launch a run's agent holds (+1).
 # store::mod_checkin::ModCheckinRecord, record and read_all hold the per-session check-in the mod
 # feed writes and doctor reads; SubagentReporter lets a mod child record stand against the status line (+4).
-surface-budget = 665
+# store::agent_context::merge_mod_reading lands a mod reading in the session's sidecar;
+# ModCheckinRecord::checked_in_at is the check-in instant doctor compares a turn end with (+2).
+surface-budget = 667
 
 [[verdict]]
 kind = "item"
@@ -10183,6 +10187,11 @@ reason = "The binary's accounts redeem entry previews fresh credits/windows and 
 kind = "item"
 key = "store::agent_context::attach_rest_certificates"
 reason = "The binary's supervised split and exec end-trace call the store-owned guard in place of their two copies (cli/supervised/pane.rs, cli/agents_cmd/exec.rs); cli sees only pub (pass 25)."
+
+[[verdict]]
+kind = "item"
+key = "store::agent_context::merge_mod_reading"
+reason = "The binary's mod feed merges a mod reading into the session's own sidecar under the record lock: sparse, cost only rising, a marker only when newer (adapter_claude.md, Rich context); cli sees only pub."
 
 [[verdict]]
 kind = "item"

@@ -104,40 +104,7 @@ impl AgentContextRecord {
         owner_started_at: Option<Timestamp>,
     ) -> bool {
         let mut context = context;
-        let first_observed_at = self
-            .context
-            .rate_limits
-            .as_ref()
-            .is_none_or(|limits| limits.windows.is_empty())
-            .then_some(owner_started_at)
-            .flatten()
-            .map(|start| context.observed_at.min(start));
-        for window in context
-            .rate_limits
-            .iter_mut()
-            .flat_map(|limits| &mut limits.windows)
-        {
-            if window.source.is_authoritative() {
-                continue;
-            }
-            if let Some(first_observed_at) = first_observed_at {
-                window.observed_at = Some(first_observed_at);
-                continue;
-            }
-            let prior = self.context.rate_limits.as_ref().and_then(|limits| {
-                limits
-                    .windows
-                    .iter()
-                    .find(|prior| prior.key() == window.key())
-            });
-            if let Some(prior) = prior
-                && prior.observed_at.is_some()
-                && prior.used_percentage == window.used_percentage
-                && prior.resets_at == window.resets_at
-            {
-                window.observed_at = prior.observed_at;
-            }
-        }
+        self.stamp_incoming_windows(&mut context, owner_started_at);
         let observed_cost = context.cost.is_some();
         let model_id = context.model_id.clone().or(self.context.model_id.clone());
         if let Some(error) = &mut context.turn_error {
@@ -179,6 +146,75 @@ impl AgentContextRecord {
         next.locally_priced_cost = locally_priced_cost;
         *self = next;
         true
+    }
+
+    /// Date the best-effort windows of an incoming reading: a sidecar's first
+    /// windows are floored at the owner process's start, and a window whose
+    /// content is unchanged keeps the prior stamp.
+    fn stamp_incoming_windows(
+        &self,
+        context: &mut AgentContext,
+        owner_started_at: Option<Timestamp>,
+    ) {
+        let first_observed_at = self
+            .context
+            .rate_limits
+            .as_ref()
+            .is_none_or(|limits| limits.windows.is_empty())
+            .then_some(owner_started_at)
+            .flatten()
+            .map(|start| context.observed_at.min(start));
+        for window in context
+            .rate_limits
+            .iter_mut()
+            .flat_map(|limits| &mut limits.windows)
+        {
+            if window.source.is_authoritative() {
+                continue;
+            }
+            if let Some(first_observed_at) = first_observed_at {
+                window.observed_at = Some(first_observed_at);
+                continue;
+            }
+            let prior = self.context.rate_limits.as_ref().and_then(|limits| {
+                limits
+                    .windows
+                    .iter()
+                    .find(|prior| prior.key() == window.key())
+            });
+            if let Some(prior) = prior
+                && prior.observed_at.is_some()
+                && prior.used_percentage == window.used_percentage
+                && prior.resets_at == window.resets_at
+            {
+                window.observed_at = prior.observed_at;
+            }
+        }
+    }
+
+    /// Merge a mod reading through the sparse observed merge: what it carries
+    /// replaces, what it omits stands (the statusline's split, model, effort),
+    /// cost only rises, and its windows are dated as a statusline push dates
+    /// them. A resting-turn marker lands only when its transcript stamp is
+    /// newer than the stored one of its kind, so a scan of a stale tail never
+    /// moves a marker backwards.
+    pub(crate) fn merge_mod_reading(
+        &mut self,
+        kind: &str,
+        mut context: AgentContext,
+        owner_started_at: Option<Timestamp>,
+    ) -> bool {
+        self.stamp_incoming_windows(&mut context, owner_started_at);
+        let stored_settle = self.context.settle.as_ref().map(|settle| settle.at);
+        if context.settle.as_ref().map(|settle| settle.at) <= stored_settle {
+            context.settle = None;
+        }
+        let stored_error = self.context.turn_error.as_ref().map(|error| error.at);
+        if context.turn_error.as_ref().map(|error| error.at) <= stored_error {
+            context.turn_error = None;
+        }
+        let observed_at = context.observed_at;
+        self.merge_observed(kind, context, observed_at)
     }
 
     pub(crate) fn apply_local_refresh(

@@ -1479,7 +1479,11 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
     }
 
     fn observe_mod_report(&self, payload: &Value) -> Option<super::ModReport> {
-        rimz_mod::observe(payload, Timestamp::now())
+        let mut report = rimz_mod::observe(payload, Timestamp::now())?;
+        rimz_mod::scan_transcript(payload, &mut report, read_transcript_tail, || {
+            std::thread::sleep(rimz_mod::ABORT_REREAD_PAUSE);
+        });
+        Some(report)
     }
 
     fn subagent_cost_cursor(
@@ -2065,6 +2069,9 @@ struct TranscriptUsage {
     cache_write_input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     model: Option<String>,
+    /// Whether the newest request ran in fast mode, from its `usage.speed`;
+    /// `None` when that request names no speed.
+    fast: Option<bool>,
 }
 
 #[derive(Default)]
@@ -2200,6 +2207,10 @@ fn usage_from_transcript_tail(
             cache_write_input_tokens: Some(cache_write),
             output_tokens: Some(output),
             model,
+            fast: usage
+                .get("speed")
+                .and_then(Value::as_str)
+                .map(|speed| speed == "fast"),
         };
     }
     if whole_file {

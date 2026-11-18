@@ -193,6 +193,23 @@ pub fn merge_observed(
     })
 }
 
+/// Merge one mod reading onto the session's sidecar record (see
+/// `AgentContextRecord::merge_mod_reading`); the statusline's whole-record
+/// push is [`write()`]. `owner_started_at` floors the first windows as there.
+/// Returns whether anything changed and was written.
+pub fn merge_mod_reading(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+    context: AgentContext,
+    owner_started_at: Option<Timestamp>,
+) -> Result<bool, atomic::AtomicErr> {
+    let observed_at = context.observed_at;
+    update_record(runtime, kind, agent_id, observed_at, |record, _| {
+        record.merge_mod_reading(kind, context, owner_started_at)
+    })
+}
+
 /// Merge a provider-native turn-error marker into the latest sidecar record.
 /// The marker is display-only enrichment and shares the same self-clear rule as
 /// transcript-detected turn errors: any newer lifecycle heartbeat moves
