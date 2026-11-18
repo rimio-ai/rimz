@@ -599,11 +599,11 @@ struct BlockLogo {
 }
 
 /// What fills a logo's box: the image's placeholder cells, or, in a frame
-/// without image ids, the text emblem's rows centred in the same box.
+/// without image ids, nothing, so the box keeps the rows the image will take.
 #[derive(Clone)]
 enum LogoMark {
     Image(u32),
-    Text(Vec<Vec<Span<'static>>>),
+    Reserved,
 }
 
 impl BlockLogo {
@@ -661,14 +661,7 @@ fn place_logo(lines: &mut Vec<Line<'static>>, logo: BlockLogo) -> usize {
                 art_column_row(&mut lines[first + usize::from(row)], cells);
             }
         }
-        LogoMark::Text(rows) => {
-            let offset = usize::from(logo_box.rows).saturating_sub(rows.len()) / 2;
-            for (row, art) in rows.into_iter().enumerate() {
-                if let Some(line) = lines.get_mut(first + offset + row) {
-                    art_column_row(line, art);
-                }
-            }
-        }
+        LogoMark::Reserved => {}
     }
     gained_above + gained_below
 }
@@ -697,7 +690,7 @@ fn art_column_row(line: &mut Line<'static>, cells: Vec<Span<'static>>) {
 /// kept as text by a user's mana glyph, its brand resolves to a truecolor tone,
 /// a logo tier is ready, and a logo id is free. A frame without image ids on a
 /// pane that draws logos reserves the box for a block whose logo has landed and
-/// fills it with the text emblem, so its rows match the frame on arrival.
+/// leaves it empty, so its rows match the frame on arrival.
 fn block_logo(
     context: &mut DashboardContext<'_>,
     panel: &SidebarProviderPanel,
@@ -720,14 +713,7 @@ fn block_logo(
             if !sources.any(|source| reserve.landed(source, rgb, cols)) {
                 return None;
             }
-            // The art's bottom rows that fit the box, as the text tier's crest
-            // pick keeps the bottom of a tall emblem.
-            let first = panel.art.len().saturating_sub(usize::from(logo_box.rows));
-            LogoMark::Text(
-                (first..panel.art.len())
-                    .map(|row| art_row_spans(context.theme, panel, row))
-                    .collect(),
-            )
+            LogoMark::Reserved
         }
         (None, None) => return None,
     };
