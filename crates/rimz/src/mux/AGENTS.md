@@ -24,6 +24,7 @@ Local contract for `crates/rimz/src/mux/` — the Zellij/tmux seam. Extends [cra
 - tmux 3.7 and later reject a client invocation of more than 1000 argv words, and every version rejects one packed command over 16 KiB (`command too long`); a command list that grows with windows or panes goes through a `source-file -` script on stdin.
 - When a required tmux version is absent, build it from its release tarball (`https://github.com/tmux/tmux/releases/download/<v>/tmux-<v>.tar.gz`, as `ci/Dockerfile` does) with `./configure && make` under `$TMPDIR`, then put the directory holding the built `tmux` first on `PATH`.
 - A rule that reads a pane's terminal input (tty atime, bytes read) as human typing is probed, on both backends, against outer-terminal focus-out/in and a popup or floating pane opened over the pane, with a program that enables `?1004`: tmux and Zellij forward those reports to the pane with no pane change.
+- The tmux client view (`parse_client_view` in [`tmux/parse.rs`](./tmux/parse.rs)) is the routing sample, not the list of clients that receive pane output: it leaves every `ignore-size` client out of `ClientView::clients` and the presence figures. The read-only share (`attach -r -f ignore-size`) draws output and is listed only in `ClientPresence::unrouted_clients`; the room's control client (`ignore-size,no-output`) draws nothing and is listed nowhere. A rule about who receives what a pane writes reads both sets.
 
 ## Ownership and direction
 
