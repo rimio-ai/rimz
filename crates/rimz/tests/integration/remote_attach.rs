@@ -33,6 +33,8 @@ use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env};
 mod keyboard;
 #[path = "remote_ports.rs"]
 mod ports;
+#[path = "remote_upload.rs"]
+mod upload;
 
 fn stdout_line(out: &Output) -> String {
     assert!(

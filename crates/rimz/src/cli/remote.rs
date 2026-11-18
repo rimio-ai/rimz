@@ -25,6 +25,7 @@ mod relay;
 mod setup;
 mod supervisor;
 mod tty;
+mod upload_receiver;
 mod web;
 
 #[derive(Debug, Args)]
@@ -111,12 +112,15 @@ enum RemoteSubcmd {
         #[command(subcommand)]
         command: LinkStatsSubcmd,
     },
+    /// Hidden remote paste receiver. The upload client calls this.
+    #[command(hide = true)]
+    Upload(link_stats::RoomArgs),
 }
 
 #[derive(Debug, Subcommand)]
 enum LinkStatsSubcmd {
     /// Ingest JSONL link probes for one remote room and publish link-stats.json.
-    Ingest(link_stats::LinkStatsIngestArgs),
+    Ingest(link_stats::RoomArgs),
 }
 
 #[derive(Debug, Args)]
@@ -276,6 +280,7 @@ impl RemoteArgs {
             RemoteSubcmd::List { .. } => "remote list",
             RemoteSubcmd::Ports { .. } => "remote ports",
             RemoteSubcmd::LinkStats { .. } => "remote link-stats",
+            RemoteSubcmd::Upload(_) => "remote upload",
         }
     }
 }
@@ -357,6 +362,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
         RemoteSubcmd::LinkStats { command } => match command {
             LinkStatsSubcmd::Ingest(args) => link_stats::ingest(args),
         },
+        RemoteSubcmd::Upload(args) => upload_receiver::run(args),
     }
 }
 

@@ -83,7 +83,7 @@ Room files have one lifetime class per directory, and only `disk/paths.rs` const
 | `audit/` | State | Except `transcript/` and `messages/`, remove files older than 30 days by mtime, then oldest first until at most 64 MiB remains per room. Those two subdirectories follow `gc.transcript_retention` (default `forever`) and report together as `transcript`. |
 | `cache/` | State | Rebuildable. Cleared on reset, with no age sweep. `rimz doctor --audit` warns above 150,000 entries. |
 | `owned/` | State | Agent unit: 7 days after the latest session using its handle ends, never while its process owner is live or its directory or a direct child is newer than 7 days. Unknown handles use the same mtime grace. Runs: terminal and record mtime older than 7 days. Workflow homes: see [Garbage collection](#garbage-collection). Restorability does not extend the grace. |
-| `tmp/` | State | Agent temp unit `tmp/<handle>/`: remove after `gc.tmp_grace` (default 1 day) has passed both its newest owner's end and the mtime of the directory and each direct child. Owners include launched children sharing the parent's unit, but not provider-native subagents. Any live process owner, or any owner without an end, keeps the unit. Unknown handles use the same mtime grace. [Pressure eviction](../reference/cli/maintenance.md#automatic-sweeps) bypasses the grace for ended and rowless units, never for holds. An error skips one unit, not the class. `tmp/_unnamed/`, shared by handleless launches, stays until the room directory is pruned. |
+| `tmp/` | State | Agent temp unit `tmp/<handle>/`: remove after `gc.tmp_grace` (default 1 day) has passed both its newest owner's end and the mtime of the directory and each direct child. Owners include launched children sharing the parent's unit, but not provider-native subagents. Any live process owner, or any owner without an end, keeps the unit. Unknown handles use the same mtime grace. [Pressure eviction](../reference/cli/maintenance.md#automatic-sweeps) bypasses the grace for ended and rowless units, never for holds. An error skips one unit, not the class. `tmp/_unnamed/`, shared by handleless launches, stays until the room directory is pruned. A remote paste upload's unit `tmp/_upload-<id>/` has no owner, so it follows the mtime grace alone. |
 | `<home>/empty/<workspace-dir>/` | State (outside the room store) | Keep each agent directory while any retained row records it as `worktree_path`, even after that session ends. Otherwise remove it once its directory mtime is older than the 7-day owned grace. Keep the room-level directory while its store exists. Machine GC sweeps the trees of removed stores under the same per-agent grace, then removes an empty room-level directory. Unknown entries and symlink targets are untouched. |
 | `shared/` | State | Room-wide files agents hand each other, with no sweep. Hard reset removes it. Otherwise it goes when the room directory is pruned. `rimz doctor --audit` warns above 150,000 entries. |
 | `team-notes/` | State | Team archives under `<yyyymmdd>/<HHMMSS>Z-<team>-<lane>[-N]/`. Legacy flat runs remain readable. `gc.team_notes_retention` defaults to `forever`. A duration removes a closed run only after its newest recursive entry mtime expires, without following symlinks. Missing boards are closed. Unreadable or stageless boards stay open. Unreadable manifests stay. Soft reset keeps it, while hard reset and whole-room deletion remove it. `rimz doctor --audit` warns above 150,000 entries while retention is `forever`. |
@@ -145,6 +145,7 @@ owned/runs/<run_id>.json                      supervised-run records
 owned/workflows/<run-id>/                     live workflow record, inline definition root, journal and work directory
 owned/finished-workflows/<run-id>/            an ended run's whole home, moved, with its saved history.txt
 tmp/<handle>/, tmp/_unnamed/                  per-agent temp units
+tmp/_upload-<id>/                             one remote paste upload's files
 shared/                                       room-wide shared files
 out/<reader>/<name>[.<n>|.<run_id>].output    child and peer responses
 out/<reader>/<wait-name>.output               watched-command output
@@ -249,7 +250,7 @@ lanes/room-settings.json                     asserted Zellij session and client 
 lanes/{authoritative-pane-probe,focus-anchor}.json focus and pane truth
 lanes/typing.json                            Linux terminal-input timing and non-typing exclusions
 lanes/{group-roots,diff-stats,cohort-spend,pipeline,bookings,pr-state,trunk-state,keep-warm,metrics-sample}.json enrichment
-lanes/{loop-fire,message-wake,codex-daemon-reap,link-stats}.json coordination
+lanes/{loop-fire,message-wake,codex-daemon-reap,link-stats,upload}.json coordination
 lanes/{budget.scopes,budget.fleet-park,budget.<digest>,auto-continue.<digest>}.json session state
 lanes/workspace-spending.<prefix>.json        room spend projection
 lanes/hook-drainer-outages/<pid>              wrapper-held hook-drainer outage leases

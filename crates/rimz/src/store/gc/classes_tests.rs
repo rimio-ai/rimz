@@ -513,6 +513,17 @@ fn tmp_units_follow_the_grace_rule_and_keep_the_unnamed_unit() {
         unit(Some("orphan")),
         unit(None),
     );
+    let upload = paths.ensure_upload_unit("19a2b3c4d5e-42").unwrap();
+    fs::File::open(&upload).unwrap().set_modified(old).unwrap();
+    let inventory =
+        crate::store::gc::tmp_inventory(&paths, &Vec::new().into(), &|agent, _| temp_owner(agent))
+            .unwrap();
+    assert!(
+        inventory
+            .iter()
+            .any(|unit| unit.path == upload && unit.hold == crate::store::gc::TmpHold::Unowned),
+        "an upload unit is listed as unowned: {inventory:?}"
+    );
     let recent = paths.temp_unit_dir(Some("recent"));
     fs::create_dir_all(&recent).unwrap();
     fs::File::open(&recent)
@@ -539,6 +550,7 @@ fn tmp_units_follow_the_grace_rule_and_keep_the_unnamed_unit() {
     )
     .unwrap();
     assert!(!ended.exists() && !orphan.exists());
+    assert!(!upload.exists(), "an upload unit goes past the grace");
     assert!(live.exists(), "a live owner keeps its unit past the grace");
     assert!(unnamed.exists() && recent.exists());
 }

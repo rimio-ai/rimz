@@ -373,7 +373,7 @@ Problems do not change the exit code: `gc` exits 0 whenever the sweep completes.
 
 ### Retention
 
-Owned state has a seven-day grace. Agent temp units use `gc.tmp_grace` (default `1d`) instead. A temp unit stays while any agent sharing it is live or has no recorded end. It then expires only when both its latest end and the mtime of its directory or any direct child are past the grace. Rowless units use mtime alone, and `tmp/_unnamed/` stays with the room.
+Owned state has a seven-day grace. Agent temp units use `gc.tmp_grace` (default `1d`) instead. A temp unit stays while any agent sharing it is live or has no recorded end. It then expires only when both its latest end and the mtime of its directory or any direct child are past the grace. Rowless units, a remote paste upload's `tmp/_upload-<id>/` among them, use mtime alone, and `tmp/_unnamed/` stays with the room.
 
 Diagnostic audit files expire after 30 days, or oldest-first above 64 MiB. Neither rule applies to `audit/transcript/` and `audit/messages/`. Those histories follow `gc.transcript_retention`: `forever` by default, or a non-zero duration (`s`, `m`, `h`, `d`) that expires weekly files by their last modification. Hard reset and `uninstall --state` or `--all` still remove both.
 

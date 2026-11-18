@@ -56,7 +56,7 @@ builds            /home/me/.rimz/builds
 | `workspace dir` | The directory name the room's files live under: `<slug>-<hex>`. The slug is the project root's basename with every character other than a letter, digit, or `_` turned into `-`, cut to 20 characters (`root` when nothing is left). The hex is the first 4 hex digits of the id, two more each time another directory already holds that prefix. An existing directory whose `workspace.json` names the id is reused, so the name stays fixed once created. |
 | `project root` | The project the room belongs to, as the [room resolution](../cli.md#which-room-a-command-reaches) chose it. |
 | `state dir`, `runtime dir` | The room's durable directory under `home/ws/` and its tmpfs directory under `runtime root/ws/`, both named by `workspace dir`. |
-| `room tmp` | The room's temp root, holding one `<handle>/` directory per agent, shared with the subagents it launches, and `_unnamed/` for launches without a handle. |
+| `room tmp` | The room's temp root, holding one `<handle>/` directory per agent, shared with the subagents it launches, `_unnamed/` for launches without a handle, and one `_upload-<id>/` per remote paste upload. |
 | `shared` | The room's shared directory, where agents hand each other files. |
 | `out` | Where RimZ writes results: subagent and peer responses and watched-command output, under `out/<reader>/` for the agent that reads them, or `out/_unnamed/` for a reader without a handle. |
 | `team notes` | Archived team runs, each holding its manifest, board, and scratch files. A checkout's `.rimz/team` link points to its current run. |
