@@ -53,6 +53,10 @@ pub struct PaneFrame {
     /// Non-normal room modes per attached client; absence means normal.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub client_modes: Vec<crate::pane::ClientRoomMode>,
+    /// Clients that draw pane output but route no view (tmux's read-only
+    /// share); only the renderer's client attach count reads them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) unrouted_clients: Vec<crate::ids::MuxClientId>,
     /// Session-global latest focused pane resolved from fresh client views or
     /// a backend register derived from those views.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -541,6 +545,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
         viewed_panes: client_viewed.to_vec(),
         client_views: client_views.to_vec(),
         client_modes: Vec::new(),
+        unrouted_clients: Vec::new(),
         focused_pane,
         focus_origin,
         client_view_fresh,

@@ -38,6 +38,8 @@ struct HeldSlot {
     logo: LogoPainter,
     swept: bool,
     retire: Retire,
+    /// The host's client attach count when this slot's images were last sent.
+    client_attaches: u64,
 }
 
 /// Where a held slot is in returning after routed frames lose their pixel surface.
@@ -55,7 +57,7 @@ enum Retire {
 }
 
 impl HeldSlot {
-    fn new(slot: PixelSlot, lease: Option<PixelLease>, wrap: bool) -> Self {
+    fn new(slot: PixelSlot, lease: Option<PixelLease>, wrap: bool, client_attaches: u64) -> Self {
         Self {
             slot,
             _lease: lease,
@@ -64,6 +66,7 @@ impl HeldSlot {
             logo: LogoPainter::new(wrap),
             swept: false,
             retire: Retire::Kept,
+            client_attaches,
         }
     }
 
@@ -108,6 +111,7 @@ pub(super) struct FramePainter {
     slot_pool: RuntimePaths,
     slot: SlotState,
     pixel_wrap: bool,
+    client_attaches: u64,
     #[cfg(test)]
     _slot_pool_dir: Option<tempfile::TempDir>,
 }
@@ -153,7 +157,7 @@ impl FramePainter {
         let mut painter = Self::new(caps, pixel_wrap, pool);
         painter.assets = assets;
         if let Some(slot) = slot {
-            painter.slot = SlotState::Held(Box::new(HeldSlot::new(slot, None, pixel_wrap)));
+            painter.slot = SlotState::Held(Box::new(HeldSlot::new(slot, None, pixel_wrap, 0)));
         }
         painter._slot_pool_dir = Some(dir);
         painter
@@ -176,9 +180,34 @@ impl FramePainter {
                 warned: false,
             },
             pixel_wrap,
+            client_attaches: 0,
             #[cfg(test)]
             _slot_pool_dir: None,
         }
+    }
+
+    /// Record the host's client attach count. A client new to the session has
+    /// received no image, so a held slot whose images went out under an older
+    /// count is due one resend of each visible image in place. Returns true only
+    /// on the call that first sees a new count, so a held-back paint asks once.
+    pub(super) fn note_client_attaches(&mut self, attaches: u64) -> bool {
+        let moved = std::mem::replace(&mut self.client_attaches, attaches) != attaches;
+        moved && matches!(&self.slot, SlotState::Held(held) if held.client_attaches != attaches)
+    }
+
+    /// Forget what the held slot sent before a client attached, so this frame
+    /// sends each visible image again under its id, without a delete.
+    fn resend_after_client_attach(&mut self) {
+        let SlotState::Held(held) = &mut self.slot else {
+            return;
+        };
+        if held.client_attaches == self.client_attaches {
+            return;
+        }
+        held.client_attaches = self.client_attaches;
+        held.pet.resend_in_place();
+        held.meter.resend_in_place();
+        held.logo.resend_in_place();
     }
 
     pub(super) fn holds_slot(&self) -> bool {
@@ -233,6 +262,7 @@ impl FramePainter {
                     lease.slot,
                     Some(lease),
                     self.pixel_wrap,
+                    self.client_attaches,
                 )));
                 ui.meter_pixels = None;
                 return;
@@ -450,6 +480,7 @@ impl FramePainter {
                 PaintKind::Mirror(_) => None,
             };
             if let Some(permit) = permit {
+                self.resend_after_client_attach();
                 self.ensure_pixel_transmitted(&mut graphics, ui, permit)?;
                 bracket = !graphics.is_empty();
                 terminal.backend_mut().write_all(&graphics)?;

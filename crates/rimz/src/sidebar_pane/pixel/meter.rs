@@ -367,6 +367,11 @@ impl MeterPainter {
         Ok(())
     }
 
+    /// Send each meter image again under its id at its next show.
+    pub(in crate::sidebar_pane) fn resend_in_place(&mut self) {
+        self.residency.invalidate();
+    }
+
     pub(in crate::sidebar_pane) fn clear<W: Write>(
         &mut self,
         writer: &mut W,

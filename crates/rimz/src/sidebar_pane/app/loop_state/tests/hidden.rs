@@ -1081,6 +1081,111 @@ fn a_pane_returning_before_its_mirror_grant_keeps_its_slot() {
     assert_eq!(first_free_slot(&pair.panes[1]), Some(0x520200));
 }
 
+/// Paint `rig` once more on a dirty pass and return what it wrote.
+fn forced_frame(rig: &mut Rig, clock: &LoopClock, output: &FrameOutput) -> String {
+    rig.state.pane.dirty = true;
+    rig.state.pane.next_frame = clock.now();
+    assert!(advance_wakeup(rig, Wakeup::Snapshot), "the pass paints");
+    String::from_utf8_lossy(&std::mem::take(&mut *output.0.lock().unwrap())).into_owned()
+}
+
+#[test]
+fn a_client_new_to_the_session_resends_a_held_slots_images_once_in_place() {
+    let (mut pair, output) = arrived_pixel_pair(SLOT_CAPS);
+    pair.sample(&[(1, 1), (2, 1)]);
+    assert!(
+        advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot),
+        "the attach paints without another trigger"
+    );
+    let attach =
+        String::from_utf8_lossy(&std::mem::take(&mut *output.0.lock().unwrap())).into_owned();
+    assert!(attach.contains("a=t"), "{}", attach.escape_debug());
+    assert!(!attach.contains("a=d"), "{}", attach.escape_debug());
+    let after = forced_frame(&mut pair.panes[1], &pair.clock, &output);
+    assert!(!after.contains("a=t"), "{}", after.escape_debug());
+
+    for (clients, why) in [
+        (&[(1, 1), (2, 1)][..], "the same clients"),
+        (&[(1, 1), (2, 0)][..], "a client moving between panes"),
+        (&[(1, 1)][..], "a client leaving"),
+    ] {
+        pair.sample(clients);
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        let frame = forced_frame(&mut pair.panes[1], &pair.clock, &output);
+        assert!(!frame.contains("a=t"), "{why}: {}", frame.escape_debug());
+    }
+
+    // A pane off screen keeps its slot until its mirror grant, and resends on its return.
+    pair.sample(&[(1, 0)]);
+    repaint_source(&mut pair);
+    pair.sample(&[(1, 0), (3, 0)]);
+    let rig = &mut pair.panes[1];
+    rig.state
+        .advance(
+            &mut super::scroll::queued([Wakeup::Snapshot]),
+            &mut rig.terminal,
+        )
+        .unwrap();
+    assert!(rig.state.pane.paint.holds_slot());
+    pair.sample(&[(1, 1), (3, 0)]);
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+    let back = String::from_utf8_lossy(&output.0.lock().unwrap()).into_owned();
+    assert!(back.contains("a=t"), "{}", back.escape_debug());
+    assert!(!back.contains("a=d"), "{}", back.escape_debug());
+}
+
+#[test]
+fn a_held_back_paint_asks_once_per_client_attach_and_resends_when_it_paints() {
+    let (mut pair, output) = arrived_pixel_pair(SLOT_CAPS);
+    let rig = &mut pair.panes[1];
+    rig.state
+        .pane
+        .paint_hold
+        .engage(rig.state.pane.clock.now(), u64::MAX);
+    pair.sample(&[(1, 1), (2, 1)]);
+    assert!(
+        !advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot),
+        "the hold blocks paint"
+    );
+    let rig = &mut pair.panes[1];
+    let later = pair.clock.now() + Duration::from_secs(1);
+    rig.state.pane.dirty = false;
+    rig.state.pane.next_frame = later;
+    advance_wakeup(rig, Wakeup::Snapshot);
+    assert!(
+        rig.state.pane.next_frame > pair.clock.now(),
+        "a pass that saw the count already does not ask for a frame at once again"
+    );
+
+    rig.state.pane.paint_hold.release();
+    output.0.lock().unwrap().clear();
+    let painted = forced_frame(rig, &pair.clock, &output);
+    assert!(painted.contains("a=t"), "{}", painted.escape_debug());
+    assert!(!painted.contains("a=d"), "{}", painted.escape_debug());
+}
+
+#[test]
+fn a_slot_taken_after_a_client_attach_sends_its_images_once() {
+    let mut pair = mirror_pair(MuxName::Tmux);
+    amend_for_pixel_meters(&mut pair.snapshot);
+    let rig = &mut pair.panes[1];
+    rig.state.pane.paint = FramePainter::new(SLOT_CAPS, true, rig.runtime.clone());
+    let output = FrameOutput::default();
+    rig.terminal.backend_mut().play_output(output.clone());
+    pair.sample(&[(1, 0), (2, 0)]);
+    advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot);
+    pair.sample(&[(1, 1), (2, 0)]);
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+    let arrival =
+        String::from_utf8_lossy(&std::mem::take(&mut *output.0.lock().unwrap())).into_owned();
+    assert!(arrival.contains("a=t"), "the take sends");
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    let second = forced_frame(&mut pair.panes[1], &pair.clock, &output);
+    assert!(!second.contains("a=t"), "{}", second.escape_debug());
+}
+
 #[test]
 fn a_hidden_pane_without_a_painted_view_returns_its_slot_unpainted() {
     let (mut pair, output) = arrived_pixel_pair(SLOT_CAPS);

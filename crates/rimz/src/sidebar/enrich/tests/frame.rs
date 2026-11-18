@@ -74,6 +74,7 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
             client_id: crate::ids::MuxClientId::Zellij(1),
             mode: crate::pane::RoomMode::Prefix,
         }],
+        unrouted_clients: Vec::new(),
         focused_pane: Some(pane_id.clone()),
         focus_origin: Default::default(),
         client_view_fresh: false,

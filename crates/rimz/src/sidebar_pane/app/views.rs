@@ -1,6 +1,6 @@
 //! Host-memory client membership and lazy presentation ownership.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -129,6 +129,10 @@ pub(super) struct ViewsRecord {
     /// The sidebars the last fresh client sample routes a client to; routing,
     /// landing and input never write it.
     on_screen_panes: HashSet<PaneId>,
+    /// Fresh client samples that held a client id the previous sample lacked,
+    /// counting the clients that draw pane output but route no view (tmux's
+    /// read-only share).
+    pub(super) client_attaches: u64,
 }
 
 impl ViewsRecord {
@@ -148,12 +152,14 @@ impl ViewsRecord {
             mapped_panes: views.panes.keys().cloned().collect(),
             resolved_panes: views.resolved_panes().cloned().collect(),
             on_screen_panes: views.on_screen_panes().cloned().collect(),
+            client_attaches: views.client_attaches,
         }
     }
 
     fn matches(&self, views: &Views) -> bool {
         let mirror = views.mirror_view();
         self.revision == views.revision
+            && self.client_attaches == views.client_attaches
             && self.mirror_target == mirror.map(|(id, state, _, _)| (id, state.layout_sequence))
             && self.mirror_pane == mirror.and_then(|(id, ..)| views.mirror_pane(id))
             && self.fold.as_ref().map(Arc::as_ptr) == views.fold.as_ref().map(Arc::as_ptr)
@@ -269,6 +275,9 @@ pub(super) struct Views {
     clients: BTreeMap<MuxClientId, Client>,
     panes: HashMap<PaneId, ViewId>,
     last_sample: Option<Vec<ClientRoute>>,
+    /// Every client id of the last fresh sample, routed or not.
+    last_attached: Option<BTreeSet<MuxClientId>>,
+    client_attaches: u64,
     retention: Option<Duration>,
     next_id: u64,
     activity: u64,
@@ -790,7 +799,7 @@ impl Views {
                 focused: client.pane_id.clone(),
             })
             .collect();
-        self.reconcile_routes(&clients, true, now, retention);
+        self.reconcile_routes(&clients, &frame.unrouted_clients, true, now, retention);
     }
 
     pub(super) fn focused(&self, pane: &PaneId) -> Option<PaneId> {
@@ -855,12 +864,13 @@ impl Views {
                 focused: client.pane_id.clone(),
             })
             .collect();
-        self.reconcile_routes(&clients, fresh, now, retention);
+        self.reconcile_routes(&clients, &[], fresh, now, retention);
     }
 
     fn reconcile_routes(
         &mut self,
         clients: &[ClientRoute],
+        unrouted: &[MuxClientId],
         fresh: bool,
         now: Instant,
         retention: Duration,
@@ -870,6 +880,19 @@ impl Views {
             return;
         }
         self.expire(now, retention);
+        let attached: BTreeSet<_> = clients
+            .iter()
+            .map(|route| route.client_id.clone())
+            .chain(unrouted.iter().cloned())
+            .collect();
+        if self
+            .last_attached
+            .as_ref()
+            .is_some_and(|last| !attached.is_subset(last))
+        {
+            self.client_attaches += 1;
+        }
+        self.last_attached = Some(attached);
         let mut sample = clients.to_vec();
         sample.sort_by(|left, right| left.client_id.cmp(&right.client_id));
         if self.last_sample.as_ref() == Some(&sample) {

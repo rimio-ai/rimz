@@ -42,6 +42,46 @@ fn card_commands_require_one_view_shared_by_all_attached_clients() {
 }
 
 #[test]
+fn only_a_client_new_to_the_session_moves_the_attach_count() {
+    let clock = clock();
+    let handle = ViewsHandle::default();
+    let attaches = |clients: &[(u32, u32)], fresh: bool| {
+        let mut frame = frame(clients);
+        frame.client_view_fresh = fresh;
+        handle.lock().reconcile_frame(&frame, clock.now(), HOLD);
+        handle.read().client_attaches
+    };
+    assert_eq!(attaches(&[(1, 11)], true), 0, "a host's first sample");
+    assert_eq!(attaches(&[(1, 11)], true), 0, "the same clients");
+    assert_eq!(attaches(&[(1, 11), (2, 12)], false), 0, "a stale sample");
+    assert_eq!(attaches(&[(1, 11), (2, 12)], true), 1, "a new client");
+    assert_eq!(attaches(&[(1, 11), (2, 21)], true), 1, "a client moving");
+    assert_eq!(attaches(&[(2, 21)], true), 1, "a client leaving");
+    assert_eq!(attaches(&[(1, 21), (2, 21)], true), 2, "a client back");
+}
+
+#[test]
+fn an_unrouted_client_new_to_the_session_moves_the_attach_count_once() {
+    let clock = clock();
+    let handle = ViewsHandle::default();
+    let attaches = |unrouted: &[u32]| {
+        let mut frame = frame(&[(1, 11)]);
+        frame.unrouted_clients = unrouted.iter().map(|&id| MuxClientId::Zellij(id)).collect();
+        handle.lock().reconcile_frame(&frame, clock.now(), HOLD);
+        handle.read().client_attaches
+    };
+    assert_eq!(attaches(&[]), 0, "a host's first sample");
+    assert_eq!(attaches(&[9]), 1, "a share new to the session");
+    assert_eq!(attaches(&[9]), 1, "the same share");
+    assert_eq!(attaches(&[]), 1, "the share leaving");
+    assert_eq!(attaches(&[9]), 2, "the share back");
+    assert!(
+        handle.read().on_screen(&pane(10)) && !handle.read().on_screen(&pane(20)),
+        "the share routes no view"
+    );
+}
+
+#[test]
 fn record_release_does_not_wait_for_the_subscriber_registry() {
     let handle = Arc::new(ViewsHandle::default());
     let subscribers = handle.lock().subscribers.clone();

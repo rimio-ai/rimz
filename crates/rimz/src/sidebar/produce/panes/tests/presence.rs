@@ -23,7 +23,7 @@ fn unfocused_terminals_keep_topology_and_afk_evidence_but_are_not_typing_viewers
             ..Default::default()
         },
     };
-    let (viewed, clients, _modes, presence, fresh) =
+    let (viewed, clients, _modes, presence, fresh, _unrouted) =
         frame_client_view(None, None, MuxName::Tmux, || Ok(view.clone()));
     let presence = presence.unwrap();
     assert_eq!(
@@ -92,7 +92,7 @@ fn frame_client_samples_carry_clocks_from_pushed_direct_and_prior_views() {
         frame_client_view(None, Some(&prior), MuxName::Zellij, unavailable),
         frame_client_view(None, Some(&prior), MuxName::Tmux, unavailable),
     ];
-    let actual = samples.map(|(viewed, clients, modes, presence, fresh)| {
+    let actual = samples.map(|(viewed, clients, modes, presence, fresh, _unrouted)| {
         (
             presence.map(|sample| (sample.client_input_ms, sample.client_views)),
             fresh,
@@ -753,7 +753,7 @@ fn client_samples_are_stamped_when_the_read_starts_and_withheld_frames_ignore_th
         presence: ClientPresence::default(),
     };
     let read_started = std::cell::Cell::new(0);
-    let (_, _, _, presence, _) = frame_client_view(None, None, MuxName::Tmux, || {
+    let (_, _, _, presence, _, _) = frame_client_view(None, None, MuxName::Tmux, || {
         read_started.set(unix_now_ms());
         std::thread::sleep(std::time::Duration::from_millis(5));
         Ok(view.clone())

@@ -13,6 +13,7 @@ fn pane(id: &str) -> PaneRef {
 
 fn frame(name: &str, panes: &[&str]) -> PaneFrame {
     PaneFrame {
+        unrouted_clients: Vec::new(),
         focus_origin: Default::default(),
         client_view_fresh: false,
         client_sample_withheld: false,
