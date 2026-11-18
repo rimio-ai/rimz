@@ -4,18 +4,18 @@
 
 use super::*;
 
-const SENTINEL: &str = "RIMZ-RELAY-END";
+pub(super) const SENTINEL: &str = "RIMZ-RELAY-END";
 
 /// A supervised attach running on a fake terminal.
-struct Attach {
+pub(super) struct Attach {
     child: Box<dyn portable_pty::Child + Send + Sync>,
-    terminal: FakeTerminal,
-    tty_name: PathBuf,
+    pub(super) terminal: FakeTerminal,
+    pub(super) tty_name: PathBuf,
     deadline: Instant,
 }
 
 impl Attach {
-    fn start(pair: PtyPair, cmd: CommandBuilder) -> Self {
+    pub(super) fn start(pair: PtyPair, cmd: CommandBuilder) -> Self {
         let child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
         let tty_name = pair.master.tty_name().expect("remote connect pty name");
         drop(pair.slave);
@@ -27,7 +27,7 @@ impl Attach {
         }
     }
 
-    fn wait_for(&self, what: &str, ready: impl Fn() -> bool) {
+    pub(super) fn wait_for(&self, what: &str, ready: impl Fn() -> bool) {
         while !ready() && Instant::now() < self.deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -38,7 +38,7 @@ impl Attach {
         );
     }
 
-    fn wait_exit(&mut self) -> Option<portable_pty::ExitStatus> {
+    pub(super) fn wait_exit(&mut self) -> Option<portable_pty::ExitStatus> {
         loop {
             if let Some(status) = self.child.try_wait().expect("poll remote connect") {
                 return Some(status);
@@ -52,7 +52,7 @@ impl Attach {
         }
     }
 
-    fn finish(mut self) -> String {
+    pub(super) fn finish(mut self) -> String {
         let status = self.wait_exit();
         let output = String::from_utf8_lossy(&self.terminal.finish()).into_owned();
         let status =
@@ -65,7 +65,7 @@ impl Attach {
     }
 }
 
-fn recording_command(env: &Env, log: &Path) -> CommandBuilder {
+pub(super) fn recording_command(env: &Env, log: &Path) -> CommandBuilder {
     let stdin_plan = env.project_root.join("ssh-stdin.plan");
     std::fs::write(&stdin_plan, "record\n").expect("write ssh stdin plan");
     let mut cmd = remote_connect_pty_command(env, log);
@@ -77,11 +77,11 @@ fn recording_command(env: &Env, log: &Path) -> CommandBuilder {
     cmd
 }
 
-fn stdin_log(env: &Env) -> PathBuf {
+pub(super) fn stdin_log(env: &Env) -> PathBuf {
     env.project_root.join("ssh-stdin.log")
 }
 
-fn tty_name_log(env: &Env) -> PathBuf {
+pub(super) fn tty_name_log(env: &Env) -> PathBuf {
     env.project_root.join("ssh-tty-name.log")
 }
 
@@ -233,22 +233,30 @@ fn a_terminal_resize_reaches_the_attach() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let size_log = env.project_root.join("ssh-size.log");
+    let winch_log = env.project_root.join("ssh-winch.log");
     let pair = remote_connect_pty();
     let mut cmd = recording_command(&env, &log);
     cmd.env("RIMZ_TEST_SSH_SIZE_LOG", &size_log);
+    cmd.env("RIMZ_TEST_SSH_WINCH_LOG", &winch_log);
     let attach = Attach::start(pair, cmd);
-    let sizes = || {
-        std::fs::read_to_string(&size_log)
+    let lines = |path: &Path| {
+        std::fs::read_to_string(path)
             .unwrap_or_default()
             .lines()
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>()
     };
+    let sizes = || lines(&size_log);
 
     attach.wait_for("the attach recorded no size", || !sizes().is_empty());
     attach.terminal.resize(30, 120);
     attach.wait_for("the resize never reached the attach", || {
         sizes().iter().any(|size| size == "30 120")
+    });
+    // ssh learns of a new size only from SIGWINCH, so the pty's size alone
+    // would leave the remote pane at the old one.
+    attach.wait_for("the attach got no SIGWINCH at the new size", || {
+        lines(&winch_log).iter().any(|size| size == "30 120")
     });
     attach.terminal.write(SENTINEL.as_bytes());
     let terminal = attach.tty_name.clone();

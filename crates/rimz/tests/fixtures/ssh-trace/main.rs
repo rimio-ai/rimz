@@ -19,7 +19,13 @@
 //! `$RIMZ_TEST_SSH_TTY_NAME_LOG` records the terminal each attach's stdin
 //! names, and `$RIMZ_TEST_SSH_PID_FILE` receives the attach's pid.
 //! `$RIMZ_TEST_SSH_SIZE_LOG` records each window size stdin reports while
-//! stdin is recorded.
+//! stdin is recorded, and `$RIMZ_TEST_SSH_WINCH_LOG` the size stdin reports
+//! at each SIGWINCH the shim receives meanwhile.
+//! An upload channel (`remote upload` in argv) runs the real receiver
+//! `$RIMZ_TEST_SSH_UPLOAD_RIMZ remote upload --dir $RIMZ_TEST_SSH_UPLOAD_DIR`
+//! with inherited stdio, and exits 127 as a host without rimz does when
+//! either is unset. `$RIMZ_TEST_SSH_UPLOAD_STALL` passes the receiver the
+//! header line alone and then holds the stream open until the shim is killed.
 //! `$RIMZ_TEST_SSH_STDIN_PLAN` chooses whether each visible attach ignores or
 //! records stdin, and `$RIMZ_TEST_SSH_STDIN_LOG` receives the recorded bytes.
 //! `$RIMZ_TEST_SSH_SUSPEND` stops the visible client until its process group
@@ -90,6 +96,10 @@ fn main() {
 
     if is_path_preflight(&argv) {
         exit_from_plan("RIMZ_TEST_SSH_PATH_PREFLIGHT_PLAN");
+    }
+
+    if argv.iter().any(|arg| arg.contains("remote upload")) {
+        run_upload_receiver();
     }
 
     if argv
@@ -268,6 +278,42 @@ fn record_attach_identity_if_requested() {
         .expect("open ssh trace tty name log");
     log.write_all(format!("{name}\n").as_bytes())
         .expect("write ssh trace tty name");
+}
+
+fn run_upload_receiver() -> ! {
+    let (Some(rimz), Some(dir)) = (
+        env::var_os("RIMZ_TEST_SSH_UPLOAD_RIMZ"),
+        env::var_os("RIMZ_TEST_SSH_UPLOAD_DIR"),
+    ) else {
+        std::process::exit(127);
+    };
+    let mut receiver = std::process::Command::new(rimz);
+    receiver.args(["remote", "upload", "--dir"]).arg(dir);
+    if env::var_os("RIMZ_TEST_SSH_UPLOAD_STALL").is_none() {
+        let status = receiver.status().expect("run upload receiver");
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    let mut child = receiver
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn upload receiver");
+    let mut stream = child.stdin.take().expect("receiver stdin");
+    // One byte at a time, so no file byte after the header is consumed.
+    let mut byte = [0_u8; 1];
+    while std::io::stdin()
+        .read(&mut byte)
+        .expect("read upload header")
+        == 1
+    {
+        stream.write_all(&byte).expect("forward upload header");
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+    // The stream stays open, sending nothing, until the receiver gives up.
+    let status = child.wait().expect("wait for upload receiver");
+    drop(stream);
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 fn exit_web_prep() -> ! {
@@ -534,14 +580,26 @@ fn record_stdin_until_sentinel() {
     let mut recorded = Vec::new();
     let mut buffer = [0u8; 256];
     let mut size_log = env::var_os("RIMZ_TEST_SSH_SIZE_LOG").map(|path| (path, None));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let winched = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let winch_log = env::var_os("RIMZ_TEST_SSH_WINCH_LOG").inspect(|_| {
+        signal_hook::flag::register(signal_hook::consts::SIGWINCH, winched.clone())
+            .expect("register ssh trace SIGWINCH");
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while std::time::Instant::now() < deadline {
         if let Some((path, last)) = &mut size_log {
             record_size_change(&stdin, path, last);
         }
+        if let Some(path) = &winch_log
+            && winched.swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            record_size_change(&stdin, path, &mut None);
+        }
         let mut fds = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
-        if poll(&mut fds, 50u16).expect("poll ssh trace stdin") == 0 {
-            continue;
+        match poll(&mut fds, 50u16) {
+            Ok(0) | Err(nix::errno::Errno::EINTR) => continue,
+            Ok(_) => {}
+            Err(err) => panic!("poll ssh trace stdin: {err}"),
         }
         let count = stdin
             .lock()

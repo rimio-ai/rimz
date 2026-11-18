@@ -102,7 +102,7 @@ Run `rimz remote ports` to find the local URL or why a listener has not been for
 
 The room crosses as a screen. The agents, their transcripts, the git work, and the store all run on the host; SSH carries the multiplexer's rendered output one way and your keystrokes the other, the same bytes a local attach would paint. The multiplexer redraws only the focused tab and diffs each frame, and every attach turns on SSH compression, so an idle room is nearly silent and a busy pane costs about what watching it locally would. Forwarded ports are the exception: that traffic is your own dev server's, and it flows only while you are attached.
 
-Your keystrokes pass through `rimz remote connect` on the way out. While SSH holds the terminal raw, `rimz` reads the keyboard and hands SSH every byte unchanged and in order, mouse reports and pastes included; a password or host-key prompt reads the keyboard directly. `[remote] paste = false` leaves SSH reading the terminal itself ([remote connect paste](./configuration.md#remote-connect-paste)).
+Your keystrokes pass through `rimz remote connect` on the way out. While SSH holds the terminal raw, `rimz` reads the keyboard and hands SSH every byte unchanged and in order, mouse reports and pastes included, except the Ctrl+V and file drops that [paste files into the host](#paste-files-and-images-into-the-host); a password or host-key prompt reads the keyboard directly. `[remote] paste = false` leaves SSH reading the terminal itself ([remote connect paste](./configuration.md#remote-connect-paste)).
 
 To measure the actual traffic, attach, then run `rimz pane bandwidth` from inside the remote shell. It belongs on the Linux host serving the room, where the write-rate counters live; from your own machine it has nothing to read. It samples for five seconds and attributes the output rate per pane, with the compressed SSH wire-rate alongside:
 
@@ -111,6 +111,24 @@ rimz pane bandwidth   # on the host: per-pane output and the SSH wire-rate over 
 ```
 
 The per-pane figures are raw producer output. The `WIRE(ssh↑)` and `WIRE(ssh↓)` rows are the compressed payload actually on the socket, normally far below the sum, because the multiplexer throttles to the focused tab before SSH compresses what is left. `--secs` widens the window, and the [pane reference](../reference/cli/pane.md) covers what the command prints when a host cannot measure.
+
+## Paste files and images into the host
+
+Locally, dropping a screenshot onto Claude Code or Codex attaches it, because the agent reads the file at the path your terminal pastes. Over plain `ssh` that path names a file on your laptop, so the agent on the host finds nothing there, and the workaround is an `scp` to the host and the remote path typed by hand. `rimz remote connect` does that copy for you: the file travels over the connection you already have, and the agent's pane receives the path on the host instead of yours.
+
+Three things start an upload:
+
+- **Ctrl+V uploads what the clipboard holds.** Copied Finder files upload as themselves; a copied image, such as a screenshot taken to the clipboard, uploads as one `clipboard-<date>-<time>.png`. Use Ctrl+V, not Cmd+V, for an image: Cmd+V is your terminal's own paste, and a terminal pastes nothing for an image. A clipboard holding only text, or no clipboard reader, sends Ctrl+V to the host as typed. RimZ reads the clipboard with `osascript` on macOS; on other systems Ctrl+V reads no clipboard and passes through, except as the cancel key of a running drop upload.
+- **A file drop uploads the dropped files.** Dragging files onto the terminal pastes their paths, and RimZ uploads them when every path in the paste is a readable regular file on your laptop. A drop that includes a directory, or any paste that is not a list of file paths, reaches the host unchanged.
+- **Cmd+V of copied Finder files counts as a drop.** The terminal pastes their paths the same way.
+
+While the files travel, the remote sidebar shows a progress row above its footer with `(⌃V cancel)`. A second Ctrl+V cancels; one within the first second is taken for key repeat and ignored. A cancelled or failed upload pastes nothing, and a failure leaves `upload failed:` and its reason on the row for a few seconds. One upload runs at a time: a paste made during an upload reaches the host as typed. One upload totals at most `paste_max` bytes (1 GiB by default), and a larger one fails before any byte is sent ([remote connect paste](./configuration.md#remote-connect-paste)).
+
+When the upload completes, RimZ types the remote paths into the session as one paste, the way a local drop would arrive, so the pane that is focused at that moment receives them. Switching panes during a long upload moves the paste to the new pane, and a tmux pane in copy mode at that moment drops it. Claude Code attaches every image in such a paste. Codex attaches a paste only when it is exactly one image path, so paste images into Codex one at a time.
+
+On the host, each upload lands in its own directory, `~/.rimz/ws/<workspace-dir>/tmp/_upload-<id>/`, with each file keeping its name (control characters replaced, a clash with another file in the same upload renamed). `rimz gc` removes the directory once its files are older than `gc.tmp_grace` (one day by default), as it does other temp folders ([retention](../reference/cli/maintenance.md#retention)).
+
+Uploads ride the supervised link's background connection, so a `--no-reconnect` connection passes Ctrl+V and drops through as typed. `[remote] paste = false` on your laptop turns the feature off along with the keyboard relay.
 
 ## Continuity across reboots
 

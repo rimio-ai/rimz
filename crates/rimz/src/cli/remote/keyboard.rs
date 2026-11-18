@@ -13,6 +13,11 @@
 //! the terminal next. A failed read or write of the master is that hangup; any
 //! other error stops the relay with the error, which the supervisor reads as
 //! the attach's end while ssh still runs.
+//!
+//! On an attach with a control socket, a Ctrl+V or a dropped path list goes to
+//! the upload triggers in `upload_client` instead of the session, and the
+//! remote paths an upload returns are typed into the session outside any
+//! bracketed paste the user has open.
 
 use std::fs::File;
 use std::io::{self, PipeReader, PipeWriter, Read, Write};
@@ -28,7 +33,9 @@ use nix::sys::signal::{Signal, kill};
 use nix::sys::termios::{self, LocalFlags, SetArg, Termios};
 use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::Pid;
-use rimz::remote::paste::{Input, InputScanner};
+use rimz::remote::paste::{Input, InputScanner, paste_payload};
+
+use super::upload_client::{UploadRoute, Uploads};
 
 /// How often a cooked slave is checked for ssh's raw flip.
 const COOKED_RECHECK: Duration = Duration::from_millis(10);
@@ -44,8 +51,9 @@ pub(super) struct KeyboardPty {
 
 impl KeyboardPty {
     /// Opens the pair with the shell's modes and the terminal's size, and
-    /// starts the relay thread, which waits for the child's pid.
-    pub(super) fn open(saved: &Termios) -> io::Result<Self> {
+    /// starts the relay thread, which waits for the child's pid. Uploads run
+    /// only on an attach with a `route`.
+    pub(super) fn open(saved: &Termios, route: Option<UploadRoute>) -> io::Result<Self> {
         let size = rustix::termios::tcgetwinsize(io::stdin())?;
         let size = nix::pty::Winsize {
             ws_row: size.ws_row,
@@ -61,7 +69,8 @@ impl KeyboardPty {
             fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
         }
         let (start, started) = mpsc::channel();
-        let relay = KeyboardRelay::start(File::from(pty.master), saved.clone(), started)?;
+        let uploads = route.map(Uploads::new).transpose()?;
+        let relay = KeyboardRelay::start(File::from(pty.master), saved.clone(), uploads, started)?;
         Ok(Self {
             slave: pty.slave,
             relay,
@@ -96,7 +105,12 @@ pub(super) struct KeyboardRelay {
 }
 
 impl KeyboardRelay {
-    fn start(master: File, saved: Termios, started: mpsc::Receiver<Pid>) -> io::Result<Self> {
+    fn start(
+        master: File,
+        saved: Termios,
+        uploads: Option<Uploads>,
+        started: mpsc::Receiver<Pid>,
+    ) -> io::Result<Self> {
         let (stopped, stop) = io::pipe()?;
         let (winched, winch) = io::pipe()?;
         let worker = thread::Builder::new()
@@ -118,6 +132,7 @@ impl KeyboardRelay {
                     scanner: InputScanner::default(),
                     hold_until: None,
                     results: Vec::new(),
+                    uploads,
                 };
                 let result = relay.run(&stopped, &winched);
                 signal_hook::low_level::unregister(id);
@@ -153,15 +168,8 @@ struct Relay {
     hold_until: Option<Instant>,
     /// Paste results waiting for the user's open bracketed paste to close.
     results: Vec<u8>,
-}
-
-/// What one scanned input becomes.
-enum Verdict {
-    /// Bytes for the session, unchanged.
-    Forward(Vec<u8>),
-    /// A trigger held back while the upload it starts runs.
-    #[expect(dead_code, reason = "the Ctrl+V and drop triggers start uploads")]
-    Upload(Input),
+    /// Dropping the relay cancels a running upload.
+    uploads: Option<Uploads>,
 }
 
 impl Relay {
@@ -196,6 +204,11 @@ impl Relay {
             }
             if ready.stopped {
                 return Ok(());
+            }
+            if ready.uploaded
+                && let Some(paste) = self.uploads.as_mut().and_then(Uploads::finished)
+            {
+                self.write_result(&paste);
             }
             if ready.winched {
                 let _ = (&*winched).read(&mut buffer)?;
@@ -244,6 +257,9 @@ impl Relay {
         fds.insert(self.master.as_fd());
         fds.insert(stopped);
         fds.insert(winched);
+        if let Some(uploads) = &self.uploads {
+            fds.insert(uploads.wake());
+        }
         // The terminal is read only while ssh holds the slave raw; otherwise
         // its input is left for ssh's own prompts through `/dev/tty`.
         if self.raw {
@@ -255,6 +271,10 @@ impl Relay {
                 master: fds.contains(self.master.as_fd()),
                 stopped: fds.contains(stopped),
                 winched: fds.contains(winched),
+                uploaded: self
+                    .uploads
+                    .as_ref()
+                    .is_some_and(|uploads| fds.contains(uploads.wake())),
                 stdin: self.raw && fds.contains(stdin),
             }),
             Err(Errno::EINTR) => Ok(Ready::default()),
@@ -286,12 +306,16 @@ impl Relay {
         self.dispatch(inputs);
     }
 
-    /// Writes typed input to the session, each input as its verdict says.
+    /// Writes typed input to the session, less the triggers an upload took.
     fn dispatch(&mut self, inputs: Vec<Input>) {
         for input in inputs {
-            match verdict(input) {
-                Verdict::Forward(bytes) => self.forward(&bytes),
-                Verdict::Upload(_) => {}
+            let taken = match (&input, self.uploads.as_mut()) {
+                (Input::CtrlV(_), Some(uploads)) => uploads.ctrl_v(),
+                (Input::Paste(paste), Some(uploads)) => uploads.paste(paste_payload(paste)),
+                _ => false,
+            };
+            if !taken {
+                self.forward(input.bytes());
             }
         }
         self.flush_results();
@@ -300,7 +324,6 @@ impl Relay {
     /// Writes an upload's paste result where it cannot land inside a
     /// bracketed paste the user is still sending: at once outside one, else
     /// as soon as it closes.
-    #[cfg_attr(not(test), expect(dead_code, reason = "uploads write their results"))]
     fn write_result(&mut self, bytes: &[u8]) {
         self.results.extend_from_slice(bytes);
         self.flush_results();
@@ -354,13 +377,8 @@ struct Ready {
     master: bool,
     stopped: bool,
     winched: bool,
+    uploaded: bool,
     stdin: bool,
-}
-
-/// Every input forwards unchanged until the upload triggers act on Ctrl+V
-/// and dropped paths.
-fn verdict(input: Input) -> Verdict {
-    Verdict::Forward(input.bytes().to_vec())
 }
 
 fn slave_is_raw(master: &File) -> io::Result<bool> {
@@ -387,6 +405,7 @@ mod tests {
             scanner: InputScanner::default(),
             hold_until: None,
             results: Vec::new(),
+            uploads: None,
         };
         let mut inputs = Vec::new();
         relay.scanner.feed(b"\x1b[200~text", &mut inputs);

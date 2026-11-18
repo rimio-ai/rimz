@@ -31,6 +31,8 @@ use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env};
 
 #[path = "remote_keyboard.rs"]
 mod keyboard;
+#[path = "remote_paste.rs"]
+mod paste;
 #[path = "remote_ports.rs"]
 mod ports;
 #[path = "remote_upload.rs"]

@@ -229,19 +229,19 @@ A one-shot `--no-reconnect` attach runs no relay. It owns the alternate-scroll (
 
 With `[remote] paste` on (the default) and a terminal on stdin, every supervised attach runs SSH on a pty pair that `KeyboardPty` in `cli/remote/keyboard.rs` opens before the spawn. SSH's stdin is the slave; its stdout and stderr stay as above. The slave starts with the `TtyGuard` snapshot and the terminal's size, so SSH reads the shell's modes and size from it as it would from the terminal. The child is not moved to a new session: `/dev/tty` stays the real terminal, so a password or host-key prompt reads the keyboard itself. With `paste = false`, or stdin not a terminal, no pty exists and SSH inherits stdin. A pty or relay-thread start failure prints `rimz: keyboard relay unavailable, ssh reads the terminal: <error>` and the session runs on inherited stdin.
 
-The relay thread owns the terminal only while SSH holds the slave raw (its `ICANON` flag clear). It checks the slave every 10ms while cooked and every 100ms while raw. On the raw flip it makes the terminal raw (`cfmakeraw` of the snapshot), copies the terminal's size to the slave, and sends SSH `SIGWINCH`, so a resize that arrived while cooked applies then. While raw it reads the terminal and writes the master; a resize copies the size and signals SSH again. When SSH leaves raw mode the relay gives the terminal back in the snapshot's modes and stops reading it, so a prompt SSH then writes through `/dev/tty` reads the terminal unrelayed. Anything written to the slave is copied to stdout: SSH writes nothing there, but a local client such as `tmux attach` in the test shim paints through its stdin terminal.
+The relay thread owns the terminal only while SSH holds the slave raw (its `ICANON` flag clear). It checks the slave every 10ms while cooked and every 100ms while raw. On the raw flip it makes the terminal raw (`cfmakeraw` of the snapshot), copies the terminal's size to the slave, and sends SSH `SIGWINCH`, so a resize that arrived while cooked applies then. While raw it reads the terminal and writes the master, sampling the slave again when the terminal turns readable, so a key typed just after SSH left raw waits for SSH's prompt; a resize copies the size and signals SSH again. When SSH leaves raw mode the relay gives the terminal back in the snapshot's modes and stops reading it, so a prompt SSH then writes through `/dev/tty` reads the terminal unrelayed. Anything written to the slave is copied to stdout: SSH writes nothing there, but a local client such as `tmux attach` in the test shim paints through its stdin terminal.
 
 The master is checked before the terminal on every wake. A master read that returns 0 or an error, or a failed master write, is the hangup: the relay stops in that pass, so input typed after the session ends stays queued for the shell. `run_ssh_session` drops its copy of the slave right after the spawn, since an open slave would hide the hangup. It stops the relay (`KeyboardRelay::finish`) before the output drain, so nothing reads the terminal while `TtyGuard::restore`, the reply fence, or the connection panel run. Any other relay error stops the relay, and the session loop (`check_keyboard`) reads it while the session runs: when SSH is still running 100 ms later, the attach fails as a stopped output relay does (SSH is killed, the terminal restored, no reconnect), with an error naming the keyboard relay, its cause, and `[remote] paste = false` as the way to connect without it, since a session left running would draw and take no key. When SSH has already exited, the error is one `rimz: keyboard relay stopped: <error>` line and the session's outcome stands.
 
-Input passes through `InputScanner` (`remote/paste.rs`), which holds an escape sequence until it completes (50ms for a lone `Esc`) and a bracketed paste while it can still be a path list (starts with `/`, at most 64 KiB, closes without a 200ms pause). Each scanned input gets a verdict:
+Input passes through `InputScanner` (`remote/paste.rs`), which holds an escape sequence until it completes (50ms for a lone `Esc`) and a bracketed paste while it can still be a path list (starts with `/`, at most 64 KiB, closes without a 200ms pause). `Relay::dispatch` writes each scanned input unchanged and in order, except the two triggers an upload takes on an attach with a control socket ([the upload client](#the-upload-client)):
 
-| Input | Verdict |
+| Input | Written to the session |
 | --- | --- |
-| `Forward` (every byte outside a trigger) | `Verdict::Forward`, written unchanged and in order |
-| `CtrlV` (`0x16`, `ESC[118;5u`, `ESC[27;5;118~`, outside a paste) | `Verdict::Forward` until the clipboard upload acts on it; `Verdict::Upload` holds it back while its upload runs |
-| `Paste` (a whole held bracketed paste) | `Verdict::Forward` until the drop upload acts on it; `Verdict::Upload` holds it back while its upload runs |
+| `Forward` (every byte outside a trigger) | always |
+| `CtrlV` (`0x16`, `ESC[118;5u`, `ESC[27;5;118~`, outside a paste; `ESC 0x16`, a legacy Alt+Ctrl+V, is `Forward`) | unless `Uploads::ctrl_v` takes it |
+| `Paste` (a whole held bracketed paste) | unless `Uploads::paste` takes it |
 
-`Relay::write_result` writes an upload's paste result at once when no bracketed paste is open in the input, and otherwise as soon as the open one closes, so a result never lands inside the user's paste.
+`Relay::write_result` writes an upload's paste result at once when no bracketed paste is open in the input, and otherwise right after the byte that closes the open one, ahead of anything the same read typed after it, so a result never lands inside the user's paste or behind the Enter that follows it.
 
 ### Classifying the end
 
@@ -444,6 +444,25 @@ The remote sidebar owns degraded-but-alive links. They surface through the foote
 
 The receiver judges the limit from the header alone: a transfer whose sizes sum above `limit` is refused before a byte is read, with a reason that names both sizes and `paste_max`. Each transfer lands in its own temp unit, `<room state>/tmp/_upload-<id>/` (`StatePaths::ensure_upload_unit`), where `<id>` is the receiver's start time in hex and its pid. A file keeps its base name with control characters replaced by `_`; an empty, `.` or `..` name becomes `file`, and a repeated name is numbered before its extension (`same-2.png`). A stream that ends before its last byte, or sends nothing for 30 s, removes the unit and its lane row and exits non-zero without a result line. The paths are sent only once every file is complete and still on disk.
 
+### The upload client
+
+`Uploads` in `cli/remote/upload_client.rs` holds one attach's triggers. `supervise_remote` hands it an `UploadRoute` (target, control path, and `[remote] paste_max`) through `KeyboardPty::open`; a plain attach, whose `ProbeHandle` has no control path, gets none, and its Ctrl+V and pastes are written as typed. Every decision runs on the relay thread, so later keystrokes keep their order behind it:
+
+| Input | State | Outcome |
+| --- | --- | --- |
+| Ctrl+V | an upload running, less than 1 s (`REPEAT_WINDOW`) since its ready line | swallowed as a key repeat |
+| Ctrl+V | an upload running, later | the upload's ssh child is killed and nothing is pasted |
+| Ctrl+V | an empty clipboard read less than 0.5 s ago (`NOTHING_REUSE`) | written as typed, without a new read |
+| Ctrl+V | otherwise | [the clipboard](#the-clipboard-reader) is read; files or an image upload, anything else is written as typed |
+| `Paste` | no upload running, and `parse_drop` reads its payload as paths that each open as a regular file | those files upload |
+| `Paste` | otherwise | written as typed |
+
+An upload opens every file before it starts, without blocking and without taking a controlling tty (`O_NONBLOCK | O_NOCTTY`), and checks the opened handle is a regular file, so a FIFO or a device path cannot stall the relay; a file it cannot open, or one that is not a regular file, writes the trigger as typed. It then runs `remote::upload::upload_stream_spec`, `ssh -S <control path> -o BatchMode=yes -T -- <dest> <receiver snippet>` (`-T` overrides a `RequestTTY` in the user's ssh config, since a remote tty would rewrite the binary stream), with stderr on `/dev/null` (the fallback attach inherits the terminal's) and waits up to 5 s (`READY_WAIT`) for the receiver's ready line. An exit, a timeout, or anything other than a ready or error line makes the receiver unusable: the child is killed and the trigger is written as typed, which is also what an older receiver (exit 2) or a host without rimz (exit 127) gives. An error line takes the trigger and pastes nothing, and the child is left to exit after the receiver's failure hold. Once ready, a `remote-upload` thread streams each file's bytes, closes stdin, reads the result, and reports it through a channel and a wake pipe that `Relay::wait` selects on. A file that shrank while it streamed closes the stream short, which the receiver reads as a cancel. The relay writes `drop_paste` of the returned paths through `Relay::write_result`. Dropping `Uploads` at the session's end kills a running upload, so its paste never lands; finished and killed children are reaped on their own threads.
+
+### The clipboard reader
+
+`cli/remote/clipboard.rs` runs one reader per Ctrl+V, bounded at 2 s (`CLIPBOARD_WAIT`, then the reader is killed), with the path of a fresh PNG in a private `rimz-paste-<pid>-<time>` directory under the temp dir as its argument. Its stdout is `files` and one absolute path per line, `image` and the PNG's path, or `none`; anything else, a failure, or a timeout reads as nothing to upload. On macOS the reader is `osascript -l JavaScript` running `MAC_CLIPBOARD_SCRIPT`, which checks file URLs before image data because Finder publishes a copied file's icon beside its URL, and converts a TIFF-only image to PNG. `RIMZ_REMOTE_CLIPBOARD_BIN` replaces it, and elsewhere it is the only reader. The PNG is opened and unlinked before its upload starts, and goes up as `clipboard-<local time>.png`.
+
 ### The upload lane
 
 The receiver alone writes `<runtime>/lanes/upload.json` (`remote::upload::lane_path`), atomically, followed by a sidebar store-delta wake. The record (`UploadLane`, version `rimz.upload-lane.v1`) carries the transfer id, `running` or `failed`, the bytes received, the total, a failure reason, and the receiver's clock in milliseconds. A running record is written when the transfer is accepted and then at most every 250 ms while bytes arrive. A finished or cut transfer removes the record, with a wake, only while it still carries its own id: two transfers into one room share the row, last writer wins. A failure record stays for `UPLOAD_FAILED_HOLD` (8 s), then the receiver removes it the same way. The sidebar's fold (`sidebar::enrich::fold_upload`, through `UploadLane::live_at`) drops a running record older than `UPLOAD_RUNNING_STALE` (10 s), the mark of a receiver that died, a failed one older than 8 s, and an unreadable or other-version file, and carries the rest as `SidebarSnapshot::upload`, drawn as the [paste upload row](../interface/sidebar.md#paste-upload-row) above the footer.
@@ -509,7 +528,8 @@ The table lists the module's test overrides. Every other duration is fixed, so a
 
 | Variable | Controls |
 | --- | --- |
-| `RIMZ_SSH_BIN`, `RIMZ_INFOCMP_BIN` | Binary overrides. `crates/rimz/tests/fixtures/ssh-trace` is the standard shim. |
+| `RIMZ_SSH_BIN`, `RIMZ_INFOCMP_BIN` | Binary overrides. `crates/rimz/tests/fixtures/ssh-trace` is the standard shim; on an upload channel it runs the real receiver named by `RIMZ_TEST_SSH_UPLOAD_RIMZ` against `RIMZ_TEST_SSH_UPLOAD_DIR`. |
+| `RIMZ_REMOTE_CLIPBOARD_BIN` | The [clipboard reader](#the-clipboard-reader) a Ctrl+V runs, in place of macOS's `osascript`; elsewhere the only reader. Not testkit-only: it is the off-Mac way to give Ctrl+V a clipboard. |
 | `RIMZ_REMOTE_GATETIME_MS` | Establishment threshold. |
 | `RIMZ_REMOTE_MASTER_CONNECT_MS`, `RIMZ_REMOTE_MASTER_TIMEOUT_MS` | Background master connect and total deadlines. |
 | `RIMZ_REMOTE_REACHABLE_RETRY_MS`, `RIMZ_REMOTE_FLAT_WINDOW_MS`, `RIMZ_REMOTE_BACKOFF_CAP_MS` | Retry pacing. |
