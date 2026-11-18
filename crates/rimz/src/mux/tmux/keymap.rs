@@ -399,7 +399,7 @@ mod tests {
         );
         let rimz = commands_with(
             "[room]\nstyle='rimz'",
-            &[("prefix", "C-b"), ("prefix2", "M-x")],
+            &[("prefix", "C-b"), ("prefix2", "M-y")],
         );
         assert_eq!(prefix_commands(&rimz), [] as [Vec<String>; 0]);
         let second_prefix = commands_with(ctrl_b, &[("prefix", "C-a"), ("prefix2", "C-b")]);

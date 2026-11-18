@@ -163,6 +163,21 @@ pub(super) fn reduce(
                 let pane = &row.pane.as_ref()?.pane_id;
                 (Some(pane) == wanted).then_some((row, pane))
             }) else {
+                // A launched child's pane has no card of its own: it nests under its parent.
+                if let Some((child, pane)) = named.as_ref().and_then(|named| {
+                    let mut children = snapshot.rows().flat_map(|row| row.sub_agents());
+                    Some((
+                        children.find(|child| child.pane.as_ref() == Some(named))?,
+                        named,
+                    ))
+                }) {
+                    let target = CardTarget::Agent {
+                        kind: child.kind.clone(),
+                        agent_id: AgentSessionId::from(child.id.clone()),
+                        pane: pane.clone(),
+                    };
+                    return (outcome, CardReply::CloseTarget { target });
+                }
                 let reason = match named {
                     Some(pane) => format!("no card owns pane {pane}"),
                     None => "no highlighted card".to_owned(),

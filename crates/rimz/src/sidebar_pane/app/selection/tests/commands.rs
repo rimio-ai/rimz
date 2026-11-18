@@ -353,3 +353,62 @@ fn card_close_with_a_pane_names_that_rows_target_and_refuses_an_unknown_pane() {
         }
     );
 }
+
+/// A launched child's pane has no card of its own: it nests under its parent, and a
+/// close naming that pane targets the child agent, never the parent.
+#[test]
+fn card_close_with_a_launched_childs_pane_names_the_child() {
+    let mut snapshot = filterable_snapshot(&workspace());
+    let now = snapshot.now;
+    let child_pane = PaneId::from_parts(MuxName::Zellij, "terminal_5");
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    );
+    rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents
+        .push(crate::store::snapshot::SidebarSubAgent {
+            id: "child-1".into(),
+            kind: crate::ids::AgentKind::new_unchecked("codex"),
+            pane: Some(child_pane.clone()),
+            prior_turn: false,
+            name: "review".into(),
+            petname: Some("otter".into()),
+            provider_native: false,
+            status: crate::agents::AgentStatus::Running,
+            stalled: false,
+            compacting: false,
+            phase: crate::agents::TurnPhase::Idle,
+            turn_error_label: None,
+            task: None,
+            first_prompt: None,
+            profile: None,
+            model: None,
+            fast: false,
+            effort: None,
+            description: None,
+            tokens: None,
+            context_window: None,
+            compaction_count: 0,
+            cost_usd: None,
+            elapsed_secs: None,
+            started_at: None,
+            finished_at: None,
+            last_activity: now,
+            registered_at: Some(now),
+        });
+    let request = CardRequest::CloseTarget {
+        pane: Some(child_pane.clone()),
+    };
+    assert_eq!(
+        reduce(&request, &mut ViewState::default(), &snapshot).1,
+        CardReply::CloseTarget {
+            target: CardTarget::Agent {
+                kind: crate::ids::AgentKind::new_unchecked("codex"),
+                agent_id: crate::ids::AgentSessionId::from("child-1".to_owned()),
+                pane: child_pane,
+            }
+        }
+    );
+}

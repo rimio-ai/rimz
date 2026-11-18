@@ -344,6 +344,7 @@ const RIMZ_COMMANDS: &[(&str, &[&str])] = &[
         &["sidebar", "filter", "needs-you", "--toggle"],
     ),
     ("card.close", &["sidebar", "close"]),
+    ("tab.close", &["sidebar", "close", "--tab"]),
     ("card.reopen", &["sidebar", "reopen"]),
     ("sidebar.focus", &["sidebar", "focus", "--toggle"]),
     ("pane.zoom", &["pane", "zoom"]),

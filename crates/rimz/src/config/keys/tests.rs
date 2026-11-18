@@ -94,7 +94,9 @@ fn embedded_keymap_matches_every_spec_binding() {
             concat!(
                 "Alt+j card.next\nAlt+k card.prev\nAlt+J worktree.next\nAlt+K worktree.prev\n",
                 "Alt+h pane.focus.left\nAlt+l pane.focus.right\nAlt+? filter.needs_you\n",
-                "Alt+n palette.new_agent\nAlt+t tab.new\nAlt+0 tab.dashboard\n",
+                "Alt+n palette.new_agent\nAlt+P palette.commands\nAlt+/ palette.cards\n",
+                "Alt+z pane.zoom\nAlt+x card.close\nAlt+X tab.close\nAlt+t tab.new\n",
+                "Alt+T card.reopen\nAlt+0 tab.dashboard\n",
                 "Alt+1 tab.terminal.1\nAlt+2 tab.terminal.2\nAlt+3 tab.terminal.3\n",
                 "Alt+4 tab.terminal.4\nAlt+5 tab.terminal.5\nAlt+6 tab.terminal.6\n",
                 "Alt+7 tab.terminal.7\nAlt+8 tab.terminal.8\nAlt+9 tab.terminal.9\n",
@@ -263,7 +265,11 @@ fn invalid_bindings_drop_only_themselves_under_strict_and_lenient_loads() {
             assert!(notice.contains("keys.bind.normal."), "{notice}");
             assert!(notice.contains("binding ignored"), "{notice}");
             let map = machine.room_keymap();
-            assert_eq!(action(&map, KeyMode::Normal, "Alt+x"), None);
+            assert_eq!(
+                action(&map, KeyMode::Normal, "Alt+x").as_deref(),
+                Some("card.close"),
+                "{binding}: a dropped binding leaves the bundled one"
+            );
             assert_eq!(
                 action(&map, KeyMode::Normal, "Alt+y").as_deref(),
                 Some("card.reopen")
@@ -384,6 +390,7 @@ fn rimz_actions_carry_commands_and_typed_palette_modes() {
             vec!["sidebar", "filter", "needs-you", "--toggle"],
         ),
         ("card.close", vec!["sidebar", "close"]),
+        ("tab.close", vec!["sidebar", "close", "--tab"]),
         ("card.reopen", vec!["sidebar", "reopen"]),
         ("sidebar.focus", vec!["sidebar", "focus", "--toggle"]),
         ("pane.zoom", vec!["pane", "zoom"]),

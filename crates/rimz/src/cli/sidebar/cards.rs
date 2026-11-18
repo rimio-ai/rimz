@@ -1,8 +1,10 @@
+use std::collections::HashSet;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName};
+use rimz::mux::{ClientFocusOptions, ClientView, PaneListOptions, PaneReadConsistency};
 use rimz::sidebar::produce::hosting::read_hosting;
 use rimz::sidebar_pane::{CardReply, CardRequest, CardTarget};
 use serde::{Deserialize, Serialize};
@@ -56,23 +58,61 @@ pub(super) fn request(
         CardReply::Refused { reason } => Ok(writeln!(render::err(), "{reason}")?),
         CardReply::CloseTarget { target } => {
             let (ctx, globals) = open_room(globals, &session, mux)?;
-            close(&ctx, &globals, &session, target)
+            close(&ctx, &globals, &session, vec![target])
         }
     }
 }
 
-fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, target: CardTarget) -> Result<()> {
-    let (kind, agent_id, pane) = match target {
-        CardTarget::Agent {
-            kind,
-            agent_id,
-            pane,
-        } => (kind, agent_id, pane),
-        CardTarget::Pane(pane) => {
-            rimz::mux::backend_for(pane.mux()).close_pane(session, &pane)?;
-            return Ok(());
+/// Close the focused tab's cards: every tiled pane but the sidebar, through one stop of
+/// all their agents. Focus on the sidebar or in the dashboard closes nothing.
+pub(super) fn close_tab(globals: &GlobalFlags, session: Option<String>) -> Result<()> {
+    let (session, mux) = resolve_session(globals, session)?;
+    let backend = rimz::mux::backend_for(mux);
+    let listing = backend
+        .list_panes(PaneListOptions {
+            session_name: Some(session.clone()),
+            consistency: PaneReadConsistency::RequireAuthoritative,
+            ..Default::default()
+        })
+        .context("sidebar close --tab: listing panes")?;
+    let view = backend
+        .client_view(ClientFocusOptions {
+            session_name: Some(session.clone()),
+            ..Default::default()
+        })
+        .context("sidebar close --tab: sampling attached client focus")?;
+    let live = listing
+        .panes
+        .iter()
+        .map(|pane| pane.pane_id.clone())
+        .collect::<HashSet<_>>();
+    let focused = ClientView::unique_live_focus(&view.clients, &view.viewed_panes, &live)
+        .and_then(|focused| listing.panes.iter().find(|pane| pane.pane_id == focused))
+        .context("sidebar close --tab requires one attached client focused on one live pane")?;
+    if focused.is_rimz_sidebar() || focused.view_name.as_deref() == Some(rimz::pane::VIEW_NAME) {
+        return Ok(());
+    }
+    let mut targets = Vec::new();
+    for pane in listing.panes.iter().filter(|pane| {
+        pane.view_id == focused.view_id && !pane.is_floating && !pane.is_rimz_sidebar()
+    }) {
+        let request = CardRequest::CloseTarget {
+            pane: Some(pane.pane_id.clone()),
+        };
+        match rimz::sidebar_pane::request_card(mux, &session, request)? {
+            CardReply::CloseTarget { target } => targets.push(target),
+            CardReply::Refused { reason } => return Ok(writeln!(render::err(), "{reason}")?),
+            CardReply::Done => {}
         }
-    };
+    }
+    let (ctx, globals) = open_room(globals, &session, mux)?;
+    close(&ctx, &globals, &session, targets)
+}
+
+/// Close `targets` through one hosting read: raw panes and agents no pane hosts close
+/// their pane, and every hosted agent stops in one batch, children before parents. Each
+/// stopped root that offers a resume enters the closed-card list, in `targets` order.
+fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, targets: Vec<CardTarget>) -> Result<()> {
     let read = match read_hosting(&ctx.workspace, &ctx.store, globals.mux) {
         Ok(mut read) => {
             render::room::print_notices(read.take_notices())?;
@@ -83,28 +123,57 @@ fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, target: CardTarget) ->
             bail!("sidebar close: {err}; nothing was closed");
         }
     };
-    let Some(agent) = read.agent_hosting_of_session(&kind, &agent_id).holder else {
-        rimz::mux::backend_for(pane.mux()).close_pane(session, &pane)?;
-        return Ok(());
-    };
-    let snapshot = ctx.cached_snapshot()?;
-    let stop = agents_cmd::stop_resolved(ctx, globals, &snapshot, &[agent])?.remove(0);
-    stop.into_result(agent.agent_id.as_str())?;
-    if !agents_cmd::offers_resume(&ctx.workspace, agent)
-        || !rimz::harness::resume::resume_session_present(agent)
-    {
+    let mut agents = Vec::new();
+    for target in targets {
+        let (kind, agent_id, pane) = match target {
+            CardTarget::Agent {
+                kind,
+                agent_id,
+                pane,
+            } => (kind, agent_id, pane),
+            CardTarget::Pane(pane) => {
+                rimz::mux::backend_for(pane.mux()).close_pane(session, &pane)?;
+                continue;
+            }
+        };
+        match read.agent_hosting_of_session(&kind, &agent_id).holder {
+            Some(agent) if agents.contains(&agent) => {}
+            Some(agent) => agents.push(agent),
+            None => rimz::mux::backend_for(pane.mux()).close_pane(session, &pane)?,
+        }
+    }
+    if agents.is_empty() {
         return Ok(());
     }
+    let snapshot = ctx.cached_snapshot()?;
+    let stops = agents_cmd::stop_resolved(ctx, globals, &snapshot, &agents)?;
     let mut entries = read_closed(ctx);
-    entries.push(ClosedCard {
-        kind: agent.kind.clone(),
-        agent_id: agent.agent_id.clone(),
-        team: agent.team.clone(),
-        role: agent.role.clone(),
-        worktree: agents_cmd::resume_worktree_name(&ctx.workspace, agent).map(str::to_owned),
-        closed_at: rimz::utils::time::unix_now_ms(),
-    });
-    write_closed(ctx, &entries)
+    let recorded = entries.len();
+    let mut failures = Vec::new();
+    for (agent, stop) in agents.into_iter().zip(stops) {
+        if let Err(err) = stop.into_result(agent.agent_id.as_str()) {
+            failures.push(format!("{err:#}"));
+            continue;
+        }
+        if !agents_cmd::offers_resume(&ctx.workspace, agent)
+            || !rimz::harness::resume::resume_session_present(agent)
+        {
+            continue;
+        }
+        entries.push(ClosedCard {
+            kind: agent.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            team: agent.team.clone(),
+            role: agent.role.clone(),
+            worktree: agents_cmd::resume_worktree_name(&ctx.workspace, agent).map(str::to_owned),
+            closed_at: rimz::utils::time::unix_now_ms(),
+        });
+    }
+    if entries.len() > recorded {
+        write_closed(ctx, &entries)?;
+    }
+    anyhow::ensure!(failures.is_empty(), "{}", failures.join("; "));
+    Ok(())
 }
 
 fn read_closed(ctx: &Ctx) -> Vec<ClosedCard> {

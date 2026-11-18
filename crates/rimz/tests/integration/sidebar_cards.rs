@@ -39,7 +39,12 @@ fn command(env: &Env, args: &[&str]) -> Command {
     command
 }
 
-fn exchange(env: &Env, expected: Value, reply: Value, mut command: Command) -> Output {
+fn exchange(env: &Env, expected: Value, reply: Value, command: Command) -> Output {
+    exchanges(env, &[(expected, reply)], command)
+}
+
+/// Answer each request the command sends the host, in order, with its paired reply.
+fn exchanges(env: &Env, pairs: &[(Value, Value)], mut command: Command) -> Output {
     let digest = Sha256::digest(format!("zellij\0{}", session(env)));
     let path = env
         .runtime_paths()
@@ -52,32 +57,33 @@ fn exchange(env: &Env, expected: Value, reply: Value, mut command: Command) -> O
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut peer = loop {
-        match listener.accept() {
-            Ok((peer, _)) => break peer,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if child.try_wait().unwrap().is_some() {
-                    std::fs::remove_file(&path).unwrap();
-                    return child.wait_with_output().unwrap();
+    for (expected, reply) in pairs {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut peer = loop {
+            match listener.accept() {
+                Ok((peer, _)) => break peer,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if child.try_wait().unwrap().is_some() {
+                        std::fs::remove_file(&path).unwrap();
+                        return child.wait_with_output().unwrap();
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "card request never reached the host"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
                 }
-                assert!(
-                    Instant::now() < deadline,
-                    "card request never reached the host"
-                );
-                std::thread::sleep(Duration::from_millis(5));
+                Err(error) => panic!("accept card request: {error}"),
             }
-            Err(error) => panic!("accept card request: {error}"),
-        }
-    };
-    peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    let mut line = String::new();
-    BufReader::new(peer.try_clone().unwrap())
-        .read_line(&mut line)
-        .unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), expected);
-    writeln!(peer, "{reply}").unwrap();
-    drop(peer);
+        };
+        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut line = String::new();
+        BufReader::new(peer.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), *expected);
+        writeln!(peer, "{reply}").unwrap();
+    }
     let output = child.wait_with_output().unwrap();
     std::fs::remove_file(path).unwrap();
     output
@@ -498,6 +504,203 @@ fn close_bounds_the_cache_and_saves_team_worktree_replay() {
     assert_eq!(entries[31]["team"], "forge");
     assert_eq!(entries[31]["role"], "coder");
     assert_eq!(entries[31]["worktree"], "feature");
+}
+
+/// A tab of two agents, a shell, and a floating pane beside its sidebar, next to another
+/// agent's tab and the dashboard, with the one client focused on `focus`.
+fn tab_command(env: &Env, focus: Option<&str>) -> Command {
+    let pane = |id: u64, tab: u64, extra: Value| {
+        let mut row = json!({"id": id, "is_plugin": false, "tab_id": tab});
+        row.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        row
+    };
+    let rows = [
+        pane(1, 1, json!({"title": "rimz-sidebar"})),
+        pane(7, 1, json!({"pane_command": "claude"})),
+        pane(8, 1, json!({"pane_command": "claude"})),
+        pane(10, 1, json!({"pane_command": "sh"})),
+        pane(11, 1, json!({"pane_command": "sh", "is_floating": true})),
+        pane(9, 2, json!({"pane_command": "claude"})),
+        pane(5, 3, json!({"pane_command": "sh", "tab_name": "rimzd"})),
+    ];
+    std::fs::write(
+        env.home_root.join("panes.json"),
+        serde_json::to_vec(&rows).unwrap(),
+    )
+    .unwrap();
+    let mut command = command(env, &["close", "--tab"]);
+    command.env(
+        "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+        format!("{} [Created 1s ago]\n", session(env)),
+    );
+    let clients = focus.map_or(String::new(), |pane| format!("1 {pane} claude\n"));
+    command.env(
+        "RIMZ_TEST_ZELLIJ_LIST_CLIENTS",
+        format!("CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n{clients}"),
+    );
+    command
+}
+
+fn close_pane_request(id: u64) -> Value {
+    json!({"command":"close_target", "pane": format!("zellij:terminal_{id}")})
+}
+
+fn agent_reply(id: &str, pane: u64) -> Value {
+    json!({"reply":"close_target", "agent":{
+        "kind":"claude", "agent_id":id, "pane":format!("zellij:terminal_{pane}")
+    }})
+}
+
+#[test]
+fn close_tab_closes_every_tiled_pane_but_the_sidebar_and_records_each_root() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "first", |_| {});
+    seed(&env, "second", |observation| {
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_8"));
+    });
+    seed(&env, "other", |observation| {
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
+    });
+    let output = exchanges(
+        &env,
+        &[
+            (close_pane_request(7), agent_reply("first", 7)),
+            (close_pane_request(8), agent_reply("second", 8)),
+            (
+                close_pane_request(10),
+                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
+            ),
+        ],
+        tab_command(&env, Some("terminal_8")),
+    );
+    assert_exit(&output, 0);
+    let mut closed: Vec<_> = closes(&env)
+        .iter()
+        .map(|line| line.rsplit('\t').next().unwrap().to_owned())
+        .collect();
+    closed.sort();
+    assert_eq!(closed, ["terminal_10", "terminal_7", "terminal_8"]);
+    let entries = read_closed(&env);
+    let ids: Vec<_> = entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["agent_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["first", "second"], "{entries}");
+}
+
+/// A card lagging a swap and the card of the session that replaced it name one holder:
+/// the tab close stops it once and records it once.
+#[test]
+fn close_tab_records_a_holder_two_cards_name_once() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    launched(&env, "sess-old", 0, "terminal_7");
+    launched(&env, "sess-new", 1, "terminal_8");
+    let output = exchanges(
+        &env,
+        &[
+            (close_pane_request(7), agent_reply("sess-old", 7)),
+            (close_pane_request(8), agent_reply("sess-new", 8)),
+            (
+                close_pane_request(10),
+                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
+            ),
+        ],
+        tab_command(&env, Some("terminal_7")),
+    );
+    assert_exit(&output, 0);
+    let entries = read_closed(&env);
+    assert_eq!(entries.as_array().unwrap().len(), 1, "{entries}");
+    assert_eq!(entries[0]["agent_id"], "sess-new");
+}
+
+/// A parent and the launched child it split beside itself share the tab: both stop, and
+/// only the parent enters the closed-card list.
+#[test]
+fn close_tab_stops_a_parent_and_its_launched_child_and_records_the_parent() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "first", |_| {});
+    seed(&env, "kid", |observation| {
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_8"));
+        observation.launch.parent_agent_id = Some("first".into());
+        observation.launch.launch_depth = Some(1);
+    });
+    let output = exchanges(
+        &env,
+        &[
+            (close_pane_request(7), agent_reply("first", 7)),
+            (close_pane_request(8), agent_reply("kid", 8)),
+            (
+                close_pane_request(10),
+                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
+            ),
+        ],
+        tab_command(&env, Some("terminal_8")),
+    );
+    assert_exit(&output, 0);
+    let mut closed: Vec<_> = closes(&env)
+        .iter()
+        .map(|line| line.rsplit('\t').next().unwrap().to_owned())
+        .collect();
+    closed.sort();
+    assert_eq!(closed, ["terminal_10", "terminal_7", "terminal_8"]);
+    let entries = read_closed(&env);
+    assert_eq!(entries.as_array().unwrap().len(), 1, "{entries}");
+    assert_eq!(entries[0]["agent_id"], "first");
+}
+
+#[test]
+fn close_tab_on_the_sidebar_or_in_the_dashboard_closes_nothing() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    for focus in ["terminal_1", "terminal_5"] {
+        let output = exchanges(&env, &[], tab_command(&env, Some(focus)));
+        assert_exit(&output, 0);
+        assert!(output.stderr.is_empty(), "{focus}: {output:?}");
+    }
+    let output = tab_command(&env, None).output().unwrap();
+    assert_exit(&output, 1);
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("sidebar close --tab requires one attached client focused on one live pane"),
+        "{output:?}"
+    );
+    let output = command(&env, &["close", "--tab", "--pane", "zellij:terminal_7"])
+        .output()
+        .unwrap();
+    assert_exit(&output, 2);
+    assert_eq!(closes(&env), Vec::<String>::new());
+}
+
+#[test]
+fn close_tab_closes_nothing_when_the_host_refuses_one_pane() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "first", |_| {});
+    let output = exchanges(
+        &env,
+        &[
+            (close_pane_request(7), agent_reply("first", 7)),
+            (
+                close_pane_request(8),
+                json!({"reply":"refused", "reason":"sidebar view is not ready; try again"}),
+            ),
+        ],
+        tab_command(&env, Some("terminal_7")),
+    );
+    assert_exit(&output, 0);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim(),
+        "sidebar view is not ready; try again"
+    );
+    assert_eq!(closes(&env), Vec::<String>::new());
+    assert!(!closed_path(&env).exists());
 }
 
 #[test]
