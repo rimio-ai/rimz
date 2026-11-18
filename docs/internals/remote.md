@@ -31,6 +31,7 @@ The second split is library versus process. [`crates/rimz/src/remote/`](../../cr
 | [`cli/remote/keyboard.rs`](../../crates/rimz/src/cli/remote/keyboard.rs) | Per-attach keyboard relay: the pty pair in front of SSH, raw-follows-slave, resize, and input dispatch. |
 | [`cli/remote/web.rs`](../../crates/rimz/src/cli/remote/web.rs) | Web prep, the local auth relay, and tunnel supervision. |
 | [`cli/remote/link_stats.rs`](../../crates/rimz/src/cli/remote/link_stats.rs) | The remote-side `rimz remote link-stats ingest` service and listener sampling. |
+| [`cli/remote/upload_receiver.rs`](../../crates/rimz/src/cli/remote/upload_receiver.rs) | The remote-side `rimz remote upload` receiver behind a paste upload, and the upload lane it publishes. |
 | [`cli/remote/ports.rs`](../../crates/rimz/src/cli/remote/ports.rs) | The lifetime-locked local forward record and the machine/connection views of `rimz remote ports`. |
 | [`cli/remote/tty.rs`](../../crates/rimz/src/cli/remote/tty.rs) | `TtyGuard`: local termios snapshot, restore, reply fence, and emulator reset. |
 | [`cli/remote/setup.rs`](../../crates/rimz/src/cli/remote/setup.rs), [`cli/remote/list.rs`](../../crates/rimz/src/cli/remote/list.rs) | Install and alias listing handlers. |
@@ -429,6 +430,23 @@ Alerts split across two delivery paths, by who can still reach the user. The del
 The local supervisor owns outage alerts, because a dead link cannot rely on the remote-rendered sidebar. Confirmed link-lost and link-restored edges emit terminal-local OSC and BEL plus notification handlers. A probe blackout emits the terminal-local signals only, because it is a local stall and not a confirmed drop.
 
 The remote sidebar owns degraded-but-alive links. They surface through the footer badge alone and raise no bell or handler. `LinkNotificationState` in `sidebar/notify.rs` still bounds a health episode for the record: ten seconds of fresh degraded or bad stats opens one, thirty seconds of fresh good stats closes it, and stale stats pause both clocks. An expired or missing sidecar closes an open episode at once. Each edge writes a `link_alert` diagnostic carrying the tier, RTT, miss percentage, episode start, and recovery duration.
+
+## Paste uploads
+
+### The receiver
+
+`rimz remote upload (--session <name> | --dir <path>)` is hidden, resolves the room as `link-stats ingest` does (`room_store` in `cli/remote/link_stats.rs`), and refuses when the room has no store. Its wire is four steps, each line JSON, and both sides ignore unknown fields:
+
+1. The laptop sends `{"v":"rimz.upload.v1","limit":<bytes>,"files":[{"name":"<base name>","size":<bytes>}, ...]}`.
+2. The receiver answers `{"ok":true}` when ready, or `{"error":"<reason>"}`. A header of another version exits 2 without a line, as an older receiver's unknown subcommand does.
+3. The laptop sends each file's bytes in header order, exactly `size` each, then closes stdin.
+4. The receiver answers `{"ok":true,"paths":["<absolute path>", ...]}`, or `{"error":"<reason>"}`.
+
+The receiver judges the limit from the header alone: a transfer whose sizes sum above `limit` is refused before a byte is read, with a reason that names both sizes and `paste_max`. Each transfer lands in its own temp unit, `<room state>/tmp/_upload-<id>/` (`StatePaths::ensure_upload_unit`), where `<id>` is the receiver's start time in hex and its pid. A file keeps its base name with control characters replaced by `_`; an empty, `.` or `..` name becomes `file`, and a repeated name is numbered before its extension (`same-2.png`). A stream that ends before its last byte, or sends nothing for 30 s, removes the unit and its lane row and exits non-zero without a result line. The paths are sent only once every file is complete and still on disk.
+
+### The upload lane
+
+The receiver alone writes `<runtime>/lanes/upload.json` (`remote::upload::lane_path`), atomically, followed by a sidebar store-delta wake. The record (`UploadLane`, version `rimz.upload-lane.v1`) carries the transfer id, `running` or `failed`, the bytes received, the total, a failure reason, and the receiver's clock in milliseconds. A running record is written when the transfer is accepted and then at most every 250 ms while bytes arrive. A finished or cut transfer removes the record, with a wake, only while it still carries its own id: two transfers into one room share the row, last writer wins. A failure record stays for `UPLOAD_FAILED_HOLD` (8 s), then the receiver removes it the same way. A reader drops a running record older than `UPLOAD_RUNNING_STALE` (10 s), the mark of a receiver that died, and a failed one older than 8 s.
 
 ## Port auto-forwarding
 

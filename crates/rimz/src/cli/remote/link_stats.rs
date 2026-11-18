@@ -19,7 +19,7 @@ const PROC_ROOT_ENV: &str = "RIMZ_PROC_ROOT";
 
 #[derive(Debug, Args)]
 #[group(required = true, multiple = false)]
-pub(super) struct LinkStatsIngestArgs {
+pub(super) struct RoomArgs {
     /// Existing room session name.
     #[arg(long)]
     session: Option<String>,
@@ -28,13 +28,14 @@ pub(super) struct LinkStatsIngestArgs {
     dir: Option<PathBuf>,
 }
 
-pub(super) fn ingest(args: LinkStatsIngestArgs) -> Result<()> {
-    let (runtime, workspace_id) = link_stats_runtime(args)?;
+pub(super) fn ingest(args: RoomArgs) -> Result<()> {
+    let (store, workspace_id) = room_store(args)?;
+    let runtime = store.runtime_paths();
     let client = link_client_id();
     runtime
         .ensure_dirs()
         .context("preparing runtime directories for link stats")?;
-    let path = rimz::remote::link::stats_path(&runtime);
+    let path = rimz::remote::link::stats_path(runtime);
     let result = ingest_probes(&path, &client, workspace_id);
     remove_stats_if_owned(&path, &client);
     result
@@ -178,7 +179,9 @@ fn remove_stats_if_owned(path: &Path, client: &str) {
     }
 }
 
-fn link_stats_runtime(args: LinkStatsIngestArgs) -> Result<(rimz::RuntimePaths, WorkspaceId)> {
+/// The room a host-side helper serves, resolved from `--session` or `--dir`;
+/// refuses when the room has no store.
+pub(super) fn room_store(args: RoomArgs) -> Result<(rimz::Store, WorkspaceId)> {
     let (project_root, workspace_id) = match (args.session, args.dir) {
         (Some(session), None) => {
             let room = workspace_record_for_session(&session)?
@@ -195,7 +198,7 @@ fn link_stats_runtime(args: LinkStatsIngestArgs) -> Result<(rimz::RuntimePaths, 
     let state = rimz::StatePaths::for_project_root(&project_root)?;
     let store = crate::cli::open_existing_store_at(state)?
         .with_context(|| crate::cli::no_room(format_args!("at {}", project_root.display())))?;
-    Ok((store.runtime_paths().clone(), workspace_id))
+    Ok((store, workspace_id))
 }
 
 fn link_client_id() -> String {

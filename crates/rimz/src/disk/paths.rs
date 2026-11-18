@@ -706,6 +706,15 @@ impl StatePaths {
         Ok(unit)
     }
 
+    /// Create the temp unit of one remote upload, `tmp/_upload-<id>/`, private
+    /// to its user. `id` is path-safe; the `_` keeps it apart from handles, so
+    /// GC lists it as an unowned unit.
+    pub fn ensure_upload_unit(&self, id: &str) -> Result<PathBuf> {
+        let unit = self.tmp_dir.join(format!("_upload-{id}"));
+        ensure_private_runtime_dir(&unit)?;
+        Ok(unit)
+    }
+
     /// Remove the entire room state tree, including incompatible history.
     pub(crate) fn remove_root(&self) -> Result<()> {
         remove_tree(&self.root)

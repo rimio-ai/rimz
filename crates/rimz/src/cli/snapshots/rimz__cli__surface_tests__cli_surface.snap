@@ -1510,6 +1510,8 @@ rimz help remote setup
 
 rimz help remote update
 
+rimz help remote upload [hidden]
+
 rimz help reset
 
 rimz help sessions
@@ -2981,6 +2983,8 @@ rimz remote help setup
 
 rimz remote help update
 
+rimz remote help upload [hidden]
+
 rimz remote link-stats [hidden]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
@@ -3066,6 +3070,16 @@ rimz remote update
     --reconnect  [action=set-true takes=0..=0]
     --resume  [action=set-true takes=0..=0]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz remote upload [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --dir <DIR>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session <SESSION>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
