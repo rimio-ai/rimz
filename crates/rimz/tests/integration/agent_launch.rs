@@ -5597,6 +5597,307 @@ fn explain_uses_the_room_account_before_a_launch_batch_exists() {
 }
 
 #[test]
+fn explain_names_where_each_tuning_value_came_from() {
+    let env = Env::new();
+    assert!(init_launch_repo(&env.project_root));
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n\
+         [tiers]\nintern = []\njunior = ['opus']\nsenior = ['astra']\nprincipal = []\n",
+    )
+    .unwrap();
+    env.write_config(
+        &env.project_root,
+        "[profiles.hand]\nagent = 'claude'\n\
+         [agents.teams.crew]\nroles = [\
+         {role = 'lead', profile = 'hand', fast = 'off', auto-compact = '400k'}, \
+         {role = 'mate', profile = 'hand'}]\n",
+    );
+    env.rimz().args(["trust", "grant"]).assert().success();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude",
+        "description: Claude base\nfast: on\ncode-mode: on\neffort: high\nauto-compact: 300k",
+        "Claude base.",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "codex",
+        "description: Codex base\neffort: medium\nfast: on",
+        "Codex base.",
+    );
+    for (name, extra) in [
+        ("plain", ""),
+        ("cleared", "\nfast: unset"),
+        ("slow", "\nfast: off"),
+    ] {
+        crate::common::write_definition(
+            &env,
+            "agents",
+            name,
+            &format!("description: Tuned\nagent: claude\ntools: [Read]{extra}"),
+            "",
+        );
+    }
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "squad",
+        "description: Squad\nleader: lead\nstages: [Plan, Review]\nroles:\n  \
+         - agent: plain\n    role: lead\n    owns: [Plan]\n    fast: off\n  \
+         - agent: plain\n    role: judge\n    owns: [Review]",
+        "Plan, then review.",
+    );
+    crate::common::write_definition(
+        &env,
+        "subagents",
+        "scout",
+        "description: Scout\nagent: codex\ntools: [Read]",
+        "",
+    );
+    let explain = |args: &[&str]| -> serde_json::Value {
+        let output = env
+            .rimz()
+            .args(["agents", "explain"])
+            .args(args)
+            .arg("--json")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+    let tuning = |report: &serde_json::Value| {
+        ["effort", "fast", "code_mode", "auto_compact"]
+            .map(|key| (report[key].clone(), report[format!("{key}_source")].clone()))
+    };
+    let base = serde_json::json!("kind base claude");
+    let from_base = [
+        (serde_json::json!("high"), base.clone()),
+        (serde_json::json!(true), base.clone()),
+        (serde_json::json!(true), base.clone()),
+        (serde_json::json!(300_000), base.clone()),
+    ];
+    assert_eq!(tuning(&explain(&["plain"])), from_base);
+    assert_eq!(tuning(&explain(&["claude"])), from_base);
+
+    let cleared = tuning(&explain(&["cleared"]));
+    assert_eq!(
+        cleared[1],
+        (serde_json::Value::Null, serde_json::Value::Null)
+    );
+    assert_eq!(cleared[0], from_base[0]);
+    let slow = explain(&["slow"]);
+    assert_eq!(
+        tuning(&slow)[1],
+        (serde_json::json!(false), serde_json::json!("profile slow"))
+    );
+    assert!(
+        slow["provider_argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg
+                .as_str()
+                .is_some_and(|arg| arg.contains("\"fastMode\":false"))),
+        "{slow}"
+    );
+    assert_eq!(
+        tuning(&explain(&["plain", "--no-fast"]))[1],
+        (serde_json::json!(false), serde_json::json!("--no-fast"))
+    );
+    assert_eq!(
+        tuning(&explain(&["slow", "--effort", "low"]))[0],
+        (serde_json::json!("low"), serde_json::json!("--effort"))
+    );
+    assert_eq!(
+        tuning(&explain(&["cleared", "--fast"]))[1],
+        (serde_json::json!(true), serde_json::json!("--fast"))
+    );
+    assert_eq!(
+        tuning(&explain(&["claude-fast"]))[1],
+        (serde_json::json!(true), serde_json::json!("claude-fast"))
+    );
+    let codex = tuning(&explain(&["plain", "--agent", "codex"]));
+    assert_eq!(
+        codex[0],
+        (
+            serde_json::json!("medium"),
+            serde_json::json!("kind base codex")
+        )
+    );
+    assert_eq!(
+        codex[1],
+        (
+            serde_json::json!(true),
+            serde_json::json!("kind base codex")
+        )
+    );
+
+    // A bare kind routed by `--model` or `--tier` keeps the base of the kind it lands on, and
+    // a tier credits nothing it did not choose.
+    let effort_high = (serde_json::json!("high"), base.clone());
+    assert_eq!(
+        tuning(&explain(&["claude", "--model", "opus"]))[0],
+        effort_high
+    );
+    let tiered = explain(&["claude", "--tier", "senior"]);
+    assert_eq!(tiered["kind"], "codex", "{tiered}");
+    assert_eq!(
+        tuning(&tiered)[0],
+        (
+            serde_json::json!("medium"),
+            serde_json::json!("kind base codex")
+        )
+    );
+    assert_eq!(
+        tuning(&explain(&["plain", "--tier", "junior"]))[0],
+        effort_high
+    );
+
+    // A TOML role's own values are credited to the role, and survive a re-base onto another
+    // kind; a value the role leaves unwritten takes the new kind's base.
+    let lead = tuning(&explain(&["crew.lead"]));
+    let role = serde_json::json!("role lead");
+    assert_eq!(lead[1], (serde_json::json!(false), role.clone()));
+    assert_eq!(lead[3], (serde_json::json!(400_000), role.clone()));
+    assert_eq!(lead[0], effort_high);
+    let lead = explain(&["crew.lead", "--agent", "codex"]);
+    assert_eq!(tuning(&lead)[1], (serde_json::json!(false), role));
+    assert!(
+        lead["provider_argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "service_tier=default"),
+        "{lead}"
+    );
+    assert_eq!(
+        tuning(&explain(&["crew.mate", "--agent", "codex"]))[1],
+        (
+            serde_json::json!(true),
+            serde_json::json!("kind base codex")
+        )
+    );
+    // A Markdown role's own fast outlives a re-base onto another kind as a TOML role's does.
+    assert_eq!(
+        tuning(&explain(&["squad.lead", "--agent", "codex"]))[1],
+        (serde_json::json!(false), serde_json::json!("role lead"))
+    );
+    assert_eq!(
+        tuning(&explain(&["squad.judge", "--agent", "codex"]))[1],
+        (
+            serde_json::json!(true),
+            serde_json::json!("kind base codex")
+        )
+    );
+
+    let human = |args: &[&str]| {
+        let output = env
+            .rimz()
+            .args(["agents", "explain"])
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(output).unwrap()
+    };
+    let row = |text: &str, label: &str| {
+        text.lines()
+            .map(str::trim)
+            .find_map(|line| line.strip_prefix(&format!("{label}:")).map(str::trim))
+            .map(str::to_owned)
+    };
+    let plain = human(&["plain"]);
+    for (label, value) in [
+        ("effort", "high (kind base claude)"),
+        ("fast", "on (kind base claude)"),
+        ("code-mode", "on (kind base claude)"),
+        ("auto-compact", "300000 (kind base claude)"),
+    ] {
+        assert_eq!(row(&plain, label).as_deref(), Some(value), "{plain}");
+    }
+    let cleared = human(&["cleared"]);
+    assert_eq!(row(&cleared, "fast").as_deref(), Some("unset"), "{cleared}");
+    let slow = human(&["slow"]);
+    assert_eq!(row(&slow, "fast").as_deref(), Some("off"), "{slow}");
+
+    // Listings show what the launch takes: an unwritten effort or fast lists the kind base's,
+    // and a written one, `unset` included, still wins.
+    let listed = |args: &[&str], rows: &str| -> Vec<(String, Option<String>, bool)> {
+        let output = env
+            .rimz()
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        let entries = if rows.is_empty() { &json } else { &json[rows] };
+        let mut listed = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["namespace"] != "subagents")
+            .filter(|entry| ["plain", "cleared", "slow"].contains(&entry["name"].as_str().unwrap()))
+            .map(|entry| {
+                (
+                    entry["name"].as_str().unwrap().to_owned(),
+                    entry["effort"].as_str().map(str::to_owned),
+                    entry["fast"].as_bool().unwrap_or(false),
+                )
+            })
+            .collect::<Vec<_>>();
+        listed.sort();
+        listed
+    };
+    let high = || Some("high".to_owned());
+    assert_eq!(
+        listed(&["agents", "profiles", "--json"], ""),
+        [
+            ("cleared".to_owned(), high(), false),
+            ("plain".to_owned(), high(), true),
+            ("slow".to_owned(), high(), false),
+        ]
+    );
+    assert_eq!(
+        listed(&["agents", "validate", "--json"], "rows"),
+        [
+            ("cleared".to_owned(), high(), false),
+            ("plain".to_owned(), high(), true),
+            ("slow".to_owned(), high(), false),
+        ]
+    );
+    let scout = env
+        .rimz()
+        .args(["subagents", "profiles", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let scout: serde_json::Value = serde_json::from_slice(&scout).unwrap();
+    let scout = scout
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "scout")
+        .unwrap();
+    assert_eq!(
+        (&scout["effort"], &scout["fast"]),
+        (&serde_json::json!("medium"), &serde_json::json!(true)),
+        "{scout}"
+    );
+}
+
+#[test]
 fn explain_kind_override_uses_only_the_final_kinds_defaults() {
     let env = Env::new();
     assert!(init_launch_repo(&env.project_root));
@@ -6028,7 +6329,7 @@ fn explain_prints_the_plan_without_side_effects() {
         1
     );
     assert!(argv.iter().any(|arg| arg == "--foo"));
-    assert_eq!(overridden["fast"], false);
+    assert_eq!(overridden["fast"], serde_json::Value::Null);
     let fast = env
         .rimz()
         .args(["agents", "explain", "worker", "--json", "--fast"])
@@ -6330,6 +6631,8 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
             assert_eq!(report["tier_skipped"][0]["reason"], "logged_out");
         }
         assert_eq!(report["isolation_source"], "recorded --isolation");
+        // The seat has no launch record, so its effort comes from the current chain.
+        assert_eq!(report["effort_source"], "built-in default", "{report}");
         assert_eq!(report["env"]["RIMZ_AGENT_NAME"], "worker");
         assert!(
             report["provider_argv"]
@@ -6357,6 +6660,94 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
         );
         assert!(!env.runtime_paths().prompt_dir().exists());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn explain_seat_credits_the_record_only_with_what_it_holds() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let provider_home = env.home_root.join(".claude");
+    std::fs::create_dir_all(provider_home.join("projects")).expect("empty conversation catalog");
+    std::fs::create_dir_all(env.rimz_home()).expect("mkdir config");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = \"host\"\n",
+    )
+    .expect("write machine config");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude",
+        "description: Claude base\ncode-mode: on\nauto-compact: 300k",
+        "Claude base.",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: []",
+        "",
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: AgentSessionId::from("missing-conversation"),
+                launch_id: Some(AgentSessionId::from("launch_explain_recorded")),
+                agent_name: "worker".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    profile: Some("worker".to_owned()),
+                    record: Some(Box::new(rimz::agents::LaunchRecord {
+                        model: Some("opus".to_owned()),
+                        effort: Some("low".to_owned()),
+                        fast: Some(true),
+                        ..Default::default()
+                    })),
+                    isolation: Some(rimz::config::Isolation::Host),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed durable seat");
+    let output = env
+        .rimz()
+        .env("CLAUDE_CONFIG_DIR", &provider_home)
+        .args(["agents", "explain", "@worker", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let source = |key: &str| (report[key].clone(), report[format!("{key}_source")].clone());
+    let recorded = serde_json::json!("recorded");
+    assert_eq!(
+        source("effort"),
+        (serde_json::json!("low"), recorded.clone())
+    );
+    assert_eq!(source("fast"), (serde_json::json!(true), recorded));
+    assert_eq!(
+        source("code_mode"),
+        (
+            serde_json::json!(true),
+            serde_json::json!("kind base claude")
+        ),
+        "{report}"
+    );
 }
 
 #[cfg(unix)]

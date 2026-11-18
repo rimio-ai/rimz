@@ -59,23 +59,26 @@ pub(crate) fn available_profiles(
                 .get(runtime.kind())
                 .map(|profile| (name, profile))
         }))
-        .map(|(name, profile)| AgentProfileReport {
-            name: name.to_owned(),
-            source: "profile",
-            origin: sources
-                .profile_origin(scope, name)
-                .cloned()
-                .unwrap_or_default(),
-            brand_kind: Some(provider_brand_kind(&profile.agent, profiles).to_owned()),
-            agent: Some(profile.agent.clone()),
-            model: profile.model.clone(),
-            tier: profile.model_tier.as_ref().map(|tier| tier.tier),
-            tier_fallback: profile.model_tier.as_ref().map(|tier| tier.fell_back),
-            effort: profile.effective_effort(),
-            fast: profile.fast == Some(rimz::agents::Toggle::On),
-            description: profile.description.clone(),
-            allowed_tools: profile.allowed_tools.clone().unwrap_or_default(),
-            path: sources.profile(scope, name).map(PathBuf::from),
+        .map(|(name, profile)| {
+            let (effort, fast) = rimz::harness::spec::listed_tuning(name, profiles);
+            AgentProfileReport {
+                name: name.to_owned(),
+                source: "profile",
+                origin: sources
+                    .profile_origin(scope, name)
+                    .cloned()
+                    .unwrap_or_default(),
+                brand_kind: Some(provider_brand_kind(&profile.agent, profiles).to_owned()),
+                agent: Some(profile.agent.clone()),
+                model: profile.model.clone(),
+                tier: profile.model_tier.as_ref().map(|tier| tier.tier),
+                tier_fallback: profile.model_tier.as_ref().map(|tier| tier.fell_back),
+                effort,
+                fast,
+                description: profile.description.clone(),
+                allowed_tools: profile.allowed_tools.clone().unwrap_or_default(),
+                path: sources.profile(scope, name).map(PathBuf::from),
+            }
         })
         .collect::<Vec<_>>();
     reports.extend(commands.0.keys().map(|name| AgentProfileReport {
@@ -152,10 +155,7 @@ fn subagent_report(
         .0
         .get(&profile.name)
         .and_then(|profile| profile.model_tier.as_ref());
-    let fast = profiles
-        .0
-        .get(&profile.name)
-        .is_some_and(|profile| profile.fast == Some(rimz::agents::Toggle::On));
+    let (_, fast) = rimz::harness::spec::listed_tuning(&profile.name, profiles);
     AgentProfileReport {
         allowed_tools: profiles
             .0
@@ -722,6 +722,7 @@ mod tests {
             variant: None,
             definition_renders: None,
             kind_defaults: false,
+            kind_base: false,
             tools: None,
             auto_compact_default: None,
             model_tier: None,

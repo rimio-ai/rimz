@@ -84,10 +84,19 @@ impl AgentFrontmatter {
     }
 }
 
+/// A kind base's frontmatter: its description and the launch tuning every launch on the
+/// kind starts from. Any other key is collected so the refusal can name it.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
 pub(super) struct BaseFrontmatter {
     pub description: Option<String>,
+    pub fast: Option<crate::agents::Toggle>,
+    pub code_mode: Option<crate::agents::Toggle>,
+    pub effort: Option<String>,
+    #[serde(default, deserialize_with = "token_count")]
+    pub auto_compact: Option<String>,
+    #[serde(flatten)]
+    pub other: BTreeMap<String, IgnoredAny>,
 }
 
 #[derive(Deserialize)]

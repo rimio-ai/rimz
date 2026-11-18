@@ -2641,7 +2641,7 @@ fn runtime_resolution_aliases_and_defaults() {
             profile.kind_defaults,
             profile.mode,
             profile.effort.clone(),
-            profile.effective_effort(),
+            crate::harness::spec::listed_tuning(name, &loaded.agent_profiles).0,
             resolved.launch.mode,
             resolved.launch.effort,
         ));
@@ -2952,7 +2952,7 @@ fn names_and_kind_bases_are_validated() {
         "agents/claude.md",
         "---\ndescription: Base\nmodel: fable\n---\nBase.",
     );
-    error(root.path(), "unknown field");
+    error(root.path(), "a kind base takes only");
     write(
         root.path(),
         "agents/claude.md",
@@ -4500,4 +4500,81 @@ fn hook_trust_fix_keeps_team_members_out_of_solo_resume() {
         hook_trust_fix(&agent.kind, Some("sol"), None),
         "rimz agents sol"
     );
+}
+
+#[test]
+fn kind_bases_take_launch_tuning_and_refuse_other_keys_by_name() {
+    use crate::agents::Toggle::{On, Unset};
+
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        "agents/claude.md",
+        "---\ndescription: Base\nfast: on\ncode-mode: unset\neffort: low\nauto-compact: 300k\n---\nBase.",
+    );
+    let loaded = clean(root.path());
+    for profiles in [&loaded.agent_profiles, &loaded.subagent_profiles] {
+        let base = &profiles.0["claude"];
+        assert_eq!(
+            (
+                base.kind_base,
+                base.fast,
+                base.code_mode,
+                base.effort.as_deref(),
+                base.auto_compact.as_deref()
+            ),
+            (true, Some(On), Some(Unset), Some("low"), Some("300k"))
+        );
+    }
+
+    let base = root.path().join("agents/claude.md");
+    for (fields, message) in [
+        (
+            "tools: [Read]\nmodel: fable",
+            format!(
+                "{}: a kind base takes only `description`, `fast`, `code-mode`, `effort`, and \
+                 `auto-compact`, not `model`, `tools`; put those on a profile that names the \
+                 kind with `agent:`",
+                base.display()
+            ),
+        ),
+        (
+            "effort: +1",
+            format!(
+                "{}: effort +1 is relative; set an absolute effort or omit it for the chosen \
+                 model's default",
+                base.display()
+            ),
+        ),
+        (
+            "auto-compact: 5k",
+            format!(
+                "{}: sets `auto-compact: 5k`; rimz takes a token count from 100k through 1M, \
+                 spelled '200k', '200000', or '1m'",
+                base.display()
+            ),
+        ),
+    ] {
+        write(
+            root.path(),
+            "agents/claude.md",
+            &format!("---\ndescription: Base\n{fields}\n---\nBase."),
+        );
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &root.path().join("config.toml"),
+            &crate::config::tiers::TierConfig::default(),
+            Some(272_000),
+        );
+        assert_eq!(
+            loaded
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            [message]
+        );
+    }
 }

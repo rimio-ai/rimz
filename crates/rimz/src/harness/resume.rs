@@ -31,7 +31,7 @@ use crate::harness::plan::{
     CohortCell, CohortResumePlan, CohortSeed, LayoutPaneParams, ResumeLaunchIdentity,
     ResumeLaunchPosture, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
-use crate::harness::spec::LayoutSpec;
+use crate::harness::spec::{LayoutSpec, TuningSource};
 use crate::ids::{
     AgentKind, AgentSessionId, LaneName, LoginKey, LoginName, PaneId, TeamInstanceId, WorkspaceId,
 };
@@ -539,14 +539,11 @@ fn resolve_posture_with_role(
                 let mut profile = profile.clone();
                 if let Some(stamp) = request.stamped_tier {
                     profile.model = Some(stamp.model.clone());
-                    profile.effort = renders.effort.clone().or_else(|| {
-                        crate::agents::definition_defaults(
-                            request.kind.as_str(),
-                            Some(&stamp.model),
-                        )
-                        .effort
-                        .map(str::to_owned)
-                    });
+                    // A kind base keeps its own effort; under a definition the kind base and
+                    // then the built-in default fill what the definition leaves unwritten.
+                    if !profile.kind_base {
+                        profile.effort = renders.effort.clone();
+                    }
                     profile.tier_stamp = Some(Box::new(stamp.clone()));
                 }
                 profile
@@ -622,6 +619,10 @@ fn resolve_posture_with_role(
     cell.launch.tier = request.stamped_tier.cloned().map(Box::new);
     if let Some(record) = request.record {
         let mut record = record.clone();
+        if record.effort.is_some() {
+            cell.tuning.effort = Some(TuningSource::Recorded);
+        }
+        cell.tuning.fast = record.fast.map(|_| TuningSource::Recorded);
         record.effort = record.effort.or_else(|| cell.launch.effort.clone());
         // Only RimZ's own switch is the record's to replace, and only where it differs
         // from what the profile's `fast` field rendered: a recorded on or off swaps the
@@ -3326,11 +3327,27 @@ fn restore_resume_cell(
                     }
                 ))
             })?;
-        posture.effort = definition.effort.clone().or_else(|| {
-            crate::agents::definition_defaults(kind.as_str(), Some(&model))
-                .effort
-                .map(str::to_owned)
-        });
+        // As a fresh `--tier` launch: the definition's effort, then the kind base's, then the
+        // built-in default for the tier's model.
+        let base = profiles
+            .0
+            .get(kind.as_str())
+            .filter(|base| base.kind_base)
+            .and_then(|base| base.effort.clone());
+        (posture.effort, posture.tuning.effort) = if let Some(effort) = &definition.effort {
+            (
+                Some(effort.clone()),
+                profile.map(|name| TuningSource::Profile(name.to_owned())),
+            )
+        } else if let Some(effort) = base {
+            (Some(effort), Some(TuningSource::KindBase(kind.clone())))
+        } else {
+            let effort = crate::agents::definition_defaults(kind.as_str(), Some(&model)).effort;
+            (
+                effort.map(str::to_owned),
+                effort.map(|_| TuningSource::BuiltIn),
+            )
+        };
         posture.model = Some(model.clone());
         posture.tier = Some(Box::new(crate::agents::TierStamp {
             tier,
@@ -3368,6 +3385,7 @@ fn restore_resume_cell(
     cell.args = posture.args;
     cell.notices = posture.notices;
     cell.auto_compact = posture.auto_compact;
+    cell.tuning = posture.tuning;
     cell.system_prompt_file = posture.system_prompt_file;
     cell.append_system_prompt_files = posture.append_system_prompt_files;
     cell.skills = posture.skills;

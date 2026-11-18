@@ -1092,7 +1092,6 @@ upward-dependencies = [
 # ConfigEditor::check_named_account_update shares account-rerun edit preflight with the CLI (+1).
 # skill_is_callable shares profile skill callability with launch reminders and validation (+1).
 # AccountCap, its parser error/accessors, and budget validation reach config and launch (+6).
-# Profile::effective_effort preserves listing defaults without baking launch values (+1).
 # Per-agent lifetime resolution and its static provenance replace the kind-only lookup (+4).
 # has_absolute_task_root and TaskEntry::root_problem share machine-root admission and its diagnosis (+2).
 # HarnessConfig::load_smart_compact_lenient shares the core-only dispatch default (+1).
@@ -9459,6 +9458,21 @@ reason = "Shares resolver-owned launch choices and facts with scene-specific CLI
 kind = "item"
 key = "harness::spec::team_summary"
 reason = "Shares resolver-owned launch choices and facts with scene-specific CLI error rendering."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::listed_tuning"
+reason = "One reading of a profile's effort and fast through its kind base for every listing: agents and subagents profiles, validate rows, the subagent catalog and spec suggestions."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::TuningSource"
+reason = "The layer that supplied a planned tuning value, set by the resolution that built the plan and read by agents explain."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::TuningSources"
+reason = "Carries each tuning value's source on the planned cell and resume posture, so explain names the layer without a second resolution."
 
 [[verdict]]
 kind = "item"

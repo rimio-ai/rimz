@@ -480,6 +480,10 @@ pub struct Profile {
     /// the launch finally runs on.
     #[serde(skip)]
     pub kind_defaults: bool,
+    /// Whether this is a kind base (`agents/<kind>.md`), whose tuning keys fill the
+    /// kind-defaults step below every written value rather than layering as written.
+    #[serde(skip)]
+    pub kind_base: bool,
     #[serde(skip)]
     pub model_tier: Option<super::tiers::TierProvenance>,
     #[serde(skip)]
@@ -518,14 +522,16 @@ pub struct Profile {
     #[serde(default)]
     pub effort: Option<String>,
     /// Launch in the provider's fast mode (priority serving). On renders the
-    /// fast switch and off the provider's off switch where it has one; `unset`
-    /// stops inheritance and, like absent, leaves the provider's default. On
-    /// on a provider without a fast switch warns and launches without it.
+    /// fast switch and off the provider's off switch where it has one; absent
+    /// takes the kind base's value, while `unset` stops inheritance and the kind
+    /// base and leaves the provider's default. On on a provider without a fast
+    /// switch warns and launches without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast: Option<crate::agents::Toggle>,
     /// Launch in the provider's code mode. On and off render the provider's
-    /// switch; `unset` and absent render nothing. On on a provider without a
-    /// code mode warns and launches without it.
+    /// switch; absent takes the kind base's value, and `unset`, or absent with
+    /// none, renders nothing. On on a provider without a code mode warns and
+    /// launches without it.
     #[serde(default, rename = "code-mode", skip_serializing_if = "Option::is_none")]
     pub code_mode: Option<crate::agents::Toggle>,
     #[serde(default)]
@@ -584,20 +590,6 @@ pub struct Profile {
     pub append_system_prompt_files: Vec<PromptSource>,
     #[serde(default)]
     pub args: Option<String>,
-}
-
-impl Profile {
-    /// The effort used when launching on this profile's own kind and model.
-    pub fn effective_effort(&self) -> Option<String> {
-        self.effort.clone().or_else(|| {
-            if !self.kind_defaults {
-                return None;
-            }
-            crate::agents::definition_defaults(&self.agent, self.model.as_deref())
-                .effort
-                .map(str::to_owned)
-        })
-    }
 }
 
 pub(super) fn native_auto_compact(window: Option<u64>, kind: &str) -> Option<String> {

@@ -168,7 +168,15 @@ fn unknown_spec_catalog_keeps_kinds_and_only_resolvable_names() {
         ("perf", profile("claude")),
         ("assistant", profile("perf")),
         ("forge.coder", profile("codex")),
-        ("claude", profile("claude")),
+        (
+            "claude",
+            Profile {
+                kind_base: true,
+                effort: Some("low".into()),
+                fast: Some(crate::agents::Toggle::On),
+                ..profile("claude")
+            },
+        ),
     ]);
     let commands = commands([("build", "printf ready")]);
     let teams = TeamsConfig(BTreeMap::from([
@@ -194,7 +202,14 @@ fn unknown_spec_catalog_keeps_kinds_and_only_resolvable_names() {
             .collect::<Vec<_>>(),
         ["perf", "peer"]
     );
-    assert!(matches!(closest[0].kind, SpecKind::Profile(_)));
+    // The suggestion lists the tuning the launch takes, here from the kind base.
+    let SpecKind::Profile(perf) = &closest[0].kind else {
+        panic!("perf is a profile")
+    };
+    assert_eq!(
+        (perf.effort.as_deref(), perf.fast),
+        (Some("low"), Some(crate::agents::Toggle::On))
+    );
     assert!(matches!(&closest[1].kind, SpecKind::Team(Some(summary)) if summary == "claude,codex"));
     assert!(
         error
@@ -325,6 +340,7 @@ fn profile(agent: &str) -> Profile {
         variant: None,
         definition_renders: None,
         kind_defaults: false,
+        kind_base: false,
         tools: None,
         auto_compact_default: None,
         model_tier: None,
@@ -1399,6 +1415,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
             variant: None,
             definition_renders: None,
             kind_defaults: false,
+            kind_base: false,
             tools: None,
             auto_compact_default: None,
             model_tier: None,
@@ -1882,6 +1899,7 @@ fn kind_defaults_follow_the_final_kind_and_model() {
 
 #[test]
 fn role_values_survive_defaults_in_both_rebase_orders() {
+    use crate::agents::Toggle;
     use PermissionMode::{Auto, Plan};
 
     let profiles = profiles([
@@ -1899,44 +1917,105 @@ fn role_values_survive_defaults_in_both_rebase_orders() {
                 ..profile("claude")
             },
         ),
+        (
+            "fast-codex",
+            Profile {
+                fast: Some(Toggle::On),
+                ..profile("codex")
+            },
+        ),
     ]);
     let mut actual = Vec::new();
     let mut expected = Vec::new();
-    for (target, model, mode, effort, final_mode, final_effort) in [
-        ("codex", None, None, None, None, Some("xhigh")),
-        ("opencode", None, None, None, None, None),
+    // A role's own fast, off and unset included, survives a re-base onto another kind.
+    for (target, model, mode, effort, fast, final_mode, final_effort) in [
+        ("codex", None, None, None, None, None, Some("xhigh")),
+        ("opencode", None, None, None, None, None, None),
         (
             "codex",
             None,
             Some(Plan),
             Some("high"),
+            None,
             Some(Plan),
             Some("high"),
         ),
-        ("qwen", None, Some(Auto), None, Some(Auto), None),
-        ("fable", None, None, Some("xhigh"), None, Some("xhigh")),
-        ("claude", Some("fable"), None, None, None, Some("high")),
+        ("qwen", None, Some(Auto), None, None, Some(Auto), None),
+        (
+            "fable",
+            None,
+            None,
+            Some("xhigh"),
+            None,
+            None,
+            Some("xhigh"),
+        ),
+        (
+            "claude",
+            Some("fable"),
+            None,
+            None,
+            None,
+            None,
+            Some("high"),
+        ),
+        (
+            "codex",
+            None,
+            None,
+            None,
+            Some(Toggle::Off),
+            None,
+            Some("xhigh"),
+        ),
+        (
+            "fast-codex",
+            None,
+            None,
+            None,
+            Some(Toggle::Unset),
+            None,
+            Some("xhigh"),
+        ),
+        (
+            "fast-codex",
+            None,
+            None,
+            None,
+            Some(Toggle::Off),
+            None,
+            Some("xhigh"),
+        ),
     ] {
         let binding = RoleBinding {
             model: model.map(str::to_owned),
             mode,
             effort: effort.map(str::to_owned),
+            fast,
             ..role("coder", "worker")
         };
         let base = resolve_agent_override(Some(target), &profiles).unwrap();
         let configured = team(vec![binding.clone()]);
         let prepared = prepare_team("forge", &configured, &profiles, base.as_ref())
             .map(|team| {
-                let launch = &team.roles[0].resolved.launch;
-                (launch.mode, launch.effort.clone())
+                let resolved = &team.roles[0].resolved;
+                (
+                    resolved.launch.mode,
+                    resolved.launch.effort.clone(),
+                    resolved.fast.and_then(Toggle::enabled),
+                )
             })
             .map_err(|error| error.to_string());
         let replayed =
             profile_cell_with_base_override("worker", &profiles, base.as_ref(), Some(&binding))
-                .map(|cell| (cell.launch.mode, cell.launch.effort))
+                .map(|cell| (cell.launch.mode, cell.launch.effort, cell.launch.fast))
                 .map_err(|error| error.to_string());
         actual.push((prepared, replayed));
-        let launch = Ok((final_mode, final_effort.map(str::to_owned)));
+        let launch = Ok((
+            final_mode,
+            final_effort.map(str::to_owned),
+            fast.and_then(Toggle::enabled),
+        ));
         expected.push((launch.clone(), launch));
     }
     assert_eq!(actual, expected);
@@ -3709,5 +3788,218 @@ fn specs_that_need_no_help_pass_through_unchanged() {
         qualify_spec_in_channel("planner", "gone", "gone", &teams, &profiles, &commands)
             .expect("qualify"),
         Cow::Borrowed("planner")
+    );
+}
+
+#[test]
+fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
+    use crate::agents::Toggle::{Off, On, Unset};
+
+    let base =
+        |agent: &str, fast, code_mode, effort: Option<&str>, auto_compact: Option<&str>| Profile {
+            kind_base: true,
+            fast,
+            code_mode,
+            effort: effort.map(str::to_owned),
+            auto_compact: auto_compact.map(str::to_owned),
+            system_prompt_file: Some("/prompts/base.md".into()),
+            ..profile(agent)
+        };
+    let profiles = profiles([
+        (
+            "claude",
+            base("claude", Some(On), Some(On), Some("low"), Some("300k")),
+        ),
+        (
+            "codex",
+            base("codex", Some(Off), None, Some("medium"), None),
+        ),
+        (
+            "markdown",
+            Profile {
+                kind_defaults: true,
+                ..profile("claude")
+            },
+        ),
+        ("toml", profile("claude")),
+        (
+            "cleared",
+            Profile {
+                fast: Some(Unset),
+                code_mode: Some(Unset),
+                ..profile("claude")
+            },
+        ),
+        ("heir", profile("cleared")),
+        (
+            "eager",
+            Profile {
+                fast: Some(On),
+                ..profile("claude")
+            },
+        ),
+        (
+            "eager-heir",
+            Profile {
+                fast: Some(Unset),
+                ..profile("eager")
+            },
+        ),
+        (
+            "written",
+            Profile {
+                fast: Some(Off),
+                code_mode: Some(Off),
+                effort: Some("high".into()),
+                auto_compact: Some("200k".into()),
+                ..profile("claude")
+            },
+        ),
+    ]);
+    let tuning = |resolved: ResolvedProfile| {
+        (
+            resolved.kind.to_string(),
+            resolved.fast,
+            resolved.code_mode,
+            resolved.launch.effort.clone(),
+            resolved.effective_auto_compact(),
+        )
+    };
+    let based = (
+        "claude".to_owned(),
+        Some(On),
+        Some(On),
+        Some("low".to_owned()),
+        Some("300000".to_owned()),
+    );
+    let codex = (
+        "codex".to_owned(),
+        Some(Off),
+        None,
+        Some("medium".to_owned()),
+        None,
+    );
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (name, agent, want) in [
+        ("claude", None, based.clone()),
+        ("markdown", None, based.clone()),
+        ("toml", None, based.clone()),
+        (
+            "cleared",
+            None,
+            (
+                "claude".to_owned(),
+                Some(Unset),
+                Some(Unset),
+                Some("low".to_owned()),
+                Some("300000".to_owned()),
+            ),
+        ),
+        (
+            "heir",
+            None,
+            (
+                "claude".to_owned(),
+                Some(Unset),
+                Some(Unset),
+                Some("low".to_owned()),
+                Some("300000".to_owned()),
+            ),
+        ),
+        (
+            "eager-heir",
+            None,
+            (
+                "claude".to_owned(),
+                Some(Unset),
+                Some(On),
+                Some("low".to_owned()),
+                Some("300000".to_owned()),
+            ),
+        ),
+        (
+            "written",
+            None,
+            (
+                "claude".to_owned(),
+                Some(Off),
+                Some(Off),
+                Some("high".to_owned()),
+                Some("200000".to_owned()),
+            ),
+        ),
+        ("markdown", Some("codex"), codex.clone()),
+        ("toml", Some("codex"), codex.clone()),
+        (
+            "written",
+            Some("codex"),
+            (
+                "codex".to_owned(),
+                Some(Off),
+                None,
+                Some("high".to_owned()),
+                Some("200000".to_owned()),
+            ),
+        ),
+        ("eager", Some("codex"), codex.clone()),
+        ("markdown", Some("claude"), based.clone()),
+    ] {
+        actual.push((
+            name,
+            agent,
+            resolve_profile_rebased(name, agent, &profiles)
+                .map(tuning)
+                .map_err(|error| error.to_string()),
+        ));
+        expected.push((name, agent, Ok(want)));
+    }
+    assert_eq!(actual, expected);
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (fast, effort, want_fast, want_effort) in [
+        (None, None, Some(true), "low"),
+        (Some(Off), Some("high"), Some(false), "high"),
+        (Some(Unset), None, None, "low"),
+    ] {
+        let binding = RoleBinding {
+            fast,
+            effort: effort.map(str::to_owned),
+            ..role("coder", "toml")
+        };
+        let configured = team(vec![binding.clone()]);
+        let seat = prepare_team("forge", &configured, &profiles, None)
+            .map(|team| {
+                let resolved = &team.roles[0].resolved;
+                (
+                    resolved.fast.and_then(crate::agents::Toggle::enabled),
+                    resolved.code_mode.and_then(crate::agents::Toggle::enabled),
+                    resolved.launch.effort.clone(),
+                )
+            })
+            .map_err(|error| error.to_string());
+        let replayed = profile_cell_with_base_override("toml", &profiles, None, Some(&binding))
+            .map(|cell| (cell.launch.fast, cell.launch.code_mode, cell.launch.effort))
+            .map_err(|error| error.to_string());
+        actual.push((seat, replayed));
+        let launch = Ok((want_fast, Some(true), Some(want_effort.to_owned())));
+        expected.push((launch.clone(), launch));
+    }
+    assert_eq!(actual, expected);
+
+    let cell = agent_cell("toml", &profiles, &no_commands());
+    assert_eq!(
+        (
+            cell.launch.fast,
+            cell.launch.code_mode,
+            cell.auto_compact.as_deref()
+        ),
+        (Some(true), Some(true), Some("300000"))
+    );
+    let suffixed = agent_cell("codex-fast", &profiles, &no_commands());
+    assert_eq!(
+        (suffixed.launch.fast, suffixed.launch.effort.as_deref()),
+        (Some(true), Some("medium"))
     );
 }

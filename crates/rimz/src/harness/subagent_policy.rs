@@ -48,7 +48,7 @@ pub fn catalog(
             source: SubagentProfileSource::Profile,
             agent: Some(profile.agent.clone()),
             model: profile.model.clone(),
-            effort: profile.effective_effort(),
+            effort: crate::harness::spec::listed_tuning(name, subagent_profiles).0,
             description: profile.description.clone(),
         })
         .collect::<Vec<_>>();
@@ -75,7 +75,9 @@ pub fn catalog(
             source: SubagentProfileSource::Profile,
             agent: Some(runtime.kind().to_owned()),
             model: base.and_then(|base| base.model.clone()),
-            effort: base.and_then(crate::config::Profile::effective_effort),
+            effort: base.and_then(|_| {
+                crate::harness::spec::listed_tuning(runtime.name(), subagent_profiles).0
+            }),
             description: base.and_then(|base| base.description.clone()),
         });
     }
@@ -176,6 +178,7 @@ mod tests {
                 variant: None,
                 definition_renders: None,
                 kind_defaults: false,
+                kind_base: false,
                 tools: None,
                 auto_compact_default: None,
                 model_tier: None,
@@ -261,6 +264,7 @@ mod tests {
                 variant: None,
                 definition_renders: None,
                 kind_defaults: false,
+                kind_base: false,
                 tools: None,
                 auto_compact_default: None,
                 model_tier: None,

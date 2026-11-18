@@ -1412,6 +1412,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         variant: None,
         definition_renders: None,
         kind_defaults: false,
+        kind_base: false,
         tools: None,
         auto_compact_default: None,
         model_tier: None,

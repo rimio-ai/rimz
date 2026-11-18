@@ -262,7 +262,9 @@ impl LaunchAgents {
                     {
                         let mut selected = render.clone();
                         selected.model = Some(model.to_owned());
-                        selected.effort = renders.effort.clone();
+                        if !selected.kind_base {
+                            selected.effort = renders.effort.clone();
+                        }
                         selected.model_tier = None;
                         selected.tier_stamp = None;
                         consumed |= base.as_ref().is_none_or(|base| {
@@ -304,7 +306,10 @@ impl LaunchAgents {
                 )?;
                 // Load covers native families and model-client engines; the walk skips exclusions.
                 let mut selected = renders.renders[&pick.kind].clone();
-                selected.effort = renders.effort.clone();
+                // A bare kind routes to another kind's base, whose effort is its own.
+                if !selected.kind_base {
+                    selected.effort = renders.effort.clone();
+                }
                 selected.model = Some(pick.model.clone());
                 selected.tier_stamp = Some(Box::new(crate::agents::TierStamp {
                     tier: requested,
