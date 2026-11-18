@@ -73,11 +73,12 @@ A binding value is an action name, `"none"` (removes the bundled key), or `{ run
 | `card.last` | `rimz sidebar last` | same |
 | `filter.needs_you` | `rimz sidebar filter needs-you --toggle` | same |
 | `card.close` / `card.reopen` | `rimz sidebar close` / `reopen` | same |
+| `tab.close` | [`rimz sidebar close --tab`](./cli/sidebar.md#close-and-reopen) | same |
 | `sidebar.focus` | `rimz sidebar focus --toggle` | same |
 
 On both backends, split, close and swap never act on the sidebar. A split pressed on the sidebar splits the work pane behind it instead: the tab's last focused work pane while it is still open there, else the first, with focus in the new pane, in that pane's directory; with no work pane beside the sidebar it does nothing. Two cases differ. On Zellij 0.44.x, split pressed on the sidebar can make no pane. On tmux, when the work pane is a member of a collapsed stack with other members, the new pane opens beside the whole stack, where the split key pressed in that member splits the member alone. Close and swap pressed on the sidebar do nothing, and a swap whose neighbour is the sidebar does nothing; a swap pressed in move mode stays in it. Pressed on a work pane, each key starts no `rimz` process: on tmux it runs the plain tmux command, and on Zellij the [presence plugin](../guide/security.md#the-zellij-presence-plugin) performs the native action, a split through its `RunActionsAsUser` permission.
 
-`card.close` closes the highlighted card's pane, which a reopen can bring back ([close and reopen](./cli/sidebar.md)). `pane.send_prefix` sends the resolved prefix chord: `Ctrl+<c>` is one byte, the letter's code AND `0x1f` (`Ctrl+b` is byte 2), and `Alt+<c>` is `27` followed by the character (`Alt+w` is `27 119`).
+`card.close` closes the highlighted card's pane, which a reopen can bring back ([close and reopen](./cli/sidebar.md)). `tab.close` closes the focused tab without confirmation: each agent in it closes as `card.close` would close its card, so each reopenable one comes back on its own reopen, and every other pane simply closes. Pressed on the sidebar or in the dashboard tab, it does nothing. `pane.send_prefix` sends the resolved prefix chord: `Ctrl+<c>` is one byte, the letter's code AND `0x1f` (`Ctrl+b` is byte 2), and `Alt+<c>` is `27` followed by the character (`Alt+w` is `27 119`).
 
 ## The card layer
 
@@ -103,7 +104,11 @@ Prefix `Alt+p`, scrollback `vi`. Its pane and tab modes are empty.
 | mode | key | action |
 | --- | --- | --- |
 | normal | the card layer, plus `Alt+h` / `Alt+l` | `pane.focus.left` / `right` |
-| normal | `Alt+t` | `tab.new` |
+| normal | `Alt+P` | `palette.commands` |
+| normal | `Alt+/` | `palette.cards` |
+| normal | `Alt+z` | `pane.zoom` |
+| normal | `Alt+x` / `Alt+X` | `card.close` / `tab.close` |
+| normal | `Alt+t` / `Alt+T` | `tab.new` / `card.reopen` |
 | prefix | `p`, prefix | `palette.commands` |
 | prefix | `/` | `palette.cards` |
 | prefix | `z` | `pane.zoom` |
@@ -154,7 +159,7 @@ Prefix `Ctrl+b`, scrollback `native`. Its pane and tab modes are empty.
 - resize: `h j k l` and arrows `pane.resize.*`; `Esc`, `Enter` `mode.exit`.
 - move: `h j k l` and arrows `pane.swap.*`; `Esc`, `Enter` `mode.exit`.
 
-Not bound: `&`, `!`, `Space`, `,`, `$`, `.`, `'`, `(` and `)`, `0`, `]` and the other buffer keys, `q`, `t`, `i`, marks, rotate, `C-z`, layouts, the repeatable `M-` and `C-` arrow resizes, and menus. Of the vocabulary, `mode.pane`, `mode.tab`, `mode.move`, `filter.needs_you` (on `Alt+?` only) and `sidebar.focus` have no prefix key.
+Not bound: `&`, `!`, `Space`, `,`, `$`, `.`, `'`, `(` and `)`, `0`, `]` and the other buffer keys, `q`, `t`, `i`, marks, rotate, `C-z`, layouts, the repeatable `M-` and `C-` arrow resizes, and menus. Of the vocabulary, `mode.pane`, `mode.tab`, `mode.move`, `filter.needs_you` (on `Alt+?` only), `tab.close` and `sidebar.focus` have no prefix key.
 
 ### Your tmux prefix
 
@@ -186,7 +191,7 @@ Prefix `Ctrl+g`, scrollback `native`. Locked is home, as in Zellij's unlock-firs
 | move | `h j k l`, arrows | `pane.swap.*` (stays) |
 | pane, tab, resize, move | `Esc`, `Enter` | `mode.exit` |
 
-Not bound: tab close, rename, sync and break; floating, embed, pin and frame toggles; swap layouts; `Alt+i`, `Alt+o`, `Alt+f`, `Alt+[`, `Alt+]`, `Alt+=`, `Alt+-`; and the session-manager plugins. Of the vocabulary, `pane.send_prefix` and `sidebar.focus` are unbound.
+Not bound: tab close, rename, sync and break; floating, embed, pin and frame toggles; swap layouts; `Alt+i`, `Alt+o`, `Alt+f`, `Alt+[`, `Alt+]`, `Alt+=`, `Alt+-`; and the session-manager plugins. Of the vocabulary, `pane.send_prefix`, `tab.close` and `sidebar.focus` are unbound.
 
 ## `vim`
 
@@ -214,4 +219,4 @@ Prefix `Alt+w`, scrollback `vi`. Its pane and tab modes are empty.
 - resize: `h j k l` and arrows `pane.resize.*`; `<` left, `>` right, `+` down, `-` up; `Esc`, `Enter` `mode.exit`.
 - move: `h j k l` and arrows `pane.swap.*`; `Esc`, `Enter` `mode.exit`.
 
-Not bound: vim's `CTRL-W W`, `x` (exchange), `r` (rotate), `T` (move to a new tab), `=`, `_` and `|`, and the `CTRL-W CTRL-<letter>` variants. Here `r` and `T` carry the RimZ actions in the table above. Of the vocabulary, `pane.close`, `pane.send_prefix`, `mode.pane`, `mode.tab`, `mode.move`, `card.slot.1` .. `card.slot.9` and `sidebar.focus` are unbound.
+Not bound: vim's `CTRL-W W`, `x` (exchange), `r` (rotate), `T` (move to a new tab), `=`, `_` and `|`, and the `CTRL-W CTRL-<letter>` variants. Here `r` and `T` carry the RimZ actions in the table above. Of the vocabulary, `pane.close`, `pane.send_prefix`, `mode.pane`, `mode.tab`, `mode.move`, `card.slot.1` .. `card.slot.9`, `tab.close` and `sidebar.focus` are unbound.

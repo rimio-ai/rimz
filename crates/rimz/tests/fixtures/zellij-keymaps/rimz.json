@@ -161,6 +161,27 @@
       "--root",
       "/project,=%2C",
       "sidebar",
+      "reopen",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "close",
+      "--tab",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
       "walk",
       "next",
       "--session-name",
@@ -174,6 +195,26 @@
       "sidebar",
       "walk",
       "prev",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "close",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "pane",
+      "zoom",
       "--session-name",
       "room"
     ],
@@ -241,6 +282,14 @@
   "modes": [
     {
       "binds": [
+        {
+          "key": "Alt /",
+          "steps": [
+            {
+              "palette": "cards"
+            }
+          ]
+        },
         {
           "key": "Alt 0",
           "steps": [
@@ -354,6 +403,30 @@
           ]
         },
         {
+          "key": "Alt P",
+          "steps": [
+            {
+              "palette": "commands"
+            }
+          ]
+        },
+        {
+          "key": "Alt T",
+          "steps": [
+            {
+              "run": 14
+            }
+          ]
+        },
+        {
+          "key": "Alt X",
+          "steps": [
+            {
+              "run": 15
+            }
+          ]
+        },
+        {
           "key": "Alt h",
           "steps": [
             {
@@ -368,7 +441,7 @@
           "key": "Alt j",
           "steps": [
             {
-              "run": 14
+              "run": 16
             }
           ]
         },
@@ -376,7 +449,7 @@
           "key": "Alt k",
           "steps": [
             {
-              "run": 15
+              "run": 17
             }
           ]
         },
@@ -414,6 +487,22 @@
               "action": [
                 "NewTab"
               ]
+            }
+          ]
+        },
+        {
+          "key": "Alt x",
+          "steps": [
+            {
+              "run": 18
+            }
+          ]
+        },
+        {
+          "key": "Alt z",
+          "steps": [
+            {
+              "run": 19
             }
           ]
         }
@@ -464,7 +553,7 @@
           "key": "?",
           "steps": [
             {
-              "float": 16
+              "float": 20
             },
             {
               "mode": "locked"
@@ -655,7 +744,7 @@
                   "NewPane",
                   "Down"
                 ],
-                "run": 17
+                "run": 21
               }
             },
             {
@@ -667,7 +756,7 @@
           "key": "u",
           "steps": [
             {
-              "run": 18
+              "run": 22
             },
             {
               "mode": "locked"
@@ -683,7 +772,7 @@
                   "NewPane",
                   "Right"
                 ],
-                "run": 19
+                "run": 23
               }
             },
             {
@@ -695,7 +784,7 @@
           "key": "x",
           "steps": [
             {
-              "run": 20
+              "run": 24
             },
             {
               "mode": "locked"
@@ -706,7 +795,7 @@
           "key": "z",
           "steps": [
             {
-              "run": 21
+              "run": 25
             },
             {
               "mode": "locked"

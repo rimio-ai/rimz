@@ -133,7 +133,7 @@
 # keymap = "rimz"                     # rimz, tmux, zellij, or vim; rimz is the bundled sidebar-first keymap
 ## prefix = "Ctrl+a"                  # unset: the keymap's own (rimz Alt+p, tmux Ctrl+b, zellij Ctrl+g, vim Alt+w); moves every prefix binding
 ## [keys.bind.normal]
-## "Alt+x" = "card.close"              # named action, or { run = "rimz ..." }; "none" removes a binding
+## "Alt+s" = "pane.split.down"        # named action, or { run = "rimz ..." }; "none" removes a binding
 ## [keys.sidebar]                     # in-pane sidebar keys, read under both room styles
 ## "g x" = "move.bottom"              # a sequence: chords separated by spaces
 ## "Ctrl+d" = "move.half_page_down"   # [Ctrl+][Alt+]key; case matters

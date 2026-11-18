@@ -76,6 +76,9 @@ enum SidebarSubcmd {
         /// Close the card that owns this pane instead of the highlighted one.
         #[arg(long)]
         pane: Option<PaneId>,
+        /// Close every card in the focused tab instead, and with them the tab.
+        #[arg(long, conflicts_with = "pane")]
+        tab: bool,
         #[arg(long)]
         session_name: Option<String>,
     },
@@ -505,9 +508,14 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             session_name,
             CardRequest::FilterNeedsYou { toggle },
         ),
-        SidebarSubcmd::Close { pane, session_name } => {
-            cards::request(globals, session_name, CardRequest::CloseTarget { pane })
-        }
+        SidebarSubcmd::Close {
+            tab: true,
+            session_name,
+            ..
+        } => cards::close_tab(globals, session_name),
+        SidebarSubcmd::Close {
+            pane, session_name, ..
+        } => cards::request(globals, session_name, CardRequest::CloseTarget { pane }),
         SidebarSubcmd::Reopen { session_name } => cards::reopen(globals, session_name),
         SidebarSubcmd::Snapshot {
             workspace_id,
