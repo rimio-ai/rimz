@@ -9549,16 +9549,6 @@ reason = "Parameter of pub pets::resolve_render_tier and part of pub detect_pixe
 
 [[verdict]]
 kind = "item"
-key = "sidebar_pane::pixel::RESIDENT_REFRESH_MS"
-reason = "The pets painter test asserts resend timing through PixelPainter; private would respell the policy as literals there. Stays at sidebar_pane reach; the resend gate is pinned by 30108e572 (pass 22a)."
-
-[[verdict]]
-kind = "item"
-key = "sidebar_pane::pixel::MIN_RESEND_SPACING_MS"
-reason = "The pets painter test asserts resend spacing through PixelPainter; private would respell the policy as literals there. Stays at sidebar_pane reach (pass 22a)."
-
-[[verdict]]
-kind = "item"
 key = "sidebar_pane::pixel::meter::MeterPixels"
 reason = "Field type of UiState::meter_pixels; private_interfaces floors it at that field's reach, which pass 24c narrowed to the pane, so this follows it there (pass 22a; re-anchored pass 24c)."
 

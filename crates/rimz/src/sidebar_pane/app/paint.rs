@@ -445,21 +445,19 @@ impl FramePainter {
             if std::mem::take(&mut ui.clear_pending) {
                 terminal.clear()?;
             }
-            let now_ms = u64::from(snapshot.theme.display.resolved_refresh_ms())
-                .saturating_mul(view.animation_phase);
             let permit = match kind {
                 PaintKind::Routed(permit) => permit,
                 PaintKind::Mirror(_) => None,
             };
             if let Some(permit) = permit {
-                self.ensure_pixel_transmitted(&mut graphics, ui, now_ms, permit)?;
+                self.ensure_pixel_transmitted(&mut graphics, ui, permit)?;
                 bracket = !graphics.is_empty();
                 terminal.backend_mut().write_all(&graphics)?;
                 graphics.clear();
             }
             render::draw_to_terminal(terminal, snapshot, alert, view, ui)?;
             if let Some(permit) = permit {
-                self.ensure_meters_transmitted(&mut graphics, ui, now_ms, permit)?;
+                self.ensure_meters_transmitted(&mut graphics, ui, permit)?;
             }
             bracket |= !graphics.is_empty();
             terminal.backend_mut().write_all(&graphics)
@@ -477,7 +475,6 @@ impl FramePainter {
         &mut self,
         writer: &mut W,
         ui: &UiState,
-        now_ms: u64,
         permit: &ImagePermit,
     ) -> io::Result<()> {
         let SlotState::Held(held) = &mut self.slot else {
@@ -492,8 +489,7 @@ impl FramePainter {
         };
         held.sweep_once(writer, self.pixel_wrap, permit)?;
         if let Some(png) = self.assets.pixel_frame(&pixel.pet_id, pixel.sprite_index) {
-            held.pet
-                .ensure_transmitted(writer, pixel, png, now_ms, permit)?;
+            held.pet.ensure_transmitted(writer, pixel, png, permit)?;
         }
         Ok(())
     }
@@ -502,7 +498,6 @@ impl FramePainter {
         &mut self,
         writer: &mut W,
         ui: &UiState,
-        now_ms: u64,
         permit: &ImagePermit,
     ) -> io::Result<()> {
         let SlotState::Held(held) = &mut self.slot else {
@@ -515,10 +510,9 @@ impl FramePainter {
         held.sweep_once(writer, self.pixel_wrap, permit)?;
         for (image_id, raster) in pixels.visible_images() {
             held.meter
-                .ensure_transmitted(writer, image_id, raster, now_ms, permit)?;
+                .ensure_transmitted(writer, image_id, raster, permit)?;
         }
-        held.logo
-            .ensure_transmitted(writer, &pixels.logos, now_ms, permit)
+        held.logo.ensure_transmitted(writer, &pixels.logos, permit)
     }
 
     /// Delete every resident image under a permit, then return the slot. Without

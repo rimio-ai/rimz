@@ -221,16 +221,17 @@ The testkit scenario player (the hidden `rimz sidebar play`, built only with the
 
 `ImageResidency` in `pixel/mod.rs` decides when to send, for the pet (`PixelPainter`), the meter and the logos (`LogoPainter`) alike:
 
-- A sprite is transmitted the first time a frame shows it, or when its id or pet changes. The PNG bytes come from the shared prepared sheet.
-- A sprite whose last send is `RESIDENT_REFRESH_MS` (2 seconds) old is re-sent the next time a frame shows it, so a dropped tmux passthrough or a terminal image-store eviction recovers on its own. Re-sends that fall on different frames are spaced at least `MIN_RESEND_SPACING_MS` (250 ms) apart.
+- An image is transmitted the first time a frame shows it, or when its id or content changes (for a sprite, its pet). The PNG bytes come from the shared prepared sheet.
+- A slot take starts every residency over, so a pane arriving at a tab with a fresh slot sends every image it shows. A pane that comes back on screen still holding its slot sends nothing and relies on the terminal still holding the images.
+- An unchanged image on screen is never sent again, however long it stays. An image lost on its way to the terminal (a client too slow to keep up, a suspended client, the sidebar pane in copy mode, the terminal discarding the image) stays blank until its content changes or the pane next takes a slot.
 - A pet change re-transmits the new sheet under the same ids, so the terminal replaces image data in place without a delete.
 - Deletes free both image data and placements (`d=I`), at teardown and on the next paint after pixels are disabled; the first routed paint after a frame carrying those deletes is written returns the slot. Every attachment loop exit, errors included, attempts cleanup (`LoopState::clear_pixel`). A lost pty cannot deliver it, and the next holder's sweep bounds those leftovers. Range deletes are never used, because Ghostty 1.3.1 deletes unrelated images for that operation.
 
-Every transmit carries a virtual placement (`U=1,p=1`) that the placeholder cells refer to. A re-send replaces that placement instead of adding one, and restores it on terminals that drop placements when replacing image data.
+Every transmit carries a virtual placement (`U=1,p=1`) that the placeholder cells refer to. A send under an id already resident (a pet change) replaces that placement instead of adding one, and restores it on terminals that drop placements when replacing image data.
 
 Inside tmux, one image's complete chunked transmit and its placement share one passthrough DCS envelope (`wrap_pixel_payload`). tmux interleaves panes only between DCS envelopes, while the terminal holds one pending chunked load, so one envelope per image keeps another pane's graphics commands from corrupting that load. Each kitty chunk still carries at most 4096 base64 bytes. Deletes go in envelopes of their own.
 
-Graphics traffic is kept to these sends because some macOS terminals re-evaluate the mouse pointer shape on every image update. `glyphs = "sextant"` removes the pet's share, and `[theme.display] pixel = "off"` removes the meter's and the logos' too. A logo is sent once per box it fills and re-sent only on the shared resident refresh.
+Graphics traffic is kept to these sends because some macOS terminals re-evaluate the mouse pointer shape on every image update. `glyphs = "sextant"` removes the pet's share, and `[theme.display] pixel = "off"` removes the meter's and the logos' too. A logo is sent once per box it fills.
 
 Mode 2026 does not nest: under the renderer's [synchronized-output policy](./sidebar.md#synchronized-output), the slot sweep, in-frame deletes, and meter and logo transmits add no bracket of their own. Teardown (`FramePainter::clear`) brackets its resident deletes and writes nothing when none remain.
 

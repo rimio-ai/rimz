@@ -31,8 +31,6 @@ pub(super) const LOGO_ID_CAPACITY: u32 = 64;
 pub(super) const METER_ID_OFFSET: u32 = 0x100;
 pub(super) const METER_ID_CAPACITY: u32 = 256;
 pub(super) const IMAGE_ID_COLOR_MASK: u32 = 0x00ff_ffff;
-pub(super) const RESIDENT_REFRESH_MS: u64 = 2000;
-pub(super) const MIN_RESEND_SPACING_MS: u64 = 250;
 
 /// Cross-version image-id layout. Moving it orphans images from older renderers.
 /// A pane holds one only while it holds an [`ImagePermit`]: a permitted routed frame
@@ -124,17 +122,16 @@ pub fn encode_png(width: u32, height: u32, data: &[u8]) -> Vec<u8> {
 struct Resident<C> {
     image_id: u32,
     content: C,
-    sent_at_ms: u64,
 }
 
 /// Generic terminal image residency. Content bytes stay caller-owned and are
-/// produced only after first-send/change/stale policy requests transmission.
+/// produced only when a key is first shown or its image id or content changes:
+/// an unchanged image on screen is never sent again.
 #[derive(Debug)]
 pub(super) struct ImageResidency<K, C> {
     wrap: bool,
     images: BTreeMap<K, Resident<C>>,
     resident_ids: BTreeSet<u32>,
-    last_resend_ms: Option<u64>,
 }
 
 impl<K: Ord, C: Eq> ImageResidency<K, C> {
@@ -143,7 +140,6 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
             wrap,
             images: BTreeMap::new(),
             resident_ids: BTreeSet::new(),
-            last_resend_ms: None,
         }
     }
 
@@ -158,7 +154,6 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
             key,
             image_id,
             content,
-            now_ms,
             cols,
             rows,
         } = request;
@@ -166,14 +161,7 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
             .images
             .get(&key)
             .is_none_or(|resident| resident.image_id != image_id || resident.content != content);
-        let stale = self.images.get(&key).is_some_and(|resident| {
-            now_ms.saturating_sub(resident.sent_at_ms) >= RESIDENT_REFRESH_MS
-        });
-        let resend = stale
-            && self.last_resend_ms.is_none_or(|last| {
-                last == now_ms || now_ms.saturating_sub(last) >= MIN_RESEND_SPACING_MS
-            });
-        if !changed && !resend {
+        if !changed {
             return Ok(false);
         }
 
@@ -181,18 +169,8 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
         let mut payload = transmit_png(image_id, &png);
         payload.extend_from_slice(&resident_place(image_id, cols, rows));
         write_graphics(writer, &wrap_pixel_payload(&payload, self.wrap))?;
-        self.images.insert(
-            key,
-            Resident {
-                image_id,
-                content,
-                sent_at_ms: now_ms,
-            },
-        );
+        self.images.insert(key, Resident { image_id, content });
         self.resident_ids.insert(image_id);
-        if resend {
-            self.last_resend_ms = Some(now_ms);
-        }
         Ok(true)
     }
 
@@ -222,7 +200,6 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
     /// replacement for a new pet and payload release while disabled.
     pub(super) fn invalidate(&mut self) {
         self.images.clear();
-        self.last_resend_ms = None;
     }
 
     /// Unbracketed: the caller's frame or teardown carries the
@@ -250,15 +227,8 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
     }
 
     #[cfg(test)]
-    pub(super) fn mark_resident(&mut self, key: K, image_id: u32, content: C, now_ms: u64) {
-        self.images.insert(
-            key,
-            Resident {
-                image_id,
-                content,
-                sent_at_ms: now_ms,
-            },
-        );
+    pub(super) fn mark_resident(&mut self, key: K, image_id: u32, content: C) {
+        self.images.insert(key, Resident { image_id, content });
         self.resident_ids.insert(image_id);
     }
 
@@ -277,7 +247,6 @@ pub(super) struct ImageRequest<K, C> {
     pub(super) key: K,
     pub(super) image_id: u32,
     pub(super) content: C,
-    pub(super) now_ms: u64,
     pub(super) cols: u16,
     pub(super) rows: u16,
 }
@@ -504,7 +473,6 @@ mod tests {
                         key: 7,
                         image_id: 7,
                         content: (),
-                        now_ms: 0,
                         cols: 12,
                         rows: 6,
                     },
