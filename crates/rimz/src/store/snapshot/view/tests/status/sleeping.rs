@@ -155,29 +155,22 @@ fn launched_child_resting_on_shell_holds_parent_turn() {
 }
 
 #[test]
-fn launched_child_in_its_soft_compaction_cycle_holds_parent_turn() {
-    use crate::agents::state::{SoftCompactMark, SoftCompactProgress};
-    for (label, child_status, compacting, progress, holds) in [
+fn launched_child_owed_a_compaction_continue_holds_parent_turn() {
+    use crate::agents::state::SoftCompactMark;
+    for (label, child_status, compacting, owed, holds) in [
         ("child mid-turn", AgentStatus::Running, false, None, true),
         (
-            "wrap-up turn ended",
+            "turn ended, continue owed",
             AgentStatus::Success,
             false,
-            Some(SoftCompactProgress::TurnEnded),
+            Some(true),
             true,
         ),
         (
-            "compacting after the wrap-up",
+            "compacting, continue owed",
             AgentStatus::Success,
             true,
-            Some(SoftCompactProgress::TurnEnded),
-            true,
-        ),
-        (
-            "continue queued",
-            AgentStatus::Success,
-            false,
-            Some(SoftCompactProgress::ContinueQueued),
+            Some(true),
             true,
         ),
         (
@@ -188,17 +181,17 @@ fn launched_child_in_its_soft_compaction_cycle_holds_parent_turn() {
             false,
         ),
         (
-            "cycle finished",
+            "continue settled",
             AgentStatus::Success,
             false,
-            Some(SoftCompactProgress::Continued),
+            Some(false),
             false,
         ),
         (
-            "compacting after a finished cycle",
+            "compacting, continue settled",
             AgentStatus::Success,
             true,
-            Some(SoftCompactProgress::Continued),
+            Some(false),
             false,
         ),
     ] {
@@ -209,10 +202,12 @@ fn launched_child_in_its_soft_compaction_cycle_holds_parent_turn() {
         if compacting {
             child.compacting_since = Some(ago(5));
         }
-        child.soft_compact = progress.map(|progress| SoftCompactMark {
-            steered_at: ago(60),
+        child.soft_compact = owed.map(|owed| SoftCompactMark {
             compactions: Some(0),
-            progress,
+            continue_owed: owed.then(|| crate::agents::state::OwedContinue {
+                message_id: crate::ids::MessageId::new(),
+                queued_at: ago(5),
+            }),
         });
         let snapshot = room_with_agent_panes(vec![parent, child]);
         let parent = row(&snapshot, "root");

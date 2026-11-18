@@ -926,6 +926,9 @@ enum AgentsSubcmd {
         /// Replace the configured compaction brief; an empty string sends the bare command.
         #[arg(allow_hyphen_values = true)]
         instruction: Option<String>,
+        /// Send no continue after compacting an agent mid-turn.
+        #[arg(long)]
+        no_continue: bool,
     },
     /// Resume a closed agent or a lane's closed agents where they left off.
     Resume {
@@ -1250,8 +1253,9 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Compact {
             reference,
             instruction,
+            no_continue,
         }) => {
-            return compact::compact_agent(reference, instruction, globals);
+            return compact::compact_agent(reference, instruction, no_continue, globals);
         }
         Some(AgentsSubcmd::Resume {
             scope,

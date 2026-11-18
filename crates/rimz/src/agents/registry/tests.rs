@@ -405,51 +405,38 @@ fn soft_compact_participation_pins_every_builtin_skip_and_reason() {
 }
 
 #[test]
-fn soft_compact_prompt_preserves_the_exact_endings_and_seat_briefs() {
+fn compact_reminder_names_the_trailing_or_bare_self_compaction() {
     let mut agent = AgentState::seed(
         AgentKind::new_unchecked("codex"),
         AgentSessionId::from("soft-compact"),
         AgentStatus::Running,
         jiff::Timestamp::from_second(1_700_000_000).unwrap(),
     );
-    let harness = HarnessConfig::default();
-    let prefix = "Context is getting high, so I'm going to compact you once this turn ends. Wrap up the step you're on, without leaving any file half-edited, and don't start anything new. Then end your turn";
-    for (kind, team, instruction, expected) in [
-        ("claude", None, None, format!("{prefix}.")),
+    let prefix = "Your context is getting high. At a good stopping point, before you start anything new, compact yourself: ";
+    let suffix = "RimZ compacts you once this turn ends and then tells you to continue.";
+    for (kind, expected) in [
         (
-            "codex",
-            None,
-            None,
+            "claude",
             format!(
-                "{prefix} with a note for yourself after the compaction:\n\n{}",
-                harness.compact_instruction(crate::config::CompactSeat::Solo)
+                "{prefix}run `rimz agents compact @me \"<what to keep>\"`, naming what you need to keep. {suffix}"
             ),
         ),
         (
             "codex",
-            Some("forge"),
-            None,
             format!(
-                "{prefix} with a note for yourself after the compaction:\n\n{}",
-                harness.compact_instruction(crate::config::CompactSeat::Team)
+                "{prefix}note what you need to keep in your reply, since this agent's compaction takes no brief, then run `rimz agents compact @me`. {suffix}"
             ),
         ),
-        (
-            "codex",
-            Some("forge"),
-            Some("  Keep exact decisions.\nAnd open questions.  "),
-            format!(
-                "{prefix} with a note for yourself after the compaction:\n\n  Keep exact decisions.\nAnd open questions.  "
-            ),
-        ),
-        ("codex", None, Some(""), format!("{prefix}.")),
     ] {
         agent.kind = AgentKind::new_unchecked(kind);
-        agent.team = team.map(str::to_owned);
-        let mut harness = harness.clone();
-        harness.compact_instruction = instruction.map(str::to_owned);
-        assert_eq!(soft_compact_prompt(&agent, &harness), Some(expected));
+        assert_eq!(compact_reminder(&agent), Some(expected), "{kind}");
     }
+    agent.kind = AgentKind::new_unchecked("amp");
+    assert_eq!(
+        compact_reminder(&agent),
+        None,
+        "no native compaction command"
+    );
 }
 
 #[test]

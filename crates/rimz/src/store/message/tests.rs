@@ -2848,8 +2848,8 @@ fn unknown_premise_round_trips_and_holds() {
 }
 
 #[test]
-fn row_premises_break_on_lifespan_prompt_idle_turn_and_cleared_soft_cycle() {
-    use crate::agents::state::{SoftCompactMark, SoftCompactProgress};
+fn row_premises_break_on_lifespan_prompt_idle_turn_and_cleared_continue() {
+    use crate::agents::state::SoftCompactMark;
 
     let at = Timestamp::from_second(1_000).unwrap();
     let later = at + Duration::from_secs(1);
@@ -2876,13 +2876,20 @@ fn row_premises_break_on_lifespan_prompt_idle_turn_and_cleared_soft_cycle() {
     soft.soft_compact = Some(SoftCompactStep::Continue);
     let mut soft_live = receiver.clone();
     soft_live.soft_compact = Some(SoftCompactMark {
-        steered_at: at,
         compactions: Some(1),
-        progress: SoftCompactProgress::Continued,
+        continue_owed: Some(crate::agents::state::OwedContinue {
+            message_id: soft.message_id.clone(),
+            queued_at: at,
+        }),
     });
     let mut soft_ended = soft_live.clone();
     soft_ended.ended_at = Some(later);
-    let cases: [(&MessageRecord, Option<AgentState>, Timestamp, Option<&str>); 13] = [
+    let mut soft_reminded = receiver.clone();
+    soft_reminded.soft_compact = Some(SoftCompactMark {
+        compactions: Some(1),
+        continue_owed: None,
+    });
+    let cases: [(&MessageRecord, Option<AgentState>, Timestamp, Option<&str>); 14] = [
         (&plain, Some(prompted(Some(later))), later, None),
         (&lifespan, Some(receiver.clone()), at, None),
         (
@@ -2918,13 +2925,19 @@ fn row_premises_break_on_lifespan_prompt_idle_turn_and_cleared_soft_cycle() {
             &soft,
             Some(soft_ended),
             later,
-            Some("soft-compaction cycle cleared before delivery"),
+            Some("compaction continue cleared before delivery"),
+        ),
+        (
+            &soft,
+            Some(soft_reminded),
+            later,
+            Some("compaction continue cleared before delivery"),
         ),
         (
             &soft,
             Some(receiver.clone()),
             later,
-            Some("soft-compaction cycle cleared before delivery"),
+            Some("compaction continue cleared before delivery"),
         ),
     ];
     let actual = cases

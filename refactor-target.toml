@@ -347,9 +347,9 @@ upward-dependencies = ["address"]
 # SubagentOwner, resolve_owner and AgentSeat::from_identity share recorded ownership (+3).
 # RebuildScope, RebuildReport, RebuiltDay, KeptDay, RebuildErr and
 # rebuild_spending_history share saved-day rebuilds with the CLI (+6).
-# SoftCompactSkip, soft_compact_skip and soft_compact_prompt and their facade exports share mid-turn policy (+6).
-# SoftCompactMark carries the fold's durable wrap-up epoch into helper policy (+1).
-# SoftCompactProgress distinguishes wrap-up, clean turn end and queued continuation (+1).
+# SoftCompactSkip, soft_compact_skip and compact_reminder and their facade exports share the reminder's policy.
+# SoftCompactMark carries the fold's reminder epoch and owed continue into reminder and wake policy (+1).
+# OwedContinue names the continue the mark owes by message id, in the slot SoftCompactProgress left.
 # ShareReport::default_home and shares_history let the CLI render its sharing summary (+2).
 # AgentState::has_native_turn_started shares the compaction marker's native-hook gate (+1).
 # AgentState::post_compaction_usage shares the post-compaction estimate between hooks (+1).
@@ -460,18 +460,18 @@ reason = "Durable launch origin is stamped by launchers, inherited by agent laun
 
 [[verdict]]
 kind = "item"
-key = "agents::state::SoftCompactProgress"
-reason = "Only a real clean turn end makes the marked wrap-up's continuation due."
-
-[[verdict]]
-kind = "item"
 key = "agents::state::PriorTurn"
 reason = "The store folds the turn stamps a turn opened over; the cache clock reads them back while a usage-limit refusal explains that turn."
 
 [[verdict]]
 kind = "item"
+key = "agents::state::OwedContinue"
+reason = "The store folds which compaction continue a card is owed; only that record's ending clears it, and the message premise matches its id."
+
+[[verdict]]
+kind = "item"
 key = "agents::state::SoftCompactMark"
-reason = "The store folds the sent wrap-up epoch, clean turn end and queued continuation; producer and helper policy read it."
+reason = "The store folds the sent reminder's epoch and the owed compaction continue; reminder policy and owed wakes read it."
 
 [[verdict]]
 kind = "item"
@@ -595,8 +595,8 @@ reason = "Command and declared context/compaction coverage determine participati
 
 [[verdict]]
 kind = "item"
-key = "agents::registry::soft_compact_prompt"
-reason = "The soft-compaction helper composes the exact wrap-up text with the existing seat brief and trailing-command capability."
+key = "agents::registry::compact_reminder"
+reason = "The reminder helper composes the self-compaction reminder, with a brief only where the adapter's command takes one."
 
 [[verdict]]
 kind = "item"
@@ -2497,8 +2497,8 @@ reason = "The producer passes card identity and the cycle step to its detached C
 
 [[verdict]]
 kind = "item"
-key = "harness::soft_compact::due_step"
-reason = "Producer and helper make the same live-row, context and durable-cycle decision."
+key = "harness::soft_compact::reminder_due"
+reason = "Producer and helper make the same live-row, context and reminder-epoch decision."
 
 [[verdict]]
 kind = "item"
@@ -3431,18 +3431,13 @@ reason = "The count and senders of the prompts that stopped a wait carry to the 
 
 [[verdict]]
 kind = "item"
-key = "message::soft_compact::WrapUpOutcome"
-reason = "The helper records whether a steer reached the pane, including a miss's reason."
+key = "message::soft_compact::ReminderOutcome"
+reason = "The helper records whether the reminder reached the pane, including a miss's reason."
 
 [[verdict]]
 kind = "item"
-key = "message::soft_compact::send_wrap_up"
-reason = "The explicit steer owns enqueue, one delivery attempt and queued-only cancellation."
-
-[[verdict]]
-kind = "item"
-key = "message::soft_compact::send_continue"
-reason = "The continue is queued at the card's locked FIFO tail before one boundary attempt."
+key = "message::soft_compact::send_reminder"
+reason = "The reminder steer owns enqueue, one delivery attempt and queued-only cancellation."
 
 [[verdict]]
 kind = "item"
@@ -4485,7 +4480,7 @@ path = "crates/rimz/src/store"
 # ThrottleNotice carries each needs-a-fix cause's oldest reason and count.
 # SidebarSnapshot::pane_session_demands shares the ladder's discovery request with the producer (+1).
 # SoftCompactStep shares the optional steer-only/continue record tag with message policy (+1).
-# Store::queue_tail_message assigns an unclaimed continue's FIFO-tail id under the queue lock (+1).
+# Store::queue_message_with_tail queues a compaction command and its continue in one commit, the continue's FIFO-tail id assigned under the queue lock (+1).
 # workflow::RunAddress, its parser error, matching, and RunRecord::address share run names (+4).
 # workflow::AttemptOutcome::as_str shares the attempt word with journal inspection (+1).
 # AgentCard carries the resolved post-compaction measurement gap to the renderer.
@@ -4561,7 +4556,8 @@ path = "crates/rimz/src/store"
 # feed writes and doctor reads; SubagentReporter lets a mod child record stand against the status line (+4).
 # store::agent_context::merge_mod_reading lands a mod reading in the session's sidecar;
 # ModCheckinRecord::checked_in_at is the check-in instant doctor compares a turn end with (+2).
-surface-budget = 667
+# store::message::read_record finds a compaction continue's command anywhere in the queue or history (+1).
+surface-budget = 668
 
 [[verdict]]
 kind = "item"

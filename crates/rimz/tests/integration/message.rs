@@ -14376,7 +14376,11 @@ fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
         rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
     );
     let messages = env.store().list_messages().expect("messages");
-    assert_eq!(messages.len(), 1);
+    assert_eq!(
+        messages.len(),
+        1,
+        "an agent at rest gets the command and no continue: {messages:?}"
+    );
     let command = &messages[0];
     assert_eq!(command.body, MessageBody::Command);
     assert_eq!(command.status, MessageStatus::Sent);
@@ -14453,10 +14457,18 @@ fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
     }
     let next_trace = env.project_root.join("manual-compact-after-prompt.log");
     let output = run_success(
-        traced_rimz(&env, &next_trace).args(["agents", "compact", "@claude"]),
-        "compact after a real prompt",
+        traced_rimz(&env, &next_trace).args(["agents", "compact", "@claude", "--no-continue"]),
+        "compact at rest with no continue",
     );
     assert!(String::from_utf8_lossy(&output.stdout).starts_with("compacting @claude (msg_"));
+    assert!(
+        env.store()
+            .list_messages()
+            .unwrap()
+            .iter()
+            .all(|message| message.soft_compact.is_none()),
+        "no continue at rest, with or without the flag"
+    );
     assert_compact_segments_then_enter(
         &trace_lines(&next_trace),
         rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
@@ -14671,7 +14683,7 @@ fn compaction_left_queued_arms_the_elder_wake() {
     assert!(!wake_stamp_path(&env).exists());
     let trace = env.project_root.join("queued-compact-wake.log");
     let output = run_success(
-        traced_rimz(&env, &trace).args(["agents", "compact", "@claude"]),
+        traced_rimz(&env, &trace).args(["agents", "compact", "@claude", "--no-continue"]),
         "queue running compact",
     );
     assert!(
@@ -14977,10 +14989,14 @@ fn idle_compaction_after_registration_at_rest_waits_then_delivers_once() {
             sender: MessageSender::System,
             automated: true,
             idle: true,
+            continue_text: None,
         },
     );
     assert!(
-        matches!(outcome, Ok(rimz::message::compact::CompactOutcome::Queued)),
+        matches!(
+            outcome,
+            Ok(rimz::message::compact::CompactOutcome::Queued { .. })
+        ),
         "expected a queued idle compaction after registration at rest, got {outcome:?}"
     );
     assert_eq!(message_by_id(&env, &id).status, MessageStatus::Queued);
@@ -15041,11 +15057,12 @@ fn idle_compaction_is_canceled_when_a_resumed_parked_turn_ends() {
             sender: MessageSender::System,
             automated: true,
             idle: true,
+            continue_text: None,
         },
     );
     assert!(matches!(
         outcome,
-        Ok(rimz::message::compact::CompactOutcome::Queued)
+        Ok(rimz::message::compact::CompactOutcome::Queued { .. })
     ));
     compact_race_hook(&env, &trace, "Stop");
     let ended = env.store().snapshot_cached().unwrap().agents[0].clone();
@@ -15217,6 +15234,7 @@ fn idle_compaction_first_attempt_keeps_its_cancellation_reason() {
             sender: MessageSender::System,
             automated: true,
             idle: true,
+            continue_text: None,
         },
     );
     let reason = match outcome {
@@ -15465,24 +15483,41 @@ fn agents_compact_queues_for_a_running_agent() {
         traced_rimz(&env, &trace).args(["agents", "compact", "@claude"]),
         "queue running compact",
     );
+    let receipt = String::from_utf8_lossy(&output.stdout);
     assert!(
-        String::from_utf8_lossy(&output.stdout).starts_with("queued compaction for @claude (msg_")
+        receipt.starts_with("queued compaction for @claude (msg_")
+            && receipt
+                .trim_end()
+                .ends_with("is running; delivers at its next turn boundary, then continues it"),
+        "{receipt}"
     );
     let messages = env.store().list_messages().expect("messages");
-    assert_eq!(messages.len(), 1);
+    assert_eq!(messages.len(), 2, "{messages:?}");
     let command = &messages[0];
     assert_eq!(command.status, MessageStatus::Queued);
     assert_eq!(command.body, MessageBody::Command);
     assert_eq!(command.gate, DeliveryGate::Done);
+    let continuation = &messages[1];
+    assert_eq!(continuation.status, MessageStatus::Queued);
+    assert_eq!(continuation.text, "continue");
     assert_eq!(
-        list_message_ids(
-            &env,
-            &[
-                "message", "list", "--all", "--system", "--status", "queued", "--json"
-            ],
-            None
-        ),
-        vec![command.message_id.to_string()]
+        continuation.follows_command.as_ref(),
+        Some(&command.message_id)
+    );
+    let mut listed = list_message_ids(
+        &env,
+        &[
+            "message", "list", "--all", "--system", "--status", "queued", "--json",
+        ],
+        None,
+    );
+    listed.sort();
+    assert_eq!(
+        listed,
+        vec![
+            command.message_id.to_string(),
+            continuation.message_id.to_string()
+        ]
     );
     let refused = traced_rimz(&env, &trace)
         .args(["agents", "compact", "@claude"])

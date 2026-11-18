@@ -1755,7 +1755,12 @@ pub(super) fn category_entries(
             0
         };
     row("Auto-compact:", "compacts", compacts, None);
-    row("Soft compact:", "soft_compacts", rollup.soft_compacts, None);
+    row(
+        "Compact reminder:",
+        "soft_compacts",
+        rollup.soft_compacts,
+        None,
+    );
     row("Keepalive:", "keepalives", rollup.keepalives, None);
     row("Idle stop:", "idle_stops", rollup.idle_stops, None);
     row(
@@ -2070,9 +2075,9 @@ fn row_benefit_line(
         } => {
             let agent = label.as_deref().unwrap_or(kind.as_str());
             let outcome = if *delivered {
-                "soft compact"
+                "compact reminder"
             } else {
-                "soft compact held"
+                "compact reminder held"
             };
             let error = error
                 .as_deref()

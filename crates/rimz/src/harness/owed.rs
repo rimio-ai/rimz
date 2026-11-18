@@ -1,7 +1,6 @@
 //! Wakes and prompts still owed to a supervised agent session.
 
 use crate::Store;
-use crate::agents::state::SoftCompactProgress;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::message::turn_wait::TurnWaitView;
 use crate::store::StoreErr;
@@ -23,10 +22,8 @@ use super::fleet::FleetRuns;
 /// (unless its board already reads Done), and a settled run's report is in
 /// the later queue read. That read must therefore count `TeamReport` too.
 ///
-/// The soft-compaction mark precedes the queue read: queuing a continue
-/// publishes its record before advancing the mark past the owed step. A
-/// wrap-up owes only while its turn is open, so an errored end that leaves
-/// the mark waiting for a clean one does not hold an idle agent forever.
+/// A continue a compaction command owes counts from the queue read alone, from
+/// its queuing until it is terminal; a smart-compaction reminder owes nothing.
 ///
 /// The wait terms keep `TurnWaitView`'s order, catalog → queue → rollup: a
 /// wake publishes its message record before it consumes its catalog row, and a
@@ -69,17 +66,6 @@ pub fn owed_wake(
             {
                 return Ok(Some(OwedWake::Team));
             }
-        }
-        if launcher.ended_at.is_none()
-            && launcher
-                .soft_compact
-                .is_some_and(|mark| match mark.progress {
-                    SoftCompactProgress::WrappingUp => launcher.holds_open_turn(),
-                    SoftCompactProgress::TurnEnded => true,
-                    SoftCompactProgress::ContinueQueued | SoftCompactProgress::Continued => false,
-                })
-        {
-            return Ok(Some(OwedWake::SoftCompact));
         }
     }
     let view = TurnWaitView::load(store)?;
@@ -184,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn soft_compaction_keeps_only_its_live_card_owed_until_continue_settles() {
+    fn compaction_continue_keeps_only_its_live_card_owed_until_it_settles_or_clears() {
         use crate::store::message::SoftCompactStep;
 
         let turn_end = |errored| LifecycleSignal::TurnEnded {
@@ -193,18 +179,17 @@ mod tests {
             turn_id: None,
         };
         for (queued, terminal, after, expected) in [
-            (false, false, None, Some("soft compaction")),
+            (false, false, None, None),
             (true, false, None, Some("soft compaction")),
             (true, true, None, None),
-            (false, false, Some(turn_end(false)), Some("soft compaction")),
-            (false, false, Some(turn_end(true)), None),
+            (true, false, Some(turn_end(false)), Some("soft compaction")),
+            (true, false, Some(turn_end(true)), Some("soft compaction")),
             (
-                false,
+                true,
                 false,
                 Some(LifecycleSignal::TurnInterrupted { turn_id: None }),
                 None,
             ),
-            (false, false, Some(LifecycleSignal::Ended), None),
             (true, false, Some(LifecycleSignal::Ended), None),
         ] {
             let (_dir, store) = fixture();
@@ -228,15 +213,15 @@ mod tests {
                 .agent_with_context(&kind, &"parent".into(), crate::RuntimeScope::Runtime)
                 .unwrap()
                 .unwrap();
-            let mut wrap_up = MessageRecord::new(
+            let mut reminder = MessageRecord::new(
                 store.paths().workspace_id.clone(),
                 &agent,
-                "wrap up".into(),
+                "compact yourself".into(),
                 DeliveryGate::Any,
             );
-            wrap_up.soft_compact = Some(SoftCompactStep::WrapUp);
-            wrap_up.status = MessageStatus::Sent;
-            store.queue_message(&wrap_up, "owed-test").unwrap();
+            reminder.soft_compact = Some(SoftCompactStep::WrapUp);
+            reminder.status = MessageStatus::Sent;
+            store.queue_message(&reminder, "owed-test").unwrap();
             if queued {
                 let mut continuation = MessageRecord::new(
                     store.paths().workspace_id.clone(),
@@ -245,6 +230,7 @@ mod tests {
                     DeliveryGate::Done,
                 );
                 continuation.soft_compact = Some(SoftCompactStep::Continue);
+                continuation.sender = crate::store::message::MessageSender::System;
                 store.queue_message(&continuation, "owed-test").unwrap();
                 if terminal {
                     store
@@ -253,18 +239,13 @@ mod tests {
                 }
             }
             let label = format!("queued={queued}, terminal={terminal}, after={after:?}");
-            let progress = store
+            let owed = store
                 .audit_rows()
                 .unwrap()
                 .find(&kind, &agent.agent_id)
-                .and_then(|agent| agent.soft_compact)
-                .map(|mark| mark.progress);
-            let expected_progress = match (queued, terminal) {
-                (false, _) => SoftCompactProgress::WrappingUp,
-                (true, false) => SoftCompactProgress::ContinueQueued,
-                (true, true) => SoftCompactProgress::Continued,
-            };
-            assert_eq!(progress, Some(expected_progress), "{label}");
+                .and_then(|agent| agent.soft_compact.clone())
+                .is_some_and(|mark| mark.continue_owed.is_some());
+            assert_eq!(owed, queued && !terminal, "{label}");
             if let Some(signal) = after {
                 lifecycle(signal);
             }

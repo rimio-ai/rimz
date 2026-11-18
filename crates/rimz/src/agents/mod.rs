@@ -145,8 +145,8 @@ pub(crate) use registry::{
     ResumeProbe, resumed_session_id_for_root, resumed_session_id_from_cmdline,
 };
 pub use registry::{
-    Runtime, SoftCompactSkip, all_definitions, compact_command, definition_by_kind,
-    find_definition, find_runtime, known_kinds, runtime_names, soft_compact_prompt,
+    Runtime, SoftCompactSkip, all_definitions, compact_command, compact_reminder,
+    definition_by_kind, find_definition, find_runtime, known_kinds, runtime_names,
     soft_compact_skip, spec_by_kind,
 };
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode};

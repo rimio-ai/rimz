@@ -277,7 +277,7 @@ fn premise_labels(message: &MessageListRow, now: Timestamp) -> Vec<String> {
         .idle_since
         .map(|at| format!("no turn since {}", time_with_absolute(at, now)));
     let cycle = (message.soft_compact == Some(rimz::store::message::SoftCompactStep::Continue))
-        .then(|| "soft-compaction cycle not cleared".to_owned());
+        .then(|| "compaction continue still owed".to_owned());
     let join = matches!(&message.sender, MessageSender::Harness { notice } if notice.awaits_join())
         .then(|| "linked runs not all joined".to_owned());
     [run, idle, cycle, join]
@@ -1087,7 +1087,7 @@ mod tests {
             [
                 format!("run {run} not ended"),
                 format!("no turn since {}", time_with_absolute(now, now)),
-                "soft-compaction cycle not cleared".to_owned(),
+                "compaction continue still owed".to_owned(),
                 "linked runs not all joined".to_owned(),
                 "msg_0000000000000001 still queued".to_owned(),
             ]

@@ -1135,10 +1135,11 @@ fn soft_compact_continue_gets_a_tail_id_without_claiming_the_boundary() {
     let q = Queue::new();
     let mut earlier = q.record(1);
     earlier.message_id = MessageId::parse("msg_v000000000000000").unwrap();
-    q.queue_message(&earlier, "session").unwrap();
     let mut continuation = q.record(2);
     continuation.soft_compact = Some(SoftCompactStep::Continue);
-    let queued = q.queue_tail_message(&continuation, "session").unwrap();
+    let queued = q
+        .queue_message_with_tail(&earlier, &continuation, "session")
+        .unwrap();
     assert!(
         queued.message_id > earlier.message_id,
         "a locked tail id sorts after every live record"

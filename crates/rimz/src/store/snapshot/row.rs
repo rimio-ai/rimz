@@ -1325,7 +1325,7 @@ pub struct SidebarSubAgent {
     /// An open native or launched child projected failed for silence, not a finished run.
     #[serde(default, skip_serializing_if = "is_false")]
     pub stalled: bool,
-    /// The child is compacting, or its soft-compaction cycle is in flight.
+    /// The child is compacting, or a compaction continue is still owed to it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub compacting: bool,
     /// The displayed running turn's shape (reasoning / acting).

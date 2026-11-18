@@ -156,8 +156,42 @@ pub(in crate::store) fn read_status(
     history_dir: &Path,
     message_id: &crate::ids::MessageId,
 ) -> Result<Option<MessageStatus>> {
-    if let Some(status) = status_in_file(&queue_path(messages_dir), message_id)? {
-        return Ok(Some(status));
+    #[derive(serde::Deserialize)]
+    struct StatusRow {
+        message_id: crate::ids::MessageId,
+        status: MessageStatus,
+    }
+    Ok(
+        find_row(messages_dir, history_dir, message_id, |row: &StatusRow| {
+            &row.message_id
+        })?
+        .map(|row| row.status),
+    )
+}
+
+pub(in crate::store) fn read_record(
+    messages_dir: &Path,
+    history_dir: &Path,
+    message_id: &crate::ids::MessageId,
+) -> Result<Option<MessageRecord>> {
+    find_row(
+        messages_dir,
+        history_dir,
+        message_id,
+        |row: &MessageRecord| &row.message_id,
+    )
+}
+
+/// The row for `message_id`, decoded as `T`: the live queue first, then every history bucket,
+/// newest first.
+fn find_row<T: serde::de::DeserializeOwned>(
+    messages_dir: &Path,
+    history_dir: &Path,
+    message_id: &crate::ids::MessageId,
+    id: fn(&T) -> &crate::ids::MessageId,
+) -> Result<Option<T>> {
+    if let Some(row) = row_in_file(&queue_path(messages_dir), message_id, id)? {
+        return Ok(Some(row));
     }
     let mut files = bucket_files(history_dir).map_err(|source| MessageStoreErr::Io {
         path: history_dir.to_path_buf(),
@@ -165,22 +199,18 @@ pub(in crate::store) fn read_status(
     })?;
     files.sort();
     for path in files.into_iter().rev() {
-        if let Some(status) = status_in_file(&path, message_id)? {
-            return Ok(Some(status));
+        if let Some(row) = row_in_file(&path, message_id, id)? {
+            return Ok(Some(row));
         }
     }
     Ok(None)
 }
 
-fn status_in_file(
+fn row_in_file<T: serde::de::DeserializeOwned>(
     path: &Path,
     message_id: &crate::ids::MessageId,
-) -> Result<Option<MessageStatus>> {
-    #[derive(serde::Deserialize)]
-    struct StatusRow {
-        message_id: crate::ids::MessageId,
-        status: MessageStatus,
-    }
+    id: fn(&T) -> &crate::ids::MessageId,
+) -> Result<Option<T>> {
     let file = match fs::File::open(path) {
         Ok(file) => file,
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -191,15 +221,13 @@ fn status_in_file(
             });
         }
     };
-    for row in
-        serde_json::Deserializer::from_reader(io::BufReader::new(file)).into_iter::<StatusRow>()
-    {
+    for row in serde_json::Deserializer::from_reader(io::BufReader::new(file)).into_iter::<T>() {
         let row = row.map_err(|source| MessageStoreErr::Json {
             path: path.to_path_buf(),
             source,
         })?;
-        if row.message_id == *message_id {
-            return Ok(Some(row.status));
+        if id(&row) == message_id {
+            return Ok(Some(row));
         }
     }
     Ok(None)

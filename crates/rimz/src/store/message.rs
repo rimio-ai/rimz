@@ -49,6 +49,20 @@ pub fn read_status(
     )?)
 }
 
+/// The record of `message_id`, live or in any history bucket, read under the workspace lock;
+/// `None` when neither holds it.
+pub(crate) fn read_record(
+    paths: &crate::StatePaths,
+    message_id: &MessageId,
+) -> crate::store::Result<Option<MessageRecord>> {
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+    Ok(codec::read_record(
+        &paths.messages_dir,
+        &paths.message_history_dir,
+        message_id,
+    )?)
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "origin")]
 pub enum MessageSender {
@@ -671,6 +685,10 @@ pub struct MessageRecord {
     pub auto_compact: Option<AutoCompact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soft_compact: Option<SoftCompactStep>,
+    /// For a continue, the compaction command it was queued behind. Delivery withdraws the
+    /// continue once that command has ended without reaching the pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follows_command: Option<MessageId>,
     /// For a smart-compact command, the occupied-context-token reading the
     /// trigger fired on. While a carried-forward stale gauge still equals this
     /// baseline, the send path suppresses duplicate `/compact` commands; a new
@@ -698,6 +716,9 @@ pub struct MessageRecord {
     pub batch_id: Option<MessageId>,
 }
 
+/// A smart-compaction record's role. `WrapUp`, a tag older than the reminder it now marks, is
+/// the steer-only reminder to compact; `Continue` is the continue queued behind a compaction
+/// command. Both spellings stay, since records and events on disk carry them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SoftCompactStep {
@@ -822,6 +843,7 @@ impl MessageRecord {
             announced_at: None,
             auto_compact: None,
             soft_compact: None,
+            follows_command: None,
             compacted_context_tokens: None,
             idle_since: None,
             premises: Vec::new(),
@@ -876,6 +898,7 @@ impl MessageRecord {
                 .collect(),
         );
         message.soft_compact = record.soft_compact;
+        message.follows_command = record.follows_command.clone();
         message.reply_wanted = record.reply_wanted;
         message
     }
@@ -1028,7 +1051,7 @@ impl MessageRecord {
 
     /// The first premise `row`, the receiver's live row, shows broken, as the withdrawal reason:
     /// a lifespan past `now`, a prompt later than the sender's copy, a turn edge after an idle
-    /// compaction's decision, or a soft-compaction continue whose cycle cleared. The harness
+    /// compaction's decision, or a compaction continue its row no longer owes. The harness
     /// subjects (`about_run`, a fleet digest's joins, a stage visit) are judged on the
     /// `message` side, which calls this first.
     pub(crate) fn broken_row_premise(
@@ -1040,9 +1063,9 @@ impl MessageRecord {
             return Some("lifespan ended before delivery".to_owned());
         }
         if self.soft_compact == Some(SoftCompactStep::Continue)
-            && row.is_none_or(|row| row.ended_at.is_some() || row.soft_compact.is_none())
+            && row.is_none_or(|row| !self.is_owed_continue_of(row))
         {
-            return Some("soft-compaction cycle cleared before delivery".to_owned());
+            return Some("compaction continue cleared before delivery".to_owned());
         }
         let row = row?;
         if row.ended_at.is_none() && self.idle_compaction_lapsed(row) {
@@ -1055,6 +1078,17 @@ impl MessageRecord {
                     if row.last_prompt_at > *last_prompt_at)
             })
             .then(|| "agent was prompted after this message was queued".to_owned())
+    }
+
+    /// Whether `row` still owes this record as its compaction continue: an older continue
+    /// queued before the one the mark names is owed nothing.
+    fn is_owed_continue_of(&self, row: &AgentState) -> bool {
+        row.soft_compact_in_flight()
+            && row
+                .soft_compact
+                .as_ref()
+                .and_then(|mark| mark.continue_owed.as_ref())
+                .is_some_and(|owed| owed.message_id == self.message_id)
     }
 
     /// The withdrawal reason when this record waits on a visit to `checkout`'s board other than

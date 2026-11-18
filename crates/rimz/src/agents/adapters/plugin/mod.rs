@@ -938,6 +938,16 @@ setup-doc = "README.md"
             (
                 vec!["context", "compaction_start", "compaction_end"],
                 Some("/compact"),
+                Some(SoftCompactSkip::NoTurnStartHook),
+            ),
+            (
+                vec![
+                    "turn_start",
+                    "context",
+                    "compaction_start",
+                    "compaction_end",
+                ],
+                Some("/compact"),
                 None,
             ),
         ] {

@@ -565,8 +565,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_owner_ancestry_contract_is_version_104() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 104);
+fn snapshot_compaction_continue_contract_is_version_105() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 105);
+}
+
+#[test]
+fn pre_105_soft_compact_cycle_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(104);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views whose rows carry the soft-compaction cycle's progress mark must refold"
+    );
 }
 
 #[test]

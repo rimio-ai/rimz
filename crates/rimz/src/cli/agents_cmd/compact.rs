@@ -1,4 +1,5 @@
-//! Operator-triggered context compaction through the native command queue.
+//! Operator-triggered context compaction through the native command queue, with the continue
+//! a busy agent is owed afterward.
 
 use std::io::Write;
 
@@ -13,6 +14,7 @@ use crate::cli::{GlobalFlags, ctx::Ctx, render, send};
 pub(super) fn compact_agent(
     reference: String,
     instruction: Option<String>,
+    no_continue: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
@@ -70,15 +72,23 @@ pub(super) fn compact_agent(
             command,
             sender: send::sender_for(caller.as_ref(), ctx.channel(), false),
             automated: false,
+            continue_text: super::exec::continue_text(&config.resume.auto_continue_text)
+                .filter(|_| !no_continue)
+                .map(str::to_owned),
         },
     )
     .map_err(|err| anyhow::anyhow!("{handle}: {}", err.live_message(jiff::Timestamp::now())))?;
     match outcome {
         CompactOutcome::Sent => writeln!(render::out(), "compacting {handle} ({message_id})")?,
-        CompactOutcome::Queued => writeln!(
+        CompactOutcome::Queued { continues } => writeln!(
             render::out(),
-            "queued compaction for {handle} ({message_id}) — {handle} is {}; delivers at its next turn boundary",
+            "queued compaction for {handle} ({message_id}) — {handle} is {}; delivers at its next turn boundary, {}",
             agent.effective_status(jiff::Timestamp::now()).as_str(),
+            if continues {
+                "then continues it"
+            } else {
+                "with no continue after"
+            },
         )?,
     }
     Ok(())

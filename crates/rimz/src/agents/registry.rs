@@ -187,13 +187,14 @@ pub fn compact_command(agent: &AgentState, harness: &HarnessConfig) -> Option<St
         .compact_command(harness.compact_instruction(agent.compact_seat()))
 }
 
-/// Why an adapter cannot take part in mid-turn soft compaction.
+/// Why an adapter cannot take the mid-turn smart-compaction reminder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SoftCompactSkip {
     NoCompactCommand,
     NoLiveContextReading,
     NoCompactionSignal,
+    NoTurnStartHook,
 }
 
 impl std::fmt::Display for SoftCompactSkip {
@@ -202,11 +203,12 @@ impl std::fmt::Display for SoftCompactSkip {
             Self::NoCompactCommand => "no compact command",
             Self::NoLiveContextReading => "no live context reading",
             Self::NoCompactionSignal => "no compaction signal",
+            Self::NoTurnStartHook => "no turn-start hook",
         })
     }
 }
 
-/// Derive mid-turn participation from the adapter's declared command and coverage.
+/// Derive reminder participation from the adapter's declared command and coverage.
 pub fn soft_compact_skip(definition: &AgentDefinition) -> Option<SoftCompactSkip> {
     if definition.spec().launch.compact_command.is_none() {
         return Some(SoftCompactSkip::NoCompactCommand);
@@ -223,25 +225,33 @@ pub fn soft_compact_skip(definition: &AgentDefinition) -> Option<SoftCompactSkip
     ) {
         return Some(SoftCompactSkip::NoLiveContextReading);
     }
+    if !definition.spec().lifecycle_hooks.turn_started.is_native() {
+        return Some(SoftCompactSkip::NoTurnStartHook);
+    }
     None
 }
 
-/// Compose the wrap-up steer, carrying the seat's brief when the command cannot.
-pub fn soft_compact_prompt(agent: &AgentState, harness: &HarnessConfig) -> Option<String> {
+/// Compose the smart-compaction reminder: run `rimz agents compact @me` at a good stopping
+/// point, with a brief of what to keep where the adapter's command takes one, bare where it
+/// does not; `None` when the adapter has no native compaction command.
+pub fn compact_reminder(agent: &AgentState) -> Option<String> {
     let command = spec_by_kind(agent.kind.as_str())?.launch.compact_command?;
     let prefix = concat!(
-        "Context is getting high, so I'm going to compact you once this turn ends. ",
-        "Wrap up the step you're on, without leaving any file half-edited, ",
-        "and don't start anything new. Then end your turn"
+        "Your context is getting high. At a good stopping point, before you start anything new, ",
+        "compact yourself: "
     );
-    let brief = harness.compact_instruction(agent.compact_seat());
-    Some(
-        if command.instruction == CompactInstruction::Trailing || brief.is_empty() {
-            format!("{prefix}.")
-        } else {
-            format!("{prefix} with a note for yourself after the compaction:\n\n{brief}")
-        },
-    )
+    let suffix = "RimZ compacts you once this turn ends and then tells you to continue.";
+    Some(if command.instruction == CompactInstruction::Trailing {
+        format!(
+            "{prefix}run `rimz agents compact @me \"<what to keep>\"`, naming what you need to \
+             keep. {suffix}"
+        )
+    } else {
+        format!(
+            "{prefix}note what you need to keep in your reply, since this agent's compaction \
+             takes no brief, then run `rimz agents compact @me`. {suffix}"
+        )
+    })
 }
 
 /// Display-order kinds — the walk doctor and the wiring probes iterate.

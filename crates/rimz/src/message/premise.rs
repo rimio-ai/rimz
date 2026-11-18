@@ -1,9 +1,10 @@
 //! Whether a queued message's premises still hold: the record's row premises, then the
 //! subjects only the harness or the queue can read (a linked run, a fleet digest's or team
 //! result's joins, a team stage visit, a provider-limit park, the original of a "still queued"
-//! warning). The write check calls it on every batch member under the pane lock; a delivery
-//! attempt calls it once on its head before candidacy, since the write path wakes a hibernated
-//! receiver before it reaches the write check. The turn-start clear and each subject's owner
+//! warning, the compaction command a continue follows). The write check calls it on every
+//! batch member under the pane lock; a delivery attempt calls it once on its head before
+//! candidacy, since the write path wakes a hibernated receiver before it reaches the write
+//! check. The turn-start clear and each subject's owner
 //! withdraw through `Store::withdraw_messages` with the row-only half.
 
 use jiff::Timestamp;
@@ -73,6 +74,9 @@ pub(super) fn broken(
             return Ok(Some(reason));
         }
     }
+    if let Some(reason) = unsent_command(store, message)? {
+        return Ok(Some(reason));
+    }
     if let Some(reason) = ended_park(store, message, row) {
         return Ok(Some(reason));
     }
@@ -87,6 +91,30 @@ pub(super) fn broken(
         let run = crate::harness::scratch::board_run(checkout, &zone)?;
         message.ended_stage_visit(checkout, &run.stage.name, run.stage_started_at)
     }))
+}
+
+/// The withdrawal reason of a continue whose compaction command ended without reaching the
+/// pane, looked up in the whole queue and history. A command still in the queue, or one no
+/// record holds, keeps it; one that was typed keeps it whether or not a compaction hook confirmed
+/// it.
+pub(super) fn unsent_command(
+    store: &Store,
+    message: &MessageRecord,
+) -> crate::store::Result<Option<String>> {
+    let Some(command_id) = &message.follows_command else {
+        return Ok(None);
+    };
+    Ok(
+        crate::store::message::read_record(store.paths(), command_id)?
+            .filter(|command| command.status.is_terminal())
+            .filter(|command| command.last_sent_at.is_none() && command.delivered_at.is_none())
+            .map(|command| {
+                format!(
+                    "compaction {command_id} {} before it was typed",
+                    command.status
+                )
+            }),
+    )
 }
 
 /// The withdrawal reason of a continue whose provider-limit park closed or was replaced.
@@ -180,6 +208,51 @@ mod tests {
 
         assert!(!withdraw_before_candidacy(&workspace, &store, &plain).unwrap());
         assert!(withdraw_before_candidacy(&workspace, &store, &idle).is_err());
+    }
+
+    /// A continue finds its untyped command in history however many records ended after it.
+    #[test]
+    fn a_continue_finds_its_untyped_command_past_the_newest_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::parse("ws_000000000000000000000000").unwrap();
+        let store = Store::open(
+            crate::StatePaths::under(workspace_id.clone(), dir.path()).unwrap(),
+            crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap(),
+        )
+        .unwrap();
+        let receiver = AgentState::stub("claude", "receiver", AgentStatus::Idle);
+        let record = |text: &str| {
+            MessageRecord::new(
+                workspace_id.clone(),
+                &receiver,
+                text.to_owned(),
+                DeliveryGate::Done,
+            )
+        };
+        let command = record("/compact");
+        store.queue_message(&command, "room").unwrap();
+        let later: Vec<_> = (0..500).map(|_| record("later")).collect();
+        for message in &later {
+            store.queue_message(message, "room").unwrap();
+        }
+        store
+            .withdraw_messages("room", |live| {
+                (live.message_id == command.message_id).then(|| "canceled".to_owned())
+            })
+            .unwrap();
+        store
+            .withdraw_messages("room", |_| Some("canceled".to_owned()))
+            .unwrap();
+        let mut follow = record("continue");
+        follow.follows_command = Some(command.message_id.clone());
+
+        assert_eq!(
+            unsent_command(&store, &follow).unwrap(),
+            Some(format!(
+                "compaction {} canceled before it was typed",
+                command.message_id
+            ))
+        );
     }
 
     /// A continue parked on the agent's provider limit reads the park under its holder's own kind
