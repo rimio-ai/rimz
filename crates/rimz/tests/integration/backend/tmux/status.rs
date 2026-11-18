@@ -396,7 +396,7 @@ fn reload_reapplies_room_options_without_starting_stopped_sessions() {
         );
     }
     for (config, present, absent) in [
-        ("[room]\nstyle='rimz'", "M-j", &["M-x", "M-y"][..]),
+        ("[room]\nstyle='rimz'", "M-j", &["M-e", "M-y"][..]),
         (
             "[sidebar]\nfocus_key='Alt+z'\nzoom_key='off'",
             "M-z",
