@@ -1,0 +1,22 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                          ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0                                    $0.00
+ ────────────────────────────────────────────
+
+
+
+
+
+
+ ────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0               $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0               $0.00
+
+ ↑ upload failed: 5 B is over the 4 B upload
+ limit (paste_max)
+                                   ? for help

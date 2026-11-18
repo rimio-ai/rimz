@@ -136,6 +136,8 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(ChromeAlert, "⚠", None),
     glyph!(ChromePresenceAway, "zᶻ", Some("\u{f186}")),
     glyph!(ChromeRemoteLink, "⇄", Some("\u{ede3}")),
+    glyph!(ChromeUpload, "↑", Some("\u{f093}")),
+    glyph!(ChromeControlKey, "⌃", None),
     glyph!(ChromeStall, "⧗", Some("\u{f0f86}")),
     glyph!(ChromeStallFading, "↓", None),
     glyph!(ChromeRemoteControl, "⇅", None),

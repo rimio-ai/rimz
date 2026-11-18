@@ -193,6 +193,12 @@ pub(crate) enum Component {
     StallSeparator,
     /// The named or counted overflow of hidden stall items.
     StallOverflow,
+    /// A paste upload's glyph and the received share of its progress bar.
+    UploadProgress,
+    /// The share of a paste upload's progress bar still to arrive.
+    UploadTrack,
+    /// A failed paste upload's row, glyph and reason.
+    UploadFailed,
 }
 
 #[cfg(test)]
@@ -276,6 +282,9 @@ impl Component {
         Component::StallFading,
         Component::StallSeparator,
         Component::StallOverflow,
+        Component::UploadProgress,
+        Component::UploadTrack,
+        Component::UploadFailed,
     ];
 }
 
@@ -284,22 +293,22 @@ impl Component {
     pub(crate) fn resolve(self, palette: &Palette) -> Color {
         use Component::*;
         tone_color(match self {
-            Sessions | Output | HelpKey | KeyHint | WindowHuge | Typing => palette.accent,
+            Sessions | Output | HelpKey | KeyHint | WindowHuge | Typing | UploadProgress => {
+                palette.accent
+            }
             LaneSpine | EntrySpine => palette.selection,
             WorktreeHeader | BranchDelta | WorkflowState | StallWord | NotTrackedFix => {
                 palette.body
             }
-            WorktreePristine | WindowSmall | WorkflowDetour | StallSeparator | BudgetSpent => {
-                palette.faint
-            }
+            WorktreePristine | WindowSmall | WorkflowDetour | StallSeparator | BudgetSpent
+            | UploadTrack => palette.faint,
             WorktreePrConflict | StallLeadActive | StallFigure | RoomModeMark => palette.caution,
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
                 palette.good
             }
             WorktreeReconciling | Compaction | WorktreeCiPending | PipelineRevisited
-            | ThrottleNotice | WorkflowVisitsCapped | WorkflowParked | PaneNotice | BookingFix => {
-                palette.warn
-            }
+            | ThrottleNotice | WorkflowVisitsCapped | WorkflowParked | PaneNotice | BookingFix
+            | UploadFailed => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge
             | MessageQueued => palette.cool,
             TeamLabel | SubagentHeader | WaitHeader | BookedHeader | ProcIo | CacheWrite

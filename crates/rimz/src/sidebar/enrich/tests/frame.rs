@@ -57,6 +57,69 @@ fn corrupt_or_wrong_version_stats_disappear() {
 }
 
 #[test]
+fn a_live_upload_lane_sets_the_row_and_an_expired_one_clears_it() {
+    use crate::remote::upload::UploadLane;
+    use crate::store::snapshot::SidebarUpload;
+    let running = UploadLane::running("t".to_owned(), 3, 9, 1_000);
+    let failed = UploadLane::failed("t".to_owned(), 9, "disk full".to_owned(), 1_000);
+    for (lane, now_ms, expected) in [
+        (
+            &running,
+            11_000,
+            Some(SidebarUpload::Running {
+                received: 3,
+                total: 9,
+            }),
+        ),
+        (&running, 11_001, None),
+        (
+            &failed,
+            9_000,
+            Some(SidebarUpload::Failed {
+                reason: "disk full".to_owned(),
+            }),
+        ),
+        (&failed, 9_001, None),
+    ] {
+        let (_dir, runtime, mut snapshot) = runtime();
+        snapshot.upload = Some(SidebarUpload::Running {
+            received: 0,
+            total: 1,
+        });
+        atomic::write_temp_then_rename_cache(&crate::remote::upload::lane_path(&runtime), lane)
+            .unwrap();
+        fold_upload(&mut snapshot, &runtime, now_ms);
+        assert_eq!(snapshot.upload, expected, "{:?} at {now_ms}", lane.state);
+    }
+}
+
+#[test]
+fn a_missing_corrupt_or_unknown_version_upload_lane_clears_the_row() {
+    let (_dir, runtime, mut snapshot) = runtime();
+    let path = crate::remote::upload::lane_path(&runtime);
+    let shown = Some(crate::store::snapshot::SidebarUpload::Running {
+        received: 0,
+        total: 1,
+    });
+
+    snapshot.upload = shown.clone();
+    fold_upload(&mut snapshot, &runtime, 1_000);
+    assert_eq!(snapshot.upload, None, "no lane file");
+
+    atomic::write_bytes_atomically(&path, b"not json").unwrap();
+    snapshot.upload = shown.clone();
+    fold_upload(&mut snapshot, &runtime, 1_000);
+    assert_eq!(snapshot.upload, None, "unparseable lane");
+
+    let mut lane = crate::remote::upload::UploadLane::running("t".to_owned(), 0, 1, 1_000);
+    lane.v = "rimz.upload-lane.v0".to_owned();
+    atomic::write_temp_then_rename_cache(&path, &lane).unwrap();
+    snapshot.upload = shown;
+    fold_upload(&mut snapshot, &runtime, 1_000);
+    assert_eq!(snapshot.upload, None, "wrong schema version");
+}
+
+#[test]
 fn frame_fold_carries_viewed_panes_onto_snapshot() {
     let (_dir, runtime, snapshot) = runtime();
     let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");

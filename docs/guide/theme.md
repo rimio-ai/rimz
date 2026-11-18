@@ -108,15 +108,15 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | slot | what it paints |
 | --- | --- |
 | `good` | calm and positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker, and the compacted-context meter's glyph while it has no size estimate |
-| `warn` | the caution floor: resting `?` waits, starts-needing-a-fix notices, a booked launch's `⚠` needs-a-fix segment and entry lead, the pane notice a refused in-pane key leaves above the key row, workflow `parked` words, the `⊘` held mark on workflow rails and capped visit counts, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
+| `warn` | the caution floor: resting `?` waits, starts-needing-a-fix notices, a booked launch's `⚠` needs-a-fix segment and entry lead, the pane notice a refused in-pane key leaves above the key row, a failed paste upload's row above the footer, workflow `parked` words, the `⊘` held mark on workflow rails and capped visit counts, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
 | `caution` | the warm "hot, costly, or blocked until you act" amber: the gauge mid-band, the age-heat midpoint, the active stall lead and figures, the conflicted pull request marker and cockpit PR count, and the `PREFIX`, `PANE`, `TAB`, `RESIZE`, `SCROLL` and `MOVE` room-mode marks on the bottom key row |
 | `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), greyed toward `muted` for an expired context meter and its age clock, and dimmed a little past halfway toward the background for a fully spent pixel budget bar |
-| `accent` | data: the `◎` sessions glyph, the `↗` output marker, the card's `✎` typing pen, and the pending and continuation keys of the which-key hint on the bottom key row |
+| `accent` | data: the `◎` sessions glyph, the `↗` output marker, the card's `✎` typing pen, a paste upload's `↑` and the received share of its bar, and the pending and continuation keys of the which-key hint on the bottom key row |
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph, and the card's `↧` queued-message glyph |
 | `meta` | delegation and compaction: the `⧉` subagents, `⧖` waits and `▷` booked headers on an agent card, the `◍` cache-write marker, the workflow badge, and the context meter's `┤` compaction wall and matching point label |
 | `body` | body text: stat figures, subagent lines, worktree headers, workflow state words, active stall resource words, not-tracked fix text, and the card's due-message count |
 | `muted` | chrome: labels, ages, subordinate values, a group header's `· branch` beside a lane label it differs from, workflow visit counts, the needs-you filter header, the fading stall lead and items, stall overflow tags, the not-tracked suffix and `tip:` label, the compacted-context meter's empty track while it has no size estimate, an unfired booked launch's `▷` lead, and a fired one's `–` lead with nothing left alive |
-| `faint` | faintest chrome: measured bar tracks, the spent part of budget bars and the unknown budget track, `·` separators (including between stall items), dotted dividers, workflow detour connectors |
+| `faint` | faintest chrome: measured bar tracks, the spent part of budget bars and the unknown budget track, the part of a paste upload's bar still to arrive, `·` separators (including between stall items), dotted dividers, workflow detour connectors |
 | `rule` | the darkest chrome, one step below `faint`: the scrollbar track |
 | `selection` | the selected card's bright `▌` spine, the light `▏` mark beside its cursor entry, and the dim `▎` lane bracket |
 | `selection_bg` | the selected card's recessed background band |
@@ -155,7 +155,7 @@ Glyphs are grouped by where they appear as you read the sidebar down the column.
 | `card` | the agent card body: subagents, waits, booked launches (`booked` is `▷` / `󰃰`, and `booking_ended` is `–` in both sets), parked background, `message_queued` (`↧` / `󱃚`) and `typing` (`✎` / `󰏫`) |
 | `process` | the CPU, memory, and IO row |
 | `keys` | the help overlay's action leads |
-| `chrome` | framing, spines, tabs, badges, the search lead, and the help-box frame; `stall` is `⧗` (Nerd Font `󰾆`), and `stall_fading` is `↓` in both sets |
+| `chrome` | framing, spines, tabs, badges, the search lead, the help-box frame, and the paste upload row; `stall` is `⧗` (Nerd Font `󰾆`), `stall_fading` is `↓` in both sets, `upload` is `↑` (Nerd Font ``), and `control_key`, the `⌃` of the upload row's cancel hint, is `⌃` in both sets |
 
 Each glyph must occupy one or two terminal cells; RimZ refuses anything empty or wider. Use the second cell for a trailing space when a Nerd Font icon draws double-width.
 

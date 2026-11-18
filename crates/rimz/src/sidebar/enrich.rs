@@ -21,7 +21,7 @@ use crate::store::Store;
 use crate::store::snapshot::{
     HookDrainerOutage, HookDrainerOutageAgent, LazyAgentPairingDiagnostic, LazyAgentPairingResult,
     RemoteControlBadge, RuntimeReapInputs, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView,
-    SidebarPresence, SidebarProviderPanel, SidebarSnapshot, SidebarWorktreeGroup,
+    SidebarPresence, SidebarProviderPanel, SidebarSnapshot, SidebarUpload, SidebarWorktreeGroup,
     SidebarWorktreeKind, ThrottleNotice, TruthNotice, WorktreeCi, WorktreePrQueue, WorktreePrState,
     WorktreeTrunkSync, compute_lazy_agent_pairings,
 };
@@ -177,6 +177,25 @@ fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, now_m
         freshness,
         sampled_at_ms: file.received_at_ms,
     });
+}
+
+/// Fold the room's paste upload lane onto the snapshot. A missing, corrupt,
+/// unknown-version, or expired record (a dead receiver's) clears the row.
+fn fold_upload(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, now_ms: u64) {
+    use crate::remote::upload::{UploadLane, UploadState};
+    snapshot.upload = std::fs::read(crate::remote::upload::lane_path(runtime))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<UploadLane>(&bytes).ok())
+        .filter(|lane| lane.live_at(now_ms))
+        .map(|lane| match lane.state {
+            UploadState::Running => SidebarUpload::Running {
+                received: lane.received,
+                total: lane.total,
+            },
+            UploadState::Failed => SidebarUpload::Failed {
+                reason: lane.reason.unwrap_or_default(),
+            },
+        });
 }
 
 /// Project the cached git facts onto each worktree group: the diff stats shown
@@ -708,7 +727,9 @@ fn enrich_core(
     // fold builds provider panels and stamps context severity.
     snapshot.apply_machine_config(&machine_config);
     snapshot.typing_until = typing_deadlines(runtime, frame, machine_config.harness.typing_hold);
-    fold_link_stats(&mut snapshot, runtime, crate::utils::time::unix_now_ms());
+    let now_ms = crate::utils::time::unix_now_ms();
+    fold_link_stats(&mut snapshot, runtime, now_ms);
+    fold_upload(&mut snapshot, runtime, now_ms);
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
     let roots_cache: Option<WorktreeRootsCache> =

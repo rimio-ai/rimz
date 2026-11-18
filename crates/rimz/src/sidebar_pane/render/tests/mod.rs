@@ -40,6 +40,7 @@ mod scroll;
 mod search;
 mod section_labels;
 mod stall;
+mod upload;
 mod visible_compose;
 mod workflow;
 mod worktree;

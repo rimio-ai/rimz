@@ -70,10 +70,10 @@ pub use view::{
     RemoteControlBadge, RuntimeReapInputs, SNAPSHOT_VERSION, SidebarCohortEffort, SidebarInactive,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPlace, SidebarPresence,
     SidebarProviderPanel, SidebarSeatEffort, SidebarSnapshot, SidebarStallItem, SidebarStallPhase,
-    SidebarStallResource, SidebarStatusCount, SidebarUnitKey, SidebarWorkflow, SidebarWorkflowNode,
-    SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, ThrottleNotice, TruthNotice, UnitStatus,
-    WorkflowNodeKind, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
-    lead_unread_row,
+    SidebarStallResource, SidebarStatusCount, SidebarUnitKey, SidebarUpload, SidebarWorkflow,
+    SidebarWorkflowNode, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, ThrottleNotice,
+    TruthNotice, UnitStatus, WorkflowNodeKind, WorktreeCi, WorktreePrQueue, WorktreePrState,
+    WorktreeTrunkSync, lead_unread_row,
 };
 pub(crate) use view::{HeldRank, group_partition};
 pub(crate) use view::{actionable_unread_count, triage_key};

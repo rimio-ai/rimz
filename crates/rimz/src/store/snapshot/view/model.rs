@@ -958,6 +958,14 @@ pub struct SidebarLinkHealth {
     pub sampled_at_ms: u64,
 }
 
+/// The room's paste upload, folded from the receiver's live upload lane.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum SidebarUpload {
+    Running { received: u64, total: u64 },
+    Failed { reason: String },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

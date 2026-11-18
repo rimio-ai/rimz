@@ -4560,7 +4560,8 @@ path = "crates/rimz/src/store"
 # store::agent_context::merge_mod_reading lands a mod reading in the session's sidecar;
 # ModCheckinRecord::checked_in_at is the check-in instant doctor compares a turn end with (+2).
 # store::message::read_record finds a compaction continue's command anywhere in the queue or history (+1).
-surface-budget = 668
+# SidebarUpload carries the paste upload row the upload lane folds into the snapshot (+1).
+surface-budget = 669
 
 [[verdict]]
 kind = "item"

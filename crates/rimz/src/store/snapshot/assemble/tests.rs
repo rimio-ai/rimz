@@ -565,8 +565,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_compaction_continue_contract_is_version_105() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 105);
+fn snapshot_upload_row_contract_is_version_106() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 106);
+}
+
+#[test]
+fn pre_106_uploadless_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(105);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views that carry no paste upload row must refold"
+    );
 }
 
 #[test]
