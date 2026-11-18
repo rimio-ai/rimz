@@ -250,6 +250,38 @@ pub(super) fn check_cards(
         "reopen needs a new tab: {new_view}, surviving tabs: {surviving_views:?}"
     );
     wait_focus(backend, session, &runtime, &new_pane);
+
+    // The tab close stops the agent as a card close does, so its own reopen brings it back,
+    // and the tab's sidebar then closes itself with the emptied tab.
+    let new_view = new_view.clone();
+    quiet(card(&["close", "--tab"]));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let views = pane_views(backend, session, &runtime);
+        if !views.values().any(|view| *view == new_view) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "closed tab {new_view} still holds panes: {views:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    quiet(card(&["reopen"]));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !store.snapshot().unwrap().agents.iter().any(|agent| {
+        agent.agent_id == agents[1].agent_id
+            && agent
+                .pane
+                .as_ref()
+                .is_some_and(|pane| pane.pane_id != new_pane)
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "the tab-closed card never reopened"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn quiet(output: Output) {
