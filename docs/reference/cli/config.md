@@ -134,6 +134,7 @@ These keys always take a string: a value that parses as another TOML type is wri
 | `gc.team_notes_retention` | `forever` (default) or a positive duration (`s`, `m`, `h`, `d`); removes whole closed team-note runs by their newest recursive entry modification |
 | `gc.automation_notes_retention` | `forever` (default) or a positive duration (`s`, `m`, `h`, `d`); independent retention for closed workflow and loop notes |
 | `gc.tmp_floor_min` | a byte size (`B`, `KB`, `KiB`, `MB`, `MiB`, `GB`, `GiB`, or decimal `K`/`M`/`G`); default `10GiB` |
+| `remote.paste_max` | a byte size, as `gc.tmp_floor_min`; default `1GiB`, the largest total of one `rimz remote connect` upload |
 
 The two shorthands write the full key: `rimz config set theme <name>` sets `theme.scheme`, and `rimz config set theme.glyphs <set>` sets `theme.glyphs.set`. Each refuses a value that is not a string.
 

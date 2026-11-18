@@ -12,10 +12,12 @@
 pub mod aliases;
 pub mod forward;
 pub mod link;
+pub mod paste;
 pub mod reachability;
 pub mod recovery;
 pub mod setup;
 pub mod tty;
+pub mod upload;
 pub mod version;
 pub mod web;
 

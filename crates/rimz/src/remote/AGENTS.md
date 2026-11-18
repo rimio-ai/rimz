@@ -21,6 +21,7 @@ Local contract for `crates/rimz/src/remote/` — the SSH attach library. Extends
 - [`aliases.rs`](./aliases.rs) — per-machine aliases in `remote.toml`; [`version.rs`](./version.rs) — client/host skew classification.
 - [`link.rs`](./link.rs) — the health JSONL protocol, the tier classifier over `ids::LinkTier`, and terminal-session transitions; [`reachability.rs`](./reachability.rs) — endpoint discovery and reconnect-wait state; [`recovery.rs`](./recovery.rs) — panel timing, checkpoints, and the panel's final row model.
 - [`forward.rs`](./forward.rs) — listener discovery and live ControlMaster forwards; [`setup.rs`](./setup.rs) — argv builders whose I/O belongs to the CLI; [`web.rs`](./web.rs) — browser-tunnel argv plus the one socket exception: `bind_local_relay` and `reserve_forward_port` bind loopback listeners to pick a free local port (the relay keeps its listener; the forward port is probed and released); [`tty.rs`](./tty.rs) — terminal-state hygiene and the supervised-output stream scanner.
+- [`paste.rs`](./paste.rs) — the keyboard-input scanner (Ctrl+V and bracketed pastes) and the Ghostty drop-path codec; [`upload.rs`](./upload.rs) — the upload wire lines and the room's upload lane record.
 
 ## Tests
 

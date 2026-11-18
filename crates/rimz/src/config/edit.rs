@@ -1533,6 +1533,7 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || is_gc_duration_edit(path)
         || matches!(path, [root, leaf] if root == "gc" && matches!(leaf.as_str(), "transcript_retention" | "team_notes_retention" | "automation_notes_retention"))
         || matches!(path, [root, leaf] if root == "gc" && leaf == "tmp_floor_min")
+        || matches!(path, [root, leaf] if root == "remote" && leaf == "paste_max")
         || is_sidebar_theme_scheme_edit(path)
         || is_sidebar_glyph_string_edit(path)
     {
@@ -1603,6 +1604,14 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         };
         if let Err(err) = crate::utils::size::parse_byte_size(raw) {
             invalid_value!("gc.tmp_floor_min {err}");
+        }
+    }
+    if matches!(path, [root, leaf] if root == "remote" && leaf == "paste_max") {
+        let Some(raw) = value.as_str() else {
+            invalid_value!("remote.paste_max must be a byte-size string");
+        };
+        if let Err(err) = crate::utils::size::parse_byte_size(raw) {
+            invalid_value!("remote.paste_max {err}");
         }
     }
     if matches!(path, [root, leaf] if root == "gc" && leaf == "tmp_floor_percent")

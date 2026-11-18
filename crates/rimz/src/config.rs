@@ -51,6 +51,7 @@ mod mcps;
 mod mux;
 mod notifications;
 mod pets;
+mod remote;
 mod remote_control;
 mod resume;
 mod scheme;
@@ -128,6 +129,7 @@ pub use notifications::{NotificationKind, NotificationsPrefs};
 pub(crate) use notifications::{NotificationTrigger, NotifyCondition, NotifyHandler};
 pub(crate) use pets::PetsGlyphMode;
 pub use pets::{CellAspect, PetsConfig};
+pub use remote::RemoteConfig;
 pub(crate) use remote_control::RemoteControlConfig;
 use resume::parse_auto_redeem_min_gain;
 pub use resume::{ResumeConfig, SpendOrder};
@@ -581,6 +583,7 @@ pub struct MachineConfig {
     pub mux: MuxConfig,
     pub accounts: AccountsConfig,
     pub remote_control: RemoteControlConfig,
+    pub remote: RemoteConfig,
     pub daemon: DaemonConfig,
     pub notifications: NotificationsPrefs,
     pub sidebar: SidebarConfig,
@@ -848,6 +851,7 @@ impl MachineConfig {
             mux: core.mux,
             accounts: core.accounts,
             remote_control: core.remote_control,
+            remote: core.remote,
             daemon: core.daemon,
             notifications: core.notifications,
             sidebar: core.sidebar,
@@ -1281,6 +1285,7 @@ struct CoreConfig {
     mux: MuxConfig,
     accounts: AccountsConfig,
     remote_control: RemoteControlConfig,
+    remote: RemoteConfig,
     daemon: DaemonConfig,
     notifications: NotificationsPrefs,
     sidebar: SidebarConfig,

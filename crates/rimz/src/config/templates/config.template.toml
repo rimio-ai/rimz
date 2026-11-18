@@ -17,6 +17,10 @@
 # claude = false                       # auto-launch `claude remote-control` in the managed daemon tab
 # codex = false                        # ensure the per-user Codex remote-control daemon when installed
 
+[remote]
+# paste = true                         # `rimz remote connect`: relay the keyboard so Ctrl+V and file drops upload into the room
+# paste_max = "1GiB"                   # largest total size of one upload
+
 # Model lists are ordered by preference; written lists replace defaults.
 # Only tier: routes; concrete model: and --model run exactly as named.
 # Routing skips usage-unavailable tier entries; off still records build passes.
