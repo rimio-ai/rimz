@@ -122,6 +122,39 @@ fn pane_writes_require_an_earlier_wake_in_the_same_function() {
 }
 
 #[test]
+fn thin_mcp_server_rejects_store_config_and_room_reaches_outside_tests() {
+    let root = temp_repo_root("thin-mcp");
+    let server = root.join("crates/rimz/src/mcp/server.rs");
+    let cli = root.join("crates/rimz/src/cli/mcp.rs");
+    let elsewhere = root.join("crates/rimz/src/lsp/mod.rs");
+    for path in [&server, &cli, &elsewhere] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    }
+    let files = [server.clone(), cli.clone(), elsewhere.clone()];
+    std::fs::write(&elsewhere, format!("// {}\n", concat!("Store", "::open"))).unwrap();
+    for path in [&server, &cli] {
+        for entry in [
+            concat!("Store", "::open"),
+            concat!("crate::", "config::effective::load"),
+            concat!("rimz::", "workspace::WorkspaceResolver"),
+        ] {
+            std::fs::write(&server, "// thin\n").unwrap();
+            std::fs::write(&cli, "// thin\n").unwrap();
+            ensure_thin_mcp_server(&root, &files).unwrap();
+            std::fs::write(path, format!("// {entry}\n")).unwrap();
+            assert!(
+                ensure_thin_mcp_server(&root, &files).is_err(),
+                "{} admitted {entry}",
+                path.display()
+            );
+            std::fs::write(path, format!("// thin\nmod tests {{ {entry}(); }}\n")).unwrap();
+            ensure_thin_mcp_server(&root, &files).unwrap();
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn thin_park_rejects_store_entry_points_but_leaves_event_follower_alone() {
     let root = temp_repo_root("thin-park");
     let relatives = [

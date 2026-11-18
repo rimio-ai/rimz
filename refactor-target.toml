@@ -23,6 +23,7 @@ layers = [
     "proc",
     "child_process",
     "config",
+    "mcp",
     "packs",
     "trust",
     "theme",

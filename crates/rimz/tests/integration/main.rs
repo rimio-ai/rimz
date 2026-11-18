@@ -36,6 +36,7 @@ mod list_pets;
 mod list_themes;
 mod loop_schedule;
 mod lsp;
+mod mcp_server;
 mod message;
 mod mux_command;
 mod notes;

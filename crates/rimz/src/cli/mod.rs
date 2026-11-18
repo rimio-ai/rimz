@@ -31,6 +31,7 @@ mod loop_cmd;
 mod loop_launch;
 mod loop_timer;
 mod lsp;
+mod mcp;
 mod message;
 mod notes;
 mod packs;
@@ -302,6 +303,7 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
         Some(Subcmd::Tab(args)) => tab::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Mod(args)) => statusline::run_mod(args, &globals),
+        Some(Subcmd::Mcp(args)) => mcp::run(args),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
         Some(Subcmd::Codex(args)) => codex::run(args, &globals),
         Some(Subcmd::Daemon(args)) => daemon::run(args, &globals),
@@ -794,6 +796,10 @@ enum Subcmd {
     /// not.
     #[command(hide = true)]
     Mod(statusline::ModArgs),
+    /// MCP server. A Claude or Codex launch starts this over stdio; humans do
+    /// not.
+    #[command(hide = true)]
+    Mcp(mcp::McpArgs),
     /// Install or uninstall agent hooks.
     ///
     /// Internal hook entrypoints live here too.
