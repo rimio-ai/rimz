@@ -431,6 +431,10 @@ pub struct LocalContextPatch {
     pub turn_error: FieldPatch<AgentTurnError>,
     pub settle: FieldPatch<TurnSettle>,
     pub permission_settle: FieldPatch<PermissionSettle>,
+    /// A `Set` turn error or settle lands only when its `at` is newer than the
+    /// stored marker's: for a source that rereads markers another producer may
+    /// already have stamped later (Claude's `StopFailure` is stamped at decode).
+    pub markers_advance: bool,
 }
 
 impl LocalContextPatch {
@@ -443,7 +447,25 @@ impl LocalContextPatch {
     }
 
     /// Apply adapter-owned policy without consulting provider identity.
-    pub(super) fn apply(self, context: &mut AgentContext, definition: &AgentSpec) {
+    pub(super) fn apply(mut self, context: &mut AgentContext, definition: &AgentSpec) {
+        if self.markers_advance {
+            if let FieldPatch::Set(error) = &self.turn_error
+                && context
+                    .turn_error
+                    .as_ref()
+                    .is_some_and(|stored| error.at <= stored.at)
+            {
+                self.turn_error = FieldPatch::Keep;
+            }
+            if let FieldPatch::Set(settle) = &self.settle
+                && context
+                    .settle
+                    .as_ref()
+                    .is_some_and(|stored| settle.at <= stored.at)
+            {
+                self.settle = FieldPatch::Keep;
+            }
+        }
         let prior_model_id = context.model_id.clone();
         let prior_model_display_name = context.model_display_name.clone();
         let prior_tokens = context.tokens.clone();

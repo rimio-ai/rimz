@@ -6,17 +6,17 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use super::rimz_mod;
 use super::{
     CLAUDE_HOOK_TIMEOUT_SECS, CLAUDE_HOOKS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER, STATUS_LINE,
     SUBAGENT_STATUS_LINE,
 };
+use super::{mod_policy, rimz_mod};
 use crate::agents::capabilities::LaunchCapability;
 use crate::agents::managed_json_hooks::{ManagedJsonHookSpec, SyncEncoding};
 use crate::agents::managed_source::ManagedSource;
 use crate::agents::{
     AgentErr, AgentSpec, HookInstallOptions, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, ManagedIntegration, Result,
+    HookUninstallReport, ManagedIntegration, ModBlocker, ModPlan, Result,
 };
 
 static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
@@ -36,6 +36,8 @@ pub(super) static MANAGED_SOURCE: ManagedSource = ManagedSource::json(&SPEC, cla
 /// the entry never names a folder that is not there. Uninstall removes the entry
 /// and leaves the folder, which every Claude account shares and which loads in
 /// no session once no settings list it; machine-wide `rimz uninstall` removes it.
+/// Under a managed policy that blocks the mod ([`mod_policy::blocker`]), install
+/// writes no folder and removes RimZ's own entry, keeping the hooks.
 pub(super) static MANAGED_INTEGRATION: ClaudeManagedIntegration = ClaudeManagedIntegration;
 
 pub(super) struct ClaudeManagedIntegration;
@@ -48,11 +50,16 @@ impl ManagedIntegration for ClaudeManagedIntegration {
     ) -> Result<HookInstallReport> {
         let settings = claude_settings_path(login_env)?;
         let dir = rimz_mod::dir(login_env);
-        let entry = rimz_mod::env_path(&dir)?;
-        let written = rimz_mod::write(&dir)?;
+        let blocked = mod_policy::blocker(login_env).is_some();
+        let entry = rimz_mod::env_path(&dir, !blocked)?;
+        let written = if blocked {
+            Vec::new()
+        } else {
+            rimz_mod::write(&dir)?
+        };
         let mut report = SPEC.install_into_with(&settings, &[entry])?;
         report.files.extend(written);
-        report.plugin_dir = Some(dir);
+        report.plugin_dir = (!blocked).then_some(dir);
         Ok(report)
     }
 
@@ -62,10 +69,16 @@ impl ManagedIntegration for ClaudeManagedIntegration {
         _options: HookInstallOptions,
     ) -> Result<HookInstallPreview> {
         let dir = rimz_mod::dir(login_env);
-        let entry = rimz_mod::env_path(&dir)?;
+        let blocker = mod_policy::blocker(login_env);
+        let entry = rimz_mod::env_path(&dir, blocker.is_none())?;
         let mut preview = SPEC.preview_at_with(&claude_settings_path(login_env)?, &[entry])?;
-        preview.files.extend(rimz_mod::previews(&dir)?);
-        preview.plugin_dir = Some(dir);
+        preview.plugin_dir = Some(match blocker {
+            Some(blocker) => ModPlan::Skipped(blocker),
+            None => {
+                preview.files.extend(rimz_mod::previews(&dir)?);
+                ModPlan::Listed(dir)
+            }
+        });
         Ok(preview)
     }
 
@@ -73,8 +86,12 @@ impl ManagedIntegration for ClaudeManagedIntegration {
         let dir = rimz_mod::dir(login_env);
         SPEC.uninstall_from_with(
             &claude_settings_path(login_env)?,
-            &[rimz_mod::env_path(&dir)?],
+            &[rimz_mod::env_path(&dir, false)?],
         )
+    }
+
+    fn mod_blocker(&self, login_env: &BTreeMap<String, String>) -> Option<ModBlocker> {
+        mod_policy::blocker(login_env)
     }
 
     fn installed(&self, login_env: &BTreeMap<String, String>) -> bool {
@@ -83,8 +100,10 @@ impl ManagedIntegration for ClaudeManagedIntegration {
 
     fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
         let dir = rimz_mod::dir(login_env);
-        let (Ok(settings), Ok(entry)) = (claude_settings_path(login_env), rimz_mod::env_path(&dir))
-        else {
+        let (Ok(settings), Ok(entry)) = (
+            claude_settings_path(login_env),
+            rimz_mod::env_path(&dir, true),
+        ) else {
             return MANAGED_SOURCE.managed_artifacts_present(login_env);
         };
         SPEC.managed_artifacts_at_with(&settings, &[entry])
@@ -92,22 +111,26 @@ impl ManagedIntegration for ClaudeManagedIntegration {
 
     /// The settings file when its owned hooks, status lines or mod entry differ
     /// from what install writes, and, once the settings carry RimZ's
-    /// integration, each mod file that is missing or stale.
+    /// integration, each mod file that is missing or stale. Under a policy that
+    /// blocks the mod, a listed entry is the drift and the folder is none.
     fn outdated_files(
         &self,
         login_env: &BTreeMap<String, String>,
         _options: HookInstallOptions,
     ) -> Vec<PathBuf> {
         let dir = rimz_mod::dir(login_env);
-        let (Ok(settings), Ok(entry)) = (claude_settings_path(login_env), rimz_mod::env_path(&dir))
-        else {
+        let blocked = mod_policy::blocker(login_env).is_some();
+        let (Ok(settings), Ok(entry)) = (
+            claude_settings_path(login_env),
+            rimz_mod::env_path(&dir, !blocked),
+        ) else {
             return MANAGED_SOURCE.outdated_files(login_env);
         };
         let mut files = Vec::new();
         if SPEC.outdated_at_with(&settings, &[entry]) {
             files.push(settings.clone());
         }
-        if SPEC.managed_artifacts_at(&settings) {
+        if !blocked && SPEC.managed_artifacts_at(&settings) {
             files.extend(rimz_mod::outdated(&dir));
         }
         files

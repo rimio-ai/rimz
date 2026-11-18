@@ -125,6 +125,7 @@ fn mod_missing_flags_live_claude_sessions_without_a_check_in() {
         mod_checked_in: [&agents[1], &agents[4]]
             .map(|agent| (key(agent), check_in(agent, now)))
             .into(),
+        ..Default::default()
     };
     for audit in [false, true] {
         let rollup = project_agent_rollup(
@@ -191,6 +192,7 @@ fn mod_signals_missing_flags_each_signal_a_finished_turn_lacked() {
     let sessions = |record: rimz::store::mod_checkin::ModCheckinRecord| LiveSessions {
         keys: [key.clone()].into(),
         mod_checked_in: [(key.clone(), record)].into(),
+        ..Default::default()
     };
     let bare = check_in(&agent, checked_in);
     let both = [ModSignal::Readings, ModSignal::TurnReport];
@@ -260,6 +262,77 @@ fn mod_signals_missing_flags_each_signal_a_finished_turn_lacked() {
         wire["rows"][0]["mod_signals_missing"],
         serde_json::json!(["readings", "turn_report"])
     );
+}
+
+/// A login whose policy blocks the mod shows the policy on its live sessions'
+/// rows in place of a missing check-in or signal; another login keeps both.
+#[test]
+fn a_blocked_login_shows_its_policy_in_place_of_missing_mod_flags() {
+    let now = jiff::Timestamp::now();
+    let mut blocked = rimz::testkit::agent_state("claude", "blocked", now);
+    blocked.turn_ended_at = Some(now + jiff::SignedDuration::from_secs(5));
+    let mut other = blocked.clone();
+    other.agent_id = "other".into();
+    other.login = Some("work".parse().unwrap());
+    let key = |agent: &rimz::agents::AgentState| (agent.kind.clone(), agent.agent_id.clone());
+    let blocker = rimz::agents::ModBlocker {
+        agent: "claude",
+        key: "allowManagedModsOnly",
+        file: "/etc/claude-code/managed-settings.json".into(),
+        disables_hooks: false,
+    };
+    let live = LiveSessions {
+        keys: [key(&blocked), key(&other)].into(),
+        mod_checked_in: [&blocked, &other]
+            .map(|agent| (key(agent), check_in(agent, now)))
+            .into(),
+        mod_blockers: [(blocked.login_key(), blocker.clone())].into(),
+    };
+    assert_eq!(live.mod_blocked(&blocked), Some(&blocker));
+    assert!(!live.mod_missing(&blocked));
+    assert!(live.mod_signals_missing(&blocked).is_empty());
+    assert_eq!(live.mod_blocked(&other), None);
+    assert_eq!(live.mod_signals_missing(&other).len(), 2);
+
+    let agents = [blocked, other];
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/project")),
+        agents.to_vec(),
+        now,
+    );
+    let rollup = project_agent_rollup(
+        &agents,
+        &snapshot,
+        &Default::default(),
+        &rimz::address::AddressContext {
+            channel: None,
+            origin: rimz::address::ChannelOrigin::Root,
+        },
+        &mut Probe::Ready(Accounts { rows: vec![] }),
+        false,
+        &live,
+    );
+    let wire = serde_json::to_value(rollup).unwrap();
+    let row = |id: &str| {
+        wire["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["agent_id"] == id)
+            .cloned()
+            .unwrap()
+    };
+    let blocked = row("blocked");
+    assert_eq!(
+        blocked["mod_blocked"],
+        serde_json::json!({
+            "key": "allowManagedModsOnly",
+            "file": "/etc/claude-code/managed-settings.json",
+            "disables_hooks": false,
+        })
+    );
+    assert_eq!(blocked.get("mod_signals_missing"), None);
+    assert_eq!(row("other").get("mod_blocked"), None);
 }
 
 #[test]

@@ -341,6 +341,7 @@ pub(super) fn collect_agent_rollup(
             .into_iter()
             .map(|record| ((record.kind.clone(), record.agent_id.clone()), record))
             .collect(),
+        mod_blockers: mod_blockers(&projection.agents),
     };
     if audit {
         projection = match store.runtime_projection(rimz::RuntimeScope::Audit) {
@@ -400,6 +401,29 @@ pub(super) fn collect_agent_rollup(
 
 type SessionKey = (rimz::ids::AgentKind, rimz::ids::AgentSessionId);
 
+/// The managed policy blocking the mod for each login a live session runs on,
+/// read once per login.
+fn mod_blockers(
+    agents: &[rimz::agents::AgentState],
+) -> std::collections::BTreeMap<rimz::ids::LoginKey, rimz::agents::ModBlocker> {
+    let mut blockers = std::collections::BTreeMap::new();
+    let logins: std::collections::BTreeSet<_> = agents
+        .iter()
+        .filter(|agent| agent.ended_at.is_none())
+        .map(|agent| (agent.login_key(), agent.login.clone()))
+        .collect();
+    for (key, login) in logins {
+        let blocker = rimz::agents::find_definition(key.kind.as_str())
+            .and_then(|definition| definition.managed_integration())
+            .zip(rimz::agents::session_login_env(&key.kind, login.as_ref()).ok())
+            .and_then(|(integration, env)| integration.mod_blocker(&env));
+        if let Some(blocker) = blocker {
+            blockers.insert(key, blocker);
+        }
+    }
+    blockers
+}
+
 /// The sessions live in the room, and the RimZ mod's check-in for each it
 /// reached.
 #[derive(Default)]
@@ -407,6 +431,9 @@ struct LiveSessions {
     keys: std::collections::BTreeSet<SessionKey>,
     mod_checked_in:
         std::collections::BTreeMap<SessionKey, rimz::store::mod_checkin::ModCheckinRecord>,
+    /// Logins whose provider policy keeps the mod from loading: their
+    /// sessions owe no mod reports, and the row shows the policy instead.
+    mod_blockers: std::collections::BTreeMap<rimz::ids::LoginKey, rimz::agents::ModBlocker>,
 }
 
 impl LiveSessions {
@@ -415,6 +442,18 @@ impl LiveSessions {
     /// runs inside its parent's session, and a provisional row has no session
     /// yet. Only Claude ships a RimZ mod.
     fn owes_mod_reports(&self, agent: &rimz::agents::AgentState) -> bool {
+        self.mod_blocked(agent).is_none() && self.runs_the_mod(agent)
+    }
+
+    /// The policy that keeps the mod from a session that would otherwise owe
+    /// its reports.
+    fn mod_blocked(&self, agent: &rimz::agents::AgentState) -> Option<&rimz::agents::ModBlocker> {
+        self.mod_blockers
+            .get(&agent.login_key())
+            .filter(|_| self.runs_the_mod(agent))
+    }
+
+    fn runs_the_mod(&self, agent: &rimz::agents::AgentState) -> bool {
         agent.kind.as_str() == "claude"
             && !agent.is_provider_subagent()
             && !agent.agent_id.is_provisional()
@@ -491,6 +530,9 @@ fn project_agent_rollup(
                 .then(|| agent_compaction_lowered(agent))
                 .flatten();
             let mod_missing = !historical && live.mod_missing(agent);
+            let mod_blocked = (!historical)
+                .then(|| live.mod_blocked(agent).cloned())
+                .flatten();
             let mod_signals_missing = if historical {
                 Vec::new()
             } else {
@@ -526,6 +568,7 @@ fn project_agent_rollup(
                 && compaction_lowered.is_none()
                 && !mod_missing
                 && mod_signals_missing.is_empty()
+                && mod_blocked.is_none()
             {
                 return None;
             }
@@ -565,6 +608,7 @@ fn project_agent_rollup(
                 compaction_lowered,
                 mod_missing,
                 mod_signals_missing,
+                mod_blocked,
                 restartable: agent.pane.is_some() && agent.ended_at.is_none(),
                 historical,
             })

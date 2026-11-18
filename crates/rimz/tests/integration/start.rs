@@ -472,6 +472,47 @@ fn start_warns_and_records_a_missing_configured_agent_shell() {
     assert_skipped(&env, &stderr, "agents.shell", "does not exist");
 }
 
+fn assert_start_records_the_claude_mod_policy(key: &str, disables_hooks: bool) {
+    let env = Env::new();
+    let policy = env.grok_policy_root().join(if cfg!(target_os = "macos") {
+        "Library/Application Support/ClaudeCode/managed-settings.json"
+    } else {
+        "etc/claude-code/managed-settings.json"
+    });
+    std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+    std::fs::write(&policy, format!(r#"{{"{key}": true}}"#)).unwrap();
+    let output = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("configuration warnings must permit birth"),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let setting = policy.display().to_string();
+    assert_skipped(&env, &stderr, &setting, &format!("`{key}` in {setting}"));
+    assert_eq!(
+        stderr.contains("turns off RimZ's settings hooks"),
+        disables_hooks,
+        "{stderr}"
+    );
+}
+
+#[test]
+fn start_records_allow_managed_mods_only() {
+    assert_start_records_the_claude_mod_policy("allowManagedModsOnly", false);
+}
+
+#[test]
+fn start_records_allow_managed_hooks_only() {
+    assert_start_records_the_claude_mod_policy("allowManagedHooksOnly", true);
+}
+
+#[test]
+fn start_records_disable_all_hooks() {
+    assert_start_records_the_claude_mod_policy("disableAllHooks", true);
+}
+
 #[test]
 fn start_warns_about_a_legacy_only_host_without_writing_config() {
     let env = Env::new();

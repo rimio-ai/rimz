@@ -141,21 +141,21 @@ impl ManagedPricingCache {
 }
 
 #[cfg(target_os = "windows")]
-fn managed_settings_root() -> PathBuf {
+pub(super) fn managed_settings_root() -> PathBuf {
     PathBuf::from(r"C:\Program Files\ClaudeCode")
 }
 
 #[cfg(target_os = "macos")]
-fn managed_settings_root() -> PathBuf {
+pub(super) fn managed_settings_root() -> PathBuf {
     PathBuf::from("/Library/Application Support/ClaudeCode")
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn managed_settings_root() -> PathBuf {
+pub(super) fn managed_settings_root() -> PathBuf {
     PathBuf::from("/etc/claude-code")
 }
 
-fn managed_settings_files(root: &Path) -> Vec<PathBuf> {
+pub(super) fn managed_settings_files(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     let primary = root.join("managed-settings.json");
     if primary.is_file() {

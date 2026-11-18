@@ -6,13 +6,15 @@ use super::*;
 use std::collections::BTreeMap;
 
 use crate::agents::adapters::claude::install::MANAGED_INTEGRATION;
-use crate::agents::{AgentErr, HookInstallOptions, ManagedIntegration};
+use crate::agents::{AgentErr, HookInstallOptions, ManagedIntegration, ModPlan};
 
 struct Fixture {
     _temp: tempfile::TempDir,
     env: BTreeMap<String, String>,
     settings: PathBuf,
     mod_dir: PathBuf,
+    /// Claude's managed settings file under the fixture's machine root.
+    policy: PathBuf,
 }
 
 fn fixture() -> Fixture {
@@ -30,8 +32,20 @@ fn fixture() -> Fixture {
             "RIMZ_CLAUDE_SETTINGS".to_owned(),
             settings.display().to_string(),
         ),
+        (
+            "RIMZ_TEST_GROK_POLICY_ROOT".to_owned(),
+            temp.path().join("machine").display().to_string(),
+        ),
     ]);
+    let policy = temp.path().join("machine").join(
+        crate::agents::adapters::claude::managed_pricing::managed_settings_root()
+            .components()
+            .filter(|part| matches!(part, std::path::Component::Normal(_)))
+            .collect::<PathBuf>()
+            .join("managed-settings.json"),
+    );
     Fixture {
+        policy,
         mod_dir: rimz_home.join("mods/claude"),
         _temp: temp,
         env,
@@ -202,8 +216,8 @@ fn preview_names_the_mod_folder_and_its_new_files() {
         .preview(&fixture.env, HookInstallOptions::default())
         .unwrap();
     assert_eq!(
-        preview.plugin_dir.as_deref(),
-        Some(fixture.mod_dir.as_path())
+        preview.plugin_dir,
+        Some(ModPlan::Listed(fixture.mod_dir.clone()))
     );
     assert_eq!(preview.files[0].path, fixture.settings);
     assert!(preview.files[0].candidate.contains(&format!(
@@ -272,4 +286,91 @@ fn named_and_ambient_homes_list_the_same_mod_folder() {
             "{settings:?}"
         );
     }
+}
+
+/// Under each managed key that blocks the mod: install writes no mod and no
+/// entry and keeps the user's own folders, a policy that appears after install
+/// makes the entry the only drift and the next install removes it, uninstall
+/// still restores the original settings, and a lifted policy restores the mod.
+fn assert_policy_skips_the_mod(key: &str) {
+    let fixture = fixture();
+    let before = r#"{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"/mine:~/also","FOO":"bar"}}"#;
+    std::fs::write(&fixture.settings, before).unwrap();
+    std::fs::create_dir_all(fixture.policy.parent().unwrap()).unwrap();
+    std::fs::write(&fixture.policy, format!(r#"{{"{key}": true}}"#)).unwrap();
+    let outdated =
+        || MANAGED_INTEGRATION.outdated_files(&fixture.env, HookInstallOptions::default());
+
+    let blocker = MANAGED_INTEGRATION.mod_blocker(&fixture.env).unwrap();
+    assert_eq!((blocker.key, &blocker.file), (key, &fixture.policy));
+    let preview = MANAGED_INTEGRATION
+        .preview(&fixture.env, HookInstallOptions::default())
+        .unwrap();
+    assert_eq!(preview.plugin_dir, Some(ModPlan::Skipped(blocker)));
+    assert_eq!(preview.files.len(), 1, "the preview lists no mod file");
+    let report = install(&fixture);
+    assert_eq!(report.plugin_dir, None);
+    assert_eq!(report.files.len(), 1);
+    assert!(!fixture.mod_dir.exists(), "no mod folder is written");
+    assert_eq!(
+        read(&fixture.settings)["env"],
+        serde_json::json!({"CLAUDE_CODE_PLUGIN_DIRS": "/mine:~/also", "FOO": "bar"})
+    );
+    assert!(MANAGED_INTEGRATION.installed(&fixture.env));
+    assert!(outdated().is_empty(), "{:?}", outdated());
+    MANAGED_INTEGRATION.uninstall(&fixture.env).unwrap();
+    assert_eq!(
+        read(&fixture.settings),
+        serde_json::from_str::<Value>(before).unwrap()
+    );
+
+    std::fs::remove_file(&fixture.policy).unwrap();
+    install(&fixture);
+    assert!(
+        fixture.mod_dir.join("hooks/rimz.ts").is_file(),
+        "a lifted policy restores the mod"
+    );
+    std::fs::write(&fixture.policy, format!(r#"{{"{key}": true}}"#)).unwrap();
+    assert_eq!(
+        outdated(),
+        vec![fixture.settings.clone()],
+        "the folder is not drift"
+    );
+    install(&fixture);
+    assert_eq!(
+        read(&fixture.settings)["env"]["CLAUDE_CODE_PLUGIN_DIRS"],
+        "/mine:~/also",
+        "the next install removes RimZ's entry alone"
+    );
+    assert!(outdated().is_empty());
+    MANAGED_INTEGRATION.uninstall(&fixture.env).unwrap();
+    assert_eq!(
+        read(&fixture.settings),
+        serde_json::from_str::<Value>(before).unwrap()
+    );
+}
+
+#[test]
+fn allow_managed_mods_only_skips_the_mod() {
+    assert_policy_skips_the_mod("allowManagedModsOnly");
+}
+
+#[test]
+fn allow_managed_hooks_only_skips_the_mod() {
+    assert_policy_skips_the_mod("allowManagedHooksOnly");
+}
+
+#[test]
+fn disable_all_hooks_skips_the_mod() {
+    assert_policy_skips_the_mod("disableAllHooks");
+}
+
+#[test]
+fn a_malformed_managed_file_installs_the_mod() {
+    let fixture = fixture();
+    std::fs::create_dir_all(fixture.policy.parent().unwrap()).unwrap();
+    std::fs::write(&fixture.policy, "{\"allowManagedModsOnly\": tru").unwrap();
+    assert_eq!(MANAGED_INTEGRATION.mod_blocker(&fixture.env), None);
+    install(&fixture);
+    assert!(fixture.mod_dir.join("hooks/rimz.ts").is_file());
 }

@@ -1592,6 +1592,73 @@ fn doctor_flags_a_live_claude_session_until_the_mod_checks_it_in() {
     );
 }
 
+/// Under a managed policy that keeps the mod from loading, the login's Claude
+/// rows show the policy and never a missing check-in or missing signal. The
+/// registration and turn are injected: a real session registers only under
+/// `allowManagedModsOnly`, since the other two keys turn its hooks off, and
+/// for those this pins the row a registered session would get.
+fn assert_doctor_shows_the_claude_mod_policy(key: &str, disables_hooks: bool) {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let policy = env.grok_policy_root().join(if cfg!(target_os = "macos") {
+        "Library/Application Support/ClaudeCode/managed-settings.json"
+    } else {
+        "etc/claude-code/managed-settings.json"
+    });
+    std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+    std::fs::write(&policy, format!(r#"{{"{key}": true}}"#)).unwrap();
+    inject_lifecycle(
+        &env,
+        "claude",
+        "blocked-session",
+        LifecycleSignal::Registered,
+        Some("main"),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    for signal in [
+        LifecycleSignal::TurnStarted { turn_id: None },
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    ] {
+        inject_lifecycle(&env, "claude", "blocked-session", signal, Some("main"));
+    }
+
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    let row = &report["agents"]["rows"][0];
+    assert_eq!(
+        row["mod_blocked"],
+        json!({"key": key, "file": policy, "disables_hooks": disables_hooks}),
+        "{report:#}"
+    );
+    assert!(row.get("mod_missing").is_none(), "{report:#}");
+    assert!(row.get("mod_signals_missing").is_none(), "{report:#}");
+    let text = env.rimz().args(["doctor"]).output().unwrap();
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        text.contains(&format!("RimZ mod blocked by `{key}`")),
+        "{text}"
+    );
+    assert!(!text.contains("RimZ mod never reported"), "{text}");
+}
+
+#[test]
+fn doctor_shows_allow_managed_mods_only() {
+    assert_doctor_shows_the_claude_mod_policy("allowManagedModsOnly", false);
+}
+
+#[test]
+fn doctor_shows_allow_managed_hooks_only() {
+    assert_doctor_shows_the_claude_mod_policy("allowManagedHooksOnly", true);
+}
+
+#[test]
+fn doctor_shows_disable_all_hooks() {
+    assert_doctor_shows_the_claude_mod_policy("disableAllHooks", true);
+}
+
 #[test]
 fn doctor_json_folds_one_row_per_agent() {
     let env = Env::new();

@@ -1,16 +1,18 @@
 //! Resumable Claude transcript fold for session-cumulative usage, cache-write retention, and
-//! the main conversation's latest recorded request.
+//! the main conversation's latest recorded request, plus the resting-turn scan that lands an
+//! interruption, a turn death or a turn-ending denial with no status line or mod to trigger it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::spend::{claude_config_dirs_from, parse_claude_spend_with_retention};
-use super::{TranscriptUsageSource, managed_pricing, usage_from_transcript};
+use super::statusline::{self, RestingTurnOutcome};
+use super::{TranscriptUsageSource, managed_pricing, read_transcript_tail, usage_from_transcript};
 use crate::agents::pricing;
 use crate::agents::spending::SpendUpdate;
 use crate::agents::{
     AgentTokenUsage, FieldPatch, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
-    LocalSpendFold, LocalTokenPatch, TranscriptStat,
+    LocalSpendFold, LocalTokenPatch, TranscriptStat, TurnSettle, TurnSettleOutcome,
 };
 
 pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRefresh> {
@@ -51,6 +53,15 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         }))
     });
     let usage = usage_from_transcript(&path);
+    let (settle, turn_error) =
+        match read_transcript_tail(&path).and_then(|tail| statusline::detect_resting_turn(&tail)) {
+            Some(RestingTurnOutcome::Interrupted(at)) => (
+                FieldPatch::Set(TurnSettle::new(at, TurnSettleOutcome::Interrupted)),
+                FieldPatch::Keep,
+            ),
+            Some(RestingTurnOutcome::Died(error)) => (FieldPatch::Keep, FieldPatch::Set(error)),
+            None => (FieldPatch::Keep, FieldPatch::Keep),
+        };
 
     Some(LocalContextRefresh {
         context: LocalContextPatch {
@@ -68,6 +79,9 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
                 Some(latest) => latest.map_or(FieldPatch::Clear, FieldPatch::Set),
                 None => restartable_patch(None, restarted),
             },
+            settle,
+            turn_error,
+            markers_advance: true,
             ..LocalContextPatch::default()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),

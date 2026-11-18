@@ -450,6 +450,77 @@ fn non_codex_local_refresh_preserves_turn_error_marker() {
     assert_eq!(merged.context.turn_error, Some(marker));
 }
 
+/// A refresh that only advances markers never puts an older one back over a
+/// newer stored marker (a `StopFailure` stamped at decode, say), and still
+/// lands a newer one.
+#[test]
+fn an_advancing_local_refresh_never_moves_a_marker_backwards() {
+    let (_dir, runtime) = runtime();
+    let observed_at = Timestamp::from_second(1_700_000_000).unwrap();
+    let stored_error = turn_error(
+        TurnErrorClass::PausedOverloaded,
+        "stop failure",
+        1_700_000_020,
+    );
+    let stored_settle = TurnSettle::new(
+        Timestamp::from_second(1_700_000_020).unwrap(),
+        TurnSettleOutcome::Interrupted,
+    );
+    let mut prior = AgentContextRecord::new("claude", "sess-1", ctx(observed_at));
+    prior.context.turn_error = Some(stored_error.clone());
+    prior.context.settle = Some(stored_settle);
+    write_record(&runtime, &prior).unwrap();
+
+    let advancing = |error_at: i64, settle_at: i64| {
+        let mut refresh = unpriced_refresh();
+        refresh.context.markers_advance = true;
+        refresh.context.turn_error = FieldPatch::Set(turn_error(
+            TurnErrorClass::PausedOverloaded,
+            "scan",
+            error_at,
+        ));
+        refresh.context.settle = FieldPatch::Set(TurnSettle::new(
+            Timestamp::from_second(settle_at).unwrap(),
+            TurnSettleOutcome::Interrupted,
+        ));
+        refresh
+    };
+    for at in [1_700_000_010, 1_700_000_020] {
+        merge_local_context(
+            &runtime,
+            spec("claude"),
+            "sess-1",
+            advancing(at, at),
+            observed_at,
+        )
+        .unwrap();
+        let merged = read_one(&runtime, "claude", "sess-1").unwrap();
+        assert_eq!(
+            merged.context.turn_error.as_ref(),
+            Some(&stored_error),
+            "{at}"
+        );
+        assert_eq!(merged.context.settle, Some(stored_settle), "{at}");
+    }
+    merge_local_context(
+        &runtime,
+        spec("claude"),
+        "sess-1",
+        advancing(1_700_000_030, 1_700_000_031),
+        observed_at,
+    )
+    .unwrap();
+    let merged = read_one(&runtime, "claude", "sess-1").unwrap();
+    assert_eq!(
+        merged.context.turn_error.map(|error| error.at),
+        Timestamp::from_second(1_700_000_030).ok()
+    );
+    assert_eq!(
+        merged.context.settle.map(|settle| settle.at),
+        Timestamp::from_second(1_700_000_031).ok()
+    );
+}
+
 #[test]
 fn merge_turn_error_skips_identical_marker() {
     let (_dir, runtime) = runtime();
