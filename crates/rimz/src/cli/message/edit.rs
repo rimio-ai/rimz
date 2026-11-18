@@ -193,7 +193,7 @@ pub(super) fn requeue_message(
         bail!("message {message_id} not found");
     };
     if record.soft_compact == Some(rimz::store::message::SoftCompactStep::WrapUp) {
-        bail!("{message_id} is a steer-only soft-compaction wrap-up and is never requeued");
+        bail!("{message_id} is a steer-only smart-compaction reminder and is never requeued");
     }
     if !record.status.is_terminal() {
         if matches!(

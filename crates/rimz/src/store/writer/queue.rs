@@ -1439,7 +1439,7 @@ impl Store {
     /// window of the write also holds it until applied. A prompt written since its
     /// receiver's resume stays held until the next lifecycle observation or ten
     /// delivery windows from the resume, whichever comes first.
-    /// Steer-only wrap-ups instead cancel after their claim or unclaimed queue
+    /// Steer-only reminders instead cancel after their claim or unclaimed queue
     /// time reaches the claim TTL, hold during an open turn once sent, and settle
     /// from the receiver's turn end without ever requeueing.
     #[must_use = "durability barrier; check the result"]
@@ -1493,7 +1493,7 @@ impl Store {
                     }
                     return MessageUpdate::Finalize {
                         status: MessageStatus::Canceled,
-                        reason: Some("soft-compaction wrap-up was not sent; not retried".to_owned()),
+                        reason: Some("smart-compaction reminder was not sent; not retried".to_owned()),
                     };
                 }
                 if message.expired(now) {
@@ -1984,13 +1984,13 @@ fn settle_wrap_up(
     let (status, reason) = if ended {
         (
             MessageStatus::Delivered,
-            "soft-compaction wrap-up settled after turn end",
+            "smart-compaction reminder settled after turn end",
         )
     } else {
         report.timed_out += 1;
         (
             MessageStatus::TimedOut,
-            "soft-compaction wrap-up unconfirmed; not resent",
+            "smart-compaction reminder unconfirmed; not resent",
         )
     };
     MessageUpdate::Finalize {

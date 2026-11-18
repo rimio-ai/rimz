@@ -287,7 +287,7 @@ pane_border_status = "top"           # "top" (default), "bottom", "off", or "inh
 # auto-compact; "off" passes none.
 # An engine switch drops this default silently where no window flag exists.
 # auto_compact = "272k"
-# Wrap up a filling turn, compact at rest, and continue; also compact before messages/waits.
+# Remind a filling turn to compact itself; also compact before messages/waits.
 # A profile or role's smart-compact overrides this line; tokens or "70%", "off" disables it.
 # smart_compact = "258k"
 ## compact_instruction = ""       # text for compact commands that accept it; unset = RimZ's brief for the seat (solo or team member), "" = bare command

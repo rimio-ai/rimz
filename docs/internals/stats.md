@@ -212,7 +212,7 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 | --- | --- |
 | stall notice | it has no error once queued for the parent, including a notice later withdrawn because its child run ended before delivery |
 | stall nudge | it has no error once queued for the teammate, and counts under `stall_nudges` even when the immediate boundary attempt misses |
-| auto-continue, cache keepalive, soft compaction, idle compaction, flip compaction | it was delivered |
+| auto-continue, cache keepalive, smart-compaction reminder, idle compaction, flip compaction | it was delivered |
 | idle stop | the agent's pane closed, even with a cleanup error |
 | hibernation | it froze, or a deepening step reclaimed more than 0 bytes |
 | launch retry | the relaunch spawned |
@@ -232,7 +232,7 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 
 `untrusted_cwd_fallback` events count under `untrusted_cwd_fallbacks` and `Untrusted cwd:`. They carry `kind`, account `login`, `target`, private `cwd`, and optional `profile`. The benefit names the provider, account, target, and profile, and forensics add cwd. Repeated target/profile starts group by account as empty-root grants do, without merging the two categories. An explicit empty start has no fallback assist.
 
-`soft_compact` counts the wrap-up steer under `soft_compacts` (`Soft compact:`), only when delivered. A miss remains in `held.soft_compacts` and the forensic timeline. Its later compact-first command counts separately under `compacts` (`Auto-compact:`). A continue record adds no assist.
+`soft_compact` counts the smart-compaction reminder under `soft_compacts` (`Compact reminder:`), only when delivered. A miss remains in `held.soft_compacts` and the forensic timeline. The `rimz agents compact` the agent then runs, and the continue queued behind it, add no assist: they are the caller's own command, recorded as message records.
 
 A held or failed attempt increments `held` under the count it would have joined (`AssistEvent::count_key`), and the timeline header prints it beside that count: `Auto-compact: N (M held)`. A deepening step that reclaimed 0 bytes is neither counted nor held. Four projections are easy to get wrong:
 

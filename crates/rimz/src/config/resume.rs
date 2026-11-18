@@ -74,9 +74,10 @@ pub struct ResumeConfig {
     pub auto_continue_backoff_secs: Vec<u64>,
     /// Number of auto-continue attempts before leaving the row paused.
     pub auto_continue_max_retries: u32,
-    /// Text for park recovery when `auto_continue` is on, and for mid-turn soft
-    /// compaction's continue regardless of that switch. Blank text disables the
-    /// soft trigger. Sent through the message queue as a paste plus Enter.
+    /// Text for park recovery when `auto_continue` is on, and for the continue
+    /// `rimz agents compact` owes a busy agent regardless of that switch. Blank
+    /// text owes that compaction no continue and withholds the smart-compaction
+    /// reminder. Sent through the message queue as a paste plus Enter.
     pub auto_continue_text: String,
     /// Spend a Codex reset credit automatically when an in-use account's spend
     /// ladder reaches a useful reset. Expiry rescue remains

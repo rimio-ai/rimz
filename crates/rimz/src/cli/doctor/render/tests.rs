@@ -1386,7 +1386,7 @@ fn prompt_cache_fallback_is_always_json_and_uncounted_context_when_nonempty() {
 fn soft_compact_skips_are_json_and_uncounted_context_only_when_detected() {
     let mut report = report_fixture();
     let mut tally = Tally::default();
-    assert!(!strip(|w| render_hooks(w, &report, &mut tally)).contains("soft compaction"));
+    assert!(!strip(|w| render_hooks(w, &report, &mut tally)).contains("smart-compaction reminder"));
     assert_eq!(
         serde_json::to_value(&report).unwrap()["soft_compact_skips"],
         serde_json::json!([])
@@ -1397,7 +1397,7 @@ fn soft_compact_skips_are_json_and_uncounted_context_only_when_detected() {
     }];
     let text = strip(|w| render_hooks(w, &report, &mut tally));
     assert!(
-        text.contains("mid-turn soft compaction skipped: amp (no compact command)"),
+        text.contains("smart-compaction reminder skipped: amp (no compact command)"),
         "{text}"
     );
     assert!(text.contains("provider's own window"), "{text}");

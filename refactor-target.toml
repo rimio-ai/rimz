@@ -385,7 +385,7 @@ upward-dependencies = ["address"]
 # AgentTune's per-key accessors project effective overrides before configured fallback (+3).
 # RaisedAsk::detail and question_sentence share the card's question line (+2).
 # ResetGrant, its re-export from agents and ResetCredits::accounted carry per-grant reset credits (+3).
-# AgentState::soft_compact_in_flight shares the open-cycle rest lift with the sub-agent projection (+1).
+# AgentState::soft_compact_in_flight shares the owed-continue rest lift with the sub-agent projection (+1).
 # AgentState::last_request_recorded and request_key name the cache clock's source and the
 # request identity pacing compares, which a switch of source does not move (+2).
 # AgentState::lane_checkout and project_lane keep derived rows and the fold on the stored lane (+2).
@@ -586,7 +586,7 @@ reason = "Refresh callers carry the independent catalog/config/model gate on the
 [[verdict]]
 kind = "item"
 key = "agents::registry::SoftCompactSkip"
-reason = "Launch warnings, doctor and the soft-compaction producer share the adapter's typed skip reason."
+reason = "Launch warnings, doctor and the smart-compaction reminder producer share the adapter's typed skip reason."
 
 [[verdict]]
 kind = "item"
@@ -2483,12 +2483,12 @@ reason = "The CLI invokes the harness-owned locked recheck and enqueue with fres
 [[verdict]]
 kind = "item"
 key = "harness::soft_compact::compact_agents"
-reason = "Sidebar refresh drives the shared soft-compaction decision through detached helpers and disposable pacing."
+reason = "Sidebar refresh drives the shared smart-compaction reminder decision through detached helpers and disposable pacing."
 
 [[verdict]]
 kind = "item"
 key = "harness::soft_compact"
-reason = "The sidebar and detached helper share one read-only soft-compaction policy."
+reason = "The sidebar and detached helper share one read-only smart-compaction reminder policy."
 
 [[verdict]]
 kind = "item"
@@ -2503,7 +2503,7 @@ reason = "Producer and helper make the same live-row, context and reminder-epoch
 [[verdict]]
 kind = "item"
 key = "harness::soft_compact::spawn_soft_compact"
-reason = "Soft-compaction helpers use the shared typed argv and detached null-stdio transport."
+reason = "Smart-compaction reminder helpers use the shared typed argv and detached null-stdio transport."
 
 [[verdict]]
 kind = "item"
@@ -3399,8 +3399,8 @@ upward-dependencies = [
 # FanoutMatch carries resolved identities and paste-ready addresses into CLI ambiguity rows (+1).
 # InterruptConfirmation and the public DeliveryReport/deliver_one_report expose stop evidence to both CLI receipts (+3).
 # spawn_queued_head shares the FIFO selection and delivery argv across hooks and resumed wrappers (+1).
-# soft_compact exposes its module, both sends and the wrap-up delivery outcome to the helper (+4).
-# TurnWaitView::soft_compact_in_flight shares queued-cycle debt without another queue read (+1).
+# soft_compact exposes its module, the reminder send and its delivery outcome to the helper.
+# TurnWaitView::soft_compact_in_flight shares owed-continue debt without another queue read (+1).
 # InputWait carries native-input refusal reasons from the write decision to CLI receipts (+1).
 surface-budget = 91
 
@@ -3412,7 +3412,7 @@ reason = "Pane writes, dispatch and CLI receipts share human-input and automatic
 [[verdict]]
 kind = "item"
 key = "message::soft_compact"
-reason = "Soft-compaction queue and delivery choreography belongs beside other message sends."
+reason = "The smart-compaction reminder's queue and delivery choreography belongs beside other message sends."
 
 [[verdict]]
 kind = "item"
@@ -4662,7 +4662,7 @@ reason = "The producer and renderer share inactive membership and its landed or 
 [[verdict]]
 kind = "item"
 key = "store::message::SoftCompactStep"
-reason = "Durable records and event payloads share the wrap-up/continue vocabulary with message delivery and helper policy."
+reason = "Durable records and event payloads share the reminder/continue vocabulary (stored as wrap_up/continue) with message delivery and helper policy."
 
 [[verdict]]
 kind = "item"

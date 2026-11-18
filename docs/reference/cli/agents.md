@@ -305,7 +305,7 @@ rimz agents forge -w restore-living-team --fresh   # new sessions, same checkout
 
 `-p` (`--print`) launches exactly one agent in a real pane, waits until the work ends, prints the result, and exits with the run's status, so a script branches on the outcome. The pane stays watchable and steerable while the script waits. The [scripting guide](../../guide/scripting.md) teaches the workflow.
 
-A clean turn end keeps the run `running` while a one-shot wait, a harness wake in flight, a live or unreported child result, a launched team's report, a soft-compaction continuation, or a prompt a person or an agent sent it (queued and due, or just sent) is owed. The turn that prompt opens gets the run's whole `--timeout` again, as a follow-up turn does. `agents show` adds the parked age; run JSON and live NDJSON status include `parked_at`. Live NDJSON `status` events keep raw `agent_status`: a Codex Auto permission reports `waiting` with `permission_review_until` (arrival + 60 s) as its attention deadline while the ask remains open; the field is omitted for other rows and once the rollout proves the asking Code Mode cell finished, closing the ask while raw status stays `waiting`. The next turn resumes the same run. If nothing remains to wake a parked run, it fails with exit `1` and the reason `parked on a wake that never arrived: no armed wait, no wake in flight, no live subagents` (or an earlier captured failure), except that a run parked on a prompt that was then withdrawn (canceled, expired or archived before it opened a turn) completes with the parked turn's answer. `--timeout` still applies while parked; background receipts and `agents wait` joins are unchanged.
+A clean turn end keeps the run `running` while a one-shot wait, a harness wake in flight, a live or unreported child result, a launched team's report, the continue a [compaction](#compact) owes it, or a prompt a person or an agent sent it (queued and due, or just sent) is owed. The turn that prompt opens gets the run's whole `--timeout` again, as a follow-up turn does. `agents show` adds the parked age; run JSON and live NDJSON status include `parked_at`. Live NDJSON `status` events keep raw `agent_status`: a Codex Auto permission reports `waiting` with `permission_review_until` (arrival + 60 s) as its attention deadline while the ask remains open; the field is omitted for other rows and once the rollout proves the asking Code Mode cell finished, closing the ask while raw status stays `waiting`. The next turn resumes the same run. If nothing remains to wake a parked run, it fails with exit `1` and the reason `parked on a wake that never arrived: no armed wait, no wake in flight, no live subagents` (or an earlier captured failure), except that a run parked on a prompt that was then withdrawn (canceled, expired or archived before it opened a turn) completes with the parked turn's answer. `--timeout` still applies while parked; background receipts and `agents wait` joins are unchanged.
 
 ```sh
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
@@ -1087,7 +1087,7 @@ Stopping a parent first stops its live children launched with `rimz subagents`, 
 The agent stops only when all of this holds at one check:
 
 - its turn has ended cleanly, and it is not waiting on your input, parked on a budget or provider limit, compacting, or running background work;
-- nothing is owed to it: no armed wait, no subagent or launched team still to report, no soft-compaction continuation, no message queued or scheduled for it, and no open supervised run or peer turn, so a soft stop never cancels a run;
+- nothing is owed to it: no armed wait, no subagent or launched team still to report, no continue owed after a [compaction](#compact), no message queued or scheduled for it, and no open supervised run or peer turn, so a soft stop never cancels a run;
 - every live `rimz subagents` child the stop would close with it, at any depth, passes those same two checks. A child needs no rest of its own, but a message queued for a child you kept holds its parent until the message lands. A provider's own subagent is not checked: its row can read as working after it finished;
 - stopping it and those children would not cancel a run that is still open;
 - for a team seat, the team's board reads `Done`. A seat whose checkout has no board is held;
@@ -1125,16 +1125,21 @@ Restarting a current workflow step agent uses `rimz workflow restart <run> --con
 
 #### `compact`
 
-`rimz agents compact <REF> [INSTRUCTION]` queues the agent's native context-compaction command and delivers it at a turn boundary: at once for an idle agent, or when a running or waiting agent's turn ends. There is no way to force it into a live turn.
+`rimz agents compact <REF> [INSTRUCTION] [--no-continue]` queues the agent's native context-compaction command and delivers it at a turn boundary: at once for an idle agent, or when a running or waiting agent's turn ends. There is no way to force it into a live turn. An agent compacts itself with `rimz agents compact @me`.
+
+When the agent holds an open turn and the command queues, RimZ also queues a continue behind it: the [`[resume] auto_continue_text`](../../guide/configuration.md#resume) prompt, typed once the compaction has ended, so the agent picks its work back up. `--no-continue`, or a blank `auto_continue_text`, queues the command alone. An agent at rest gets no continue, and `--no-continue` changes nothing there.
 
 | Output | Meaning |
 | --- | --- |
 | `compacting @handle (msg_...)` | Sent. The command was submitted; compaction may still be running. |
-| `queued compaction for @handle (msg_...) — @handle is <status>; delivers at its next turn boundary` | Queued until the turn ends. |
+| `queued compaction for @handle (msg_...) — @handle is <status>; delivers at its next turn boundary, then continues it` | Queued until the turn ends, with a continue queued behind it. |
+| `queued compaction for @handle (msg_...) — @handle is <status>; delivers at its next turn boundary, with no continue after` | Queued until the turn ends, with no continue. |
+
+The continue is withdrawn (`Canceled`) when you interrupt the agent, when it runs `/clear`, or when a prompt you type opens a turn before the continue lands; a RimZ notice landing first withdraws nothing. It is also withdrawn when its compaction command ends without being typed (canceled, expired, or errored). While the continue is owed, a [supervised run](#supervised-runs--p) stays open and a [`--when-idle`](#stop) stop waits. If the continue cannot be queued, the command prints the reason, exits `1`, and leaves the compaction queued.
 
 Without `INSTRUCTION`, the command uses the [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction) brief. An instruction replaces that brief on adapters that accept trailing text (Claude, Grok, Droid, MiniMax, OMP, Qoder, Hermes), and `""` sends the bare command. Other adapters refuse any instruction, including `""`; rerun without one.
 
-This is an explicit command, separate from the seat's [`smart-compact`](../definitions.md#smart-compaction) policy, which asks a busy agent to wrap up before compacting at rest and continuing, and also compacts before messages to resting agents.
+This is an explicit command, separate from the seat's [`smart-compact`](../definitions.md#smart-compaction) policy, which reminds a busy agent to run this command on itself and also compacts before messages to resting agents.
 
 `INSTRUCTION` may start with `-`; a value that is itself one of the command's flags (`-h`, `--help`, or a global flag such as `--color`) needs `--` before it.
 
