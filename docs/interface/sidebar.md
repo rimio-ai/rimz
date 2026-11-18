@@ -203,6 +203,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `┤ Tab ├` | the active dashboard tab under `NO_COLOR` |
 | `zᶻ idle`, `zᶻ away` | you are away from the terminal |
 | `⇄ 210ms` | SSH link round-trip time |
+| `↑ ▰▰▰▱▱▱ (⌃V cancel)` | a paste uploading from `rimz remote connect`, filled to the share received |
 | `⧗ stall mem 34%` | machine resource pressure: time tasks spent stalled, not utilisation |
 | `mem 6%↓` | a fading stall; its ten-second average has eased while the minute average remains high |
 | `/ auth` | the text search, above the dashboard |
@@ -1036,6 +1037,25 @@ The SSH anchor takes the left edge, followed by the stall notice and then the pr
 Stall figures are Linux PSI's `some` averages: the percentage of time at least one task waited for memory, CPU, or I/O, not how much of the resource was used. An item shows when its ten-second or minute average reaches 10% for memory, 50% for CPU, or 25% for I/O. The figure is the current ten-second average, rounded to a whole percent. Below 80% of its threshold it fades with `↓`; it clears when both averages fall below the threshold. Active items come first, then fading ones, with memory, CPU, I/O in that order within each group. The lead and active figures are bold amber; fading items are muted (dim under `NO_COLOR`). Unavailable readings contribute no item.
 
 As the pane narrows, presence drops first, help shortens to `?`, and a healthy or warming SSH figure becomes bare `⇄`. Bad-link figures and `stale` never drop. Next help drops, the items after the first collapse to `+cpu` for one hidden item or `+N` for several, the tag becomes numeric even for one item, and the word `stall` drops while its glyph stays. `?` returns whenever it fits beside a later shape; the final shape clips at the right edge. An active refresh alert hides the footer and its stall notice until the room can be read again.
+
+### Paste upload row
+
+While a paste or file drop sent through [`rimz remote connect`](../guide/remote.md) uploads into the room, one row sits directly above the footer: the upload glyph, a bar filled to the share of bytes the host has received, and the key that cancels it.
+
+```
+ ↑ ▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ (⌃V cancel)
+                                   ? for help
+```
+
+A failed upload names its cause instead, for eight seconds, wrapped to the pane:
+
+```
+ ↑ upload failed: 5 B is over the 4 B upload
+ limit (paste_max)
+                                   ? for help
+```
+
+The bar moves only when the host records more bytes, at most about four times a second, and never between paint ticks. It is the pixel bar where the provider dashboard draws pixel budget bars, and the `▰▱` text bar anywhere else. As the pane narrows, the `(⌃V cancel)` hint drops before the bar shrinks below four cells. The row unfolds a footer folded into the dashboard, as a notice does, and an active refresh alert hides it with the footer. A transfer whose host receiver stops reporting for ten seconds drops its row.
 
 ### Notices and alerts
 

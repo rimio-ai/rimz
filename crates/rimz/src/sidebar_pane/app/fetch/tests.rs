@@ -442,6 +442,22 @@ fn hook_drainer_outages_are_content_not_a_clock_only_change() {
 }
 
 #[test]
+fn upload_progress_is_content_not_a_clock_only_change() {
+    let mut left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
+    left.upload = Some(crate::store::snapshot::SidebarUpload::Running {
+        received: 1,
+        total: 9,
+    });
+    let mut right = left.clone();
+    assert!(same_snapshot_content(&left, &right));
+    right.upload = Some(crate::store::snapshot::SidebarUpload::Running {
+        received: 2,
+        total: 9,
+    });
+    assert!(!same_snapshot_content(&left, &right));
+}
+
+#[test]
 fn a_rejudged_skipped_list_of_equal_size_is_content() {
     let mut left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
     left.skipped_settings = Some(crate::store::snapshot::SkippedSettings {

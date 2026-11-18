@@ -345,6 +345,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         fleet_day_spend_epoch_secs,
         fleet_budget,
         link,
+        upload,
         stall,
         reflects_log,
         fenced_sessions,
@@ -405,6 +406,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         && fleet_day_spend_epoch_secs == &right.fleet_day_spend_epoch_secs
         && fleet_budget == &right.fleet_budget
         && link == &right.link
+        && upload == &right.upload
         && stall == &right.stall
         && reflects_log == &right.reflects_log
         && throttle_notices == &right.throttle_notices

@@ -46,10 +46,10 @@ pub use model::{
     RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarInactive, SidebarLinkFreshness,
     SidebarLinkHealth, SidebarPipeline, SidebarPlace, SidebarPresence, SidebarProviderPanel,
     SidebarSeatEffort, SidebarStallItem, SidebarStallPhase, SidebarStallResource,
-    SidebarStatusCount, SidebarUnitKey, SidebarWorkflow, SidebarWorkflowNode, SidebarWorktreeGroup,
-    SidebarWorktreeKind, StackPr, ThrottleNotice, UnitStatus, WorkflowNodeKind, WorktreeCi,
-    WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, agent_idle_since, card_status,
-    lead_unread_row, needs_you,
+    SidebarStatusCount, SidebarUnitKey, SidebarUpload, SidebarWorkflow, SidebarWorkflowNode,
+    SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, ThrottleNotice, UnitStatus,
+    WorkflowNodeKind, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
+    agent_idle_since, card_status, lead_unread_row, needs_you,
 };
 pub(crate) use model::{actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;
@@ -137,7 +137,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 105;
+pub const SNAPSHOT_VERSION: u32 = 106;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -379,6 +379,10 @@ pub struct SidebarSnapshot {
     /// `None`, leaving the footer without an SSH anchor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<SidebarLinkHealth>,
+    /// The room's paste upload while the host's `rimz remote upload` receiver
+    /// keeps its lane live; `None` in local rooms and between uploads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload: Option<SidebarUpload>,
     /// Machine resources stalling on the room host, in footer order. Stamped by
     /// the room host's fetch cycle and the CLI producer; other folds leave it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -505,6 +509,7 @@ impl SidebarSnapshot {
             fleet_day_spend_epoch_secs: None,
             fleet_budget: None,
             link: None,
+            upload: None,
             stall: Vec::new(),
             reflects_log: None,
             fenced_sessions: Arc::default(),

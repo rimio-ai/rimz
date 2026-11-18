@@ -6,7 +6,8 @@ use crate::sidebar_pane::render::labels::value_seam;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{
     HookDrainerOutageAgent, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
-    SidebarSnapshot, SidebarStallItem, SidebarStallPhase, SidebarStallResource, TruthNotice,
+    SidebarSnapshot, SidebarStallItem, SidebarStallPhase, SidebarStallResource, SidebarUpload,
+    TruthNotice,
 };
 use jiff::Timestamp;
 use ratatui::style::{Modifier, Style};
@@ -666,6 +667,60 @@ fn presence_badge(
         SidebarPresence::Detached => format!("{glyph} away"),
     };
     Some(Span::styled(text, theme.muted()))
+}
+
+/// The narrowest progress bar drawn beside the `(⌃V cancel)` hint; below it
+/// the hint drops and the bar takes its cells.
+const UPLOAD_BAR_MIN: usize = 4;
+
+/// The paste upload row above the footer: the upload glyph, then a running
+/// transfer's progress bar and cancel hint, or a failed one's reason.
+pub(super) fn upload_line(
+    theme: &Theme,
+    upload: &SidebarUpload,
+    width: usize,
+    pixels: Option<&mut crate::sidebar_pane::pixel::meter::MeterPixels>,
+) -> Line<'static> {
+    let glyph = theme.glyph(GlyphRole::ChromeUpload);
+    let (received, total) = match upload {
+        SidebarUpload::Failed { reason } => {
+            let style = theme.styled(Component::UploadFailed, Modifier::empty());
+            return Line::from(Span::styled(
+                format!("{glyph} upload failed: {reason}"),
+                style,
+            ));
+        }
+        SidebarUpload::Running { received, total } => (*received, *total),
+    };
+    let lead = Span::styled(
+        glyph.to_owned(),
+        theme.styled(Component::UploadProgress, Modifier::empty()),
+    );
+    let room = width.saturating_sub(layout::text_width(glyph) + 1);
+    if room == 0 {
+        return Line::from(lead);
+    }
+    let hint = format!(" ({}V cancel)", theme.glyph(GlyphRole::ChromeControlKey));
+    let hint_width = layout::text_width(&hint);
+    let (bar_width, hint) = if room >= UPLOAD_BAR_MIN + hint_width {
+        (room - hint_width, Some(hint))
+    } else {
+        (room, None)
+    };
+    let received_pct = received
+        .min(total)
+        .saturating_mul(100)
+        .checked_div(total)
+        .map_or(100, |pct| u8::try_from(pct).unwrap_or(100));
+    let mut spans = vec![lead, Span::raw(" ")];
+    spans.extend(super::labels::progress_bar_spans(
+        theme,
+        received_pct,
+        bar_width,
+        pixels,
+    ));
+    spans.extend(hint.map(|hint| Span::styled(hint, theme.muted())));
+    Line::from(spans)
 }
 
 fn link_badge(link: &SidebarLinkHealth, theme: &Theme) -> FooterLink {

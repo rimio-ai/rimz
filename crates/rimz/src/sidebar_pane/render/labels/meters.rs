@@ -683,6 +683,64 @@ pub(in crate::sidebar_pane::render) fn budget_bar_spans(
         })
 }
 
+/// A paste upload's progress bar, filled to `received_pct`: the pixel bar when
+/// the frame lends `pixels` and the budget bar could paint there, else the
+/// `▰`/`▱` text bar in the same cells.
+pub(in crate::sidebar_pane::render) fn progress_bar_spans(
+    theme: &Theme,
+    received_pct: u8,
+    width: usize,
+    pixels: Option<&mut MeterPixels>,
+) -> Vec<Span<'static>> {
+    let fill = theme.styled(Component::UploadProgress, Modifier::empty());
+    let track = theme.styled(Component::UploadTrack, theme.faint().add_modifier);
+    pixels
+        .and_then(|pixels| {
+            pixel_progress_bar_spans(theme, received_pct, width, fill, track, pixels)
+        })
+        .unwrap_or_else(|| {
+            two_tone_bar(
+                filled_cells(received_pct, width),
+                width,
+                fill,
+                track,
+                theme.glyph(GlyphRole::MeterManaFilled),
+                theme.glyph(GlyphRole::MeterManaTrack),
+            )
+        })
+}
+
+/// The progress bar as one budget raster: `received_pct` in the fill tone,
+/// the rest as track. An empty bar is the raster's unknown reading, the whole
+/// strip in the track, since its spent reading paints the strip in the fill.
+fn pixel_progress_bar_spans(
+    theme: &Theme,
+    received_pct: u8,
+    width: usize,
+    fill: Style,
+    track: Style,
+    pixels: &mut MeterPixels,
+) -> Option<Vec<Span<'static>>> {
+    let width = width.max(1);
+    if !placeholder_columns_supported(width) || mana_glyphs_overridden(theme) {
+        return None;
+    }
+    let width_cells = u16::try_from(width).ok()?;
+    let image_id = pixels.intern(BudgetRaster::new(
+        width_cells,
+        (received_pct > 0).then_some(received_pct),
+        theme.pixel_rgb(fill.fg?)?,
+        theme.pixel_rgb(track.fg?)?,
+        Vec::new(),
+    ))?;
+    let style = Style::default().fg(image_id_color(image_id));
+    Some(
+        (0..width_cells)
+            .map(|col| Span::styled(placeholder_cluster(0, col), style))
+            .collect(),
+    )
+}
+
 /// One continuous slanted bar over the text bar's cells, cut at the exact
 /// percent, with each tick at its own percent; a spent bar is the strip in
 /// [`Component::BudgetExhausted`]. `None` keeps the text bar: a user's own

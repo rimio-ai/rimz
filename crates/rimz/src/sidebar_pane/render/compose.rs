@@ -566,6 +566,7 @@ fn plan_bottom_chrome<'a>(
         && ui.gate_notice.is_none()
         && skipped_notice.is_none()
         && snapshot.throttle_notices.is_empty()
+        && snapshot.upload.is_none()
         && alert.is_none();
     let corner = if alert_active || owns_store {
         BottomCorner::None
@@ -598,7 +599,7 @@ pub(super) fn build_bottom_chrome(
     view: &ViewState,
     ui: &UiState,
     roster: &VisibleRoster<'_>,
-    meter_pixels: Option<&mut MeterPixels>,
+    mut meter_pixels: Option<&mut MeterPixels>,
 ) -> RenderedBlock {
     let plan = plan_bottom_chrome(snapshot, alert, view, ui);
     let inner = content_width(cells);
@@ -618,7 +619,7 @@ pub(super) fn build_bottom_chrome(
         ui,
         plan.dashboard,
         folded_footer,
-        meter_pixels,
+        meter_pixels.as_deref_mut(),
     ));
     bottom.append(bottom_corner_chrome(
         snapshot,
@@ -660,6 +661,10 @@ pub(super) fn build_bottom_chrome(
             // never draws on an empty block: without an alert the dashboard
             // or the fleet store's `W:`/`M:` rows always precede it.
             bottom.push_inert(Line::from(""));
+            if let Some(upload) = snapshot.upload.as_ref() {
+                let row = super::chrome::upload_line(theme, upload, inner, meter_pixels);
+                bottom.extend_inert(notice_rows(vec![row], inner));
+            }
             bottom.extend_inert(footer.into_iter().map(pad_chrome));
         }
     }
