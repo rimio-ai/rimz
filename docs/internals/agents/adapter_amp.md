@@ -90,7 +90,7 @@ Profile presets render through `PresetMatchers`:
 | Preset | Rendered as |
 | --- | --- |
 | `model` | `--mode <value>`, passed verbatim. Amp accepts `low`, `medium`, `high`, `ultra`, or a plugin mode by key or label ([modes](../../externals/agent-adapter/amp-reference.md#models-modes-and-effort)) |
-| `fast` | `--fast` |
+| `fast` | `--fast`; forced off renders nothing, since a thread created without `--fast` is standard |
 | `effort` | skipped with a warning at launch. Amp rejects `--effort` as an unknown option, and each mode's effort is set in Amp's Mode Dial settings |
 | `auto-compact` | skipped with a warning at launch |
 

@@ -280,7 +280,7 @@ description: Claude, shaped for this machine
 Prefer small, reviewable changes. Name what you are unsure about.
 ```
 
-A base takes no settings, only a description and a prompt body. The settings go in the profile beside it, `~/.rimz/agents/planner.md`:
+A base takes a description, a prompt body, and at most four launch defaults every launch on its kind starts from: `fast`, `code-mode`, `effort`, and `auto-compact`. A value a profile, role, or launch flag writes wins over the base's, and `unset` clears it. Every other setting goes in the profile beside it, `~/.rimz/agents/planner.md`:
 
 ```markdown
 ---
@@ -316,7 +316,7 @@ rimz agents planner --model opus --effort high --budget 5
 rimz agents planner --append-system-prompt-file ./local.md --append-system-prompt-file ./task.md
 ```
 
-A repeated `--append-system-prompt-file` keeps command-line order and replaces the profile's entire fragment list for that launch; fragments need a base `system-prompt-file`. `--effort` uses the provider's own effort flag or OpenCode's checked session variant; Hermes checks its supported level list. Unsupported effort warns and launches without it. OpenCode needs a model and refuses an effort the chosen model does not offer ([details](../internals/agents/adapter_opencode.md#model-selection)). `--fast` asks Claude, Codex, Amp, or Pi for its fast mode, which answers sooner at a higher price (Pi only on supported OpenAI models), and `--no-fast` drops a profile's `fast` for one agent; the agent keeps either choice across restart and resume. `--budget 5` parks the agent when its session cost reaches $5 and `--budget 20/day` caps each local calendar day instead; the same dollar-cap model scales up to loop tasks, the room, and a provider account in the [budgets guide](./budget.md).
+A repeated `--append-system-prompt-file` keeps command-line order and replaces the profile's entire fragment list for that launch; fragments need a base `system-prompt-file`. `--effort` uses the provider's own effort flag or OpenCode's checked session variant; Hermes checks its supported level list. Unsupported effort warns and launches without it. OpenCode needs a model and refuses an effort the chosen model does not offer ([details](../internals/agents/adapter_opencode.md#model-selection)). `--fast` asks Claude, Codex, Amp, or Pi for its fast mode, which answers sooner at a higher price (Pi only on supported OpenAI models), and `--no-fast` forces it off for one agent, even where the profile or its kind base sets `fast`; the agent keeps either choice across restart and resume. `--budget 5` parks the agent when its session cost reaches $5 and `--budget 20/day` caps each local calendar day instead; the same dollar-cap model scales up to loop tasks, the room, and a provider account in the [budgets guide](./budget.md).
 
 To try a profile on a different provider without changing it, add `--agent`:
 
