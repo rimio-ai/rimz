@@ -86,10 +86,10 @@ fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
     record.task = Some("nightly".to_owned());
     record.recheck_at = Some(Timestamp::from_second(10000).unwrap());
     for (report, now, expected) in [
-        (crate::store::workflow::LoopReport::Owed, 1200, Some(1200)),
-        (crate::store::workflow::LoopReport::Sent, 1300, None),
+        (crate::store::workflow::ReportMark::Owed, 1200, Some(1200)),
+        (crate::store::workflow::ReportMark::Sent, 1300, None),
     ] {
-        record.loop_report = report;
+        record.report = report;
         std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
         tick_workflows(
             &runtime,

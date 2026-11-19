@@ -293,7 +293,7 @@ fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, h
     let active: BTreeMap<_, _> = records
         .into_iter()
         .filter(|record| {
-            record.state == crate::store::workflow::RunState::Active || record.owes_loop_report()
+            record.state == crate::store::workflow::RunState::Active || record.owes_report()
         })
         .map(|record| (record.id.clone(), record))
         .collect();
@@ -307,7 +307,7 @@ fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, h
         // A deadline granted after `recheck_at` was published is not clamped
         // into it, so an unfired deadline is a due edge of its own.
         let deadline = record.deadline.filter(|_| !record.deadline_fired);
-        if !record.owes_loop_report()
+        if !record.owes_report()
             && record.recheck_at.is_some_and(|at| at > now)
             && record.held.is_none()
             && !deadline.is_some_and(|at| at <= now)
@@ -377,7 +377,7 @@ fn spawn_reconcile(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, 
 /// finished run that still owes its report waits as long as it had been finished at that
 /// spawn, so each failed report attempt doubles the gap, from one tick up to an hour.
 fn tick_pace(record: &crate::store::workflow::RunRecord, last: Timestamp) -> i64 {
-    match record.terminal_at.filter(|_| record.owes_loop_report()) {
+    match record.terminal_at.filter(|_| record.owes_report()) {
         Some(ended) => last
             .duration_since(ended)
             .as_secs()

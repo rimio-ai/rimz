@@ -419,6 +419,7 @@ fn fork_validation_inherits_the_callers_automation_not_the_sources() {
         Some(rimz::agents::Automation::Workflow {
             workflow: "review".into(),
             step: "build".into(),
+            depth: None,
         }),
     ] {
         caller.automation = automation.clone();

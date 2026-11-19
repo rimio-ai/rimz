@@ -189,6 +189,7 @@ const ROUTINE_RIMZ_PREFIXES: &[&str] = &[
     "rimz workflow run",
     "rimz workflow list",
     "rimz workflow show",
+    "rimz workflow wait",
     "rimz workflow cancel",
     "rimz workflow resume",
     "rimz workflow restart",

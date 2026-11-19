@@ -194,7 +194,7 @@ fn loop_add_resolves_a_bare_role_in_its_team_lane() {
 fn loop_add_refuses_what_a_launch_task_cannot_carry() {
     let env = live_room();
     kinds_fixture(&env);
-    let cases: [(&[&str], &str); 31] = [
+    let cases: [(&[&str], &str); 32] = [
         (
             &["--workflow", "smoke", "--each-worktree", "--", "-w", "x"],
             "loop task `t`: --workflow `smoke`: -w in the tail places the run, and --each-worktree places each fire",
@@ -271,6 +271,10 @@ fn loop_add_refuses_what_a_launch_task_cannot_carry() {
         (
             &["--workflow", "smoke", "--", "--once"],
             "loop task `t`: --workflow `smoke`: --once tries one node by hand, and a task's fire runs the whole workflow; remove --once\n",
+        ),
+        (
+            &["--workflow", "smoke", "--", "--detach"],
+            "loop task `t`: --workflow `smoke`: --detach drops the report a task's run owes it; remove --detach\n",
         ),
         (
             &["--workflow", "smoke", "--timeout", "1h"],

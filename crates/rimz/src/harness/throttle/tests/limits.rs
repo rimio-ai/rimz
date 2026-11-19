@@ -93,6 +93,7 @@ fn stamped(record: &workflow::RunRecord, node: &str) -> AgentState {
     leader.automation = Some(crate::agents::Automation::Workflow {
         workflow: "review".into(),
         step: node.into(),
+        depth: None,
     });
     leader
 }

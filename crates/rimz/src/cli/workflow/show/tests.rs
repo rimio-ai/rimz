@@ -81,6 +81,7 @@ fn now_line_uses_the_open_case_hold_instead_of_restarting_it() {
         journal: &[],
         now,
         commands: resolve::RunCommands::new(&record, &globals),
+        starter: None,
     };
     let mut output = Vec::new();
     view.now_line(&state, &mut output).unwrap();
@@ -127,6 +128,7 @@ fn a_hold_under_unknown_reads_unknown_without_a_forecast_until_true_again() {
             journal: &[],
             now,
             commands: resolve::RunCommands::new(record, &globals),
+            starter: None,
         };
         let phrase = view.presentation(None).unwrap();
         (phrase.state, phrase.forecast)
@@ -182,6 +184,7 @@ fn now_line_reads_a_sleep_a_step_enters_next_instead_of_reporting_it_slept() {
         journal: &[],
         now,
         commands: resolve::RunCommands::new(&record, &globals),
+        starter: None,
     };
     let mut output = Vec::new();
     view.now_line(&state, &mut output).unwrap();
@@ -244,6 +247,7 @@ fn output_of(definition: &str, with_you: bool) -> (String, String) {
         journal: &journal,
         now,
         commands: resolve::RunCommands::new(&record, &globals),
+        starter: None,
     };
     let mut headline = Vec::new();
     let mut rail = Vec::new();
@@ -309,6 +313,7 @@ fn an_asking_or_held_judge_names_its_pane_and_its_running_timeout() {
             journal: &[],
             now,
             commands: resolve::RunCommands::new(&record, &globals),
+            starter: None,
         };
         let mut headline = Vec::new();
         view.headline(&mut headline, None, None).unwrap();
@@ -382,6 +387,7 @@ fn a_rest_check_judges_ask_or_hold_names_the_judge_not_the_session() {
             journal: &[],
             now,
             commands: resolve::RunCommands::new(&record, &globals),
+            starter: None,
         };
         let mut headline = Vec::new();
         view.headline(&mut headline, None, None).unwrap();

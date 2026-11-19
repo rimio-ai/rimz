@@ -276,7 +276,7 @@ fn stop_includes_a_cleared_companion() {
         .collect();
     assert_eq!(
         stamps,
-        vec![json!({"by": "workflow", "workflow": "review", "step": "build"}); 2]
+        vec![json!({"by": "workflow", "workflow": "review", "step": "build", "depth": 1}); 2]
     );
     let companion = store
         .snapshot()

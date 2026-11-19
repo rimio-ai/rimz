@@ -15,7 +15,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The run record's own shape version, raised when a binary on either side of a change would
 /// misread the other's record; `load` refuses a record of any other version before decoding it.
 /// A change to what a definition means raises nothing: every run reads its definition as it is.
-pub const VERSION: u32 = 16;
+pub const VERSION: u32 = 17;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -602,21 +602,38 @@ pub enum RunOrigin {
     Inline,
 }
 
-/// Whether a run still owes its loop task the report of how it ended. The fire's task sets it
-/// owed at creation, and only the scheduler's collector marks it sent.
+/// Whether a run still owes its recipient the report of how it ended: its loop task, or the
+/// agent that started it ([`RunStarter::Agent`]) without `--detach`. The start sets it owed, and
+/// only the collector marks it sent.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LoopReport {
-    /// Nothing is owed: no task started the run, or it was recorded before reports existed.
+pub enum ReportMark {
+    /// Nothing is owed: no task or agent is told how the run ended, the start was detached, or
+    /// the run was recorded before reports existed.
     #[default]
     None,
-    /// A loop task started the run; its report has not fully landed: the history row, the
-    /// strike update, or both are missing. On a terminal record the run awaits its collection,
-    /// which the command that ended it runs next, and which the scheduler's tick retries.
+    /// The run's report has not fully landed: for a loop task, the history row, the strike
+    /// update, or both are missing. On a terminal record the run awaits its collection, which
+    /// the command that ended it runs next, and which the scheduler's tick retries.
     Owed,
-    /// The terminal outcome reached the loop history and, while the task's row existed, the
-    /// strike count.
+    /// The terminal outcome reached its recipient: for a loop task, the loop history and, while
+    /// the task's row existed, the strike count.
     Sent,
+}
+
+/// What started a run, for whom its report is meant and where it is drawn; a run a person or a
+/// loop task started has none.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "by")]
+pub enum RunStarter {
+    /// An agent, by its launch: `launch` is the launch id, matched to a living row as a team's
+    /// launcher is.
+    Agent {
+        kind: AgentKind,
+        launch: AgentSessionId,
+    },
+    /// Another run, from a command, script or check at its node `node`.
+    Run { run: WorkflowRunId, node: String },
 }
 
 /// How a run ended, in the engine's terms: written in the record write that makes the run
@@ -726,8 +743,19 @@ pub struct RunRecord {
     /// route that is not an `unknown` wait. Set at creation, never changed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub once: bool,
-    #[serde(default)]
-    pub loop_report: LoopReport,
+    /// The run's one report mark, for its loop task or its agent starter. The key keeps its
+    /// older name, which [`RunHeader`] reads from a record of any version.
+    #[serde(default, rename = "loop_report")]
+    pub report: ReportMark,
+    /// What started the run, set at creation and never changed; none for a person, a loop task,
+    /// or a loop shell task's command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starter: Option<RunStarter>,
+    /// How many runs sit on the run's launch path, itself included: 1 for a run a person, a loop
+    /// task or an agent outside any workflow started, one more than the run, or the step's run,
+    /// that started it. Set at creation; `[agents] max-workflow-depth` bounds it.
+    #[serde(default = "first_depth")]
+    pub depth: u32,
     /// A deployed run's definition directory, canonical at the start and read live; an inline
     /// run has none and reads its own `definition/`, through [`RunRecord::definition_dir`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -891,10 +919,24 @@ impl RunRecord {
                 .is_some_and(|fire| fire.task() == *task)
     }
 
+    /// A finished run whose loop task or agent starter has not yet heard how it ended: the one
+    /// debt that keeps the run's home live and its paced advance due.
+    pub fn owes_report(&self) -> bool {
+        self.state.is_terminal() && self.report == ReportMark::Owed && self.has_recipient()
+    }
+
     /// A finished run whose loop task has not yet heard how it ended.
     pub fn owes_loop_report(&self) -> bool {
-        self.state.is_terminal() && self.task.is_some() && self.loop_report == LoopReport::Owed
+        self.owes_report() && self.task.is_some()
     }
+
+    fn has_recipient(&self) -> bool {
+        self.task.is_some() || matches!(self.starter, Some(RunStarter::Agent { .. }))
+    }
+}
+
+const fn first_depth() -> u32 {
+    1
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1319,7 +1361,8 @@ pub struct RunHeader {
     pub state: Option<RunState>,
     pub node: Option<String>,
     pub terminal_at: Option<Timestamp>,
-    pub loop_report: Option<LoopReport>,
+    pub report: Option<ReportMark>,
+    pub starter: Option<RunStarter>,
     /// Where the run's definition came from; a record naming none was deployed, as its own
     /// decode reads it.
     pub origin: RunOrigin,
@@ -1355,7 +1398,8 @@ impl RunHeader {
             state: field(record.get("state")),
             node: field(record.get("node")),
             terminal_at: field(record.get("terminal_at")),
-            loop_report: field(record.get("loop_report")),
+            report: field(record.get("loop_report")),
+            starter: field(record.get("starter")),
             origin: field(record.get("origin")).unwrap_or_default(),
             once: field(record.get("once")).unwrap_or(false),
             ending: field(outcome.and_then(|outcome| outcome.get("ending"))),
@@ -1395,9 +1439,16 @@ impl RunHeader {
                 .is_some_and(|fire| fire.task() == *task)
     }
 
+    /// A finished run that owes its report, as [`RunRecord::owes_report`] reads it.
+    pub fn owes_report(&self) -> bool {
+        self.is_terminal()
+            && self.report == Some(ReportMark::Owed)
+            && (self.task.is_some() || matches!(self.starter, Some(RunStarter::Agent { .. })))
+    }
+
     /// A finished run whose loop task has not yet heard how it ended.
     pub fn owes_loop_report(&self) -> bool {
-        self.is_terminal() && self.task.is_some() && self.loop_report == Some(LoopReport::Owed)
+        self.owes_report() && self.task.is_some()
     }
 }
 
@@ -1488,10 +1539,10 @@ pub enum RunClass {
 impl RunClass {
     /// Whether the room's workflow pass has work in a live home of this class: anything but a
     /// run this RimZ continues, a newer RimZ's run, and a home without a record. A finished run
-    /// this RimZ reads that still owes its loop report is left to its paced advance.
+    /// this RimZ reads that still owes its report is left to its paced advance.
     pub fn awaits_pass(&self) -> bool {
         match self {
-            Self::Current(record) => record.state.is_terminal() && !record.owes_loop_report(),
+            Self::Current(record) => record.state.is_terminal() && !record.owes_report(),
             Self::Stranded { .. } | Self::Ended(_) | Self::NotObject => true,
             Self::Newer { .. } | Self::Recordless => false,
         }
@@ -1526,7 +1577,8 @@ impl RunRecord {
             state: Some(self.state),
             node: Some(self.node.clone()),
             terminal_at: self.terminal_at,
-            loop_report: Some(self.loop_report),
+            report: Some(self.report),
+            starter: self.starter.clone(),
             origin: self.origin,
             once: self.once,
             ending: self.outcome.as_ref().map(|outcome| outcome.ending.clone()),
@@ -1600,9 +1652,10 @@ pub fn classify(paths: &WorkflowPaths) -> Result<RunClass> {
 }
 
 /// End a stranded run in its record, in place: the record names the run failed with why this
-/// RimZ cannot continue it, owes its loop task the report when it names one, and keeps every
-/// other member and its version, so a RimZ that reads that version still reads the body. A first
-/// `terminal_at` and a recorded `acted` are kept. Returns why the run was stranded when this call
+/// RimZ cannot continue it, owes its loop task the report when it names one (an agent starter's
+/// owed mark stays as written, so that starter is still told), and keeps every other member and
+/// its version, so a RimZ that reads that version still reads the body. A first `terminal_at`
+/// and a recorded `acted` are kept. Returns why the run was stranded when this call
 /// ended it; a record that is no longer stranded is left as it is.
 #[must_use = "durability barrier; check the result"]
 pub fn end_stranded(
@@ -1627,7 +1680,7 @@ pub fn end_stranded(
     outcome.entry("acted").or_insert(serde_json::json!(false));
     record.insert("outcome".into(), Value::Object(outcome));
     if header.task.is_some() {
-        record.insert("loop_report".into(), serde_json::json!(LoopReport::Owed));
+        record.insert("loop_report".into(), serde_json::json!(ReportMark::Owed));
     }
     record.insert("stranded".into(), serde_json::json!(true));
     crate::disk::atomic::write_temp_then_rename(&paths.record, &Value::Object(record))?;
@@ -1639,7 +1692,7 @@ pub fn end_stranded(
 #[must_use = "durability barrier; check the result"]
 pub fn mark_header_report_sent(paths: &WorkflowPaths, _guard: &WorkspaceLock) -> Result<()> {
     let mut record = read_object(paths)?;
-    record.insert("loop_report".into(), serde_json::json!(LoopReport::Sent));
+    record.insert("loop_report".into(), serde_json::json!(ReportMark::Sent));
     Ok(crate::disk::atomic::write_temp_then_rename(
         &paths.record,
         &Value::Object(record),
@@ -1808,7 +1861,7 @@ pub fn finish(
         RunClass::NotObject => true,
         class => class
             .header()
-            .is_some_and(|header| header.is_terminal() && !header.owes_loop_report()),
+            .is_some_and(|header| header.is_terminal() && !header.owes_report()),
     };
     if !movable {
         return Ok(Finished::Kept);

@@ -1889,6 +1889,13 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
     {
         invalid_value!("gc.tmp_floor_percent must be 0-100");
     }
+    if matches!(path, [root, leaf] if root == "agents" && leaf == "max-workflow-depth")
+        && value
+            .as_integer()
+            .is_none_or(|value| !(1..=255).contains(&value))
+    {
+        invalid_value!("agents.max-workflow-depth must be a whole number from 1 to 255");
+    }
     if is_daily_budget_edit(path) {
         let Some(raw) = value.as_str() else {
             invalid_value!("{} must be a string ending in `/day`", path.join("."));

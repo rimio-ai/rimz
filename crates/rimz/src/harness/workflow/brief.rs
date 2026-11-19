@@ -8,7 +8,7 @@ use crate::disk::paths::WorkflowPaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::prose::{span, verbatim};
 use crate::store::workflow::{
-    self, AttemptOutcome, JournalEvent, RunFire, RunRecord, TurnEndAction,
+    self, AttemptOutcome, JournalEvent, RunFire, RunRecord, RunStarter, TurnEndAction,
 };
 
 const DEFINITION: &str = "a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node.";
@@ -260,13 +260,24 @@ fn rail(spec: &Definition, current: &str) -> String {
 }
 
 fn origin(record: &RunRecord) -> String {
-    match &record.fire {
-        None => "The user started this run by hand with `rimz workflow run`.".into(),
-        Some(RunFire::Manual { task, .. }) => format!(
+    let command = span("rimz workflow run");
+    match (&record.fire, &record.starter) {
+        (None, Some(RunStarter::Agent { kind, launch })) => format!(
+            "A {} agent (launch {}) started this run with {command}.",
+            span(kind.as_str()),
+            span(launch.as_str())
+        ),
+        (None, Some(RunStarter::Run { run, node })) => format!(
+            "The workflow run {} started this run with {command} from its node {}.",
+            span(run.as_str()),
+            span(node)
+        ),
+        (None, None) => format!("The user started this run by hand with {command}."),
+        (Some(RunFire::Manual { task, .. }), _) => format!(
             "The user started this run by hand with {}.",
             span(&format!("rimz loop fire {task}"))
         ),
-        Some(RunFire::Scheduled { task, trigger, .. }) => {
+        (Some(RunFire::Scheduled { task, trigger, .. }), _) => {
             let clause = trigger
                 .as_ref()
                 .map_or_else(String::new, |clause| format!(", {clause}"));

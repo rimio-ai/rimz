@@ -669,6 +669,20 @@ fn typing_hold_invalid_value_warns_and_uses_the_default() {
 }
 
 #[test]
+fn a_zero_workflow_depth_warns_and_runs_as_if_absent() {
+    let dir = tempdir().unwrap();
+    let path = write(&dir, "[agents]\nmax-workflow-depth = 0\n");
+    let config = load_lenient_no_fragments(&path);
+    let warning = config.notices.unreadable_files.get(&path);
+    assert!(
+        warning.is_some_and(|warning| warning
+            .contains("agents.max-workflow-depth must be a whole number from 1 to 255")),
+        "{warning:?}"
+    );
+    assert_eq!(config.agents.max_workflow_depth, 3);
+}
+
+#[test]
 fn account_budget_validation_is_typed_and_lenient_load_preserves_preflight_detail() {
     let dir = tempdir().expect("tempdir");
     let config_path = write(
@@ -1187,6 +1201,20 @@ fn agent_chain_length_defaults_parses_override_and_rejects_retired_key() {
     ))
     .expect("load chain length override");
     assert_eq!(tuned.agents.max_chain_length, 5);
+    assert_eq!(defaulted.agents.max_workflow_depth, 3);
+    let deeper = load_no_fragments(&write_named(
+        &dir,
+        "config.toml",
+        "[agents]\nmax-workflow-depth = 1\n",
+    ))
+    .expect("load workflow depth override");
+    assert_eq!(
+        (
+            deeper.agents.max_workflow_depth,
+            deeper.agents.max_chain_length
+        ),
+        (1, 3)
+    );
 
     match load_no_fragments(&write_named(
         &dir,

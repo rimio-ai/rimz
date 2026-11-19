@@ -100,6 +100,7 @@ fn flat_resume_keeps_a_workflow_origin_in_the_pane_title() {
         automation: Some(crate::agents::Automation::Workflow {
             workflow: "nightly".into(),
             step: "build".into(),
+            depth: None,
         }),
         ..agent("claude", "saved", "/code/project", 0)
     };

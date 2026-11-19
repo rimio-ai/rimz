@@ -16,6 +16,7 @@ struct View<'a> {
     journal: &'a [JournalEntry],
     now: Timestamp,
     commands: resolve::RunCommands<'a>,
+    starter: Option<String>,
 }
 
 struct Presentation {
@@ -50,6 +51,10 @@ pub(super) fn render(
         }
         if let Some(sign) = spec.as_ref().ok().and_then(|spec| sign(run, spec)) {
             value["sign"] = serde_json::json!(sign);
+        }
+        let handle = RoomView::new(&run.record.project_root).starter(&run.state, &run.record);
+        if let Some(starter) = starter_json(&run.record, handle.as_deref()) {
+            value["starter"] = starter;
         }
         return render::json_pretty(&value);
     }
@@ -90,6 +95,7 @@ pub(super) fn render(
         journal: &journal,
         now: Timestamp::now(),
         commands: resolve::RunCommands::new(&run.record, globals),
+        starter: room.starter(&run.state, &run.record),
     };
     let agent = (run.record.state == RunState::Active
         && workflow_view::asking(&run.record).is_none())
@@ -253,6 +259,12 @@ pub(super) fn render_other(other: &resolve::Other, json: bool, history: bool) ->
         if let Some(notes) = header.as_ref().and_then(|header| header.notes.as_ref()) {
             value["notes"] =
                 serde_json::json!(other.state.notes_run(paths::Class::AutomationNotes, notes));
+        }
+        if let records::RunClass::Current(record) = &other.found.class {
+            let handle = RoomView::new(&record.project_root).starter(&other.state, record);
+            if let Some(starter) = starter_json(record, handle.as_deref()) {
+                value["starter"] = starter;
+            }
         }
         return render::json_pretty(&value);
     }
@@ -546,7 +558,7 @@ impl View<'_> {
 
     fn origin(&self, out: &mut impl Write) -> Result<()> {
         let record = self.record;
-        let origin = run_origin(record);
+        let origin = run_origin(record, self.starter.as_deref());
         let settled = self
             .journal
             .iter()

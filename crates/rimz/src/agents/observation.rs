@@ -192,19 +192,36 @@ impl std::fmt::Display for TierSkipReason {
 
 /// The automation that started an agent, inherited by its launched children and peers.
 ///
-/// Adding a variant makes an older binary drop the whole event that carries it.
+/// Adding a variant makes an older binary drop the whole event that carries it, so the variants
+/// grow only by optional, defaulted fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "by", rename_all = "snake_case")]
 pub enum Automation {
     Loop,
-    Workflow { workflow: String, step: String },
+    Workflow {
+        workflow: String,
+        step: String,
+        /// The depth of the step's run ([`crate::store::workflow::RunRecord::depth`]), which a
+        /// run this agent or a peer or child it launched starts one deeper than; absent reads as
+        /// 1, a run started before the field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        depth: Option<u32>,
+    },
 }
 
 impl Automation {
     pub fn workflow_scope(&self) -> Option<(&str, &str)> {
         match self {
             Self::Loop => None,
-            Self::Workflow { workflow, step } => Some((workflow, step)),
+            Self::Workflow { workflow, step, .. } => Some((workflow, step)),
+        }
+    }
+
+    /// How many workflow runs sit on this agent's launch path: 0 outside any workflow.
+    pub fn workflow_depth(&self) -> u32 {
+        match self {
+            Self::Loop => 0,
+            Self::Workflow { depth, .. } => depth.unwrap_or(1),
         }
     }
 }
@@ -732,7 +749,43 @@ pub(crate) fn payload_has_context_observation(payload: &Value) -> bool {
 mod tests {
     use serde_json::json;
 
-    use super::{AgentUsageSummary, payload_has_context_observation};
+    use super::{AgentUsageSummary, Automation, payload_has_context_observation};
+
+    /// The workflow automation an older RimZ wrote and reads: no depth.
+    #[derive(Debug, PartialEq, serde::Deserialize)]
+    #[serde(tag = "by", rename_all = "snake_case")]
+    enum DepthlessAutomation {
+        Loop,
+        Workflow { workflow: String, step: String },
+    }
+
+    #[test]
+    fn workflow_depth_decodes_both_ways_across_the_older_shape() {
+        let older = json!({"by": "workflow", "workflow": "land", "step": "build"});
+        let decoded: Automation = serde_json::from_value(older).unwrap();
+        assert_eq!(decoded.workflow_depth(), 1, "{decoded:?}");
+        assert_eq!(Automation::Loop.workflow_depth(), 0);
+        let newer = serde_json::to_value(Automation::Workflow {
+            workflow: "land".into(),
+            step: "build".into(),
+            depth: Some(2),
+        })
+        .unwrap();
+        assert_eq!(newer["depth"], 2);
+        assert_eq!(
+            serde_json::from_value::<DepthlessAutomation>(newer.clone()).unwrap(),
+            DepthlessAutomation::Workflow {
+                workflow: "land".into(),
+                step: "build".into(),
+            }
+        );
+        assert_eq!(
+            serde_json::from_value::<Automation>(newer)
+                .unwrap()
+                .workflow_depth(),
+            2
+        );
+    }
 
     #[test]
     fn tier_passes_share_move_detection_and_short_and_full_descriptions() {

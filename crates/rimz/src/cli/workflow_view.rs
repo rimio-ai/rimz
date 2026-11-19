@@ -159,6 +159,24 @@ pub(super) fn calls_you(record: &RunRecord) -> bool {
     asking(record).is_some() || held(record).is_some_and(Hold::needs_you)
 }
 
+/// Whether the run waits on a person: parked, an agent asking, held on an error no wait recovers
+/// from, or a capacity hold that needs a fix. `workflow list` puts such a run under NEEDS YOU,
+/// and `workflow wait` returns on it.
+pub(super) fn needs_you(record: &RunRecord) -> bool {
+    record.state == RunState::Parked
+        || calls_you(record)
+        || capacity_wait(record)
+            .is_some_and(|wait| wait.hold.is_some_and(rimz::ids::HoldKind::needs_fix))
+}
+
+/// The capacity wait an active run's record holds.
+pub(super) fn capacity_wait(record: &RunRecord) -> Option<&rimz::store::workflow::Wait> {
+    record
+        .wait
+        .as_ref()
+        .filter(|wait| record.state == RunState::Active && wait.outcome == "capacity")
+}
+
 pub(super) fn since(record: &RunRecord) -> Timestamp {
     if record.state == RunState::Parked
         && let Some(park) = &record.park

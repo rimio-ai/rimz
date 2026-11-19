@@ -71,6 +71,14 @@ pub struct AgentsConfig {
     /// Maximum successive agent-to-agent launches from a human-started root.
     #[serde(default = "default_max_chain_length", rename = "max-chain-length")]
     pub max_chain_length: u8,
+    /// Maximum workflow runs on one launch path, counting from a run a person, a loop task, or
+    /// an agent outside any workflow started; `rimz workflow run` refuses a start past it.
+    #[serde(
+        default = "default_max_workflow_depth",
+        rename = "max-workflow-depth",
+        deserialize_with = "workflow_depth"
+    )]
+    pub max_workflow_depth: u8,
     /// How many times a fresh launch whose provider dies before its session
     /// opens is relaunched; `0` disables the relaunch.
     /// Pickers, resumes, and forks are never retried.
@@ -119,6 +127,7 @@ impl Default for AgentsConfig {
             placement: LaunchPlacement::default(),
             isolation: Isolation::default(),
             max_chain_length: default_max_chain_length(),
+            max_workflow_depth: default_max_workflow_depth(),
             startup_relaunches: 3,
             startup_relaunch_wait: "3s".to_owned(),
             env_reminder: true,
@@ -179,6 +188,24 @@ pub struct StartupRelaunchWaitErr {
 
 const fn default_max_chain_length() -> u8 {
     3
+}
+
+const fn default_max_workflow_depth() -> u8 {
+    3
+}
+
+/// A depth of 1 to 255; anything else refuses the file, which the lenient load warns about and
+/// reads as absent.
+fn workflow_depth<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    i64::deserialize(deserializer)
+        .ok()
+        .and_then(|depth| u8::try_from(depth).ok())
+        .filter(|depth| *depth > 0)
+        .ok_or_else(|| {
+            serde::de::Error::custom(
+                "agents.max-workflow-depth must be a whole number from 1 to 255",
+            )
+        })
 }
 
 /// Machine-local agent hibernation policy, validated at use.

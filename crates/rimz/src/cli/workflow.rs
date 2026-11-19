@@ -21,6 +21,7 @@ mod rail;
 mod receipt;
 mod reconcile;
 mod show;
+mod wait;
 
 use host::Host;
 pub(super) use receipt::restart;
@@ -132,6 +133,16 @@ impl RoomView {
         )
     }
 
+    /// The card address of the agent that started the run, while its row is in the room.
+    fn starter(&self, state: &rimz::StatePaths, record: &RunRecord) -> Option<String> {
+        let Some(records::RunStarter::Agent { kind, launch }) = &record.starter else {
+            return None;
+        };
+        let peers = rimz::address::addressable_agents(self.snapshot(state)?);
+        let agent = rimz::address::launch_row(peers.iter().copied(), kind, launch)?;
+        Some(rimz::address::agent_handle(agent, &peers, false))
+    }
+
     fn snapshot(
         &self,
         state: &rimz::StatePaths,
@@ -158,16 +169,31 @@ impl RoomView {
     }
 }
 
-fn run_origin(record: &RunRecord) -> String {
-    record.task.as_ref().map_or_else(
-        || "hand".into(),
-        |task| {
-            format!(
-                "loop task {task}{}",
-                if record.manual { ", fired by hand" } else { "" }
-            )
-        },
-    )
+/// Who started the run: its loop task, the agent by `handle` (its launch id once the agent is
+/// out of the room), the run and node it was started from, or a person.
+fn run_origin(record: &RunRecord, handle: Option<&str>) -> String {
+    if let Some(task) = &record.task {
+        return format!(
+            "loop task {task}{}",
+            if record.manual { ", fired by hand" } else { "" }
+        );
+    }
+    match &record.starter {
+        Some(records::RunStarter::Agent { launch, .. }) => {
+            handle.map_or_else(|| format!("agent launch {launch}"), str::to_owned)
+        }
+        Some(records::RunStarter::Run { run, node }) => format!("run {run} at {node}"),
+        None => "hand".into(),
+    }
+}
+
+/// The run's starter as JSON: the record's own, with the agent's `handle` while it is in the room.
+fn starter_json(record: &RunRecord, handle: Option<&str>) -> Option<serde_json::Value> {
+    let mut starter = serde_json::to_value(record.starter.as_ref()?).ok()?;
+    if let Some(handle) = handle {
+        starter["handle"] = handle.into();
+    }
+    Some(starter)
 }
 
 fn limit_text(limit: &rimz::harness::workflow::Limit) -> String {
@@ -235,6 +261,10 @@ enum Command {
         /// would take, and wait for it here.
         #[arg(long, conflicts_with = "loop_fire_json")]
         once: bool,
+        /// From an agent: tell it nothing when the run ends, and do not hold it open or show it
+        /// waiting on the run; join the run with `rimz workflow wait` instead.
+        #[arg(long, conflicts_with = "loop_fire_json")]
+        detach: bool,
         /// The fire of a workflow loop task starting this run as the task's own.
         #[arg(long, hide = true, value_name = "JSON")]
         loop_fire_json: Option<String>,
@@ -265,6 +295,22 @@ enum Command {
         /// Print detailed history instead of the compact run view.
         #[arg(long, conflicts_with = "json")]
         history: bool,
+    },
+    /// Wait for runs to end, or for one to need a person.
+    Wait {
+        /// Run id or address `<workflow>#<checkout>`.
+        #[arg(value_name = "RUN", required = true, num_args = 1..)]
+        runs: Vec<String>,
+        /// Return when the first run ends instead of all of them.
+        #[arg(long)]
+        any: bool,
+        /// Give up after this long, exiting 124 and leaving the runs going. An agent's wait
+        /// also exits 75 when a prompt for it is queued.
+        #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
+        timeout: Option<std::time::Duration>,
+        /// Print each run's outcome as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Cancel a run and interrupt its live script.
     Cancel {
@@ -357,6 +403,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             at,
             input,
             once,
+            detach,
             loop_fire_json,
         } => {
             let args = workflow::StartArgs {
@@ -370,6 +417,8 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
                 at,
                 input,
                 once,
+                starting: workflow::Starting::default(),
+                detach,
             };
             let task = loop_fire_json
                 .as_deref()
@@ -385,6 +434,12 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             json,
             history,
         } => show(id.as_deref(), node.as_deref(), json, history, globals),
+        Command::Wait {
+            runs,
+            any,
+            timeout,
+            json,
+        } => wait::run(&runs, any, timeout, json, globals),
         Command::Cancel { id, reason } => receipt::cancel(&id, reason.as_deref(), globals),
         Command::Resume { id, at, extend } => receipt::resume(&id, at.as_deref(), &extend, globals),
         Command::Restart { id, continued } => restart(&id, continued, globals),
@@ -493,7 +548,7 @@ fn finish_run(state: &rimz::StatePaths, id: &WorkflowRunId) -> Result<Finish> {
     let records::RunClass::Current(record) = found.class else {
         return Ok(unmoved(None));
     };
-    if !record.state.is_terminal() || record.owes_loop_report() {
+    if !record.state.is_terminal() || record.owes_report() {
         return Ok(unmoved(Some(*record)));
     }
     let history =
@@ -644,6 +699,14 @@ fn start(
             ctx.workspace.project_root.display()
         );
     }
+    let mut args = args;
+    // A task's own run starts nothing on a launch path; any other start is placed on one and
+    // bounded before anything is created.
+    if task.is_none() {
+        args.starting = starting_here(&ctx);
+        args.starting
+            .admit(super::machine_config().agents.max_workflow_depth)?;
+    }
     refuse_unwritable_home("started")?;
     let env_fire = rimz::harness::loop_task::read_fire_env().map(|fire| fire.fire);
     let scope = match &worktree {
@@ -734,6 +797,26 @@ fn start(
         Some(passed) => receipt::write_held(&paths, &passed, ""),
         None => Ok(()),
     }
+}
+
+/// Who starts a run from this process ([`workflow::starting`]): the run `RIMZ_WORKFLOW_RUN` names,
+/// when this RimZ reads it, the calling agent, when one resolves, and whether a run's command
+/// step or check spawned this process (`RIMZ_WORKFLOW_NODE`).
+fn starting_here(ctx: &super::ctx::Ctx) -> workflow::Starting {
+    let enclosing = std::env::var("RIMZ_WORKFLOW_RUN")
+        .ok()
+        .and_then(|raw| raw.parse::<WorkflowRunId>().ok())
+        .and_then(|id| resolve::locate(&id).ok())
+        .and_then(|(_, found)| match found.class {
+            records::RunClass::Current(record) => Some(*record),
+            _ => None,
+        });
+    let snapshot = ctx.store.snapshot().ok();
+    let agent = snapshot
+        .as_ref()
+        .and_then(|snapshot| rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents).ok());
+    let hosted = std::env::var_os("RIMZ_WORKFLOW_NODE").is_some();
+    workflow::starting(enclosing.as_ref(), agent, hosted)
 }
 
 /// The RimZ-owned worktree `-w <name>` names, created from the configured base when missing,
@@ -920,6 +1003,7 @@ pub(super) fn check_loop_launch(
         at,
         input,
         once,
+        detach,
         loop_fire_json,
         ..
     } = &args.command
@@ -946,6 +1030,9 @@ pub(super) fn check_loop_launch(
             "--once tries one node by hand, and a task's fire runs the whole workflow; remove \
              --once"
         );
+    }
+    if *detach {
+        bail!("--detach drops the report a task's run owes it; remove --detach");
     }
     if name.components().count() != 1 {
         bail!(

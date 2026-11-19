@@ -239,6 +239,7 @@ pane_border_status = "top"           # "top" (default), "bottom", "off", or "inh
 # Definitions live in <agents_home>/{agents,subagents,teams,traits}/*.md.
 # placement = "auto"                    # launch placement: "auto" (single agent → current pane; team/worktree → new tab), "pane" (split a new pane), or "tab" (always new tab)
 # max-chain-length = 3                  # successive agent-to-agent launches allowed from a human-started root
+# max-workflow-depth = 3                # workflow runs on one launch path; a start past it refuses
 # startup-relaunches = 3                # relaunches of a fresh agent whose CLI exits with an error before its session opens; 0 disables
 # startup-relaunch-wait = "3s"          # wait before each of those relaunches, 0s through 24h
 # env-reminder = true                   # include cwd and shell in launch reminders

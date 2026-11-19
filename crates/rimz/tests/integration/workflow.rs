@@ -10,6 +10,7 @@ mod conditions;
 mod inspection;
 mod judges;
 mod memory;
+mod peers;
 mod refusals;
 mod scope;
 mod shells;
