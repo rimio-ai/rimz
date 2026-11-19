@@ -1,10 +1,15 @@
-//! Antigravity hook and statusline installer.
+//! Antigravity hook plugin and statusline installer.
 //!
-//! Antigravity splits its observer surfaces across two JSON files. The hook
-//! file receives only events with a documented observer-neutral response;
-//! `PreToolUse` stays untouched because every documented result changes native
-//! permission policy. The settings file wraps a pre-existing statusline and
-//! restores its complete value on uninstall.
+//! RimZ's hooks live in a plugin directory it owns, `~/.gemini/config/plugins/rimz/`,
+//! written as whole embedded files that agy discovers and enables by default
+//! (observed on agy 1.5.12). The hook file holds only events with a documented
+//! observer-neutral response; `PreToolUse` stays untouched because every
+//! documented result changes native permission policy. Earlier releases merged
+//! the same hook into the global `hooks.json`, which install and uninstall now
+//! only strip: a hook name loaded from both files runs twice. agy rewrites
+//! `settings.json` and drops unknown `statusLine` keys, so the statusline is
+//! owned by its command and the displaced original lives in a RimZ-home record.
+//! Enablement lives in agy's `config.json`, which RimZ reads and never writes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,78 +17,78 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::agents::{
-    AgentErr, HookInstallFilePreview, HookInstallPreview, HookInstallReport, HookUninstallReport,
-    ManagedIntegration, Result, StatusLineChange, agent_config_path, read_optional_file,
+    AgentErr, AgentSpec, HookInstallFilePreview, HookInstallPreview, HookInstallReport,
+    HookPreflightErr, HookUninstallReport, ManagedIntegration, Result, agent_config_path, jsonc,
+    provider_file, read_optional_file,
     settings_json::{self, PendingWrite},
 };
 
 use super::super::install_report::report_files;
-use super::{ANTIGRAVITY_HOOKS, HOOK_TIMEOUT_SECS, RIMZ_HOOK_MARKER, STATUS_LINE};
+use super::super::owned_statusline::{OwnedStatusLine, StateChange};
+use super::{
+    ANTIGRAVITY_HOOKS, HOOK_TIMEOUT_SECS, RIMZ_HOOK_MARKER, RIMZ_STATUS_LINE_MARKER,
+    STATUS_LINE_COMMAND,
+};
 
 const AGENT: &str = "antigravity";
-const RIMZ_HOOK_NAME: &str = "rimz";
+const PLUGIN_NAME: &str = "rimz";
+const PLUGIN_AUTHOR: &str = "RimZ";
+const MANIFEST: &str = "plugin.json";
+const PLUGIN_HOOKS: &str = "hooks.json";
+const ENABLE_FIX: &str = "agy plugin enable rimz";
+const STACK_WITH_DEFAULT: &str = "stack_with_default";
+
+const STATUS_LINE: OwnedStatusLine = OwnedStatusLine {
+    agent: AGENT,
+    command: STATUS_LINE_COMMAND,
+    marker: RIMZ_STATUS_LINE_MARKER,
+    retained_keys: &[STACK_WITH_DEFAULT],
+    object_only: true,
+};
 
 pub(super) static MANAGED_INTEGRATION: AntigravityManagedIntegration =
-    AntigravityManagedIntegration;
+    AntigravityManagedIntegration { paths: None };
 
-pub(super) struct AntigravityManagedIntegration;
+/// The files the installer resolves from the process home. The plugin
+/// directory and agy's `config.json` sit beside the global hooks file, so
+/// the `RIMZ_ANTIGRAVITY_HOOKS` override moves all three.
+#[derive(Clone, Debug)]
+pub(super) struct Paths {
+    pub(super) hooks: PathBuf,
+    pub(super) settings: PathBuf,
+    pub(super) state: PathBuf,
+}
 
-pub(super) fn outdated_files_at(hooks: &Path, settings: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    if let (Ok(root), Ok(candidate)) = (
-        settings_json::read_json_object(AGENT, hooks),
-        hook_candidate(hooks),
-    ) {
-        let owned = owned_hooks(&root);
-        if !owned.is_empty() && owned != owned_hooks(&candidate) {
-            files.push(hooks.to_path_buf());
+impl Paths {
+    fn plugin(&self) -> PathBuf {
+        self.hooks.with_file_name("plugins").join(PLUGIN_NAME)
+    }
+
+    fn config(&self) -> PathBuf {
+        self.hooks.with_file_name("config.json")
+    }
+}
+
+pub(super) struct AntigravityManagedIntegration {
+    paths: Option<Paths>,
+}
+
+impl AntigravityManagedIntegration {
+    #[cfg(test)]
+    pub(super) fn at(paths: Paths) -> Self {
+        Self { paths: Some(paths) }
+    }
+
+    fn paths(&self) -> Result<Paths> {
+        match &self.paths {
+            Some(paths) => Ok(paths.clone()),
+            None => Ok(Paths {
+                hooks: hooks_path()?,
+                settings: settings_path()?,
+                state: crate::disk::paths::rimz_home().join("antigravity-statusline.json"),
+            }),
         }
     }
-    if let (Ok(root), Ok((candidate, _))) = (
-        settings_json::read_json_object(AGENT, settings),
-        statusline_candidate(settings),
-    ) && super::super::managed_statusline::is_managed(&root, &STATUS_LINE)
-        && super::super::managed_statusline::managed_value(&root, &STATUS_LINE)
-            != super::super::managed_statusline::managed_value(&candidate, &STATUS_LINE)
-    {
-        files.push(settings.to_path_buf());
-    }
-    files
-}
-
-fn owned_hooks(root: &Map<String, Value>) -> Map<String, Value> {
-    root.iter()
-        .filter_map(|(name, events)| {
-            let owned = super::super::managed_json_hooks::owned_hook_entries(
-                events.as_object()?,
-                owned_entry,
-            );
-            (!owned.is_empty()).then(|| (name.clone(), Value::Object(owned)))
-        })
-        .collect()
-}
-
-fn owned_entry(entry: &Value) -> Option<Value> {
-    let mut object = entry.as_object()?.clone();
-    if object
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(|command| command.contains(RIMZ_HOOK_MARKER))
-    {
-        return Some(entry.clone());
-    }
-    let hooks: Vec<_> = object
-        .get("hooks")?
-        .as_array()?
-        .iter()
-        .filter(|hook| value_has_owned_hook(hook))
-        .cloned()
-        .collect();
-    if hooks.is_empty() {
-        return None;
-    }
-    object.insert("hooks".to_owned(), Value::Array(hooks));
-    Some(Value::Object(object))
 }
 
 impl ManagedIntegration for AntigravityManagedIntegration {
@@ -92,8 +97,8 @@ impl ManagedIntegration for AntigravityManagedIntegration {
         _login_env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
     ) -> Vec<PathBuf> {
-        hooks_path()
-            .and_then(|hooks| Ok(outdated_files_at(&hooks, &settings_path()?)))
+        self.paths()
+            .map(|paths| outdated_files(&paths))
             .unwrap_or_default()
     }
 
@@ -102,7 +107,7 @@ impl ManagedIntegration for AntigravityManagedIntegration {
         _login_env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
     ) -> Result<HookInstallReport> {
-        install(&hooks_path()?, &settings_path()?)
+        install(&self.paths()?)
     }
 
     fn preview(
@@ -110,29 +115,67 @@ impl ManagedIntegration for AntigravityManagedIntegration {
         _login_env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
     ) -> Result<HookInstallPreview> {
-        preview(&hooks_path()?, &settings_path()?)
+        preview(&self.paths()?)
     }
 
     fn uninstall(&self, _login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
-        uninstall(&hooks_path()?, &settings_path()?)
+        uninstall(&self.paths()?)
     }
 
     fn installed(&self, _login_env: &BTreeMap<String, String>) -> bool {
-        hooks_path()
-            .and_then(|hooks| settings_path().map(|settings| installed(&hooks, &settings)))
-            .unwrap_or(false)
+        self.paths().is_ok_and(|paths| {
+            plugin_installed(&paths.plugin())
+                && !holds_owned_hook(&paths.hooks)
+                && STATUS_LINE.installed_at(&paths.settings)
+        })
     }
 
     fn managed_artifacts_present(&self, _login_env: &BTreeMap<String, String>) -> bool {
-        hooks_path()
-            .and_then(|hooks| settings_path().map(|settings| managed(&hooks, &settings)))
-            .unwrap_or(false)
+        self.paths().is_ok_and(|paths| {
+            owned_plugin_present(&paths.plugin())
+                || holds_owned_hook(&paths.hooks)
+                || STATUS_LINE.artifact_at(&paths.settings)
+        })
+    }
+
+    fn hooks_disabled(&self, _login_env: &BTreeMap<String, String>) -> Option<HookPreflightErr> {
+        let config = self.paths().ok()?.config();
+        let root: Value = jsonc::from_slice(&std::fs::read(&config).ok()?).ok()?;
+        (root.pointer("/plugins/rimz/enabled") == Some(&Value::Bool(false))).then(|| {
+            HookPreflightErr::HooksDisabled {
+                reason: format!(
+                    "agy has the RimZ plugin disabled: `plugins.rimz.enabled` is false in {}",
+                    config.display()
+                ),
+                fix: ENABLE_FIX.to_owned(),
+            }
+        })
+    }
+
+    fn wiring_input_paths(
+        &self,
+        _descriptor: &AgentSpec,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<PathBuf> {
+        let Ok(paths) = self.paths() else {
+            return Vec::new();
+        };
+        let plugin = paths.plugin();
+        plugin_files()
+            .iter()
+            .map(|(name, _)| plugin.join(name))
+            .chain([
+                paths.hooks.clone(),
+                paths.config(),
+                paths.settings,
+                paths.state,
+            ])
+            .collect()
     }
 
     fn wrapped_status_line_command(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
-        settings_path()
-            .ok()
-            .and_then(|path| wrapped_statusline_command(&path))
+        let paths = self.paths().ok()?;
+        STATUS_LINE.wrapped_command_at(&paths.settings, &paths.state)
     }
 }
 
@@ -152,108 +195,330 @@ pub(super) fn settings_path() -> Result<PathBuf> {
     )
 }
 
-pub(super) fn install(hooks_path: &Path, settings_path: &Path) -> Result<HookInstallReport> {
-    let hooks_original = settings_json::read_optional_bytes(AGENT, hooks_path)?;
-    let settings_original = settings_json::read_optional_bytes(AGENT, settings_path)?;
-    let hooks_existed = hooks_original.is_some();
-    let settings_existed = settings_original.is_some();
-    let hooks = hook_candidate(hooks_path)?;
-    let settings = statusline_candidate(settings_path)?.0;
-    let settings_candidate = settings_json::render_json(AGENT, &settings)?;
-    let hooks_candidate = settings_json::render_json(AGENT, &hooks)?;
+/// The plugin's files, hooks first so agy never discovers a manifest whose
+/// hooks are not yet on disk. The manifest's version moves only with the
+/// plugin's content.
+fn plugin_files() -> [(&'static str, Vec<u8>); 2] {
+    let mut hooks = Map::new();
+    hooks.insert(PLUGIN_NAME.to_owned(), Value::Object(rimz_hook()));
+    let manifest = json!({
+        "name": PLUGIN_NAME,
+        "version": "1.0.0",
+        "description": "RimZ session and attention hooks",
+        "author": PLUGIN_AUTHOR,
+    });
+    // Both values hold only string keys and serializable primitives.
+    [
+        (
+            PLUGIN_HOOKS,
+            serde_json::to_vec_pretty(&hooks).expect("embedded hooks serialize"),
+        ),
+        (
+            MANIFEST,
+            serde_json::to_vec_pretty(&manifest).expect("embedded manifest serializes"),
+        ),
+    ]
+}
+
+fn rimz_hook() -> Map<String, Value> {
+    let mut rimz = Map::new();
+    for hook in &ANTIGRAVITY_HOOKS {
+        let handler = json!({
+            "type": "command",
+            "command": hook.command,
+            "timeout": HOOK_TIMEOUT_SECS,
+        });
+        let entry = match hook.config_matcher {
+            Some(matcher) => json!({"matcher": matcher, "hooks": [handler]}),
+            None => handler,
+        };
+        if let Value::Array(entries) = rimz
+            .entry(hook.config_event.to_owned())
+            .or_insert_with(|| Value::Array(Vec::new()))
+        {
+            entries.push(entry);
+        }
+    }
+    rimz
+}
+
+/// Refuses a plugin path RimZ does not own: a file, a symlink, a plugin file
+/// that is not a regular file, a manifest another author wrote, or a
+/// manifest-less directory holding anything but a hook file with RimZ's
+/// handlers. An absent or empty directory is RimZ's to fill.
+fn check_plugin(dir: &Path) -> Result<()> {
+    let io_err = |source| AgentErr::InstallIo {
+        agent: AGENT,
+        path: dir.to_path_buf(),
+        source,
+    };
+    match std::fs::symlink_metadata(dir) {
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(io_err(source)),
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Err(not_owned(dir)),
+    }
+    for name in [PLUGIN_HOOKS, MANIFEST] {
+        let file = dir.join(name);
+        if std::fs::symlink_metadata(&file).is_ok_and(|metadata| !metadata.is_file()) {
+            return Err(AgentErr::Install {
+                agent: AGENT,
+                reason: format!(
+                    "{} is not a regular file; move it aside before installing RimZ",
+                    file.display()
+                ),
+            });
+        }
+    }
+    let hooks = dir.join(PLUGIN_HOOKS);
+    let owned = match settings_json::read_optional_bytes(AGENT, &dir.join(MANIFEST))? {
+        Some(bytes) => jsonc::from_slice::<Value>(&bytes).is_ok_and(|manifest| {
+            manifest["name"] == PLUGIN_NAME && manifest["author"] == PLUGIN_AUTHOR
+        }),
+        None => {
+            std::fs::read_dir(dir).map_err(io_err)?.all(|entry| {
+                entry.is_ok_and(|entry| {
+                    entry.file_name() == PLUGIN_HOOKS
+                        && entry.file_type().is_ok_and(|kind| kind.is_file())
+                })
+            }) && (!hooks.exists() || holds_owned_hook(&hooks))
+        }
+    };
+    if owned { Ok(()) } else { Err(not_owned(dir)) }
+}
+
+fn not_owned(dir: &Path) -> AgentErr {
+    AgentErr::Install {
+        agent: AGENT,
+        reason: format!(
+            "{} is not a RimZ-owned agy plugin; move it aside before installing RimZ",
+            dir.display()
+        ),
+    }
+}
+
+fn owned_plugin_present(dir: &Path) -> bool {
+    std::fs::symlink_metadata(dir).is_ok() && check_plugin(dir).is_ok()
+}
+
+fn plugin_installed(dir: &Path) -> bool {
+    owned_plugin_present(dir)
+        && plugin_files().iter().all(|(name, bytes)| {
+            let file = dir.join(name);
+            std::fs::symlink_metadata(&file).is_ok_and(|metadata| metadata.is_file())
+                && std::fs::read(file).is_ok_and(|content| content == *bytes)
+        })
+}
+
+fn outdated_files(paths: &Paths) -> Vec<PathBuf> {
+    let plugin = paths.plugin();
+    let mut files = Vec::new();
+    if check_plugin(&plugin).is_ok() {
+        let entries = plugin_files().map(|(name, bytes)| {
+            let file = plugin.join(name);
+            let current = std::fs::symlink_metadata(&file)
+                .is_ok_and(|metadata| metadata.is_file())
+                .then(|| std::fs::read(&file).ok())
+                .flatten();
+            (
+                file,
+                current.as_deref() == Some(bytes.as_slice()),
+                current.is_some(),
+            )
+        });
+        if entries.iter().any(|(_, _, present)| *present) {
+            files.extend(
+                entries
+                    .into_iter()
+                    .filter(|(_, current, _)| !current)
+                    .map(|(file, ..)| file),
+            );
+        }
+    }
+    if holds_owned_hook(&paths.hooks) {
+        files.push(paths.hooks.clone());
+    }
+    if STATUS_LINE.outdated_at(&paths.settings) {
+        files.push(paths.settings.clone());
+    }
+    files
+}
+
+/// The plugin is published last: a failed record or settings pair leaves any
+/// legacy global handlers as the one hook set, never beside the plugin.
+fn install(paths: &Paths) -> Result<HookInstallReport> {
+    let plugin = paths.plugin();
+    check_plugin(&plugin)?;
+    let settings = Settings::plan(paths)?;
+    let global = stripped_global(&paths.hooks)?;
+    let hooks_original = global
+        .is_some()
+        .then(|| settings_json::read_optional_bytes(AGENT, &paths.hooks))
+        .transpose()?
+        .flatten();
+    let hooks_candidate = global
+        .as_ref()
+        .map(|root| settings_json::render_json(AGENT, root))
+        .transpose()?;
+    let state_existed = paths.state.exists();
+    STATUS_LINE.apply_state(&paths.state, &settings.state)?;
     settings_json::commit_pair(
         AGENT,
-        PendingWrite::required(settings_path, &settings_candidate),
-        PendingWrite::required(hooks_path, &hooks_candidate),
-        settings_original.as_deref(),
+        PendingWrite::optional(&paths.settings, settings.write.as_deref()),
+        PendingWrite::optional(&paths.hooks, hooks_candidate.as_deref()),
+        settings.original.as_deref(),
         hooks_original.as_deref(),
     )?;
+    let mut files = Vec::new();
+    for (name, candidate) in plugin_files() {
+        let file = plugin.join(name);
+        let original = settings_json::read_optional_bytes(AGENT, &file)?;
+        if original.as_deref() != Some(candidate.as_slice()) {
+            provider_file::write_bytes(&file, &candidate)?;
+        }
+        files.push((file, original.is_some()));
+    }
+    if global.is_some() {
+        files.push((paths.hooks.clone(), true));
+    }
+    files.push((paths.settings.clone(), settings.original.is_some()));
+    if !matches!(settings.state, StateChange::Keep) {
+        files.push((paths.state.clone(), state_existed));
+    }
     Ok(HookInstallReport {
         plugin_dir: None,
         agent: AGENT,
-        files: report_files([
-            (hooks_path, hooks_existed),
-            (settings_path, settings_existed),
-        ]),
+        files: report_files(
+            files
+                .iter()
+                .map(|(path, existed)| (path.as_path(), *existed)),
+        ),
         installed_events: installed_event_names(),
     })
 }
 
-pub(super) fn preview(hooks_path: &Path, settings_path: &Path) -> Result<HookInstallPreview> {
-    let hooks_original = read_optional_file(AGENT, hooks_path)?;
-    let settings_original = read_optional_file(AGENT, settings_path)?;
-    let hooks = hook_candidate(hooks_path)?;
-    let (settings, status_line_change) = statusline_candidate(settings_path)?;
+fn preview(paths: &Paths) -> Result<HookInstallPreview> {
+    let plugin = paths.plugin();
+    check_plugin(&plugin)?;
+    let settings = Settings::plan(paths)?;
+    let mut files = Vec::new();
+    for (name, candidate) in plugin_files() {
+        let file = plugin.join(name);
+        let original = read_optional_file(AGENT, &file)?;
+        files.push(HookInstallFilePreview {
+            path: file,
+            existed: original.is_some(),
+            original,
+            candidate: String::from_utf8(candidate).expect("serialized JSON is UTF-8"),
+        });
+    }
+    if let Some(root) = stripped_global(&paths.hooks)? {
+        files.push(HookInstallFilePreview {
+            path: paths.hooks.clone(),
+            existed: true,
+            original: read_optional_file(AGENT, &paths.hooks)?,
+            candidate: settings_json::render_json(AGENT, &root)?,
+        });
+    }
+    let settings_original = read_optional_file(AGENT, &paths.settings)?;
+    files.push(HookInstallFilePreview {
+        path: paths.settings.clone(),
+        existed: settings_original.is_some(),
+        candidate: settings
+            .write
+            .clone()
+            .or_else(|| settings_original.clone())
+            .unwrap_or_default(),
+        original: settings_original,
+    });
+    files.extend(STATUS_LINE.state_preview(&paths.state, &settings.state)?);
     Ok(HookInstallPreview {
         agent: AGENT,
-        files: vec![
-            HookInstallFilePreview {
-                path: hooks_path.to_path_buf(),
-                existed: hooks_original.is_some(),
-                original: hooks_original,
-                candidate: settings_json::render_json(AGENT, &hooks)?,
-            },
-            HookInstallFilePreview {
-                path: settings_path.to_path_buf(),
-                existed: settings_original.is_some(),
-                original: settings_original,
-                candidate: settings_json::render_json(AGENT, &settings)?,
-            },
-        ],
+        files,
         planned_events: installed_event_names(),
-        status_line_change: Some(status_line_change),
+        status_line_change: settings.change,
         subagent_status_line_change: None,
         plugin_dir: None,
     })
 }
 
-pub(super) fn uninstall(hooks_path: &Path, settings_path: &Path) -> Result<HookUninstallReport> {
-    let existed = hooks_path.exists();
-    let settings_existed = settings_path.exists();
-    let mut removed_events = Vec::new();
-    if existed {
-        let mut root = settings_json::read_json_object(AGENT, hooks_path)?;
-        if strip_owned_hooks(&mut root) {
-            removed_events = installed_event_names();
-            settings_json::write_json(AGENT, hooks_path, &root)?;
+/// A plugin path RimZ does not own stays; the global file's owned handlers and
+/// the owned statusline are still removed.
+fn uninstall(paths: &Paths) -> Result<HookUninstallReport> {
+    let plugin = paths.plugin();
+    let mut files = Vec::new();
+    let mut removed_hooks = false;
+    if owned_plugin_present(&plugin) {
+        removed_hooks = holds_owned_hook(&plugin.join(PLUGIN_HOOKS));
+        std::fs::remove_dir_all(&plugin).map_err(|source| AgentErr::InstallIo {
+            agent: AGENT,
+            path: plugin.clone(),
+            source,
+        })?;
+        files.push((plugin, true));
+    }
+    if let Some(root) = stripped_global(&paths.hooks)? {
+        settings_json::write_json(AGENT, &paths.hooks, &root)?;
+        files.push((paths.hooks.clone(), true));
+        removed_hooks = true;
+    }
+    if paths.settings.exists() {
+        let mut root = settings_json::read_json_object(AGENT, &paths.settings)?;
+        let before = root.clone();
+        STATUS_LINE.strip(&mut root, &paths.state)?;
+        if root != before {
+            settings_json::write_json(AGENT, &paths.settings, &root)?;
+            files.push((paths.settings.clone(), true));
         }
     }
-    uninstall_statusline_file(settings_path)?;
+    if paths.state.exists() {
+        STATUS_LINE.remove_state(&paths.state)?;
+        files.push((paths.state.clone(), true));
+    }
     Ok(HookUninstallReport {
         agent: AGENT,
-        files: report_files([(hooks_path, existed), (settings_path, settings_existed)]),
-        removed_events,
+        files: report_files(
+            files
+                .iter()
+                .map(|(path, existed)| (path.as_path(), *existed)),
+        ),
+        removed_events: if removed_hooks {
+            installed_event_names()
+        } else {
+            Vec::new()
+        },
     })
 }
 
-pub(super) fn installed(hooks_path: &Path, settings_path: &Path) -> bool {
-    let Ok(root) = settings_json::read_json_object(AGENT, hooks_path) else {
-        return false;
-    };
-    let Some(rimz) = root.get(RIMZ_HOOK_NAME).and_then(Value::as_object) else {
-        return false;
-    };
-    let complete = ANTIGRAVITY_HOOKS.iter().all(|entry| {
-        rimz.get(entry.config_event)
-            .and_then(Value::as_array)
-            .is_some_and(|entries| {
-                entries
-                    .iter()
-                    .any(|handler| handler_matches(handler, entry.config_matcher, entry.command))
-            })
-    });
-    complete && statusline_managed_at(settings_path)
+/// What install does to `settings.json`: the bytes to write when the
+/// candidate differs from the file, and what it does to the record.
+struct Settings {
+    original: Option<Vec<u8>>,
+    write: Option<String>,
+    state: StateChange,
+    change: Option<crate::agents::StatusLineChange>,
 }
 
-pub(super) fn managed(hooks_path: &Path, settings_path: &Path) -> bool {
-    settings_json::read_json_object(AGENT, hooks_path)
-        .is_ok_and(|root| value_has_owned_hook(&Value::Object(root)))
-        || statusline_managed_at(settings_path)
-}
-
-pub(super) fn wrapped_statusline_command(settings_path: &Path) -> Option<String> {
-    let root = settings_json::read_json_object(AGENT, settings_path).ok()?;
-    super::super::managed_statusline::wrapped_command(&root, &STATUS_LINE)
+impl Settings {
+    fn plan(paths: &Paths) -> Result<Self> {
+        let path = &paths.settings;
+        let existing = settings_json::read_json_object(AGENT, path)?;
+        let (mut candidate, displaced) = STATUS_LINE.install_candidate(path)?;
+        if !existing.contains_key("statusLine")
+            && let Some(Value::Object(statusline)) = candidate.get_mut("statusLine")
+        {
+            statusline.insert(STACK_WITH_DEFAULT.to_owned(), Value::Bool(true));
+        }
+        let write = (candidate != existing)
+            .then(|| settings_json::render_json(AGENT, &candidate))
+            .transpose()?;
+        Ok(Self {
+            original: settings_json::read_optional_bytes(AGENT, path)?,
+            change: STATUS_LINE.classify(&existing),
+            state: STATUS_LINE.state_change(path, &paths.state, displaced.as_ref())?,
+            write,
+        })
+    }
 }
 
 fn installed_event_names() -> Vec<String> {
@@ -263,63 +528,15 @@ fn installed_event_names() -> Vec<String> {
         .collect()
 }
 
-fn hook_candidate(path: &Path) -> Result<Map<String, Value>> {
+/// The global hooks file with RimZ's handlers removed, when it holds any.
+fn stripped_global(path: &Path) -> Result<Option<Map<String, Value>>> {
     let mut root = settings_json::read_json_object(AGENT, path)?;
-    strip_owned_hooks(&mut root);
-    if root.contains_key(RIMZ_HOOK_NAME) {
-        return Err(AgentErr::Install {
-            agent: AGENT,
-            reason: format!(
-                "the hook name `{RIMZ_HOOK_NAME}` in {} is user-owned; rename that hook before installing RimZ",
-                path.display()
-            ),
-        });
-    }
-
-    let mut rimz = Map::new();
-    for hook in &ANTIGRAVITY_HOOKS {
-        let entry = match hook.config_matcher {
-            Some(matcher) => json!({
-                "matcher": matcher,
-                "hooks": [command_handler(hook.command)],
-            }),
-            None => command_handler(hook.command),
-        };
-        rimz.entry(hook.config_event.to_owned())
-            .or_insert_with(|| Value::Array(Vec::new()))
-            .as_array_mut()
-            .expect("fresh event array")
-            .push(entry);
-    }
-    root.insert(RIMZ_HOOK_NAME.to_owned(), Value::Object(rimz));
-    Ok(root)
+    Ok(strip_owned_hooks(&mut root).then_some(root))
 }
 
-fn command_handler(command: &str) -> Value {
-    json!({
-        "type": "command",
-        "command": command,
-        "timeout": HOOK_TIMEOUT_SECS,
-    })
-}
-
-fn handler_matches(entry: &Value, matcher: Option<&str>, command: &str) -> bool {
-    match matcher {
-        None => command_matches(entry, command),
-        Some(matcher) => {
-            entry.get("matcher").and_then(Value::as_str) == Some(matcher)
-                && entry
-                    .get("hooks")
-                    .and_then(Value::as_array)
-                    .is_some_and(|hooks| hooks.iter().any(|hook| command_matches(hook, command)))
-        }
-    }
-}
-
-fn command_matches(handler: &Value, command: &str) -> bool {
-    handler.get("type").and_then(Value::as_str) == Some("command")
-        && handler.get("command").and_then(Value::as_str) == Some(command)
-        && handler.get("timeout").and_then(Value::as_u64) == Some(HOOK_TIMEOUT_SECS)
+fn holds_owned_hook(path: &Path) -> bool {
+    settings_json::read_json_object(AGENT, path)
+        .is_ok_and(|root| value_has_owned_hook(&Value::Object(root)))
 }
 
 fn value_has_owned_hook(value: &Value) -> bool {
@@ -336,16 +553,20 @@ fn value_has_owned_hook(value: &Value) -> bool {
     }
 }
 
+/// Removes RimZ-owned handlers, and each entry, event, or hook they leave
+/// empty; a container the user left empty stays.
 fn strip_owned_hooks(root: &mut Map<String, Value>) -> bool {
     let before = value_has_owned_hook(&Value::Object(root.clone()));
     root.retain(|_, hook| {
         let Some(events) = hook.as_object_mut() else {
             return true;
         };
+        let event_count = events.len();
         events.retain(|_, entries| {
             let Some(entries) = entries.as_array_mut() else {
                 return true;
             };
+            let entry_count = entries.len();
             entries.retain_mut(|entry| {
                 let Some(object) = entry.as_object_mut() else {
                     return true;
@@ -358,68 +579,22 @@ fn strip_owned_hooks(root: &mut Map<String, Value>) -> bool {
                     return false;
                 }
                 if let Some(hooks) = object.get_mut("hooks").and_then(Value::as_array_mut) {
+                    let handler_count = hooks.len();
                     hooks.retain(|handler| {
                         !handler
                             .get("command")
                             .and_then(Value::as_str)
                             .is_some_and(|command| command.contains(RIMZ_HOOK_MARKER))
                     });
-                    if hooks.is_empty() {
+                    if hooks.is_empty() && hooks.len() != handler_count {
                         return false;
                     }
                 }
                 true
             });
-            !entries.is_empty()
+            !entries.is_empty() || entries.len() == entry_count
         });
-        !events.is_empty()
+        !events.is_empty() || events.len() == event_count
     });
     before
-}
-
-fn statusline_candidate(path: &Path) -> Result<(Map<String, Value>, StatusLineChange)> {
-    let mut root = settings_json::read_json_object(AGENT, path)?;
-    let fresh = !root.contains_key(STATUS_LINE.key_path[0]);
-    let change = super::super::managed_statusline::classify(&root, &STATUS_LINE)
-        .ok_or_else(|| incompatible_statusline(path, &root))?;
-    super::super::managed_statusline::upsert(&mut root, &STATUS_LINE);
-    if fresh
-        && let Some(statusline) = root
-            .get_mut(STATUS_LINE.key_path[0])
-            .and_then(Value::as_object_mut)
-    {
-        statusline.insert("stack_with_default".to_owned(), Value::Bool(true));
-    }
-    Ok((root, change))
-}
-
-fn incompatible_statusline(path: &Path, root: &Map<String, Value>) -> AgentErr {
-    let found = root
-        .get(STATUS_LINE.key_path[0])
-        .map(settings_json::json_type_name)
-        .unwrap_or("missing");
-    AgentErr::Install {
-        agent: AGENT,
-        reason: format!(
-            "expected `{}` in {} to be a JSON object; found {found}",
-            STATUS_LINE.key_path[0],
-            path.display(),
-        ),
-    }
-}
-
-fn statusline_managed_at(path: &Path) -> bool {
-    settings_json::read_json_object(AGENT, path)
-        .is_ok_and(|root| super::super::managed_statusline::is_managed(&root, &STATUS_LINE))
-}
-
-fn uninstall_statusline_file(path: &Path) -> Result<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let mut root = settings_json::read_json_object(AGENT, path)?;
-    if super::super::managed_statusline::strip(&mut root, &STATUS_LINE) {
-        settings_json::write_json(AGENT, path, &root)?;
-    }
-    Ok(())
 }

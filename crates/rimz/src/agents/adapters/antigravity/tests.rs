@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::ManagedIntegration as _;
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
 use crate::agents::{
     AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState, PriceBook,
@@ -8,7 +9,7 @@ use crate::ids::AgentSessionId;
 use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::io::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
 const CHILD_ALPHA: &str = "15b124d3-7753-412b-988b-88b2cd518cf8";
@@ -266,198 +267,686 @@ fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
         );
     }
 }
-#[test]
-fn outdated_files_compare_owned_hooks_and_statuslines() {
-    let dir = tempfile::tempdir().unwrap();
-    let hooks = dir.path().join("hooks.json");
-    let settings = dir.path().join("settings.json");
-    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
-    install::install(&hooks, &settings).unwrap();
-    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
-    let canonical: Value = serde_json::from_slice(&std::fs::read(&hooks).unwrap()).unwrap();
-    let mut user = canonical.clone();
-    user["mine"] = json!({"Stop":[{"command":"echo user"}]});
-    std::fs::write(&hooks, user.to_string()).unwrap();
-    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
-    for retired in [false, true] {
-        let mut drift = canonical.clone();
-        if retired {
-            drift["rimz"]["RetiredEvent"] = canonical["rimz"]["Stop"].clone();
-        } else {
-            drift["rimz"]["Stop"][0]["timeout"] = json!(999);
+struct AgyHome {
+    _dir: tempfile::TempDir,
+    paths: install::Paths,
+    plugin: PathBuf,
+    config: PathBuf,
+}
+
+impl AgyHome {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".gemini/config");
+        let settings_dir = dir.path().join(".gemini/antigravity-cli");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&settings_dir).unwrap();
+        Self {
+            paths: install::Paths {
+                hooks: config_dir.join("hooks.json"),
+                settings: settings_dir.join("settings.json"),
+                state: dir.path().join("rimz/antigravity-statusline.json"),
+            },
+            plugin: config_dir.join("plugins/rimz"),
+            config: config_dir.join("config.json"),
+            _dir: dir,
         }
-        std::fs::write(&hooks, drift.to_string()).unwrap();
-        assert_eq!(
-            install::outdated_files_at(&hooks, &settings),
-            std::slice::from_ref(&hooks)
-        );
     }
-    std::fs::write(&hooks, canonical.to_string()).unwrap();
-    let mut status: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
-    status["statusLine"]["command"] = json!("older statusline");
-    std::fs::write(&settings, status.to_string()).unwrap();
-    assert_eq!(
-        install::outdated_files_at(&hooks, &settings),
-        std::slice::from_ref(&settings)
-    );
-    std::fs::write(&hooks, "not json").unwrap();
-    std::fs::write(
-        &settings,
-        r#"{"statusLine":{"type":"command","command":"echo user"}}"#,
-    )
-    .unwrap();
-    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
+
+    fn integration(&self) -> &'static install::AntigravityManagedIntegration {
+        Box::leak(Box::new(install::AntigravityManagedIntegration::at(
+            self.paths.clone(),
+        )))
+    }
+
+    fn plugin_hooks(&self) -> PathBuf {
+        self.plugin.join("hooks.json")
+    }
+
+    fn manifest(&self) -> PathBuf {
+        self.plugin.join("plugin.json")
+    }
+
+    fn snapshot(&self) -> Vec<Option<Vec<u8>>> {
+        [
+            self.plugin_hooks(),
+            self.manifest(),
+            self.paths.hooks.clone(),
+            self.paths.settings.clone(),
+            self.paths.state.clone(),
+        ]
+        .iter()
+        .map(|path| std::fs::read(path).ok())
+        .collect()
+    }
+}
+
+/// The global-file \`rimz\` hook earlier RimZ releases merged into hooks.json.
+fn legacy_global_rimz_hook() -> Value {
+    let mut rimz = serde_json::Map::new();
+    for hook in &ANTIGRAVITY_HOOKS {
+        let handler = json!({"type": "command", "command": hook.command, "timeout": 5});
+        let entry = match hook.config_matcher {
+            Some(matcher) => json!({"matcher": matcher, "hooks": [handler]}),
+            None => handler,
+        };
+        rimz.entry(hook.config_event.to_owned())
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .unwrap()
+            .push(entry);
+    }
+    Value::Object(rimz)
+}
+
+fn rimz_statusline(extra: Value) -> Value {
+    let mut statusline = json!({"type": "command", "command": STATUS_LINE_COMMAND});
+    for (key, value) in extra.as_object().unwrap() {
+        statusline[key] = value.clone();
+    }
+    statusline
+}
+
+fn write_json(path: &Path, value: &Value) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+}
+
+fn env() -> BTreeMap<String, String> {
+    BTreeMap::new()
+}
+
+fn report_paths(files: &[crate::agents::HookInstallFileReport]) -> Vec<(PathBuf, bool)> {
+    files
+        .iter()
+        .map(|file| (file.path.clone(), file.existed))
+        .collect()
 }
 
 #[test]
-fn hook_install_round_trips_existing_and_absent_statuslines() {
-    for (name, original, change) in [
-        (
-            "wrapped",
-            json_value(
-                r#"{"colorScheme":"tokyo night","statusLine":{"type":"command","command":"my-statusline --compact","stack_with_default":false,"custom":"kept"}}"#,
-            ),
-            StatusLineChange::Wrapping {
-                original: "my-statusline --compact".to_owned(),
-            },
-        ),
-        (
-            "added",
-            json_value(r#"{"colorScheme":"tokyo night"}"#),
-            StatusLineChange::Added,
-        ),
+fn fresh_install_writes_the_plugin_and_settings_and_no_global_hooks() {
+    let home = AgyHome::new();
+    let managed = home.integration();
+    assert!(!managed.installed(&env()));
+    assert!(!managed.managed_artifacts_present(&env()));
+    let preview = managed.preview(&env(), Default::default()).unwrap();
+    assert_eq!(preview.planned_events, ANTIGRAVITY_EVENT_NAMES);
+    assert_eq!(preview.status_line_change, Some(StatusLineChange::Added));
+    let previewed: Vec<_> = preview.files.iter().map(|file| file.path.clone()).collect();
+    assert_eq!(
+        previewed,
+        [
+            home.plugin_hooks(),
+            home.manifest(),
+            home.paths.settings.clone()
+        ]
+    );
+    let report = managed.install(&env(), Default::default()).unwrap();
+    assert_eq!(report.installed_events, ANTIGRAVITY_EVENT_NAMES);
+    assert_eq!(
+        report_paths(&report.files),
+        [
+            (home.plugin_hooks(), false),
+            (home.manifest(), false),
+            (home.paths.settings.clone(), false),
+        ]
+    );
+    assert!(!home.paths.hooks.exists());
+    assert!(!home.paths.state.exists());
+    assert!(!home.config.exists());
+    let manifest = read_json(&home.manifest());
+    assert_eq!(manifest["name"], "rimz");
+    assert_eq!(manifest["author"], "RimZ");
+    let hooks = read_json(&home.plugin_hooks());
+    assert_eq!(hooks, json!({"rimz": legacy_global_rimz_hook()}));
+    assert!(hooks["rimz"].get("PreToolUse").is_none());
+    assert_eq!(
+        read_json(&home.paths.settings)["statusLine"],
+        rimz_statusline(json!({"stack_with_default": true}))
+    );
+    assert!(managed.installed(&env()));
+    assert!(
+        managed
+            .outdated_files(&env(), Default::default())
+            .is_empty()
+    );
+    let once = home.snapshot();
+    managed.install(&env(), Default::default()).unwrap();
+    assert_eq!(home.snapshot(), once);
+}
+
+#[test]
+fn a_legacy_install_agy_stripped_migrates_into_the_plugin() {
+    let home = AgyHome::new();
+    let mine = json!({"Stop": [{"type": "command", "command": "my-stop", "timeout": 9}]});
+    write_json(
+        &home.paths.hooks,
+        &json!({"mine": mine, "rimz": legacy_global_rimz_hook()}),
+    );
+    write_json(
+        &home.paths.settings,
+        &json!({"colorScheme": "tokyo night", "statusLine": rimz_statusline(json!({"stack_with_default": true}))}),
+    );
+    let settings_before = std::fs::read(&home.paths.settings).unwrap();
+    let managed = home.integration();
+    assert!(!managed.installed(&env()));
+    assert!(managed.managed_artifacts_present(&env()));
+    assert_eq!(
+        managed.outdated_files(&env(), Default::default()),
+        std::slice::from_ref(&home.paths.hooks)
+    );
+    let preview = managed.preview(&env(), Default::default()).unwrap();
+    let global = preview
+        .files
+        .iter()
+        .find(|file| file.path == home.paths.hooks)
+        .expect("the stripped global hooks file is previewed");
+    assert!(!global.candidate.contains("rimz hooks feed"));
+    assert_eq!(
+        preview.status_line_change,
+        Some(StatusLineChange::Unchanged)
+    );
+    managed.install(&env(), Default::default()).unwrap();
+    assert_eq!(read_json(&home.paths.hooks), json!({"mine": mine}));
+    assert_eq!(
+        std::fs::read(&home.paths.settings).unwrap(),
+        settings_before
+    );
+    assert!(!home.paths.state.exists());
+    assert!(managed.installed(&env()));
+    assert!(
+        managed
+            .outdated_files(&env(), Default::default())
+            .is_empty()
+    );
+    let once = home.snapshot();
+    managed.install(&env(), Default::default()).unwrap();
+    assert_eq!(home.snapshot(), once);
+}
+
+#[test]
+fn a_legacy_marked_statusline_moves_its_original_into_the_record() {
+    let home = AgyHome::new();
+    let original =
+        json!({"type": "command", "command": "my-statusline --compact", "custom": "kept"});
+    write_json(
+        &home.paths.settings,
+        &json!({"statusLine": rimz_statusline(json!({
+            "stack_with_default": false,
+            "_rimz_managed": true,
+            "_rimz_wrapped": original,
+        }))}),
+    );
+    let managed = home.integration();
+    assert_eq!(
+        managed.wrapped_status_line_command(&env()).as_deref(),
+        Some("my-statusline --compact")
+    );
+    assert!(
+        managed
+            .outdated_files(&env(), Default::default())
+            .contains(&home.paths.settings)
+    );
+    let preview = managed.preview(&env(), Default::default()).unwrap();
+    assert!(
+        preview
+            .files
+            .iter()
+            .any(|file| file.path == home.paths.state)
+    );
+    let report = managed.install(&env(), Default::default()).unwrap();
+    assert!(
+        report_paths(&report.files).contains(&(home.paths.state.clone(), false)),
+        "the displaced-statusline record is a receipt row"
+    );
+    assert_eq!(
+        read_json(&home.paths.state),
+        json!({"statusLine": original})
+    );
+    assert_eq!(
+        read_json(&home.paths.settings)["statusLine"],
+        rimz_statusline(json!({"stack_with_default": false}))
+    );
+    assert_eq!(
+        managed.wrapped_status_line_command(&env()).as_deref(),
+        Some("my-statusline --compact")
+    );
+    assert!(
+        managed
+            .outdated_files(&env(), Default::default())
+            .is_empty()
+    );
+    managed.uninstall(&env()).unwrap();
+    assert_eq!(read_json(&home.paths.settings)["statusLine"], original);
+    assert!(!home.paths.state.exists());
+    assert!(!home.plugin.exists());
+    assert!(!managed.managed_artifacts_present(&env()));
+}
+
+#[test]
+fn a_complete_plugin_beside_a_surviving_global_handler_is_not_installed() {
+    let home = AgyHome::new();
+    let managed = home.integration();
+    managed.install(&env(), Default::default()).unwrap();
+    write_json(
+        &home.paths.hooks,
+        &json!({"rimz": legacy_global_rimz_hook()}),
+    );
+    assert!(!managed.installed(&env()));
+    assert_eq!(
+        managed.outdated_files(&env(), Default::default()),
+        std::slice::from_ref(&home.paths.hooks)
+    );
+    managed.install(&env(), Default::default()).unwrap();
+    assert_eq!(read_json(&home.paths.hooks), json!({}));
+    assert!(managed.installed(&env()));
+}
+
+#[test]
+fn a_user_rimz_hook_in_the_global_file_stays_untouched() {
+    let home = AgyHome::new();
+    std::fs::write(
+        &home.paths.hooks,
+        r#"{"rimz":{"Stop":[{"type":"command","command":"user-command"}]}}"#,
+    )
+    .unwrap();
+    let before = std::fs::read(&home.paths.hooks).unwrap();
+    let managed = home.integration();
+    assert!(
+        managed
+            .outdated_files(&env(), Default::default())
+            .is_empty()
+    );
+    let preview = managed.preview(&env(), Default::default()).unwrap();
+    assert!(
+        preview
+            .files
+            .iter()
+            .all(|file| file.path != home.paths.hooks)
+    );
+    managed.install(&env(), Default::default()).unwrap();
+    assert_eq!(std::fs::read(&home.paths.hooks).unwrap(), before);
+    assert!(managed.installed(&env()));
+    managed.uninstall(&env()).unwrap();
+    assert_eq!(std::fs::read(&home.paths.hooks).unwrap(), before);
+}
+
+#[test]
+fn a_plugin_path_rimz_does_not_own_is_refused_and_left() {
+    for case in [
+        "file",
+        "symlink",
+        "foreign manifest",
+        "manifest-less user hooks",
+        "symlinked plugin file",
     ] {
-        let dir = tempfile::tempdir().unwrap();
-        let hooks_path = dir.path().join(format!("{name}/config/hooks.json"));
-        let settings_path = dir.path().join(format!("{name}/settings.json"));
-        std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &hooks_path,
-            r#"{"mine":{"Stop":[{"type":"command","command":"my-stop","timeout":9}]}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            &settings_path,
-            serde_json::to_string_pretty(&original).unwrap(),
-        )
-        .unwrap();
-        let preview = install::preview(&hooks_path, &settings_path).unwrap();
-        assert_eq!(preview.planned_events, ANTIGRAVITY_EVENT_NAMES);
-        assert_eq!(preview.status_line_change, Some(change));
-        assert!(!preview.files[0].candidate.contains("PreToolUse"));
-        let report = install::install(&hooks_path, &settings_path).unwrap();
-        let files: Vec<_> = report
-            .files
-            .iter()
-            .map(|file| (file.path.as_path(), file.existed))
-            .collect();
-        assert_eq!(
-            files,
-            [
-                (hooks_path.as_path(), true),
-                (settings_path.as_path(), true)
-            ]
-        );
-        assert!(install::installed(&hooks_path, &settings_path));
-        let mut hooks = read_json(&hooks_path);
-        assert_eq!(hooks["mine"]["Stop"][0]["command"], "my-stop");
-        assert!(hooks["rimz"].get("PreToolUse").is_none());
-        assert_eq!(hooks["rimz"]["PreInvocation"].as_array().unwrap().len(), 1);
-        assert_eq!(hooks["rimz"]["PostToolUse"].as_array().unwrap().len(), 3);
-        let installed = read_json(&settings_path);
-        if name == "wrapped" {
-            assert_eq!(
-                install::wrapped_statusline_command(&settings_path).as_deref(),
-                Some("my-statusline --compact")
-            );
-            assert_eq!(installed["statusLine"]["stack_with_default"], false);
-            assert_eq!(installed["statusLine"]["_rimz_wrapped"]["custom"], "kept");
-        } else {
-            assert_eq!(installed["statusLine"]["command"], STATUS_LINE_COMMAND);
-            assert_eq!(installed["statusLine"]["stack_with_default"], true);
+        let home = AgyHome::new();
+        std::fs::create_dir_all(home.plugin.parent().unwrap()).unwrap();
+        match case {
+            "file" => std::fs::write(&home.plugin, "not a plugin").unwrap(),
+            "symlink" => {
+                let target = home.plugin.with_file_name("elsewhere");
+                std::fs::create_dir_all(&target).unwrap();
+                std::os::unix::fs::symlink(&target, &home.plugin).unwrap();
+            }
+            "manifest-less user hooks" => write_json(
+                &home.plugin_hooks(),
+                &json!({"mine": {"Stop": [{"type": "command", "command": "my-stop"}]}}),
+            ),
+            "symlinked plugin file" => {
+                write_json(&home.manifest(), &json!({"name": "rimz", "author": "RimZ"}));
+                let target = home.plugin.with_file_name("elsewhere.json");
+                std::fs::write(&target, "{}").unwrap();
+                std::os::unix::fs::symlink(&target, home.plugin_hooks()).unwrap();
+            }
+            _ => write_json(
+                &home.manifest(),
+                &json!({"name": "rimz", "author": "someone else"}),
+            ),
         }
-        hooks["rimz"]["Stop"][0]["timeout"] = json!(1);
-        std::fs::write(&hooks_path, serde_json::to_string_pretty(&hooks).unwrap()).unwrap();
-        assert!(!install::installed(&hooks_path, &settings_path));
-        install::install(&hooks_path, &settings_path).unwrap();
-        assert!(install::installed(&hooks_path, &settings_path));
-        let once = (
-            std::fs::read_to_string(&hooks_path).unwrap(),
-            std::fs::read_to_string(&settings_path).unwrap(),
+        write_json(&home.paths.settings, &json!({"theme": "dark"}));
+        let before = home.snapshot();
+        let managed = home.integration();
+        let error = managed.install(&env(), Default::default()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&home.plugin.display().to_string()),
+            "{case}: {error}"
         );
-        install::install(&hooks_path, &settings_path).unwrap();
-        assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), once.0);
-        assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), once.1);
-        let report = install::uninstall(&hooks_path, &settings_path).unwrap();
-        assert_eq!(report.removed_events, ANTIGRAVITY_EVENT_NAMES);
-        let files: Vec<_> = report
-            .files
-            .iter()
-            .map(|file| (file.path.as_path(), file.existed))
-            .collect();
-        assert_eq!(
-            files,
-            [
-                (hooks_path.as_path(), true),
-                (settings_path.as_path(), true)
-            ]
+        assert!(
+            managed.preview(&env(), Default::default()).is_err(),
+            "{case}"
         );
-        assert!(!install::managed(&hooks_path, &settings_path));
-        let restored_hooks = read_json(&hooks_path);
-        assert!(restored_hooks.get("rimz").is_none());
-        assert_eq!(restored_hooks["mine"]["Stop"][0]["command"], "my-stop");
-        assert_eq!(read_json(&settings_path), original);
+        assert_eq!(home.snapshot(), before, "{case}");
+        assert!(!managed.installed(&env()), "{case}");
+        assert!(!managed.managed_artifacts_present(&env()), "{case}");
+        let report = managed.uninstall(&env()).unwrap();
+        assert!(
+            report.files.is_empty() && report.removed_events.is_empty(),
+            "{case}: uninstall reports Antigravity untouched: {report:?}"
+        );
+        assert!(
+            std::fs::symlink_metadata(&home.plugin).is_ok(),
+            "{case}: uninstall leaves a plugin path RimZ does not own"
+        );
+        assert_eq!(home.snapshot(), before, "{case}");
     }
+}
+
+/// Antigravity's spec, with the installer pointed at a scratch home.
+struct ScratchAgy {
+    managed: &'static install::AntigravityManagedIntegration,
+}
+
+impl CoreCapability for ScratchAgy {
+    fn spec(&self) -> &'static AgentSpec {
+        &ANTIGRAVITY_DESCRIPTOR
+    }
+}
+impl HookCapability for ScratchAgy {}
+impl LaunchCapability for ScratchAgy {}
+impl SessionCapability for ScratchAgy {}
+impl TranscriptCapability for ScratchAgy {}
+impl ContextCapability for ScratchAgy {}
+impl AccountCapability for ScratchAgy {}
+impl SpendingCapability for ScratchAgy {}
+impl RuntimeControlCapability for ScratchAgy {}
+impl InstallationCapability for ScratchAgy {
+    fn managed_integration(&self) -> Option<&'static dyn crate::agents::ManagedIntegration> {
+        Some(self.managed)
+    }
+}
+
+#[test]
+fn a_disabled_plugin_is_reported_and_preflight_returns_it_before_reinstalling() {
+    let home = AgyHome::new();
+    let managed = home.integration();
+    let definition =
+        crate::agents::AgentDefinition::new(Box::leak(Box::new(ScratchAgy { managed })));
+    for config in [
+        None,
+        Some("{\"plugins\":{\"rimz\":{\"enabled\":true}}}"),
+        Some("{\"plugins\":{\"other\":{\"enabled\":false}}}"),
+        Some("not json"),
+        Some("{\"plugins\":{\"rimz\":{\"enabled\":\"false\"}}}"),
+    ] {
+        if let Some(config) = config {
+            std::fs::write(&home.config, config).unwrap();
+        }
+        assert!(managed.hooks_disabled(&env()).is_none(), "{config:?}");
+    }
+    std::fs::write(
+        &home.config,
+        "{\n  // agy writes this file\n  \"plugins\": {\"rimz\": {\"enabled\": false}},\n}\n",
+    )
+    .unwrap();
+    for installed in [false, true] {
+        if installed {
+            managed.install(&env(), Default::default()).unwrap();
+            assert!(
+                managed.installed(&env()),
+                "installed stays a statement about files"
+            );
+        }
+        let Some(crate::agents::HookPreflightErr::HooksDisabled { reason, fix }) =
+            managed.hooks_disabled(&env())
+        else {
+            panic!("a disabled plugin must answer hooks_disabled");
+        };
+        assert!(
+            reason.contains(&home.config.display().to_string()),
+            "{reason}"
+        );
+        assert!(reason.contains("plugins.rimz.enabled"), "{reason}");
+        assert_eq!(fix, "agy plugin enable rimz");
+        let preflight = crate::agents::preflight_hooks(
+            &definition,
+            &env(),
+            crate::agents::TurnLifecycleNeed::None,
+        );
+        assert!(
+            matches!(preflight, Err(crate::agents::HookPreflightErr::HooksDisabled { ref fix, .. }) if fix == "agy plugin enable rimz"),
+            "installed={installed}: {preflight:?}"
+        );
+    }
+}
+
+#[test]
+fn a_statusline_the_user_replaced_is_left_by_uninstall_and_wrapped_by_install() {
+    let home = AgyHome::new();
+    let managed = home.integration();
+    managed.install(&env(), Default::default()).unwrap();
+    let replaced = json!({"type": "command", "command": "user-statusline"});
+    write_json(&home.paths.settings, &json!({"statusLine": replaced}));
+    assert!(!managed.installed(&env()));
+    assert!(
+        managed
+            .outdated_files(&env(), Default::default())
+            .is_empty()
+    );
+    managed.uninstall(&env()).unwrap();
+    assert_eq!(read_json(&home.paths.settings)["statusLine"], replaced);
+    let preview = managed.preview(&env(), Default::default()).unwrap();
+    assert_eq!(
+        preview.status_line_change,
+        Some(StatusLineChange::Wrapping {
+            original: "user-statusline".to_owned()
+        })
+    );
+    managed.install(&env(), Default::default()).unwrap();
+    assert_eq!(
+        read_json(&home.paths.state),
+        json!({"statusLine": replaced})
+    );
+    assert_eq!(
+        managed.wrapped_status_line_command(&env()).as_deref(),
+        Some("user-statusline")
+    );
+    managed.uninstall(&env()).unwrap();
+    assert_eq!(read_json(&home.paths.settings)["statusLine"], replaced);
 }
 
 #[test]
 fn hook_install_accepts_only_object_statuslines() {
-    let dir = tempfile::tempdir().unwrap();
-    let hooks_path = dir.path().join("hooks.json");
-    let settings_path = dir.path().join("settings.json");
-    std::fs::write(&hooks_path, r#"{"mine":{"Stop":[]}}"#).unwrap();
-
+    let home = AgyHome::new();
+    let managed = home.integration();
     let object = json!({"custom": "kept", "stack_with_default": false});
-    std::fs::write(
-        &settings_path,
-        serde_json::to_string(&json!({"statusLine": object})).unwrap(),
-    )
-    .unwrap();
+    write_json(&home.paths.settings, &json!({"statusLine": object}));
     assert_eq!(
-        install::preview(&hooks_path, &settings_path)
+        managed
+            .preview(&env(), Default::default())
             .unwrap()
             .status_line_change,
         Some(StatusLineChange::Added)
     );
-    install::install(&hooks_path, &settings_path).unwrap();
-    let installed = read_json(&settings_path);
+    managed.install(&env(), Default::default()).unwrap();
+    let installed = read_json(&home.paths.settings);
     assert_eq!(installed["statusLine"]["stack_with_default"], false);
-    assert_eq!(installed["statusLine"]["_rimz_wrapped"], object);
-    install::uninstall(&hooks_path, &settings_path).unwrap();
-    assert_eq!(read_json(&settings_path)["statusLine"], object);
+    assert_eq!(read_json(&home.paths.state)["statusLine"], object);
+    managed.uninstall(&env()).unwrap();
+    assert_eq!(read_json(&home.paths.settings)["statusLine"], object);
 
-    let hooks_original = std::fs::read(&hooks_path).unwrap();
-    let settings_original = br#"{"statusLine":"user command"}"#;
-    std::fs::write(&settings_path, settings_original).unwrap();
-    let error = install::install(&hooks_path, &settings_path).unwrap_err();
-    assert!(error.to_string().contains("to be a JSON object"));
-    assert_eq!(std::fs::read(&hooks_path).unwrap(), hooks_original);
-    assert_eq!(std::fs::read(&settings_path).unwrap(), settings_original);
+    let home = AgyHome::new();
+    let managed = home.integration();
+    std::fs::write(&home.paths.settings, br#"{"statusLine":"user command"}"#).unwrap();
+    let before = home.snapshot();
+    let error = managed.install(&env(), Default::default()).unwrap_err();
+    assert!(error.to_string().contains("to be a JSON object"), "{error}");
+    assert_eq!(home.snapshot(), before);
+    assert!(!home.plugin.exists());
 }
+
 #[test]
-fn hook_install_refuses_a_user_owned_rimz_hook_name() {
-    let dir = tempfile::tempdir().unwrap();
-    let hooks_path = dir.path().join("hooks.json");
-    let settings_path = dir.path().join("settings.json");
-    std::fs::write(
-        &hooks_path,
-        r#"{"rimz":{"Stop":[{"type":"command","command":"user-command"}]}}"#,
-    )
-    .unwrap();
-    let error = install::preview(&hooks_path, &settings_path).unwrap_err();
-    assert!(error.to_string().contains("hook name `rimz`"));
-    assert!(error.to_string().contains("user-owned"));
+fn uninstall_reaches_each_artifact_alone() {
+    for artifact in ["plugin", "empty plugin dir", "global handler", "statusline"] {
+        let home = AgyHome::new();
+        let managed = home.integration();
+        match artifact {
+            "plugin" => {
+                managed.install(&env(), Default::default()).unwrap();
+                std::fs::remove_file(&home.paths.settings).unwrap();
+            }
+            "empty plugin dir" => std::fs::create_dir_all(&home.plugin).unwrap(),
+            "global handler" => write_json(
+                &home.paths.hooks,
+                &json!({"mine": {"Stop": []}, "rimz": legacy_global_rimz_hook()}),
+            ),
+            _ => write_json(
+                &home.paths.settings,
+                &json!({"theme": "dark", "statusLine": rimz_statusline(json!({}))}),
+            ),
+        }
+        assert!(managed.managed_artifacts_present(&env()), "{artifact}");
+        let report = managed.uninstall(&env()).unwrap();
+        assert!(!managed.managed_artifacts_present(&env()), "{artifact}");
+        assert!(!home.plugin.exists(), "{artifact}");
+        match artifact {
+            "plugin" => assert_eq!(report.removed_events, ANTIGRAVITY_EVENT_NAMES),
+            "empty plugin dir" => assert!(report.removed_events.is_empty(), "{report:?}"),
+            "global handler" => {
+                assert_eq!(report.removed_events, ANTIGRAVITY_EVENT_NAMES);
+                assert_eq!(read_json(&home.paths.hooks), json!({"mine": {"Stop": []}}));
+            }
+            _ => assert_eq!(read_json(&home.paths.settings), json!({"theme": "dark"})),
+        }
+    }
+    let report = AgyHome::new().integration().uninstall(&env()).unwrap();
+    assert!(
+        report.files.is_empty() && report.removed_events.is_empty(),
+        "never installed: {report:?}"
+    );
 }
+
+#[test]
+fn reinstall_after_the_statusline_key_is_deleted_drops_the_stale_record() {
+    let home = AgyHome::new();
+    let managed = home.integration();
+    write_json(
+        &home.paths.settings,
+        &json!({"statusLine": {"type": "command", "command": "user-statusline"}}),
+    );
+    managed.install(&env(), Default::default()).unwrap();
+    assert!(home.paths.state.exists());
+    write_json(&home.paths.settings, &json!({"theme": "dark"}));
+    let preview = managed.preview(&env(), Default::default()).unwrap();
+    let record = preview
+        .files
+        .iter()
+        .find(|file| file.path == home.paths.state)
+        .expect("the record's removal is previewed");
+    assert!(record.existed && record.candidate.is_empty());
+    let report = managed.install(&env(), Default::default()).unwrap();
+    assert!(!home.paths.state.exists());
+    assert!(
+        report
+            .files
+            .iter()
+            .any(|file| file.path == home.paths.state && file.existed),
+        "the receipt lists the removed record"
+    );
+    assert_eq!(managed.wrapped_status_line_command(&env()), None);
+    managed.uninstall(&env()).unwrap();
+    assert_eq!(read_json(&home.paths.settings), json!({"theme": "dark"}));
+}
+
+#[test]
+fn a_failed_record_write_leaves_the_global_handlers_the_only_hook_set() {
+    let home = AgyHome::new();
+    write_json(
+        &home.paths.hooks,
+        &json!({"rimz": legacy_global_rimz_hook()}),
+    );
+    write_json(
+        &home.paths.settings,
+        &json!({"statusLine": {"type": "command", "command": "user-statusline"}}),
+    );
+    // A directory at the record's path fails its rename with EISDIR, root included.
+    std::fs::create_dir_all(&home.paths.state).unwrap();
+    let before = home.snapshot();
+    let managed = home.integration();
+    managed.install(&env(), Default::default()).unwrap_err();
+    assert!(
+        !home.plugin.exists(),
+        "a plugin beside the global handlers fires twice"
+    );
+    assert_eq!(home.snapshot(), before);
+}
+
+#[test]
+fn a_settings_file_install_leaves_alone_previews_without_a_diff() {
+    let home = AgyHome::new();
+    let managed = home.integration();
+    managed.install(&env(), Default::default()).unwrap();
+    let agy_formatted = serde_json::to_string(&read_json(&home.paths.settings)).unwrap();
+    std::fs::write(&home.paths.settings, &agy_formatted).unwrap();
+    let preview = managed.preview(&env(), Default::default()).unwrap();
+    let settings = preview
+        .files
+        .iter()
+        .find(|file| file.path == home.paths.settings)
+        .expect("settings.json is previewed");
+    assert_eq!(settings.original.as_deref(), Some(agy_formatted.as_str()));
+    assert_eq!(settings.candidate, agy_formatted);
+    managed.install(&env(), Default::default()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&home.paths.settings).unwrap(),
+        agy_formatted
+    );
+}
+
+#[test]
+fn outdated_files_name_each_drifted_file() {
+    let home = AgyHome::new();
+    let managed = home.integration();
+    let outdated = || managed.outdated_files(&env(), Default::default());
+    assert!(outdated().is_empty());
+    managed.install(&env(), Default::default()).unwrap();
+    assert!(outdated().is_empty());
+    let canonical = std::fs::read(home.plugin_hooks()).unwrap();
+    let mut drift = read_json(&home.plugin_hooks());
+    drift["rimz"]["Stop"][0]["timeout"] = json!(999);
+    write_json(&home.plugin_hooks(), &drift);
+    assert_eq!(outdated(), std::slice::from_ref(&home.plugin_hooks()));
+    assert!(!managed.installed(&env()));
+    std::fs::write(home.plugin_hooks(), &canonical).unwrap();
+    std::fs::remove_file(home.manifest()).unwrap();
+    assert_eq!(outdated(), [home.manifest()]);
+    managed.install(&env(), Default::default()).unwrap();
+    let mut settings = read_json(&home.paths.settings);
+    settings["statusLine"]["_rimz_managed"] = json!(true);
+    write_json(&home.paths.settings, &settings);
+    assert_eq!(outdated(), std::slice::from_ref(&home.paths.settings));
+    write_json(
+        &home.paths.settings,
+        &json!({"statusLine": {"type": "command", "command": "echo user"}}),
+    );
+    std::fs::write(&home.paths.hooks, "not json").unwrap();
+    assert!(outdated().is_empty());
+}
+
+#[test]
+fn wiring_inputs_name_every_file_the_answers_read() {
+    let home = AgyHome::new();
+    let paths = home
+        .integration()
+        .wiring_input_paths(&ANTIGRAVITY_DESCRIPTOR, &env());
+    for path in [
+        home.plugin_hooks(),
+        home.manifest(),
+        home.paths.hooks.clone(),
+        home.config.clone(),
+        home.paths.settings.clone(),
+        home.paths.state.clone(),
+    ] {
+        assert!(
+            paths.contains(&path),
+            "{} missing from {paths:?}",
+            path.display()
+        );
+    }
+}
+
 #[test]
 fn statusline_projects_model_account_and_context_usage() {
     let context = AntigravityAdapter
