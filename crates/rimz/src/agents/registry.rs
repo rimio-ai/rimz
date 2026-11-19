@@ -24,9 +24,7 @@ use super::adapters::opencode::OpencodeAdapter;
 use super::adapters::pi::PiAdapter;
 use super::adapters::qoder::QoderAdapter;
 use super::adapters::qwen::QwenAdapter;
-use super::definition::{
-    AgentDefinition, AgentSpec, CompactInstruction, ConcernCoverage, IntegrationConcern,
-};
+use super::definition::{AgentDefinition, AgentSpec, ConcernCoverage, IntegrationConcern};
 use super::{AgentErr, AgentState, Result};
 use crate::config::HarnessConfig;
 use crate::ids::AgentSessionId;
@@ -231,27 +229,18 @@ pub fn soft_compact_skip(definition: &AgentDefinition) -> Option<SoftCompactSkip
     None
 }
 
-/// Compose the smart-compaction reminder: run the bare `rimz agents compact @me` at a good
-/// stopping point, so the configured or built-in brief applies where the adapter's command takes
-/// one, after noting what to keep in the reply where it does not; `None` when the adapter has no
-/// native compaction command.
+/// Compose the smart-compaction reminder: an agent whose work ends in this turn finishes and
+/// rests, and one with work left writes it down and runs `rimz agents compact @me`; `None` when
+/// the adapter has no native compaction command.
 pub fn compact_reminder(agent: &AgentState) -> Option<String> {
-    let command = spec_by_kind(agent.kind.as_str())?.launch.compact_command?;
-    let prefix = concat!(
-        "Your context is getting high. At a good stopping point, before you start anything new, ",
-        "compact yourself: "
-    );
-    let suffix = "RimZ compacts you once this turn ends and then tells you to continue.";
-    Some(if command.instruction == CompactInstruction::Trailing {
-        format!(
-            "{prefix}run `rimz agents compact @me` with no instruction of your own: RimZ adds \
-             any compaction brief itself. {suffix}"
+    let spec = spec_by_kind(agent.kind.as_str())?;
+    spec.launch.compact_command.is_some().then(|| {
+        concat!(
+            "Your context is getting high. If this turn finishes your work, just finish and rest. ",
+            "Otherwise, at a good stopping point, before you start anything new, write down what ",
+            "is left to do, then compact yourself: run `rimz agents compact @me`."
         )
-    } else {
-        format!(
-            "{prefix}note what you need to keep in your reply, since this agent's compaction \
-             takes no brief, then run `rimz agents compact @me`. {suffix}"
-        )
+        .to_owned()
     })
 }
 

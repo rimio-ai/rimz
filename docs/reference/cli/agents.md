@@ -1139,7 +1139,7 @@ The continue is withdrawn (`Canceled`) when you interrupt the agent, when it run
 
 Without `INSTRUCTION`, the command uses the [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction) brief. An instruction replaces that brief on adapters that accept trailing text (Claude, Grok, Droid, MiniMax, OMP, Qoder, Hermes), and `""` sends the bare command. Other adapters refuse any instruction, including `""`; rerun without one.
 
-This is an explicit command, separate from the seat's [`smart-compact`](../definitions.md#smart-compaction) policy, which reminds a busy agent to run this command on itself and also compacts before messages to resting agents.
+This is an explicit command, separate from the seat's [`smart-compact`](../definitions.md#smart-compaction) policy, which reminds a busy agent to run this command on itself unless its turn finishes its work, and also compacts before messages to resting agents.
 
 `INSTRUCTION` may start with `-`; a value that is itself one of the command's flags (`-h`, `--help`, or a global flag such as `--color`) needs `--` before it.
 
