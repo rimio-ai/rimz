@@ -418,7 +418,7 @@ fn compact_reminder_names_the_trailing_or_bare_self_compaction() {
         (
             "claude",
             format!(
-                "{prefix}run `rimz agents compact @me \"<what to keep>\"`, naming what you need to keep. {suffix}"
+                "{prefix}run `rimz agents compact @me` with no instruction of your own, since RimZ supplies your role's compaction brief. {suffix}"
             ),
         ),
         (

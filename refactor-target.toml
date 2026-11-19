@@ -596,7 +596,7 @@ reason = "Command and declared context/compaction coverage determine participati
 [[verdict]]
 kind = "item"
 key = "agents::registry::compact_reminder"
-reason = "The reminder helper composes the self-compaction reminder, with a brief only where the adapter's command takes one."
+reason = "The reminder helper composes the self-compaction reminder, always asking for the bare command so the configured or built-in brief applies."
 
 [[verdict]]
 kind = "item"
