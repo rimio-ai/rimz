@@ -77,7 +77,7 @@ pub(super) fn interrupt(t: &mut Transition<'_>, reason: &str) {
 pub(super) fn prepare(
     t: &mut Transition<'_>,
     host: &dyn AttemptHost,
-    guard: &WorkspaceLock,
+    guard: &Commit<'_>,
     seen: &mut BTreeSet<String>,
 ) -> Result<Option<Decision>> {
     // prepare dispatches here only while the session is held, with its run pinned.
@@ -271,7 +271,7 @@ pub(super) fn prepare(
 
 fn restore(
     t: &mut Transition<'_>,
-    guard: &WorkspaceLock,
+    guard: &Commit<'_>,
     seen: &mut BTreeSet<String>,
     action: TurnEndAction,
     verdict: Option<&Verdict>,
@@ -316,7 +316,7 @@ pub(super) fn push(
     if !pushed.queued {
         return Ok(false);
     }
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, Some(host))?;
     let Some(current) = super::reload(paths)? else {
         return Ok(false);
     };

@@ -353,3 +353,48 @@ fn the_notice_says_how_many_agents_a_pass_left_running() {
     );
     success(command(&env, &["workflow", "cancel", &active]));
 }
+
+#[test]
+fn the_pass_fires_a_stranded_runs_ending_and_nothing_for_an_ended_one() {
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let active = start(&env);
+    until(&env, &active, |value| value["record"]["wait"].is_object());
+    let state = env.state_path_for(&env.project_root);
+    let base: Value =
+        serde_json::from_slice(&fs::read(state.workflow(&active.parse().unwrap()).record).unwrap())
+            .unwrap();
+    let older = u64::from(rimz::store::workflow::VERSION) - 1;
+    let mut seeded = Vec::new();
+    for state_name in ["active", "done"] {
+        let id = rimz::ids::WorkflowRunId::new();
+        let mut record = base.clone();
+        record["id"] = json!(id.as_str());
+        record["version"] = json!(older);
+        record["state"] = json!(state_name);
+        let paths = state.workflow(&id);
+        fs::create_dir_all(&paths.home).unwrap();
+        fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+        seeded.push(id.to_string());
+    }
+    success(command(&env, &["workflow", "reconcile"]));
+    let fired = run_signals(&env, &seeded[0], 2);
+    assert_eq!(
+        fired
+            .iter()
+            .map(|(name, payload)| (
+                name.as_str(),
+                payload["node"].as_str(),
+                payload["outcome"].as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("workflow.ended", Some("pr"), Some("failed")),
+            ("workflow.failed", Some("pr"), Some("failed")),
+        ],
+        "{fired:#?}"
+    );
+    assert!(
+        run_signals(&env, &seeded[1], 0).is_empty(),
+        "a run that had ended fires nothing"
+    );
+}

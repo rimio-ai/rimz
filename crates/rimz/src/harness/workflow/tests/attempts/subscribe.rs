@@ -449,3 +449,65 @@ fn a_session_on_a_refused_definition_hears_nothing() {
     assert!(forwarded(&state, &record).is_empty());
     cancel(&state, &record.id, &host, None).unwrap();
 }
+
+fn run_signal(name: &str, run: &WorkflowRunId) -> Signal {
+    Signal {
+        source: crate::store::event::SignalSource::Lifecycle,
+        ..signal(
+            name,
+            json!({"run": run.as_str(), "workflow": "test", "node": "pr"}),
+        )
+    }
+}
+
+/// A run's own `workflow.*` signal never reaches it; another run's reaches its subscribed step.
+#[test]
+fn a_session_hears_other_runs_workflow_signals_never_its_own() {
+    let (_dir, state, record) =
+        setup(&SUBSCRIBED.replace("subscribe=['ci.failed',", "subscribe=['workflow.*',"));
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    let other = WorkflowRunId::new();
+    let own = run_signal("workflow.moved", &record.id);
+    assert!(!hears_lifecycle(&state, &own, &|_| None).unwrap());
+    assert!(hears_lifecycle(&state, &run_signal("workflow.moved", &other), &|_| None).unwrap());
+    for run in [&record.id, &other] {
+        wake(&state, &run_signal("workflow.moved", run), &host).unwrap();
+    }
+    assert_eq!(
+        forwarded(&state, &record)
+            .into_iter()
+            .map(|(_, signal, _)| signal)
+            .collect::<Vec<_>>(),
+        ["workflow.moved"],
+        "only the other run's signal forwards"
+    );
+    cancel(&state, &record.id, &host, None).unwrap();
+}
+
+#[test]
+fn a_check_wakes_on_another_runs_workflow_signal_never_its_own() {
+    let (dir, state, record) = setup(&WAITING.replace("'review.ready'", "'workflow.ended'"));
+    check(
+        dir.path(),
+        json!({"outcome":"pending", "recheck_at":"2099-01-01T00:00:00Z"}),
+    );
+    let host = FakeHost::new();
+    let waiting = advance_ok(&state, &record.id, &host);
+    assert!(waiting.wait.is_some(), "{waiting:#?}");
+    let wakes = || {
+        records::journal(&state.workflow(&record.id))
+            .unwrap()
+            .iter()
+            .filter(|row| matches!(row.event, JournalEvent::Wake { .. }))
+            .count()
+    };
+    let own = run_signal("workflow.ended", &record.id);
+    assert!(!hears_lifecycle(&state, &own, &|_| None).unwrap());
+    wake(&state, &own, &host).unwrap();
+    assert_eq!(wakes(), 0, "a run's own ending never wakes it");
+    let other = run_signal("workflow.ended", &WorkflowRunId::new());
+    assert!(hears_lifecycle(&state, &other, &|_| None).unwrap());
+    wake(&state, &other, &host).unwrap();
+    assert_eq!(wakes(), 1);
+}

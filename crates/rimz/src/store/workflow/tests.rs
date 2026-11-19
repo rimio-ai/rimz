@@ -229,6 +229,7 @@ fn classification_reads_newer_versions_no_further_and_strands_unfinished_old_run
             RunClass::Stranded { cause, header } => {
                 assert_eq!(header.workflow.as_deref(), Some("review"), "{expected}");
                 assert_eq!(header.node.as_deref(), Some("pr"), "{expected}");
+                assert_eq!(header.origin, RunOrigin::Deployed, "{expected}");
                 match cause {
                     StrandedCause::Older { version } => format!("stranded older {version}"),
                     StrandedCause::MissingVersion => "stranded missing".into(),

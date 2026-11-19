@@ -452,7 +452,7 @@ fn publish(
         fire_facts: start.fire_facts,
         stranded: false,
     };
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, None)?;
     // A run stamped with a fire but started by hand (no task) is no task's own.
     let task = record
         .loop_fire
@@ -578,7 +578,61 @@ fn spawn(record: &RunRecord) -> Result<Advance> {
     })
 }
 
-fn persist(t: &mut Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
+/// The workspace lock over a run's writes, and the edges those writes commit: once the lock is
+/// released, each write that changed the run's node, its state, or whether it needs a person is
+/// handed to the host, which fires its signals and may take the lock itself.
+pub(super) struct Commit<'h> {
+    /// Held from `acquire` until the drop, which releases it before the host hears anything.
+    lock: Option<WorkspaceLock>,
+    host: Option<&'h dyn AttemptHost>,
+    edges: std::cell::RefCell<Vec<(RunRecord, RunRecord)>>,
+}
+
+impl<'h> Commit<'h> {
+    /// Take the workspace lock. A write under a hostless lock hands no edge on.
+    pub(super) fn acquire(state: &StatePaths, host: Option<&'h dyn AttemptHost>) -> Result<Self> {
+        Ok(Self {
+            lock: Some(WorkspaceLock::acquire(&state.workspace_lock)?),
+            host,
+            edges: std::cell::RefCell::new(Vec::new()),
+        })
+    }
+
+    fn committed(&self, before: RunRecord, after: &RunRecord) {
+        if before.node != after.node
+            || before.state != after.state
+            || before.needs_you() != after.needs_you()
+        {
+            self.edges.borrow_mut().push((before, after.clone()));
+        }
+    }
+}
+
+impl std::ops::Deref for Commit<'_> {
+    type Target = WorkspaceLock;
+
+    fn deref(&self) -> &WorkspaceLock {
+        // Only the drop takes the lock out.
+        self.lock
+            .as_ref()
+            .expect("the commit holds its lock until dropped")
+    }
+}
+
+impl Drop for Commit<'_> {
+    fn drop(&mut self) {
+        drop(self.lock.take());
+        let Some(host) = self.host else {
+            return;
+        };
+        for (before, after) in self.edges.take() {
+            host.committed(&before, &after);
+        }
+    }
+}
+
+fn persist(t: &mut Transition<'_>, guard: &Commit<'_>) -> Result<()> {
+    let before = guard.host.and_then(|_| workflow::load(t.paths).ok());
     t.record.version = workflow::VERSION;
     let latched = t.record.engaged == Some(false) && engages(&t.record);
     if latched {
@@ -614,6 +668,9 @@ fn persist(t: &mut Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
         workflow::append(t.paths, entry, guard)?;
     }
     workflow::write(t.paths, &t.record, guard)?;
+    if let Some(before) = before {
+        guard.committed(before, &t.record);
+    }
     accounting::transition(t, latched);
     Ok(())
 }
@@ -981,7 +1038,7 @@ fn fail_unreadable(
     host: &dyn AttemptHost,
     reason: String,
 ) -> Result<()> {
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, Some(host))?;
     let Some(record) = reload(paths)? else {
         return Ok(());
     };
@@ -1091,7 +1148,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
         let fresh = reader.reread(&paths, &record);
         let spec = fresh.as_ref().unwrap_or(&spec);
-        let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+        let guard = Commit::acquire(state, Some(host))?;
         let Some(current) = reload(&paths)? else {
             return Ok(());
         };
@@ -1165,7 +1222,7 @@ fn command_step(
     crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
     let fresh = reader.reread(paths, record);
     let spec = fresh.as_ref().unwrap_or(spec);
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, Some(host))?;
     let Some(current) = reload(paths)? else {
         return Ok(false);
     };
@@ -1320,7 +1377,7 @@ fn message_step(
     };
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, Some(host))?;
     let current = reload(paths)?;
     let moved = current.is_none();
     let mut t = Transition {
@@ -1372,7 +1429,7 @@ fn prepare(
     windows: &WindowReadings<'_>,
     admission: &mut Admission,
 ) -> Result<Decision> {
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, Some(host))?;
     let Some(current) = reload(paths)? else {
         return Ok(Decision::Stop);
     };
@@ -1757,7 +1814,7 @@ fn prepare_capacity(
     step: &Node,
     groups: Vec<throttle::StartGroup>,
     admission: &mut Admission,
-    guard: &WorkspaceLock,
+    guard: &Commit<'_>,
     waits: bool,
     host_gated: bool,
 ) -> Result<Option<Decision>> {
@@ -2009,7 +2066,7 @@ pub fn cancel(
     reason: Option<&str>,
 ) -> Result<bool> {
     let paths = state.workflow(id);
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, Some(host))?;
     let Some(record) = reload(&paths)? else {
         return Ok(false);
     };
@@ -2038,7 +2095,7 @@ pub fn restart(
 ) -> Result<(RunRecord, Option<Advance>)> {
     let paths = state.workflow(id);
     let reader = Reader::new();
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, Some(host))?;
     let record = workflow::load(&paths)?;
     let spec = reader.admitted(&paths, &record)?;
     let mut t = Transition {
@@ -2219,7 +2276,7 @@ pub fn resume(
     let paths = state.workflow(id);
     let reader = Reader::new();
     let record = {
-        let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+        let guard = Commit::acquire(state, Some(host))?;
         let record = workflow::load(&paths)?;
         let spec = reader.admitted(&paths, &record)?;
         if record.state.is_terminal() {
@@ -2404,7 +2461,7 @@ pub(crate) fn reassign_task(
     if !state.root.exists() {
         return Ok(Vec::new());
     }
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, None)?;
     let mut reassigned = Vec::new();
     for mut record in workflow::live_runs(state)? {
         if !record.started_by(task) {
@@ -2570,31 +2627,66 @@ fn forward_text(record: &RunRecord, step: &str, prompt: Option<&str>, signal: &S
     lines.join("\n")
 }
 
-/// Whether a live session subscribes to the family of a lifecycle signal, the only
-/// receiver a lifecycle signal has among workflow runs. Reads records and definitions, and the
-/// leader's recorded session through `session` as `from_leader` needs it; it runs where a signal
-/// fires, with no attempt host.
+/// Whether a `workflow.*` signal names `record`'s own run, which it never wakes.
+fn names_run(signal: &Signal, record: &RunRecord) -> bool {
+    signal.name.family() == "workflow"
+        && signal
+            .payload
+            .get("run")
+            .and_then(serde_json::Value::as_str)
+            == Some(record.id.as_str())
+}
+
+/// Whether the current check of an active run subscribes to `signal` and its match delivers it.
+fn checks_hear(spec: &Definition, record: &RunRecord, signal: &Signal) -> Result<bool> {
+    let Some(check) = spec.check(&record.node) else {
+        return Ok(false);
+    };
+    Ok(check.subscriptions()?.into_iter().any(|subscription| {
+        delivers(
+            &record.project_root,
+            &record.scope.path,
+            subscription,
+            signal,
+        )
+    }))
+}
+
+/// Whether a lifecycle signal reaches a live run: its current check subscribes and the match
+/// delivers it, or a live session subscribes to its family. A run's own `workflow.*` signal
+/// reaches no step of that run. Reads records and definitions, and the leader's recorded session
+/// through `session` as `from_leader` needs it; it runs where a signal fires, with no attempt
+/// host.
 pub(crate) fn hears_lifecycle(
     state: &StatePaths,
     signal: &Signal,
     session: &dyn Fn(&workflow::AttemptRun) -> Option<crate::ids::AgentSessionId>,
 ) -> Result<bool> {
     for record in workflow::live_runs(state)? {
-        let Some(attempt) = record.session_attempt() else {
+        if record.state != RunState::Active || names_run(signal, &record) {
             continue;
-        };
-        if record.state != RunState::Active
-            || attempt.lifecycle.is_turn()
-            || attempt.ending.is_some()
-            || attempt
-                .run
-                .as_ref()
-                .is_some_and(|run| from_leader(run, signal, session))
-        {
+        }
+        let session = record.session_attempt().filter(|attempt| {
+            !attempt.lifecycle.is_turn()
+                && attempt.ending.is_none()
+                && !attempt
+                    .run
+                    .as_ref()
+                    .is_some_and(|run| from_leader(run, signal, session))
+        });
+        // A check subscribes to no lifecycle family but `workflow`, so every other lifecycle
+        // signal reads a definition only for a run with a live session.
+        if session.is_none() && signal.name.family() != "workflow" {
             continue;
         }
         // A definition that no longer reads hears nothing; the other runs still do.
         let Ok(spec) = spec::load(&record.definition_dir(&state.workflow(&record.id))) else {
+            continue;
+        };
+        if checks_hear(&spec, &record, signal).unwrap_or(false) {
+            return Ok(true);
+        }
+        let Some(attempt) = session else {
             continue;
         };
         let Some(Ok(subscriptions)) = spec.step(&attempt.node).map(Node::subscriptions) else {
@@ -2615,23 +2707,13 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
     for record in workflow::live_runs(state)? {
         let paths = state.workflow(&record.id);
         let result: Result<()> = (|| {
-            let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+            let guard = Commit::acquire(state, Some(host))?;
             let current = workflow::load(&paths)?;
-            if current.state != RunState::Active {
+            if current.state != RunState::Active || names_run(signal, &current) {
                 return Ok(());
             }
             let spec = spec::load(&current.definition_dir(&paths))?;
-            let woken = match spec.check(&current.node) {
-                Some(check) => check.subscriptions()?.into_iter().any(|subscription| {
-                    delivers(
-                        &current.project_root,
-                        &current.scope.path,
-                        subscription,
-                        signal,
-                    )
-                }),
-                None => false,
-            };
+            let woken = checks_hear(&spec, &current, signal)?;
             let forwards = subscribers(&spec, &current, signal, host)?;
             if !woken && forwards.is_empty() {
                 return Ok(());
@@ -2703,7 +2785,7 @@ pub fn submit(
     let paths = state.workflow(id);
     let reader = Reader::new();
     let record = {
-        let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+        let guard = Commit::acquire(state, None)?;
         let refuse = |why: &str| Err(WorkflowErr::Refused(format!("workflow run {id} {why}")));
         let Some(record) = reload(&paths)? else {
             return refuse("is no longer available");

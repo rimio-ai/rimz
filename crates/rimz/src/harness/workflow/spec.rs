@@ -286,7 +286,7 @@ impl<'de> Deserialize<'de> for Wake {
 }
 
 impl Wake {
-    /// A check's wake, which lifecycle signals never reach.
+    /// A check's wake, which an agent's or a team's lifecycle signals never reach.
     pub(super) fn subscription(&self) -> Result<Subscription, SpecErr> {
         let (selector, matches) = self.parsed()?;
         if selector.family() == "agent"

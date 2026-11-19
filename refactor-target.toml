@@ -4583,8 +4583,10 @@ path = "crates/rimz/src/store"
 # and whether it owes an agent its report (+3).
 # store::workflow::stamp_report_message keeps one report message id on a run across retries, and
 # RunStarter::is_agent matches an agent row against the starter's launch (+2).
+# RunRecord::needs_you, calls_you and live_attempts give the workflow list, wait and the
+# workflow.waiting signal one NEEDS YOU reading (+3).
 # A run's owed agent starter is read for the occupancy that leaves it out (+1).
-surface-budget = 676
+surface-budget = 679
 
 [[verdict]]
 kind = "item"
@@ -5915,7 +5917,8 @@ allowed-dependencies = [
 # AttemptHost::budget_refusal and budget_refusal let the engine hold a launch the budget gate would refuse (+2).
 # Limited moves here from store::workflow, an in-memory observation no record stores (+1).
 # Starting and starting resolve a start's starter and depth before anything is created (+2).
-surface-budget = 103
+# AttemptHost::committed hands the host each committed run edge once the lock is released (+1).
+surface-budget = 104
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
@@ -11841,6 +11844,16 @@ reason = "Workflow command-step output has its own classed per-sequence path."
 kind = "item"
 key = "harness::schedule::signal::team::team_lifecycle_signals"
 reason = "Pass 28e: four distinct, test-pinned edge rules (team.waiting, team.failed, team.idle, team.ended) share one payload; extracting them only moves the rule table."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::signal::workflow::run_signals"
+reason = "The workflow CLI host maps each committed run edge to its workflow.* signals here, so the engine never imports the scheduler."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::signal::workflow::stranded_signals"
+reason = "The room's workflow pass fires a stranded run's ending from the header it read, outside the engine."
 
 [[verdict]]
 kind = "item"

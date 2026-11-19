@@ -166,6 +166,13 @@ pub trait AttemptHost {
     fn machine_gated(&self) -> bool {
         true
     }
+    /// One committed write of a run, read from its record before and after the write. The
+    /// engine calls it once the workspace lock is released, so the host may take that lock.
+    fn committed(
+        &self,
+        before: &crate::store::workflow::RunRecord,
+        after: &crate::store::workflow::RunRecord,
+    );
 }
 
 pub struct Pushed {

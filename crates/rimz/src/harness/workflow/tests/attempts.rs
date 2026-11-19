@@ -68,7 +68,7 @@ pub(super) fn update(state: &StatePaths, record: &RunRecord) {
     records::write(&state.workflow(&record.id), record, &guard).unwrap();
 }
 
-fn advance_ok(state: &StatePaths, id: &WorkflowRunId, host: &FakeHost) -> RunRecord {
+pub(super) fn advance_ok(state: &StatePaths, id: &WorkflowRunId, host: &FakeHost) -> RunRecord {
     let result = advance(state, id, host);
     assert!(result.is_ok(), "agent steps must be admitted: {result:?}");
     records::load(&state.workflow(id)).unwrap()

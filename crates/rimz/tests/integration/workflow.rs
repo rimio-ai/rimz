@@ -398,6 +398,43 @@ fn script_pid(value: &Value) -> Option<u32> {
         .ok()
 }
 
+/// The `workflow.*` signals the room's event log holds for run `id`, oldest first, as
+/// `(name, payload)`, once there are `count` of them: a run's writer fires each signal after it
+/// releases the workspace lock, so the last can land after the record reads ended.
+fn run_signals(env: &Env, id: &str, count: usize) -> Vec<(String, Value)> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let listed = success(command(
+            env,
+            &[
+                "events",
+                "list",
+                "--signal",
+                "workflow.*",
+                "-n",
+                "100",
+                "--json",
+            ],
+        ));
+        let mut fired: Vec<(String, Value)> = listed
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|event| event["payload"]["run"] == id)
+            .map(|event| {
+                (
+                    event["name"].as_str().unwrap().to_owned(),
+                    event["payload"].clone(),
+                )
+            })
+            .collect();
+        fired.reverse();
+        if fired.len() >= count || Instant::now() >= deadline {
+            return fired;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn evaluation_script(outcome: &str) -> String {
     format!("printf '%s\\n' '{{\"outcome\":\"{outcome}\"}}'\n")
 }

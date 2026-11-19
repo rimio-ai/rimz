@@ -99,7 +99,7 @@ pub(super) fn stop_abandoned(
         return Ok(());
     }
     stop_owed(host, runs);
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, Some(host))?;
     let Some(record) = super::reload(paths)? else {
         return Ok(());
     };
@@ -224,7 +224,7 @@ pub(super) fn hold(
 pub(super) fn prepare_end(
     t: &mut Transition<'_>,
     host: &dyn AttemptHost,
-    guard: &WorkspaceLock,
+    guard: &Commit<'_>,
 ) -> Result<Decision> {
     // Called only for an agent attempt already published on this record.
     let attempt = t
@@ -366,7 +366,7 @@ fn attempt_answered(record: &RunRecord) -> bool {
 /// Remind a judge once, at its first clean rest without an answer; otherwise it waits.
 fn remind(
     t: &mut Transition<'_>,
-    guard: &WorkspaceLock,
+    guard: &Commit<'_>,
     observed: &Observed,
     hold_changed: bool,
 ) -> Result<Decision> {
@@ -424,7 +424,7 @@ pub(super) fn launch(
         })),
     };
 
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, Some(host))?;
     let reloaded = super::reload(paths)?;
     let moved = reloaded.is_none();
     let mut t = Transition {
@@ -692,7 +692,7 @@ pub(super) fn finish(
         .then(|| super::Reader::new().reread(paths, record))
         .flatten();
     let spec = fresh.as_ref().unwrap_or(spec);
-    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let guard = Commit::acquire(state, Some(host))?;
     let Some(current) = super::reload(paths)? else {
         return Ok(false);
     };

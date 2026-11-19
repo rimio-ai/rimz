@@ -61,6 +61,14 @@ pub(in crate::harness) struct FakeHost {
     pub(super) retired: RefCell<Vec<crate::ids::MessageId>>,
     /// The session the leader's supervised run recorded.
     pub(in crate::harness) leader_session: RefCell<Option<crate::ids::AgentSessionId>>,
+    /// Each committed write the engine handed over, before and after.
+    pub(super) committed: RefCell<
+        Vec<(
+            crate::store::workflow::RunRecord,
+            crate::store::workflow::RunRecord,
+        )>,
+    >,
+    pub(super) on_committed: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 impl FakeHost {
@@ -112,6 +120,8 @@ impl FakeHost {
             on_message: RefCell::new(None),
             retired: RefCell::new(Vec::new()),
             leader_session: RefCell::new(None),
+            committed: RefCell::new(Vec::new()),
+            on_committed: RefCell::new(None),
             groups: RefCell::new(None),
             groups_error: RefCell::new(None),
             budget: RefCell::new(None),
@@ -316,6 +326,19 @@ impl AttemptHost for FakeHost {
         self.leader_session.borrow().clone()
     }
 
+    fn committed(
+        &self,
+        before: &crate::store::workflow::RunRecord,
+        after: &crate::store::workflow::RunRecord,
+    ) {
+        if let Some(on_committed) = &*self.on_committed.borrow() {
+            on_committed();
+        }
+        self.committed
+            .borrow_mut()
+            .push((before.clone(), after.clone()));
+    }
+
     /// The library's own resolver, so engine tests exercise what a launch admits.
     fn start_groups(
         &self,
@@ -361,6 +384,7 @@ mod inspection;
 mod judges;
 mod message;
 mod refusals;
+mod signals;
 mod sleep;
 mod tries;
 mod turns;

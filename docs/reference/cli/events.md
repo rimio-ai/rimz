@@ -133,6 +133,7 @@ Every signal name, by who produces it. The families in the second column are [re
 | `worktree.created`, `worktree.removed` | `worktree` | `worktree` | A successful managed worktree creation or removal |
 | `team.idle`, `team.waiting`, `team.failed`, `team.ended` | `team` | `lifecycle` | The agent lifecycle hook, when a team member's transition changes its cohort |
 | `team.stage` ([payload](./teams.md#the-teamstage-signal)) | `team` | `team` | A team stage flip, and the [re-wake](./teams.md#the-owners-notice) of the stage owner when it is resumed |
+| `workflow.moved`, `workflow.waiting`, `workflow.failed`, `workflow.ended` ([payload](./workflow.md#run-signals)) | `workflow` | `lifecycle` | A committed write of a [workflow](./workflow.md) run that moves it, makes it need you, or ends it, and the room's workflow pass ending a run an older RimZ left |
 | `wait.<task-name>` | `wait` | `watch` | The watcher of a `rimz wait` command, check, PID, or file watch, at a check-in and its final outcome |
 | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended` | `agent` | none | Derived from a lifecycle record. No signal line: the lifecycle line is its trace. |
 
@@ -184,7 +185,7 @@ If firing fails after the append, `emit` exits 1 with `firing signal tasks`, and
 
 ### Reserved families
 
-Seven families belong to RimZ: `agent`, `team`, `ci`, `pr`, `trunk`, `worktree`, and `wait`. `emit` refuses every name in them, including names RimZ never produces (`ci.custom`):
+Eight families belong to RimZ: `agent`, `team`, `ci`, `pr`, `trunk`, `worktree`, `wait`, and `workflow`. `emit` refuses every name in them, including names RimZ never produces (`ci.custom`):
 
 ```console
 $ rimz events emit ci.passed

@@ -861,6 +861,40 @@ impl RunRecord {
             .unwrap_or_else(|| paths.definition.clone())
     }
 
+    /// The run's live agent attempts: the current one, a judge's included, then a session held
+    /// under its rest check. A run that is not active has none.
+    pub fn live_attempts(&self) -> impl Iterator<Item = &LiveAttempt> {
+        let active = self.state == RunState::Active;
+        self.attempt
+            .iter()
+            .chain(self.held.as_ref().map(|held| &held.attempt))
+            .filter(move |_| active)
+    }
+
+    /// Whether the active run waits on the user: an agent asking, or held on an error no wait
+    /// recovers from.
+    pub fn calls_you(&self) -> bool {
+        self.live_attempts().any(|attempt| attempt.asking.is_some())
+            || self
+                .live_attempts()
+                .find_map(|attempt| attempt.held_on.as_ref())
+                .is_some_and(Hold::needs_you)
+    }
+
+    /// Whether the run waits on a person: parked, an agent asking, held on an error no wait
+    /// recovers from, or a capacity hold that needs a fix. `workflow list` puts such a run under
+    /// NEEDS YOU, `workflow wait` returns on it, and a run that starts to fires
+    /// `workflow.waiting`.
+    pub fn needs_you(&self) -> bool {
+        self.state == RunState::Parked
+            || self.calls_you()
+            || self.wait.as_ref().is_some_and(|wait| {
+                self.state == RunState::Active
+                    && wait.outcome == "capacity"
+                    && wait.hold.is_some_and(crate::ids::HoldKind::needs_fix)
+            })
+    }
+
     /// The agent session still owned by this run, including a session held under its rest check.
     pub fn session_attempt(&self) -> Option<&LiveAttempt> {
         self.held
@@ -1682,13 +1716,10 @@ pub fn classify(paths: &WorkflowPaths) -> Result<RunClass> {
 /// RimZ cannot continue it, owes its loop task the report when it names one (an agent starter's
 /// owed mark stays as written, so that starter is still told), and keeps every other member and
 /// its version, so a RimZ that reads that version still reads the body. A first `terminal_at`
-/// and a recorded `acted` are kept. Returns why the run was stranded when this call
-/// ended it; a record that is no longer stranded is left as it is.
+/// and a recorded `acted` are kept. Returns the header read before the ending when this call
+/// ended the run; a record that is no longer stranded is left as it is.
 #[must_use = "durability barrier; check the result"]
-pub fn end_stranded(
-    paths: &WorkflowPaths,
-    _guard: &WorkspaceLock,
-) -> Result<Option<StrandedCause>> {
+pub fn end_stranded(paths: &WorkflowPaths, _guard: &WorkspaceLock) -> Result<Option<RunHeader>> {
     let RunClass::Stranded { header, cause } = classify(paths)? else {
         return Ok(None);
     };
@@ -1711,7 +1742,7 @@ pub fn end_stranded(
     }
     record.insert("stranded".into(), serde_json::json!(true));
     crate::disk::atomic::write_temp_then_rename(&paths.record, &Value::Object(record))?;
-    Ok(Some(cause))
+    Ok(Some(*header))
 }
 
 /// Mark the report of a run as sent, in place, leaving every other member of its record as it

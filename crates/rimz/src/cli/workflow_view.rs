@@ -110,20 +110,11 @@ pub(super) fn with_you(record: &RunRecord) -> bool {
             .is_some_and(|attempt| !attempt.lifecycle.is_turn() && attempt.run.is_some())
 }
 
-/// The run's live agent attempts: the current one, a judge's included, then a session held
-/// under its rest check. A run that is not active has none.
-fn live_attempts(record: &RunRecord) -> impl Iterator<Item = &LiveAttempt> {
-    let active = record.state == RunState::Active;
-    record
-        .attempt
-        .iter()
-        .chain(record.held.as_ref().map(|held| &held.attempt))
-        .filter(move |_| active)
-}
-
 /// The ask the run's live agent attempt shows, with the attempt that shows it.
 pub(super) fn asker(record: &RunRecord) -> Option<(&LiveAttempt, &Asking)> {
-    live_attempts(record).find_map(|attempt| Some((attempt, attempt.asking.as_ref()?)))
+    record
+        .live_attempts()
+        .find_map(|attempt| Some((attempt, attempt.asking.as_ref()?)))
 }
 
 pub(super) fn asking(record: &RunRecord) -> Option<&Asking> {
@@ -139,7 +130,9 @@ pub(super) fn judge(record: &RunRecord) -> Option<&str> {
 
 /// The stop the run's live agent attempt is held on, with the attempt it holds.
 pub(super) fn holder(record: &RunRecord) -> Option<(&LiveAttempt, &Hold)> {
-    live_attempts(record).find_map(|attempt| Some((attempt, attempt.held_on.as_ref()?)))
+    record
+        .live_attempts()
+        .find_map(|attempt| Some((attempt, attempt.held_on.as_ref()?)))
 }
 
 pub(super) fn held(record: &RunRecord) -> Option<&Hold> {
@@ -153,20 +146,14 @@ pub(super) fn hold_handle<'r>(attempt: &'r LiveAttempt, hold: &'r Hold) -> Optio
         .or_else(|| attempt.run.as_ref().map(|run| run.handle.as_str()))
 }
 
-/// Whether the active run waits on the user: an agent asking, or held on an error no wait
-/// recovers from.
+/// [`RunRecord::calls_you`].
 pub(super) fn calls_you(record: &RunRecord) -> bool {
-    asking(record).is_some() || held(record).is_some_and(Hold::needs_you)
+    record.calls_you()
 }
 
-/// Whether the run waits on a person: parked, an agent asking, held on an error no wait recovers
-/// from, or a capacity hold that needs a fix. `workflow list` puts such a run under NEEDS YOU,
-/// and `workflow wait` returns on it.
+/// [`RunRecord::needs_you`].
 pub(super) fn needs_you(record: &RunRecord) -> bool {
-    record.state == RunState::Parked
-        || calls_you(record)
-        || capacity_wait(record)
-            .is_some_and(|wait| wait.hold.is_some_and(rimz::ids::HoldKind::needs_fix))
+    record.needs_you()
 }
 
 /// The capacity wait an active run's record holds.
