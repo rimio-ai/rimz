@@ -120,6 +120,7 @@ Four commands cover watching:
 
 ```sh
 rimz workflow list                   # every unfinished run, with what it waits on
+rimz workflow list --all             # then the runs that ended, newest first
 rimz workflow show "$RUN"            # one run: where it is, the graph, a short trail
 rimz workflow show "$RUN" --history  # every check answer and attempt, repeats folded
 rimz workflow show fix-tests         # the definition as a graph, then its live runs
@@ -538,7 +539,7 @@ When a step's agent is stuck or has lost the thread, `rimz workflow restart "$RU
 
 `rimz workflow cancel "$RUN"` ends the run as `canceled` and stops whatever it is running: a check's command, a judge, a command step, or every agent of an agent step with its subagents. The commits and uncommitted edits in the checkout stay.
 
-A run also ends on its own: as `done` at `@done`, or as `failed` at `@failed`. At any ending the run leaves `rimz workflow list`, and its run directory moves to `~/.rimz/ws/<workspace-dir>/owned/finished-workflows/<run-id>/`. `rimz workflow show` still reads it there for seven days. After that, garbage collection removes it, which runs about once a day per open room. At every ending RimZ saves the `--history` view as `history.txt` in the run directory and in the notes folder. The exception is the small run behind a loop task's fire: one that ends `done` without acting is counted in the task's summary and its directory removed.
+A run also ends on its own: as `done` at `@done`, or as `failed` at `@failed`. At any ending the run leaves `rimz workflow list`, and its run directory moves to `~/.rimz/ws/<workspace-dir>/owned/finished-workflows/<run-id>/`. `rimz workflow list --all` lists it there under FINISHED, newest ending first, and `rimz workflow show` still reads it, for about seven days after its record was last written. After that, garbage collection removes it, which runs about once a day per open room. The small run a shell task's fire wraps its command in stays out of `--all`, since `rimz loop show` lists those, while the runs a workflow task fires are listed. At every ending RimZ saves the `--history` view as `history.txt` in the run directory and in the notes folder. The exception is the small run behind a loop task's fire: one that ends `done` without acting is counted in the task's summary and its directory removed.
 
 An unfinished run holds its checkout, so `rimz worktree remove feat-x` refuses while one runs there, and names the `rimz workflow cancel` command. Once the run has ended, `rimz worktree remove` takes the tree, with its usual refusals for uncommitted changes and commits that have not landed. `rimz worktree remove feat-x --force` removes the tree and then cancels the unfinished runs in it. Files your suite writes in the checkout, such as a `__pycache__/` or a coverage report, count as uncommitted changes unless `.gitignore` covers them. The [cleanup section](./worktrees.md#cleanup-once-work-lands) covers landing the work first.
 

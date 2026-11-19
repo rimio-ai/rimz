@@ -370,13 +370,20 @@ pub(super) fn state_word(state: RunState, ending: Option<&RunEnding>) -> &'stati
     }
 }
 
+/// The glyph of a run in a state that ends it; any other state reads as failed.
+pub(super) fn ended_glyph_role(state: RunState) -> GlyphRole {
+    match state {
+        RunState::Done => GlyphRole::StatusDone,
+        RunState::Canceled => GlyphRole::StatusIdle,
+        RunState::Failed | RunState::Active | RunState::Parked => GlyphRole::StatusAttention,
+    }
+}
+
 pub(super) fn glyph_role(record: &RunRecord) -> GlyphRole {
     match record.state {
-        RunState::Done => return GlyphRole::StatusDone,
-        RunState::Failed => return GlyphRole::StatusAttention,
-        RunState::Canceled => return GlyphRole::StatusIdle,
+        state if state.is_terminal() => return ended_glyph_role(state),
         RunState::Parked => return GlyphRole::WorkflowHeld,
-        RunState::Active => {}
+        _ => {}
     }
     if calls_you(record) {
         return GlyphRole::StatusWaiting;

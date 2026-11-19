@@ -323,7 +323,7 @@ The record, an inline run's `definition/`, and the journal sit outside the node-
 
 Every evaluation and attempt takes a fresh `seq`, a re-run after a dead host included. The one exception is a message step's re-send after a dead host, which keeps its attempt's `seq` and message id so the queue takes the notice once. A node therefore keys a `notes/` write by the item it records: keying it by `seq` would not make a repeat a no-op.
 
-Only the live directory answers "what is running". `crates/rimz/src/store/workflow.rs::live_runs` and every census, listing, and protection read walk `owned/workflows/` alone, and a run found by id through `crates/rimz/src/store/workflow.rs::find` says which directory held it. Soft reset keeps run homes in both directories, and hard reset removes both. A home without `record.json` is a crash during creation (or while an inline run's definition is written), which every reader skips.
+Only the live directory answers "what is running". `crates/rimz/src/store/workflow.rs::live_runs` and every census, live listing, and protection read walk `owned/workflows/` alone; the FINISHED section of `rimz workflow list --all` (`crates/rimz/src/cli/workflow/list.rs::finished`) walks both directories of every recorded room for runs that ended, and a run found by id through `crates/rimz/src/store/workflow.rs::find` says which directory held it. Soft reset keeps run homes in both directories, and hard reset removes both. A home without `record.json` is a crash during creation (or while an inline run's definition is written), which every reader skips.
 
 ### Where a run reads its definition
 

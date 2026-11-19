@@ -10,6 +10,7 @@ rimz workflow run babysit-pr                      # in the current checkout
 rimz workflow run babysit-pr -w feat-x --prompt 'merge before Friday'
 rimz workflow run babysit-pr --at pr --input '{"outcome":"green"}' --once # try one node
 rimz workflow list                                # active and parked runs, every room
+rimz workflow list --all -n 50                    # then the runs that ended, newest first
 rimz workflow show 'babysit-pr#feat-x'
 rimz workflow show 'babysit-pr#feat-x' --history  # detailed history, folded repeats
 rimz workflow show babysit-pr                     # definition rail, then live runs
@@ -30,7 +31,7 @@ A run is active (a node is working or waiting), parked (stopped at a node until 
 
 | Target | Example | Selects |
 | --- | --- | --- |
-| Run address `<workflow>#<checkout>` | `babysit-pr#feat-x` | That workflow's unfinished run in that checkout. `show` falls back to the newest finished run when none is unfinished. |
+| Run address `<workflow>#<checkout>` | `babysit-pr#feat-x` | That workflow's unfinished run in that checkout. `show` falls back to the newest finished run that this RimZ's record version wrote when none is unfinished. Any finished run, whatever version wrote it, is reached by the id `rimz workflow list --all` prints. |
 | Workflow name | `babysit-pr` | In `show`, the definition and its live runs. In `resume`, `restart`, and `cancel`, the caller's run (below). |
 | Run id | `wf_` and 32 hexadecimal digits | That run, finished or not, in any room. |
 
@@ -744,7 +745,7 @@ The two-positional form takes a workflow name only. A run address or run id is a
 
 ### `workflow list`
 
-`rimz workflow list [--json]` prints every unfinished run across rooms, without column headers. With none, it prints `no active or parked runs; start one with rimz workflow run <name>`, and `--json` prints `[]`.
+`rimz workflow list [--json] [--all [-n N]]` prints every unfinished run across rooms, without column headers. With none, it prints `no active or parked runs; start one with rimz workflow run <name>`, and `--json` prints `[]`; under `--all`, the FINISHED section follows that line and `--json` holds the finished rows.
 
 NEEDS YOU comes first: parked runs, active runs with a blocking ask, active runs held on an error that waiting will not clear (a provider error, an unknown error, a lapsed plan, or a failed turn with no error on the card), and capacity holds needing a fix (`check_failed`, `disk`, `store`), longest waiting first, with full addresses and a `workflow show` hint for the first run. The other runs group by workflow name, each heading reading `<workflow> · N active[ · M held]`. Self-clearing capacity holds sort last in their group, and each part sorts by address. Several rooms get headings (the home-relative project root), the caller's room first, and hints for other rooms carry `--root`.
 
@@ -775,6 +776,8 @@ Detail is one of:
 A try's detail opens with `once · `.
 
 A cached PR number adds ` · PR #N` once per row. Each room supplies its own agent names and PR cache. JSON reads neither that enrichment nor the journal: its `detail` reads `with you` without an agent or PR, and `held <age>[, gives up <clock>] · <reason>` for capacity waits, without node or the separate age column.
+
+`--all` adds a `FINISHED` section after the live list: the ended runs of workflows started by name, in the same rooms, newest ending first. It reads each run's record header, so a run an older RimZ wrote is listed too. A workflow task's fires are listed; the run a shell task's fire wraps its command in and a run whose record cannot be read are left out. A run that ended but has not yet moved to `finished-workflows/` is listed here as well, and a run the live list shows is never also a finished row. Several rooms get headings inside the section as in the live list, the caller's room first. A row reads `<glyph> <address>  <state>  <id>  <ended>`, with `once · ` before the state of a try that did not end `tried`. Within a room, adjacent rows that agree on everything but the id and the ending time fold into one, which names the newest id and reads `<state> ×N over <span>`. `-n` (default 20) limits the rows printed, and a closing line names the runs it hid and the `-n` that shows them. With no ended run the section is left out, and `-n` without `--all` is a usage error. Finished runs are kept about seven days after their last write ([finished runs](#finished-runs)).
 
 ### `workflow show`
 
@@ -974,7 +977,7 @@ A finished run id still resolves, from any room, and `show` prints it without re
 - `--json` prints `address`, `dir`, `record`, `journal`, and the saved text as `history`, whatever record version wrote it. `record` is the record as this RimZ decodes it, or as written when another version wrote it or it does not decode.
 - Log paths in a finished run's journal and decoded record name the files in the finished run directory, as `dir` does. `prev_attempt.claim_path`, and every run-directory path in a record printed as written, name the run directory as it was while live. A deployed run's `spec_dir` names its deployed folder.
 
-`rimz gc` removes a finished run's directory once its record is more than seven days old, whatever version wrote it, and never removes a live run's directory that holds a record. GC runs about once a day per open room. It backfills a missing notes copy of `history.txt` before removing the directory, and keeps the directory if that copy fails. The notes and history survive run-directory cleanup and default to permanent retention. `rimz reset` keeps both, and `rimz reset --hard` removes both.
+`rimz gc` removes a finished run's directory once its record was last written more than seven days ago, whatever version wrote it, and never removes a live run's directory that holds a record. GC runs about once a day per open room. It backfills a missing notes copy of `history.txt` before removing the directory, and keeps the directory if that copy fails. The notes and history survive run-directory cleanup and default to permanent retention. `rimz reset` keeps both, and `rimz reset --hard` removes both.
 
 ### Runs this RimZ cannot continue
 
@@ -1004,7 +1007,7 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 
 ## JSON shapes
 
-`list --json` and `show <workflow> --json` print arrays of `{id, address, workflow, scope, state, node, since, detail}`, with optional `hold` for a known capacity cause and `once: true` for a try. `scope` is the scope path: the checkout, or the project root for `scope = "project"`. `since` is node entry, not the human row's state-specific age. `detail` is the [waiting line](#the-waiting-line), so its capacity bounds follow the same day-qualified clock as rechecks and passed deadlines. Read the node and its entry time from `node` and `since`, never from `detail`.
+`list --json` and `show <workflow> --json` print arrays of `{id, address, workflow, scope, state, node, since, detail}`, with optional `hold` for a known capacity cause and `once: true` for a try. `list --all --json` appends the finished runs to the same array, unfolded and at most `-n` of them, each in that shape with an empty `detail` and an `ended` key (RFC 3339). `scope` is the scope path: the checkout, or the project root for `scope = "project"`. `since` is node entry, not the human row's state-specific age. `detail` is the [waiting line](#the-waiting-line), so its capacity bounds follow the same day-qualified clock as rechecks and passed deadlines. Read the node and its entry time from `node` and `since`, never from `detail`.
 
 `show [RUN] --json` prints `{address, dir, record, journal}`: the short run address, work directory, run record, and journal entries. Runs with kept notes add `notes`, the absolute folder path. When the definition cannot load, it still prints the record and journal. A finished run adds `history` ([finished runs](#finished-runs)).
 

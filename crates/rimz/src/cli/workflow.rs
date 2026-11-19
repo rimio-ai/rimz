@@ -239,11 +239,17 @@ enum Command {
         #[arg(long, hide = true, value_name = "JSON")]
         loop_fire_json: Option<String>,
     },
-    /// List active and parked workflow runs across rooms.
+    /// List active and parked workflow runs across rooms; with --all, the runs that ended too.
     List {
-        /// Print the active and parked runs as JSON.
+        /// Print the active and parked runs as JSON, then with --all the finished ones.
         #[arg(long)]
         json: bool,
+        /// Add the finished runs of workflows started by name, newest ending first.
+        #[arg(long)]
+        all: bool,
+        /// Finished rows to print with --all, or finished records with --json.
+        #[arg(short = 'n', long, default_value_t = 20, requires = "all")]
+        limit: usize,
     },
     /// Show a definition, one node, or a run's progress and history.
     Show {
@@ -372,7 +378,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
                 .context("decoding --loop-fire-json")?;
             start(name, worktree, prompt, args, task, globals)
         }
-        Command::List { json } => list::run(json, globals),
+        Command::List { json, all, limit } => list::run(json, all.then_some(limit), globals),
         Command::Show {
             id,
             node,
