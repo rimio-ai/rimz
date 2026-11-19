@@ -338,7 +338,7 @@ rimz config set harness.idle_compact off      # opt out of idle compaction
 rimz config set harness.smart_compact 200k    # remind a filling turn to compact, compact before the next prompt
 ```
 
-A related cleanup is not a reflex but a request: `rimz agents stop @coder --when-idle` stops an agent once it has rested three minutes with nothing owed to it ([stop reference](../reference/cli/agents.md#stop)).
+A related cleanup is not a reflex but a request: `rimz agents stop @coder --when-idle` stops an agent once it has rested three minutes with nothing owed to it. Its receipt lists what still holds the stop, what closes with the agent, and what keeps running after it ([stop reference](../reference/cli/agents.md#stop)).
 
 ### Auto-continue
 
