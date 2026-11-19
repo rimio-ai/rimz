@@ -390,20 +390,20 @@ mod tests {
             (
                 "claude",
                 Some(read_bash),
-                &["--strict-mcp-config", "--tools", "Read,Bash,REPL,Poll"],
-                &["--strict-mcp-config", "--tools", "Read,Bash"],
+                &["--tools", "Read,Bash,REPL,Poll"],
+                &["--tools", "Read,Bash"],
             ),
             (
                 "claude",
                 Some(&["REPL", "Read"]),
-                &["--strict-mcp-config", "--tools", "REPL,Read,Poll"],
-                &["--strict-mcp-config", "--tools", "REPL,Read"],
+                &["--tools", "REPL,Read,Poll"],
+                &["--tools", "REPL,Read"],
             ),
             (
                 "claude",
                 Some(&[]),
-                &["--strict-mcp-config", "--tools", "REPL,Poll"],
-                &["--strict-mcp-config", "--tools", ""],
+                &["--tools", "REPL,Poll"],
+                &["--tools", ""],
             ),
             ("claude", None, &[], &[]),
             ("pi", None, &["--tools", "+codemode"], &[]),
@@ -475,13 +475,14 @@ mod tests {
             "Skill",
         ]);
         // Literal args the planner agent launches with.
-        let expected = shlex::split("--strict-mcp-config --tools 'Bash,Read,Grep,Glob,Edit,Write,AskUserQuestion,LSP,Skill'").unwrap();
+        let expected =
+            shlex::split("--tools 'Bash,Read,Grep,Glob,Edit,Write,AskUserQuestion,LSP,Skill'")
+                .unwrap();
         assert_eq!(render_tool_args("claude", Some(&plain)).unwrap(), expected);
         let named = tools(&["Agent(Explore, Plan)", "Bash", "Agent(Explore)"]);
         assert_eq!(
             render_tool_args("claude", Some(&named)).unwrap(),
             [
-                "--strict-mcp-config",
                 "--disallowedTools",
                 "Agent(general-purpose)",
                 "Agent(statusline-setup)",

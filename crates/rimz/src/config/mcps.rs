@@ -6,49 +6,96 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::mcp::catalog::Capability;
+use crate::mcp::catalog::{Capability, LoadMode};
 
-/// One `mcps` entry: a RimZ capability (`rimz-lsp`) or a user server's name.
+/// One `mcps` entry: `*`, `rimz`, a RimZ capability (`rimz-lsp`), or a
+/// user server's name, with an optional load mode (`github:deferred`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct McpName(String);
+pub struct McpName {
+    name: String,
+    mode: Option<LoadMode>,
+}
+
+/// The entry that admits every server and capability.
+const ALL: &str = "*";
 
 impl McpName {
-    pub fn as_str(&self) -> &str {
-        &self.0
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn mode(&self) -> Option<LoadMode> {
+        self.mode
+    }
+
+    /// `*`, which keeps every one of the user's servers and every capability.
+    pub fn is_all(&self) -> bool {
+        self.name == ALL
     }
 
     pub fn capability(&self) -> Option<Capability> {
-        Capability::from_name(&self.0)
+        Capability::from_name(&self.name)
+    }
+
+    /// The user's own server the entry names: not `*`, `rimz`, or a capability.
+    pub fn user_server(&self) -> Option<&str> {
+        let rimz = self.is_all()
+            || self.name == crate::mcp::catalog::SERVER_NAME
+            || self.capability().is_some();
+        (!rimz).then_some(self.name())
     }
 }
 
-/// The RimZ capabilities an `mcps` selection serves: every one when absent.
+/// Whether an `mcps` selection limits what a launch loads: a list without
+/// `*` does, an absent one does not.
+pub fn mcps_limit(mcps: Option<&[McpName]>) -> bool {
+    mcps.is_some_and(|entries| !entries.iter().any(McpName::is_all))
+}
+
+/// The RimZ capabilities an `mcps` selection serves: every one when absent
+/// or when it lists `*` or `rimz`.
 pub fn mcp_capabilities(mcps: Option<&[McpName]>) -> Vec<Capability> {
-    match mcps {
-        None => Capability::ALL.to_vec(),
-        Some(names) => Capability::ALL
-            .into_iter()
-            .filter(|capability| {
-                names
-                    .iter()
-                    .any(|name| name.capability() == Some(*capability))
-            })
-            .collect(),
+    let Some(entries) = mcps else {
+        return Capability::ALL.to_vec();
+    };
+    if entries
+        .iter()
+        .any(|entry| entry.is_all() || entry.name == crate::mcp::catalog::SERVER_NAME)
+    {
+        return Capability::ALL.to_vec();
     }
+    Capability::ALL
+        .into_iter()
+        .filter(|capability| {
+            entries
+                .iter()
+                .any(|entry| entry.capability() == Some(*capability))
+        })
+        .collect()
 }
 
 impl FromStr for McpName {
     type Err = McpListErr;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let name = value.trim();
-        let reserved = name == crate::mcp::catalog::SERVER_NAME
-            || (name.starts_with("rimz-") && Capability::from_name(name).is_none());
-        if name.is_empty() || reserved {
-            return Err(McpListErr::InvalidName(value.to_owned()));
+        let invalid = || McpListErr::InvalidName(value.to_owned());
+        let entry = value.trim();
+        let (name, mode) = match entry.rsplit_once(':') {
+            Some((name, mark)) => (
+                name.trim_end(),
+                Some(LoadMode::from_name(mark.trim_start()).ok_or_else(invalid)?),
+            ),
+            None => (entry, None),
+        };
+        let reserved = name.starts_with("rimz-") && Capability::from_name(name).is_none();
+        if name.is_empty() || reserved || (name == ALL && mode.is_some()) {
+            return Err(invalid());
         }
-        Ok(Self(name.to_owned()))
+        Ok(Self {
+            name: name.to_owned(),
+            mode,
+        })
     }
 }
 
@@ -62,34 +109,58 @@ impl TryFrom<String> for McpName {
 
 impl From<McpName> for String {
     fn from(value: McpName) -> Self {
-        value.0
+        value.to_string()
     }
 }
 
 impl fmt::Display for McpName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(&self.name)?;
+        match self.mode {
+            Some(mode) => write!(f, ":{}", mode.name()),
+            None => Ok(()),
+        }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum McpListErr {
     #[error(
-        "invalid mcps entry `{0}`: name a RimZ capability (rimz-lsp, rimz-wait, rimz-control, rimz-notes) or one of your own MCP servers"
+        "invalid mcps entry `{0}`: list `*`, `rimz`, a RimZ capability (rimz-lsp, rimz-wait, rimz-control, rimz-notes), or one of your own MCP servers, each name with an optional `:always` or `:deferred`"
     )]
     InvalidName(String),
+    #[error("invalid mcps entry `{entry}`: `{earlier}` already gives `{}` another mark", entry.name())]
+    ConflictingMark { entry: McpName, earlier: McpName },
     #[error("duplicate mcps entry `{0}`")]
     DuplicateName(McpName),
+}
+
+/// Adds `entry` to `entries`; `false` when the same entry is already there,
+/// and an error when the same name is there with another mark.
+pub(crate) fn push_mcp_entry(
+    entries: &mut Vec<McpName>,
+    entry: McpName,
+) -> Result<bool, McpListErr> {
+    match entries.iter().find(|earlier| earlier.name == entry.name) {
+        Some(earlier) if *earlier == entry => Ok(false),
+        Some(earlier) => Err(McpListErr::ConflictingMark {
+            earlier: earlier.clone(),
+            entry,
+        }),
+        None => {
+            entries.push(entry);
+            Ok(true)
+        }
+    }
 }
 
 pub(crate) fn parse_mcp_list(names: &[String]) -> Result<Vec<McpName>, McpListErr> {
     let mut parsed: Vec<McpName> = Vec::new();
     for name in names {
-        let name: McpName = name.parse()?;
-        if parsed.contains(&name) {
-            return Err(McpListErr::DuplicateName(name));
+        let entry: McpName = name.parse()?;
+        if !push_mcp_entry(&mut parsed, entry.clone())? {
+            return Err(McpListErr::DuplicateName(entry));
         }
-        parsed.push(name);
     }
     Ok(parsed)
 }
@@ -110,53 +181,129 @@ where
 mod tests {
     use super::*;
 
+    fn list(names: &[&str]) -> Vec<McpName> {
+        parse_mcp_list(
+            &names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn mcp_names_refuse_reserved_and_empty_entries() {
-        for input in ["rimz-lsp", "rimz-notes", "github", "my.server", "rimzy"] {
-            assert_eq!(input.parse::<McpName>().unwrap().as_str(), input);
+    fn entries_parse_a_name_and_an_optional_mark() {
+        for (input, name, mode) in [
+            ("rimz-lsp", "rimz-lsp", None),
+            ("github", "github", None),
+            ("my.server", "my.server", None),
+            ("rimzy", "rimzy", None),
+            ("rimz", "rimz", None),
+            ("*", "*", None),
+            ("github:always", "github", Some(LoadMode::Always)),
+            ("rimz:deferred", "rimz", Some(LoadMode::Deferred)),
+            (" rimz-wait:always ", "rimz-wait", Some(LoadMode::Always)),
+        ] {
+            let entry: McpName = input.parse().unwrap();
+            assert_eq!((entry.name(), entry.mode()), (name, mode), "{input}");
+            assert_eq!(entry.to_string(), input.trim());
         }
-        for input in ["", " ", "rimz", "rimz-message", "rimz-"] {
+        let all: McpName = "*".parse().unwrap();
+        assert!(all.is_all());
+        assert_eq!(all.user_server(), None);
+        let rimz: McpName = "rimz:always".parse().unwrap();
+        assert!(!rimz.is_all());
+        assert_eq!((rimz.capability(), rimz.user_server()), (None, None));
+        let lsp: McpName = "rimz-lsp:deferred".parse().unwrap();
+        assert_eq!(
+            (lsp.capability(), lsp.user_server()),
+            (Some(Capability::Lsp), None)
+        );
+        let github: McpName = "github:always".parse().unwrap();
+        assert_eq!(github.user_server(), Some("github"));
+        let spaced: McpName = "github : always".parse().unwrap();
+        assert_eq!(spaced, github);
+    }
+
+    #[test]
+    fn entries_refuse_empty_names_bad_marks_and_reserved_names() {
+        for input in [
+            "",
+            " ",
+            ":always",
+            "rimz-message",
+            "rimz-",
+            "*:always",
+            "* :always",
+            "github:eager",
+            "github:",
+        ] {
             let error = input.parse::<McpName>().unwrap_err();
-            assert_eq!(error, McpListErr::InvalidName(input.to_owned()));
-            assert!(
-                error
-                    .to_string()
-                    .contains("rimz-lsp, rimz-wait, rimz-control, rimz-notes")
-            );
+            assert_eq!(error, McpListErr::InvalidName(input.to_owned()), "{input}");
         }
+        assert_eq!(
+            "github:eager".parse::<McpName>().unwrap_err().to_string(),
+            "invalid mcps entry `github:eager`: list `*`, `rimz`, a RimZ capability \
+             (rimz-lsp, rimz-wait, rimz-control, rimz-notes), or one of your own MCP servers, \
+             each name with an optional `:always` or `:deferred`"
+        );
         assert_eq!(
             parse_mcp_list(&["github".to_owned(), "github".to_owned()]).unwrap_err(),
             McpListErr::DuplicateName("github".parse().unwrap())
         );
+        let error = parse_mcp_list(&["github:always".to_owned(), "github".to_owned()]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid mcps entry `github`: `github:always` already gives `github` another mark"
+        );
     }
 
     #[test]
-    fn toml_profiles_keep_an_empty_list_and_refuse_reserved_names() {
+    fn toml_profiles_keep_an_empty_list_and_read_marks() {
         let profile: crate::config::Profile =
             toml::from_str("agent = 'claude'\nmcps = []").unwrap();
         assert_eq!(profile.mcps, Some(Vec::new()));
         let profile: crate::config::Profile = toml::from_str("agent = 'claude'").unwrap();
         assert_eq!(profile.mcps, None);
-        let error = toml::from_str::<crate::config::Profile>("agent = 'claude'\nmcps = ['rimz']")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("invalid mcps entry `rimz`"), "{error}");
+        let error =
+            toml::from_str::<crate::config::Profile>("agent = 'claude'\nmcps = ['*:always']")
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("invalid mcps entry `*:always`"), "{error}");
         let profile: crate::config::Profile =
-            toml::from_str("agent = 'claude'\nmcps = [' rimz-lsp ']").unwrap();
+            toml::from_str("agent = 'claude'\nmcps = [' rimz-lsp ', '*', 'rimz:deferred']")
+                .unwrap();
         let names = profile.mcps.unwrap();
         assert_eq!(names[0].capability(), Some(Capability::Lsp));
-        assert_eq!(names[0].as_str(), "rimz-lsp");
+        assert_eq!(names[0].name(), "rimz-lsp");
+        assert!(names[1].is_all());
+        assert_eq!(names[2].mode(), Some(LoadMode::Deferred));
     }
 
     #[test]
-    fn capabilities_follow_the_list() {
+    fn capabilities_and_limits_follow_the_list() {
         assert_eq!(mcp_capabilities(None), Capability::ALL.to_vec());
         assert_eq!(mcp_capabilities(Some(&[])), Vec::new());
-        let names =
-            parse_mcp_list(&["github".into(), "rimz-notes".into(), "rimz-lsp".into()]).unwrap();
         assert_eq!(
-            mcp_capabilities(Some(&names)),
+            mcp_capabilities(Some(&list(&["github", "rimz-notes", "rimz-lsp"]))),
             vec![Capability::Lsp, Capability::Notes]
         );
+        for all in [
+            list(&["*"]),
+            list(&["rimz"]),
+            list(&["github", "rimz:always"]),
+        ] {
+            assert_eq!(
+                mcp_capabilities(Some(&all)),
+                Capability::ALL.to_vec(),
+                "{all:?}"
+            );
+        }
+
+        assert!(!mcps_limit(None));
+        assert!(!mcps_limit(Some(&list(&["*"]))));
+        assert!(!mcps_limit(Some(&list(&["github:always", "*"]))));
+        assert!(mcps_limit(Some(&[])));
+        assert!(mcps_limit(Some(&list(&["rimz"]))));
     }
 }

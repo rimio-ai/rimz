@@ -711,17 +711,13 @@ fn names(path: &Path, key: &str, listed: &[String]) -> Result<Vec<String>, Defin
 }
 
 fn mcp_names(path: &Path, listed: &[String]) -> Result<Vec<crate::config::McpName>, DefinitionErr> {
+    let refuse = |error: crate::config::McpListErr| {
+        DefinitionErr::new(path, format!("sets `mcps:` with an {error}"))
+    };
     let mut names: Vec<crate::config::McpName> = Vec::new();
     for name in listed {
-        let name = name
-            .trim()
-            .parse()
-            .map_err(|error: crate::config::McpListErr| {
-                DefinitionErr::new(path, format!("sets `mcps:` with an {error}"))
-            })?;
-        if !names.contains(&name) {
-            names.push(name);
-        }
+        let name = name.trim().parse().map_err(refuse)?;
+        crate::config::mcps::push_mcp_entry(&mut names, name).map_err(refuse)?;
     }
     Ok(names)
 }

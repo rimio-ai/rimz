@@ -4296,3 +4296,24 @@ fn program_lookup_runs_under_the_configured_agent_shell() {
         Some(agent)
     );
 }
+
+#[test]
+fn exec_wire_carries_marked_and_star_mcps_entries() {
+    let mut input = request(
+        "claude",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    input.mcps = Some(
+        ["*", "rimz:deferred", "rimz-lsp:always", "github"]
+            .map(|entry| entry.parse().unwrap())
+            .into(),
+    );
+    let (_, decoded) = round_trip(&input);
+    assert_eq!(decoded, input);
+    let mcps = decoded.mcps.unwrap();
+    assert!(mcps[0].is_all());
+    assert_eq!(mcps[2].mode(), Some(crate::mcp::catalog::LoadMode::Always));
+}

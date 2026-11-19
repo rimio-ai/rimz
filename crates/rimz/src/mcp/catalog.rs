@@ -45,6 +45,30 @@ impl Capability {
     }
 }
 
+/// How a provider loads a capability's tools: in the agent's context from the
+/// start, or deferred until its tool search finds them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LoadMode {
+    Always,
+    Deferred,
+}
+
+impl LoadMode {
+    /// The mark's name in an `mcps` entry and the `serve` flag it becomes.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::Deferred => "deferred",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Always, Self::Deferred]
+            .into_iter()
+            .find(|mode| mode.name() == name)
+    }
+}
+
 /// The arguments after the program that start `rimz mcp serve` with `only`'s
 /// tools; an empty `only` serves every capability.
 pub fn serve_args(only: &[Capability]) -> Vec<String> {
@@ -223,9 +247,23 @@ pub fn tools_for(only: &[Capability]) -> impl Iterator<Item = &'static Tool> {
         .filter(move |tool| only.is_empty() || only.contains(&tool.capability))
 }
 
-/// The `tools/list` result the server answers with for `tools`.
-pub fn tools_list(tools: &[&Tool]) -> Value {
-    let listing: Vec<Value> = tools.iter().map(|tool| tool.listing()).collect();
+/// The `tools/list` result the server answers with for `tools`; a tool whose
+/// capability `modes` names carries Claude's load mode in its `_meta`.
+pub fn tools_list(tools: &[&Tool], modes: &[(Capability, LoadMode)]) -> Value {
+    let listing: Vec<Value> = tools
+        .iter()
+        .map(|tool| {
+            let mut entry = tool.listing();
+            let mode = modes
+                .iter()
+                .find(|(capability, _)| *capability == tool.capability);
+            if let Some((_, mode)) = mode {
+                entry["_meta"] =
+                    serde_json::json!({ "anthropic/alwaysLoad": *mode == LoadMode::Always });
+            }
+            entry
+        })
+        .collect();
     serde_json::json!({ "tools": listing })
 }
 

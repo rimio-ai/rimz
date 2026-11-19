@@ -1145,7 +1145,18 @@ upward-dependencies = [
 # ConsensusPieces carries the definitions' trait claims on MachineConfig to project teams' `consensus` (+1).
 # read_logo_file and parse_logo_svg give the sidebar's logo worker the checks config validates with (+2).
 # RemoteConfig carries the laptop's `[remote]` paste settings to `remote connect` (+1).
-surface-budget = 298
+# mcps_limit tells both MCP adapters whether a profile's `mcps` list limits the launch (+1).
+surface-budget = 299
+
+[[verdict]]
+kind = "item"
+key = "config::mcps::mcps_limit"
+reason = "The Claude and Codex adapters read one rule for whether an `mcps` list holding `*` limits a launch."
+
+[[verdict]]
+kind = "item"
+key = "mcp::catalog::LoadMode"
+reason = "`mcps` entry marks, the serve flags, and both adapters share the load-mode vocabulary the server lists."
 
 [[verdict]]
 kind = "item"

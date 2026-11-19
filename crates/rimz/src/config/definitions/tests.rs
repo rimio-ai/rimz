@@ -1458,11 +1458,10 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
     );
     let loaded = clean(root.path());
     let names = |name: &str| {
-        loaded.agent_profiles.0[name].mcps.as_ref().map(|mcps| {
-            mcps.iter()
-                .map(|mcp| mcp.as_str().to_owned())
-                .collect::<Vec<_>>()
-        })
+        loaded.agent_profiles.0[name]
+            .mcps
+            .as_ref()
+            .map(|mcps| mcps.iter().map(ToString::to_string).collect::<Vec<_>>())
     };
     assert_eq!(
         names("parent"),
@@ -1472,7 +1471,8 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
     assert_eq!(names("cleared"), Some(Vec::new()));
     for (entry, shown) in [
         ("''", ""),
-        ("rimz", "rimz"),
+        ("'*:always'", "*:always"),
+        ("github:eager", "github:eager"),
         ("rimz-message", "rimz-message"),
     ] {
         let root = fixture();
@@ -1497,10 +1497,64 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
                 .map(|error| error.message.as_str())
                 .collect::<Vec<_>>(),
             [format!(
-                "sets `mcps:` with an invalid mcps entry `{shown}`: name a RimZ capability \
-                 (rimz-lsp, rimz-wait, rimz-control, rimz-notes) or one of your own MCP servers"
+                "sets `mcps:` with an invalid mcps entry `{shown}`: list `*`, `rimz`, a RimZ \
+                 capability (rimz-lsp, rimz-wait, rimz-control, rimz-notes), or one of your own \
+                 MCP servers, each name with an optional `:always` or `:deferred`"
             )]
         );
+    }
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ntools: [Bash]\nmcps: [github:always, github]",
+        "",
+    );
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &root.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
+    );
+    assert_eq!(
+        loaded
+            .errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "sets `mcps:` with an invalid mcps entry `github`: `github:always` already gives \
+          `github` another mark"
+        ]
+    );
+    for (frontmatter, entries) in [
+        (
+            "mcps: [\"*\", rimz:deferred, rimz-lsp:always, github:always, github:always]",
+            &["*", "rimz:deferred", "rimz-lsp:always", "github:always"][..],
+        ),
+        (
+            "mcps:\n  - '*'\n  - rimz-wait:deferred\n  - linear",
+            &["*", "rimz-wait:deferred", "linear"],
+        ),
+    ] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/marked.md",
+            &format!("model: astra\ntools: [Bash]\n{frontmatter}"),
+            "",
+        );
+        let loaded = clean(root.path());
+        let names = loaded.agent_profiles.0["marked"]
+            .mcps
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(names, entries, "{frontmatter}");
     }
     let root = team_fixture();
     team_definition(
@@ -2753,10 +2807,7 @@ fn definition_tools_stay_typed_until_the_final_engine_is_known() {
     let profile = &loaded.agent_profiles.0["worker"];
     assert!(profile.args.is_none(), "generated tools are not raw args");
     assert_eq!(profile.tools.as_ref().unwrap().bases(), ["Bash", "Read"]);
-    assert_eq!(
-        tool_args(&loaded, "worker"),
-        ["--strict-mcp-config", "--tools", "Bash,Read"]
-    );
+    assert_eq!(tool_args(&loaded, "worker"), ["--tools", "Bash,Read"]);
     for render in profile
         .definition_renders
         .as_ref()

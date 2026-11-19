@@ -913,14 +913,17 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         } else {
             inputs.rimz_bin.to_path_buf()
         };
-        let only = if request.mcps.is_some() {
+        let only = if capabilities.len() < crate::mcp::catalog::Capability::ALL.len() {
             capabilities.as_slice()
         } else {
             &[]
         };
         reminders.mcp_server = Some((program, crate::mcp::catalog::serve_args(only)));
     }
-    if request.mcps.is_some() && !adapter.takes_mcp_servers() {
+    let only_all = request.mcps.as_deref().is_some_and(|entries| {
+        !entries.is_empty() && entries.iter().all(crate::config::McpName::is_all)
+    });
+    if request.mcps.is_some() && !only_all && !adapter.takes_mcp_servers() {
         warnings.push(LaunchPlanWarning::McpsUnsupported {
             kind: request.kind.clone(),
         });

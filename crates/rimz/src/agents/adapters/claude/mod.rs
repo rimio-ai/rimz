@@ -694,7 +694,7 @@ fn render_definition_tools(
             });
         }
     }
-    let mut args = vec!["--strict-mcp-config".to_owned()];
+    let mut args = Vec::new();
     let denied: Vec<_> = CLAUDE_AGENT_TYPES
         .iter()
         .filter(|name| !tools.agent_types().iter().any(|allowed| allowed == **name))
@@ -712,6 +712,26 @@ fn render_definition_tools(
     );
     args.extend(["--tools".to_owned(), names.join(",")]);
     Ok(args)
+}
+
+/// The server-level `alwaysLoad` for RimZ's `--mcp-config` entry: the mark on
+/// `rimz`, except that a deferred server stays unset while a capability is
+/// marked always, since a server-level `false` overrides a tool's own `true`.
+fn server_always_load(mcps: Option<&[crate::config::McpName]>) -> Option<bool> {
+    let entries = mcps?;
+    let server = entries
+        .iter()
+        .find(|entry| entry.name() == crate::mcp::catalog::SERVER_NAME)?;
+    let always = crate::mcp::catalog::LoadMode::Always;
+    match server.mode()? {
+        crate::mcp::catalog::LoadMode::Always => Some(true),
+        crate::mcp::catalog::LoadMode::Deferred => {
+            let capability_always = entries
+                .iter()
+                .any(|entry| entry.capability().is_some() && entry.mode() == Some(always));
+            (!capability_always).then_some(false)
+        }
+    }
 }
 
 fn hook_ingress_decision(
@@ -916,10 +936,23 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<Vec<String>, crate::agents::skills::LaunchSettingsErr> {
         let grant = launch.server.as_ref().is_some_and(|server| server.grant);
-        if launch.mcps.is_some() {
-            extra_args.retain(|arg| arg != "--strict-mcp-config");
-        }
-        if grant || launch.mcps.is_some() {
+        let limits = crate::config::mcps_limit(launch.mcps);
+        let entries = launch.mcps.unwrap_or_default();
+        let warnings = entries
+            .iter()
+            .filter(|entry| entry.mode().is_some())
+            .filter_map(|entry| {
+                let reason = if entry.user_server().is_some() {
+                    "Claude takes a load mode only for RimZ's server and its capabilities"
+                } else if launch.server.is_none() {
+                    "RimZ's MCP server is off for this launch"
+                } else {
+                    return None;
+                };
+                Some(format!("the mcps entry `{entry}` is not applied: {reason}"))
+            })
+            .collect();
+        if grant || limits {
             *artifact = merge_settings(
                 cwd,
                 artifact_dir,
@@ -935,16 +968,16 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
                             [format!("mcp__{}__*", crate::mcp::catalog::SERVER_NAME)],
                         )?;
                     }
-                    if let Some(mcps) = launch.mcps {
+                    if limits {
                         let allowed = launch
                             .server
                             .as_ref()
                             .map(|_| crate::mcp::catalog::SERVER_NAME)
                             .into_iter()
                             .chain(
-                                mcps.iter()
-                                    .filter(|name| name.capability().is_none())
-                                    .map(crate::config::McpName::as_str),
+                                entries
+                                    .iter()
+                                    .filter_map(crate::config::McpName::user_server),
                             )
                             .map(|name| serde_json::json!({"serverName": name}))
                             .collect();
@@ -958,17 +991,28 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
             )?;
         }
         if let Some(server) = &launch.server {
-            let config = serde_json::json!({"mcpServers": {crate::mcp::catalog::SERVER_NAME: {
+            let mut args = server.args.clone();
+            for entry in entries {
+                if let (Some(capability), Some(mode)) = (entry.capability(), entry.mode()) {
+                    args.extend([format!("--{}", mode.name()), capability.name().to_owned()]);
+                }
+            }
+            let mut entry = serde_json::json!({
                 "type": "stdio",
                 "command": server.command,
-                "args": server.args,
-            }}});
+                "args": args,
+            });
+            if let Some(always) = server_always_load(launch.mcps) {
+                entry["alwaysLoad"] = always.into();
+            }
+            let config =
+                serde_json::json!({"mcpServers": {crate::mcp::catalog::SERVER_NAME: entry}});
             // `--mcp-config` takes several values, so it goes last: only the
             // `--` before the prompt, or a flag, can follow it, never a
             // passthrough positional.
             extra_args.extend(["--mcp-config".to_owned(), config.to_string()]);
         }
-        Ok(Vec::new())
+        Ok(warnings)
     }
 
     fn take_fast_settings(&self, extra_args: &mut Vec<String>) -> Option<bool> {

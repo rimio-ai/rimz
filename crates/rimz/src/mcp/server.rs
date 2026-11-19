@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde_json::{Value, json};
 
-use super::catalog::{Capability, Invocation, SERVER_NAME, Tool, tools_for, tools_list};
+use super::catalog::{Capability, Invocation, LoadMode, SERVER_NAME, Tool, tools_for, tools_list};
 
 const PROTOCOL_VERSIONS: [&str; 2] = ["2025-06-18", "2025-11-25"];
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -31,11 +31,17 @@ pub enum ServeErr {
 }
 
 /// Serve `only`'s tools (every tool when empty) until stdin ends, SIGINT, or
-/// SIGTERM, then kill the one-shots still running and return. With
-/// `parent_env`, each one-shot also gets every variable of the parent
+/// SIGTERM, then kill the one-shots still running and return. `modes` gives
+/// the tools of each capability it names that load mode in their listing.
+/// With `parent_env`, each one-shot also gets every variable of the parent
 /// process's environment that the server's own lacks.
-pub fn serve(only: &[Capability], parent_env: bool) -> Result<(), ServeErr> {
+pub fn serve(
+    only: &[Capability],
+    modes: &[(Capability, LoadMode)],
+    parent_env: bool,
+) -> Result<(), ServeErr> {
     let tools: Vec<&'static Tool> = tools_for(only).collect();
+    let listing = tools_list(&tools, modes);
     let inherited = if parent_env {
         #[cfg(unix)]
         let parent = crate::proc::environ(std::os::unix::process::parent_id());
@@ -66,7 +72,7 @@ pub fn serve(only: &[Capability], parent_env: bool) -> Result<(), ServeErr> {
             tracing::warn!(%err, "rimz mcp serve: SIGINT and SIGTERM will not stop one-shots");
         }
     }
-    let result = read_requests(&tools, &calls);
+    let result = read_requests(&tools, &listing, &calls);
     calls.close();
     result
 }
@@ -82,7 +88,11 @@ fn inherited_from(parent: Option<Vec<(String, String)>>) -> Option<Vec<(String, 
     )
 }
 
-fn read_requests(tools: &[&'static Tool], calls: &Arc<Calls>) -> Result<(), ServeErr> {
+fn read_requests(
+    tools: &[&'static Tool],
+    listing: &Value,
+    calls: &Arc<Calls>,
+) -> Result<(), ServeErr> {
     let mut stdin = io::stdin().lock();
     let mut line = Vec::new();
     loop {
@@ -94,13 +104,13 @@ fn read_requests(tools: &[&'static Tool], calls: &Arc<Calls>) -> Result<(), Serv
             continue;
         }
         match serde_json::from_slice::<Value>(&line) {
-            Ok(message) => handle(message, tools, calls),
+            Ok(message) => handle(message, tools, listing, calls),
             Err(err) => send_error(&Value::Null, PARSE_ERROR, &format!("parse error: {err}")),
         }
     }
 }
 
-fn handle(message: Value, tools: &[&'static Tool], calls: &Arc<Calls>) {
+fn handle(message: Value, tools: &[&'static Tool], listing: &Value, calls: &Arc<Calls>) {
     let Value::Object(mut message) = message else {
         return send_error(&Value::Null, INVALID_REQUEST, "a request is a JSON object");
     };
@@ -119,7 +129,7 @@ fn handle(message: Value, tools: &[&'static Tool], calls: &Arc<Calls>) {
     match method {
         "initialize" => send_result(&id, initialize(&params)),
         "ping" => send_result(&id, json!({})),
-        "tools/list" => send_result(&id, tools_list(tools)),
+        "tools/list" => send_result(&id, listing.clone()),
         "tools/call" => call(id, params, tools, calls),
         _ => send_error(
             &id,
