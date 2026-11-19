@@ -1,7 +1,8 @@
 //! The one table of RimZ MCP tools: each tool's capability, description,
 //! argument schema, and the `rimz` command its call runs. `rimz mcp serve`,
-//! its `--only` values, the profile `mcps` capability names, the reference
-//! page's tool table, and the routine-command check all read this table.
+//! `rimz mcp tools`, their `--only` values, the profile `mcps` capability
+//! names, the reference page's tool table, and the routine-command check all
+//! read this table.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -87,6 +88,12 @@ impl Tool {
             entry["annotations"] = serde_json::json!({ "readOnlyHint": true });
         }
         entry
+    }
+
+    /// The listing entry's estimated size in tokens, as `rimz mcp tools` and
+    /// `rimz agents explain --mcps` print it.
+    pub fn tokens(&self) -> u64 {
+        crate::utils::tokens::estimate(&self.listing().to_string())
     }
 
     /// The one-shot a call runs, or the error naming the argument that does
@@ -214,6 +221,12 @@ pub fn tools_for(only: &[Capability]) -> impl Iterator<Item = &'static Tool> {
     TOOLS
         .iter()
         .filter(move |tool| only.is_empty() || only.contains(&tool.capability))
+}
+
+/// The `tools/list` result the server answers with for `tools`.
+pub fn tools_list(tools: &[&Tool]) -> Value {
+    let listing: Vec<Value> = tools.iter().map(|tool| tool.listing()).collect();
+    serde_json::json!({ "tools": listing })
 }
 
 trait ToolArgs: DeserializeOwned + JsonSchema {

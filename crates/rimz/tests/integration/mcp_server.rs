@@ -264,7 +264,57 @@ fn serve_in_a_terminal_prints_a_note_and_exits() {
     let output = output.join().unwrap();
     assert!(output.contains("Claude and Codex launch"), "{output}");
     assert!(output.contains("rimz agents explain"), "{output}");
+    assert!(output.contains("rimz mcp tools"), "{output}");
     assert!(!output.contains("jsonrpc"), "{output}");
+}
+
+#[test]
+fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
+    let env = Env::new();
+    let run = |args: &[&str]| {
+        let output = env
+            .rimz()
+            .args(["mcp", "tools"])
+            .args(args)
+            .output()
+            .unwrap();
+        let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+        (output.status, text(&output.stdout), text(&output.stderr))
+    };
+
+    let (status, stdout, stderr) = run(&["--json", "--only", "rimz-wait"]);
+    assert!(status.success(), "{stderr}");
+    let printed: Value = serde_json::from_str(&stdout).expect("tools json");
+    let mut server = serve(&env, &["--only", "rimz-wait"]);
+    server.initialize();
+    let listing = server.request(2, "tools/list", json!({}));
+    assert_eq!(printed, listing["result"]);
+    server.close();
+
+    let (status, stdout, stderr) = run(&[]);
+    assert!(status.success(), "{stderr}");
+    let mut sum = 0;
+    for name in ALL_TOOLS {
+        let line = stdout
+            .lines()
+            .find(|line| line.split_whitespace().nth(1) == Some(name))
+            .unwrap_or_else(|| panic!("{name}: {stdout}"));
+        let size = line.split_whitespace().last().unwrap();
+        sum += size.strip_prefix('~').unwrap().parse::<u64>().unwrap();
+    }
+    let total = stdout.lines().last().unwrap();
+    assert_eq!(
+        total,
+        format!("total: ~{sum} tokens in 9 tools"),
+        "{stdout}"
+    );
+
+    let (status, _, stderr) = run(&["--only", "rimz-message"]);
+    assert_eq!(status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("expected one of rimz-lsp, rimz-wait, rimz-control, rimz-notes"),
+        "{stderr}"
+    );
 }
 
 #[test]

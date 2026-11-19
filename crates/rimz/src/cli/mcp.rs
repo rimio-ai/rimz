@@ -1,10 +1,13 @@
 //! `rimz mcp` — the stdio MCP server a Claude or Codex launch starts.
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use rimz::mcp::catalog::Capability;
+
+use rimz::mcp::catalog::{Capability, Tool, tools_for, tools_list};
+
+use crate::cli::render::{self, Table, cell};
 
 #[derive(Debug, Args)]
 pub struct McpArgs {
@@ -24,26 +27,64 @@ enum McpSubcmd {
         #[arg(long)]
         parent_env: bool,
     },
+    /// List the tools the server offers, each with its estimated size in tokens.
+    Tools {
+        /// List only this capability's tools (repeatable); every capability when absent.
+        #[arg(long, value_name = "CAPABILITY", value_parser = parse_capability)]
+        only: Vec<Capability>,
+        /// Print the server's `tools/list` result instead.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// What `serve` prints instead of serving when a person runs it at a terminal.
 const TERMINAL_NOTE: &str = "\
 rimz mcp serve is the MCP server RimZ hands to every Claude and Codex launch.
 The provider starts it over stdio, so there is nothing to serve here.
+To see its tools and their sizes: rimz mcp tools
 To see the arguments one launch passes it: rimz agents explain <profile>";
 
 pub fn run(args: McpArgs) -> Result<()> {
     match args.command {
         McpSubcmd::Serve { .. } if std::io::stdin().is_terminal() => {
-            let note = format!("{TERMINAL_NOTE}\n");
-            let written =
-                std::io::Write::write_all(&mut crate::cli::render::err(), note.as_bytes());
-            crate::cli::render::finish(written)
+            render::finish(writeln!(render::err(), "{TERMINAL_NOTE}"))
         }
         McpSubcmd::Serve { only, parent_env } => {
             rimz::mcp::serve(&only, parent_env).context("rimz mcp serve")
         }
+        McpSubcmd::Tools { only, json } => {
+            let tools: Vec<&Tool> = tools_for(&only).collect();
+            let rendered = if json {
+                render_json(&tools)
+            } else {
+                render_tools(&tools, &mut render::out())
+            };
+            render::finish(rendered)
+        }
     }
+}
+
+fn render_json(tools: &[&Tool]) -> std::io::Result<()> {
+    let listing =
+        serde_json::to_string_pretty(&tools_list(tools)).map_err(std::io::Error::other)?;
+    writeln!(render::out(), "{listing}")
+}
+
+fn render_tools(tools: &[&Tool], w: &mut impl Write) -> std::io::Result<()> {
+    let mut table = Table::new(["CAPABILITY", "TOOL", "TOKENS"]).right(&[2]);
+    let mut total = 0;
+    for tool in tools {
+        let size = tool.tokens();
+        total += size;
+        table.row([
+            cell(tool.capability.name()),
+            cell(tool.name),
+            cell(format!("~{size}")),
+        ]);
+    }
+    table.render(w)?;
+    writeln!(w, "total: ~{total} tokens in {} tools", tools.len())
 }
 
 fn parse_capability(name: &str) -> std::result::Result<Capability, String> {

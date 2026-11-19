@@ -1,6 +1,6 @@
 # `rimz mcp`
 
-`rimz mcp serve` is the MCP server a Claude or Codex launch starts over stdio. It gives the agent RimZ's own commands as tools. You do not run it yourself: started with a terminal on stdin, it prints a short note to stderr naming the command that shows what a launch passes it, and exits 0 without serving.
+`rimz mcp serve` is the MCP server a Claude or Codex launch starts over stdio. It gives the agent RimZ's own commands as tools. You do not run it yourself: started with a terminal on stdin, it prints a short note to stderr naming the commands that show what it serves and what a launch passes it, and exits 0 without serving. `rimz mcp tools` lists what it serves.
 
 ```sh
 rimz mcp serve [--only <capability>]... [--parent-env]
@@ -25,6 +25,29 @@ Each tool call runs one `rimz` command as the agent that started the server, in 
 | `rimz-control` | `self_tune` | optional `setting` (`keep-warm`, `idle-compact`, `smart-compact`), optional `value` (only with `setting`) | `rimz agents tune -- @me [setting] [value]` |
 | `rimz-notes` | `notes_add` | `kind`, `title`, and `body` or `file`, not both; optional `fence`, `meta{}` (keys without `=`), `cwd` | `rimz notes add [flags] -- <kind> <title>`, with `body` on stdin |
 | `rimz-notes` | `notes_list` | optional `filter[]`, `limit` | `rimz notes list [flags]` |
+
+## List the tools
+
+```sh
+rimz mcp tools [--only <capability>]... [--json]
+```
+
+`rimz mcp tools` prints each tool the server offers with its capability and the estimated tokens of its `tools/list` entry (compact JSON, counted with the `o200k_base` tokenizer, so Claude's own count runs somewhat higher), then the total. That entry is what a provider puts in the agent's context for the tool when it loads it up front. `--only` takes the same values as `serve --only` and refuses any other the same way. `--json` prints the server's `tools/list` result for the same `--only`, unchanged.
+
+```console
+$ rimz mcp tools
+CAPABILITY    TOOL          TOKENS
+rimz-lsp      lsp             ~425
+rimz-wait     wait            ~418
+rimz-wait     wait_list        ~36
+rimz-wait     wait_cancel      ~86
+rimz-control  self_stop       ~107
+rimz-control  self_compact     ~68
+rimz-control  self_tune       ~127
+rimz-notes    notes_add       ~239
+rimz-notes    notes_list      ~111
+total: ~1617 tokens in 9 tools
+```
 
 Every command a tool runs is on the [routine list](../agent-support.md) an installed agent runs without asking. The commands themselves are documented on their own pages: [Language servers](./lsp.md), [Wait](./wait.md), [Agents](./agents.md), and [Notes](./notes.md).
 

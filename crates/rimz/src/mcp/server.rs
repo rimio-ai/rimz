@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde_json::{Value, json};
 
-use super::catalog::{Capability, Invocation, SERVER_NAME, Tool, tools_for};
+use super::catalog::{Capability, Invocation, SERVER_NAME, Tool, tools_for, tools_list};
 
 const PROTOCOL_VERSIONS: [&str; 2] = ["2025-06-18", "2025-11-25"];
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -119,10 +119,7 @@ fn handle(message: Value, tools: &[&'static Tool], calls: &Arc<Calls>) {
     match method {
         "initialize" => send_result(&id, initialize(&params)),
         "ping" => send_result(&id, json!({})),
-        "tools/list" => {
-            let listing: Vec<Value> = tools.iter().map(|tool| tool.listing()).collect();
-            send_result(&id, json!({ "tools": listing }));
-        }
+        "tools/list" => send_result(&id, tools_list(tools)),
         "tools/call" => call(id, params, tools, calls),
         _ => send_error(
             &id,
