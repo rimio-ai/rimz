@@ -904,7 +904,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         reminders.routine_rimz = Some((inputs.runtime.prompt_dir(), [tmp.clone(), shared.clone()]));
     }
     let capabilities = crate::config::mcp_capabilities(request.mcps.as_deref());
-    if inputs.machine.agents.mcp_tools && adapter.takes_mcp_servers() && !capabilities.is_empty() {
+    if inputs.machine.agents.rimz_mcp_server
+        && adapter.takes_mcp_servers()
+        && !capabilities.is_empty()
+    {
         let program = if inputs.state.room_bin.is_file() {
             inputs.state.room_bin.clone()
         } else {

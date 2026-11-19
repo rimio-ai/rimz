@@ -86,7 +86,7 @@ fn launch(kind: &str, mcps: Option<&[&str]>, args: &[&str]) -> ExecRequest {
 }
 
 fn switches(routine: bool, tools: bool) -> String {
-    format!("[agents]\nallow-routine-rimz = {routine}\nmcp-tools = {tools}\n")
+    format!("[agents]\nallow-routine-rimz = {routine}\nrimz-mcp-server = {tools}\n")
 }
 
 fn flag_values<'a>(argv: &'a [String], flag: &str) -> Vec<&'a str> {

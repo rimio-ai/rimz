@@ -55,7 +55,7 @@ A line that is not JSON gets error `-32700`, and the server goes on reading. The
 
 ## Launch registration
 
-RimZ hands its server to a Claude or Codex launch when `[agents] mcp-tools` is on (the default, set in the [machine config](../../guide/configuration.md#rimz-tools-over-mcp)) and the profile's `mcps` list is absent or names at least one capability. The server's command is the room's `rimz` link, so it survives `rimz update`. Every spawn path does the same, and `rimz agents explain <profile>` prints the arguments in the provider argv.
+RimZ hands its server to a Claude or Codex launch when `[agents] rimz-mcp-server` is on (the default, set in the [machine config](../../guide/configuration.md#rimz-tools-over-mcp)) and the profile's `mcps` list is absent or names at least one capability. The server's command is the room's `rimz` link, so it survives `rimz update`. Every spawn path does the same, and `rimz agents explain <profile>` prints the arguments in the provider argv.
 
 - **Claude** gets one `--mcp-config` holding the `rimz` server, after every other provider argument and before the `--` that precedes a prompt, since the flag takes several values. With [`allow-routine-rimz`](../../guide/configuration.md#routine-rimz-commands) on, `mcp__rimz__*` joins `permissions.allow` in the launch's `--settings`, so the tools run without asking; with it off, Claude asks before each call.
 - **Codex** gets `-c mcp_servers.rimz.*` overrides: the command and its arguments, `--parent-env` among them, `env_vars` naming every variable RimZ spawns Codex with (Codex clears a server's environment to a few names otherwise), `tool_timeout_sec=600`, and `default_tools_approval_mode` set to `"approve"` with `allow-routine-rimz` on and `"prompt"` with it off. The `env_vars` names are collected before the user's login shell runs its startup files, so on Linux and macOS `--parent-env` takes what those files export from Codex's own environment; elsewhere the commands see the `env_vars` set alone.
@@ -78,7 +78,7 @@ A list's entries are capability names (`rimz-lsp`, `rimz-wait`, `rimz-control`, 
 
 ### Cases RimZ does not handle
 
-In each case, `[agents] mcp-tools = false` keeps RimZ's server out of every launch; a profile's `mcps` list still filters the user's servers.
+In each case, `[agents] rimz-mcp-server = false` keeps RimZ's server out of every launch; a profile's `mcps` list still filters the user's servers.
 
 - A user's own server already named `rimz`.
 - A user's own Codex `-c mcp_servers={...}` table in a profile's or launch's arguments: it replaces the table RimZ places first, so the switch-offs a `mcps` list adds are lost. The `rimz` server stays: its dotted keys follow every user argument, and Codex merges dotted keys given after a table.

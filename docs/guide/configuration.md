@@ -996,7 +996,7 @@ A profile's `mcps:` list narrows it: `mcps: [rimz-lsp, github]` keeps only the l
 
 ```toml
 [agents]
-mcp-tools = false
+rimz-mcp-server = false
 ```
 
 This key is machine-only: project config cannot override it. With it off, a profile's `mcps:` list still filters your own servers. `rimz agents explain claude` shows the launch arguments without starting an agent.

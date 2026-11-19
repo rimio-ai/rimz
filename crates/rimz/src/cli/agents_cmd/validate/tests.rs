@@ -483,7 +483,7 @@ fn shared_lsp_warning_requires_machine_servers_and_named_tool() {
         names
     };
     assert_eq!(
-        warned(&format!("[agents]\nmcp-tools = false\n{servers}")),
+        warned(&format!("[agents]\nrimz-mcp-server = false\n{servers}")),
         ["profile navigator: tools names LSP, which a room with a shared language server strips"]
     );
     let names: Vec<_> = warned(servers)
