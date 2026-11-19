@@ -29,6 +29,7 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
             "tab",
             "worktree",
             "lsp",
+            "mcp",
             "loop",
             "workflow",
             "budget",

@@ -796,9 +796,7 @@ enum Subcmd {
     /// not.
     #[command(hide = true)]
     Mod(statusline::ModArgs),
-    /// MCP server. A Claude or Codex launch starts this over stdio; humans do
-    /// not.
-    #[command(hide = true)]
+    /// RimZ's MCP server, which Claude and Codex launches start
     Mcp(mcp::McpArgs),
     /// Install or uninstall agent hooks.
     ///

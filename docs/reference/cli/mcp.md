@@ -1,6 +1,6 @@
 # `rimz mcp`
 
-`rimz mcp serve` is the MCP server a Claude or Codex launch starts over stdio. It gives the agent RimZ's own commands as tools. You do not run it yourself: the command is hidden from `rimz --help`.
+`rimz mcp serve` is the MCP server a Claude or Codex launch starts over stdio. It gives the agent RimZ's own commands as tools. You do not run it yourself: started with a terminal on stdin, it prints a short note to stderr naming the command that shows what a launch passes it, and exits 0 without serving.
 
 ```sh
 rimz mcp serve [--only <capability>]... [--parent-env]

@@ -231,6 +231,43 @@ fn notes_written(env: &Env) -> Vec<std::path::PathBuf> {
 }
 
 #[test]
+fn serve_in_a_terminal_prints_a_note_and_exits() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+
+    let env = Env::new();
+    let pair = native_pty_system().openpty(PtySize::default()).unwrap();
+    let mut command = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut command);
+    command.cwd(&env.home_root);
+    command.args(["mcp", "serve"]);
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let output = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = reader.read_to_end(&mut bytes);
+        String::from_utf8_lossy(&bytes).into_owned()
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() > deadline {
+            child.kill().unwrap();
+            panic!("rimz mcp serve kept reading a terminal");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "{status:?}");
+    let output = output.join().unwrap();
+    assert!(output.contains("Claude and Codex launch"), "{output}");
+    assert!(output.contains("rimz agents explain"), "{output}");
+    assert!(!output.contains("jsonrpc"), "{output}");
+}
+
+#[test]
 fn handshake_lists_the_tools_and_answers_only_known_methods() {
     let env = Env::new();
     let mut server = serve(&env, &[]);

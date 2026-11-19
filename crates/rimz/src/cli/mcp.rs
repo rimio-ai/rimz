@@ -1,5 +1,7 @@
 //! `rimz mcp` — the stdio MCP server a Claude or Codex launch starts.
 
+use std::io::IsTerminal;
+
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use rimz::mcp::catalog::Capability;
@@ -24,8 +26,20 @@ enum McpSubcmd {
     },
 }
 
+/// What `serve` prints instead of serving when a person runs it at a terminal.
+const TERMINAL_NOTE: &str = "\
+rimz mcp serve is the MCP server RimZ hands to every Claude and Codex launch.
+The provider starts it over stdio, so there is nothing to serve here.
+To see the arguments one launch passes it: rimz agents explain <profile>";
+
 pub fn run(args: McpArgs) -> Result<()> {
     match args.command {
+        McpSubcmd::Serve { .. } if std::io::stdin().is_terminal() => {
+            let note = format!("{TERMINAL_NOTE}\n");
+            let written =
+                std::io::Write::write_all(&mut crate::cli::render::err(), note.as_bytes());
+            crate::cli::render::finish(written)
+        }
         McpSubcmd::Serve { only, parent_env } => {
             rimz::mcp::serve(&only, parent_env).context("rimz mcp serve")
         }
