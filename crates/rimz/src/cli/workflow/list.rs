@@ -40,8 +40,290 @@ fn capacity_wait(record: &RunRecord) -> Option<&Wait> {
         .filter(|wait| record.state == RunState::Active && wait.outcome == "capacity")
 }
 
-pub(super) fn run(json: bool, globals: &super::super::GlobalFlags) -> Result<()> {
-    render(&resolve::all()?, None, json, globals)
+pub(super) fn run(
+    json: bool,
+    all: Option<usize>,
+    globals: &super::super::GlobalFlags,
+) -> Result<()> {
+    let live = resolve::all()?;
+    let Some(limit) = all else {
+        return render(&live, None, json, globals);
+    };
+    let now = Timestamp::now();
+    let mut finished = finished()?;
+    drop_live(
+        &mut finished,
+        &live.iter().map(|run| &run.record).collect::<Vec<_>>(),
+    );
+    if json {
+        let mut rows = live_json(&live, now);
+        rows.extend(finished.iter().take(limit).map(Finished::json_row));
+        return render::json_pretty(&rows);
+    }
+    render(&live, None, false, globals)?;
+    let caller = resolve::caller(globals).map(|workspace| workspace.project_root);
+    write_finished(&mut render::out(), &finished, caller.as_deref(), limit, now)?;
+    Ok(())
+}
+
+type FoldKey<'a> = (
+    Option<&'a std::path::Path>,
+    Option<&'a str>,
+    Option<&'a records::ScopeKind>,
+    Option<&'a std::path::Path>,
+    Option<&'a WorkflowRunId>,
+    RunState,
+    bool,
+    Option<std::mem::Discriminant<records::RunEnding>>,
+);
+
+/// A run that ended, read from its record's header so that any version's record is listed.
+struct Finished {
+    id: WorkflowRunId,
+    header: records::RunHeader,
+    ended: Timestamp,
+}
+
+impl Finished {
+    fn address(&self) -> String {
+        self.header
+            .address()
+            .map_or_else(|| self.id.to_string(), |address| address.to_string())
+    }
+
+    fn state(&self) -> RunState {
+        // `finished` keeps only headers whose state ends a run.
+        self.header.state.unwrap_or(RunState::Failed)
+    }
+
+    /// How the run ended, a try marked as the live list marks one.
+    fn ending(&self) -> String {
+        let word = workflow_view::state_word(self.state(), self.header.ending.as_ref());
+        // A try that ended done ended `tried`, which already says it was a try.
+        if self.header.once && self.header.ending != Some(records::RunEnding::Tried) {
+            format!("once · {word}")
+        } else {
+            word.into()
+        }
+    }
+
+    /// What two adjacent rows must agree on to fold, in typed fields: the run's room, workflow,
+    /// scope and how it ended. A record naming no address keeps its own row, which prints its id.
+    fn key(&self) -> FoldKey<'_> {
+        let header = &self.header;
+        (
+            header.project_root.as_deref(),
+            header.workflow.as_deref(),
+            header.scope_kind.as_ref(),
+            header.scope_path.as_deref(),
+            header.address().is_none().then_some(&self.id),
+            self.state(),
+            header.once,
+            header.ending.as_ref().map(std::mem::discriminant),
+        )
+    }
+
+    fn json_row(&self) -> serde_json::Value {
+        let header = &self.header;
+        let mut row = serde_json::json!({
+            "id": self.id,
+            "address": self.address(),
+            "workflow": header.workflow,
+            "scope": header.scope_path,
+            "state": self.state(),
+            "node": header.node,
+            "since": header.entered_at,
+            "detail": "",
+            "ended": self.ended,
+        });
+        if header.once {
+            row["once"] = serde_json::json!(true);
+        }
+        row
+    }
+}
+
+/// Every run that ended of a workflow started by name, in every recorded room, newest ending
+/// first: finished homes and terminal records still in the live directory, whatever version
+/// wrote them. A home whose record cannot be read is skipped.
+fn finished() -> Result<Vec<Finished>> {
+    let mut runs = Vec::new();
+    for state in rimz::disk::paths::recorded_rooms_under(&rimz::disk::paths::rimz_home())? {
+        let live = state.workflow_runs().unwrap_or_default();
+        let finished = state.finished_workflow_runs().unwrap_or_default();
+        for home in live.into_iter().chain(finished) {
+            let Ok(class) = records::classify(&home) else {
+                continue;
+            };
+            let Some(header) = class.header() else {
+                continue;
+            };
+            let Some(id) = home
+                .home
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| WorkflowRunId::parse(name).ok())
+            else {
+                continue;
+            };
+            let Some(ended) = header.terminal_at.or(header.created_at) else {
+                continue;
+            };
+            if !header.is_terminal() || header.origin != records::RunOrigin::Deployed {
+                continue;
+            }
+            runs.push(Finished {
+                id,
+                header: header.into_owned(),
+                ended,
+            });
+        }
+    }
+    runs.sort_by_key(|run| std::cmp::Reverse(run.ended));
+    Ok(runs)
+}
+
+/// Drops the finished runs a live row lists: a run that ended between the two reads is listed
+/// once, where the first read found it.
+fn drop_live(runs: &mut Vec<Finished>, live: &[&RunRecord]) {
+    let listed = live
+        .iter()
+        .filter(|record| !record.state.is_terminal())
+        .map(|record| &record.id)
+        .collect::<std::collections::HashSet<_>>();
+    runs.retain(|run| !listed.contains(&run.id));
+}
+
+/// Adjacent runs that agree on every printed fact but the id and time fold into one row: the
+/// newest member, the count, and the oldest member's ending.
+fn fold<'a>(runs: impl IntoIterator<Item = &'a Finished>) -> Vec<(&'a Finished, usize, Timestamp)> {
+    let mut rows: Vec<(&Finished, usize, Timestamp)> = Vec::new();
+    for run in runs {
+        if let Some((newest, count, oldest)) = rows.last_mut()
+            && newest.key() == run.key()
+        {
+            *count += 1;
+            *oldest = run.ended;
+            continue;
+        }
+        rows.push((run, 1, run.ended));
+    }
+    rows
+}
+
+/// The finished section: at most `limit` rows, then the runs the limit hid and how to see them.
+/// Runs fold within their room, and each room is headed as the live list heads it when several
+/// rooms hold finished runs, the caller's first.
+fn write_finished(
+    out: &mut impl Write,
+    runs: &[Finished],
+    caller: Option<&std::path::Path>,
+    limit: usize,
+    now: Timestamp,
+) -> std::io::Result<()> {
+    let mut rooms = BTreeMap::<Option<&std::path::Path>, Vec<&Finished>>::new();
+    for run in runs {
+        rooms
+            .entry(run.header.project_root.as_deref())
+            .or_default()
+            .push(run);
+    }
+    let mut rooms = rooms.into_iter().collect::<Vec<_>>();
+    rooms.sort_by_key(|(root, _)| (root.is_none() || *root != caller, *root));
+    let several = rooms.len() > 1;
+    let rows = rooms
+        .into_iter()
+        .flat_map(|(root, runs)| fold(runs).into_iter().map(move |row| (root, row)))
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let shown = &rows[..rows.len().min(limit)];
+    let machine = super::super::machine_config();
+    let glyph = rimz::theme::theme_glyphs(&machine.theme);
+    let cells = shown
+        .iter()
+        .map(|(_, (run, count, oldest))| {
+            let mut ending = run.ending();
+            if *count > 1 {
+                ending.push_str(&format!(" ×{count}"));
+                if let Some(span) = render::folded_span(*oldest, run.ended) {
+                    ending.push_str(&format!(" {span}"));
+                }
+            }
+            let role = workflow_view::ended_glyph_role(run.state());
+            (glyph(role), run.address(), ending)
+        })
+        .collect::<Vec<_>>();
+    let name = cells
+        .iter()
+        .map(|(glyph, address, _)| glyph.width() + 1 + address.width())
+        .max()
+        .unwrap_or(0);
+    let ending = cells
+        .iter()
+        .map(|(.., ending)| ending.width())
+        .max()
+        .unwrap_or(0);
+    let id = shown
+        .iter()
+        .map(|(_, (run, ..))| run.id.as_str().width())
+        .max()
+        .unwrap_or(0);
+    writeln!(out)?;
+    writeln!(
+        out,
+        "{}",
+        render::paint(render::palette::header(), "FINISHED")
+    )?;
+    let mut room = None;
+    for ((root, (run, ..)), (glyph, address, ended)) in shown.iter().zip(&cells) {
+        if several && room != Some(*root) {
+            if room.is_some() {
+                writeln!(out)?;
+            }
+            room = Some(*root);
+            if let Some(root) = root {
+                writeln!(
+                    out,
+                    "{}",
+                    render::paint(render::palette::header(), &render::home_relative_path(root))
+                )?;
+            }
+        }
+        writeln!(
+            out,
+            "  {} {}{:name_pad$}  {}{:ending_pad$}  {}{:id_pad$}  {}",
+            render::paint(render::status::workflow(run.state(), false), glyph),
+            render::paint(render::palette::body(), address),
+            "",
+            ended,
+            "",
+            run.id,
+            "",
+            render::paint(
+                render::palette::muted(),
+                &render::workflow_clock(run.ended, now)
+            ),
+            name_pad = name.saturating_sub(glyph.width() + 1 + address.width()),
+            ending_pad = ending.saturating_sub(ended.width()),
+            id_pad = id.saturating_sub(run.id.as_str().width()),
+        )?;
+    }
+    let hidden = rows[shown.len()..]
+        .iter()
+        .map(|(_, (_, count, _))| count)
+        .sum::<usize>();
+    if hidden > 0 {
+        writeln!(
+            out,
+            "  {hidden} more finished {}; rimz workflow list --all -n {} shows {}",
+            if hidden == 1 { "run" } else { "runs" },
+            rows.len(),
+            if hidden == 1 { "it" } else { "them" }
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn render(
@@ -51,6 +333,9 @@ pub(super) fn render(
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
     let now = Timestamp::now();
+    if json {
+        return render::json_pretty(&live_json(runs, now));
+    }
     let live = runs
         .iter()
         .filter(|run| !run.record.state.is_terminal())
@@ -59,17 +344,6 @@ pub(super) fn render(
         .iter()
         .map(|run| workflow::load(&run.record.definition_dir(&run.paths)).ok())
         .collect::<Vec<_>>();
-    if json {
-        let rows = live
-            .iter()
-            .zip(&specs)
-            .map(|(run, spec)| {
-                let detail = workflow_view::detail(&run.record, spec.as_ref(), now, None);
-                json_row(&run.record, &detail)
-            })
-            .collect::<Vec<_>>();
-        return render::json_pretty(&rows);
-    }
     let mut out = render::out();
     if live.is_empty() {
         if let Some(name) = workflow {
@@ -186,6 +460,17 @@ pub(super) fn render(
         write_groups(&mut out, &rows[needs..], width)?;
     }
     Ok(())
+}
+
+fn live_json(runs: &[resolve::Located], now: Timestamp) -> Vec<serde_json::Value> {
+    runs.iter()
+        .filter(|run| !run.record.state.is_terminal())
+        .map(|run| {
+            let spec = workflow::load(&run.record.definition_dir(&run.paths)).ok();
+            let detail = workflow_view::detail(&run.record, spec.as_ref(), now, None);
+            json_row(&run.record, &detail)
+        })
+        .collect()
 }
 
 fn json_row(record: &RunRecord, detail: &str) -> serde_json::Value {
@@ -325,6 +610,177 @@ fn write_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ended(workflow: &str, lane: &str, state: &str, once: bool, at: i64) -> Finished {
+        let header = records::RunHeader {
+            workflow: Some(workflow.into()),
+            project_root: Some("/repo".into()),
+            scope_kind: Some(records::ScopeKind::Worktree),
+            scope_path: Some(format!("/repo/{lane}").into()),
+            state: Some(serde_json::from_value(serde_json::json!(state)).unwrap()),
+            once,
+            ..Default::default()
+        };
+        Finished {
+            id: WorkflowRunId::new(),
+            header,
+            ended: Timestamp::from_second(at).unwrap(),
+        }
+    }
+
+    fn ending(mut run: Finished, ending: records::RunEnding) -> Finished {
+        run.header.ending = Some(ending);
+        run
+    }
+
+    fn finished_text(runs: &[Finished], caller: &str, limit: usize) -> String {
+        let mut out = Vec::new();
+        let caller = std::path::Path::new(caller);
+        write_finished(
+            &mut out,
+            runs,
+            Some(caller),
+            limit,
+            Timestamp::from_second(6000).unwrap(),
+        )
+        .unwrap();
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+    }
+
+    #[test]
+    fn finished_rows_fold_adjacent_agreeing_runs_and_name_the_runs_the_limit_hid() {
+        let gave_up = || records::RunEnding::CapacityGaveUp {
+            waited_ms: 60_000,
+            reason: None,
+        };
+        let runs = [
+            ended("land", "feat", "done", false, 5000),
+            ended("land", "feat", "done", false, 4000),
+            // Only the last fact of the fold key differs: a try keeps its own row.
+            ended("land", "feat", "done", true, 3000),
+            // Agrees with the first row, but a different row sits between them.
+            ended("land", "feat", "done", false, 2000),
+            ending(
+                ended("land", "main", "failed", false, 1000),
+                records::RunEnding::Failed,
+            ),
+            // Prints as the row above, but gave up waiting for capacity.
+            ending(ended("land", "main", "failed", false, 900), gave_up()),
+            // Prints as the row above, but ran in another checkout of the same name.
+            ending(ended("land", "x/main", "failed", false, 800), gave_up()),
+            ending(ended("land", "x/main", "failed", false, 700), gave_up()),
+            // A try that ended done says so once.
+            ending(
+                ended("land", "feat", "done", true, 600),
+                records::RunEnding::Tried,
+            ),
+        ];
+        let rows = fold(&runs);
+        assert_eq!(
+            rows.iter()
+                .map(|(run, count, _)| (run.id.clone(), *count))
+                .collect::<Vec<_>>(),
+            [(0, 2), (2, 1), (3, 1), (4, 1), (5, 1), (6, 2), (8, 1)]
+                .map(|(index, count)| (runs[index].id.clone(), count))
+                .to_vec()
+        );
+        let text = finished_text(&runs, "/repo", 2);
+        let lines = text.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 5, "{text}");
+        assert_eq!(lines[0], "", "{text}");
+        assert_eq!(lines[1], "FINISHED", "{text}");
+        assert!(
+            lines[2].contains("land#feat") && lines[2].contains("done ×2 over 16m"),
+            "{text}"
+        );
+        assert_eq!(text.matches(runs[0].id.as_str()).count(), 1, "{text}");
+        assert!(!text.contains(runs[1].id.as_str()), "{text}");
+        assert!(lines[3].contains("once · done") && lines[3].contains(runs[2].id.as_str()));
+        assert_eq!(
+            lines[4],
+            "  6 more finished runs; rimz workflow list --all -n 7 shows them"
+        );
+        assert!(
+            finished_text(&runs, "/repo", 5)
+                .ends_with("  3 more finished runs; rimz workflow list --all -n 7 shows them\n"),
+            "a hidden folded row counts each of its runs"
+        );
+        assert!(
+            finished_text(&runs, "/repo", 6)
+                .ends_with("  1 more finished run; rimz workflow list --all -n 7 shows it\n"),
+            "one hidden run reads in the singular"
+        );
+        let text = finished_text(&runs, "/repo", 7);
+        assert!(!text.contains("more finished"), "every row fits: {text}");
+        for run in &runs[4..7] {
+            assert_eq!(text.matches(run.id.as_str()).count(), 1, "{text}");
+        }
+        assert!(!text.contains(runs[7].id.as_str()), "{text}");
+        let tried = text
+            .lines()
+            .find(|line| line.contains(runs[8].id.as_str()))
+            .unwrap();
+        assert!(
+            tried.contains(" tried ") && !tried.contains("once"),
+            "{text}"
+        );
+        assert!(
+            finished_text(&[], "/repo", 20).is_empty(),
+            "no finished runs print no section"
+        );
+    }
+
+    #[test]
+    fn finished_rows_head_each_room_when_several_hold_runs_the_callers_first() {
+        let mut other = ended("land", "feat", "done", false, 2000);
+        other.header.project_root = Some("/other".into());
+        other.header.scope_path = Some("/other/feat".into());
+        let runs = [ended("land", "feat", "done", false, 3000), other];
+        for (caller, first, second) in [("/repo", 0, 1), ("/other", 1, 0)] {
+            let text = finished_text(&runs, caller, 20);
+            let lines = text.lines().collect::<Vec<_>>();
+            let room = |index: usize| {
+                runs[index]
+                    .header
+                    .project_root
+                    .as_ref()
+                    .unwrap()
+                    .display()
+                    .to_string()
+            };
+            assert_eq!(lines.len(), 7, "{text}");
+            assert_eq!(lines[1], "FINISHED", "{text}");
+            assert_eq!(lines[2], room(first), "{text}");
+            assert!(
+                lines[3].contains("land#feat") && lines[3].contains(runs[first].id.as_str()),
+                "{text}"
+            );
+            assert_eq!(lines[4], "", "{text}");
+            assert_eq!(lines[5], room(second), "{text}");
+            assert!(lines[6].contains(runs[second].id.as_str()), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_run_the_live_rows_hold_is_no_finished_row() {
+        let active = record("feat", None, false, false);
+        let mut owed = record("owed", None, false, false);
+        owed.state = RunState::Done;
+        let mut runs = vec![
+            ended("review", "feat", "done", false, 3000),
+            ended("review", "owed", "done", false, 2000),
+            ended("review", "gone", "done", false, 1000),
+        ];
+        runs[0].id = active.id.clone();
+        runs[1].id = owed.id.clone();
+        let kept = [runs[1].id.clone(), runs[2].id.clone()];
+        drop_live(&mut runs, &[&active, &owed]);
+        assert_eq!(
+            runs.iter().map(|run| run.id.clone()).collect::<Vec<_>>(),
+            kept,
+            "an active run is listed live; a terminal one still in the live directory is not"
+        );
+    }
 
     fn record(lane: &str, task: Option<&str>, manual: bool, held: bool) -> RunRecord {
         serde_json::from_value(serde_json::json!({
