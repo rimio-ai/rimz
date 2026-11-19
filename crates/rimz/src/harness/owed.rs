@@ -1,10 +1,11 @@
 //! Wakes and prompts still owed to a supervised agent session.
 
 use crate::Store;
+use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::message::turn_wait::TurnWaitView;
 use crate::store::StoreErr;
-use crate::store::run::ParkCause;
+use crate::store::run::{ParkCause, RunRecord};
 use crate::store::snapshot::find_agent;
 
 use super::fleet::FleetRuns;
@@ -53,21 +54,13 @@ pub fn owed_wake(
             .any(|agent| agent.is_team_seat() && agent.launcher_is(launcher));
         if has_members || launched_team {
             let runs = super::run::listing(store.paths())?;
-            if has_members {
-                let fleet = FleetRuns::of(rows.iter(), &runs, launcher);
-                if fleet.any_running() || !fleet.unreported().is_empty() {
-                    return Ok(Some(OwedWake::Subagents));
-                }
+            if has_members && !owing_members(rows.iter(), &runs, launcher).is_empty() {
+                return Ok(Some(OwedWake::Subagents));
             }
             if launched_team
                 && super::fleet::owed_team_runs(rows.iter(), &runs, launcher)
-                    .iter()
-                    .any(|run| {
-                        let stage = super::scratch::board_stage(&run.worktree_path);
-                        super::fleet::team_stage_pending(
-                            stage.as_ref().map(|stage| stage.name.as_str()),
-                        )
-                    })
+                    .into_iter()
+                    .any(team_owes)
             {
                 return Ok(Some(OwedWake::Team));
             }
@@ -109,6 +102,33 @@ fn owes_workflow_report(
                     .as_ref()
                     .is_some_and(|starter| starter.is_agent(agent))
         }))
+}
+
+/// The launched members whose run is open or owes its report: the fleet term's debt.
+pub(super) fn owing_members<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    runs: &'a [RunRecord],
+    launcher: &AgentState,
+) -> Vec<(&'a AgentState, &'a RunRecord)> {
+    FleetRuns::of(agents, runs, launcher).unsettled()
+}
+
+/// The launched teams' open runs whose board does not read Done: the team term's debt.
+pub(super) fn owing_teams<'a, 'agents>(
+    agents: impl IntoIterator<Item = &'agents AgentState> + Clone,
+    runs: &'a [RunRecord],
+    launcher: &AgentState,
+) -> Vec<&'a RunRecord> {
+    super::fleet::owed_team_runs(agents, runs, launcher)
+        .into_iter()
+        .filter(|run| team_owes(run))
+        .collect()
+}
+
+/// A launched team's open run owes while its board does not read Done.
+fn team_owes(run: &RunRecord) -> bool {
+    let stage = super::scratch::board_stage(&run.worktree_path);
+    super::fleet::team_stage_pending(stage.as_ref().map(|stage| stage.name.as_str()))
 }
 
 /// What still owes an agent session a wake or a prompt, as the run fold sees it.
