@@ -231,9 +231,10 @@ pub fn soft_compact_skip(definition: &AgentDefinition) -> Option<SoftCompactSkip
     None
 }
 
-/// Compose the smart-compaction reminder: run `rimz agents compact @me` at a good stopping
-/// point, with a brief of what to keep where the adapter's command takes one, bare where it
-/// does not; `None` when the adapter has no native compaction command.
+/// Compose the smart-compaction reminder: run the bare `rimz agents compact @me` at a good
+/// stopping point, so the configured or built-in brief applies where the adapter's command takes
+/// one, after noting what to keep in the reply where it does not; `None` when the adapter has no
+/// native compaction command.
 pub fn compact_reminder(agent: &AgentState) -> Option<String> {
     let command = spec_by_kind(agent.kind.as_str())?.launch.compact_command?;
     let prefix = concat!(
@@ -243,8 +244,8 @@ pub fn compact_reminder(agent: &AgentState) -> Option<String> {
     let suffix = "RimZ compacts you once this turn ends and then tells you to continue.";
     Some(if command.instruction == CompactInstruction::Trailing {
         format!(
-            "{prefix}run `rimz agents compact @me \"<what to keep>\"`, naming what you need to \
-             keep. {suffix}"
+            "{prefix}run `rimz agents compact @me` with no instruction of your own, since RimZ \
+             supplies your role's compaction brief. {suffix}"
         )
     } else {
         format!(
