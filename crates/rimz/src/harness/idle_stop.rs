@@ -23,6 +23,8 @@ use crate::store::run::RunRecord;
 use crate::store::snapshot::{SidebarSnapshot, find_agent};
 use crate::{RuntimePaths, StatePaths, Store};
 
+pub mod started;
+
 /// A declined helper leaves the request armed; this bounds how often the
 /// producer asks again while a term only the helper reads still holds.
 const IDLE_STOP_RESPAWN_THROTTLE: Duration = Duration::from_secs(30);
@@ -146,19 +148,23 @@ pub(super) fn debt(
     if let Some(owed) = super::owed::owed_wake(store, &agent.kind, &agent.agent_id)? {
         return Ok(Some(Hold::Owed(owed)));
     }
-    if messages
-        .iter()
-        .any(|message| message.same_agent_card(agent) && !message.status.is_terminal())
-    {
+    if messages.iter().any(|message| open_message(message, agent)) {
         return Ok(Some(Hold::Message));
     }
-    if runs
-        .iter()
-        .any(|run| run.matches_agent(agent) && !run.status.is_terminal())
-    {
+    if runs.iter().any(|run| open_run(run, agent)) {
         return Ok(Some(Hold::OpenRun));
     }
     Ok(None)
+}
+
+/// A message for `agent`'s card that has not reached a terminal status.
+fn open_message(message: &MessageRecord, agent: &AgentState) -> bool {
+    message.same_agent_card(agent) && !message.status.is_terminal()
+}
+
+/// A run bound to `agent`'s session that is not terminal.
+fn open_run(run: &RunRecord, agent: &AgentState) -> bool {
+    run.matches_agent(agent) && !run.status.is_terminal()
 }
 
 /// When the stop falls due while the agent keeps resting, or `None` while a

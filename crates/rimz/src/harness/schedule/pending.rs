@@ -538,6 +538,11 @@ impl SessionWaits {
         }
     }
 
+    /// The waits armed for `agent`, filed under their holders over `rows`.
+    pub(crate) fn of(self, rows: &[&AgentState], agent: &AgentState) -> Vec<PendingWait> {
+        take_waits(&mut self.following(rows).waits, agent)
+    }
+
     pub(crate) fn attach(self, snapshot: &mut SidebarSnapshot) {
         let mut waits = self
             .following(&snapshot.agents.iter().collect::<Vec<_>>())

@@ -909,3 +909,5 @@ fn pings_neither_defer_a_stop_nor_let_keep_warm_hold_against_it() {
         "a requested stop ends the hold"
     );
 }
+
+mod started;

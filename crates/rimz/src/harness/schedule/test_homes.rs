@@ -13,7 +13,7 @@ use crate::ids::FireId;
 /// Runs test `name` again in a child process with private homes, for a test that writes the
 /// machine's loop state (a created run, the task record): every test process shares the
 /// unit-test home. Returns whether this is the parent, done.
-pub(super) fn reexec_with_private_homes(name: &str) -> bool {
+pub(in crate::harness) fn reexec_with_private_homes(name: &str) -> bool {
     const CHILD: &str = "RIMZ_TEST_PRIVATE_HOMES_CHILD";
     if std::env::var_os(CHILD).is_some() {
         return false;
