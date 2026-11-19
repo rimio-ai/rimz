@@ -263,7 +263,10 @@ fn serve_in_a_terminal_prints_a_note_and_exits() {
     assert!(status.success(), "{status:?}");
     let output = output.join().unwrap();
     assert!(output.contains("Claude and Codex launch"), "{output}");
-    assert!(output.contains("rimz agents explain"), "{output}");
+    assert!(
+        output.contains("rimz agents explain <profile> --mcps"),
+        "{output}"
+    );
     assert!(output.contains("rimz mcp tools"), "{output}");
     assert!(!output.contains("jsonrpc"), "{output}");
 }
@@ -563,6 +566,222 @@ fn a_call_as_an_agent_resolves_its_home_room_and_caller() {
             || text.starts_with(&env.rimz_home().display().to_string()),
         "{text}"
     );
+}
+
+/// `rimz agents explain <profile> --mcps` shows what each launch hands over:
+/// RimZ's server and the load mode of each tool, the user's servers it keeps,
+/// each mark it did not apply, and the provider's own arguments.
+#[test]
+fn explain_mcps_shows_what_each_launch_hands_over() {
+    let env = Env::new();
+    let codex_config = env.home_root.join(".codex/config.toml");
+    std::fs::create_dir_all(codex_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &codex_config,
+        "[mcp_servers.github]\ncommand = 'gh'\n[mcp_servers.notion]\ncommand = 'notion'\n",
+    )
+    .unwrap();
+    for (name, kind, mcps) in [
+        (
+            "cmark",
+            "claude",
+            "['*', 'rimz:deferred', 'rimz-lsp:always', 'github:always']",
+        ),
+        ("cflip", "claude", "['rimz:always', 'rimz-lsp:deferred']"),
+        ("cnone", "claude", "[github]"),
+        (
+            "xmark",
+            "codex",
+            "['rimz:deferred', 'rimz-lsp:always', github]",
+        ),
+        ("pmark", "pi", "[rimz-lsp]"),
+    ] {
+        let tools = if kind == "pi" { "" } else { "\ntools: [Bash]" };
+        crate::common::write_definition(
+            &env,
+            "agents",
+            name,
+            &format!("description: {name} profile\nagent: {kind}{tools}\nmcps: {mcps}"),
+            "",
+        );
+    }
+    let config = env.rimz_home().join("config.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let explain = |profile: &str| {
+        let mut bins = Vec::new();
+        for kind in ["claude", "codex", "pi"] {
+            bins.push(crate::common::write_failing_agent_shim(&env, kind, 0));
+        }
+        let shell = crate::common::write_fake_login_shell(&env, "mcps-explain-sh", &[]);
+        let path = format!(
+            "{}:{}",
+            bins[0].display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let output = env
+            .rimz()
+            .args(["agents", "explain", profile, "--mcps"])
+            .env("SHELL", shell)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let tool_load = |out: &str, tool: &str| -> String {
+        out.lines()
+            .find(|line| line.split_whitespace().nth(1) == Some(tool))
+            .and_then(|line| line.split_whitespace().last())
+            .unwrap_or_else(|| panic!("no {tool} row in {out}"))
+            .to_owned()
+    };
+
+    let out = explain("cmark");
+    assert!(!out.contains("Plan"), "{out}");
+    assert!(
+        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes"),
+        "{out}"
+    );
+    assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
+    assert_eq!(tool_load(&out, "wait"), "default", "{out}");
+    assert!(
+        out.contains("every server the account and project configure"),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "the mcps entry `github:always` is not applied: Claude takes a load mode only for \
+             RimZ's server and its capabilities"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("--mcp-config"), "{out}");
+    assert!(out.contains(r#""--always","rimz-lsp""#), "{out}");
+    assert!(out.contains("claude mcp list"), "{out}");
+    assert!(out.contains("/context"), "{out}");
+
+    let out = explain("cflip");
+    assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
+    assert_eq!(tool_load(&out, "wait"), "always", "{out}");
+    assert_eq!(tool_load(&out, "notes_list"), "always", "{out}");
+
+    let out = explain("cnone");
+    assert!(
+        out.contains("not handed over: the mcps list names no RimZ capability"),
+        "{out}"
+    );
+    assert!(!out.contains("CAPABILITY"), "{out}");
+    assert!(out.contains("only github (allowedMcpServers)"), "{out}");
+
+    let out = explain("xmark");
+    assert!(
+        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes"),
+        "{out}"
+    );
+    assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
+    assert_eq!(tool_load(&out, "notes_add"), "deferred", "{out}");
+    assert!(out.contains("switched off: notion"), "{out}");
+    assert!(
+        out.contains(
+            "the mcps entry `rimz-lsp:always` is not applied: Codex takes a load mode per \
+             server, so rimz-lsp loads as the rimz server does"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("mcp_servers.rimz.omit_tools_from=[]"), "{out}");
+    assert!(out.contains("CODEX_ROLLOUT_TRACE_ROOT"), "{out}");
+
+    let out = explain("pmark");
+    assert!(
+        out.contains("pi takes no MCP servers from a launch; it loads its own as configured"),
+        "{out}"
+    );
+    assert!(!out.contains("CAPABILITY"), "{out}");
+
+    std::fs::write(&config, "[agents]\nrimz-mcp-server = false\n").unwrap();
+    let out = explain("cmark");
+    assert!(
+        out.contains("off: [agents] rimz-mcp-server = false"),
+        "{out}"
+    );
+    assert!(!out.contains("CAPABILITY"), "{out}");
+}
+
+/// A profile's own Codex overrides sit in the argv beside RimZ's, and
+/// `explain --mcps` reads what Codex applies: the last `omit_tools_from` for
+/// `rimz`, in either `-c` or `--config=` spelling, and only the entries a
+/// `mcp_servers=` table switches off.
+#[test]
+fn explain_mcps_reads_a_profiles_own_codex_overrides_as_codex_applies_them() {
+    let env = Env::new();
+    env.write_config(
+        &env.project_root,
+        "[profiles.xlast]\nagent = 'codex'\nmcps = ['*', 'rimz:always']\n\
+         args = \"-c 'mcp_servers.rimz.omit_tools_from=[]'\"\n\
+         [profiles.xconf]\nagent = 'codex'\nmcps = ['*']\n\
+         args = \"'--config=mcp_servers.rimz.omit_tools_from=[\\\"deferred\\\"]'\"\n\
+         [profiles.xtable]\nagent = 'codex'\nmcps = ['*']\n\
+         args = \"-c 'mcp_servers={notion={enabled=false},github={command=\\\"gh\\\"}}'\"\n",
+    );
+    let granted = env.rimz().args(["trust", "grant"]).output().unwrap();
+    assert!(
+        granted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&granted.stderr)
+    );
+    let explain = |profile: &str| {
+        let bin = crate::common::write_failing_agent_shim(&env, "codex", 0);
+        let shell = crate::common::write_fake_login_shell(&env, "mcps-overrides-sh", &[]);
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let output = env
+            .rimz()
+            .args(["agents", "explain", profile, "--mcps"])
+            .env("SHELL", shell)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let tool_load = |out: &str, tool: &str| -> String {
+        out.lines()
+            .find(|line| line.split_whitespace().nth(1) == Some(tool))
+            .and_then(|line| line.split_whitespace().last())
+            .unwrap_or_else(|| panic!("no {tool} row in {out}"))
+            .to_owned()
+    };
+
+    let out = explain("xlast");
+    let user = out
+        .find("mcp_servers.rimz.omit_tools_from=[]")
+        .unwrap_or_else(|| panic!("{out}"));
+    let rimz = out
+        .find(r#"mcp_servers.rimz.omit_tools_from=["deferred"]"#)
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(user < rimz, "RimZ's override follows the profile's: {out}");
+    assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
+
+    let out = explain("xconf");
+    assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
+    assert!(
+        out.contains(r#"--config mcp_servers.rimz.omit_tools_from=["deferred"]"#),
+        "{out}"
+    );
+
+    let out = explain("xtable");
+    assert!(out.contains("switched off: notion\n"), "{out}");
 }
 
 /// Codex hands the server only the variables its entry's `env_vars` names, so

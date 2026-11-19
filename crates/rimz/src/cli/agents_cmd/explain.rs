@@ -16,9 +16,11 @@ use rimz::harness::budget::BudgetSpec;
 use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
 use rimz::harness::launch_plan::{self, LaunchPlan, LaunchPlanInputs};
 use rimz::harness::team_prompt::{self, BUILT_IN_CONSENSUS, Consensus};
+use rimz::mcp::catalog::{Capability, LoadMode, SERVER_NAME, tools_for};
 use rimz::sandbox::{EnvPin, Mount, SkippedSkill};
 
 use super::{LaunchOverrideArgs, launch_resolve, restart};
+use crate::cli::render::Table;
 use crate::cli::{self, GlobalFlags, render};
 
 #[derive(Debug, Args)]
@@ -37,6 +39,9 @@ pub(super) struct ExplainArgs {
     /// Print only the composed system prompt and RimZ reminder.
     #[arg(long)]
     prompt: bool,
+    /// Print only the MCP servers, tools, and load modes the launch gets.
+    #[arg(long, conflicts_with_all = ["json", "prompt"])]
+    mcps: bool,
 }
 
 pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
@@ -278,6 +283,13 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     if args.json {
         return render::json_pretty(&report);
     }
+    if args.mcps {
+        return render::finish(write_mcps(
+            &plan,
+            machine.agents.rimz_mcp_server,
+            &mut render::out(),
+        ));
+    }
     if args.prompt {
         write_prompt(&report.prompt, &mut render::out())?;
         if report.prompt.reminder.is_some() && !report.prompt.reminder_delivered {
@@ -290,6 +302,211 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     }
     render_explain(&report)
+}
+
+/// What a launch hands its provider for MCP: RimZ's server and the load mode
+/// of each of its tools, the user's servers it keeps, each `mcps` mark the
+/// adapter did not apply, and the provider arguments that carry them, all read
+/// from the compiled plan.
+fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io::Result<()> {
+    let kind = plan.request.kind.as_str();
+    let adapter = rimz::agents::find_definition(kind).expect("compiled agent has an adapter");
+    let mut servers = render::KeyVals::new().indent(2);
+    if !adapter.takes_mcp_servers() {
+        servers.push(
+            "rimz",
+            render::cell(format!(
+                "{kind} takes no MCP servers from a launch; it loads its own as configured"
+            )),
+        );
+        writeln!(w, "MCP servers")?;
+        return servers.render(w);
+    }
+    let process = plan.process();
+    let rimz_line = if !plan.mcp_capabilities.is_empty() {
+        let names: Vec<_> = plan.mcp_capabilities.iter().map(|c| c.name()).collect();
+        format!("serves {}", names.join(", "))
+    } else if !server_on {
+        "off: [agents] rimz-mcp-server = false".to_owned()
+    } else {
+        "not handed over: the mcps list names no RimZ capability".to_owned()
+    };
+    servers.push("rimz", render::cell(rimz_line));
+    servers.push("your servers", render::cell(user_servers(plan)));
+    writeln!(w, "MCP servers")?;
+    servers.render(w)?;
+    let arguments = mcp_arguments(&process.provider_argv);
+    if !plan.mcp_capabilities.is_empty() {
+        let mut table = Table::new(["CAPABILITY", "TOOL", "TOKENS", "LOAD"]).right(&[2]);
+        let mut total = 0;
+        let tools: Vec<_> = tools_for(&plan.mcp_capabilities).collect();
+        for tool in &tools {
+            let size = tool.tokens();
+            total += size;
+            table.row([
+                render::cell(tool.capability.name()),
+                render::cell(tool.name),
+                render::cell(format!("~{size}")),
+                render::cell(load_mode(&arguments, tool.capability)),
+            ]);
+        }
+        writeln!(w, "\nTools")?;
+        table.render(w)?;
+        writeln!(w, "total: ~{total} tokens in {} tools", tools.len())?;
+    }
+    if !process.mcp_warnings.is_empty() {
+        writeln!(w, "\nNot applied")?;
+        for warning in &process.mcp_warnings {
+            writeln!(w, "  {warning}")?;
+        }
+    }
+    if !arguments.is_empty() {
+        writeln!(w, "\nProvider arguments")?;
+        for (flag, value) in arguments {
+            writeln!(w, "  {flag} {value}")?;
+        }
+    }
+    let pointers: &[&str] = match kind {
+        "claude" => &[
+            "claude mcp list: the servers Claude connects for the account and project",
+            "/context in the session: what fills Claude's context, its MCP tools included",
+        ],
+        "codex" => &[
+            "CODEX_ROLLOUT_TRACE_ROOT=<dir> on a launch: Codex writes each request's tool \
+             declarations there",
+        ],
+        _ => &[],
+    };
+    writeln!(w, "\nCheck it")?;
+    writeln!(w, "  rimz mcp tools: every RimZ tool and its size")?;
+    for pointer in pointers {
+        writeln!(w, "  {pointer}")?;
+    }
+    Ok(())
+}
+
+/// The user's servers a launch keeps, read from what the adapter wrote: a
+/// Claude allowlist in its settings (a file or the inline `--settings`), or
+/// the servers a Codex `-c` override switches off.
+fn user_servers(plan: &LaunchPlan) -> String {
+    let process = plan.process();
+    let inline = process
+        .provider_argv
+        .windows(2)
+        .rev()
+        .find(|pair| pair[0] == "--settings")
+        .and_then(|pair| serde_json::from_str::<serde_json::Value>(&pair[1]).ok());
+    if let Some(allowed) = process
+        .settings()
+        .or(inline.as_ref())
+        .and_then(|settings| settings.get("allowedMcpServers"))
+        .and_then(serde_json::Value::as_array)
+    {
+        let names: Vec<_> = allowed
+            .iter()
+            .filter_map(|entry| entry["serverName"].as_str())
+            .filter(|name| *name != SERVER_NAME)
+            .collect();
+        let names = if names.is_empty() {
+            "none".to_owned()
+        } else {
+            names.join(", ")
+        };
+        return format!("only {names} (allowedMcpServers)");
+    }
+    // Codex applies the last `mcp_servers=` table it is given.
+    let table = mcp_arguments(&process.provider_argv)
+        .into_iter()
+        .filter(|(_, value)| value.starts_with("mcp_servers="))
+        .filter_map(|(_, value)| toml::from_str::<toml::Table>(value).ok())
+        .filter_map(|table| table.get("mcp_servers")?.as_table().cloned())
+        .next_back()
+        .unwrap_or_default();
+    let switched_off: Vec<_> = table
+        .iter()
+        .filter(|(_, entry)| entry.get("enabled").and_then(toml::Value::as_bool) == Some(false))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    if switched_off.is_empty() {
+        return "every server the account and project configure".to_owned();
+    }
+    format!("switched off: {}", switched_off.join(", "))
+}
+
+/// A capability's load mode as the launch passes it. On Claude, a
+/// `--always` or `--deferred` flag naming it in the `rimz` server's
+/// `--mcp-config` args, else that entry's `alwaysLoad`; on Codex, the
+/// server's `omit_tools_from` override, where `["deferred"]` loads its tools
+/// from the start and `[]` defers them; the last one passed wins, as in
+/// Codex. `default` when neither is passed.
+fn load_mode(arguments: &[(&str, &str)], capability: Capability) -> &'static str {
+    let omit_prefix = format!("mcp_servers.{SERVER_NAME}.omit_tools_from=");
+    let mut load = None;
+    for (flag, value) in arguments {
+        if *flag == "--mcp-config" {
+            let Ok(config) = serde_json::from_str::<serde_json::Value>(value) else {
+                continue;
+            };
+            let server = &config["mcpServers"][SERVER_NAME];
+            let args: Vec<&str> = server["args"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .collect();
+            let flagged = args
+                .windows(2)
+                .filter(|pair| pair[1] == capability.name())
+                .find_map(|pair| pair[0].strip_prefix("--").and_then(LoadMode::from_name));
+            let server_wide = server["alwaysLoad"].as_bool().map(|always| {
+                if always {
+                    LoadMode::Always
+                } else {
+                    LoadMode::Deferred
+                }
+            });
+            load = flagged.or(server_wide).or(load);
+        } else if let Some(omit) = value.strip_prefix(&omit_prefix) {
+            let Ok(table) = toml::from_str::<toml::Table>(&format!("omit = {omit}")) else {
+                continue;
+            };
+            let Some(surfaces) = table["omit"].as_array() else {
+                continue;
+            };
+            let mode = if surfaces
+                .iter()
+                .any(|surface| surface.as_str() == Some("deferred"))
+            {
+                LoadMode::Always
+            } else {
+                LoadMode::Deferred
+            };
+            load = Some(mode);
+        }
+    }
+    load.map_or("default", LoadMode::name)
+}
+
+/// The provider arguments that carry MCP servers, in argv order: Claude's
+/// `--mcp-config` and Codex's `mcp_servers…` overrides, given as `-c <kv>`,
+/// `--config <kv>`, or `--config=<kv>`.
+fn mcp_arguments(argv: &[String]) -> Vec<(&str, &str)> {
+    let mut arguments = Vec::new();
+    for (index, arg) in argv.iter().enumerate() {
+        let next = argv.get(index + 1).map(String::as_str);
+        let (flag, value) = match (arg.as_str(), next) {
+            ("--mcp-config", Some(value)) => (arg.as_str(), value),
+            ("-c" | "--config", Some(value)) => (arg.as_str(), value),
+            _ => match arg.strip_prefix("--config=") {
+                Some(value) => ("--config", value),
+                None => continue,
+            },
+        };
+        if flag == "--mcp-config" || value.starts_with("mcp_servers") {
+            arguments.push((flag, value));
+        }
+    }
+    arguments
 }
 
 fn validate_target_overrides(args: &ExplainArgs) -> Result<()> {
@@ -1107,10 +1324,16 @@ mod tests {
             applied_overrides(&args, &["--foo".to_owned()], "claude", Some("opus"), None),
             ["--account rimio", "--model opus", "--yolo", "-- --foo"]
         );
-        let error = ParserArgs::try_parse_from(["explain", "coder", "--json", "--prompt"])
-            .err()
-            .unwrap();
-        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        for conflict in [
+            ["--json", "--prompt"],
+            ["--mcps", "--json"],
+            ["--mcps", "--prompt"],
+        ] {
+            let error = ParserArgs::try_parse_from(["explain", "coder", conflict[0], conflict[1]])
+                .err()
+                .unwrap();
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
     }
 
     #[test]

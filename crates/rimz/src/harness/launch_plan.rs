@@ -59,6 +59,9 @@ pub struct LaunchPlan {
     pub stage: AgentProcessStage,
     pub sandbox: Option<SandboxPlan>,
     pub skill_links: Option<SkillLinkPlan>,
+    /// The RimZ capabilities whose tools the launch's MCP server serves;
+    /// empty when the launch is handed no server.
+    pub mcp_capabilities: Vec<crate::mcp::catalog::Capability>,
     pub warnings: Vec<LaunchPlanWarning>,
     temp_owner: Option<String>,
     runtime: RuntimePaths,
@@ -920,6 +923,11 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         };
         reminders.mcp_server = Some((program, crate::mcp::catalog::serve_args(only)));
     }
+    let mcp_capabilities = if reminders.mcp_server.is_some() {
+        capabilities
+    } else {
+        Vec::new()
+    };
     let only_all = request.mcps.as_deref().is_some_and(|entries| {
         !entries.is_empty() && entries.iter().all(crate::config::McpName::is_all)
     });
@@ -1053,7 +1061,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     }
     let process = &*process;
     let mut env = login_env;
-    for warning in &process.env_warnings {
+    for warning in process.env_warnings.iter().chain(&process.mcp_warnings) {
         warnings.push(LaunchPlanWarning::LaunchEnv(warning.clone()));
     }
     if process.host_skills == Some(crate::agents::skills::HostSkillPlan::Unenforced) {
@@ -1143,6 +1151,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         stage,
         sandbox,
         skill_links,
+        mcp_capabilities,
         warnings,
         temp_owner,
         runtime: inputs.runtime.clone(),
