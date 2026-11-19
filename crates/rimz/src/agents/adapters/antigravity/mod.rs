@@ -9,6 +9,7 @@
 mod install;
 mod payloads;
 mod session;
+mod spend;
 mod statusline;
 mod usage;
 // Capabilities this agent has no behavior for; every method keeps its
@@ -265,8 +266,8 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "custom statusline context_window payload",
     },
     realtime_cost: ConcernCoverage::Partial {
-        via: "current statusline usage is priced through the local model price book",
-        gap: "no cumulative session or provider billing ledger is published",
+        via: "turn-end transcript token rows priced at list price by exact model",
+        gap: "the session total moves only when a turn ends",
     },
     rich_context: ConcernCoverage::Wired {
         via: "custom statusline context plus agy -p /usage quota windows",
@@ -274,8 +275,9 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     hook_install: ConcernCoverage::Wired {
         via: "RimZ-owned agy plugin directory plus reversible statusLine wrap",
     },
-    account_spend: ConcernCoverage::Unsupported {
-        reason: "quota is work-metered and no cumulative billing ledger is published",
+    account_spend: ConcernCoverage::Partial {
+        via: "transcript_full token rows priced at list price by exact model",
+        gap: "quota is work-metered, so dollars are a list-price estimate",
     },
     tool_stats: ConcernCoverage::Partial {
         via: "PostToolUse toolCall names on matched tools",
@@ -291,15 +293,15 @@ const ANTIGRAVITY_USER_COVERAGE: UserCoverage = UserCoverage {
         note: "the card tracks every turn from session start to session end",
     },
     live: CapabilityLevel::Partial {
-        shows: "context fill, token composition, and a priced dollar figure",
-        limit: "the dollar figure covers the current turn rather than a session total",
+        shows: "context fill, token composition, and the session's priced dollar total",
+        limit: "the dollar total updates when a turn ends",
     },
     history: CapabilityLevel::Partial {
-        shows: "past sessions read end to end with per-turn detail",
-        limit: "no dollars, so Antigravity sessions stay out of rimz stats spend",
+        shows: "past sessions read end to end, with per-turn tokens and dollars",
+        limit: "dollars are a list-price estimate, not what the plan bills",
     },
     account: CapabilityLevel::Full {
-        note: "5h and weekly quota windows with fill and reset, plan tier while live",
+        note: "Gemini 5h and weekly quota windows with fill and reset, plus plan tier",
     },
     ask: CapabilityLevel::Partial {
         shows: "the card raises Waiting and routes you to the pane",
@@ -366,18 +368,12 @@ impl crate::agents::capabilities::CoreCapability for AntigravityAdapter {
                 .iter()
                 .map(|entry| super::hook_types::classification_sample(&entry.hook))
                 .collect(),
-            context_cost: Some(super::ContextCostFixture {
-                payload: serde_json::json!({
-                    "model": {"id": "gemini-3-flash-preview"},
-                    "context_window": {
-                        "current_usage": {
-                            "input_tokens": 100,
-                            "output_tokens": 20,
-                            "cache_creation_input_tokens": 30,
-                            "cache_read_input_tokens": 40
-                        }
-                    }
-                }),
+            spend: Some(super::SpendFixture {
+                session_id: "11111111-1111-4111-8111-111111111111",
+                file_name: "brain/11111111-1111-4111-8111-111111111111/.system_generated/logs/transcript_full.jsonl",
+                body: super::SpendFixtureBody::Jsonl(
+                    r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-07-13T23:23:09Z","model":"gemini-3-flash-preview","input_tokens":100,"cache_read_tokens":40,"output_tokens":20}"#,
+                ),
             }),
             local_session: Some(session::fixture_observation()),
             ..super::AdapterConformance::default()
@@ -537,28 +533,16 @@ impl crate::agents::capabilities::ContextCapability for AntigravityAdapter {
         let agent_id = parsed.conversation_id.clone()?;
         super::ContextObservation::new(agent_id, parsed.into_context(source, Timestamp::now()))
     }
-
-    fn context_cost(
-        &self,
-        payload: &Value,
-        prices: &dyn Fn() -> std::sync::Arc<super::PriceBook>,
-    ) -> Option<super::AgentCost> {
-        if !payload.is_object() {
-            return None;
-        }
-        statusline::StatuslinePayload::deserialize(payload)
-            .ok()?
-            .cost(prices)
-    }
 }
 
 impl crate::agents::capabilities::AccountCapability for AntigravityAdapter {
     fn probe_account(&self, login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
+        let provider_home = self.config_home(login_env);
         usage::read(
-            self.config_home(login_env),
+            provider_home.clone(),
             login_env.get("HOME").map(String::as_str),
         )
-        .account()
+        .account(provider_home.as_deref())
     }
 
     fn probe_account_usage(
@@ -574,16 +558,37 @@ impl crate::agents::capabilities::AccountCapability for AntigravityAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for AntigravityAdapter {
+    fn spending_sources(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> Vec<crate::agents::spending::SpendingSource> {
+        self.config_home(login_env)
+            .map(|home| spend::sources(&home))
+            .unwrap_or_default()
+    }
+
+    fn parse_spend(
+        &self,
+        path: &Path,
+        resume: Option<&crate::agents::spending::SpendCursor>,
+        prices: &super::PriceBook,
+    ) -> crate::agents::spending::SpendParse {
+        spend::parse(path, resume, prices)
+    }
+
     fn session_transcript(
         &self,
         session_id: &str,
         prior_path: Option<&Path>,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> Option<PathBuf> {
-        if let Some(path) = prior_path.filter(|path| session::valid_transcript(path, session_id)) {
+        let home = session::login_home(login_env)?;
+        if let Some(path) =
+            prior_path.filter(|path| session::valid_transcript_under(&home, path, session_id))
+        {
             return Some(path.to_path_buf());
         }
-        session::transcript_for_session(session_id)
+        session::transcript_for_session_under(&home, session_id)
     }
 }
 

@@ -467,59 +467,53 @@ mod tests {
     }
 
     #[test]
-    fn current_usage_cost_attaches_only_when_the_payload_is_priceable() {
+    fn token_priced_cost_attaches_only_when_the_payload_is_priceable() {
         let prices = PriceBook::from_litellm_json(
-            r#"{"gemini-3.5-flash": {"input_cost_per_token": 1.5e-6, "output_cost_per_token": 9e-6, "cache_read_input_token_cost": 0.15e-6}}"#,
+            r#"{"copilot-test-model": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "cache_read_input_token_cost": 1e-7}}"#,
         );
+        let copilot = rimz::agents::definition_by_kind("copilot").unwrap();
+        let observe = |payload: &Value| {
+            let mut context = copilot.observe_context("copilot", payload).unwrap().context;
+            attach_context_cost(copilot, payload, &|| Arc::new(prices.clone()), &mut context);
+            context.cost
+        };
+
         let priced = json!({
-            "conversation_id": "agy-session",
-            "model": {"id": "Gemini 3.5 Flash (Medium)"},
-            "context_window": {"current_usage": {
-                "input_tokens": 2_971,
-                "output_tokens": 630,
-                "cache_read_input_tokens": 16_270
-            }}
+            "session_id": "copilot-session",
+            "model": {"id": "copilot-test-model"},
+            "context_window": {
+                "total_input_tokens": 2_100,
+                "total_output_tokens": 330,
+                "total_cache_read_tokens": 1_000,
+                "total_reasoning_tokens": 30
+            },
+            "cost": {"total_lines_added": 5}
         });
-        let mut context = rimz::agents::definition_by_kind("antigravity")
-            .unwrap()
-            .observe_context("antigravity", &priced)
-            .unwrap()
-            .context;
-        attach_context_cost(
-            rimz::agents::definition_by_kind("antigravity").unwrap(),
-            &priced,
-            &|| Arc::new(prices.clone()),
-            &mut context,
-        );
-        let cost = context.cost.unwrap();
-        assert_eq!(cost.coverage, rimz::agents::CostCoverage::CurrentUsage);
-        assert!((cost.total_cost_usd.unwrap() - 0.012_567).abs() < 1e-15);
+        let cost = observe(&priced).unwrap();
+        assert!((cost.total_cost_usd.unwrap() - 0.001_86).abs() < 1e-15);
         assert_eq!(
             cost,
             AgentCost {
                 total_cost_usd: cost.total_cost_usd,
-                coverage: rimz::agents::CostCoverage::CurrentUsage,
+                coverage: rimz::agents::CostCoverage::Session,
+                total_lines_added: Some(5),
                 ..AgentCost::default()
             }
         );
 
         let unknown = json!({
-            "conversation_id": "agy-session",
+            "session_id": "copilot-session",
             "model": {"id": "unknown"},
-            "context_window": {"current_usage": {"input_tokens": 10}}
+            "context_window": {"total_input_tokens": 10}
         });
-        let mut context = rimz::agents::definition_by_kind("antigravity")
-            .unwrap()
-            .observe_context("antigravity", &unknown)
-            .unwrap()
-            .context;
-        attach_context_cost(
-            rimz::agents::definition_by_kind("antigravity").unwrap(),
-            &unknown,
-            &|| Arc::new(prices.clone()),
-            &mut context,
-        );
-        assert!(context.cost.is_none());
+        assert!(observe(&unknown).is_none());
+
+        let current_usage_only = json!({
+            "session_id": "copilot-session",
+            "model": {"id": "copilot-test-model"},
+            "context_window": {"current_usage": {"input_tokens": 10, "output_tokens": 2}}
+        });
+        assert!(observe(&current_usage_only).is_none());
     }
 
     #[test]

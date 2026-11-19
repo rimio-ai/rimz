@@ -352,7 +352,7 @@ The terminal-title command ([terminal title](https://antigravity.google/docs/cli
 | `context_window` | token totals, limit, percentages, and `current_usage`. Below | docs |
 | `exceeds_200k_tokens` | `true` once context exceeds 200k tokens. `null` before the first API call | docs |
 | `product` | application name, for example `antigravity` | docs |
-| `quota` | map from model or bucket ID to `{remaining_fraction, reset_time, reset_in_seconds}`, optional | docs |
+| `quota` | map from model or bucket ID to `{remaining_fraction, reset_time, reset_in_seconds}`, optional. A 1.5.12 capture holds the ids `gemini-5h`, `gemini-weekly`, `3p-5h`, and `3p-weekly`, with no `window` field | docs, 1.5.12 capture |
 | `agent_state` | `idle`, `thinking`, `working`, `tool_use`, or `initializing` | docs |
 | `vcs` | `{type, branch, client, dirty}`. `type` is `git`, `jj`, or `hg` | docs |
 | `sandbox` | `{enabled, allow_network}` | docs |
@@ -399,6 +399,8 @@ The 1.2.2 binary marks most fields `omitempty`. Accept absent fields. Omission a
 
 No source says whether the `total_*` token fields count the current window or the whole session, or how often `current_usage` refreshes. The 1.1.12 changelog fixed quota that lagged one fetch. The full set of `quota` bucket IDs is unpublished.
 
+A 1.5.12 capture (2026-11-19, no model turn) fills the payload in stages within one session: the first three payloads carry neither `quota` nor `plan_tier`, the next two carry `quota` only, and later ones carry both, with `email` present from the second. While `agent_state` is `initializing`, and until the first model turn, `context_window.current_usage` is `null`.
+
 ## Transcripts and local state
 
 ### Transcripts
@@ -418,6 +420,8 @@ Historical embedded instructions describe two JSONL transcripts per conversation
 | `thinking` | model reasoning on `PLANNER_RESPONSE` steps |
 | `tool_calls` | optional array of tool calls with arguments |
 | `truncated_fields` | compact file only: the fields cut on this line |
+
+In 1.5.12 local transcripts (12 conversations read 2026-11-18 and 2026-11-19), each completed `MODEL` / `PLANNER_RESPONSE` step also carries `model` in slug form with its effort suffix (`gemini-4-neon-high`, `gemini-3.8-flash-high`), `input_tokens`, `cache_read_tokens`, and `output_tokens`. `input_tokens` excludes cache reads, and one print-mode turn whose `usage` reported 31 thinking tokens wrote an `output_tokens` equal to its reported output, so output includes thinking. No file repeated a `step_index`, `transcript.jsonl` repeats the same token rows, and a context reset appends new rows without rewriting earlier ones.
 
 No page publishes the full enums, an append guarantee, a locking contract, retention, or what `/rewind` does to either file. The 1.1.13 changelog describes transcript rewriting during compaction. It provides no append-only guarantee, so an offset-only reader cannot assume stable prior content.
 
@@ -626,7 +630,7 @@ Since 1.3.3, the macOS terminal sandbox blocks reads under `~/Library/Applicatio
 
 ## Authentication
 
-The CLI signs in with Google in a browser and stores the session in the OS keyring (Apple Keychain, Secret Service over D-Bus, Windows Credential Manager). SSH sessions use a URL-and-code flow ([install](https://antigravity.google/docs/cli/install/)). On Linux without a D-Bus session bus, or for an hour after a keyring timeout, the CLI bypasses the keyring and stores tokens in files (1.1.3, 1.1.26). A historical 1.2.2 installation had an `antigravity-oauth-token` file in the app-data root. Its format is undocumented. `/logout` removes the stored session.
+The CLI signs in with Google in a browser and stores the session in the OS keyring (Apple Keychain, Secret Service over D-Bus, Windows Credential Manager). SSH sessions use a URL-and-code flow ([install](https://antigravity.google/docs/cli/install/)). On Linux without a D-Bus session bus, or for an hour after a keyring timeout, the CLI bypasses the keyring and stores tokens in files (1.1.3, 1.1.26). A historical 1.2.2 installation had an `antigravity-oauth-token` file in the app-data root. Its format is undocumented. On a 1.5.12 file-store installation it is JSON with a top-level `id_token_email` that equals the statusline `email`. `/logout` removes the stored session.
 
 Other sign-in paths exist: Business sign-in for Gemini Enterprise with a Google Cloud project, Workforce Identity Federation, and Application Default Credentials (1.1.10), and a `GEMINI_API_KEY` environment variable with `modelProvider: "gemini"` (1.1.13), for which `/logout` has nothing to clear. No credential file or machine-readable auth-status command is documented.
 
@@ -656,7 +660,7 @@ Plans grant baseline quota that refreshes on plan-dependent five-hour and weekly
 
 ### Cost
 
-The statusline `cost` field (1.1.21 changelog) is an unrounded estimated cost of the current session. Its unit and nested shape are unpublished. Print-mode `usage` reports tokens without dollars. Plan quota and AI credits are not API-token billing.
+The statusline `cost` field (1.1.21 changelog) is an unrounded estimated cost of the current session. Its unit and nested shape are unpublished. Print-mode `usage` and the transcript token rows report tokens without dollars. Plan quota and AI credits are not API-token billing.
 
 ### Private local service
 

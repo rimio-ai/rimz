@@ -5,6 +5,7 @@ fn bit_exact(scoped: &ScopedSpending) -> String {
         tally,
         headline_cutoff_secs,
         live_baselines,
+        headline_live_baselines,
         day,
         day_cutoff_secs,
     } = scoped;
@@ -38,6 +39,9 @@ fn bit_exact(scoped: &ScopedSpending) -> String {
     }
     for (session, usd) in live_baselines {
         lines.push(format!("{session}: {:016x}", usd.to_bits()));
+    }
+    for (session, usd) in headline_live_baselines {
+        lines.push(format!("headline {session}: {:016x}", usd.to_bits()));
     }
     lines.join("\n")
 }

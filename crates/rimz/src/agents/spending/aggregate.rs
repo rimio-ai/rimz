@@ -522,17 +522,21 @@ pub(crate) fn aggregate_counted_rollups(
                 .iter()
                 .filter(|row| row.origin().is_some_and(|origin| scope.contains(origin)))
                 .collect();
-            let scoped_files = files.iter().filter_map(|file| {
-                let cached = cache.files.get(file.path.to_string_lossy().as_ref())?;
-                cached
-                    .origin_path
-                    .as_deref()
-                    .filter(|origin| scope.contains(origin))?;
-                Some((file, cached))
+            let cached_files = files.iter().filter_map(|file| {
+                Some((file, cache.files.get(file.path.to_string_lossy().as_ref())?))
             });
+            let (scoped_files, originless_files) = cached_files
+                .filter(|(_, cached)| {
+                    cached
+                        .origin_path
+                        .as_deref()
+                        .is_none_or(|origin| scope.contains(origin))
+                })
+                .partition::<Vec<_>, _>(|(_, cached)| cached.origin_path.is_some());
             aggregate_scoped_rollups(
                 selected.iter().copied(),
-                scoped_files,
+                scoped_files.into_iter(),
+                originless_files.into_iter(),
                 &contested_session_keys(files, cache, contested),
                 scope,
                 headline,
@@ -579,9 +583,15 @@ pub(crate) fn aggregate_counted_rollups(
     }
 }
 
+/// A file without an origin is in no scope, so its rows stay out of the
+/// scope's figures, yet a live card in scope may run on its session (an
+/// Antigravity transcript names no folder). Its spend from before the day
+/// cutoff becomes that session's live baseline, and its spend from before the
+/// headline cutoff its headline baseline, so the card adds only each window's.
 fn aggregate_scoped_rollups<'a, P: CountedPayload + 'a>(
     counted: impl Iterator<Item = &'a P> + Clone,
     files: impl Iterator<Item = (&'a SpendingFile, &'a FileCacheEntry)>,
+    originless: impl Iterator<Item = (&'a SpendingFile, &'a FileCacheEntry)>,
     contested: &FastHashSet<SessionKey<'a>>,
     scope: &SpendScope,
     headline: HeadlineContext<'_>,
@@ -646,16 +656,30 @@ fn aggregate_scoped_rollups<'a, P: CountedPayload + 'a>(
         cutoff,
         window_starts,
     );
-    let live_baselines = session_totals
+    let mut live_baselines: BTreeMap<String, f64> = session_totals
         .into_iter()
         .filter(|(_, (youngest, _))| within_raw_retain_window(*youngest, now_secs))
         .map(|(session, (_, usd))| (session.materialize(), usd))
         .collect();
+    let mut headline_live_baselines = BTreeMap::new();
+    for (session, before) in originless_session_spend(originless, day_cutoff_secs, cutoff, now_secs)
+    {
+        if live_baselines.contains_key(&session) {
+            continue;
+        }
+        if before.headline != before.day {
+            headline_live_baselines.insert(session.clone(), before.headline);
+        }
+        if before.day > 0.0 {
+            live_baselines.insert(session, before.day);
+        }
+    }
     day.sessions = day_sessions.len().try_into().unwrap_or(u32::MAX);
     ScopedSpending {
         tally,
         headline_cutoff_secs: cutoff,
         live_baselines,
+        headline_live_baselines,
         day,
         day_cutoff_secs,
     }
@@ -782,6 +806,48 @@ fn add_spending_sessions(
             window_starts,
         );
     }
+}
+
+/// An originless session's spend from before each cutoff a live card's cost
+/// is counted above.
+#[derive(Default)]
+struct OriginlessBaseline {
+    youngest_secs: u64,
+    day: f64,
+    headline: f64,
+}
+
+/// Each recent originless session's spend from before `day_cutoff_secs` and
+/// before `headline_cutoff_secs`. A session whose youngest row is past the
+/// raw retain window is left out, as the scoped baselines leave theirs.
+fn originless_session_spend<'a>(
+    files: impl Iterator<Item = (&'a SpendingFile, &'a FileCacheEntry)>,
+    day_cutoff_secs: u64,
+    headline_cutoff_secs: u64,
+    now_secs: u64,
+) -> impl Iterator<Item = (String, OriginlessBaseline)> {
+    let mut sessions = FastHashMap::<String, OriginlessBaseline>::default();
+    for (file, cached_file) in files {
+        let file_key = file_session_key(file.adapter, &file.path);
+        for entry in cached_file
+            .entries
+            .iter()
+            .filter(|entry| within_widest_window(entry.ts_secs, now_secs))
+        {
+            let session = session_key(file.adapter.spec().kind, file_key, entry);
+            let baseline = sessions.entry(session.materialize()).or_default();
+            baseline.youngest_secs = baseline.youngest_secs.max(entry.ts_secs);
+            if entry.ts_secs < day_cutoff_secs {
+                baseline.day += entry.cost_usd;
+            }
+            if entry.ts_secs < headline_cutoff_secs {
+                baseline.headline += entry.cost_usd;
+            }
+        }
+    }
+    sessions
+        .into_iter()
+        .filter(move |(_, baseline)| within_raw_retain_window(baseline.youngest_secs, now_secs))
 }
 
 fn add_scoped_sessions<'a>(
@@ -1271,11 +1337,17 @@ pub(super) fn aggregate_scoped_locations(
         .flatten()
         .filter(|file| file.selected)
         .map(|file| (file.file, file.cache));
+    let originless_files = table
+        .iter()
+        .flatten()
+        .filter(|file| file.cache.origin_path.is_none())
+        .map(|file| (file.file, file.cache));
     CachedScopedSpending {
         has_discovered_file,
         scoped: aggregate_scoped_rollups(
             counted.iter(),
             scoped_files,
+            originless_files,
             &contested_session_keys(files, cache, contested),
             scope,
             headline,

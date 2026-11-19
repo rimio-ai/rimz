@@ -526,13 +526,6 @@ pub(super) fn transcript_for_session(session_id: &str) -> Option<PathBuf> {
     transcript_for_session_under(&home, session_id)
 }
 
-pub(super) fn valid_transcript(path: &Path, session_id: &str) -> bool {
-    let Some(home) = home() else {
-        return false;
-    };
-    valid_transcript_under(&home, path, session_id)
-}
-
 pub(super) fn latest_prompt(path: &Path, session_id: &str) -> Option<String> {
     let home = home()?;
     latest_prompt_under(&home, path, session_id)
@@ -759,6 +752,15 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
     }
 }
 
+/// The CLI home of the login whose environment is `login_env`: the override
+/// when set, else under that login's `HOME`.
+pub(super) fn login_home(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    resolve_home(
+        std::env::var_os("RIMZ_ANTIGRAVITY_HOME").as_deref(),
+        login_env.get("HOME").map(OsStr::new),
+    )
+}
+
 fn home() -> Option<PathBuf> {
     resolve_home(
         std::env::var_os("RIMZ_ANTIGRAVITY_HOME").as_deref(),
@@ -777,7 +779,7 @@ pub(super) fn resolve_home(override_home: Option<&OsStr>, home: Option<&OsStr>) 
         })
 }
 
-fn transcript_for_session_under(home: &Path, session_id: &str) -> Option<PathBuf> {
+pub(super) fn transcript_for_session_under(home: &Path, session_id: &str) -> Option<PathBuf> {
     valid_conversation_id(session_id).then_some(())?;
     TRANSCRIPT_BASENAMES.iter().find_map(|basename| {
         let path = transcript_path(home, session_id, basename);
@@ -792,7 +794,7 @@ fn transcript_path(home: &Path, session_id: &str, basename: &str) -> PathBuf {
         .join(basename)
 }
 
-fn valid_transcript_under(home: &Path, path: &Path, session_id: &str) -> bool {
+pub(super) fn valid_transcript_under(home: &Path, path: &Path, session_id: &str) -> bool {
     if !valid_conversation_id(session_id) || !regular_file(path) {
         return false;
     }

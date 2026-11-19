@@ -244,8 +244,17 @@ pub struct WorkspaceSpendingCache {
     pub day_cutoff_secs: u64,
     #[serde(default)]
     pub headline_cutoff_secs: u64,
+    /// Each in-scope session's walked spend, which a live card's cost is
+    /// counted above, and each recent originless session's (an Antigravity
+    /// transcript) spend from before `day_cutoff_secs`, so its card adds only
+    /// today's.
     #[serde(default)]
     pub live_baselines: BTreeMap<String, f64>,
+    /// Each recent originless session's spend from before
+    /// `headline_cutoff_secs`, where it differs from its `live_baselines`
+    /// entry: the headline counts its card above this one instead.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headline_live_baselines: BTreeMap<String, f64>,
 }
 
 impl WorkspaceSpendingCache {
@@ -263,6 +272,7 @@ impl WorkspaceSpendingCache {
             day: scoped.day,
             day_cutoff_secs: scoped.day_cutoff_secs,
             live_baselines: scoped.live_baselines,
+            headline_live_baselines: scoped.headline_live_baselines,
         }
     }
 

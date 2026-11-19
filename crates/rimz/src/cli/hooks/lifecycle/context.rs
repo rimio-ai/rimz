@@ -443,6 +443,61 @@ pub(super) fn prior_total_cost(
 mod tests {
     use super::*;
 
+    #[test]
+    fn an_agy_turn_end_prices_the_named_accounts_transcript() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let session = "6b1f8f2e-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
+        let named_home = dir.path().join("named");
+        let logs = named_home
+            .join(".gemini/antigravity-cli/brain")
+            .join(session)
+            .join(".system_generated/logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let row = serde_json::json!({"step_index": 1, "source": "MODEL",
+            "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": "2026-07-13T23:23:10Z",
+            "content": "answer", "model": "gemini-4-neon", "input_tokens": 1000,
+            "cache_read_tokens": 0, "output_tokens": 100});
+        std::fs::write(logs.join("transcript_full.jsonl"), format!("{row}\n")).unwrap();
+        let prices = dir.path().join("pricing.sqlite");
+        rimz::agents::pricing::testkit::seed_cache_at(
+            &prices,
+            r#"{"gemini-4-neon":{"input_cost_per_token":3e-6,"output_cost_per_token":1.5e-5}}"#,
+        );
+        let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
+            schema_version: "1".into(),
+            event_id: rimz::EventId::new(),
+            ts: jiff::Timestamp::now(),
+            source: rimz::ids::AgentKind::new_unchecked("antigravity"),
+            event: Some("Stop".into()),
+            payload: "{}".into(),
+            cwd: dir.path().to_path_buf(),
+            hook_pid: std::process::id(),
+            env: std::collections::BTreeMap::from([(
+                "HOME".into(),
+                named_home.display().to_string(),
+            )]),
+        };
+        let agent = rimz::agents::definition_by_kind("antigravity").unwrap();
+        let stop = serde_json::json!({"conversationId": session, "fullyIdle": true});
+        let decoded = agent.decode_hook("Stop", &stop).unwrap();
+        let turn_ended =
+            super::super::ends_turn(decoded.lifecycle().map(|observation| &observation.signal));
+        let mut refresh = None;
+        rimz::harness::hook_drain::with_frame_env(
+            &frame,
+            rimz::harness::hook_drain::FrameAttempt::First,
+            || {
+                supplement_realtime_cost(agent, session, &prices, turn_ended, None, &mut refresh);
+            },
+        );
+        let usd = refresh_total_cost(refresh.as_ref()).expect("the turn end is priced");
+        assert!(
+            (usd - (1000.0 * 3e-6 + 100.0 * 1.5e-5)).abs() < 1e-12,
+            "{usd}"
+        );
+    }
+
     struct SessionEndRefreshAdapter;
 
     impl rimz::agents::capabilities::CoreCapability for SessionEndRefreshAdapter {
