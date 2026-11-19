@@ -606,7 +606,7 @@ Each list load or watch repaint resolves runtime paths and scans heartbeat fresh
 
 A signal is a name, a JSON object payload, a source, and, for watched commands, an outcome. The first three persist, and [`store/event.rs`](../../../crates/rimz/src/store/event.rs) owns them as `SignalName`, `SignalSource`, and `SignalEventPayload`. The outcome does not persist, so the runtime `Signal` and its `WatchOutcome` stay in the harness and convert down through `From<&Signal> for SignalEventPayload`.
 
-`SignalName` is lowercase dot-separated segments, each starting with a lowercase letter or digit and otherwise `[a-z0-9_-]`, at most 64 bytes. The family is the first segment. `rimz events emit --source cli` refuses the `RESERVED_FAMILIES` (`agent`, `wait`, `team`, `ci`, `pr`, `trunk`, `worktree`). The hidden `--source forge` accepts exactly the nine forge names, and `--source git` accepts only `trunk.moved`. Neither authenticates the caller.
+`SignalName` is lowercase dot-separated segments, each starting with a lowercase letter or digit and otherwise `[a-z0-9_-]`, at most 64 bytes. The family is the first segment. `rimz events emit --source cli` refuses the `RESERVED_FAMILIES` (`agent`, `wait`, `team`, `ci`, `pr`, `trunk`, `worktree`, `workflow`). The hidden `--source forge` accepts exactly the nine forge names, and `--source git` accepts only `trunk.moved`. Neither authenticates the caller.
 
 | Source | Producer | Names |
 | --- | --- | --- |
@@ -615,6 +615,7 @@ A signal is a name, a JSON object payload, a source, and, for watched commands, 
 | `Git` | the sidebar's project-root trunk lane | `trunk.moved` |
 | `Worktree` | successful managed worktree operations, appended and fired in-process | `worktree.created`, `worktree.removed` |
 | `Lifecycle` | the elected hook drainer, from the lifecycle events it applies | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended`. `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
+| `Lifecycle` | the workflow engine's CLI host after a committed run write, and the room's workflow pass for a stranded run ([run signals](./workflow.md#run-signals)) | `workflow.moved`, `workflow.waiting`, `workflow.failed`, `workflow.ended` |
 | `Team` | `rimz teams flip` and the stage owner's [resume re-wake](./teams.md#resume-re-wake) | `team.stage` |
 | `Watch` | `rimz wait watch <name>` at a check-in or terminal command, PID, check, or file outcome, and the host's watch-lost rule | `wait.<task-name>` |
 

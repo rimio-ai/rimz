@@ -58,7 +58,9 @@ lifetime_fields!(
 
 pub(crate) const MAX_SIGNAL_NAME_BYTES: usize = 64;
 
-const RESERVED_FAMILIES: &[&str] = &["agent", "wait", "team", "ci", "pr", "trunk", "worktree"];
+const RESERVED_FAMILIES: &[&str] = &[
+    "agent", "wait", "team", "ci", "pr", "trunk", "worktree", "workflow",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitSignal {

@@ -2,6 +2,7 @@
 //! `harness::signal`.
 
 mod team;
+pub mod workflow;
 pub(crate) use team::team_lifecycle_signals;
 
 use std::fs::{File, OpenOptions};

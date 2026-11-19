@@ -156,7 +156,7 @@ pub(super) fn close(
     state: &StatePaths,
     paths: &WorkflowPaths,
     mut t: Transition<'_>,
-    guard: WorkspaceLock,
+    guard: Commit<'_>,
     host: &dyn AttemptHost,
     closing: Closing<'_>,
 ) -> Result<()> {

@@ -26,7 +26,9 @@ fn signal_vocabulary_shape_and_cap_are_pinned() {
     );
     assert!("x".repeat(64).parse::<SignalName>().is_ok());
     assert!("x".repeat(65).parse::<SignalName>().is_err());
-    for family in ["agent", "wait", "team", "ci", "pr", "trunk", "worktree"] {
+    for family in [
+        "agent", "wait", "team", "ci", "pr", "trunk", "worktree", "workflow",
+    ] {
         assert!(
             format!("{family}.custom")
                 .parse::<SignalName>()

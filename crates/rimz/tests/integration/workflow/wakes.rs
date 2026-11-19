@@ -223,3 +223,55 @@ fn explicit_stage_filters_override_the_runs_board_scope() {
         assert_woken(&env, &id, "team.stage", json!({(key):"chosen"}));
     }
 }
+
+#[test]
+fn a_run_fires_one_workflow_signal_per_committed_edge() {
+    let spec = format!(
+        "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non = {{ done = 'second' }}\ntimeout = '1h'\n\
+         [script.second]\nrun = 'sh checks/pr.sh'\non = {{ done = '@failed' }}\ntimeout = '1h'\n"
+    );
+    let (env, _) = fixture(&spec, &evaluation_script("done"));
+    let id = start(&env);
+    settled(&env, &id, "failed");
+    let fired = run_signals(&env, &id, 3);
+    let edges: Vec<_> = fired
+        .iter()
+        .map(|(name, payload)| {
+            (
+                name.as_str(),
+                payload["node"].as_str(),
+                payload["from"].as_str(),
+                payload["outcome"].as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        edges,
+        [
+            ("workflow.moved", Some("second"), Some("pr"), None),
+            ("workflow.ended", Some("second"), None, Some("failed")),
+            ("workflow.failed", Some("second"), None, Some("failed")),
+        ],
+        "{fired:#?}"
+    );
+    for (_, payload) in &fired {
+        assert_eq!(payload["workflow"], "review", "{payload:#}");
+    }
+}
+
+#[test]
+fn a_canceled_run_fires_its_ending_once() {
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let id = start(&env);
+    until(&env, &id, |value| value["record"]["wait"].is_object());
+    success(command(&env, &["workflow", "cancel", &id]));
+    let fired = run_signals(&env, &id, 1);
+    assert_eq!(
+        fired
+            .iter()
+            .map(|(name, payload)| (name.as_str(), payload["outcome"].as_str()))
+            .collect::<Vec<_>>(),
+        [("workflow.ended", Some("canceled"))],
+        "{fired:#?}"
+    );
+}

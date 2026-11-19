@@ -634,6 +634,33 @@ impl workflow::AttemptHost for Host<'_> {
         workflow::orphan(state, attempt)
     }
 
+    fn committed(
+        &self,
+        before: &rimz::store::workflow::RunRecord,
+        after: &rimz::store::workflow::RunRecord,
+    ) {
+        use rimz::harness::schedule::signal::{emit_in_process, workflow};
+        let signals = workflow::run_signals(before, after);
+        if signals.is_empty() {
+            return;
+        }
+        let ctx = match self.ctx() {
+            Ok(ctx) => ctx,
+            Err(error) => {
+                tracing::warn!(%error, run = %after.id, "could not open the room to fire workflow signals");
+                return;
+            }
+        };
+        for signal in &signals {
+            emit_in_process(
+                &ctx.store,
+                &ctx.workspace.session_name,
+                &ctx.workspace.project_root,
+                signal,
+            );
+        }
+    }
+
     fn leader_session(&self, run: &AttemptRun) -> Option<rimz::ids::AgentSessionId> {
         rimz::harness::run::load(self.state, &run.run_id)
             .ok()

@@ -95,7 +95,7 @@ Missed time is not made up in bulk. A new repeating task arms without firing, so
 
 ## Fire on a signal
 
-A clock is a guess about when something will happen. A signal is the event itself, and most signals need no wiring. The sidebar already polls the forge (GitHub or Gitea) for the pull request and CI result of each [worktree](./worktrees.md) branch in the room, and the reporting hooks already know when an agent or a team changes state. Each of those changes is a signal a task can fire on by name.
+A clock is a guess about when something will happen. A signal is the event itself, and most signals need no wiring. The sidebar already polls the forge (GitHub or Gitea) for the pull request and CI result of each [worktree](./worktrees.md) branch in the room, the reporting hooks already know when an agent or a team changes state, and every workflow run reports its own moves. Each of those changes is a signal a task can fire on by name.
 
 | Family | Signals | Fires when |
 | --- | --- | --- |
@@ -106,6 +106,7 @@ A clock is a guess about when something will happen. A signal is the event itsel
 | `worktree` | `worktree.created`, `worktree.removed` | RimZ creates or removes a managed worktree. |
 | `agent` | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended` | One agent changes state. |
 | `team` | `team.idle`, `team.waiting`, `team.failed`, `team.ended`, `team.stage` | A [team](./teams.md) cohort settles, or its board changes stage. |
+| `workflow` | `workflow.moved`, `workflow.waiting`, `workflow.failed`, `workflow.ended` | A [workflow](./workflows.md) run moves to another node, starts to need you, fails, or ends. |
 
 The [loop reference](../reference/cli/loop.md#built-in-signals) gives the exact moment each one fires and the payload fields it carries.
 

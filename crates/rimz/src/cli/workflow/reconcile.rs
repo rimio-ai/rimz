@@ -91,7 +91,17 @@ pub(super) fn settle(room: &Room<'_>, id: &WorkflowRunId) -> Result<Settled> {
     match records::classify(&paths)? {
         records::RunClass::Stranded { .. } => {
             let guard = WorkspaceLock::acquire(&room.state.workspace_lock)?;
-            ended_now = records::end_stranded(&paths, &guard)?.is_some();
+            let ended = records::end_stranded(&paths, &guard)?;
+            drop(guard);
+            ended_now = ended.is_some();
+            if let Some(header) = ended {
+                use rimz::harness::schedule::signal::{emit_in_process, workflow};
+                if let Some(root) = &header.project_root {
+                    for signal in workflow::stranded_signals(id, &header) {
+                        emit_in_process(room.store, room.session_name, root, &signal);
+                    }
+                }
+            }
         }
         // An owed report of a run this RimZ reads is retried by its paced advance.
         records::RunClass::Current(record)

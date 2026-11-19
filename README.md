@@ -265,7 +265,7 @@ rimz wait --pid 16776                        # an existing process exits
 rimz wait --run 'gh run watch --exit-status' # a command exits, with its output in the message
 ```
 
-**Wake on a signal.** A timer guesses when something will happen; a [signal](./docs/guide/loops.md#fire-on-a-signal) is the thing itself. RimZ emits `ci.passed` and `ci.failed`, `pr.opened`, `pr.merged` and `pr.closed`, `trunk.moved`, `worktree.created` and `worktree.removed`, and agent and team lifecycle signals from what the room already watches, and anything can emit its own. Narrow a task to one branch with `--match branch=<name>`. On GitHub, `pr.behind`, `pr.conflicted`, `pr.queued`, and `pr.dequeued` also report a PR falling behind its base, gaining conflicts, or entering and leaving the merge queue. The [loop reference](./docs/reference/cli/loop.md#built-in-signals) lists when each signal fires and what it carries.
+**Wake on a signal.** A timer guesses when something will happen; a [signal](./docs/guide/loops.md#fire-on-a-signal) is the thing itself. RimZ emits `ci.passed` and `ci.failed`, `pr.opened`, `pr.merged` and `pr.closed`, `trunk.moved`, `worktree.created` and `worktree.removed`, agent and team lifecycle signals from what the room already watches, and workflow run signals as each run moves and ends, and anything can emit its own. Narrow a task to one branch with `--match branch=<name>`. On GitHub, `pr.behind`, `pr.conflicted`, `pr.queued`, and `pr.dequeued` also report a PR falling behind its base, gaining conflicts, or entering and leaving the merge queue. The [loop reference](./docs/reference/cli/loop.md#built-in-signals) lists when each signal fires and what it carries.
 
 ```sh
 # Start a fixer each time CI fails on the feature branch

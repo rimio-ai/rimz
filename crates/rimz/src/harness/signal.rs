@@ -374,6 +374,7 @@ pub fn signal_subject(
         }
         "worktree" => append_identity(&mut headline, payload, "name"),
         "team" => append_identity(&mut headline, payload, "instance"),
+        "workflow" => append_identity(&mut headline, payload, "run"),
         _ => {}
     }
     match name.as_str() {
@@ -413,6 +414,16 @@ pub fn signal_subject(
             if let Some(member) = text("member") {
                 let handle = member.split('#').next().unwrap_or(member);
                 headline.push_str(&format!(" · {}", one_line(handle)));
+            }
+        }
+        "workflow.moved" => {
+            if let (Some(from), Some(to)) = (text("from"), text("node")) {
+                headline.push_str(&format!(" · {} -> {}", one_line(from), one_line(to)));
+            }
+        }
+        "workflow.ended" => {
+            if let Some(outcome) = text("outcome") {
+                headline.push_str(&format!(" · {}", one_line(outcome)));
             }
         }
         "team.stage" => {
@@ -673,5 +684,32 @@ mod tests {
         }
         let matches = std::collections::BTreeMap::from([("branch".to_owned(), "*".to_owned())]);
         assert!(parse_signal_selector("task", "pr.conflicted", Some(&matches)).is_ok());
+    }
+
+    #[test]
+    fn a_workflow_subject_names_the_run_and_its_edge() {
+        let subject = |name: &str, payload: Value| {
+            let name = name.parse().unwrap();
+            signal_subject(&name, payload.as_object().unwrap())
+        };
+        let run = serde_json::json!({"run": "wf_1", "workflow": "review", "node": "fix"});
+        let with = |key: &str, value: &str| {
+            let mut payload = run.clone();
+            payload[key] = value.into();
+            payload
+        };
+        assert_eq!(
+            subject("workflow.moved", with("from", "build")),
+            "wf_1 · build -> fix"
+        );
+        assert_eq!(
+            subject("workflow.ended", with("outcome", "failed")),
+            "wf_1 · failed"
+        );
+        assert_eq!(
+            subject("workflow.failed", with("outcome", "failed")),
+            "wf_1"
+        );
+        assert_eq!(subject("workflow.waiting", run), "wf_1");
     }
 }

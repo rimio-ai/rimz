@@ -486,6 +486,7 @@ A session's `subscribe` takes `wake` entries, with the same defaults read for th
 - Each matching signal is queued for the leader as a `Type: SIGNAL` message from `@rimz` at its next turn boundary, sent at once when it rests. The message opens with the signal's subject and details, then names the workflow, step, and run, then the entry's `prompt` after a blank line.
 - Each entry that matches sends its own message. Entries with the same signal and `match` send one.
 - A forward changes no run state, and a check subscribed to the same signal still wakes.
+- A run's own [`workflow.*` signals](#run-signals) never reach its leader.
 - Forwarding stops when the attempt ends. A forward still queued then is canceled at delivery, and a `keep = true` agent that lives on receives nothing more.
 - The launch reminder lists the subscriptions, and `--history` prints one `signal` row per forward.
 - A `turn` step refuses `subscribe` with `only a session receives signals; a turn ends where they would land`.
@@ -921,6 +922,21 @@ review · 1 active · started by hand
 | `recheck` | The check's `recheck_at`, before which nothing evaluates. A signal matching the check's subscription clears it. For a `for` hold it is when the hold completes. |
 
 Every instant, capacity bounds included, uses local `HH:MM` today, `Mon HH:MM` within six days in either direction, and `YYYY-MM-DD HH:MM` beyond that.
+
+## Run signals
+
+Every run fires signals in the reserved `workflow` [family](./events.md#reserved-families) as it moves, with source `lifecycle`. Each committed write of the run record fires each signal its change calls for once, after the write:
+
+| Signal | When |
+| --- | --- |
+| `workflow.moved` | The run's node changed and the run did not end. A write that passes through several nodes fires one, from the node the record held before it. |
+| `workflow.waiting` | The run starts to need a person: the runs `workflow list` puts under NEEDS YOU. |
+| `workflow.ended` | The run ended `done`, `failed`, or `canceled`. |
+| `workflow.failed` | Beside `workflow.ended`, when the run ended `failed`. |
+
+The room's workflow pass fires `workflow.ended` and `workflow.failed` for a run an older RimZ left that it [ends as failed](#runs-this-rimz-cannot-continue). The run a [shell loop task](#loop-tasks)'s fire makes for its command fires none, so a task on `workflow.ended` never fires itself again. A `--workflow` task's run fires them as any run does, so such a task subscribed to its own workflow's `workflow.ended` starts a run again at each ending. Every payload carries `run` (the run id), `workflow`, `node` (the node after the write), and `checkout` (the run's checkout path). `workflow.moved` adds `from`, and `workflow.ended` and `workflow.failed` add `outcome`. A signal is not replayed: a process that dies between the write and the fire loses it. The trigger line names the run ([subjects](./loop.md#the-triggers-evidence)).
+
+A loop task, a check's `wake`, and a session's `subscribe` hear these signals as any other room-wide family. A run's own `workflow.*` signals never wake its checks or reach its leader.
 
 ## Wait for runs
 
