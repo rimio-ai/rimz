@@ -1,8 +1,8 @@
 # Antigravity adapter
 
-This page maps the Antigravity CLI (`agy`) onto RimZ's types: launch and resume, the hooks RimZ installs, session discovery from the provider's local store, the transcript, subagents, statusline context, the account, and cost. The provider-neutral agent model is in [model.md](./model.md), the integration layer in [adapter.md](./adapter.md), and pane binding and supersession in [instances.md](./instances.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream protocol, pinned at `agy` 1.3.3 with transcript and subagent captures from 1.1.2, is in [antigravity-reference.md](../../externals/agent-adapter/antigravity-reference.md).
+This page maps the Antigravity CLI (`agy`) onto RimZ's types: launch and resume, the hooks RimZ installs, session discovery from the provider's local store, the transcript, subagents, statusline context, the account, and cost. The provider-neutral agent model is in [model.md](./model.md), the integration layer in [adapter.md](./adapter.md), and pane binding and supersession in [instances.md](./instances.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream protocol, pinned at `agy` 1.3.3 with transcript and subagent captures from 1.1.2 and plugin and `/usage` captures from 1.5.12, is in [antigravity-reference.md](../../externals/agent-adapter/antigravity-reference.md).
 
-Antigravity reaches RimZ through four sources, and each owns different facts. Command hooks carry turn boundaries and tool progress. The custom statusline carries the live model, account, and context gauge. The provider's local `brain/` store carries conversation identity, history, and native questions between hooks. The private loopback service of a running `agy` carries the plan and quota. RimZ installs no `PreToolUse` hook, because no documented `PreToolUse` decision is proven to leave native permission policy unchanged ([reference](../../externals/agent-adapter/antigravity-reference.md#decisions)).
+Antigravity reaches RimZ through four sources, and each owns different facts. Command hooks carry turn boundaries and tool progress. The custom statusline carries the live model, account, and context gauge. The provider's local `brain/` store carries conversation identity, history, and native questions between hooks. A print-mode `agy -p /usage` run carries the quota. RimZ installs no `PreToolUse` hook, because no documented `PreToolUse` decision is proven to leave native permission policy unchanged ([reference](../../externals/agent-adapter/antigravity-reference.md#decisions)).
 
 ## Files
 
@@ -13,9 +13,7 @@ Antigravity reaches RimZ through four sources, and each owns different facts. Co
 | `crates/rimz/src/agents/adapters/antigravity/install.rs` | The plugin-directory install, the statusline record, preview, uninstall, and the disabled-plugin check |
 | `crates/rimz/src/agents/adapters/antigravity/session.rs` | Provider home resolution, transcript path validation, local-session discovery, the transcript fold, final-message extraction, and the parent-transcript subagent join |
 | `crates/rimz/src/agents/adapters/antigravity/statusline.rs` | The statusline payload, its `AgentContext` projection, and current-usage pricing |
-| `crates/rimz/src/agents/adapters/antigravity/local_api.rs` | The loopback service client and the two account probes |
-| `crates/rimz/src/agents/adapters/antigravity/local_api/process.rs` | Exact-process and owned-socket discovery for `agy` |
-| `crates/rimz/src/agents/adapters/antigravity/local_api/wire.rs` | The service's JSON schemas, the hashed account key, and the quota fold |
+| `crates/rimz/src/agents/adapters/antigravity/usage.rs` | The `agy -p /usage` child, its mapping onto both account probes, the 60 s reuse, and the quota fold |
 
 ## Launch and resume
 
@@ -212,40 +210,47 @@ Antigravity puts the selector label, such as `Gemini 3.5 Flash (Medium)`, in bot
 
 The `NativeWait` settle projects a `running` card to `waiting` while it is newer than the row's activity ([model.md](./model.md#waiting-and-asks)). It creates no ask and sends nothing to Antigravity. Any later hook advances the row's activity past the marker, so a missed `false` refresh clears itself.
 
-RimZ reads no other statusline field. `cost` has no published shape, `subagents` carries no stable ids, `conversation_title` would replace RimZ's launch description on the card, and `quota` stays unread because the local service supplies quota ([Account and balance](#account-and-balance)).
+RimZ reads no other statusline field. `cost` has no published shape, `subagents` carries no stable ids, `conversation_title` would replace RimZ's launch description on the card, and `quota` stays unread because the `/usage` probe supplies quota ([Account and balance](#account-and-balance)).
 
 ## Account and balance
 
-The plan and quota come from the private Connect-over-HTTPS service of an already-running `agy` ([reference](../../externals/agent-adapter/antigravity-reference.md#private-local-service)). RimZ starts no `agy`, reads no credential or OAuth token, and sends no pane input. The version probe returns `None` instead of running `agy --version` ([providers.md](./providers.md#the-out-of-band-probe)).
+One print-mode run, `agy -p /usage --output-format json`, answers both account probes. It spends no model turn, fires no hook, and leaves no conversation ([reference](../../externals/agent-adapter/antigravity-reference.md#exit-timeout-and-read-only-commands)). RimZ reads no credential or OAuth token itself and sends no pane input. The version probe returns `None` instead of running `agy --version` ([providers.md](./providers.md#the-out-of-band-probe)).
 
-`local_api/process.rs::discover` finds the service. It takes processes of the caller's real uid whose executable basename and `argv[0]` basename are both `agy`, newest start first, and keeps the first four. For each it lists listening TCP sockets the process owns on exactly `127.0.0.1` or `::1`, from `/proc/<pid>/fd` and `/proc/<pid>/net/tcp{,6}` on Linux, or from `lsof` (400 ms bound) on macOS. Other platforms find nothing. Before every request `revalidate` checks the uid, both basenames, and the process start token again. The client disables certificate verification, since the service's certificate is self-signed, along with proxies and redirects. It relies on the process and socket checks for trust.
+`crates/rimz/src/agents/adapters/antigravity/usage.rs::run` starts the `agy` that `locate_binary` finds, with the inherited environment plus:
 
-| Limit | Value |
-| --- | --- |
-| candidate processes | 4 |
-| endpoints per process | 12 |
-| whole probe | 2 s (`PROBE_TIMEOUT`) |
-| one request | 750 ms (`ATTEMPT_TIMEOUT`), connect 300 ms |
-| response body | 256 KiB (`MAX_RESPONSE_BYTES`) |
+- `SSH_CONNECTION`, and one newline on stdin. A logged-out `agy -p` otherwise waits 60 s for a sign-in and opens a browser. The SSH variable selects agy's URL-and-code flow, and the newline answers its code prompt, so the run exits within a second.
+- the login env's `HOME`, when it carries one.
+- a 10 s deadline (`DEADLINE`), after which the process group is killed and reaped. An offline run took 7.3 s on 1.5.12, a logged-in one at most 2.8 s.
 
-Two probes use the service:
+`usage::classify` reads stdout as one JSON envelope, and `Read::account` and `Read::usage` map the one reading onto both probes:
 
-| Probe | Calls | Needs | Returns |
-| --- | --- | --- | --- |
-| `probe_account` (display) | `GetUserStatus` on each endpoint until one parses | an email or a plan | plan and email, `metered: true`. Any failure is `SourceUnavailable` |
-| `probe_account_usage` (direct account usage) | `GetUserStatus`, then `RetrieveUserQuotaSummary` with `{"forceRefresh":true}` on the same endpoint | an email | `Found` with plan and windows, or `Failed` |
+| Outcome of the run | `probe_account` | `probe_account_usage` |
+| --- | --- | --- |
+| exit 0, `status: "SUCCESS"`, `command.name: "usage"`, windows fold | `Found`, `metered: true` and nothing else | `Found`, default identity, the windows, no plan |
+| the same envelope with no bucket | `Found` | `NoCredentials` |
+| the same envelope whose buckets fail the fold, a type mismatch included | `Found` | `Failed` |
+| `status: "ERROR"` whose `error` contains `authentication` in any case, at any exit | `LoggedOut` | `NoCredentials` |
+| any other `ERROR` envelope, at any exit | `Unavailable(SourceUnavailable)` | `Failed` |
+| a non-zero exit without an `ERROR` envelope | `Unavailable(ExitNonZero)` | `Failed` |
+| the deadline | `Unavailable(TimedOut)` | `Failed` |
+| no binary, or a failed spawn | `Unavailable(SpawnFailed)` | `Failed` |
+| exit 0 without that envelope | `Unavailable(UnparseableOutput)` | `Failed` |
+| `RIMZ_OAUTH_USAGE_OFFLINE` set, `agy` never started | `Unavailable(SourceUnavailable)` | `Failed` |
 
-The plan is `userStatus.userTier.name`, else the first nonblank of `planDisplayName`, `displayName`, `productName`, `planName`, and `planShortName` under `planStatus.planInfo`. A `code` other than absent, `0`, `"0"`, `"ok"`, or `"success"` rejects the response. The usage probe trims and ASCII-lowercases the email and hashes it as SHA-256 over `rimz:antigravity-account:v1\0` plus the email. It persists only `antigravity:v1:<hex>`, with `KindWide` scope. A failure before any status parse is `Failed` with no owner. A failure after the status read carries that owner, which lets the credits cache drop another owner's windows ([providers.md](./providers.md#the-credits-cache-and-usage-identity)).
+The reading names no email, so the usage identity carries no owner key and its default `KindWide` scope ([providers.md](./providers.md#the-credits-cache-and-usage-identity)). `rimz accounts list` shows no plan for Antigravity. The sidebar's provider panel takes the plan label from a live session's statusline.
+
+`usage::read` keeps each reading for 60 s (`REUSE`) per provider home (`config_home`) within one process, whichever probe asks and whatever the reading was, so one `rimz accounts list` starts `agy` once. The reuse is per process, and the sidebar's two lanes run in different ones: the account lane probes in the sidebar host (`crates/rimz/src/sidebar/refresh/accounts.rs`), while the usage read runs in a detached `rimz agents refresh-usage` helper (`crates/rimz/src/sidebar/refresh/usage.rs`). A cold pass therefore starts `agy` twice, and the steady state is the usage claim cadence (every 5 min while an agent is in use, 60 min once a read settles on a login failure, 3 h idle) plus one account start per `ACCOUNTS_TTL` (10 min), where a failed account probe retries after `ACCOUNTS_RETRY_TTL` (10 s), doubling up to that window. The reuse stamp is taken before the run, and the windows carry the run's start as `observed_at`.
 
 ### Quota windows
 
-`wire.rs::parse_rate_limits` folds per-model buckets into at most two windows. A bucket's period comes from its `bucketId`, else its `displayName`, lowercased with `-` and `_` read as spaces. A `5h` token or the words `5 hour` or `five hour` mean five hours, and a `weekly` token means a week. Other buckets are ignored.
+`usage.rs::rate_limits` folds the buckets of every group into at most two windows. A bucket's `window` gives its period: `5h` means five hours and `weekly` a week. Other buckets are ignored.
 
+- A bucket in a known period needs a nonblank `id`, or the whole reading is rejected.
 - Each enabled bucket with a remaining fraction joins its period. A disabled bucket, or one without a fraction, marks the period present and contributes nothing.
-- The period's window is the bucket with the smallest remaining fraction. A tie takes the later reset, then the lower bucket identity.
+- The period's window is the bucket with the smallest remaining fraction. A tie takes the later reset, then the lower bucket id.
 - A present period with no usable bucket publishes a window with unknown fill and reset. An absent period publishes no window, so a weekly-only response yields one window.
 - Used percentage is `100` only at a remaining fraction of exactly `0`. Otherwise it is rounded and capped at `99`.
-- A usable bucket's fraction outside `0..=1`, or a reset that is missing, unparseable, or not in the future, rejects the whole reading. So does a response with no recognized period.
+- A usable bucket's fraction outside `0..=1`, or a reset that is missing, unparseable, or not in the future, rejects the whole reading. So does a response whose buckets name no known period.
 
 The windows are `Authoritative` ([providers.md](./providers.md#window-fusion)), and RimZ invents no credits or dollars from them. They never arm auto-continue, because no Antigravity stop class is certified recoverable ([providers.md](./providers.md#auto-continue)).
 

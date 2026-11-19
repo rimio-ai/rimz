@@ -1,14 +1,16 @@
-//! Antigravity CLI 1.3.3 launch, hook, statusline, local-session, and transcript adapter.
+//! Antigravity CLI launch, hook, statusline, local-session, transcript, and account adapter.
+//! The plugin install, the kept `statusLine` keys, and the `agy -p /usage` envelope were
+//! observed on agy 1.5.12.
 //!
 //! RimZ installs only hooks with documented observer-neutral output. The
 //! policy-changing `PreToolUse` decision channel stays untouched; disjoint
 //! `PostToolUse` matchers recover tool phase after execution instead.
 
 mod install;
-mod local_api;
 mod payloads;
 mod session;
 mod statusline;
+mod usage;
 // Capabilities this agent has no behavior for; every method keeps its
 // default from `agents::capabilities`.
 impl crate::agents::capabilities::RuntimeControlCapability for AntigravityAdapter {}
@@ -267,7 +269,7 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         gap: "no cumulative session or provider billing ledger is published",
     },
     rich_context: ConcernCoverage::Wired {
-        via: "custom statusline context plus local account identity and subscription quota",
+        via: "custom statusline context plus agy -p /usage quota windows",
     },
     hook_install: ConcernCoverage::Wired {
         via: "RimZ-owned agy plugin directory plus reversible statusLine wrap",
@@ -297,7 +299,7 @@ const ANTIGRAVITY_USER_COVERAGE: UserCoverage = UserCoverage {
         limit: "no dollars, so Antigravity sessions stay out of rimz stats spend",
     },
     account: CapabilityLevel::Full {
-        note: "plan tier plus 5h and weekly quota windows with fill and reset",
+        note: "5h and weekly quota windows with fill and reset, plan tier while live",
     },
     ask: CapabilityLevel::Partial {
         shows: "the card raises Waiting and routes you to the pane",
@@ -551,19 +553,23 @@ impl crate::agents::capabilities::ContextCapability for AntigravityAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for AntigravityAdapter {
-    fn probe_account(&self, _login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
-        local_api::probe_account()
-            .map(super::account::AccountProbe::Found)
-            .unwrap_or(super::account::AccountProbe::Unavailable(
-                crate::agents::account::AccountProbeError::SourceUnavailable,
-            ))
+    fn probe_account(&self, login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
+        usage::read(
+            self.config_home(login_env),
+            login_env.get("HOME").map(String::as_str),
+        )
+        .account()
     }
 
     fn probe_account_usage(
         &self,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> super::AccountUsageProbe {
-        local_api::probe_account_usage()
+        usage::read(
+            self.config_home(login_env),
+            login_env.get("HOME").map(String::as_str),
+        )
+        .usage()
     }
 }
 
