@@ -382,6 +382,8 @@ enum ProcessWrapping {
 pub struct CompiledAgentProcess {
     pub host_skills: Option<crate::agents::skills::HostSkillPlan>,
     pub(super) env_warnings: Vec<String>,
+    /// What the adapter's MCP registration could not apply, one line each.
+    pub mcp_warnings: Vec<String>,
     pub(super) settings_artifact: Option<crate::agents::skills::LaunchSettingsArtifact>,
     /// Provider command before shell startup wrapping.
     pub provider_argv: Vec<String>,
@@ -402,6 +404,13 @@ pub struct CompiledAgentProcess {
 }
 
 impl CompiledAgentProcess {
+    /// The provider settings file this launch writes, as JSON.
+    pub fn settings(&self) -> Option<&serde_json::Value> {
+        self.settings_artifact
+            .as_ref()
+            .map(|(_, settings, _)| settings)
+    }
+
     pub(super) fn rebuild_argv(&mut self) {
         let argv = self
             .session_step_argv
@@ -1124,7 +1133,7 @@ fn compile_agent_process_with_extra_env(
         }
         _ => false,
     };
-    let mut env_warnings = adapter.finalize_launch_env(
+    let env_warnings = adapter.finalize_launch_env(
         &login_env,
         &mut env,
         reminders.disable_native_subagents(request),
@@ -1404,6 +1413,7 @@ fn compile_agent_process_with_extra_env(
             unset.insert(key.to_owned());
         }
     }
+    let mut mcp_warnings = Vec::new();
     if adapter.takes_mcp_servers() {
         let server = reminders.mcp_server.as_ref().map(|(command, args)| {
             crate::agents::capabilities::McpServer {
@@ -1413,7 +1423,7 @@ fn compile_agent_process_with_extra_env(
                 env_names: spawn_env_names(&skill_env, &env),
             }
         });
-        env_warnings.extend(adapter.mcp_server_args(
+        mcp_warnings = adapter.mcp_server_args(
             &crate::agents::capabilities::McpLaunch {
                 server,
                 mcps: request.mcps.as_deref(),
@@ -1422,7 +1432,7 @@ fn compile_agent_process_with_extra_env(
             (cwd, artifact_dir),
             action.extra_args_mut(),
             &mut settings_artifact,
-        )?);
+        )?;
     }
     let mut provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
     if let Some(subcommand) = frontend.subcommand {
@@ -1438,6 +1448,7 @@ fn compile_agent_process_with_extra_env(
     let mut process = CompiledAgentProcess {
         host_skills,
         env_warnings,
+        mcp_warnings,
         settings_artifact,
         provider_argv,
         provider_program,

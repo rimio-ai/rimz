@@ -544,6 +544,7 @@ rimz agents explain coder --tier senior
 rimz agents explain forge.coder --json
 rimz agents explain @coder
 rimz agents explain coder --prompt > prompt.md
+rimz agents explain coder --mcps
 ```
 
 | Target | Describes |
@@ -573,6 +574,8 @@ The default report shows:
 A routed plan also carries `tier`, `tier_skipped` for usage passes, and `tier_unbuildable` for build passes (`model`, full `error`); empty pass lists are omitted. Later static exclusions do not appear as passes.
 
 `--prompt` prints only the composed configured system prompt, then two newlines and the RimZ reminder. It cannot show a provider's built-in instructions or prompt options passed as raw provider arguments (those appear in the argv report). When the provider has no channel for appended system text, it still prints the reminder and notes on stderr that the reminder is not delivered. `--prompt` and `--json` conflict; warnings go to stderr.
+
+`--mcps` prints only what the launch hands its provider for [MCP](./mcp.md#launch-registration), read from the same compiled plan and the adapter's own output. Under `MCP servers`, the `rimz` row says RimZ's server `serves` the capabilities the profile's `mcps` list keeps, is `off` by `[agents] rimz-mcp-server = false`, or is `not handed over` because the list names no RimZ capability; the `your servers` row says the launch keeps every server the account and project configure, `only` the servers a Claude `allowedMcpServers` list names, or which Codex servers it `switched off`. While the server is handed over, a table lists each tool with its capability, its estimated size in tokens (as `rimz mcp tools` counts it), and its `LOAD` as the launch passes it: on Claude, a `--always` or `--deferred` flag naming the capability in the `rimz` entry of `--mcp-config`, else that entry's `alwaysLoad`; on Codex, the `rimz` server's `omit_tools_from` override; `default` when the launch passes neither, so the provider's own default applies. `Not applied` lists each mark the provider cannot apply, with its reason, `Provider arguments` shows the `--mcp-config` or `-c mcp_servers…` arguments that carry the servers, and `Check it` points to the provider's own views: `claude mcp list` and `/context` in the session for Claude, `CODEX_ROLLOUT_TRACE_ROOT` for Codex. A kind that takes no MCP servers from a launch prints one line saying so. `--mcps` conflicts with `--json` and `--prompt`.
 
 Explain applies the same checks as a launch. System-prompt files must be readable UTF-8, and configured isolation and skill capabilities must pass their preflights: a failure is an error, never a partial plan. The launch-chain check is the exception: when a real launch from here would fail it (a subagent caller, the chain limit, or a caller identity RimZ cannot resolve), `explain` still prints the plan, without launch ancestry, and warns that a real launch from there would be refused. A profile whose permission posture is missing or incompatible is shown without it, with a warning.
 

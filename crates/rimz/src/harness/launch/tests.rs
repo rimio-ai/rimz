@@ -3728,6 +3728,7 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
     let process = CompiledAgentProcess {
         host_skills: None,
         env_warnings: Vec::new(),
+        mcp_warnings: Vec::new(),
         settings_artifact: None,
         provider_argv,
         provider_program: "claude".to_owned(),

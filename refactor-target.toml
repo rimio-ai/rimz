@@ -5610,7 +5610,8 @@ allowed-dependencies = [
 # AgentShellResolution::missing_saved_path exposes the stale lookup without changing JSON (+1).
 # AgentShellPersistence selects room-scoped or per-launch shell lookups (+1).
 # ReminderSection shares explicit launch-reminder headings across callers (+1).
-surface-budget = 57
+# CompiledAgentProcess::settings lets `agents explain --mcps` read the allowlist the adapter wrote (+1).
+surface-budget = 58
 
 [[verdict]]
 kind = "item"
