@@ -23,6 +23,7 @@ const STATUS_LINE: OwnedStatusLine = OwnedStatusLine {
     command: RIMZ_STATUS_LINE_COMMAND,
     marker: RIMZ_STATUS_LINE_MARKER,
     retained_keys: RETAINED_RENDERING_KEYS,
+    object_only: false,
 };
 
 pub(super) static MANAGED_INTEGRATION: CursorManagedIntegration = CursorManagedIntegration;

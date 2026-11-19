@@ -570,6 +570,7 @@ fn home_kept_children(remove_state: bool, remove_config: bool) -> Vec<&'static s
             "trust",
             "agents.d",
             "cursor-statusline.json",
+            "antigravity-statusline.json",
         ]);
     }
     keep

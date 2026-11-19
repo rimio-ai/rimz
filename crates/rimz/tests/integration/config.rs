@@ -2351,14 +2351,26 @@ fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
         "{output}"
     );
 
-    let hooks = std::fs::read_to_string(&files.antigravity_hooks).expect("read hooks config");
+    let plugin_hooks = files
+        .antigravity_hooks
+        .with_file_name("plugins")
+        .join("rimz/hooks.json");
+    let hooks = std::fs::read_to_string(&plugin_hooks).expect("read the RimZ plugin's hooks");
     let settings =
         std::fs::read_to_string(&files.antigravity_settings).expect("read settings config");
     assert!(
         hooks.contains("rimz hooks feed --source antigravity"),
         "{hooks}"
     );
-    assert!(settings.contains("_rimz_managed"), "{settings}");
+    assert!(
+        !files.antigravity_hooks.exists(),
+        "the global hooks file is never created"
+    );
+    assert!(
+        settings.contains("rimz statusline feed --source antigravity")
+            && !settings.contains("_rimz_"),
+        "{settings}"
+    );
     assert_eq!(
         std::fs::read_to_string(&files.pi_extension).expect("read Pi extension"),
         PI_EXTENSION_SOURCE,

@@ -98,7 +98,7 @@ What the write does depends on the agent. Most are a merge: RimZ adds its entrie
 
 Codex also gets a marked `rules/rimz.rules` file for [routine coordination commands](./configuration.md#routine-rimz-commands). Those rules let matching commands run without a permission prompt or command sandbox; the dry run shows them separately from the reporting hooks. An unmarked file at that path is left alone; your own rules still apply.
 
-MiniMax Code gets a native `rimz@local` plugin under its data directory's `plugins/rimz`, without changing your other plugins or settings; uninstall removes that directory.
+MiniMax Code gets a native `rimz@local` plugin under its data directory's `plugins/rimz`, without changing your other plugins or settings; uninstall removes that directory. Antigravity gets a `rimz` plugin in `~/.gemini/config/plugins/rimz`, which agy enables by default; if you disable it, `rimz accounts list` and an Antigravity launch name `agy plugin enable rimz` as the fix. Install also removes the hooks an older RimZ wrote into `~/.gemini/config/hooks.json`, and uninstall removes the plugin directory.
 
 `rimz hooks install` and `rimz hooks uninstall` cover the rest of the lifecycle:
 

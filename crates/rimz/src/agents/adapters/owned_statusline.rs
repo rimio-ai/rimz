@@ -26,6 +26,8 @@ pub(super) struct OwnedStatusLine {
     pub(super) command: &'static str,
     pub(super) marker: &'static str,
     pub(super) retained_keys: &'static [&'static str],
+    /// Refuse to displace a statusline that is not a JSON object.
+    pub(super) object_only: bool,
 }
 
 impl OwnedStatusLine {
@@ -37,6 +39,18 @@ impl OwnedStatusLine {
     ) -> Result<(Map<String, Value>, Option<Value>)> {
         let mut root = settings_json::read_json_object(self.agent, path)?;
         let existing = root.get(STATUS_LINE_KEY).cloned();
+        if self.object_only
+            && let Some(found) = existing.as_ref().filter(|value| !value.is_object())
+        {
+            return Err(AgentErr::Install {
+                agent: self.agent,
+                reason: format!(
+                    "expected `{STATUS_LINE_KEY}` in {} to be a JSON object; found {}",
+                    path.display(),
+                    settings_json::json_type_name(found),
+                ),
+            });
+        }
         let displaced = self.displaced(existing.as_ref());
         let mut statusline = Map::new();
         if let Some(Value::Object(object)) = existing.as_ref() {
