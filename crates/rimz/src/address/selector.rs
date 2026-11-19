@@ -10,7 +10,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use super::{
-    AddressContext, LaneSelector, Roster, agent_in_lane, lane_label, launched_parent,
+    AddressContext, LaneSelector, Roster, agent_in_lane, lane_label, launch_row, launched_parent,
     parse_selector, resolve_many,
 };
 use crate::agents::{AgentState, AgentStatus, ParkDemotion, TurnErrorClass, TurnPhase};
@@ -35,6 +35,7 @@ pub enum Field {
     Team,
     Role,
     Parent,
+    Launcher,
     Status,
     Error,
     Live,
@@ -45,7 +46,7 @@ pub enum Field {
 }
 
 impl Field {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Name,
         Self::Handle,
         Self::Profile,
@@ -56,6 +57,7 @@ impl Field {
         Self::Team,
         Self::Role,
         Self::Parent,
+        Self::Launcher,
         Self::Status,
         Self::Error,
         Self::Live,
@@ -77,6 +79,7 @@ impl Field {
             Self::Team => "team",
             Self::Role => "role",
             Self::Parent => "parent",
+            Self::Launcher => "launcher",
             Self::Status => "status",
             Self::Error => "error",
             Self::Live => "live",
@@ -100,7 +103,7 @@ impl Field {
             | Self::Account
             | Self::Model
             | Self::Role => FieldKind::Text,
-            Self::Lane | Self::Team | Self::Parent => FieldKind::Address,
+            Self::Lane | Self::Team | Self::Parent | Self::Launcher => FieldKind::Address,
             Self::Status | Self::Error | Self::Live => FieldKind::Enum,
             Self::Age => FieldKind::Duration,
             Self::Ctx => FieldKind::Percent,
@@ -270,6 +273,7 @@ pub struct AgentRow<'a> {
     team: Option<String>,
     role: Option<String>,
     parent: Option<String>,
+    launcher: Option<String>,
     status: AgentStatus,
     #[serde(skip)]
     phase: TurnPhase,
@@ -345,6 +349,9 @@ impl<'a> AgentRow<'a> {
         let (status, phase) =
             card_status(agent, card_row, child_card(source, agent), demotion, now);
         let parent_agent = launched_parent(source.agents.iter(), agent);
+        let launcher_agent = agent
+            .launcher()
+            .and_then(|(kind, id)| launch_row(source.agents.iter(), kind, id));
         let idle = now.duration_since(agent_idle_since(agent, card_row));
         Self {
             agent,
@@ -364,6 +371,7 @@ impl<'a> AgentRow<'a> {
             team: agent.team.clone(),
             role: agent.role.clone(),
             parent: parent_agent.map(|parent| roster.paste_address(parent, reader)),
+            launcher: launcher_agent.map(|launcher| roster.paste_address(launcher, reader)),
             status,
             phase,
             error: agent
@@ -395,6 +403,7 @@ impl<'a> AgentRow<'a> {
             | Field::Live
             | Field::Age => false,
             Field::Parent => self.agent.parent_agent_id.is_none(),
+            Field::Launcher => self.agent.launcher().is_none(),
             Field::Error => self.error.is_none(),
             _ => self.text(field).is_none() && self.number(field).is_none(),
         }
@@ -412,6 +421,7 @@ impl<'a> AgentRow<'a> {
             Field::Team => self.team.as_deref(),
             Field::Role => self.role.as_deref(),
             Field::Parent => self.parent.as_deref(),
+            Field::Launcher => self.launcher.as_deref(),
             _ => None,
         }
     }
@@ -524,7 +534,7 @@ impl<L> LaneScope<L> {
     /// The one lane `query` reads under this scope, or `None` for every lane.
     pub fn lane(self, query: &Query) -> Option<L> {
         match self {
-            Self::Current(_) if query.names(Field::Lane) => None,
+            Self::Current(_) if query.names(Field::Lane) || query.names(Field::Launcher) => None,
             Self::Current(lane) | Self::Named(lane) => Some(lane),
             Self::Room => None,
         }
@@ -595,10 +605,12 @@ fn pane_bound(snapshot: &SidebarSnapshot, agent: &AgentState) -> bool {
         .any(|pane| pane.agent_id.as_ref() == Some(&agent.agent_id))
 }
 
-/// A parsed `--filter` query: every term must match.
+/// A parsed `--filter` query: every term must match. An `@me` value matches
+/// only once [`Query::with_caller`] has bound the calling agent.
 #[derive(Clone, Debug, Default)]
 pub struct Query {
     terms: Vec<Term>,
+    caller: Option<Box<AgentState>>,
 }
 
 #[derive(Clone, Debug)]
@@ -613,6 +625,8 @@ enum Value {
     None,
     Any,
     Text(String),
+    /// `@me` in an agent-reference term: the calling agent.
+    Me,
     Status(AgentStatus),
     Error(ErrorClass),
     Live(bool),
@@ -664,7 +678,23 @@ impl Query {
                 terms.push(Term::parse(term?)?);
             }
         }
-        Ok(Self { terms })
+        Ok(Self {
+            terms,
+            caller: None,
+        })
+    }
+
+    /// Whether an agent-reference term names `@me`, which needs a caller bound.
+    pub fn names_me(&self) -> bool {
+        self.terms
+            .iter()
+            .any(|term| term.values.contains(&Value::Me))
+    }
+
+    /// The query with `@me` bound to `caller`, the agent running the command.
+    pub fn with_caller(mut self, caller: &AgentState) -> Self {
+        self.caller = Some(Box::new(caller.clone()));
+        self
     }
 
     /// Whether a term names `field`, which replaces that field's default.
@@ -683,16 +713,23 @@ impl Query {
                 .all(|term| term.holds(|value| matches!(value, Value::Live(false) | Value::Any)))
     }
 
-    /// The default set (live, top-level) where its field is unnamed, then every term.
+    /// The default set (live, top-level) where its field is unnamed, then every
+    /// term. A `launcher` term replaces the top-level default, since what an
+    /// agent launched includes its children.
     pub fn admits(&self, row: &AgentRow<'_>, reader: &AddressContext) -> bool {
         (self.names(Field::Live) || row.live)
-            && (self.names(Field::Parent) || row.missing(Field::Parent))
+            && (self.names(Field::Parent)
+                || self.names(Field::Launcher)
+                || row.missing(Field::Parent))
             && self.matches(row, reader)
     }
 
     /// Every term, without the default set: for a caller that chooses its own.
     pub fn matches(&self, row: &AgentRow<'_>, reader: &AddressContext) -> bool {
-        self.terms.iter().all(|term| term.matches(row, reader))
+        let caller = self.caller.as_deref();
+        self.terms
+            .iter()
+            .all(|term| term.matches(row, reader, caller))
     }
 }
 
@@ -736,14 +773,19 @@ impl Term {
         self.op.holds(&self.values, test)
     }
 
-    fn matches(&self, row: &AgentRow<'_>, reader: &AddressContext) -> bool {
+    fn matches(
+        &self,
+        row: &AgentRow<'_>,
+        reader: &AddressContext,
+        caller: Option<&AgentState>,
+    ) -> bool {
         if self.op.ordered() {
             return match (row.number(self.field), self.values.as_slice()) {
                 (Some(have), [Value::Number(want)]) => self.op.compares(have, *want),
                 _ => false,
             };
         }
-        self.holds(|value| value_matches(self.field, value, row, reader))
+        self.holds(|value| value_matches(self.field, value, row, reader, caller))
     }
 }
 
@@ -765,6 +807,7 @@ fn parse_value(field: Field, word: &Word, term: &str) -> Result<Value, QueryErro
     };
     match field.kind() {
         FieldKind::Text => Ok(Value::Text(raw.to_owned())),
+        FieldKind::Address if is_agent_ref(field) && as_address(raw) == "@me" => Ok(Value::Me),
         FieldKind::Address => address_value(field, raw)
             .then(|| Value::Text(raw.to_owned()))
             .ok_or_else(|| {
@@ -826,6 +869,11 @@ fn address_value(field: Field, raw: &str) -> bool {
     }
 }
 
+/// A field whose value names one agent, where `@me` reads as the caller.
+const fn is_agent_ref(field: Field) -> bool {
+    matches!(field, Field::Parent | Field::Launcher)
+}
+
 /// A bare word is a handle: `coder` reads as `@coder`.
 fn as_address(text: &str) -> String {
     let bare_word = text
@@ -854,8 +902,15 @@ fn enum_value(field: Field, raw: &str) -> Option<Value> {
     }
 }
 
-fn value_matches(field: Field, value: &Value, row: &AgentRow<'_>, reader: &AddressContext) -> bool {
+fn value_matches(
+    field: Field,
+    value: &Value,
+    row: &AgentRow<'_>,
+    reader: &AddressContext,
+    caller: Option<&AgentState>,
+) -> bool {
     let text = match value {
+        Value::Me => return caller.is_some_and(|me| is_ref_to(field, row.agent, me)),
         Value::None => return row.missing(field),
         Value::Any => return !row.missing(field),
         Value::Status(status) => return row.status == *status,
@@ -876,6 +931,7 @@ fn value_matches(field: Field, value: &Value, row: &AgentRow<'_>, reader: &Addre
                 && lane.is_none_or(|lane| lane_matches(row, lane))
         }
         Field::Parent => parent_matches(row, text, reader),
+        Field::Launcher => launcher_matches(row, text, reader),
         _ => row.text(field).is_some_and(|have| glob(text, have)),
     }
 }
@@ -916,6 +972,31 @@ fn parent_matches(row: &AgentRow<'_>, text: &str, reader: &AddressContext) -> bo
         matches
             .iter()
             .any(|agent| agent.kind == parent.kind && agent.agent_id == parent.agent_id)
+    })
+}
+
+/// Whether `agent`'s `field` link names `target`, matched by launch id.
+fn is_ref_to(field: Field, agent: &AgentState, target: &AgentState) -> bool {
+    match field {
+        Field::Parent => agent.is_launched_child() && agent.parent_is(target),
+        Field::Launcher => agent.launcher_is(target),
+        _ => false,
+    }
+}
+
+/// A wildcard compares the launcher's address; anything else resolves as an
+/// address in the row's own snapshot and must name the agent that launched it.
+fn launcher_matches(row: &AgentRow<'_>, text: &str, reader: &AddressContext) -> bool {
+    if text.contains('*') {
+        return row
+            .launcher
+            .as_deref()
+            .is_some_and(|have| handle_matches(have, text));
+    }
+    resolve_many(row.source, &as_address(text), None, reader).is_ok_and(|matches| {
+        matches
+            .iter()
+            .any(|agent| is_ref_to(Field::Launcher, row.agent, agent))
     })
 }
 

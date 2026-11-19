@@ -1591,6 +1591,15 @@ fn preset_scopes_to_own_children_or_the_lane_and_never_admits_a_non_child() {
         ids(None, Some("feat-x"), &["lane=*"]),
         ["cousin", "done", "kid", "stranger"]
     );
+    assert_eq!(
+        ids(Some(&planner), Some("other"), &["launcher=*"]),
+        ["cousin", "done", "kid", "stranger"],
+        "a launcher term replaces both the caller's children and the lane"
+    );
+    assert_eq!(
+        ids(None, Some("feat-x"), &["launcher=*"]),
+        ["cousin", "done", "kid", "stranger"]
+    );
     assert_eq!(ids(None, None, &["live=no"]), ["done"]);
     assert!(ids(None, None, &["parent=none"]).is_empty());
     assert!(ids(Some(&planner), None, &["parent=none"]).is_empty());

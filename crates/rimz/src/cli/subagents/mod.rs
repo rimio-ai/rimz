@@ -701,7 +701,9 @@ enum ListScope<'a> {
 /// A resolved agent caller sees its own children unless a term names `parent`.
 fn list_scope<'a>(caller: Option<&'a AgentState>, query: &Query) -> ListScope<'a> {
     match caller {
-        Some(caller) if !query.names(Field::Parent) => ListScope::Caller(caller),
+        Some(caller) if !query.names(Field::Parent) && !query.names(Field::Launcher) => {
+            ListScope::Caller(caller)
+        }
         _ => ListScope::Channel,
     }
 }
@@ -720,7 +722,8 @@ fn preset_rows<'a>(
         ListScope::Caller(caller) => Some(rimz::address::launched_children(agents, caller)),
         ListScope::Channel => None,
     };
-    let lane = lane.filter(|_| own.is_none() && !query.names(Field::Lane));
+    let lane = lane
+        .filter(|_| own.is_none() && !query.names(Field::Lane) && !query.names(Field::Launcher));
     rows.into_iter()
         .filter(|row| {
             let agent = row.agent();
@@ -737,7 +740,8 @@ fn preset_rows<'a>(
 
 /// What `subagents list` lists until a term names the field.
 const FILTER_DEFAULTS: &str = "naming parent or lane replaces its default: an agent's own \
-     children (else the current lane's), the current lane; live has no default";
+     children (else the current lane's), the current lane; naming launcher replaces both; live \
+     has no default";
 
 fn list_children(json: bool, quiet: bool, filters: &[String], globals: &GlobalFlags) -> Result<()> {
     if filters.iter().any(|filter| filter.trim() == "help") {
@@ -768,6 +772,7 @@ fn list_children(json: bool, quiet: bool, filters: &[String], globals: &GlobalFl
         now,
     ));
     let reader = ctx.address_context();
+    let query = crate::cli::select::bind_caller(query, &ctx.store, &snapshot, &reader)?;
     let mut rows = selector::live_rows(&snapshot, &demotion, &reader, now);
     let closed = selector::closed_rows(&audit_snapshot, &snapshot, &rows, &demotion, &reader, now);
     rows.extend(closed);
@@ -796,7 +801,7 @@ fn list_children(json: bool, quiet: bool, filters: &[String], globals: &GlobalFl
         let channel = reader
             .channel
             .as_ref()
-            .filter(|_| !query.names(Field::Lane))
+            .filter(|_| !query.names(Field::Lane) && !query.names(Field::Launcher))
             .map(|channel| format!("#{channel}"));
         let line = match (scope, channel, filters.is_empty()) {
             (ListScope::Caller(caller), _, true) => format!(

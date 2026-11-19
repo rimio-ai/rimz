@@ -134,6 +134,9 @@ fn every_production_parses() {
         &["parent=coder"],
         &["parent=@coder#feat"],
         &["parent=co*"],
+        &["launcher=@coder"],
+        &["launcher=@me"],
+        &["launcher=*,none"],
         &["lane=#feat"],
         &["lane=feat"],
         &["lane=fe*"],
@@ -666,4 +669,145 @@ fn a_selected_address_holds_only_while_it_names_the_live_agent_selected() {
     line.check(Some(&fox)).unwrap();
     line.check(None).unwrap();
     assert_eq!(line.check(Some(&ended)), Err(SelectionMoved::Ended));
+}
+
+fn launched_by(agent: &mut AgentState, kind: &str, launcher: &str) {
+    agent.launched_by = Some(crate::agents::LaunchedBy {
+        kind: AgentKind::new_unchecked(kind),
+        agent_id: launcher.into(),
+    });
+}
+
+/// `root` launched a child, a peer in another lane (stamped by kind `claude`
+/// with root's launch id, as a molt leaves it), and a team seat; `other` is
+/// unrelated and launched `stray`.
+fn launcher_room() -> SidebarSnapshot {
+    let ids = ["root", "kid", "peer", "seat", "other", "stray"];
+    snapshot(launcher_agents(), &ids)
+}
+
+fn launcher_agents() -> Vec<AgentState> {
+    let mut root = agent("root", "%1");
+    root.launch_id = Some("launch-root".into());
+    let kid = child("kid", "launch-root", "%2");
+    let mut peer = agent("peer", "%3");
+    peer.worktree_path = Some("/repo/docs".to_owned());
+    peer.worktree_branch = Some("docs".to_owned());
+    crate::testkit::set_own_lane(&mut peer);
+    launched_by(&mut peer, "claude", "launch-root");
+    let mut seat = agent("seat", "%4");
+    seat.team = Some("forge".to_owned());
+    launched_by(&mut seat, "codex", "root");
+    let other = agent("other", "%5");
+    let mut stray = agent("stray", "%6");
+    launched_by(&mut stray, "codex", "other");
+    vec![root, kid, peer, seat, other, stray]
+}
+
+#[test]
+fn a_launcher_term_selects_children_peers_and_seats_in_every_lane() {
+    let live = launcher_room();
+    let feat = LaneSelector::parse(Some("feat"));
+    let ids = |filters: &[&str]| {
+        rows_in_scope(
+            &live,
+            None,
+            LaneScope::Current(&feat),
+            &query(filters),
+            &ParkDemotion::default(),
+            &reader(),
+            now(),
+        )
+        .iter()
+        .map(|row| row.agent().agent_id.to_string())
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&["launcher=@root"]), ["kid", "peer", "seat"]);
+    assert_eq!(ids(&["launcher=root"]), ["kid", "peer", "seat"]);
+    assert_eq!(ids(&["launcher=ro*"]), ["kid", "peer", "seat"]);
+    assert_eq!(
+        ids(&["launcher=none"]),
+        ["root", "other"],
+        "naming launcher lifts the lane default, but none names no launcher"
+    );
+    assert_eq!(ids(&["launcher=*"]), ["kid", "peer", "seat", "stray"]);
+    assert!(
+        ids(&["launcher=@nobody"]).is_empty(),
+        "a miss selects nothing"
+    );
+    assert_eq!(
+        ids(&["launcher=codex"]),
+        ["kid", "peer", "seat", "stray"],
+        "a reference naming several agents selects what any of them launched"
+    );
+    assert_eq!(
+        ids(&["parent=@root"]),
+        ["kid"],
+        "parent still names children alone"
+    );
+    assert_eq!(
+        LaneScope::Current("feat").lane(&query(&["launcher=*"])),
+        None
+    );
+    let rows = live_rows(&live, &ParkDemotion::default(), &reader(), now());
+    let launchers = rows
+        .iter()
+        .map(|row| {
+            let json = serde_json::to_value(row).unwrap();
+            (row.agent().agent_id.to_string(), json["launcher"].clone())
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(launchers["kid"], "@root");
+    assert_eq!(launchers["peer"], "@root");
+    assert_eq!(launchers["seat"], "@root");
+    assert_eq!(launchers["stray"], "@other");
+    assert_eq!(launchers["root"], serde_json::Value::Null);
+}
+
+#[test]
+fn a_row_whose_launcher_ended_keeps_its_launcher() {
+    let mut agents = launcher_agents();
+    agents
+        .iter_mut()
+        .find(|agent| agent.agent_id.as_str() == "other")
+        .unwrap()
+        .ended_at = Some(now());
+    let live = snapshot(agents, &["root", "kid", "peer", "seat", "stray"]);
+    assert!(selected(&live, &["launcher=*"]).contains(&"stray".to_owned()));
+    assert!(!selected(&live, &["launcher=none"]).contains(&"stray".to_owned()));
+}
+
+#[test]
+fn me_names_the_bound_caller_in_agent_reference_terms() {
+    let live = launcher_room();
+    let root = live
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "root")
+        .unwrap()
+        .clone();
+    for filters in [&["launcher=@me"][..], &["parent=@me"], &["parent=me"]] {
+        assert!(query(filters).names_me(), "{filters:?}");
+    }
+    assert!(!query(&["launcher=@root"]).names_me());
+    assert!(
+        !query(&["name=@me"]).names_me(),
+        "a text term reads @me as text"
+    );
+    let ids = |query: &Query| {
+        live_rows(&live, &ParkDemotion::default(), &reader(), now())
+            .iter()
+            .filter(|row| query.admits(row, &reader()))
+            .map(|row| row.agent().agent_id.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        ids(&query(&["launcher=@me"])).is_empty(),
+        "an unbound @me names no agent, not the handle me"
+    );
+    let bound = |filters: &[&str]| ids(&query(filters).with_caller(&root));
+    assert_eq!(bound(&["launcher=@me"]), ["kid", "peer", "seat"]);
+    assert_eq!(bound(&["parent=@me"]), ["kid"]);
+    assert_eq!(bound(&["parent=me"]), ["kid"]);
+    assert_eq!(bound(&["launcher!=@me"]), ["root", "other", "stray"]);
 }
