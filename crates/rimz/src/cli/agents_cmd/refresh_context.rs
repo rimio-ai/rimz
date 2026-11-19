@@ -57,6 +57,7 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
         .default_login(kind)
         .filter(|default| default.name() == login.name())
         .map(|_| runtime.codex_app_server_socket_path());
+    let read_at_ms = rimz::utils::time::unix_now_ms();
     let Some(refresh) = definition.refresh_session_context(&agents::SessionContextInput {
         login_env: &login_env,
         session_id,
@@ -92,7 +93,7 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
 
     if let Some(realtime) = refresh.realtime_usage {
         wrote |= rimz::sidebar::refresh::complete_realtime_account_usage(
-            &runtime, &login, &logins, realtime,
+            &runtime, &login, &logins, realtime, read_at_ms,
         );
     }
 

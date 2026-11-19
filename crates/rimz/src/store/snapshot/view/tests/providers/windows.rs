@@ -11,13 +11,14 @@ fn every_provider_paints_its_own_session_window() {
     let opencode = agent("opencode", "o1", AgentStatus::Idle, 10).limits(vec![reading.clone()]);
     let claude = agent("claude", "c1", AgentStatus::Idle, 10);
 
-    let snapshot = room(vec![opencode, claude]).with_provider_aggregates(
+    let mut snapshot = room(vec![opencode, claude]).with_provider_aggregates(
         &Default::default(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &shown(&["opencode", "claude"]),
     );
+    snapshot.gather_live_windows(&BTreeMap::new());
 
     let panel = |kind: &str| {
         snapshot
@@ -38,14 +39,15 @@ fn every_provider_paints_its_own_session_window() {
 }
 
 fn claude_panel(agents: Vec<AgentState>) -> SidebarProviderPanel {
-    room(agents)
-        .with_provider_aggregates(
-            &Default::default(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &shown(&["claude"]),
-        )
+    let mut snapshot = room(agents).with_provider_aggregates(
+        &Default::default(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &shown(&["claude"]),
+    );
+    snapshot.gather_live_windows(&BTreeMap::new());
+    snapshot
         .providers
         .into_iter()
         .find(|panel| panel.kind == "claude")
@@ -113,4 +115,37 @@ fn all_keyless_sessions_keep_a_keyless_panel() {
     let panel = claude_panel(vec![first, second]);
     assert_eq!(panel.account_key, None);
     assert_eq!(panel.windows[0].used_percentage, Some(70));
+}
+
+#[test]
+fn a_window_read_before_the_identity_floor_cannot_blank_a_newer_one() {
+    let floor = jiff::Timestamp::now();
+    let read = |used: u8, offset_secs: i64| RateLimitWindow {
+        observed_at: Some(floor + jiff::SignedDuration::from_secs(offset_secs)),
+        resets_at: Some(floor + jiff::SignedDuration::from_hours(1)),
+        ..window(used, 3_600)
+    };
+    // The busier pre-floor reading falls inside the newer one's render-lag band.
+    let before = agent("claude", "before", AgentStatus::Idle, 10).limits(vec![read(70, -2)]);
+    let after = agent("claude", "after", AgentStatus::Idle, 20).limits(vec![read(20, 1)]);
+    let mut snapshot = room(vec![before, after]).with_provider_aggregates(
+        &Default::default(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &shown(&["claude"]),
+    );
+    snapshot.now = floor + jiff::SignedDuration::from_secs(5);
+    snapshot.gather_live_windows(&BTreeMap::from([(provider_key("claude"), floor)]));
+    let panel = snapshot
+        .providers
+        .iter()
+        .find(|panel| panel.kind == "claude")
+        .expect("claude panel");
+    let used: Vec<_> = panel
+        .windows
+        .iter()
+        .map(|window| window.used_percentage)
+        .collect();
+    assert_eq!(used, [Some(20)]);
 }

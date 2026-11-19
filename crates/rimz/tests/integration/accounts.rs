@@ -2899,3 +2899,74 @@ fn accounts_add_refuses_a_history_switch_only_while_the_codex_daemon_has_session
     assert!(still_running.is_none(), "idle: {still_running:?}");
     assert!(std::fs::symlink_metadata(&sessions).is_err(), "idle");
 }
+
+#[test]
+fn list_prints_the_plan_its_own_usage_refresh_just_read() {
+    use rimz::agents::AgentAccount;
+    use rimz::agents::account::{AccountStamps, AccountsCache, ProviderRecord};
+    let env = Env::new();
+    let codex_home = env.home_root.join(".codex");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(
+        codex_home.join("auth.json"),
+        r#"{"OPENAI_API_KEY":null,"tokens":{"access_token":"codex-token","account_id":"acc_123"}}"#,
+    )
+    .unwrap();
+    let (origin, server) = super::oauth_usage::serve_http_routes(
+        vec![(
+            "GET /backend-api/wham/usage",
+            200,
+            json!({
+                "plan_type": "pro",
+                "rate_limit": {"primary_window": {
+                    "used_percent": 42, "reset_at": 4102444800_u64, "limit_window_seconds": 18000
+                }}
+            })
+            .to_string(),
+        )],
+        2,
+    );
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!("chatgpt_base_url = \"{origin}/backend-api\"\n"),
+    )
+    .unwrap();
+    // A fresh record read as Plus well before this run, so no probe is due.
+    let now = rimz::utils::time::unix_now_ms();
+    env.publish_accounts(&AccountsCache {
+        logins: std::collections::BTreeMap::from([(
+            rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("codex")),
+            ProviderRecord {
+                probed_at_ms: now,
+                ok: true,
+                account: Some(AgentAccount {
+                    plan: Some("plus".to_owned()),
+                    metered: Some(true),
+                    ..Default::default()
+                }),
+                stamps: AccountStamps {
+                    plan_at_ms: Some(now - 60_000),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )]),
+    });
+    let output = hermetic(&env, &mut env.rimz())
+        .args(["accounts", "list", "--refresh", "--json"])
+        .env("RIMZ_OAUTH_USAGE_OFFLINE", "0")
+        .env("RIMZ_CODEX_BIN", env.home_root.join("missing-codex"))
+        .env("RIMZ_CODEX_APP_SERVER_SOCK", "")
+        .output()
+        .unwrap();
+    let rows: Value = serde_json::from_str(&succeeded(&output)).unwrap();
+    let requests = server.join().unwrap();
+    assert!(!requests.is_empty(), "the refresh read usage");
+    let row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["account"] == "codex@default")
+        .unwrap_or_else(|| panic!("no codex row: {rows}"));
+    assert_eq!(row["plan"], "pro", "{row}");
+}

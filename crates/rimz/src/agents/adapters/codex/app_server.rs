@@ -127,7 +127,7 @@ pub fn merge_app_server_context(
         .agent_version
         .clone_from(&context.agent_version);
     record.context.rate_limits.clone_from(&context.rate_limits);
-    record.context.account.clone_from(&context.account);
+    record.context.account = record.stamped_account(context.account.clone(), observed_at);
     record.context.observed_at = observed_at;
     record.rate_limits_observed_at = Some(observed_at);
     true

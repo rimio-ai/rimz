@@ -38,7 +38,7 @@ mod trace;
 mod trunk;
 pub mod usage;
 
-pub use accounts::query_provider_accounts;
+pub use accounts::{query_provider_accounts, read_provider_accounts};
 pub(super) use daemon_reap::read_codex_daemon_reap;
 pub use live_spend::apply_live_day_spend;
 pub use sessions::{
@@ -50,7 +50,7 @@ pub use usage::{
     refresh_provider_usage,
 };
 
-use self::accounts::produce_accounts;
+use self::accounts::{merge_live_accounts, produce_accounts};
 use self::cohort_spend::refresh_cohort_spend_for;
 use self::daemon_reap::refresh_codex_daemon_reap_cache;
 use self::git_stats::refresh_diff_stats_for;
@@ -271,6 +271,11 @@ pub(super) fn refresh_heavy_lanes(
         )
     });
 
+    // Live session accounts and versions reach the record before the probe
+    // decides what is due, so a version a session reported needs no probe.
+    steps.step("live_accounts", || {
+        merge_live_accounts(base, runtime, &logins)
+    });
     let accounts = steps.step("accounts", || produce_accounts(base, runtime, &logins));
     let spending = steps.step("spending", || {
         compute_fleet_spending_via_service(runtime, base, &config.headline_spec(), spending_startup)
@@ -290,6 +295,9 @@ pub(super) fn refresh_heavy_lanes(
             &logins,
             PanelScope::InUse,
         );
+        // Live session windows reach the display only through the cache this
+        // step writes, so they are gathered here and nowhere in the fold.
+        panels.gather_live_windows(&rate_limits::identity_floors(runtime));
         refresh_rate_limits(&mut panels, runtime, &logins);
         // `with_provider_aggregates` rebuilds panels with empty credit fields;
         // the scoped producer fold must reapply the shared cache before

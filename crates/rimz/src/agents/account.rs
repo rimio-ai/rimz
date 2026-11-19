@@ -14,14 +14,14 @@
 //!
 //! A probe also detects a *logged-in but idle* provider — one with no active
 //! session this run — so the dashboard can show substantive accounts and their
-//! budgets between turns. A live session's richer context still wins where both
-//! exist.
+//! budgets between turns. Probe, live session, and usage read all merge into
+//! one stored record per login, and every surface reads only that record.
 //!
 //! Best-effort by contract: a missing binary, a logged-out account, or
 //! unparseable output yields no account. It never fails a snapshot — account is
 //! enrichment, never correctness.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -60,7 +60,7 @@ pub struct AccountsCache {
     pub logins: BTreeMap<LoginKey, ProviderRecord>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProviderRecord {
     pub probed_at_ms: u64,
     #[serde(default, skip_serializing_if = "super::is_zero_u32")]
@@ -96,6 +96,326 @@ pub struct ProviderRecord {
     /// Last profile attempt and answer, independent of account availability.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<AccountProfileState>,
+    /// When the reading behind each shared account fact was produced. A
+    /// record an older build wrote has none, which reads as oldest.
+    #[serde(default, skip_serializing_if = "AccountStamps::is_empty")]
+    pub stamps: AccountStamps,
+    /// The backing credentials, other than the selected one, that this login's
+    /// live sessions run on, each with the last instant (Unix ms) a room's pass
+    /// saw a live session on it. The record is machine-wide, so a pass only adds
+    /// or raises its own room's sessions and drops what no room has seen for
+    /// `LIVE_CREDENTIAL_TTL`. Only these credentials show as alternates, while
+    /// their stamp is younger than that TTL. An older build's list reads as
+    /// never seen.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "live_credentials_seen"
+    )]
+    pub live_credentials: BTreeMap<String, u64>,
+}
+
+/// How long a credential stays an alternate after a room's pass last saw a live
+/// session on it: several heavy passes of an unwatched room, which fold at
+/// least every 5 s (`crate::sidebar::timing::UNWATCHED_FOLD_INTERVAL`). A
+/// pass raises a stamp only once it is a third of this old, so a steady
+/// session rewrites the record at most every 20 s.
+const LIVE_CREDENTIAL_TTL: Duration = Duration::from_secs(60);
+
+/// `ProviderRecord::live_credentials` as a map, or an older build's list of
+/// names, each read as never seen.
+fn live_credentials_seen<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, u64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Seen(BTreeMap<String, u64>),
+        Names(BTreeSet<String>),
+    }
+    Ok(match Stored::deserialize(deserializer)? {
+        Stored::Seen(seen) => seen,
+        Stored::Names(names) => names.into_iter().map(|name| (name, 0)).collect(),
+    })
+}
+
+/// Reading instants, in Unix milliseconds, of the shared account facts a
+/// [`ProviderRecord`] holds: the plan (with its display name), metering, and
+/// the account id. Version needs none: the newest version wins.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AccountStamps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metered_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id_at_ms: Option<u64>,
+    /// The reading instant of the last identity switch or logout, never
+    /// lowered, except that a live switch sets it no later than the switching
+    /// session's own earliest window. A live or usage reading produced before
+    /// it describes the previous identity and applies nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub floor_at_ms: Option<u64>,
+    /// Whether a probe stated the stored account id, whatever that probe's
+    /// instant. A live reading that states another id switches the identity
+    /// only while none did, and so does an older probe: a login whose probe
+    /// cannot read the identity (an agy keyring install) learns it from its
+    /// sessions alone.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub account_id_from_probe: bool,
+}
+
+/// Where an account reading comes from. Only a probe reads the login's own
+/// credentials, so a live reading switches the record to another identity only
+/// where no probe stated the stored one, and a usage reading never does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReadingSource {
+    Probe,
+    Live,
+    Usage,
+}
+
+impl AccountStamps {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Whether a reading produced at `read_at_ms` may replace a fact stamped
+/// `stamp`: an unstamped fact is oldest, and a tie applies.
+fn reading_is_current(stamp: Option<u64>, read_at_ms: u64) -> bool {
+    stamp.is_none_or(|stamp| read_at_ms >= stamp)
+}
+
+/// Fold one reading's shared account facts into `account`, the one merge every
+/// source goes through (probe, live session, usage read). A live or usage
+/// reading produced before the record's floor (its last identity switch or
+/// logout) describes the previous identity and applies nothing; a probe reads
+/// the login's credentials as they stand, so the floor never holds it back. A
+/// fact changes only when the reading states it, was produced no earlier than
+/// the stored fact, and differs from it: an equal value moves no stamp, so a
+/// repeated reading writes nothing. An absent value, or an empty account id, is
+/// no reading. Version takes the newest version.
+///
+/// Only a probe reads the login's own credentials, so a probe switches
+/// identity: a current probe that states a different account id, profile
+/// owner, metering, or selected credential starts the shared facts again from
+/// that reading and raises the floor to its instant, never below an earlier
+/// floor. A probe that states an account id is authoritative for it whatever
+/// its instant: one stating the stored id marks it probed
+/// (`AccountStamps::account_id_from_probe`), and one stating another id
+/// switches even when older than the stored id, unless a probe stated that
+/// one. A current live reading that states another account id switches the
+/// same way while no probe stated the stored id. Otherwise a live or usage
+/// reading that states another account id, profile owner or usage owner
+/// applies nothing. One that names a credential other than the selected one
+/// only fills that credential's empty plan, unless the reading's usage owner
+/// differs from the credential's own. True when anything changed.
+pub(crate) fn merge_account_reading(
+    account: &mut AgentAccount,
+    stamps: &mut AccountStamps,
+    reading: &AgentAccount,
+    read_at_ms: u64,
+    source: ReadingSource,
+) -> bool {
+    if source != ReadingSource::Probe && stamps.floor_at_ms.is_some_and(|floor| read_at_ms < floor)
+    {
+        return false;
+    }
+    let stated_id = |account: &AgentAccount| account.account_id.clone().filter(|id| !id.is_empty());
+    let other_id = states_other(stated_id(account).as_ref(), stated_id(reading).as_ref());
+    let other_owner = states_other(
+        account.profile_fingerprint.as_ref(),
+        reading.profile_fingerprint.as_ref(),
+    );
+    let other_credential =
+        account.sub_provider != reading.sub_provider || account.scope != reading.scope;
+    let before = (account.clone(), stamps.clone());
+    let live_switch = source == ReadingSource::Live
+        && other_id
+        && !stamps.account_id_from_probe
+        && reading_is_current(stamps.account_id_at_ms, read_at_ms);
+    if source != ReadingSource::Probe {
+        if states_other(account.sub_provider.as_ref(), reading.sub_provider.as_ref())
+            || (!reading.scope.is_kind_wide() && reading.scope != account.scope)
+        {
+            return fill_credential_plan(account, reading);
+        }
+        if (other_id && !live_switch)
+            || other_owner
+            || states_other(account.account_key.as_ref(), reading.account_key.as_ref())
+        {
+            return false;
+        }
+    } else if other_id
+        && stamps.account_id_from_probe
+        && !reading_is_current(stamps.account_id_at_ms, read_at_ms)
+    {
+        return false;
+    }
+    let held_facts = stamps.plan_at_ms.is_some()
+        || stamps.metered_at_ms.is_some()
+        || stamps.account_id_at_ms.is_some();
+    let switched = live_switch
+        || source == ReadingSource::Probe
+            && (other_id
+                || other_owner
+                || (held_facts && other_credential)
+                || (reading_is_current(stamps.metered_at_ms, read_at_ms)
+                    && states_other(account.metered.as_ref(), reading.metered.as_ref())));
+    if switched {
+        account.plan = None;
+        account.plan_name = None;
+        account.metered = None;
+        account.account_id = None;
+        // A credential mtime can predate an earlier logout's floor.
+        *stamps = AccountStamps {
+            floor_at_ms: Some(
+                stamps
+                    .floor_at_ms
+                    .map_or(read_at_ms, |floor| floor.max(read_at_ms)),
+            ),
+            ..AccountStamps::default()
+        };
+    }
+    if let Some(plan) = reading
+        .plan
+        .as_deref()
+        .map(str::trim)
+        .filter(|plan| !plan.is_empty())
+        && reading_is_current(stamps.plan_at_ms, read_at_ms)
+    {
+        // A reading of the same tier without a display name (a usage read)
+        // keeps the name a richer source gave it.
+        let plan_name = if reading.plan_name.is_some() || account.plan.as_deref() != Some(plan) {
+            reading.plan_name.clone()
+        } else {
+            account.plan_name.clone()
+        };
+        if account.plan.as_deref() != Some(plan) || account.plan_name != plan_name {
+            account.plan = Some(plan.to_owned());
+            account.plan_name = plan_name;
+            stamps.plan_at_ms = Some(read_at_ms);
+        }
+    }
+    if let Some(metered) = reading.metered
+        && reading_is_current(stamps.metered_at_ms, read_at_ms)
+        && account.metered != Some(metered)
+    {
+        account.metered = Some(metered);
+        stamps.metered_at_ms = Some(read_at_ms);
+    }
+    if let Some(account_id) = stated_id(reading) {
+        if account.account_id.as_ref() == Some(&account_id) {
+            // A probe states the login's own identity whatever its instant.
+            stamps.account_id_from_probe |= source == ReadingSource::Probe;
+        } else if reading_is_current(stamps.account_id_at_ms, read_at_ms) {
+            account.account_id = Some(account_id);
+            stamps.account_id_at_ms = Some(read_at_ms);
+            stamps.account_id_from_probe = source == ReadingSource::Probe;
+        }
+    }
+    account.version = super::version::newest_version(
+        account
+            .version
+            .as_deref()
+            .into_iter()
+            .chain(reading.version.as_deref()),
+    )
+    .map(str::to_owned);
+    (account.clone(), stamps.clone()) != before
+}
+
+/// A live or usage reading of a non-selected credential: its plan fills that
+/// credential's entry when the entry has none, and reaches nothing else.
+fn fill_credential_plan(account: &mut AgentAccount, reading: &AgentAccount) -> bool {
+    let Some(plan) = reading
+        .plan
+        .as_deref()
+        .map(str::trim)
+        .filter(|plan| !plan.is_empty())
+    else {
+        return false;
+    };
+    let Some(credential) = account.credentials.values_mut().find(|credential| {
+        credential.plan.is_none()
+            && !states_other(
+                credential.account_key.as_ref(),
+                reading.account_key.as_ref(),
+            )
+            && match reading.sub_provider.as_deref() {
+                Some(provider) => credential.sub_provider.as_deref() == Some(provider),
+                None => credential.scope == reading.scope,
+            }
+    }) else {
+        return false;
+    };
+    credential.plan = Some(plan.to_owned());
+    credential.plan_name.clone_from(&reading.plan_name);
+    true
+}
+
+/// Whether a reading states a value other than the stored one; an absent value
+/// on either side states nothing.
+fn states_other<T: PartialEq>(stored: Option<&T>, read: Option<&T>) -> bool {
+    matches!((stored, read), (Some(stored), Some(read)) if stored != read)
+}
+
+impl ProviderRecord {
+    /// Merge one reading into this record's account, creating it when the
+    /// record holds none. See [`merge_account_reading`].
+    pub(crate) fn merge_reading(
+        &mut self,
+        reading: &AgentAccount,
+        read_at_ms: u64,
+        source: ReadingSource,
+    ) -> bool {
+        let created = self.account.is_none();
+        let account = self.account.get_or_insert_default();
+        let changed = merge_account_reading(account, &mut self.stamps, reading, read_at_ms, source);
+        if created && !changed {
+            self.account = None;
+        }
+        changed
+    }
+
+    /// Record that this room's live sessions run on `providers` at `now_ms`:
+    /// add each credential other than the selected one, raise a stamp a third
+    /// of `LIVE_CREDENTIAL_TTL` old, and drop what no room has seen for the
+    /// TTL. Another room's credentials stay. True when anything changed.
+    pub(crate) fn see_live_credentials<'a>(
+        &mut self,
+        providers: impl IntoIterator<Item = &'a str>,
+        now_ms: u64,
+    ) -> bool {
+        let selected = self
+            .account
+            .as_ref()
+            .and_then(|account| account.sub_provider.clone());
+        let before = self.live_credentials.clone();
+        self.live_credentials.retain(|provider, seen| {
+            live_credential_is_fresh(*seen, now_ms) && selected.as_ref() != Some(provider)
+        });
+        let raise_after_ms = LIVE_CREDENTIAL_TTL.as_millis() as u64 / 3;
+        for provider in providers {
+            if selected.as_deref() == Some(provider) {
+                continue;
+            }
+            let seen = self
+                .live_credentials
+                .entry(provider.to_owned())
+                .or_default();
+            if now_ms.saturating_sub(*seen) >= raise_after_ms {
+                *seen = now_ms;
+            }
+        }
+        self.live_credentials != before
+    }
+}
+
+fn live_credential_is_fresh(seen_ms: u64, now_ms: u64) -> bool {
+    now_ms.saturating_sub(seen_ms) < LIVE_CREDENTIAL_TTL.as_millis() as u64
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
@@ -154,6 +474,37 @@ pub enum ProviderStatus {
 }
 
 impl ProviderRecord {
+    /// The account every display reads: the record's facts, with only the
+    /// credentials live sessions run on beside the selected one. A live
+    /// credential the inventory does not list shows as a bare entry; a record
+    /// with no inventory (an older build's) classifies none.
+    pub fn display_account(&self) -> Option<AgentAccount> {
+        let mut account = self.account.clone()?;
+        if account.credentials.is_empty() {
+            return Some(account);
+        }
+        let now_ms = crate::utils::time::unix_now_ms();
+        let live: Vec<&String> = self
+            .live_credentials
+            .iter()
+            .filter(|(_, seen)| live_credential_is_fresh(**seen, now_ms))
+            .map(|(provider, _)| provider)
+            .collect();
+        account
+            .credentials
+            .retain(|provider, _| live.contains(&provider));
+        for provider in live {
+            account
+                .credentials
+                .entry(provider.clone())
+                .or_insert_with(|| AgentAccount {
+                    sub_provider: Some(provider.clone()),
+                    ..AgentAccount::default()
+                });
+        }
+        Some(account)
+    }
+
     /// An older build's `ok` record whose account carries nothing but the CLI
     /// version: it wrote those bytes for a logout and for a login the provider
     /// reported no facts about.
@@ -341,13 +692,16 @@ pub struct ProviderCapacity {
 impl ProviderCapacity {
     /// Read one kind-wide capacity from the shared provider cache. The login's model refusals
     /// load apart from its usage entry, so a refusal still vetoes while that entry is missing.
+    /// A window observed before the login's identity floor describes the previous account and
+    /// is left out; an unstamped one stays.
     pub fn read(runtime: &RuntimePaths, key: &LoginKey) -> Option<Self> {
         let cache = read_rate_limits_cache(&RateLimitsCache::shared_path(runtime));
+        let floor_ms = identity_floor_ms(runtime, key);
         let windows = cache
             .entries
             .get(&key.clone().into())
             .filter(|entry| entry.scope.is_kind_wide())
-            .map(|entry| entry.limits.windows.clone());
+            .map(|entry| since_floor(entry.limits.windows.clone(), floor_ms));
         let refusals = ModelRefusals::read(&runtime.shared_model_refusals_path()).login(key);
         if windows.is_none() && refusals.is_empty() {
             return None;
@@ -362,6 +716,8 @@ impl ProviderCapacity {
     /// Read capacity only when the cache belongs to this exact provider
     /// account. Bound Qwen pacing uses its sliding 5-hour/7-day windows while
     /// all authoritative windows remain available to the exhaustion gate.
+    /// Windows from before the login's identity floor are left out, as in
+    /// [`Self::read`].
     fn read_bound(
         runtime: &RuntimePaths,
         key: &LoginKey,
@@ -372,25 +728,30 @@ impl ProviderCapacity {
             .entries
             .get(&AccountUsageKey::new(key.clone(), binding.scope.clone()))?;
         entry_matches_binding(entry, binding).then(|| Self {
-            windows: entry
-                .bound_limits
-                .as_ref()
-                .unwrap_or(&entry.limits)
-                .windows
-                .clone(),
+            windows: since_floor(
+                entry
+                    .bound_limits
+                    .as_ref()
+                    .unwrap_or(&entry.limits)
+                    .windows
+                    .clone(),
+                identity_floor_ms(runtime, key),
+            ),
             pacing_max_mins: Some(7 * 24 * 60),
             refusals: BTreeMap::new(),
         })
     }
 
     /// Read all kind-wide capacities from the shared provider cache once, plus a refusal-only
-    /// capacity for each login in use whose refusals stand without a usage entry.
+    /// capacity for each login in use whose refusals stand without a usage entry. Windows from
+    /// before a login's identity floor are left out, as in [`Self::read`].
     pub(crate) fn read_all(
         runtime: &RuntimePaths,
         logins: &RoomLoginSet,
     ) -> BTreeMap<LoginKey, Self> {
         let in_use = logins.keys_in_use();
         let mut refusals = ModelRefusals::read(&runtime.shared_model_refusals_path()).logins;
+        let accounts = read_accounts_cache(&runtime.shared_accounts_path());
         let mut capacities: BTreeMap<_, _> =
             read_rate_limits_cache(&RateLimitsCache::shared_path(runtime))
                 .entries
@@ -402,10 +763,14 @@ impl ProviderCapacity {
                 })
                 .map(|(key, entry)| {
                     let refusals = refusals.remove(&key.login).unwrap_or_default();
+                    let floor_ms = accounts
+                        .logins
+                        .get(&key.login)
+                        .and_then(|record| record.stamps.floor_at_ms);
                     (
                         key.login,
                         Self {
-                            windows: entry.limits.windows,
+                            windows: since_floor(entry.limits.windows, floor_ms),
                             pacing_max_mins: None,
                             refusals,
                         },
@@ -744,6 +1109,25 @@ pub(super) fn launch_model_id(model: &str) -> &str {
         .map_or(model, |entry| entry.id)
 }
 
+/// The instant (Unix ms) of the login's last identity switch or logout.
+fn identity_floor_ms(runtime: &RuntimePaths, key: &LoginKey) -> Option<u64> {
+    read_accounts_cache(&runtime.shared_accounts_path())
+        .logins
+        .get(key)
+        .and_then(|record| record.stamps.floor_at_ms)
+}
+
+/// `windows` without those observed before `floor_ms`, which describe the
+/// previous account; an unstamped window stays.
+fn since_floor(mut windows: Vec<RateLimitWindow>, floor_ms: Option<u64>) -> Vec<RateLimitWindow> {
+    windows.retain(|window| {
+        floor_ms
+            .zip(window.observed_at)
+            .is_none_or(|(floor, observed)| observed.as_millisecond() >= floor as i64)
+    });
+    windows
+}
+
 fn entry_matches_binding(entry: &RateLimitCacheEntry, binding: &ProviderAccountBinding) -> bool {
     &entry.scope == binding.scope() && entry.account_key.as_deref() == Some(binding.account_key())
 }
@@ -1004,16 +1388,16 @@ pub(crate) fn read_rate_limits_cache(path: &Path) -> RateLimitsCache {
         .unwrap_or_default()
 }
 
-/// Latest cached window observation, falling back to the credits reading.
+/// Latest cached window observation since the login's identity floor, falling
+/// back to the credits reading.
 pub fn cached_usage_read_at(runtime: &RuntimePaths, key: &LoginKey) -> Option<Timestamp> {
+    let floor_ms = identity_floor_ms(runtime, key);
     read_rate_limits_cache(&RateLimitsCache::shared_path(runtime))
         .entries
         .into_iter()
         .filter(|(usage_key, _)| usage_key.login == *key)
         .flat_map(|(_, entry)| {
-            entry
-                .limits
-                .windows
+            since_floor(entry.limits.windows, floor_ms)
                 .into_iter()
                 .filter_map(|window| window.observed_at)
         })

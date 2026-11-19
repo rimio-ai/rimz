@@ -1013,6 +1013,8 @@ fn launch_availability_reads_model_client_account_facts() {
                             ok: true,
                             account: None,
                             login_at_ms: None,
+                            stamps: Default::default(),
+                            live_credentials: Default::default(),
                         },
                     )
                 })
@@ -1090,6 +1092,8 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
             ok: true,
             account: None,
             login_at_ms: None,
+            stamps: Default::default(),
+            live_credentials: Default::default(),
         };
         crate::disk::atomic::write_temp_then_rename_cache(
             &runtime.shared_accounts_path(),
@@ -1141,6 +1145,8 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
             ..Default::default()
         }),
         login_at_ms: None,
+        stamps: Default::default(),
+        live_credentials: Default::default(),
     };
     let skip = |record: ProviderRecord| {
         crate::disk::atomic::write_temp_then_rename_cache(
@@ -5247,6 +5253,8 @@ fn supervised_account_pin_keeps_the_provider_while_unpinned_falls_back() {
                     ok: true,
                     account: None,
                     login_at_ms: None,
+                    stamps: Default::default(),
+                    live_credentials: Default::default(),
                 },
             )]
             .into(),

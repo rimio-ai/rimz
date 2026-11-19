@@ -203,6 +203,8 @@ fn publish_account_metering(runtime: &RuntimePaths, readings: &[(&str, Option<bo
                         probe_error: None,
                         profile: None,
                         login_at_ms: None,
+                        stamps: Default::default(),
+                        live_credentials: Default::default(),
                     },
                 )
             })
@@ -1842,6 +1844,8 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
             ok: false,
             account: None,
             login_at_ms: None,
+            stamps: Default::default(),
+            live_credentials: Default::default(),
         },
     );
     crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_accounts_path(), &accounts)

@@ -150,6 +150,7 @@ pub(super) fn account(kind: &str, plugin_dir: &Path, argv: &[String]) -> Account
     }
     AccountProbe::Found(AgentAccount {
         plan: response.plan,
+        account_key: response.account_id.clone(),
         account_id: response.account_id,
         ..AgentAccount::default()
     })
@@ -592,6 +593,7 @@ mod tests {
         };
         assert_eq!(account.plan.as_deref(), Some("pro"));
         assert_eq!(account.account_id.as_deref(), Some("acct-1"));
+        assert_eq!(account.account_key.as_deref(), Some("acct-1"));
 
         let AccountUsageProbe::Found {
             snapshot: usage, ..

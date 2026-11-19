@@ -871,11 +871,10 @@ pub struct AgentAccount {
     /// the dashboard infers metering from whether rate-limit windows are present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metered: Option<bool>,
-    /// The agent binary's version, when the out-of-band probe reads one. The
-    /// panel header's fallback for a provider whose sessions carry no
-    /// `agent_version` in their rich context, and the version input for
-    /// display-only provider capability badges; a live session's reading still
-    /// wins.
+    /// The agent binary's version: the newest of the out-of-band probe's reading
+    /// and the `agent_version` live sessions reported, merged into the stored
+    /// record. The panel header and the display-only provider capability badges
+    /// read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// The raw subscription-provider id the account runs on, for a
@@ -888,6 +887,12 @@ pub struct AgentAccount {
     /// probes leave it unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials_updated_at_ms: Option<u64>,
+    /// When a live session's source read these facts, in Unix milliseconds:
+    /// the context writer stamps it when the account changes, so a later
+    /// refresh that leaves the account alone does not make it look newer.
+    /// The live merge into the login's record orders readings by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_at_ms: Option<u64>,
 }
 
 impl AgentAccount {
@@ -915,6 +920,7 @@ impl std::fmt::Debug for AgentAccount {
             .field("version", &self.version)
             .field("sub_provider", &self.sub_provider)
             .field("credentials_updated_at_ms", &self.credentials_updated_at_ms)
+            .field("read_at_ms", &self.read_at_ms)
             .finish()
     }
 }

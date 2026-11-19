@@ -7,7 +7,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::account::{RateLimitsCache, read_rate_limits_cache};
+use crate::agents::account::{RateLimitsCache, read_accounts_cache, read_rate_limits_cache};
 use crate::agents::{ProviderCapacity, RateLimitWindow, RoomLoginSet, WindowSpan};
 use crate::forge::pr_state::{
     PrLink, PrQueueFact, PrReview, PrStateCache, SettledMergeability, UNSUPPORTED_REPO_KEY,
@@ -532,15 +532,25 @@ impl<'a> WindowReadings<'a> {
         let Some(runtime) = self.runtime else {
             return (RoomLoginSet::native(), BTreeMap::new());
         };
+        let accounts = read_accounts_cache(&runtime.shared_accounts_path());
         let capacities = read_rate_limits_cache(&RateLimitsCache::shared_path(runtime))
             .entries
             .into_iter()
             .filter(|(key, entry)| key.scope.is_kind_wide() && entry.scope.is_kind_wide())
             .map(|(key, entry)| {
-                (
-                    key.login,
-                    ProviderCapacity::from_windows(entry.limits.windows),
-                )
+                // A window from before the login's identity floor describes the
+                // previous account.
+                let floor = accounts
+                    .logins
+                    .get(&key.login)
+                    .and_then(|record| record.stamps.floor_at_ms);
+                let mut windows = entry.limits.windows;
+                windows.retain(|window| {
+                    floor
+                        .zip(window.observed_at)
+                        .is_none_or(|(floor, observed)| observed.as_millisecond() >= floor as i64)
+                });
+                (key.login, ProviderCapacity::from_windows(windows))
             })
             .collect();
         (RoomLoginSet::for_runtime(runtime), capacities)

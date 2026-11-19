@@ -5,15 +5,15 @@ use std::time::Instant;
 
 use crate::RuntimePaths;
 use crate::agents::account::{
-    ACCOUNTS_TTL, AccountProbe, AccountProfileAnswer, AccountProfileState, AccountsCache,
-    INFORMATIONAL_PROBE_TIMEOUT, ProviderRecord, RateLimitsCache, RecordedLogin,
-    read_accounts_cache, read_rate_limits_cache,
+    ACCOUNTS_TTL, AccountProbe, AccountProfileAnswer, AccountProfileState, AccountStamps,
+    AccountsCache, INFORMATIONAL_PROBE_TIMEOUT, ProviderRecord, RateLimitsCache, ReadingSource,
+    RecordedLogin, merge_account_reading, read_accounts_cache, read_rate_limits_cache,
 };
 use crate::agents::capabilities::AccountProfileProbe;
 use crate::agents::credits::OAUTH_HTTP_TIMEOUT_SECS;
 use crate::agents::spending::read_provider_spending_cache;
 use crate::agents::version::newest_version;
-use crate::agents::{AgentAccount, ProviderLogin, RoomLoginSet};
+use crate::agents::{AccountUsageIdentity, AgentAccount, ProviderLogin, RoomLoginSet};
 use crate::ids::LoginKey;
 use crate::sidebar::timing::ACCOUNTS_RETRY_TTL;
 use crate::utils::time::unix_now_ms;
@@ -143,6 +143,13 @@ struct ProviderProbeResult {
     total_ms: u64,
 }
 
+/// One elected batch's probe results, merged into the record under its write
+/// lock. `probed_at_ms` is the batch's start, the stamp the cadence ages from.
+struct ProbeRun {
+    probed_at_ms: u64,
+    results: Vec<ProviderProbeResult>,
+}
+
 struct ProbeBatch {
     results: Vec<ProviderProbeResult>,
     worker_count: usize,
@@ -178,9 +185,8 @@ fn produce_accounts_with(
         &BTreeSet<LoginKey>,
         &AccountsCache,
         ProfileReadPolicy,
-    ) -> AccountsCache,
+    ) -> ProbeRun,
 ) -> BTreeMap<LoginKey, AgentAccount> {
-    let context_versions = context_versions(snapshot);
     let cache = query_provider_accounts_with(
         snapshot,
         runtime,
@@ -190,7 +196,13 @@ fn produce_accounts_with(
         |login| adapter_inputs_stamp(logins, login),
         probe,
     );
-    accounts_with_context_versions(&cache, &context_versions, logins)
+    accounts_in_use(&cache, logins)
+}
+
+/// The published account records as they stand, without probing: what a
+/// caller reads again after a usage read merged a plan into them.
+pub fn read_provider_accounts(runtime: &RuntimePaths) -> AccountsCache {
+    read_accounts_cache(&runtime.shared_accounts_path())
 }
 
 /// Query the requested logins through the shared account-cache single-flight.
@@ -244,7 +256,7 @@ fn query_provider_accounts_with(
         &BTreeSet<LoginKey>,
         &AccountsCache,
         ProfileReadPolicy,
-    ) -> AccountsCache,
+    ) -> ProbeRun,
 ) -> AccountsCache {
     let path = runtime.shared_accounts_path();
     let cache = read_accounts_cache(&path);
@@ -301,9 +313,15 @@ fn query_provider_accounts_with(
             } else {
                 ProfileReadPolicy::Due
             };
-            let cache = probe(snapshot, runtime, &due, &cache, policy);
-            write_accounts_cache(&path, &cache);
-            cache
+            let run = probe(snapshot, runtime, &due, &cache, policy);
+            let active = active_version_probe_kinds(snapshot);
+            // Other writers merge live and usage readings while the batch
+            // probes, so the results merge into the record as it now stands.
+            update_accounts_cache(runtime, |current| {
+                *current = merge_probe_results(current, &active, run.probed_at_ms, run.results);
+                true
+            })
+            .unwrap_or_else(|| read_accounts_cache(&path))
         }
         // A missing coordination path cannot protect a shared publication.
         // Probe locally for this frame without writing the cache.
@@ -319,7 +337,9 @@ fn query_provider_accounts_with(
             } else {
                 ProfileReadPolicy::Disabled
             };
-            probe(snapshot, runtime, &due, &cache, policy)
+            let run = probe(snapshot, runtime, &due, &cache, policy);
+            let active = active_version_probe_kinds(snapshot);
+            merge_probe_results(&cache, &active, run.probed_at_ms, run.results)
         }
         // A live producer still owns publication. The short unforced wait
         // avoids duplicate cold batches; a forced caller reaches this only
@@ -342,11 +362,194 @@ fn query_provider_accounts_with(
 
 pub(in crate::sidebar) fn cached_accounts_for_snapshot(
     runtime: &RuntimePaths,
-    snapshot: &SidebarSnapshot,
     logins: &RoomLoginSet,
 ) -> BTreeMap<LoginKey, AgentAccount> {
-    let cache = read_accounts_cache(&runtime.shared_accounts_path());
-    accounts_with_context_versions(&cache, &context_versions(snapshot), logins)
+    accounts_in_use(
+        &read_accounts_cache(&runtime.shared_accounts_path()),
+        logins,
+    )
+}
+
+/// Fold each in-use login's live session readings into its account record:
+/// plan, metering and account id from the session's account, stamped with the
+/// instant its source read them (the context's observation when it carries
+/// none), and the version it reports. Sessions merge oldest reading first. Each
+/// pass also marks in the record's `live_credentials` the credentials other
+/// than the selected one that this room's live sessions run on (a card and no
+/// `ended_at`, since a stopped agent's row stays unended), leaving another
+/// room's marks to expire on their own. A pass without cards marks nothing. A login without a record waits
+/// for its first probe, and a session whose context states nothing changes
+/// nothing.
+pub(super) fn merge_live_accounts(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    logins: &RoomLoginSet,
+) {
+    let in_use = logins.keys_in_use();
+    let carded: BTreeSet<&str> = snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+        .filter(|row| row.as_agent().is_some())
+        .map(|row| row.id.as_str())
+        .collect();
+    let mut sessions: Vec<_> = snapshot
+        .agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent())
+        .filter(|agent| in_use.contains(&agent.login_key()))
+        .filter_map(|agent| Some((agent, agent.context.as_ref()?)))
+        .collect();
+    sessions.sort_by_key(|(_, context)| live_read_at_ms(context));
+    update_accounts_cache(runtime, |cache| {
+        let mut changed = false;
+        let now_ms = unix_now_ms();
+        for (key, record) in &mut cache.logins {
+            if !in_use.contains(key) {
+                continue;
+            }
+            let providers = sessions
+                .iter()
+                .filter(|(agent, _)| agent.login_key() == *key && agent.ended_at.is_none())
+                .filter(|(agent, _)| carded.contains(agent.agent_id.as_str()))
+                .filter_map(|(_, context)| context.sub_provider.as_deref());
+            changed |= record.see_live_credentials(providers, now_ms);
+        }
+        for (agent, context) in &sessions {
+            let Some(record) = cache.logins.get_mut(&agent.login_key()) else {
+                continue;
+            };
+            changed |= merge_live_reading(record, context);
+        }
+        changed
+    });
+}
+
+/// When a session's account facts were read: the instant their source stamped
+/// them, or the context's observation when it carries none.
+fn live_read_at_ms(context: &crate::agents::AgentContext) -> u64 {
+    context
+        .account
+        .as_ref()
+        .and_then(|account| account.read_at_ms)
+        .unwrap_or_else(|| context.observed_at.as_millisecond().max(0) as u64)
+}
+
+fn merge_live_reading(record: &mut ProviderRecord, context: &crate::agents::AgentContext) -> bool {
+    let has_windows = context
+        .rate_limits
+        .as_ref()
+        .is_some_and(|limits| !limits.windows.is_empty());
+    if context.account.is_none() && context.agent_version.is_none() && !has_windows {
+        return false;
+    }
+    let mut reading = context.account.clone().unwrap_or_default();
+    reading.version = context.agent_version.clone();
+    // A session drawing rate-limit windows is metered. The inference only fills
+    // an unknown and goes through the merge like any reading, so a logout's
+    // floor and another account's id still stop it. A kind without a login
+    // probe reads as logged out on every pass, yet its sessions still meter.
+    if reading.metered.is_none()
+        && has_windows
+        && record
+            .account
+            .as_ref()
+            .is_none_or(|account| account.metered.is_none())
+    {
+        reading.metered = Some(true);
+    }
+    let read_at_ms = live_read_at_ms(context);
+    let floor_before = record.stamps.floor_at_ms;
+    let changed = record.merge_reading(&reading, read_at_ms, ReadingSource::Live);
+    if record.stamps.floor_at_ms != floor_before {
+        // A live switch: the switching session's own windows describe the new
+        // account, and a sidecar's first windows date from its process start.
+        let own_windows_from = context
+            .rate_limits
+            .iter()
+            .flat_map(|limits| &limits.windows)
+            .filter_map(|window| window.observed_at)
+            .map(|observed| observed.as_millisecond().max(0) as u64)
+            .min()
+            .map_or(read_at_ms, |earliest| earliest.min(read_at_ms));
+        record.stamps.floor_at_ms =
+            Some(floor_before.map_or(own_windows_from, |floor| floor.max(own_windows_from)));
+    }
+    changed
+}
+
+/// Merge a usage read's plan into the login's account record, stamped at the
+/// instant the read started. The usage identity's owner joins the reading, so a
+/// read of another account applies nothing. A delegated (sub-provider) scope's
+/// plan only fills an empty plan on the credential of that scope: the record
+/// holds a credential label there, a different vocabulary. A read started
+/// before the identity floor applies nothing, a credential's plan included.
+pub(super) fn merge_usage_plan(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    identity: &AccountUsageIdentity,
+    plan: &str,
+    read_at_ms: u64,
+) {
+    let plan = plan.trim();
+    if plan.is_empty() {
+        return;
+    }
+    let scope = &identity.scope;
+    update_accounts_cache(runtime, |cache| {
+        let Some(record) = cache.logins.get_mut(key) else {
+            return false;
+        };
+        let reading = AgentAccount {
+            plan: Some(plan.to_owned()),
+            account_key: identity.account_key.clone(),
+            ..Default::default()
+        };
+        if scope.is_kind_wide() {
+            return record.merge_reading(&reading, read_at_ms, ReadingSource::Usage);
+        }
+        let Some(account) = record.account.as_ref() else {
+            return false;
+        };
+        let selected = account.scope == *scope;
+        if selected && account.plan.is_some() {
+            return false;
+        }
+        let reading = AgentAccount {
+            scope: scope.clone(),
+            sub_provider: account.sub_provider.clone().filter(|_| selected),
+            ..reading
+        };
+        record.merge_reading(&reading, read_at_ms, ReadingSource::Usage)
+    });
+}
+
+/// Read, change and publish `accounts.json` under its write lock, so each
+/// writer merges into the record as the last writer left it. Writes only when
+/// `apply` reports a change. `None` when the lock cannot be taken.
+fn update_accounts_cache(
+    runtime: &RuntimePaths,
+    apply: impl FnOnce(&mut AccountsCache) -> bool,
+) -> Option<AccountsCache> {
+    let lock = runtime.shared_accounts_write_lock();
+    let _guard = match crate::disk::lock::WorkspaceLock::acquire(&lock) {
+        Ok(guard) => guard,
+        Err(err) => {
+            tracing::warn!(
+                path = %lock.display(),
+                tags.operation = "cache.accounts_write_lock",
+                error = &err as &dyn std::error::Error,
+                "sidebar accounts cache lock failed",
+            );
+            return None;
+        }
+    };
+    let path = runtime.shared_accounts_path();
+    let mut cache = read_accounts_cache(&path);
+    if apply(&mut cache) {
+        write_accounts_cache(&path, &cache);
+    }
+    Some(cache)
 }
 
 /// Cheap scheduling hint from the already-published account cache.
@@ -410,7 +613,6 @@ fn due_provider_logins(
     now_ms: u64,
 ) -> BTreeSet<LoginKey> {
     let active_version_kinds = active_version_probe_kinds(snapshot);
-    let context_versions = context_versions(snapshot);
     logins
         .iter()
         .map(ProviderLogin::key)
@@ -437,7 +639,6 @@ fn due_provider_logins(
                 .as_ref()
                 .is_some_and(|account| account.provisional);
             let version_missing = active_version_kinds.contains(kind)
-                && !context_versions.contains_key(key)
                 && account_version(record.account.as_ref()).is_none();
             age_ms > ACCOUNTS_RETRY_TTL.as_millis() as u64
                 && (provisional || inputs_moved || version_missing)
@@ -468,7 +669,7 @@ fn probe_accounts(
     due_keys: &BTreeSet<LoginKey>,
     previous: &AccountsCache,
     policy: ProfileReadPolicy,
-) -> AccountsCache {
+) -> ProbeRun {
     let active_version_kinds = active_version_probe_kinds(snapshot);
     let probed_at_ms = unix_now_ms();
     let session_start_ms = read_provider_spending_cache(&runtime.shared_provider_spending_path())
@@ -534,7 +735,10 @@ fn probe_accounts(
         success_count,
         unavailable_count,
     });
-    merge_probe_results(previous, &active_version_kinds, probed_at_ms, batch.results)
+    ProbeRun {
+        probed_at_ms,
+        results: batch.results,
+    }
 }
 
 fn probe_one_account(
@@ -675,6 +879,10 @@ fn merge_probe_results(
             ..
         } = result;
         let active = active_version_kinds.contains(key.kind.as_str());
+        let previous_version = previous
+            .logins
+            .get(&key)
+            .and_then(|record| account_version(record.account.as_ref()));
         let ok = !matches!(&outcome, AccountProbe::Unavailable(_));
         let probe_error = match &outcome {
             AccountProbe::Unavailable(cause) => Some(*cause),
@@ -698,6 +906,27 @@ fn merge_probe_results(
         let profile = profile.or_else(|| previous_record.and_then(|record| record.profile.clone()));
         let version_probed_at_ms = version_probed_at_ms
             .or_else(|| previous_record.and_then(|record| record.version_probed_at_ms));
+        // A logout clears every shared fact, so the next login starts fresh,
+        // and a reading from before it describes the logged-out identity. A
+        // login that reads logged out again keeps the first logout's floor,
+        // and a first logout never lowers an earlier switch's floor.
+        let repeated_logout =
+            previous_record.is_some_and(|record| record.login == Some(RecordedLogin::LoggedOut));
+        let mut stamps = match &outcome {
+            AccountProbe::LoggedOut => AccountStamps {
+                floor_at_ms: Some(
+                    match previous_record.and_then(|record| record.stamps.floor_at_ms) {
+                        Some(floor) if repeated_logout => floor,
+                        Some(floor) => floor.max(probed_at_ms),
+                        None => probed_at_ms,
+                    },
+                ),
+                ..AccountStamps::default()
+            },
+            _ => {
+                previous_record.map_or_else(AccountStamps::default, |record| record.stamps.clone())
+            }
+        };
         let account = match outcome {
             AccountProbe::Found(mut account) => {
                 if account_version(Some(&account)).is_none() {
@@ -716,25 +945,66 @@ fn merge_probe_results(
                     account.plan = answer.plan.clone().or(account.plan);
                     account.plan_name.clone_from(&answer.plan_name);
                 }
-                Some(account)
+                // A delegated credential's plan a usage read filled stays until
+                // a probe states one.
+                let previous_credentials = previous_record
+                    .and_then(|record| record.account.as_ref())
+                    .map(|account| &account.credentials);
+                for (provider, credential) in &mut account.credentials {
+                    let Some(previous) = previous_credentials
+                        .and_then(|credentials| credentials.get(provider))
+                        .filter(|previous| previous.scope == credential.scope)
+                    else {
+                        continue;
+                    };
+                    if credential.plan.is_none() {
+                        credential.plan.clone_from(&previous.plan);
+                        credential.plan_name.clone_from(&previous.plan_name);
+                    }
+                }
+                // A credential file's mtime is when its facts were written;
+                // a subprocess probe's facts are as new as the probe.
+                let read_at_ms = account.credentials_updated_at_ms.unwrap_or(probed_at_ms);
+                let mut shared = previous_record
+                    .and_then(|record| record.account.clone())
+                    .unwrap_or_default();
+                merge_account_reading(
+                    &mut shared,
+                    &mut stamps,
+                    &account,
+                    read_at_ms,
+                    ReadingSource::Probe,
+                );
+                Some(AgentAccount {
+                    plan: shared.plan,
+                    plan_name: shared.plan_name,
+                    metered: shared.metered,
+                    account_id: shared.account_id,
+                    version: shared.version,
+                    ..account
+                })
             }
             AccountProbe::LoggedOut => active
                 .then(|| {
-                    probed_version
-                        .or_else(|| {
-                            previous_record
-                                .and_then(|record| account_version(record.account.as_ref()))
-                        })
-                        .map(|version| AgentAccount {
-                            version: Some(version),
-                            ..Default::default()
-                        })
+                    newest_version(
+                        [previous_version.as_deref(), probed_version.as_deref()]
+                            .into_iter()
+                            .flatten(),
+                    )
+                    .map(|version| AgentAccount {
+                        version: Some(version.to_owned()),
+                        ..Default::default()
+                    })
                 })
                 .flatten(),
             AccountProbe::Unavailable(_) => {
                 let mut account = previous_record.and_then(|record| record.account.clone());
-                if let Some(version) = probed_version {
-                    account.get_or_insert_default().version = Some(version);
+                if let Some(version) = newest_version(
+                    [previous_version.as_deref(), probed_version.as_deref()]
+                        .into_iter()
+                        .flatten(),
+                ) {
+                    account.get_or_insert_default().version = Some(version.to_owned());
                 }
                 account
             }
@@ -752,6 +1022,10 @@ fn merge_probe_results(
                 account,
                 login,
                 login_at_ms,
+                stamps,
+                live_credentials: previous_record
+                    .map(|record| record.live_credentials.clone())
+                    .unwrap_or_default(),
             },
         );
     }
@@ -805,64 +1079,17 @@ fn account_version(account: Option<&AgentAccount>) -> Option<String> {
         .cloned()
 }
 
-fn accounts_with_context_versions(
+/// The in-use logins' recorded accounts: what every display fold reads.
+fn accounts_in_use(
     cache: &AccountsCache,
-    context_versions: &BTreeMap<LoginKey, String>,
     logins: &RoomLoginSet,
 ) -> BTreeMap<LoginKey, AgentAccount> {
     let in_use = logins.keys_in_use();
-    let accounts = cache
+    cache
         .logins
         .iter()
         .filter(|(key, _)| in_use.contains(*key))
-        .filter_map(|(key, record)| {
-            record
-                .account
-                .as_ref()
-                .map(|account| (key.clone(), account.clone()))
-        })
-        .collect();
-    let mut accounts = merge_context_versions(accounts, context_versions);
-    accounts.retain(|key, _| in_use.contains(key));
-    accounts
-}
-
-fn merge_context_versions(
-    mut accounts: BTreeMap<LoginKey, AgentAccount>,
-    context_versions: &BTreeMap<LoginKey, String>,
-) -> BTreeMap<LoginKey, AgentAccount> {
-    for (kind, version) in context_versions {
-        let account = accounts.entry(kind.clone()).or_default();
-        account.version = newest_version(
-            [version.as_str()]
-                .into_iter()
-                .chain(account.version.as_deref()),
-        )
-        .map(str::to_owned);
-    }
-    accounts
-}
-
-/// The newest version each login's sessions report. A login appears exactly
-/// when one of its sessions reports a non-empty version.
-fn context_versions(snapshot: &SidebarSnapshot) -> BTreeMap<LoginKey, String> {
-    let mut reported = BTreeMap::<LoginKey, Vec<&str>>::new();
-    for agent in snapshot.agents.iter() {
-        if agent.is_provider_subagent() {
-            continue;
-        }
-        let Some(version) = agent
-            .context
-            .as_ref()
-            .and_then(|context| context.agent_version.as_deref())
-        else {
-            continue;
-        };
-        reported.entry(agent.login_key()).or_default().push(version);
-    }
-    reported
-        .into_iter()
-        .filter_map(|(key, versions)| Some((key, newest_version(versions)?.to_owned())))
+        .filter_map(|(key, record)| Some((key.clone(), record.display_account()?)))
         .collect()
 }
 

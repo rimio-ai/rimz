@@ -1216,7 +1216,7 @@ fn fold_machine_config(
     let (accounts, spending) = if let Some(lanes) = lanes {
         (lanes.accounts.clone(), lanes.spending.clone())
     } else {
-        let accounts = cached_accounts_for_snapshot(runtime, &snapshot, logins);
+        let accounts = cached_accounts_for_snapshot(runtime, logins);
         // Consumers read producer publications only. A missing workspace
         // sidecar stays absent until the room host supplies it.
         let spending = super::refresh::consumer_spending_caches(runtime, &snapshot);
@@ -1345,18 +1345,13 @@ pub(super) fn fold_machine_config_with(
     snapshot.apply_machine_config(config);
 
     let sign_in = |agent: &crate::agents::AgentState| {
-        agent
-            .context
-            .as_ref()
-            .and_then(|context| context.account.as_ref()?.metered)
-            .or_else(|| accounts.get(&agent.login_key())?.metered)
-            .map(|metered| {
-                if metered {
-                    SignIn::Subscription
-                } else {
-                    SignIn::ApiKey
-                }
-            })
+        accounts.get(&agent.login_key())?.metered.map(|metered| {
+            if metered {
+                SignIn::Subscription
+            } else {
+                SignIn::ApiKey
+            }
+        })
     };
     if snapshot
         .agents

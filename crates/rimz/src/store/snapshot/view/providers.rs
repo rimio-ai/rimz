@@ -5,7 +5,6 @@ use jiff::Timestamp;
 
 use crate::agents::AgentState;
 use crate::agents::context::RateLimitWindowKey;
-use crate::agents::version::newest_version;
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally};
 use crate::config::ProviderTabsMode;
 use crate::ids::LoginKey;
@@ -22,13 +21,13 @@ impl SidebarSnapshot {
     /// the producer's cache writes. Reported Pi backing credentials become
     /// alternates inside the same block, with whole-login stats and spend.
     /// A login in the set needs a session on it or a substantive probed account; an account-only block needs a metered login, a non-empty identity, or recorded spend, so the dashboard shows substantive accounts and budgets between turns.
-    /// Sums each login's spend, tokens, and edited lines; seeds the fallback plan
-    /// from the freshest session, the version as the newest any session or the probe
-    /// reports, and rate-limit windows from sessions speaking for one backing
-    /// credential and birth account. `probed_accounts` carries out-of-band
-    /// login facts the context cannot (Claude's `auth status`, Codex's
-    /// `auth.json`), preferred only when the freshest context has none — and a kind
-    /// whose only signal is a qualifying probed account still earns a block;
+    /// Sums each login's spend, tokens, and edited lines. Plan, metering,
+    /// account id and version come only from `probed_accounts`, the login's
+    /// fused record in `accounts.json` that every reading (probe, live session,
+    /// usage read) merges into; no live context is read here, and windows stay
+    /// empty until the rate-limit cache projects them (the producer gathers
+    /// live windows with [`SidebarSnapshot::gather_live_windows`] first). A
+    /// kind whose only signal is a qualifying probed account still earns a block;
     /// `remote_control` carries the per-kind `⇅ rc` visibility and managed-server
     /// health. Styling (emblem, color, name) and the definition-declared empty
     /// budget-window shape resolve here, so the renderer gets a ready-to-paint
@@ -85,73 +84,30 @@ impl SidebarSnapshot {
                 continue;
             }
 
-            // The freshest context seeds the fallback plan, independently of
-            // the birth-account partition used for live rate-limit windows.
-            // The credits overlay replaces it on kind-wide metered panels;
-            // delegated scopes keep credential labels rather than usage tiers.
-            let freshest = sessions
-                .iter()
-                .filter_map(|agent| agent.context.as_ref())
-                .max_by_key(|context| context.observed_at);
-            // Sessions started before and after a CLI self-update report
-            // different versions, so the newest one reported wins, the
-            // out-of-band binary probe competing as an equal; "freshest
-            // reporter wins" would flip the panel between them.
-            let version = newest_version(
-                sessions
-                    .iter()
-                    .filter_map(|agent| agent.context.as_ref()?.agent_version.as_deref())
-                    .chain(
-                        probed_accounts
-                            .get(&key)
-                            .and_then(|account| account.version.as_deref()),
-                    ),
-            )
-            .map(str::to_owned);
-            let account = freshest
-                .and_then(|context| context.account.clone())
-                .or_else(|| probed_accounts.get(&key).cloned());
+            let account = probed_accounts.get(&key).cloned();
+            let version = account.as_ref().and_then(|account| account.version.clone());
             let sub_provider = account
                 .as_ref()
                 .and_then(|account| account.sub_provider.clone());
-            let credential_sessions: Vec<_> = sessions
-                .iter()
-                .copied()
-                .filter(|agent| {
-                    agent
-                        .context
-                        .as_ref()
-                        .and_then(|context| context.sub_provider.as_deref())
-                        .is_none_or(|provider| Some(provider) == sub_provider.as_deref())
-                })
-                .collect();
             let undecided = account
                 .as_ref()
                 .is_some_and(|account| account.is_undecided());
 
-            // Budget windows are account-scoped too. Reject content-stale
-            // readings and expired windows, then prefer the newest content per
-            // identity, keeping highest usage within a 10-second render-lag band.
-            // Unchanged statusline windows keep their content stamps, so an idle
-            // pre-credit high cannot beat a fresh post-credit low. The enrich
-            // layer fuses this live candidate with cached and authoritative truth.
-            let now = self.now;
-            let account_key = credential_sessions
-                .iter()
-                .filter(|agent| agent.account_key.is_some())
-                .max_by_key(|agent| (agent.registered_at, agent.agent_id.clone()))
-                .and_then(|agent| agent.account_key.clone());
-            let mut windows = account_windows(&credential_sessions, account_key.as_deref(), now);
-            if undecided {
-                windows.clear();
-            }
-            let has_windows = !windows.is_empty();
-
+            // A delegated login's sessions may run on other credentials, so
+            // only the record names the selected one's owner there.
+            let account_key = match account.as_ref() {
+                Some(account) if !account.credentials.is_empty() => account.account_key.clone(),
+                _ => sessions
+                    .iter()
+                    .filter(|agent| agent.account_key.is_some())
+                    .max_by_key(|agent| (agent.registered_at, agent.agent_id.clone()))
+                    .and_then(|agent| agent.account_key.clone()),
+            };
             let metered = !undecided
                 && account
                     .as_ref()
                     .and_then(|account| account.metered)
-                    .unwrap_or(has_windows || account_key.is_some());
+                    .unwrap_or(account_key.is_some());
             let account_scope = account
                 .as_ref()
                 .map(|account| account.scope.clone())
@@ -232,23 +188,17 @@ impl SidebarSnapshot {
                 reset_credits: None,
                 redeem_forecast: None,
                 window_placeholders,
-                windows,
+                windows: Vec::new(),
             };
-            let mut providers: BTreeSet<_> = sessions
-                .iter()
-                .filter_map(|agent| agent.context.as_ref()?.sub_provider.as_deref())
-                .filter(|provider| Some(*provider) != panel.sub_provider.as_deref())
-                .collect();
-            // An older build's record lists no credentials, so it classifies no
-            // other provider until a new-build probe supplies the inventory.
-            if account
+            // The record lists the credentials live sessions run on beside the
+            // selected one (`ProviderRecord::display_account`); each is an
+            // alternate.
+            let providers = account
                 .as_ref()
-                .is_none_or(|account| account.credentials.is_empty())
-            {
-                providers.clear();
-            }
-            panel.alternates = providers
                 .into_iter()
+                .flat_map(|account| account.credentials.keys())
+                .filter(|provider| Some(provider.as_str()) != panel.sub_provider.as_deref());
+            panel.alternates = providers
                 .map(|provider| {
                     let credential = account
                         .as_ref()
@@ -271,22 +221,6 @@ impl SidebarSnapshot {
                         .and_then(|account| account.metered)
                         .unwrap_or(false);
                     alternate.undecided = false;
-                    let sessions: Vec<_> = sessions
-                        .iter()
-                        .copied()
-                        .filter(|agent| {
-                            agent
-                                .context
-                                .as_ref()
-                                .and_then(|context| context.sub_provider.as_deref())
-                                == Some(provider)
-                        })
-                        .collect();
-                    alternate.windows = if alternate.metered {
-                        account_windows(&sessions, alternate.account_key.as_deref(), now)
-                    } else {
-                        Vec::new()
-                    };
                     alternate
                 })
                 .collect();
@@ -301,27 +235,97 @@ impl SidebarSnapshot {
         );
         self
     }
+
+    /// Gather each panel's live rate-limit windows from the sessions on its
+    /// login that speak for its backing credential and birth account, and
+    /// each metered alternate's from the sessions on that sub-provider. Only
+    /// the producer calls this, right before it fuses the windows into the
+    /// rate-limit cache, so the display sees windows through that cache alone.
+    /// Content-stale readings and expired windows are rejected, then the
+    /// newest content per identity wins, keeping highest usage within a
+    /// 10-second render-lag band; unchanged statusline windows keep their
+    /// content stamps, so an idle pre-credit high cannot beat a fresh
+    /// post-credit low. A window observed before its login's identity floor
+    /// in `floors` describes the previous account and is dropped before that
+    /// ranking, so it cannot outrank a newer one. An undecided panel gathers
+    /// none.
+    pub(crate) fn gather_live_windows(&mut self, floors: &BTreeMap<LoginKey, Timestamp>) {
+        let now = self.now;
+        let agents = &self.agents;
+        for panel in &mut self.providers {
+            let key = panel.login_key();
+            let floor = floors.get(&key).copied();
+            let sessions: Vec<&AgentState> = agents
+                .iter()
+                .filter(|agent| !agent.is_provider_subagent() && agent.login_key() == key)
+                .collect();
+            let sub_provider_is = |agent: &AgentState, provider: Option<&str>| {
+                agent
+                    .context
+                    .as_ref()
+                    .and_then(|context| context.sub_provider.as_deref())
+                    == provider
+            };
+            if !panel.undecided {
+                let credential_sessions: Vec<_> = sessions
+                    .iter()
+                    .copied()
+                    .filter(|agent| {
+                        sub_provider_is(agent, None)
+                            || sub_provider_is(agent, panel.sub_provider.as_deref())
+                    })
+                    .collect();
+                panel.windows = account_windows(
+                    &credential_sessions,
+                    panel.account_key.as_deref(),
+                    floor,
+                    now,
+                );
+            }
+            for alternate in panel.alternates.iter_mut().filter(|alt| alt.metered) {
+                let sessions: Vec<_> = sessions
+                    .iter()
+                    .copied()
+                    .filter(|agent| sub_provider_is(agent, alternate.sub_provider.as_deref()))
+                    .collect();
+                alternate.windows =
+                    account_windows(&sessions, alternate.account_key.as_deref(), floor, now);
+            }
+        }
+    }
 }
 
 fn account_windows(
     sessions: &[&AgentState],
     account_key: Option<&str>,
+    floor: Option<Timestamp>,
     now: Timestamp,
 ) -> Vec<RateLimitWindow> {
-    fresh_windows(
-        sessions
-            .iter()
-            .filter(|agent| {
-                account_key.is_none_or(|panel_key| {
-                    agent
-                        .account_key
-                        .as_deref()
-                        .is_none_or(|key| key == panel_key)
-                })
+    let readings: Vec<AgentRateLimits> = sessions
+        .iter()
+        .filter(|agent| {
+            account_key.is_none_or(|panel_key| {
+                agent
+                    .account_key
+                    .as_deref()
+                    .is_none_or(|key| key == panel_key)
             })
-            .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref()),
-        now,
-    )
+        })
+        .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref())
+        .map(|limits| AgentRateLimits {
+            windows: limits
+                .windows
+                .iter()
+                .filter(|window| {
+                    floor
+                        .zip(window.observed_at)
+                        .is_none_or(|(floor, observed)| observed >= floor)
+                })
+                .cloned()
+                .collect(),
+        })
+        .collect();
+    fresh_windows(readings.iter(), now)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

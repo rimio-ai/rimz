@@ -260,6 +260,8 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
             account,
             login,
             login_at_ms: None,
+            stamps: Default::default(),
+            live_credentials: Default::default(),
         };
         assert_eq!(
             ProviderStatus::from_record(Some(&record)),
@@ -326,6 +328,8 @@ fn a_failed_attempt_keeps_its_known_answer_and_launch_trusts_it_for_the_ttl() {
         account: None,
         login,
         login_at_ms,
+        stamps: Default::default(),
+        live_credentials: Default::default(),
     };
     let known = |login, at_ms| Some(KnownLogin { login, at_ms });
 
@@ -1058,4 +1062,67 @@ fn a_standing_refusal_vetoes_with_no_rate_limit_entry_for_its_login() {
         RoomLoginSet::new(Some(Default::default()), None, BTreeMap::new()).with_agents(&[agent]);
     let all = ProviderCapacity::read_all(&runtime, &logins);
     assert!(all[&default].model_refused(Some("claude-fable-5-2")));
+}
+
+#[test]
+fn capacity_drops_windows_read_before_the_identity_floor() {
+    let floor = Timestamp::from_second(2_000_000_000).unwrap();
+    let (_dir, runtime) = runtime();
+    let window = |mins: u32, observed: Timestamp| RateLimitWindow {
+        duration_mins: Some(mins),
+        used_percentage: Some(100),
+        observed_at: Some(observed),
+        resets_at: Some(floor + SignedDuration::from_hours(4)),
+        ..Default::default()
+    };
+    write_cache(
+        &runtime,
+        &RateLimitsCache {
+            entries: [(
+                "claude@default".parse().unwrap(),
+                RateLimitCacheEntry {
+                    limits: AgentRateLimits {
+                        windows: vec![
+                            window(300, floor - SignedDuration::from_hours(1)),
+                            window(10_080, floor + SignedDuration::from_mins(1)),
+                        ],
+                    },
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        },
+    );
+    let accounts = AccountsCache {
+        logins: BTreeMap::from([(
+            login_key("claude"),
+            ProviderRecord {
+                stamps: AccountStamps {
+                    floor_at_ms: Some(floor.as_millisecond() as u64),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )]),
+    };
+    let path = runtime.shared_accounts_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, serde_json::to_vec(&accounts).unwrap()).unwrap();
+    let durations = |capacity: &ProviderCapacity| -> Vec<_> {
+        capacity
+            .windows
+            .iter()
+            .map(|window| window.duration_mins)
+            .collect()
+    };
+    let capacity = ProviderCapacity::read(&runtime, &login_key("claude")).unwrap();
+    assert_eq!(durations(&capacity), [Some(10_080)]);
+    let all = ProviderCapacity::read_all(&runtime, &RoomLoginSet::native());
+    assert_eq!(durations(&all[&login_key("claude")]), [Some(10_080)]);
+    assert_eq!(
+        cached_usage_read_at(&runtime, &login_key("claude")),
+        Some(floor + SignedDuration::from_mins(1))
+    );
 }

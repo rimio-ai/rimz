@@ -5,9 +5,10 @@ use std::sync::{Arc, Barrier, Mutex};
 use jiff::Timestamp;
 
 use super::*;
+use crate::agents::{AgentState, ProviderAccountScope};
 use crate::ids::WorkspaceId;
-use crate::sidebar::test_support::root_agent;
-use crate::store::snapshot::SidebarSnapshot;
+use crate::sidebar::test_support::{activity_row, root_agent, worktree_group};
+use crate::store::snapshot::{SidebarProviderPanel, SidebarSnapshot};
 
 fn key(kind: &str) -> LoginKey {
     LoginKey::default_for(crate::ids::AgentKind::new_unchecked(kind))
@@ -29,6 +30,8 @@ fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> Provide
         ok,
         account,
         login_at_ms: None,
+        stamps: Default::default(),
+        live_credentials: Default::default(),
     }
 }
 
@@ -653,7 +656,7 @@ fn unavailable_coordination_reads_profiles_only_when_forced() {
             force,
             Duration::ZERO,
             |_| None,
-            |_, _, _, cache, policy| {
+            |_, _, _, _, policy| {
                 observed.set(Some(policy));
                 let _ = read_account_profile(
                     &profile_account(Some("owner")),
@@ -670,7 +673,10 @@ fn unavailable_coordination_reads_profiles_only_when_forced() {
                     },
                     || 100,
                 );
-                cache.clone()
+                ProbeRun {
+                    probed_at_ms: 0,
+                    results: Vec::new(),
+                }
             },
         );
         actual.push((observed.get(), calls.get()));
@@ -831,16 +837,14 @@ fn forced_query_waits_for_a_peer_then_probes_and_reads_once() {
                     },
                     || 4,
                 );
-                merge_probe_results(
-                    cache,
-                    &BTreeSet::new(),
-                    3,
-                    [ProviderProbeResult {
+                ProbeRun {
+                    probed_at_ms: 3,
+                    results: vec![ProviderProbeResult {
                         profile,
                         outcome: AccountProbe::Found(account),
                         ..successful_probe("claude")
                     }],
-                )
+                }
             },
         )
     });
@@ -954,9 +958,12 @@ fn contending_account_caller_serves_cache_without_adapter_probes() {
             &empty_snapshot(),
             &runtime,
             &RoomLoginSet::native(),
-            |_, _, _, cache, _policy| {
+            |_, _, _, _, _policy| {
                 probes.fetch_add(1, Ordering::SeqCst);
-                cache.clone()
+                ProbeRun {
+                    probed_at_ms: 0,
+                    results: Vec::new(),
+                }
             }
         )
         .is_empty()
@@ -983,9 +990,12 @@ fn provider_query_force_bypasses_ttl_for_every_registered_kind() {
         true,
         Duration::ZERO,
         |_| None,
-        |_, _, kinds, cache, _policy| {
+        |_, _, kinds, _, _policy| {
             due.lock().unwrap().push(kinds.clone());
-            cache.clone()
+            ProbeRun {
+                probed_at_ms: 0,
+                results: Vec::new(),
+            }
         },
     );
 
@@ -1013,9 +1023,12 @@ fn provider_query_preserves_normal_per_provider_ttls() {
         false,
         Duration::ZERO,
         |_| Some(7),
-        |_, _, _, cache, _policy| {
+        |_, _, _, _, _policy| {
             probes.fetch_add(1, Ordering::SeqCst);
-            cache.clone()
+            ProbeRun {
+                probed_at_ms: 0,
+                results: Vec::new(),
+            }
         },
     );
 
@@ -1071,7 +1084,7 @@ impl AccountQuery {
             false,
             Duration::ZERO,
             |_| stamp,
-            |_, _, due, cache, _| {
+            |_, _, due, _, _| {
                 let results = due.iter().map(|key| {
                     self.probes[key].fetch_add(1, Ordering::SeqCst);
                     ProviderProbeResult {
@@ -1081,7 +1094,10 @@ impl AccountQuery {
                         ..successful_probe(key.kind.as_str())
                     }
                 });
-                merge_probe_results(cache, &BTreeSet::new(), now_ms, results)
+                ProbeRun {
+                    probed_at_ms: now_ms,
+                    results: results.collect(),
+                }
             },
         )
     }
@@ -1279,9 +1295,12 @@ fn provider_query_reprobes_only_the_login_whose_inputs_stamp_moved() {
             asked.lock().unwrap().push(kind);
             Some(stamp)
         },
-        |_, _, due, cache, _policy| {
+        |_, _, due, _, _policy| {
             probed.lock().unwrap().extend(due.iter().cloned());
-            cache.clone()
+            ProbeRun {
+                probed_at_ms: 0,
+                results: Vec::new(),
+            }
         },
     );
 
@@ -1756,10 +1775,35 @@ fn refreshed_accounts_keep_versions_and_logged_out_active_kinds_keep_version_onl
     assert_eq!(unanswered.logins[&key("pi")].login_at_ms, None);
 }
 
+fn shared_runtime(dir: &tempfile::TempDir) -> RuntimePaths {
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_shared_dirs().unwrap();
+    runtime
+}
+
+fn reporting(sessions: Vec<AgentState>) -> SidebarSnapshot {
+    SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/tmp/provider-version")),
+        sessions,
+        Timestamp::now(),
+    )
+}
+
+fn versioned_session(id: &str, version: &str, observed_secs: i64) -> AgentState {
+    let mut state = root_agent("codex", id, None);
+    let mut context =
+        crate::agents::AgentContext::new("codex", Timestamp::from_second(observed_secs).unwrap());
+    context.agent_version = Some(version.to_owned());
+    state.context = Some(context);
+    state
+}
+
 #[test]
-fn live_context_versions_merge_without_writing_cache() {
+fn live_context_versions_merge_into_the_record() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("accounts.json");
+    let runtime = shared_runtime(&dir);
+    let path = runtime.shared_accounts_path();
     write_accounts_cache(
         &path,
         &AccountsCache {
@@ -1776,27 +1820,18 @@ fn live_context_versions_merge_without_writing_cache() {
             )]),
         },
     );
-    let cache = read_accounts_cache(&path);
-    let versions = BTreeMap::from([(key("codex"), "0.135.0".to_owned())]);
 
-    let merged = accounts_with_context_versions(&cache, &versions, &RoomLoginSet::native());
+    merge_live_accounts(
+        &reporting(vec![versioned_session("live", "0.135.0", 100)]),
+        &runtime,
+        &RoomLoginSet::native(),
+    );
     let persisted = read_accounts_cache(&path);
 
     assert_eq!(persisted.logins[&key("codex")].probed_at_ms, 42);
-    assert_eq!(
-        merged
-            .get(&key("codex"))
-            .and_then(|account| account.version.as_deref()),
-        Some("0.135.0")
-    );
-    assert_eq!(
-        persisted.logins[&key("codex")]
-            .account
-            .as_ref()
-            .and_then(|account| account.version.as_deref()),
-        None,
-        "context versions remain local to the frame"
-    );
+    let account = persisted.logins[&key("codex")].account.as_ref().unwrap();
+    assert_eq!(account.version.as_deref(), Some("0.135.0"));
+    assert_eq!(account.metered, Some(true));
 }
 
 #[test]
@@ -1847,13 +1882,13 @@ fn account_merges_and_projection_are_login_scoped() {
     );
     write_accounts_cache(&runtime.shared_accounts_path(), &cache);
     assert_eq!(
-        cached_accounts_for_snapshot(&runtime, &empty_snapshot(), &work)[&work_key]
+        cached_accounts_for_snapshot(&runtime, &work)[&work_key]
             .plan
             .as_deref(),
         Some("work")
     );
     let mixed = work.with_agents(&[root_agent("claude", "native", None)]);
-    let projected = cached_accounts_for_snapshot(&runtime, &empty_snapshot(), &mixed);
+    let projected = cached_accounts_for_snapshot(&runtime, &mixed);
     assert_eq!(projected[&key("claude")].plan.as_deref(), Some("updated"));
     assert_eq!(projected[&work_key].plan.as_deref(), Some("work"));
 }
@@ -1934,34 +1969,28 @@ fn missing_probeable_versions_refresh_per_provider_on_retry_cadence() {
 
 #[test]
 fn whitespace_only_reported_version_does_not_stop_the_version_reprobe() {
-    let snapshot_reporting = |version: &str| {
-        let mut state = root_agent("codex", "active", None);
-        let mut context = crate::agents::AgentContext::new("codex", Timestamp::now());
-        context.agent_version = Some(version.to_owned());
-        state.context = Some(context);
-        SidebarSnapshot::build_with_agents(
-            WorkspaceId::from_project_root(Path::new("/tmp/provider-version")),
-            vec![state],
-            Timestamp::now(),
-        )
-    };
     let now_ms = unix_now_ms();
-    let mut cache = fresh_cache(now_ms);
-    cache.logins.insert(
-        key("codex"),
-        record(
-            now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1),
-            true,
-            Some(AgentAccount {
-                plan: Some("Pro".to_owned()),
-                ..Default::default()
-            }),
-        ),
-    );
     let due = |version: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = shared_runtime(&dir);
+        let mut cache = fresh_cache(now_ms);
+        cache.logins.insert(
+            key("codex"),
+            record(
+                now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1),
+                true,
+                Some(AgentAccount {
+                    plan: Some("Pro".to_owned()),
+                    ..Default::default()
+                }),
+            ),
+        );
+        write_accounts_cache(&runtime.shared_accounts_path(), &cache);
+        let snapshot = reporting(vec![versioned_session("active", version, 100)]);
+        merge_live_accounts(&snapshot, &runtime, &RoomLoginSet::native());
         due_provider_logins(
-            &cache,
-            &snapshot_reporting(version),
+            &read_accounts_cache(&runtime.shared_accounts_path()),
+            &snapshot,
             &native_logins(),
             &BTreeMap::new(),
             now_ms,
@@ -1981,68 +2010,1365 @@ fn whitespace_only_reported_version_does_not_stop_the_version_reprobe() {
 
 #[test]
 fn newest_version_wins_across_sessions_and_the_cached_account() {
-    let session = |id: &str, version: &str, observed_secs: i64| {
-        let mut state = root_agent("codex", id, None);
-        let mut context = crate::agents::AgentContext::new(
-            "codex",
-            Timestamp::from_second(observed_secs).unwrap(),
+    let merged_version = |cached: Option<&str>, sessions: Vec<AgentState>| {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = shared_runtime(&dir);
+        let account = AgentAccount {
+            version: cached.map(str::to_owned),
+            ..Default::default()
+        };
+        write_accounts_cache(
+            &runtime.shared_accounts_path(),
+            &AccountsCache {
+                logins: BTreeMap::from([(key("codex"), record(42, true, Some(account)))]),
+            },
         );
-        context.agent_version = Some(version.to_owned());
-        state.context = Some(context);
-        state
+        merge_live_accounts(&reporting(sessions), &runtime, &RoomLoginSet::native());
+        read_accounts_cache(&runtime.shared_accounts_path()).logins[&key("codex")]
+            .account
+            .as_ref()
+            .and_then(|account| account.version.clone())
     };
     for (old_at, new_at) in [(200, 100), (100, 200)] {
-        let snapshot = SidebarSnapshot::build_with_agents(
-            WorkspaceId::from_project_root(Path::new("/tmp/provider-version")),
-            vec![
-                session("old", "0.160.9", old_at),
-                session("new", "0.160.10", new_at),
-            ],
-            Timestamp::now(),
-        );
         assert_eq!(
-            context_versions(&snapshot),
-            BTreeMap::from([(key("codex"), "0.160.10".to_owned())]),
+            merged_version(
+                None,
+                vec![
+                    versioned_session("old", "0.160.9", old_at),
+                    versioned_session("new", "0.160.10", new_at),
+                ],
+            )
+            .as_deref(),
+            Some("0.160.10"),
             "old session observed at {old_at}, new at {new_at}"
         );
     }
 
+    assert_eq!(
+        merged_version(
+            Some("0.160.10"),
+            vec![versioned_session("old", "0.160.9", 300)]
+        )
+        .as_deref(),
+        Some("0.160.10"),
+        "an older live session does not overwrite the newer recorded version"
+    );
+    assert_eq!(
+        merged_version(
+            Some("0.160.10"),
+            vec![versioned_session("new", "0.161.0", 300)]
+        )
+        .as_deref(),
+        Some("0.161.0")
+    );
+}
+
+fn live_session(kind: &str, account: Option<AgentAccount>, observed_ms: i64) -> AgentState {
+    let mut state = root_agent(kind, &format!("{kind}-{observed_ms}"), None);
+    let mut context =
+        crate::agents::AgentContext::new(kind, Timestamp::from_millisecond(observed_ms).unwrap());
+    context.account = account;
+    state.context = Some(context);
+    state
+}
+
+fn stamped(account: AgentAccount, at_ms: u64) -> ProviderRecord {
+    ProviderRecord {
+        stamps: AccountStamps {
+            plan_at_ms: account.plan.as_ref().map(|_| at_ms),
+            metered_at_ms: account.metered.map(|_| at_ms),
+            account_id_at_ms: account.account_id.as_ref().map(|_| at_ms),
+            account_id_from_probe: account.account_id.is_some(),
+            ..Default::default()
+        },
+        ..record(at_ms, true, Some(account))
+    }
+}
+
+fn stored_account(runtime: &RuntimePaths, kind: &str) -> AgentAccount {
+    read_accounts_cache(&runtime.shared_accounts_path()).logins[&key(kind)]
+        .account
+        .clone()
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_plan_read_more_than_a_day_ago_still_shows_on_the_panel() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("accounts.json");
-    let cached = AccountsCache {
+    let runtime = shared_runtime(&dir);
+    let now = crate::utils::time::unix_now_ms();
+    let plan_at = now - 2 * 86_400_000;
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(
+                key("codex"),
+                ProviderRecord {
+                    probed_at_ms: now,
+                    ..stamped(
+                        AgentAccount {
+                            plan: Some("pro".to_owned()),
+                            metered: Some(true),
+                            ..Default::default()
+                        },
+                        plan_at,
+                    )
+                },
+            )]),
+        },
+    );
+    let accounts = read_provider_accounts(&runtime)
+        .logins
+        .into_iter()
+        .filter_map(|(key, record)| Some((key, record.display_account()?)))
+        .collect();
+    let panels = crate::sidebar::enrich::provider_panels_from_caches(
+        &runtime,
+        &RoomLoginSet::native(),
+        &crate::config::MachineConfig::default(),
+        accounts,
+        &Default::default(),
+    );
+    let panel = panels
+        .iter()
+        .find(|panel| panel.kind == "codex")
+        .expect("the stored login has a panel");
+    assert_eq!(
+        panel.plan.as_ref().map(|plan| plan.tier.as_str()),
+        Some("pro")
+    );
+}
+
+#[test]
+fn probe_without_a_plan_keeps_the_stored_plan_and_a_newer_probe_replaces_it() {
+    let stored = AccountsCache {
         logins: BTreeMap::from([(
             key("codex"),
             record(
-                42,
+                1_000,
                 true,
                 Some(AgentAccount {
-                    version: Some("0.160.10".to_owned()),
+                    plan: Some("pro".to_owned()),
+                    metered: Some(true),
                     ..Default::default()
                 }),
             ),
         )]),
     };
-    write_accounts_cache(&path, &cached);
-    let cache = read_accounts_cache(&path);
-    let merged_version = |context: &str| {
-        accounts_with_context_versions(
+    let probe = |plan: Option<&str>| ProviderProbeResult {
+        outcome: AccountProbe::Found(AgentAccount {
+            plan: plan.map(str::to_owned),
+            metered: Some(true),
+            ..Default::default()
+        }),
+        ..successful_probe("codex")
+    };
+    let plan = |cache: &AccountsCache| {
+        cache.logins[&key("codex")]
+            .account
+            .as_ref()
+            .and_then(|account| account.plan.clone())
+    };
+
+    let planless = merge_probe_results(&stored, &BTreeSet::new(), 2_000, [probe(None)]);
+    assert_eq!(
+        plan(&planless).as_deref(),
+        Some("pro"),
+        "a probe stating no plan"
+    );
+    let failed = merge_probe_results(
+        &stored,
+        &BTreeSet::new(),
+        2_000,
+        [ProviderProbeResult {
+            outcome: unavailable_probe("codex"),
+            ..successful_probe("codex")
+        }],
+    );
+    assert_eq!(plan(&failed).as_deref(), Some("pro"), "a probe that errors");
+    let newer = merge_probe_results(&planless, &BTreeSet::new(), 3_000, [probe(Some("plus"))]);
+    assert_eq!(plan(&newer).as_deref(), Some("plus"));
+}
+
+#[test]
+fn a_credential_file_older_than_a_live_reading_changes_nothing() {
+    let live = stamped(
+        AgentAccount {
+            plan: Some("live-plan".to_owned()),
+            ..Default::default()
+        },
+        5_000,
+    );
+    let cache = AccountsCache {
+        logins: BTreeMap::from([(key("codex"), live)]),
+    };
+    let plan_from_file_written_at = |mtime_ms: u64| {
+        let merged = merge_probe_results(
             &cache,
-            &BTreeMap::from([(key("codex"), context.to_owned())]),
-            &RoomLoginSet::native(),
-        )[&key("codex")]
-            .version
+            &BTreeSet::new(),
+            10_000,
+            [ProviderProbeResult {
+                outcome: AccountProbe::Found(AgentAccount {
+                    plan: Some("file-plan".to_owned()),
+                    credentials_updated_at_ms: Some(mtime_ms),
+                    ..Default::default()
+                }),
+                ..successful_probe("codex")
+            }],
+        );
+        merged.logins[&key("codex")]
+            .account
+            .as_ref()
+            .unwrap()
+            .plan
             .clone()
     };
 
     assert_eq!(
-        merged_version("0.160.9").as_deref(),
-        Some("0.160.10"),
-        "an older live session does not overwrite the newer cached version"
+        plan_from_file_written_at(4_000).as_deref(),
+        Some("live-plan")
     );
-    assert_eq!(merged_version("0.161.0").as_deref(), Some("0.161.0"));
     assert_eq!(
-        read_accounts_cache(&path),
-        cached,
-        "the merge is frame-local"
+        plan_from_file_written_at(6_000).as_deref(),
+        Some("file-plan")
     );
+}
+
+#[test]
+fn live_merge_writes_plan_metering_and_version_and_an_accountless_context_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    let path = runtime.shared_accounts_path();
+    write_accounts_cache(
+        &path,
+        &AccountsCache {
+            logins: BTreeMap::from([(key("codex"), record(42, true, None))]),
+        },
+    );
+    let before = std::fs::read(&path).unwrap();
+    merge_live_accounts(
+        &reporting(vec![live_session("codex", None, 1_000)]),
+        &runtime,
+        &RoomLoginSet::native(),
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "a context with no account"
+    );
+
+    let mut session = live_session(
+        "codex",
+        Some(AgentAccount {
+            plan: Some("pro".to_owned()),
+            metered: Some(true),
+            ..Default::default()
+        }),
+        2_000,
+    );
+    session.context.as_mut().unwrap().agent_version = Some("0.160.0".to_owned());
+    merge_live_accounts(&reporting(vec![session]), &runtime, &RoomLoginSet::native());
+    let account = stored_account(&runtime, "codex");
+    assert_eq!(
+        (
+            account.plan.as_deref(),
+            account.metered,
+            account.version.as_deref()
+        ),
+        (Some("pro"), Some(true), Some("0.160.0"))
+    );
+    assert_eq!(
+        read_accounts_cache(&path).logins[&key("codex")]
+            .stamps
+            .plan_at_ms,
+        Some(2_000)
+    );
+}
+
+#[test]
+fn a_probed_account_id_change_clears_the_facts_the_new_reading_lacks() {
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(
+            key("codex"),
+            stamped(
+                AgentAccount {
+                    plan: Some("team".to_owned()),
+                    metered: Some(true),
+                    account_id: Some("first".to_owned()),
+                    ..Default::default()
+                },
+                1_000,
+            ),
+        )]),
+    };
+    let switched = AgentAccount {
+        account_id: Some("second".to_owned()),
+        credentials_updated_at_ms: Some(2_000),
+        ..Default::default()
+    };
+    let merged = probe_merge(&previous, "codex", AccountProbe::Found(switched), 3_000);
+    let account = merged.logins[&key("codex")].account.clone().unwrap();
+    assert_eq!(
+        (account.account_id.as_deref(), account.plan, account.metered),
+        (Some("second"), None, None)
+    );
+    assert_eq!(merged.logins[&key("codex")].stamps.floor_at_ms, Some(2_000));
+}
+
+fn probe_merge(
+    previous: &AccountsCache,
+    kind: &str,
+    outcome: AccountProbe,
+    probed_at_ms: u64,
+) -> AccountsCache {
+    merge_probe_results(
+        previous,
+        &BTreeSet::new(),
+        probed_at_ms,
+        [ProviderProbeResult {
+            outcome,
+            ..successful_probe(kind)
+        }],
+    )
+}
+
+fn shared_facts(
+    runtime: &RuntimePaths,
+    kind: &str,
+) -> (Option<String>, Option<bool>, Option<String>) {
+    let account = stored_account(runtime, kind);
+    (account.plan, account.metered, account.account_id)
+}
+
+#[test]
+fn an_agy_switch_keeps_the_old_sessions_sidecar_out_of_the_new_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    let old_account = AgentAccount {
+        account_id: Some("a@example.com".to_owned()),
+        plan: Some("ultra".to_owned()),
+        ..Default::default()
+    };
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("antigravity"), stamped(old_account.clone(), 1_000))]),
+    };
+    let probed = AgentAccount {
+        account_id: Some("b@example.com".to_owned()),
+        credentials_updated_at_ms: Some(3_000),
+        ..Default::default()
+    };
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &probe_merge(&previous, "antigravity", AccountProbe::Found(probed), 4_000),
+    );
+    // The old session's sidecar still states account A, read before B's login.
+    merge_live_accounts(
+        &reporting(vec![live_session("antigravity", Some(old_account), 2_000)]),
+        &runtime,
+        &RoomLoginSet::native(),
+    );
+    assert_eq!(
+        shared_facts(&runtime, "antigravity"),
+        (None, None, Some("b@example.com".to_owned()))
+    );
+}
+
+#[test]
+fn a_logout_keeps_the_pre_logout_sidecar_out_of_the_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    let account = AgentAccount {
+        plan: Some("team".to_owned()),
+        metered: Some(true),
+        account_id: Some("first".to_owned()),
+        ..Default::default()
+    };
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("codex"), stamped(account.clone(), 1_000))]),
+    };
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &probe_merge(&previous, "codex", AccountProbe::LoggedOut, 5_000),
+    );
+    merge_live_accounts(
+        &reporting(vec![live_session("codex", Some(account), 2_000)]),
+        &runtime,
+        &RoomLoginSet::native(),
+    );
+    let record = &read_accounts_cache(&runtime.shared_accounts_path()).logins[&key("codex")];
+    assert_eq!(record.login, Some(RecordedLogin::LoggedOut));
+    assert_eq!(shared_facts(&runtime, "codex"), (None, None, None));
+}
+
+#[test]
+fn a_login_after_a_logout_applies_a_credential_older_than_the_logout() {
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("antigravity"), stamped(AgentAccount::default(), 1_000))]),
+    };
+    let logged_out = probe_merge(&previous, "antigravity", AccountProbe::LoggedOut, 5_000);
+    // A restored credential file keeps the mtime it had before the logout.
+    let restored = AgentAccount {
+        account_id: Some("a@example.com".to_owned()),
+        metered: Some(true),
+        credentials_updated_at_ms: Some(3_000),
+        ..Default::default()
+    };
+    let merged = probe_merge(
+        &logged_out,
+        "antigravity",
+        AccountProbe::Found(restored),
+        6_000,
+    );
+    let account = merged.logins[&key("antigravity")].account.clone().unwrap();
+    assert_eq!(
+        (account.account_id.as_deref(), account.metered),
+        (Some("a@example.com"), Some(true))
+    );
+}
+
+#[test]
+fn a_delegated_switch_to_a_planless_credential_drops_the_old_plan() {
+    let anthropic = AgentAccount {
+        scope: ProviderAccountScope::sub_provider("anthropic", "oauth"),
+        sub_provider: Some("anthropic".to_owned()),
+        plan: Some("max".to_owned()),
+        metered: Some(true),
+        ..Default::default()
+    };
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("pi"), stamped(anthropic, 1_000))]),
+    };
+    let go = AgentAccount {
+        scope: ProviderAccountScope::sub_provider("opencode", "oauth"),
+        sub_provider: Some("opencode".to_owned()),
+        metered: Some(true),
+        credentials_updated_at_ms: Some(2_000),
+        ..Default::default()
+    };
+    let merged = probe_merge(&previous, "pi", AccountProbe::Found(go), 3_000);
+    let account = merged.logins[&key("pi")].account.clone().unwrap();
+    assert_eq!(
+        (
+            account.sub_provider.as_deref(),
+            account.plan,
+            account.metered
+        ),
+        (Some("opencode"), None, Some(true))
+    );
+}
+
+#[test]
+fn a_live_session_on_another_account_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(
+                key("codex"),
+                stamped(
+                    AgentAccount {
+                        account_id: Some("b".to_owned()),
+                        ..Default::default()
+                    },
+                    2_000,
+                ),
+            )]),
+        },
+    );
+    let on_a = AgentAccount {
+        account_id: Some("a".to_owned()),
+        plan: Some("pro".to_owned()),
+        metered: Some(true),
+        ..Default::default()
+    };
+    merge_live_accounts(
+        &reporting(vec![live_session("codex", Some(on_a), 3_000)]),
+        &runtime,
+        &RoomLoginSet::native(),
+    );
+    assert_eq!(
+        shared_facts(&runtime, "codex"),
+        (None, None, Some("b".to_owned()))
+    );
+}
+
+#[test]
+fn a_live_plan_is_stamped_when_its_source_read_it_not_at_a_later_refresh() {
+    use crate::agents::context::record::AgentContextRecord;
+    let at = |ms: i64| Timestamp::from_millisecond(ms).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    // The app server reads Plus at t1.
+    let mut sidecar = AgentContextRecord::new(
+        "codex",
+        "s",
+        crate::agents::AgentContext::new("codex", at(1_000)),
+    );
+    let mut app_server = crate::agents::AgentContext::new("codex", at(1_000));
+    app_server.account = Some(AgentAccount {
+        plan: Some("plus".to_owned()),
+        ..Default::default()
+    });
+    sidecar.apply_context_refresh("codex", "s", app_server, None);
+    // A usage read stores Pro at t2.
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(
+                key("codex"),
+                stamped(
+                    AgentAccount {
+                        plan: Some("pro".to_owned()),
+                        ..Default::default()
+                    },
+                    2_000,
+                ),
+            )]),
+        },
+    );
+    // A transcript-only refresh at t3 moves the context, not the account.
+    let mut transcript = crate::agents::AgentContext::new("codex", at(3_000));
+    transcript.session_name = Some("renamed".to_owned());
+    assert!(sidecar.merge_observed("codex", transcript, at(3_000)));
+    let mut session = root_agent("codex", "s", None);
+    session.context = Some(sidecar.context);
+    merge_live_accounts(&reporting(vec![session]), &runtime, &RoomLoginSet::native());
+    assert_eq!(
+        stored_account(&runtime, "codex").plan.as_deref(),
+        Some("pro")
+    );
+}
+
+#[test]
+fn a_usage_plan_from_another_owner_applies_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(
+                key("codex"),
+                stamped(
+                    AgentAccount {
+                        account_key: Some("owner-a".to_owned()),
+                        plan: Some("plus".to_owned()),
+                        ..Default::default()
+                    },
+                    1_000,
+                ),
+            )]),
+        },
+    );
+    let other = AccountUsageIdentity {
+        account_key: Some("owner-b".to_owned()),
+        ..Default::default()
+    };
+    merge_usage_plan(&runtime, &key("codex"), &other, "pro", 2_000);
+    assert_eq!(
+        stored_account(&runtime, "codex").plan.as_deref(),
+        Some("plus")
+    );
+    let same = AccountUsageIdentity {
+        account_key: Some("owner-a".to_owned()),
+        ..Default::default()
+    };
+    merge_usage_plan(&runtime, &key("codex"), &same, "pro", 2_000);
+    assert_eq!(
+        stored_account(&runtime, "codex").plan.as_deref(),
+        Some("pro")
+    );
+}
+
+#[test]
+fn repeated_live_passes_over_unchanged_facts_write_the_record_once() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(key("codex"), record(1, true, None))]),
+        },
+    );
+    let account = AgentAccount {
+        plan: Some("pro".to_owned()),
+        metered: Some(true),
+        account_id: Some("acct".to_owned()),
+        ..Default::default()
+    };
+    let inode = || {
+        std::fs::metadata(runtime.shared_accounts_path())
+            .unwrap()
+            .ino()
+    };
+    merge_live_accounts(
+        &reporting(vec![live_session("codex", Some(account.clone()), 2_000)]),
+        &runtime,
+        &RoomLoginSet::native(),
+    );
+    let written = inode();
+    // The same session state, observed again later.
+    merge_live_accounts(
+        &reporting(vec![live_session("codex", Some(account), 3_000)]),
+        &runtime,
+        &RoomLoginSet::native(),
+    );
+    assert_eq!(inode(), written);
+    assert_eq!(
+        stored_account(&runtime, "codex").plan.as_deref(),
+        Some("pro")
+    );
+}
+
+#[test]
+fn a_pi_login_shows_the_same_alternates_on_the_sidebar_and_the_accounts_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    let credential = |provider: &str, plan: &str| AgentAccount {
+        scope: ProviderAccountScope::sub_provider(provider, "oauth"),
+        sub_provider: Some(provider.to_owned()),
+        plan: Some(plan.to_owned()),
+        metered: Some(true),
+        ..Default::default()
+    };
+    let account = AgentAccount {
+        credentials: BTreeMap::from([
+            (
+                "anthropic".to_owned(),
+                credential("anthropic", "Anthropic OAuth"),
+            ),
+            ("opencode".to_owned(), credential("opencode", "Go OAuth")),
+            ("openai".to_owned(), credential("openai", "OpenAI OAuth")),
+        ]),
+        ..credential("openai", "OpenAI OAuth")
+    };
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(key("pi"), record(1, true, Some(account)))]),
+        },
+    );
+    let session = |observed_ms: i64, provider: &str| {
+        let mut state = live_session("pi", None, observed_ms);
+        state.context.as_mut().unwrap().sub_provider = Some(provider.to_owned());
+        state
+    };
+    let snapshot = carded(vec![session(2_000, "openai"), session(2_001, "anthropic")]);
+    merge_live_accounts(&snapshot, &runtime, &RoomLoginSet::native());
+
+    let blocks = |panel: &SidebarProviderPanel| {
+        (
+            panel.sub_provider.clone(),
+            panel
+                .alternates
+                .iter()
+                .map(|alternate| alternate.sub_provider.clone())
+                .collect::<Vec<_>>(),
+        )
+    };
+    let sidebar = snapshot
+        .with_provider_aggregates(
+            &Default::default(),
+            &cached_accounts_for_snapshot(&runtime, &RoomLoginSet::native()),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeSet::from([key("pi")]),
+        )
+        .providers;
+    let row_account = read_provider_accounts(&runtime).logins[&key("pi")].display_account();
+    let row = crate::sidebar::enrich::provider_panels_from_caches(
+        &runtime,
+        &RoomLoginSet::native(),
+        &crate::config::MachineConfig::default(),
+        row_account
+            .map(|account| (key("pi"), account))
+            .into_iter()
+            .collect(),
+        &Default::default(),
+    );
+    let pi = |panels: &[SidebarProviderPanel]| {
+        blocks(panels.iter().find(|panel| panel.kind == "pi").unwrap())
+    };
+    let expected = (
+        Some("openai".to_owned()),
+        vec![Some("anthropic".to_owned())],
+    );
+    assert_eq!(pi(&sidebar), expected);
+    assert_eq!(pi(&row), expected);
+}
+
+#[test]
+fn delegated_usage_plan_only_fills_an_empty_plan_on_its_credential() {
+    let anthropic = ProviderAccountScope::sub_provider("anthropic", "oauth");
+    let openai = ProviderAccountScope::sub_provider("openai", "oauth");
+    let pi = |top_plan: Option<&str>, credential_plan: Option<&str>| AgentAccount {
+        scope: openai.clone(),
+        plan: top_plan.map(str::to_owned),
+        credentials: BTreeMap::from([(
+            "anthropic".to_owned(),
+            AgentAccount {
+                scope: anthropic.clone(),
+                plan: credential_plan.map(str::to_owned),
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    let mut actual = Vec::new();
+    for (scope, stored) in [
+        (&openai, pi(Some("OpenAI OAuth"), None)),
+        (&openai, pi(None, None)),
+        (&anthropic, pi(None, Some("Anthropic OAuth"))),
+        (&anthropic, pi(None, None)),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = shared_runtime(&dir);
+        write_accounts_cache(
+            &runtime.shared_accounts_path(),
+            &AccountsCache {
+                logins: BTreeMap::from([(key("pi"), record(1, true, Some(stored)))]),
+            },
+        );
+        let identity = AccountUsageIdentity {
+            scope: scope.clone(),
+            ..Default::default()
+        };
+        merge_usage_plan(&runtime, &key("pi"), &identity, "pro", 2);
+        let account = stored_account(&runtime, "pi");
+        actual.push((account.plan, account.credentials["anthropic"].plan.clone()));
+    }
+    let some = |plan: &str| Some(plan.to_owned());
+    assert_eq!(
+        actual,
+        [
+            (some("OpenAI OAuth"), None),
+            (some("pro"), None),
+            (None, some("Anthropic OAuth")),
+            (None, some("pro")),
+        ]
+    );
+}
+
+#[test]
+fn a_probe_landing_after_a_newer_live_write_keeps_the_live_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut stale = fresh_cache(unix_now_ms());
+    stale.logins.insert(
+        key("codex"),
+        record(
+            0,
+            true,
+            Some(AgentAccount {
+                plan: Some("old".to_owned()),
+                ..Default::default()
+            }),
+        ),
+    );
+    write_accounts_cache(&runtime.shared_accounts_path(), &stale);
+    let live_at_ms = unix_now_ms();
+    produce_accounts_with(
+        &empty_snapshot(),
+        &runtime,
+        &RoomLoginSet::native(),
+        |_, runtime, due, _, _| {
+            assert!(due.contains(&key("codex")));
+            // A live reading lands while the batch probes.
+            let live = AgentAccount {
+                plan: Some("live-plan".to_owned()),
+                ..Default::default()
+            };
+            merge_live_accounts(
+                &reporting(vec![live_session("codex", Some(live), live_at_ms as i64)]),
+                runtime,
+                &RoomLoginSet::native(),
+            );
+            ProbeRun {
+                probed_at_ms: live_at_ms - 1,
+                results: vec![ProviderProbeResult {
+                    outcome: AccountProbe::Found(AgentAccount {
+                        plan: Some("probe-plan".to_owned()),
+                        ..Default::default()
+                    }),
+                    ..successful_probe("codex")
+                }],
+            }
+        },
+    );
+    assert_eq!(
+        stored_account(&runtime, "codex").plan.as_deref(),
+        Some("live-plan")
+    );
+}
+
+fn with_windows(mut state: AgentState) -> AgentState {
+    state.context.as_mut().unwrap().rate_limits = Some(crate::agents::AgentRateLimits {
+        windows: vec![crate::agents::RateLimitWindow {
+            used_percentage: Some(10),
+            duration_mins: Some(300),
+            ..Default::default()
+        }],
+    });
+    state
+}
+
+#[test]
+fn a_keyring_agy_login_switches_to_a_newer_status_lines_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    // A keyring install's probe states no account id.
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(key("antigravity"), record(1, true, None))]),
+        },
+    );
+    let line = |email: &str, plan: &str| AgentAccount {
+        account_id: Some(email.to_owned()),
+        plan: Some(plan.to_owned()),
+        ..Default::default()
+    };
+    let merge = |account: AgentAccount, observed_ms: i64| {
+        merge_live_accounts(
+            &reporting(vec![live_session(
+                "antigravity",
+                Some(account),
+                observed_ms,
+            )]),
+            &runtime,
+            &RoomLoginSet::native(),
+        );
+    };
+    merge(line("a@example.com", "ultra"), 2_000);
+    merge(line("b@example.com", "pro"), 3_000);
+    let switched = (
+        Some("pro".to_owned()),
+        None,
+        Some("b@example.com".to_owned()),
+    );
+    assert_eq!(shared_facts(&runtime, "antigravity"), switched);
+    // A status line read before the switch describes the previous account.
+    merge(line("a@example.com", "ultra"), 2_500);
+    assert_eq!(shared_facts(&runtime, "antigravity"), switched);
+}
+
+#[test]
+fn a_switch_probe_never_lowers_an_earlier_logouts_floor() {
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("antigravity"), stamped(AgentAccount::default(), 1_000))]),
+    };
+    let logged_out = probe_merge(&previous, "antigravity", AccountProbe::LoggedOut, 5_000);
+    let probed = |email: &str, mtime_ms: u64| {
+        AccountProbe::Found(AgentAccount {
+            account_id: Some(email.to_owned()),
+            credentials_updated_at_ms: Some(mtime_ms),
+            ..Default::default()
+        })
+    };
+    // Restored credential files keep mtimes older than the logout.
+    let first = probe_merge(
+        &logged_out,
+        "antigravity",
+        probed("a@example.com", 4_500),
+        6_000,
+    );
+    let switched = probe_merge(&first, "antigravity", probed("b@example.com", 4_800), 7_000);
+    let record = &switched.logins[&key("antigravity")];
+    assert_eq!(
+        record.account.as_ref().unwrap().account_id.as_deref(),
+        Some("b@example.com")
+    );
+    assert_eq!(record.stamps.floor_at_ms, Some(5_000));
+}
+
+#[test]
+fn a_pre_logout_session_with_windows_infers_no_metering() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    let account = AgentAccount {
+        plan: Some("team".to_owned()),
+        account_id: Some("first".to_owned()),
+        ..Default::default()
+    };
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("codex"), stamped(account.clone(), 1_000))]),
+    };
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &probe_merge(&previous, "codex", AccountProbe::LoggedOut, 5_000),
+    );
+    merge_live_accounts(
+        &reporting(vec![with_windows(live_session(
+            "codex",
+            Some(account),
+            2_000,
+        ))]),
+        &runtime,
+        &RoomLoginSet::native(),
+    );
+    assert_eq!(shared_facts(&runtime, "codex"), (None, None, None));
+}
+
+#[test]
+fn a_session_on_another_account_with_windows_infers_no_metering() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    let stored = AgentAccount {
+        account_id: Some("b".to_owned()),
+        ..Default::default()
+    };
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(key("codex"), stamped(stored, 2_000))]),
+        },
+    );
+    let other = AgentAccount {
+        account_id: Some("a".to_owned()),
+        ..Default::default()
+    };
+    merge_live_accounts(
+        &reporting(vec![with_windows(live_session(
+            "codex",
+            Some(other),
+            3_000,
+        ))]),
+        &runtime,
+        &RoomLoginSet::native(),
+    );
+    assert_eq!(
+        shared_facts(&runtime, "codex"),
+        (None, None, Some("b".to_owned()))
+    );
+}
+
+fn pi_on(provider: &str, observed_ms: i64) -> AgentState {
+    let mut state = live_session("pi", None, observed_ms);
+    state.context.as_mut().unwrap().sub_provider = Some(provider.to_owned());
+    state
+}
+
+fn write_pi_on_openai(runtime: &RuntimePaths) {
+    let credential = |provider: &str| AgentAccount {
+        scope: ProviderAccountScope::sub_provider(provider, "oauth"),
+        sub_provider: Some(provider.to_owned()),
+        ..Default::default()
+    };
+    let account = AgentAccount {
+        credentials: BTreeMap::from([
+            ("anthropic".to_owned(), credential("anthropic")),
+            ("openai".to_owned(), credential("openai")),
+        ]),
+        ..credential("openai")
+    };
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(key("pi"), record(1, true, Some(account)))]),
+        },
+    );
+}
+
+/// A room whose every session has a card, as the heavy pass's base carries.
+fn carded(sessions: Vec<AgentState>) -> SidebarSnapshot {
+    let repo = Path::new("/repo");
+    let rows = sessions
+        .iter()
+        .map(|session| {
+            let mut row = activity_row(true, None, Timestamp::now(), repo);
+            row.id = session.agent_id.as_str().to_owned();
+            row
+        })
+        .collect();
+    let mut snapshot = reporting(sessions);
+    snapshot.worktree_groups = vec![worktree_group(repo, rows)].into();
+    snapshot
+}
+
+fn pi_alternates(runtime: &RuntimePaths) -> Vec<String> {
+    read_provider_accounts(runtime).logins[&key("pi")]
+        .display_account()
+        .unwrap()
+        .credentials
+        .into_keys()
+        .collect()
+}
+
+#[test]
+fn another_rooms_pass_keeps_a_credential_this_room_runs_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    write_pi_on_openai(&runtime);
+    let room_a = carded(vec![pi_on("openai", 2_000), pi_on("anthropic", 2_001)]);
+    let room_b = carded(vec![pi_on("openai", 2_002)]);
+    for room in [&room_a, &room_b, &room_a, &room_b] {
+        merge_live_accounts(room, &runtime, &RoomLoginSet::native());
+        assert_eq!(pi_alternates(&runtime), ["anthropic"]);
+    }
+    // Room A's second pass came within a third of the TTL, so it wrote nothing.
+    let seen = read_provider_accounts(&runtime).logins[&key("pi")].live_credentials["anthropic"];
+    merge_live_accounts(&room_a, &runtime, &RoomLoginSet::native());
+    assert_eq!(
+        read_provider_accounts(&runtime).logins[&key("pi")].live_credentials["anthropic"],
+        seen
+    );
+}
+
+#[test]
+fn an_ended_session_adds_no_alternate() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    write_pi_on_openai(&runtime);
+    let mut ended = pi_on("anthropic", 2_001);
+    ended.ended_at = Some(Timestamp::from_millisecond(2_500).unwrap());
+    merge_live_accounts(
+        &carded(vec![pi_on("openai", 2_000), ended]),
+        &runtime,
+        &RoomLoginSet::native(),
+    );
+    assert!(pi_alternates(&runtime).is_empty());
+}
+
+#[test]
+fn a_stopped_agents_unended_row_adds_no_alternate() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    write_pi_on_openai(&runtime);
+    let mut room = carded(vec![pi_on("openai", 2_000)]);
+    let stopped = pi_on("anthropic", 2_001);
+    room.agents = std::sync::Arc::new(vec![room.agents[0].clone(), stopped]);
+    merge_live_accounts(&room, &runtime, &RoomLoginSet::native());
+    assert!(pi_alternates(&runtime).is_empty());
+}
+
+#[test]
+fn a_credential_no_room_has_seen_lately_is_no_alternate() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    write_pi_on_openai(&runtime);
+    let path = runtime.shared_accounts_path();
+    let mut cache = read_accounts_cache(&path);
+    let hour_ago = unix_now_ms() - 3_600_000;
+    cache.logins.get_mut(&key("pi")).unwrap().live_credentials =
+        BTreeMap::from([("anthropic".to_owned(), hour_ago)]);
+    write_accounts_cache(&path, &cache);
+    assert!(pi_alternates(&runtime).is_empty());
+    // An older build's list of names reads as never seen.
+    let mut encoded = serde_json::to_value(&cache.logins[&key("pi")]).unwrap();
+    encoded["live_credentials"] = serde_json::json!(["anthropic"]);
+    let legacy: ProviderRecord = serde_json::from_value(encoded).unwrap();
+    assert_eq!(
+        legacy.live_credentials,
+        BTreeMap::from([("anthropic".to_owned(), 0)])
+    );
+}
+
+#[test]
+fn a_scoped_usage_read_before_the_floor_fills_no_credential_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    let anthropic = ProviderAccountScope::sub_provider("anthropic", "oauth");
+    let account = AgentAccount {
+        scope: ProviderAccountScope::sub_provider("openai", "oauth"),
+        credentials: BTreeMap::from([(
+            "anthropic".to_owned(),
+            AgentAccount {
+                scope: anthropic.clone(),
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    let mut stored = record(1, true, Some(account));
+    stored.stamps.floor_at_ms = Some(5_000);
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(key("pi"), stored)]),
+        },
+    );
+    let identity = AccountUsageIdentity {
+        scope: anthropic,
+        ..Default::default()
+    };
+    merge_usage_plan(&runtime, &key("pi"), &identity, "pro", 2_000);
+    assert_eq!(
+        stored_account(&runtime, "pi").credentials["anthropic"].plan,
+        None
+    );
+}
+
+#[test]
+fn a_status_line_repeated_after_a_relogin_applies_its_plan() {
+    use crate::agents::context::record::AgentContextRecord;
+    let at = |ms: i64| Timestamp::from_millisecond(ms).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    let line = |ms: i64| {
+        let mut context = crate::agents::AgentContext::new("antigravity", at(ms));
+        context.account = Some(AgentAccount {
+            plan: Some("ultra".to_owned()),
+            ..Default::default()
+        });
+        context
+    };
+    let mut sidecar = AgentContextRecord::new(
+        "antigravity",
+        "s",
+        crate::agents::AgentContext::new("antigravity", at(1_000)),
+    );
+    sidecar.merge_observed("antigravity", line(1_000), at(1_000));
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("antigravity"), record(1, true, None))]),
+    };
+    let logged_out = probe_merge(&previous, "antigravity", AccountProbe::LoggedOut, 2_000);
+    let relogin = probe_merge(
+        &logged_out,
+        "antigravity",
+        AccountProbe::Found(AgentAccount::default()),
+        3_000,
+    );
+    write_accounts_cache(&runtime.shared_accounts_path(), &relogin);
+    // The pane outlived the logout and reports the same account again.
+    sidecar.merge_observed("antigravity", line(4_000), at(4_000));
+    let mut session = root_agent("antigravity", "s", None);
+    session.context = Some(sidecar.context);
+    merge_live_accounts(&reporting(vec![session]), &runtime, &RoomLoginSet::native());
+    assert_eq!(
+        stored_account(&runtime, "antigravity").plan.as_deref(),
+        Some("ultra")
+    );
+}
+
+#[test]
+fn a_repeated_logout_keeps_the_first_logouts_floor() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    let empty = AccountsCache {
+        logins: BTreeMap::from([(key("codex"), record(1, true, None))]),
+    };
+    let first = probe_merge(&empty, "codex", AccountProbe::LoggedOut, 1_000);
+    // A kind with no login check reads logged out at every probe.
+    let second = probe_merge(&first, "codex", AccountProbe::LoggedOut, 3_000);
+    assert_eq!(second.logins[&key("codex")].stamps.floor_at_ms, Some(1_000));
+    write_accounts_cache(&runtime.shared_accounts_path(), &second);
+    merge_live_accounts(
+        &reporting(vec![versioned_session("codex-idle", "1.2.3", 2)]),
+        &runtime,
+        &RoomLoginSet::native(),
+    );
+    assert_eq!(
+        stored_account(&runtime, "codex").version.as_deref(),
+        Some("1.2.3")
+    );
+}
+
+fn live_merge(runtime: &RuntimePaths, session: AgentState) {
+    merge_live_accounts(&reporting(vec![session]), runtime, &RoomLoginSet::native());
+}
+
+fn probe_into(runtime: &RuntimePaths, kind: &str, outcome: AccountProbe, probed_at_ms: u64) {
+    let path = runtime.shared_accounts_path();
+    let merged = probe_merge(&read_accounts_cache(&path), kind, outcome, probed_at_ms);
+    write_accounts_cache(&path, &merged);
+}
+
+fn keyring_agy(runtime: &RuntimePaths) {
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(key("antigravity"), record(1, true, None))]),
+        },
+    );
+}
+
+fn agy_id(id: &str) -> AgentAccount {
+    AgentAccount {
+        account_id: Some(id.to_owned()),
+        ..Default::default()
+    }
+}
+
+fn agy_probe(id: &str, mtime_ms: u64) -> AccountProbe {
+    AccountProbe::Found(AgentAccount {
+        credentials_updated_at_ms: Some(mtime_ms),
+        ..agy_id(id)
+    })
+}
+
+#[test]
+fn a_probe_stating_the_live_id_holds_it_against_a_newer_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    keyring_agy(&runtime);
+    live_merge(
+        &runtime,
+        live_session("antigravity", Some(agy_id("a")), 2_000),
+    );
+    // The credential predates the live stamp, yet the probe states that id.
+    probe_into(&runtime, "antigravity", agy_probe("a", 1_000), 4_000);
+    live_merge(
+        &runtime,
+        live_session("antigravity", Some(agy_id("b")), 5_000),
+    );
+    assert_eq!(
+        stored_account(&runtime, "antigravity")
+            .account_id
+            .as_deref(),
+        Some("a")
+    );
+}
+
+#[test]
+fn a_probe_returns_a_live_switch_to_its_own_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    keyring_agy(&runtime);
+    live_merge(
+        &runtime,
+        live_session("antigravity", Some(agy_id("a")), 2_000),
+    );
+    live_merge(
+        &runtime,
+        live_session("antigravity", Some(agy_id("b")), 3_000),
+    );
+    assert_eq!(
+        stored_account(&runtime, "antigravity")
+            .account_id
+            .as_deref(),
+        Some("b")
+    );
+    probe_into(&runtime, "antigravity", agy_probe("a", 2_500), 4_000);
+    let record = &read_accounts_cache(&runtime.shared_accounts_path()).logins[&key("antigravity")];
+    assert_eq!(
+        record.account.as_ref().unwrap().account_id.as_deref(),
+        Some("a")
+    );
+    assert_eq!(record.stamps.floor_at_ms, Some(3_000));
+}
+
+#[test]
+fn a_credential_read_is_owned_by_that_credentials_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    let go = ProviderAccountScope::sub_provider("opencode-go", "api");
+    let account = AgentAccount {
+        scope: ProviderAccountScope::sub_provider("anthropic", "oauth"),
+        account_key: Some("K_a".to_owned()),
+        credentials: BTreeMap::from([(
+            "opencode-go".to_owned(),
+            AgentAccount {
+                scope: go.clone(),
+                account_key: Some("K_go".to_owned()),
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(key("opencode"), record(1, true, Some(account)))]),
+        },
+    );
+    let read = |owner: &str, plan: &str| {
+        let identity = AccountUsageIdentity {
+            scope: go.clone(),
+            account_key: Some(owner.to_owned()),
+            ..Default::default()
+        };
+        merge_usage_plan(&runtime, &key("opencode"), &identity, plan, 2_000);
+        stored_account(&runtime, "opencode").credentials["opencode-go"]
+            .plan
+            .clone()
+    };
+    assert_eq!(read("K_x", "other"), None);
+    assert_eq!(read("K_go", "go"), Some("go".to_owned()));
+}
+
+#[test]
+fn a_probeless_kind_infers_metering_from_a_session_with_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    // A kind without a login probe reads as logged out on every probe pass.
+    probe_into(&runtime, "omp", AccountProbe::LoggedOut, 1_000);
+    live_merge(&runtime, with_windows(live_session("omp", None, 2_000)));
+    assert_eq!(stored_account(&runtime, "omp").metered, Some(true));
+    probe_into(&runtime, "omp", AccountProbe::LoggedOut, 3_000);
+    live_merge(&runtime, with_windows(live_session("omp", None, 4_000)));
+    assert_eq!(stored_account(&runtime, "omp").metered, Some(true));
+}
+
+#[test]
+fn a_keyring_switch_keeps_the_switching_sessions_own_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    keyring_agy(&runtime);
+    live_merge(
+        &runtime,
+        live_session("antigravity", Some(agy_id("a")), 2_000),
+    );
+    // B's first windows carry its process start, before its status line.
+    let mut session = with_windows(live_session("antigravity", Some(agy_id("b")), 3_000));
+    let window_at = Timestamp::from_millisecond(1_500).unwrap();
+    for window in &mut session
+        .context
+        .as_mut()
+        .unwrap()
+        .rate_limits
+        .as_mut()
+        .unwrap()
+        .windows
+    {
+        window.observed_at = Some(window_at);
+    }
+    live_merge(&runtime, session);
+    assert_eq!(
+        stored_account(&runtime, "antigravity")
+            .account_id
+            .as_deref(),
+        Some("b")
+    );
+    let floors = super::super::rate_limits::identity_floors(&runtime);
+    assert!(
+        floors
+            .get(&key("antigravity"))
+            .is_none_or(|floor| *floor <= window_at)
+    );
+}
+
+#[test]
+fn an_empty_live_account_id_states_no_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(key("codex"), stamped(agy_id("a"), 1_000))]),
+        },
+    );
+    let reading = AgentAccount {
+        plan: Some("pro".to_owned()),
+        ..agy_id("")
+    };
+    live_merge(&runtime, live_session("codex", Some(reading), 2_000));
+    assert_eq!(
+        shared_facts(&runtime, "codex"),
+        (Some("pro".to_owned()), None, Some("a".to_owned()))
+    );
+}
+
+#[test]
+fn a_first_logout_never_lowers_a_later_floor() {
+    let mut stored = stamped(agy_id("a"), 1_000);
+    stored.login = Some(RecordedLogin::LoggedIn);
+    stored.stamps.floor_at_ms = Some(9_000);
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("codex"), stored)]),
+    };
+    let merged = probe_merge(&previous, "codex", AccountProbe::LoggedOut, 5_000);
+    assert_eq!(merged.logins[&key("codex")].stamps.floor_at_ms, Some(9_000));
 }
