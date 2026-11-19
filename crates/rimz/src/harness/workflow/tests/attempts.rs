@@ -961,12 +961,21 @@ fn occupancy_waits_merge_without_consuming_input_key_or_visits() {
             Occupancy::Occupied(vec!["sweeper".into()])
         };
         let waiting = advance_ok(&state, &record.id, &host);
-        assert_eq!(
-            waiting.wait.unwrap().outcome,
-            if takeover { "takeover" } else { "occupied" }
-        );
+        let wait = waiting.wait.unwrap();
+        assert_eq!(wait.outcome, if takeover { "takeover" } else { "occupied" });
+        assert_eq!(wait.detail.as_deref(), (!takeover).then_some("sweeper"));
+        if !takeover {
+            // A recheck that finds other occupants names them instead.
+            *host.occupancy.borrow_mut() =
+                Occupancy::Occupied(vec!["sweeper".into(), "fox".into()]);
+        }
         let waiting = advance_ok(&state, &record.id, &host);
-        assert_eq!(waiting.wait.unwrap().count, 2);
+        let wait = waiting.wait.unwrap();
+        assert_eq!(wait.count, 2);
+        assert_eq!(
+            wait.detail.as_deref(),
+            (!takeover).then_some("sweeper, fox")
+        );
         assert_eq!(waiting.input, record.input);
         assert_eq!(waiting.key, record.key);
         assert!(waiting.visits.is_empty());
@@ -1231,6 +1240,11 @@ fn a_free_checkout_is_read_again_once_the_launch_is_prepared() {
         assert_eq!(
             live.wait.as_ref().map(|wait| wait.outcome.as_str()),
             Some(wait)
+        );
+        assert_eq!(
+            live.wait.as_ref().and_then(|wait| wait.detail.as_deref()),
+            (wait == "occupied").then_some("sweeper"),
+            "the late read names the occupant it found"
         );
         assert!(
             live.attempt.is_none() && live.prev_attempt.is_none(),

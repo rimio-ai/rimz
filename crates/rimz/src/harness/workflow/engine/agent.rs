@@ -471,11 +471,12 @@ pub(super) fn launch(
                 .step(&record.node)
                 .expect("an evicting launch is a step's");
             let wait = super::occupancy_wait(&occupancy, step);
-            if let Some(wait) = wait {
-                t.step_wait(wait, None);
+            let waits = wait.is_some();
+            if let Some((wait, occupants)) = wait {
+                t.step_wait(wait, occupants);
             }
             persist(&mut t, &guard)?;
-            return Ok(wait.is_none());
+            return Ok(!waits);
         }
         Err(NotLaunched::Budget(reason)) if unstaged => {
             // The budget was spent after the first read admitted the launch: the node waits as

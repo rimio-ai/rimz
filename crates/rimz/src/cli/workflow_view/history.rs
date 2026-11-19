@@ -21,13 +21,20 @@ pub(in crate::cli) struct HistoryRow<'a> {
 impl HistoryRow<'_> {
     fn note(&self) -> String {
         let (count, first, last, detail) = match &self.latest.event {
+            // An occupied wait's detail is its occupants, which its outcome names.
             records::JournalEvent::Wait {
+                outcome,
                 count,
                 first,
                 last,
                 detail,
                 ..
-            } => (*count, *first, *last, detail.as_deref()),
+            } => (
+                *count,
+                *first,
+                *last,
+                detail.as_deref().filter(|_| outcome != "occupied"),
+            ),
             _ => (self.count, self.first.at, self.latest.at, None),
         };
         let mut note = fold_note(count, first, last);
@@ -613,9 +620,14 @@ impl History<'_> {
                 }
                 JournalEvent::Wait {
                     outcome,
+                    detail,
                     recheck_at,
                     ..
                 } => {
+                    let outcome = match outcome.as_str() {
+                        "occupied" => workflow_view::occupied(detail.as_deref()),
+                        _ => outcome.clone(),
+                    };
                     writeln!(out, "wait {outcome}{note}")?;
                     if let Some(at) = recheck_at {
                         writeln!(out, "    recheck {}", self.clock(*at))?;

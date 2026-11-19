@@ -244,7 +244,7 @@ pub(super) fn wait(
             ),
             None => wait.outcome.clone(),
         },
-        "takeover" | "occupied" => wait.outcome.clone(),
+        "occupied" => occupied(wait.detail.as_deref()),
         _ => wait.outcome.clone(),
     };
     let recheck = wait
@@ -252,6 +252,15 @@ pub(super) fn wait(
         .map(|at| format!(", recheck {}", render::workflow_clock(at, now)))
         .unwrap_or_default();
     Some(format!("{detail}{recheck}"))
+}
+
+/// An `occupied` wait's phrase: its detail holds the occupants' handles, absent on a wait
+/// written before they were kept.
+pub(super) fn occupied(occupants: Option<&str>) -> String {
+    occupants.map_or_else(
+        || "occupied".into(),
+        |occupants| format!("occupied by {occupants}"),
+    )
 }
 
 pub(super) fn park(
@@ -524,7 +533,7 @@ mod tests {
             ("budget", "budget pending"),
             ("retry", "retry: pending"),
             ("takeover", "takeover"),
-            ("occupied", "occupied"),
+            ("occupied", "occupied by pending"),
             ("capacity", "held 0s · pending"),
         ];
         let actual = cases.map(|(outcome, _)| {
@@ -533,6 +542,19 @@ mod tests {
             wait(&record, None, Timestamp::UNIX_EPOCH).unwrap()
         });
         assert_eq!(actual, cases.map(|(_, expected)| expected.to_owned()));
+        let mut occupied = record();
+        waiting(&mut occupied, "occupied");
+        occupied.wait.as_mut().unwrap().detail = Some("@otter, @fox".into());
+        assert_eq!(
+            wait(&occupied, None, Timestamp::UNIX_EPOCH).unwrap(),
+            "occupied by @otter, @fox"
+        );
+        // A wait written before the occupants were stored names nobody.
+        occupied.wait.as_mut().unwrap().detail = None;
+        assert_eq!(
+            wait(&occupied, None, Timestamp::UNIX_EPOCH).unwrap(),
+            "occupied"
+        );
         let mut record = record();
         waiting(&mut record, "pending");
         record.wait.as_mut().unwrap().recheck_at = Some(Timestamp::UNIX_EPOCH);
