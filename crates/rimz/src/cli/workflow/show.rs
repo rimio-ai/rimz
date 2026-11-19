@@ -813,6 +813,7 @@ fn takeover(
         &Host::new(&run.state, globals, None),
         &run.record.scope.path,
         &run.record.project_root,
+        run.record.owed_starter(),
     ) {
         Err(_) => writeln!(out, "takeover: blockers unavailable")?,
         Ok(workflow::Occupancy::Blocked(blockers)) => {

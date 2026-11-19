@@ -898,3 +898,53 @@ fn an_older_session_wait_follows_its_holder_past_a_runtime_snapshot() {
     let mut waits = waits.following(&[&holder]).waits;
     assert_eq!(take_waits(&mut waits, &holder).len(), 1);
 }
+
+#[test]
+fn a_run_an_agent_started_shows_on_its_card_until_its_report_is_sent() {
+    use crate::agents::{AgentState, AgentStatus};
+    let now = jiff::Timestamp::from_second(4_000).unwrap();
+    let mut planner = AgentState::stub("claude", "planner", AgentStatus::Idle);
+    planner.launch_id = Some("launch_planner".into());
+    let other = AgentState::stub("claude", "other", AgentStatus::Idle);
+    let record = |launch: &str, state: &str, report: &str| -> crate::store::workflow::RunRecord {
+        serde_json::from_value(serde_json::json!({
+            "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(),
+            "workflow":"review", "spec_dir":"/definitions/review", "prompt":"Review",
+            "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
+            "created_at":"1970-01-01T00:00:00Z", "state":state, "park":null, "node":"pr",
+            "entered_at":"1970-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
+            "wait":null, "visits":{}, "key_visits":{}, "visit_grant":0, "deadline":null,
+            "deadline_fired":false, "next_seq":1, "attempt":null, "prev_attempt":null,
+            "terminal_at":null, "starter":{"by":"agent", "kind":"claude", "launch":launch},
+            "depth":1, "loop_report":report,
+        }))
+        .unwrap()
+    };
+    let records = [
+        record("launch_planner", "active", "owed"),
+        record("launch_planner", "done", "sent"),
+        record("launch_planner", "active", "none"),
+    ];
+    let mut snapshot = SidebarSnapshot::build_with_agents(
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/project")),
+        vec![planner, other],
+        now,
+    );
+    project_workflow_waits(&mut snapshot, &records);
+    assert_eq!(
+        snapshot.agents[0].pending_waits,
+        vec![PendingWait {
+            class: PendingWaitClass::Working,
+            name: records[0].id.to_string(),
+            armed_at: Some(jiff::Timestamp::UNIX_EPOCH),
+            trigger: PendingWaitTrigger::Workflow {
+                workflow: "review".into()
+            },
+        }]
+    );
+    assert_eq!(
+        snapshot.agents[0].pending_waits[0].label(now),
+        "wakes when workflow review ends"
+    );
+    assert!(snapshot.agents[1].pending_waits.is_empty());
+}

@@ -166,8 +166,9 @@ A clean turn end does not complete a run while its session is still owed a harne
 | --- | --- |
 | `Subagents` | a launched fleet member has a run that is live or still owes a report, as `FleetRuns` selects them ([subagents.md](./subagents.md#which-runs-a-fleet-owes)) |
 | `Team` | a team this session launched has an open team run whose board is not `Done` (`fleet::owed_team_runs`) |
+| `Workflow` | a workflow run in the room's live directory that this session started without `--detach` still owes it its report (`loop_report` is `owed`), live or finished; stored as the `Wait` park cause, since older binaries decode no other |
 | `Wait` | the card has an armed one-shot wait |
-| `WakeInFlight` | a harness `Wait`, `Signal`, `SubagentReport`, `AgentReport`, or `TeamReport` message for the card is non-terminal and, if `Sent`, either within its deadline or held by the receiver's open compaction bracket; the bracket has no age bound, and after it closes the deadline applies again |
+| `WakeInFlight` | a harness `Wait`, `Signal`, `SubagentReport`, `AgentReport`, `TeamReport`, or `WorkflowReport` message for the card is non-terminal and, if `Sent`, either within its deadline or held by the receiver's open compaction bracket; the bracket has no age bound, and after it closes the deadline applies again |
 | `SoftCompact` | a live card's mark still owes the continue queued behind a compaction command (`continue_owed`), and that continue is non-terminal on its queue |
 | `Message` | a `Prompt` record from a person or an agent (`MessageSender::is_conversation`) for the card is non-terminal, deliverable now (`MessageRecord::is_deliverable`: due, its `--after` and `--when` latched, not expired), and, if `Sent`, within its deadline or held by the receiver's open compaction bracket (`TurnWaitView::message_in_flight`). A command, a `--no-from` send (sender `System`), a record scheduled for later and an unlatched condition do not count |
 

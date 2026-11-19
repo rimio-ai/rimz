@@ -45,7 +45,7 @@ Three nearby reads use other sources. Supervised-run streaming tails the provide
 | --- | --- | --- |
 | `Prompt` | A human prompt, or a headerless system prompt or command with `from: "rimz"` | `user: @receiver, text` for a human prompt. A system prompt or command is hidden with the output of the turn it opens |
 | `Message` | An inter-agent delivery or a launched child's brief, with the sender's handle as `from` | `@sender: @receiver, text` |
-| `SubagentReport` | A fleet digest, agent report, or team report, with the header's sender as `from` (`@rimz`, or `@<child>` on a legacy per-child report) | Hidden with the output of the turn it opens |
+| `SubagentReport` | A fleet digest, agent report, team report, or workflow report, with the header's sender as `from` (`@rimz`, or `@<child>` on a legacy per-child report) | Hidden with the output of the turn it opens |
 | `Wait` | Any non-report harness notice, including restarted-child, stalled-child, queued, undelivered, and unknown `@rimz` notice headers | Hidden with the output of the turn it opens |
 | `Assistant` | A root turn's final assistant message | `@receiver: text` |
 | `Ask` | A blocking question or plan approval with parsed questions, or a Codex async question | The agent's question |
@@ -92,7 +92,7 @@ A batched delivery splits at each blank line that is followed by a recognized he
 | Header `Type` | Entry |
 | --- | --- |
 | `AGENT_MESSAGE` | `Message`, with the header's sender as `from` |
-| `AGENT_REPORT`, `TEAM_REPORT`, or `SUBAGENT_REPORT` | `SubagentReport`, with the header's sender as `from` |
+| `AGENT_REPORT`, `TEAM_REPORT`, `WORKFLOW_REPORT`, or `SUBAGENT_REPORT` | `SubagentReport`, with the header's sender as `from` |
 | Any other harness notice, including an unknown `@rimz` type | `Wait`, with the header's sender as `from` |
 | No recognized header, and a confirmed or in-flight record accounts for it | The record sender's origin: human is `Prompt` without `from`, agent is `Message` from its handle, a child or report is `SubagentReport`, any other harness notice is `Wait`, system is `Prompt` with `from: "rimz"` |
 | No recognized header, and nothing accounts for it | Human `Prompt`, subject to the cases below |

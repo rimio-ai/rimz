@@ -818,6 +818,7 @@ fn enrich_core(
         crate::store::raised::attach(&mut snapshot.agents, state);
     }
     let workflow_records = project_workflow_and_throttle_state(&mut snapshot, state);
+    crate::harness::schedule::pending::project_workflow_waits(&mut snapshot, &workflow_records);
     let workflow_seeds = workflows::seeds(&workflow_records, state);
     // The pane fold seeds open-PR groups from the same reading the late PR
     // projection applies, so both see one map.

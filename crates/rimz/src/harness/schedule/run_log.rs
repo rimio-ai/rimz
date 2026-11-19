@@ -406,8 +406,9 @@ impl LoopRunRecord {
     }
 }
 
-/// Collect a finished task-started workflow run: report its outcome to its loop task, under the
-/// workspace lock, once. A run that owes nothing is left alone. A quiet run whose task row exists
+/// Collect a finished workflow run: report its outcome once, to its loop task under the workspace
+/// lock, or to the agent that started it (`starter::report`). A run that owes nothing is left
+/// alone. A quiet run whose task row exists
 /// is forgotten: its home is deleted, record first, so a crash leaves either a run still owed or
 /// a home without a record, which GC removes. Any other run gets its report row and is marked
 /// collected. A report that did not land leaves the run owed, and the scheduler's backstop
@@ -427,7 +428,7 @@ pub fn try_collect_run(
     collect_under_lock(state, run)
 }
 
-/// Report the run under the workspace lock.
+/// Report the run under the workspace lock; an agent starter's report releases it while queued.
 fn collect_under_lock(
     state: &crate::StatePaths,
     run: &crate::ids::WorkflowRunId,
@@ -442,12 +443,17 @@ fn collect_under_lock(
             if header.owes_loop_report() {
                 report_header(state, run, &header)?;
                 workflow::mark_header_report_sent(&paths, &guard)?;
+            } else if header.owes_report() {
+                starter::report(state, run, &header, guard)?;
             }
             return Ok(());
         }
         workflow::RunClass::Recordless => return Ok(()),
         _ => return Ok(()),
     };
+    if record.owes_report() && record.task.is_none() {
+        return starter::report(state, run, &record.header(), guard);
+    }
     if !record.owes_loop_report() {
         return Ok(());
     }
@@ -2158,6 +2164,8 @@ fn tail_string(value: &str, cap: usize) -> String {
     }
     value[start..].to_owned()
 }
+
+mod starter;
 
 #[cfg(test)]
 mod tests;

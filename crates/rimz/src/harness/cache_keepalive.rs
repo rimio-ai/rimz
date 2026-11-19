@@ -248,7 +248,7 @@ pub fn prompt(agent: &AgentState, now: Timestamp, limit: Option<Duration>) -> St
             .map(|at| format_duration_coarse(now.duration_since(at).as_secs()));
         let mut facts = Vec::new();
         match trigger {
-            PendingWaitTrigger::Team { .. } => {
+            PendingWaitTrigger::Team { .. } | PendingWaitTrigger::Workflow { .. } => {
                 facts.extend(elapsed);
                 facts.push(trigger.headline(now));
             }

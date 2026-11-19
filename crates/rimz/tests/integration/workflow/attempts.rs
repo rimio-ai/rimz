@@ -874,6 +874,84 @@ fn a_canceled_pre_rebirth_attempt_leaves_the_agent_now_in_its_saved_pane() {
     other.wait().unwrap();
 }
 
+#[test]
+fn a_turn_step_that_starts_a_run_stays_at_its_step_until_the_report_lands() {
+    use super::peers::{deploy, pass, reports, started};
+    for detach in [false, true] {
+        let room = Room::new("");
+        let (id, run) = room.launch();
+        room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+        let marker = deploy(&room.env, "child");
+        let mut start = room.env.rimz();
+        start
+            .args(["workflow", "run", "child", "--prompt", "Go"])
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+            .env(
+                rimz::harness::launch::ENV_AGENT_ID,
+                run.launch_id.as_ref().unwrap().as_str(),
+            );
+        if detach {
+            start.arg("--detach");
+        }
+        let child = started(start.output().unwrap());
+        until(&room.env, &child, |value| {
+            value["record"]["wait"].is_object()
+        });
+        room.hook(
+            &id,
+            &run,
+            json!({"hook_event_name":"Stop","last_assistant_message":"started"}),
+        );
+        if detach {
+            // A detached start holds nothing: the step ends at this turn end.
+            settled(&room.env, &id, "done");
+            continue;
+        }
+        let state = room.env.state_path_for(&room.env.project_root);
+        let held = || {
+            let parked = rimz::harness::run::load(&state, &run.run_id).unwrap();
+            let value = show(&room.env, &id);
+            assert_eq!(
+                (
+                    parked.parked_on,
+                    &value["record"]["node"],
+                    value["record"]["attempt"].is_object()
+                ),
+                (
+                    Some(rimz::store::run::ParkCause::Wait),
+                    &json!("build"),
+                    true
+                ),
+                "the step's agent is held at its step"
+            );
+        };
+        held();
+        pass(&room.env, &child, &marker);
+        let sent = reports(&room.env);
+        assert_eq!(sent.len(), 1, "{sent:#?}");
+        held();
+        // The report lands: it leaves the queue, and the turn it opened ends.
+        let workspace = room.env.resolve_workspace(&room.env.project_root);
+        assert!(
+            room.env
+                .store()
+                .cancel_message(&sent[0].message_id, &workspace.session_name, "landed")
+                .unwrap()
+        );
+        room.hook(
+            &id,
+            &run,
+            json!({"hook_event_name":"UserPromptSubmit","prompt":sent[0].text}),
+        );
+        room.hook(
+            &id,
+            &run,
+            json!({"hook_event_name":"Stop","last_assistant_message":"read it"}),
+        );
+        settled(&room.env, &id, "done");
+    }
+}
+
 impl Room {
     fn new(extra: &str) -> Self {
         Self::with_kind(extra, "codex")

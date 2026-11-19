@@ -135,6 +135,8 @@ pub enum StoreErr {
     #[error(transparent)]
     RunStore(#[from] run::RunStoreErr),
     #[error(transparent)]
+    WorkflowStore(#[from] workflow::WorkflowStoreErr),
+    #[error(transparent)]
     Lock(#[from] lock::LockErr),
     #[error(transparent)]
     Snapshot(#[from] snapshot::SnapshotErr),

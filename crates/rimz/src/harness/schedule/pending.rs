@@ -205,10 +205,52 @@ fn sort_waits(waits: &mut [PendingWait]) {
             PendingWaitTrigger::Signal { .. }
             | PendingWaitTrigger::Condition { .. }
             | PendingWaitTrigger::Subagent { .. }
-            | PendingWaitTrigger::Team { .. } => (2, None),
+            | PendingWaitTrigger::Team { .. }
+            | PendingWaitTrigger::Workflow { .. } => (2, None),
         };
         (kind, due, wait.name.clone())
     });
+}
+
+/// Put a pending wait on each agent's card for every run in `records` it started that still owes
+/// it a report.
+pub(crate) fn project_workflow_waits(
+    snapshot: &mut SidebarSnapshot,
+    records: &[crate::store::workflow::RunRecord],
+) {
+    let owed: Vec<_> = records
+        .iter()
+        .filter(|record| record.report == crate::store::workflow::ReportMark::Owed)
+        .filter_map(|record| Some((record, record.starter.as_ref()?)))
+        .collect();
+    let waits: Vec<Vec<PendingWait>> = snapshot
+        .agents
+        .iter()
+        .map(|agent| {
+            owed.iter()
+                .filter(|(_, starter)| starter.is_agent(agent))
+                .map(|(record, _)| PendingWait {
+                    class: PendingWaitClass::Working,
+                    name: record.id.to_string(),
+                    armed_at: Some(record.created_at),
+                    trigger: PendingWaitTrigger::Workflow {
+                        workflow: record.workflow.clone(),
+                    },
+                })
+                .collect()
+        })
+        .collect();
+    if waits.iter().all(Vec::is_empty) {
+        return;
+    }
+    for (agent, waits) in std::sync::Arc::make_mut(&mut snapshot.agents)
+        .iter_mut()
+        .zip(waits)
+        .filter(|(_, waits)| !waits.is_empty())
+    {
+        agent.pending_waits.extend(waits);
+        sort_waits(&mut agent.pending_waits);
+    }
 }
 
 pub(crate) fn project_pending_waits(

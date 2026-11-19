@@ -110,7 +110,7 @@ impl TurnWaitView {
 
     /// A harness wake between its publication and the turn it opens. Every
     /// reader counts `Wait` and `Signal`; a supervised run also counts the
-    /// fleet digest or team report a launcher is owed. A `Sent` wake remains in
+    /// fleet digest, team report or workflow report a starter is owed. A `Sent` wake remains in
     /// flight throughout its receiver's open compaction bracket, regardless of
     /// its deadline or the bounded display/delivery window.
     pub(crate) fn wake_in_flight(&self, agent: &AgentState, digest: bool) -> bool {
@@ -121,7 +121,11 @@ impl TurnWaitView {
                 } => true,
                 MessageSender::Harness { notice } => {
                     digest
-                        && (notice.is_fleet_digest() || matches!(notice, HarnessNotice::TeamReport))
+                        && (notice.is_fleet_digest()
+                            || matches!(
+                                notice,
+                                HarnessNotice::TeamReport | HarnessNotice::WorkflowReport
+                            ))
                 }
                 _ => false,
             };

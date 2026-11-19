@@ -126,6 +126,7 @@ fn render_history(
                         HarnessNotice::TeamStalled => "nudge".to_owned(),
                         HarnessNotice::MessageUndelivered => "undelivered".to_owned(),
                         HarnessNotice::MessageQueued => "queued".to_owned(),
+                        HarnessNotice::WorkflowReport => "workflow".to_owned(),
                     },
                 };
                 (from, body)

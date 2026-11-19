@@ -120,6 +120,8 @@ pub enum HarnessNotice {
     MessageUndelivered,
     /// An agent-sent message is still queued past its class delay.
     MessageQueued,
+    /// The agent that started a workflow run without `--detach`, reported when the run ends.
+    WorkflowReport,
     /// Preserve newer notices verbatim through older queue rewrites and history pruning.
     #[serde(untagged)]
     Other(String),
@@ -128,7 +130,7 @@ pub enum HarnessNotice {
 impl HarnessNotice {
     fn section_origin(&self, sender: String) -> SectionOrigin {
         match self {
-            Self::SubagentReport | Self::AgentReport | Self::TeamReport => {
+            Self::SubagentReport | Self::AgentReport | Self::TeamReport | Self::WorkflowReport => {
                 SectionOrigin::Subagent(sender)
             }
             Self::CacheKeepalive
@@ -166,6 +168,7 @@ impl HarnessNotice {
             Self::TeamStalled => "TEAM_STALLED".to_owned(),
             Self::MessageUndelivered => "MESSAGE_UNDELIVERED".to_owned(),
             Self::MessageQueued => "MESSAGE_QUEUED".to_owned(),
+            Self::WorkflowReport => "WORKFLOW_REPORT".to_owned(),
             Self::Deadline => "DEADLINE".to_owned(),
             Self::Wait => "WAIT".to_owned(),
             Self::Signal => "SIGNAL".to_owned(),

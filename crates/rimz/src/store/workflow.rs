@@ -636,6 +636,19 @@ pub enum RunStarter {
     Run { run: WorkflowRunId, node: String },
 }
 
+impl RunStarter {
+    /// Whether this starter is the agent `agent`, by its launch, as a team's launcher is matched.
+    pub fn is_agent(&self, agent: &crate::agents::AgentState) -> bool {
+        match self {
+            Self::Agent { kind, launch } => {
+                agent.launch_id.as_ref() == Some(launch)
+                    || (kind == &agent.kind && agent.answers_to(launch))
+            }
+            Self::Run { .. } => false,
+        }
+    }
+}
+
 /// How a run ended, in the engine's terms: written in the record write that makes the run
 /// terminal, so a reader of the record learns the end without the journal or the definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -751,6 +764,11 @@ pub struct RunRecord {
     /// or a loop shell task's command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub starter: Option<RunStarter>,
+    /// The id of the report queued for an agent starter, minted before the report is queued so
+    /// a collection that dies after queueing it queues the same message again, which the queue
+    /// takes once ([`stamp_report_message`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_message: Option<crate::ids::MessageId>,
     /// How many runs sit on the run's launch path, itself included: 1 for a run a person, a loop
     /// task or an agent outside any workflow started, one more than the run, or the step's run,
     /// that started it. Set at creation; `[agents] max-workflow-depth` bounds it.
@@ -917,6 +935,15 @@ impl RunRecord {
                 .loop_fire
                 .as_ref()
                 .is_some_and(|fire| fire.task() == *task)
+    }
+
+    /// The agent this run owes its report, while it owes it: that agent waits on the run, so
+    /// the run's launches run beside it rather than waiting on it or stopping it.
+    pub fn owed_starter(&self) -> Option<&RunStarter> {
+        self.starter
+            .as_ref()
+            .filter(|starter| matches!(starter, RunStarter::Agent { .. }))
+            .filter(|_| self.report == ReportMark::Owed)
     }
 
     /// A finished run whose loop task or agent starter has not yet heard how it ended: the one
@@ -1687,8 +1714,8 @@ pub fn end_stranded(
     Ok(Some(cause))
 }
 
-/// Mark the loop report of a run this RimZ does not decode as sent, in place, leaving every
-/// other member of its record as it is.
+/// Mark the report of a run as sent, in place, leaving every other member of its record as it
+/// is, whatever version wrote it.
 #[must_use = "durability barrier; check the result"]
 pub fn mark_header_report_sent(paths: &WorkflowPaths, _guard: &WorkspaceLock) -> Result<()> {
     let mut record = read_object(paths)?;
@@ -1697,6 +1724,26 @@ pub fn mark_header_report_sent(paths: &WorkflowPaths, _guard: &WorkspaceLock) ->
         &paths.record,
         &Value::Object(record),
     )?)
+}
+
+/// The id of the report an agent starter is owed, minted and written into the record, in place,
+/// on the first call and read back on every later one, whatever version wrote the record.
+#[must_use = "durability barrier; check the result"]
+pub fn stamp_report_message(
+    paths: &WorkflowPaths,
+    _guard: &WorkspaceLock,
+) -> Result<crate::ids::MessageId> {
+    let mut record = read_object(paths)?;
+    if let Some(id) = record
+        .get("report_message")
+        .and_then(|id| crate::ids::MessageId::deserialize(id).ok())
+    {
+        return Ok(id);
+    }
+    let id = crate::ids::MessageId::new();
+    record.insert("report_message".into(), serde_json::json!(id));
+    crate::disk::atomic::write_temp_then_rename(&paths.record, &Value::Object(record))?;
+    Ok(id)
 }
 
 fn read_object(paths: &WorkflowPaths) -> Result<serde_json::Map<String, Value>> {

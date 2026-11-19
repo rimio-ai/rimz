@@ -410,11 +410,15 @@ fn submitted_sections_cover_every_sender_and_body() {
         HarnessNotice::TeamStalled,
         HarnessNotice::MessageUndelivered,
         HarnessNotice::MessageQueued,
+        HarnessNotice::WorkflowReport,
         HarnessNotice::Other("future".to_owned()),
     ] {
         let origin = if matches!(
             notice,
-            HarnessNotice::SubagentReport | HarnessNotice::AgentReport | HarnessNotice::TeamReport
+            HarnessNotice::SubagentReport
+                | HarnessNotice::AgentReport
+                | HarnessNotice::TeamReport
+                | HarnessNotice::WorkflowReport
         ) {
             SectionOrigin::Subagent("@rimz".to_owned())
         } else {
@@ -2749,6 +2753,7 @@ fn every_named_harness_notice() -> Vec<HarnessNotice> {
         HarnessNotice::TeamStalled,
         HarnessNotice::MessageUndelivered,
         HarnessNotice::MessageQueued,
+        HarnessNotice::WorkflowReport,
     ];
     for notice in &all {
         match notice {
@@ -2764,7 +2769,8 @@ fn every_named_harness_notice() -> Vec<HarnessNotice> {
             | HarnessNotice::SubagentStalled
             | HarnessNotice::TeamStalled
             | HarnessNotice::MessageUndelivered
-            | HarnessNotice::MessageQueued => {}
+            | HarnessNotice::MessageQueued
+            | HarnessNotice::WorkflowReport => {}
             // `Other` preserves unknown future notices; it names no header of its own.
             HarnessNotice::Other(_) => unreachable!("only named notices are listed"),
         }
@@ -2821,7 +2827,10 @@ fn header_only_notices_preserve_origin() {
         let sections = classify_submitted_prompt(&prompt, &[], &[]);
         let origin = if matches!(
             notice,
-            HarnessNotice::SubagentReport | HarnessNotice::AgentReport | HarnessNotice::TeamReport
+            HarnessNotice::SubagentReport
+                | HarnessNotice::AgentReport
+                | HarnessNotice::TeamReport
+                | HarnessNotice::WorkflowReport
         ) {
             SectionOrigin::Subagent("@rimz".to_owned())
         } else {

@@ -127,6 +127,7 @@ fn wait_entry(ctx: &RowCtx<'_>, wait: &PendingWait) -> Entry {
         PendingWaitTrigger::Timer { .. } => theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
         PendingWaitTrigger::Signal { .. }
         | PendingWaitTrigger::Team { .. }
+        | PendingWaitTrigger::Workflow { .. }
         | PendingWaitTrigger::Condition { .. } => theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
         _ => role_glyph(theme, AnimationRole::Working, ctx.head_step),
     };

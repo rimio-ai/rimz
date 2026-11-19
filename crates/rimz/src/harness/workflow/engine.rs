@@ -408,6 +408,7 @@ fn publish(
             workflow::ReportMark::None
         },
         starter: args.starting.starter.clone(),
+        report_message: None,
         depth: args.starting.depth,
         task: start.task,
         loop_fire: start.loop_fire,
@@ -1544,7 +1545,9 @@ fn prepare(
             if launch_error.is_none() && step.occupancy() != Some(OccupancyPolicy::Share) {
                 // A step launched into a named worktree occupies that checkout, not the run's.
                 let destination = destination(&t.record, step)?;
-                let occupancy = host.occupancy(&destination, &t.record.project_root)?;
+                let beside = t.record.owed_starter().cloned();
+                let occupancy =
+                    host.occupancy(&destination, &t.record.project_root, beside.as_ref())?;
                 if let Some((wait, occupants)) = occupancy_wait(&occupancy, step) {
                     t.step_wait(wait, occupants);
                     persist(&mut t, &guard)?;
@@ -1554,6 +1557,7 @@ fn prepare(
                 evict = Some(super::Eviction {
                     checkout: destination,
                     project_root: t.record.project_root.clone(),
+                    beside,
                 });
             }
             t.now = Timestamp::now();

@@ -52,6 +52,51 @@ fn occupant(room: &Room, name: &str, pane: u32) {
         .unwrap();
 }
 
+/// Starts `review` as agent `planner`, which waits on the run's report.
+fn start_as_planner(room: &Room) -> String {
+    let receipt = success(
+        room.command(&["workflow", "run", "review", "--prompt", "Review this"])
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_ID, "launch_planner")
+            .output()
+            .unwrap(),
+    );
+    receipt.lines().next().unwrap().to_owned()
+}
+
+#[test]
+fn a_run_launches_beside_the_starter_its_report_holds_and_waits_on_any_other_occupant() {
+    for (policy, others) in [("wait", false), ("wait", true), ("takeover", false)] {
+        let room = Room::with_kind(&format!("admission.occupancy='{policy}'\n"), "claude");
+        crate::common::trust_claude_project(&room.env, &room.env.project_root);
+        occupant(&room, "planner", 61);
+        if others {
+            occupant(&room, "outside", 62);
+        }
+        let id = start_as_planner(&room);
+        let value = until(&room.env, &id, |value| {
+            value["record"]["attempt"]["run"].is_object()
+                || value["record"]["wait"]["outcome"] == "occupied"
+        });
+        let record = &value["record"];
+        assert_eq!(
+            (&record["starter"]["launch"], &record["loop_report"]),
+            (&json!("launch_planner"), &json!("owed")),
+            "{policy} {others}: {record:#}"
+        );
+        if others {
+            assert!(record["attempt"].is_null(), "{record:#}");
+            assert_eq!(record["wait"]["outcome"], "occupied", "{record:#}");
+        } else {
+            assert!(record["attempt"]["run"].is_object(), "{policy}: {record:#}");
+        }
+        let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap_or_default();
+        assert!(!trace.contains("close-pane"), "{policy} {others}: {trace}");
+        assert!(rimz::proc::process_is_live(room.owner("planner"), None));
+        success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    }
+}
+
 #[test]
 fn a_takeover_that_cannot_stop_its_occupant_launches_nothing() {
     let room = Room::with_kind("admission.occupancy='takeover'\n", "claude");
