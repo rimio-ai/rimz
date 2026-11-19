@@ -26,7 +26,7 @@ pub(in crate::sidebar) fn apply_live_today_spend(
     let live = if workspace.headline_cutoff_secs == NO_BURST_CUTOFF {
         0.0
     } else {
-        live_spend_addback(snapshot, workspace)
+        live_spend_addback(snapshot, workspace, &workspace.headline_live_baselines)
     };
     snapshot.today_spend_live_usd = Some(workspace.tally.headline.usd + live);
     snapshot.today_spend_epoch_secs = Some(workspace.headline_cutoff_secs);
@@ -35,19 +35,31 @@ pub(in crate::sidebar) fn apply_live_today_spend(
 /// Stamp the room's local-calendar-day spend independently of the configured
 /// headline window. This is the enforcement and daily-cap display figure.
 pub fn apply_live_day_spend(snapshot: &mut SidebarSnapshot, workspace: &WorkspaceSpendingCache) {
-    let live = live_spend_addback(snapshot, workspace);
+    let live = live_spend_addback(snapshot, workspace, &BTreeMap::new());
     snapshot.fleet_day_spend_usd = Some(workspace.day.usd + live);
     snapshot.fleet_day_spend_epoch_secs = Some(workspace.day_cutoff_secs);
 }
 
-fn live_spend_addback(snapshot: &SidebarSnapshot, workspace: &WorkspaceSpendingCache) -> f64 {
+/// Each live card's cost above its session's walked baseline. A session in
+/// `overrides` (an originless session's baseline for another cutoff) takes
+/// that baseline in place of its `live_baselines` one.
+fn live_spend_addback(
+    snapshot: &SidebarSnapshot,
+    workspace: &WorkspaceSpendingCache,
+    overrides: &BTreeMap<String, f64>,
+) -> f64 {
     live_card_sessions(snapshot)
         .into_iter()
         .map(|card| {
             let baseline = card
                 .session_keys
                 .iter()
-                .filter_map(|key| workspace.live_baselines.get(key).copied())
+                .filter_map(|key| {
+                    overrides
+                        .get(key)
+                        .or_else(|| workspace.live_baselines.get(key))
+                        .copied()
+                })
                 .fold(0.0_f64, f64::max);
             (card.cost_usd - baseline).max(0.0)
         })

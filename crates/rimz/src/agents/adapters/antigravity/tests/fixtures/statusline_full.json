@@ -1,0 +1,56 @@
+{
+  "cwd": "/tmp/agycap.BAZR/work",
+  "session_id": "",
+  "conversation_id": "",
+  "transcript_path": "/tmp/agycap.BAZR/home/.gemini/antigravity/brain/.system_generated/logs/transcript.jsonl",
+  "model": {
+    "id": "Gemini 4 Neon (High)",
+    "display_name": "Gemini 4 Neon (High)",
+    "effort": "high"
+  },
+  "workspace": {
+    "current_dir": "/tmp/agycap.BAZR/work",
+    "project_dir": "/tmp/agycap.BAZR/work"
+  },
+  "version": "1.5.12",
+  "context_window": {
+    "total_input_tokens": 0,
+    "total_output_tokens": 0,
+    "context_window_size": 1048576,
+    "used_percentage": 0,
+    "remaining_percentage": 100,
+    "current_usage": null
+  },
+  "exceeds_200k_tokens": null,
+  "product": "antigravity",
+  "quota": {
+    "3p-5h": {
+      "remaining_fraction": 1,
+      "reset_time": "2026-11-20T00:42:16Z",
+      "reset_in_seconds": 17989
+    },
+    "3p-weekly": {
+      "remaining_fraction": 1,
+      "reset_time": "2026-11-26T19:42:16Z",
+      "reset_in_seconds": 604789
+    },
+    "gemini-5h": {
+      "remaining_fraction": 0.9794113,
+      "reset_time": "2026-11-19T23:12:50Z",
+      "reset_in_seconds": 12623
+    },
+    "gemini-weekly": {
+      "remaining_fraction": 0.98370945,
+      "reset_time": "2026-11-26T08:37:04Z",
+      "reset_in_seconds": 564877
+    }
+  },
+  "agent_state": "idle",
+  "cycle_mode": "auto",
+  "sandbox": {
+    "enabled": false
+  },
+  "plan_tier": "Google AI Ultra",
+  "email": "user@example.com",
+  "terminal_width": 160
+}

@@ -1,6 +1,14 @@
 use super::*;
 use rimz::store::snapshot::find_agent;
 
+/// Whether a hook's lifecycle signal ends the turn, so its cost is due.
+fn ends_turn(signal: Option<&LifecycleSignal>) -> bool {
+    matches!(
+        signal,
+        Some(LifecycleSignal::TurnEnded { .. } | LifecycleSignal::TurnInterrupted { .. })
+    )
+}
+
 #[cfg(test)]
 use rimz::agents::AgentState;
 
@@ -276,10 +284,7 @@ pub(super) fn handle_lifecycle_frame(
             ),
             None => (None, None, None, None, None),
         };
-    let turn_ended = matches!(
-        signal,
-        Some(LifecycleSignal::TurnEnded { .. } | LifecycleSignal::TurnInterrupted { .. })
-    );
+    let turn_ended = ends_turn(signal);
     let root_tool_used =
         parent_agent_id.is_none() && matches!(signal, Some(LifecycleSignal::ToolUsed { .. }));
     let tool_call = match signal {

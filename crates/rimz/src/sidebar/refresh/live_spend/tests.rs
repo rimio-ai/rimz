@@ -547,3 +547,125 @@ fn claude_fork_live_addback_does_not_recount_copied_history() {
         files.reverse();
     }
 }
+
+fn walk_agy_session(
+    dir: &Path,
+    id: &str,
+    rows: &[(u32, &str, u64)],
+    mode: SpendWindowMode,
+) -> (PathBuf, WorkspaceSpendingCache) {
+    let published = Timestamp::from_second(1_750_000_000).unwrap();
+    let adapter = find_definition("antigravity").unwrap();
+    let logs = dir.join(format!("brain/{id}/.system_generated/logs"));
+    std::fs::create_dir_all(&logs).unwrap();
+    let path = logs.join("transcript_full.jsonl");
+    let lines = rows.iter().map(|(step, at, tokens)| {
+        serde_json::json!({
+            "step_index": step,
+            "type": "PLANNER_RESPONSE",
+            "created_at": at,
+            "model": "agy-priced",
+            "input_tokens": tokens,
+            "output_tokens": 0
+        })
+        .to_string()
+    });
+    std::fs::write(&path, lines.collect::<Vec<_>>().join("\n") + "\n").unwrap();
+    let files = [SpendingFile {
+        adapter,
+        login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+            adapter.spec().kind,
+        )),
+        path: path.clone(),
+    }];
+    let prices = crate::agents::pricing::PriceBook::from_litellm_json(
+        r#"{"agy-priced":{"input_cost_per_token":1e-6,"output_cost_per_token":1e-6}}"#,
+    );
+    let scope = SpendScope::from_roots(Some(Path::new("/repo/wt")), &[]);
+    let result = SpendingWalker::new().walk_local(
+        &dir.join("spending.json"),
+        &WalkRequest {
+            history: &crate::disk::paths::SpendingHistoryPaths::under(dir),
+            files: &files,
+            prices: &prices,
+            now_secs: published.as_second() as u64,
+            origin_overrides: &Default::default(),
+            user_inputs: &[],
+            scope: Some(&scope),
+            spec: &HeadlineSpec {
+                mode,
+                timezone: Some("UTC".into()),
+            },
+        },
+        &mut SilentWalk,
+    );
+    let workspace = WorkspaceSpendingCache {
+        tally: result.workspace.tally,
+        day: result.workspace.day,
+        headline_cutoff_secs: result.workspace.headline_cutoff_secs,
+        live_baselines: result.workspace.live_baselines,
+        headline_live_baselines: result.workspace.headline_live_baselines,
+        ..Default::default()
+    };
+    (path, workspace)
+}
+
+#[test]
+fn agy_live_addback_counts_only_today_of_a_session_begun_yesterday() {
+    let published = Timestamp::from_second(1_750_000_000).unwrap();
+    let wt = Path::new("/repo/wt");
+    let id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    let rows = [
+        (2, "2025-06-14T23:00:00Z", 20_000_000),
+        (4, "2025-06-15T10:00:00Z", 100_000),
+    ];
+    let (today_dir, trailing_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (path, workspace) = walk_agy_session(today_dir.path(), id, &rows, SpendWindowMode::Today);
+    let mut snapshot =
+        SidebarSnapshot::build(WorkspaceId::from_project_root(wt), Vec::new(), published)
+            .with_project_root(Some(wt.to_path_buf()));
+    let mut agy = agent_state(id, wt, &path, published);
+    agy.kind = crate::ids::AgentKind::new_unchecked("antigravity");
+    snapshot.agents = vec![agy].into();
+    let mut row = cost_row(id, Some(20.1), None);
+    row.as_agent_mut()
+        .unwrap()
+        .context
+        .as_mut()
+        .unwrap()
+        .cost
+        .as_mut()
+        .unwrap()
+        .coverage = crate::agents::CostCoverage::Session;
+    snapshot.worktree_groups = vec![worktree_group(wt, vec![row])].into();
+
+    apply_live_day_spend(&mut snapshot, &workspace);
+    let day = snapshot.fleet_day_spend_usd.unwrap();
+    assert!(
+        (day - 0.1).abs() < 1e-6,
+        "yesterday's agy rows count today: {day}"
+    );
+    // A trailing 24 h headline still holds yesterday evening's row.
+    let (_, trailing) =
+        walk_agy_session(trailing_dir.path(), id, &rows, SpendWindowMode::Trailing24h);
+    apply_live_today_spend(&mut snapshot, &trailing);
+    let headline = snapshot.today_spend_live_usd.unwrap();
+    assert!(
+        (headline - 20.1).abs() < 1e-6,
+        "the 24 h headline counts the whole session: {headline}"
+    );
+}
+
+#[test]
+fn an_old_agy_session_leaves_no_live_baseline() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    // Twenty days before the walk: inside the year, outside the raw window.
+    let rows = [(2, "2025-05-26T10:00:00Z", 1_000_000)];
+    let (_, workspace) = walk_agy_session(dir.path(), id, &rows, SpendWindowMode::Today);
+    assert!(
+        workspace.live_baselines.is_empty(),
+        "{:?}",
+        workspace.live_baselines
+    );
+}

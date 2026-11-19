@@ -3,12 +3,13 @@
 use jiff::Timestamp;
 use serde::Deserialize;
 
+use serde_json::Value;
+
 use crate::agents::context::{
-    AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentTokenUsage, CostCoverage,
-    TurnSettle, TurnSettleOutcome, clamp_pct,
+    AgentAccount, AgentContext, AgentCurrentUsage, AgentTokenUsage, TurnSettle, TurnSettleOutcome,
+    clamp_pct,
 };
 use crate::agents::payload::non_empty_trimmed;
-use crate::agents::pricing::{PriceBook, TokenSplit};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -18,6 +19,9 @@ pub(super) struct StatuslinePayload {
     version: Option<String>,
     model: Model,
     context_window: ContextWindow,
+    /// Quota buckets by id, each kept raw until its id selects it. Kept raw
+    /// whole, so a `quota` that is not a map loses only the windows.
+    quota: Option<Value>,
     plan_tier: Option<String>,
     email: Option<String>,
     tool_confirmation_pending: Option<bool>,
@@ -39,7 +43,8 @@ struct ContextWindow {
     context_window_size: Option<u64>,
     used_percentage: Option<f64>,
     remaining_percentage: Option<f64>,
-    current_usage: CurrentUsage,
+    /// agy 1.5.12 sends `null` before the first model turn.
+    current_usage: Option<CurrentUsage>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -119,40 +124,6 @@ fn normalize_model_display(
 }
 
 impl StatuslinePayload {
-    pub(super) fn cost(&self, prices: &dyn Fn() -> std::sync::Arc<PriceBook>) -> Option<AgentCost> {
-        let model_id = self.model.id.as_deref()?.trim();
-        (!model_id.is_empty()).then_some(())?;
-        let usage = &self.context_window.current_usage;
-        (usage.input_tokens.is_some()
-            || usage.output_tokens.is_some()
-            || usage.cache_creation_input_tokens.is_some()
-            || usage.cache_read_input_tokens.is_some())
-        .then_some(())?;
-        let prices = prices();
-        let price = prices.price(model_id).or_else(|| {
-            selector_price_keys(model_id)
-                .into_iter()
-                .flatten()
-                .find_map(|key| prices.exact_price(&key))
-        })?;
-        // This wire reports current context occupancy, so one-request pricing applies.
-        let total_cost_usd = price.cost_of(
-            TokenSplit::new(
-                usage.input_tokens.unwrap_or(0),
-                usage.output_tokens.unwrap_or(0),
-            )
-            .cached(
-                usage.cache_creation_input_tokens.unwrap_or(0),
-                usage.cache_read_input_tokens.unwrap_or(0),
-            ),
-        );
-        (total_cost_usd.is_finite() && total_cost_usd > 0.0).then(|| AgentCost {
-            total_cost_usd: Some(total_cost_usd),
-            coverage: CostCoverage::CurrentUsage,
-            ..AgentCost::default()
-        })
-    }
-
     pub(super) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
         let (model_display_name, label_effort, thinking_enabled) =
             normalize_model_display(self.model.display_name);
@@ -165,28 +136,17 @@ impl StatuslinePayload {
             .or(label_effort);
         let settle = (self.tool_confirmation_pending == Some(true))
             .then(|| TurnSettle::new(observed_at, TurnSettleOutcome::NativeWait));
-        let has_current_usage = self.context_window.current_usage.input_tokens.is_some()
-            || self.context_window.current_usage.output_tokens.is_some()
-            || self
-                .context_window
-                .current_usage
-                .cache_creation_input_tokens
-                .is_some()
-            || self
-                .context_window
-                .current_usage
-                .cache_read_input_tokens
-                .is_some();
-        let current_usage = AgentCurrentUsage {
-            input_tokens: self.context_window.current_usage.input_tokens,
-            output_tokens: self.context_window.current_usage.output_tokens,
-            cache_creation_input_tokens: self
-                .context_window
-                .current_usage
-                .cache_creation_input_tokens,
-            cache_read_input_tokens: self.context_window.current_usage.cache_read_input_tokens,
-        };
-        let current_usage = has_current_usage.then_some(current_usage);
+        let usage = self.context_window.current_usage.unwrap_or_default();
+        let has_current_usage = usage.input_tokens.is_some()
+            || usage.output_tokens.is_some()
+            || usage.cache_creation_input_tokens.is_some()
+            || usage.cache_read_input_tokens.is_some();
+        let current_usage = has_current_usage.then_some(AgentCurrentUsage {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
+        });
         let tokens = (self.context_window.context_window_size.is_some()
             || self.context_window.used_percentage.is_some()
             || self.context_window.remaining_percentage.is_some()
@@ -215,33 +175,11 @@ impl StatuslinePayload {
             agent_version: self.version.as_deref().and_then(non_empty_trimmed),
             tokens,
             account,
+            rate_limits: self
+                .quota
+                .and_then(|quota| super::usage::statusline_windows(quota, observed_at)),
             settle,
             ..AgentContext::new(source, observed_at)
         }
     }
-}
-
-/// Antigravity CLI 1.1.2 through 1.2.2 publishes the selected human label in `model.id`
-/// (`Gemini 3.5 Flash (Medium)`) while hooks carry a canonical-shaped hint.
-/// Keep that provider identity untouched in `AgentContext`, but let a captured
-/// terminal reasoning qualifier expose conservative exact-table candidates for
-/// this point-in-time price. Exact lookup keeps an unknown selector from
-/// borrowing rates from a related model through the global fuzzy resolver.
-fn selector_price_keys(model_id: &str) -> Option<[String; 2]> {
-    let (base, effort, thinking_enabled) = normalize_model_display(Some(model_id.to_owned()));
-    (effort.is_some() || thinking_enabled == Some(true)).then_some(())?;
-    let dotted = base?
-        .split_whitespace()
-        .map(|segment| segment.to_ascii_lowercase())
-        .collect::<Vec<_>>()
-        .join("-");
-    (!dotted.is_empty()).then_some(())?;
-    let hyphenated = dotted.replace('.', "-");
-    let hyphenated = match hyphenated.as_str() {
-        // Google's first-party hosting is the closest public rate for its catalog;
-        // Antigravity's actual serving platform has not been captured.
-        "gpt-oss-120b" => "vertex_ai/openai/gpt-oss-120b-maas".to_owned(),
-        _ => hyphenated,
-    };
-    Some([dotted, hyphenated])
 }

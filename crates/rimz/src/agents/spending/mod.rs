@@ -969,6 +969,7 @@ pub struct ScopedSpending {
     pub tally: SpendTally,
     pub headline_cutoff_secs: u64,
     pub live_baselines: BTreeMap<String, f64>,
+    pub headline_live_baselines: BTreeMap<String, f64>,
     pub day: SpendWindow,
     pub day_cutoff_secs: u64,
 }

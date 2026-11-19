@@ -1064,52 +1064,287 @@ fn statusline_native_model_effort_wins_over_label_qualifier() {
     }
 }
 #[test]
-fn statusline_prices_canonical_and_observed_model_ids_with_current_usage() {
+fn statusline_payloads_carry_no_cost_and_keep_the_turn_end_total() {
     let prices = PriceBook::from_litellm_json(
-        r#"{"agy-priced":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6,"cache_creation_input_token_cost":3e-6,"cache_read_input_token_cost":0.25e-6},"gemini-3.5-flash":{"input_cost_per_token":1.5e-6,"output_cost_per_token":9e-6,"cache_creation_input_token_cost":1.875e-6,"cache_read_input_token_cost":0.15e-6},"vertex_ai/openai/gpt-oss-120b-maas":{"input_cost_per_token":9e-8,"output_cost_per_token":3.6e-7},"gemini-3.8-flash":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6},"claude-sonnet-5":{"input_cost_per_token":3e-6,"output_cost_per_token":15e-6}}"#,
+        r#"{"agy-priced":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6},"gemini-3.8-flash":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6}}"#,
     );
-    for (id, usage, expected) in [
-        ("  agy-priced-via-router  ", (10, 20, 30, 40), 150e-6),
-        ("GPT-OSS 120B (Medium)", (10, 20, 0, 0), 8.1e-6),
-        ("Gemini 3.8 Flash (Max)", (10, 20, 0, 0), 50e-6),
-        (
-            "Gemini 3.5 Flash (Medium)",
-            (2_971, 630, 0, 16_270),
-            0.012_567,
-        ),
-    ] {
-        let cost = AntigravityAdapter.context_cost(
-            &json!({
-                "model": {"id": id, "display_name": id},
-                "context_window": {"current_usage": {
-                    "input_tokens": usage.0,
-                    "output_tokens": usage.1,
-                    "cache_creation_input_tokens": usage.2,
-                    "cache_read_input_tokens": usage.3
-                }}
-            }),
-            &|| std::sync::Arc::new(prices.clone()),
-        );
-        assert!(cost.is_some(), "{id} must have an exact selector price");
-        let cost = cost.unwrap();
-        assert_eq!(cost.coverage, crate::agents::CostCoverage::CurrentUsage);
-        assert!((cost.total_cost_usd.unwrap() - expected).abs() < 1e-15);
-    }
-    for payload in [
-        r#"{"model":{"id":"unknown","display_name":"agy-priced"},"context_window":{"current_usage":{"input_tokens":10}}}"#,
-        r#"{"model":{"id":"agy-priced"}}"#,
-        r#"{"model":{"id":"agy-priced"},"context_window":{"current_usage":{"input_tokens":0}}}"#,
-        r#"{"model":{"id":"   "},"context_window":{"current_usage":{"input_tokens":10}}}"#,
-        r#"{"model":{"id":"Gemini 3.5 Flash Turbo (Medium)"},"context_window":{"current_usage":{"input_tokens":10}}}"#,
-        r#"{"model":{"id":"Claude Sonnet 5.5 (Thinking)"},"context_window":{"current_usage":{"input_tokens":10}}}"#,
-    ] {
+    let mut record = crate::agents::context::record::AgentContextRecord::new(
+        "antigravity",
+        SESSION_ID,
+        crate::agents::AgentContext::new("antigravity", Timestamp::now()),
+    );
+    record.context.cost = Some(crate::agents::AgentCost {
+        total_cost_usd: Some(0.42),
+        ..crate::agents::AgentCost::default()
+    });
+    for id in ["agy-priced", "Gemini 3.8 Flash (Max)"] {
+        let payload = json!({
+            "conversation_id": SESSION_ID,
+            "model": {"id": id, "display_name": id},
+            "context_window": {"current_usage": {"input_tokens": 10, "output_tokens": 20}}
+        });
         assert!(
             AntigravityAdapter
-                .context_cost(&json_value(payload), &|| std::sync::Arc::new(
-                    prices.clone()
-                ))
-                .is_none()
+                .context_cost(&payload, &|| std::sync::Arc::new(prices.clone()))
+                .is_none(),
+            "{id}: the status line prices nothing"
         );
+        let context = AntigravityAdapter
+            .observe_context("antigravity", &payload)
+            .unwrap()
+            .context;
+        assert!(context.cost.is_none());
+        record.apply_context_refresh("antigravity", SESSION_ID, context, None);
+        assert_eq!(
+            record
+                .context
+                .cost
+                .as_ref()
+                .and_then(|cost| cost.total_cost_usd),
+            Some(0.42),
+            "{id}: a later payload keeps the turn-end session total"
+        );
+    }
+}
+fn statusline_fixture(source: &str) -> statusline::StatuslinePayload {
+    serde_json::from_str(source).unwrap()
+}
+#[test]
+fn statusline_quota_yields_only_the_gemini_windows() {
+    let observed_at: Timestamp = "2026-11-19T19:42:27Z".parse().unwrap();
+    let context = statusline_fixture(include_str!("tests/fixtures/statusline_full.json"))
+        .into_context("antigravity", observed_at);
+    let windows: Vec<_> = context
+        .rate_limits
+        .expect("the gemini buckets are a reading")
+        .windows
+        .into_iter()
+        .map(|window| {
+            (
+                window.duration_mins,
+                window.used_percentage,
+                window.resets_at.map(|at| at.to_string()),
+                window.observed_at,
+                window.source,
+                window.scope,
+            )
+        })
+        .collect();
+    let best_effort = crate::agents::context::WindowSource::BestEffort;
+    assert_eq!(
+        windows,
+        [
+            (
+                Some(300),
+                Some(2),
+                Some("2026-11-19T23:12:50Z".to_owned()),
+                Some(observed_at),
+                best_effort,
+                None
+            ),
+            (
+                Some(10_080),
+                Some(2),
+                Some("2026-11-26T08:37:04Z".to_owned()),
+                Some(observed_at),
+                best_effort,
+                None
+            ),
+        ]
+    );
+    let account = context.account.unwrap();
+    assert_eq!(
+        (account.plan.as_deref(), account.account_id.as_deref()),
+        (Some("Google AI Ultra"), Some("user@example.com"))
+    );
+
+    let initializing =
+        statusline_fixture(include_str!("tests/fixtures/statusline_initializing.json"))
+            .into_context("antigravity", observed_at);
+    assert!(initializing.rate_limits.is_none(), "no quota is no reading");
+    assert_eq!(initializing.account.unwrap().plan, None);
+
+    let only_third_party = statusline_fixture(
+        r#"{"quota":{"3p-5h":{"remaining_fraction":0,"reset_time":"2026-11-20T00:42:16Z"},"3p-weekly":{"remaining_fraction":"bad"}}}"#,
+    )
+    .into_context("antigravity", observed_at);
+    assert!(only_third_party.rate_limits.is_none());
+}
+
+#[test]
+fn a_statusline_quota_that_is_no_map_keeps_the_rest_of_the_reading() {
+    let observed_at: Timestamp = "2026-11-19T19:42:27Z".parse().unwrap();
+    let context = statusline_fixture(
+        r#"{"quota":"unavailable","plan_tier":"Google AI Ultra","model":{"id":"gemini-4"}}"#,
+    )
+    .into_context("antigravity", observed_at);
+    assert!(context.rate_limits.is_none());
+    assert_eq!(context.model_id.as_deref(), Some("gemini-4"));
+    assert_eq!(
+        context.account.unwrap().plan.as_deref(),
+        Some("Google AI Ultra")
+    );
+}
+
+#[test]
+fn an_expired_gemini_bucket_drops_only_its_own_window() {
+    let observed_at: Timestamp = "2026-11-19T19:42:27Z".parse().unwrap();
+    let context = statusline_fixture(
+        r#"{"quota":{
+            "gemini-5h":{"remaining_fraction":0,"reset_time":"2026-11-19T19:42:00Z"},
+            "gemini-weekly":{"remaining_fraction":0.5,"reset_time":"2026-11-26T08:37:04Z"}
+        }}"#,
+    )
+    .into_context("antigravity", observed_at);
+    let windows: Vec<_> = context
+        .rate_limits
+        .expect("the weekly bucket is a reading")
+        .windows
+        .into_iter()
+        .map(|window| (window.duration_mins, window.used_percentage))
+        .collect();
+    assert_eq!(windows, [(Some(300), None), (Some(10_080), Some(50))]);
+}
+mod spend_rows {
+    use super::*;
+    use crate::agents::spending::SpendParse;
+
+    const NEON: &str = r#"{"gemini-4-neon":{"input_cost_per_token":3e-6,"output_cost_per_token":1.5e-5,"cache_read_input_token_cost":1.5e-7}}"#;
+    const OTHER: &str = "22222222-2222-4222-8222-222222222222";
+
+    fn token_row(step: u64, model: &str, input: u64, cache_read: u64, output: u64) -> String {
+        json!({"step_index": step, "source": "MODEL", "type": "PLANNER_RESPONSE",
+            "status": "DONE", "created_at": AT_10, "content": "answer", "model": model,
+            "input_tokens": input, "cache_read_tokens": cache_read, "output_tokens": output})
+        .to_string()
+    }
+
+    fn parse(path: &Path, book: &str) -> SpendParse {
+        AntigravityAdapter.parse_spend(path, None, &PriceBook::from_litellm_json(book))
+    }
+
+    fn neon_cost(input: u64, cache_read: u64, output: u64) -> f64 {
+        input as f64 * 3e-6 + cache_read as f64 * 1.5e-7 + output as f64 * 1.5e-5
+    }
+
+    #[test]
+    fn token_rows_become_one_entry_each_keyed_by_conversation_and_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let parsed = parse(&write_transcript(dir.path(), SESSION_ID), NEON);
+        let summary: Vec<_> = parsed
+            .entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.message_id.as_deref().map(str::to_owned),
+                    entry.thread_id.as_deref().map(str::to_owned),
+                    entry.model.as_deref().map(str::to_owned),
+                    (
+                        entry.input,
+                        entry.cache_read,
+                        entry.output,
+                        entry.cache_write,
+                    ),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [(
+                Some(format!("{SESSION_ID}:2")),
+                Some(SESSION_ID.to_owned()),
+                Some("gemini-4-neon".to_owned()),
+                (1200, 300, 34, 0),
+            )]
+        );
+        assert!((parsed.entries[0].cost_usd - neon_cost(1200, 300, 34)).abs() < 1e-12);
+        assert!(parsed.unknown_models.is_empty());
+    }
+
+    #[test]
+    fn identical_first_steps_of_two_conversations_stay_two_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let row = token_row(1, "gemini-4-neon-high", 100, 0, 10);
+        let ids: Vec<_> = [SESSION_ID, OTHER]
+            .into_iter()
+            .flat_map(|id| {
+                let path = write_transcript_named(dir.path(), id, "transcript_full.jsonl", &row);
+                parse(&path, NEON).entries
+            })
+            .map(|entry| entry.message_id.as_deref().map(str::to_owned))
+            .collect();
+        assert_eq!(
+            ids,
+            [Some(format!("{SESSION_ID}:1")), Some(format!("{OTHER}:1"))]
+        );
+    }
+
+    #[test]
+    fn a_base_name_priced_only_by_a_related_key_gets_no_dollars() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_transcript(dir.path(), SESSION_ID);
+        // The raw slug `gemini-4-neon-high` answers `gemini-4` by fuzzy match only.
+        let parsed = parse(
+            &path,
+            r#"{"gemini-4":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6}}"#,
+        );
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].cost_usd, 0.0);
+        assert_eq!(parsed.entries[0].input, 1200);
+        assert_eq!(
+            parsed.unknown_models.keys().collect::<Vec<_>>(),
+            ["gemini-4-neon"]
+        );
+        let raw = parse(
+            &path,
+            r#"{"gemini-4-neon-high":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6,"cache_read_input_token_cost":1e-7},"gemini-4-neon":{"input_cost_per_token":3e-6,"output_cost_per_token":1.5e-5}}"#,
+        );
+        let raw_cost = 1200.0 * 1e-6 + 300.0 * 1e-7 + 34.0 * 2e-6;
+        assert!(
+            (raw.entries[0].cost_usd - raw_cost).abs() < 1e-12,
+            "the raw slug first"
+        );
+    }
+
+    #[test]
+    fn session_cost_sums_the_conversation_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = [
+            token_row(1, "gemini-4-neon-high", 100, 0, 10),
+            token_row(3, "gemini-4-neon-high", 50, 100, 5),
+            json!({"step_index": 4, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+                "status": "DONE", "created_at": AT_11, "content": "next"})
+            .to_string(),
+        ]
+        .join("\n");
+        let path = write_transcript_named(dir.path(), SESSION_ID, "transcript_full.jsonl", &body);
+        let cost = crate::agents::spending::session_cost_usd(
+            crate::agents::definition_by_kind("antigravity").unwrap(),
+            SESSION_ID,
+            &path,
+            &PriceBook::from_litellm_json(NEON),
+        )
+        .and_then(|cost| cost.total_cost_usd)
+        .unwrap();
+        assert!((cost - (neon_cost(100, 0, 10) + neon_cost(50, 100, 5))).abs() < 1e-12);
+    }
+
+    #[test]
+    fn spend_sources_are_the_full_transcripts_under_the_login_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider_home = dir.path().join(".gemini/antigravity-cli");
+        let full = write_transcript(&provider_home, SESSION_ID);
+        write_transcript_named(&provider_home, OTHER, "transcript.jsonl", "");
+        let env = std::collections::BTreeMap::from([(
+            "HOME".to_owned(),
+            dir.path().display().to_string(),
+        )]);
+        let files: Vec<_> = AntigravityAdapter
+            .spending_sources(&env)
+            .iter()
+            .flat_map(crate::agents::spending::SpendingSource::complete_files)
+            .collect();
+        assert_eq!(files, [full]);
     }
 }
 #[test]
@@ -2246,14 +2481,47 @@ mod usage_probe {
             ),
         ] {
             let read = usage::classify(code, stdout.as_bytes(), observed_at());
-            assert_eq!((case, format!("{:?}", read.account())), (case, account));
+            assert_eq!((case, format!("{:?}", read.account(None))), (case, account));
             assert_eq!((case, read.usage()), (case, usage));
         }
         for cause in [AccountProbeError::TimedOut, AccountProbeError::SpawnFailed] {
             let read = Read::Failed(cause);
-            assert_eq!(format!("{:?}", read.account()), unavailable(cause));
+            assert_eq!(format!("{:?}", read.account(None)), unavailable(cause));
             assert_eq!(read.usage(), failed);
         }
+    }
+    #[test]
+    fn the_credential_file_names_the_account_at_its_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let read = Read::Usage(Quota::Absent);
+        let found = |probe: AccountProbe| match probe {
+            AccountProbe::Found(account) => (account.account_id, account.credentials_updated_at_ms),
+            other => panic!("expected an account, got {other:?}"),
+        };
+        assert_eq!(
+            found(read.account(Some(dir.path()))),
+            (None, None),
+            "a keyring install"
+        );
+        let token = dir.path().join("antigravity-oauth-token");
+        std::fs::write(
+            &token,
+            r#"{"access_token":"secret","id_token_email":" user@example.com "}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            found(read.account(Some(dir.path()))),
+            (
+                Some("user@example.com".to_owned()),
+                crate::agents::account::file_mtime_ms(&token)
+            )
+        );
+        std::fs::write(&token, r#"{"id_token_email":""}"#).unwrap();
+        assert_eq!(found(read.account(Some(dir.path()))), (None, None));
+        assert!(matches!(
+            Read::LoggedOut.account(Some(dir.path())),
+            AccountProbe::LoggedOut
+        ));
     }
     #[test]
     fn offline_reads_answer_without_starting_agy() {
@@ -2385,13 +2653,12 @@ mod usage_probe {
         assert_eq!(runs, 3, "a second home and an expired read each spawn once");
     }
     #[test]
-    fn competing_buckets_choose_the_strictest_window_per_period() {
+    fn only_gemini_buckets_count_and_third_party_ones_cannot_fail_the_read() {
         let limits = windows(json!([
             {"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.8, "reset_time": FIVE_HOUR_RESET},
-            {"id": "3p-5h", "window": "5h", "remaining_fraction": 0.3, "reset_time": "2026-06-15T11:00:00Z"},
-            {"id": "other-5h", "window": "5h", "remaining_fraction": 0.3, "reset_time": FIVE_HOUR_RESET},
+            {"id": "3p-5h", "window": "5h", "remaining_fraction": 0, "reset_time": "2026-06-15T11:00:00Z"},
             {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.4, "reset_time": WEEK_RESET},
-            {"id": "3p-weekly", "window": "weekly", "remaining_fraction": 0.6, "reset_time": "2026-06-21T08:00:00Z"}
+            {"id": "3p-weekly", "window": "weekly", "remaining_fraction": "malformed"}
         ]));
         let summary: Vec<_> = limits
             .windows
@@ -2407,7 +2674,7 @@ mod usage_probe {
         assert_eq!(
             summary,
             [
-                (Some(300), Some(70), Some(FIVE_HOUR_RESET.parse().unwrap())),
+                (Some(300), Some(20), Some(FIVE_HOUR_RESET.parse().unwrap())),
                 (Some(10_080), Some(60), Some(WEEK_RESET.parse().unwrap())),
             ]
         );
@@ -2446,7 +2713,6 @@ mod usage_probe {
             json!({"id": "gemini-5h", "window": "5h", "remaining_fraction": -0.1, "reset_time": FIVE_HOUR_RESET}),
             json!({"id": "gemini-5h", "window": "5h", "remaining_fraction": 1.5, "reset_time": FIVE_HOUR_RESET}),
             json!({"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.5, "reset_time": "invalid"}),
-            json!({"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.5, "reset_time": OBSERVED_AT}),
             json!({"id": " ", "window": "5h", "remaining_fraction": 0.5, "reset_time": FIVE_HOUR_RESET}),
         ] {
             let buckets = json!([
@@ -2460,6 +2726,11 @@ mod usage_probe {
             {"id": "gemini-month", "window": "monthly", "remaining_fraction": 0.5, "reset_time": FIVE_HOUR_RESET}
         ]);
         assert_eq!(fold(unknown), Quota::Invalid);
+        // A bucket that has just reset drops alone; the read stays valid.
+        let just_reset = json!([
+            {"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.5, "reset_time": OBSERVED_AT}
+        ]);
+        assert!(matches!(fold(just_reset), Quota::Windows(_)));
     }
 }
 fn read_json(path: &Path) -> Value {

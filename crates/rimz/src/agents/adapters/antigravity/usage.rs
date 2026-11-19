@@ -9,7 +9,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::os::unix::process::CommandExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -31,6 +31,7 @@ const REUSE: Duration = Duration::from_secs(60);
 /// opens no browser; the newline on stdin then answers the code prompt.
 const SSH_SESSION_VAR: &str = "SSH_CONNECTION";
 pub(super) const SSH_SESSION_VALUE: &str = "127.0.0.1 0 127.0.0.1 0";
+const CREDENTIAL_FILE: &str = "antigravity-oauth-token";
 const FIVE_HOURS_MINS: u32 = 300;
 const WEEK_MINS: u32 = 7 * 24 * 60;
 
@@ -55,12 +56,19 @@ pub(super) enum Quota {
 }
 
 impl Read {
-    pub(super) fn account(&self) -> AccountProbe {
+    /// The login the read found, named by the credential file under
+    /// `provider_home` where agy keeps one (keyring installs keep none).
+    pub(super) fn account(&self, provider_home: Option<&Path>) -> AccountProbe {
         match self {
-            Self::Usage(_) => AccountProbe::Found(AgentAccount {
-                metered: Some(true),
-                ..AgentAccount::default()
-            }),
+            Self::Usage(_) => {
+                let credential = provider_home.and_then(credential_email);
+                AccountProbe::Found(AgentAccount {
+                    metered: Some(true),
+                    credentials_updated_at_ms: credential.as_ref().and_then(|(_, at)| *at),
+                    account_id: credential.map(|(email, _)| email),
+                    ..AgentAccount::default()
+                })
+            }
             Self::LoggedOut => AccountProbe::LoggedOut,
             Self::Failed(cause) => AccountProbe::Unavailable(*cause),
         }
@@ -115,6 +123,18 @@ pub(super) fn read_with(
     let read = run();
     reads.insert(provider_home, (now, read.clone()));
     read
+}
+
+/// The credential file's `id_token_email` and its mtime, when the token names one.
+fn credential_email(provider_home: &Path) -> Option<(String, Option<u64>)> {
+    #[derive(Deserialize)]
+    struct Credential {
+        id_token_email: Option<String>,
+    }
+    let path = provider_home.join(CREDENTIAL_FILE);
+    let credential: Credential = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+    let email = trimmed(credential.id_token_email)?;
+    Some((email, crate::agents::account::file_mtime_ms(&path)))
 }
 
 pub(super) fn run(binary: Option<PathBuf>, login_home: Option<&str>, deadline: Duration) -> Read {
@@ -175,16 +195,16 @@ struct UsageData {
     groups: Vec<BucketGroup>,
 }
 
+/// Buckets stay `Value`s until their id selects them, so a bucket outside
+/// the Gemini quota cannot fail the read whatever its shape.
 #[derive(Deserialize)]
 struct BucketGroup {
     #[serde(default)]
-    buckets: Vec<Bucket>,
+    buckets: Vec<Value>,
 }
 
 #[derive(Deserialize)]
 struct Bucket {
-    id: Option<String>,
-    window: Option<String>,
     #[serde(default)]
     disabled: bool,
     remaining_fraction: Option<f64>,
@@ -223,7 +243,6 @@ pub(super) fn classify(code: Option<i32>, stdout: &[u8], observed_at: Timestamp)
 
 #[derive(Clone, Debug)]
 struct UsableBucket {
-    identity: String,
     remaining: f64,
     reset: Timestamp,
 }
@@ -242,7 +261,7 @@ fn fold(data: Option<Value>, observed_at: Timestamp) -> Quota {
             Err(_) => return Quota::Invalid,
         },
     };
-    let buckets: Vec<Bucket> = data
+    let buckets: Vec<Value> = data
         .groups
         .into_iter()
         .flat_map(|group| group.buckets)
@@ -250,17 +269,42 @@ fn fold(data: Option<Value>, observed_at: Timestamp) -> Quota {
     if buckets.is_empty() {
         return Quota::Absent;
     }
-    rate_limits(buckets, observed_at).map_or(Quota::Invalid, Quota::Windows)
+    let gemini = buckets.into_iter().filter_map(|bucket| {
+        let period = gemini_period(bucket.get("id")?.as_str()?)?;
+        Some((period, bucket))
+    });
+    rate_limits(gemini, observed_at, WindowSource::Authoritative)
+        .map_or(Quota::Invalid, Quota::Windows)
+}
+
+/// The Gemini quota windows in a status line's `quota` map, keyed by bucket id.
+/// A map with no valid Gemini bucket, or a `quota` that is no map, is no reading.
+pub(super) fn statusline_windows(quota: Value, observed_at: Timestamp) -> Option<AgentRateLimits> {
+    let Value::Object(quota) = quota else {
+        return None;
+    };
+    let gemini = quota
+        .into_iter()
+        .filter_map(|(id, bucket)| Some((gemini_period(&id)?, bucket)));
+    rate_limits(gemini, observed_at, WindowSource::BestEffort)
+}
+
+/// The period a Gemini bucket id names (`gemini-5h`, `gemini-weekly`). Every
+/// other bucket, the "Claude and GPT models" `3p-` ones included, is ignored.
+fn gemini_period(id: &str) -> Option<Period> {
+    Period::from_suffix(id.trim().strip_prefix("gemini-")?)
 }
 
 /// The strictest bucket per period: least remaining, then the later reset.
-fn rate_limits(buckets: Vec<Bucket>, observed_at: Timestamp) -> Option<AgentRateLimits> {
+/// A selected bucket of the wrong shape invalidates the whole reading.
+fn rate_limits(
+    buckets: impl Iterator<Item = (Period, Value)>,
+    observed_at: Timestamp,
+    source: WindowSource,
+) -> Option<AgentRateLimits> {
     let mut periods = [PeriodBuckets::default(), PeriodBuckets::default()];
-    for bucket in buckets {
-        let Some(period) = bucket.window.as_deref().and_then(Period::from_window) else {
-            continue;
-        };
-        let identity = trimmed(bucket.id)?;
+    for (period, bucket) in buckets {
+        let bucket = serde_json::from_value::<Bucket>(bucket).ok()?;
         let period_buckets = &mut periods[period.index()];
         period_buckets.recognized = true;
         if bucket.disabled {
@@ -275,13 +319,14 @@ fn rate_limits(buckets: Vec<Bucket>, observed_at: Timestamp) -> Option<AgentRate
         let reset = bucket
             .reset_time
             .as_deref()
-            .and_then(|value| value.parse::<Timestamp>().ok())
-            .filter(|reset| *reset > observed_at)?;
-        period_buckets.usable.push(UsableBucket {
-            identity,
-            remaining,
-            reset,
-        });
+            .and_then(|value| value.parse::<Timestamp>().ok())?;
+        // A bucket that has just reset says nothing of its period's next fill.
+        if reset <= observed_at {
+            continue;
+        }
+        period_buckets
+            .usable
+            .push(UsableBucket { remaining, reset });
     }
 
     let mut windows = Vec::new();
@@ -301,7 +346,7 @@ fn rate_limits(buckets: Vec<Bucket>, observed_at: Timestamp) -> Option<AgentRate
             resets_at,
             duration_mins: Some(period.duration_mins()),
             observed_at: Some(observed_at),
-            source: WindowSource::Authoritative,
+            source,
             lifted: false,
             fixed_period: false,
         });
@@ -316,8 +361,8 @@ enum Period {
 }
 
 impl Period {
-    fn from_window(window: &str) -> Option<Self> {
-        match window.trim() {
+    fn from_suffix(suffix: &str) -> Option<Self> {
+        match suffix {
             "5h" => Some(Self::FiveHours),
             "weekly" => Some(Self::Week),
             _ => None,
@@ -343,7 +388,6 @@ fn compare_buckets(left: &UsableBucket, right: &UsableBucket) -> Ordering {
     left.remaining
         .total_cmp(&right.remaining)
         .then_with(|| right.reset.cmp(&left.reset))
-        .then_with(|| left.identity.cmp(&right.identity))
 }
 
 fn used_percentage(remaining: f64) -> u8 {
