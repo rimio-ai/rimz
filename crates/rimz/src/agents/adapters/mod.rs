@@ -27,6 +27,7 @@ pub(super) mod minimax;
 pub(super) mod muse;
 pub(super) mod omp;
 pub(super) mod opencode;
+mod owned_statusline;
 pub(super) mod pi;
 pub(super) mod plugin;
 pub(super) mod qoder;
