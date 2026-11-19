@@ -195,7 +195,7 @@ rimz workflow wait "$RUN" --timeout 30m --json # bounded, for a script
 
 It prints one line per run, with how it ended, its checkout and its notes folder, and exits `0` when every run ended done, `1` when one failed or was canceled, `3` when one needs you, and `124` on timeout ([every exit](../reference/cli/workflow.md#wait-for-runs)). It reads the run records and changes nothing.
 
-A run an agent starts is the agent's to follow: RimZ records the agent as its starter, and `workflow list` and `show` name it. Start it with `--detach` when the agent should not be held to its outcome. A run started from inside another run sits one level deeper, and `[agents] max-workflow-depth` ([configuration](./configuration.md#agent-launch-chains)) caps how deep they nest.
+A run an agent starts is the agent's to follow: RimZ records the agent as its starter, and `workflow list` and `show` name it. When the run ends, RimZ sends that agent one `WORKFLOW_REPORT` message at its next turn boundary, with how the run ended, its checkout and branch, its notes folder, and the command that prints its history, and it keeps the agent open until then. Start it with `--detach` when the agent should not be held to its outcome. A run started from inside another run sits one level deeper, and `[agents] max-workflow-depth` ([configuration](./configuration.md#agent-launch-chains)) caps how deep they nest.
 
 ## What a run does on your machine
 

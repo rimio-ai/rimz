@@ -30,7 +30,7 @@ pub fn occupied(
 ) -> Result<bool, WorktreeErr> {
     let card_status = CardStatus::from_demotion(ParkDemotion::default());
     Ok(
-        match takeover::read(alive, &card_status, path, project_root)? {
+        match takeover::read(alive, &card_status, path, project_root, &|_| false)? {
             Takeover::Stop(occupants) => !occupants.is_empty(),
             Takeover::Blocked(_) => true,
         },

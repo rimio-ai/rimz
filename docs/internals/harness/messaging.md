@@ -106,6 +106,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Resume prompt | `crates/rimz/src/launcher/mod.rs::queue_resume_prompt`, called by `launch_resume_layout` with the resume's prompt | `Human` / `Prompt`, whatever the caller |
 | Fleet digest | `crates/rimz/src/cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `compose_digest` | `Harness { notice: SubagentReport }` when every row is a subagent run, else `AgentReport` / `Prompt` |
 | Team report | `crates/rimz/src/cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
+| Workflow report | `crates/rimz/src/harness/schedule/run_log/starter.rs::report`, text from `starter::text`, called by `run_log::collect_run` | `Harness { notice: WorkflowReport }` / `Prompt` |
 | Child restarted with its run open | `crates/rimz/src/cli/agents_cmd/restart.rs::notify_parent_restarted`, through `SyntheticMessage` | `Harness { notice: SubagentRestarted }` / `Prompt` |
 | Launched child silent mid-turn, never started, or stopped on a turn error nothing will retry | `crates/rimz/src/cli/agents_cmd/stall_notice.rs::run`, text from `crates/rimz/src/harness/stall_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentStalled }` / `Prompt` |
 | Unfinished team at rest | `crates/rimz/src/harness/stall_nudge/helper.rs::queue`, through `SyntheticMessage`, called by the hidden stall-nudge helper | `Harness { notice: TeamStalled }` / `Prompt` |
@@ -597,6 +598,7 @@ Content:
 | `SUBAGENT_REPORT` | The status-only fleet digest when every row is a `rimz subagents` run | `@rimz` |
 | `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `-p --bg` runs and launcher-opened interactive peer turns | `@rimz` |
 | `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done` or the cohort ends before `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
+| `WORKFLOW_REPORT` | A workflow run's ending, checkout, notes folder and history command, queued once for the live agent that started it without `--detach` ([workflow.md](./workflow.md#loop-tasks)) | `@rimz` |
 | `SUBAGENT_RESTARTED` | A launched child `rimz agents restart` handed to a replacement pane with its run open, queued for its parent once per handover (none when the parent ran the restart) and withdrawn if its run ends before delivery | `@rimz` |
 | `SUBAGENT_STALLED` | A launched child silent mid-turn, not yet started, or stopped on a turn error nothing will retry, past the same stall window, queued for its parent once per run and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
 | `TEAM_STALLED` | An unfinished team quiet for 55m, queued once per stage visit to its last-active member when enabled | `@rimz` |
@@ -821,7 +823,7 @@ The keepalive is cache retention, never durable correctness. The activity heartb
 
 `TurnWaitView::reason` names the blocker of an open turn from the same view: a person's ask, pending waits, a wake in flight, a message queued (`MessageQueued`), a pause, no turn yet, or a running turn.
 
-`TurnWaitView::wake_in_flight(agent, digest)` owns the non-terminal harness-message test. The view captures one clock beside its queue read and excludes a `Sent` record past its hold deadline, deferrals included, without reconciliation. Every reader counts `Wait` and `Signal`; the supervised-run owed predicate passes `true` to also count every fleet digest (`SubagentReport`, `AgentReport`) and `TeamReport`.
+`TurnWaitView::wake_in_flight(agent, digest)` owns the non-terminal harness-message test. The view captures one clock beside its queue read and excludes a `Sent` record past its hold deadline, deferrals included, without reconciliation. Every reader counts `Wait` and `Signal`; the supervised-run owed predicate passes `true` to also count every fleet digest (`SubagentReport`, `AgentReport`), `TeamReport` and `WorkflowReport`.
 
 `TurnWaitView::message_in_flight(agent)` is the one prompt test, read by the rest hold above and by the owed predicate's last term: a record for the card from a person or an agent (`MessageSender::is_conversation`), with a `Prompt` body, non-terminal, deliverable now (`is_deliverable`), and, if `Sent`, inside its hold or held by compaction as a `Sent` wake is. A command opens no turn, so a manual `rimz agents compact` never counts here (its owed continue counts through the compaction-continue term instead); a `--no-from` send is stored as `System` text and never counts; a record scheduled for later or with an unlatched `--after` or `--when` counts once it is due or latched. A `Sent` prompt counts because one lifecycle frame folds the supervised run before it acknowledges delivery, so the Stop's owed read can find the record already claimed and sent by an independent sweep.
 

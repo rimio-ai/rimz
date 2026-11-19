@@ -284,6 +284,7 @@ Your own sends carry no header: the agent reads them as your words, as if you ha
 
 - `SUBAGENT_REPORT`, the digest sent once an agent's launched subagents have all settled; `AGENT_REPORT` when the fleet includes solo agents.
 - `TEAM_REPORT`, the leader's final response and the team's board path when an agent-launched team reaches `Done` or ends before `Done`.
+- `WORKFLOW_REPORT`, how a [workflow run](./workflows.md) an agent started without `--detach` ended, with its checkout, its notes folder, and the command that prints its history.
 - `SUBAGENT_RESTARTED`, queued for a parent once when `rimz agents restart`, run by anyone but that parent, moves one of its subagents to a new pane with its run still open; it names the child and the account it now runs on, and asks nothing of the parent. If the run ends before delivery, the notice is withdrawn.
 - `SUBAGENT_STALLED`, queued for a parent once per run when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stays silent mid-turn, has not started its first turn, or stays stopped on a turn error nothing will retry, past the same stall window. It too is withdrawn and reads `canceled` if the run ends before delivery.
 - `TEAM_STALLED`, an opt-in [stalled-team nudge](./configuration.md#stalled-team-nudge) to the last-active teammate after 55 minutes of quiet, once per unfinished stage visit.

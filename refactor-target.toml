@@ -4581,7 +4581,10 @@ path = "crates/rimz/src/store"
 # store::message::paste_order is the one batch paste order the send path and the aligner share (+1).
 # workflow::RunStarter, ReportMark::owes_report and RunRecord::owes_report record who started a run
 # and whether it owes an agent its report (+3).
-surface-budget = 673
+# store::workflow::stamp_report_message keeps one report message id on a run across retries, and
+# RunStarter::is_agent matches an agent row against the starter's launch (+2).
+# A run's owed agent starter is read for the occupancy that leaves it out (+1).
+surface-budget = 676
 
 [[verdict]]
 kind = "item"
@@ -12947,7 +12950,12 @@ reason = "The workflow pass ends a run this RimZ cannot decode in place, under t
 [[verdict]]
 kind = "item"
 key = "store::workflow::mark_header_report_sent"
-reason = "The collector marks the loop report of a run read only by its header sent without decoding the record."
+reason = "The collector marks the report of a run read only by its header sent without decoding the record."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::stamp_report_message"
+reason = "The starter report stamps one message id on a run before queueing it, read from its header alone, so a collection retried after a crash queues the same message and the queue takes it once."
 
 [[verdict]]
 kind = "item"

@@ -142,6 +142,7 @@ impl AttemptHost for FakeHost {
         &self,
         _: &std::path::Path,
         _: &std::path::Path,
+        _: Option<&crate::store::workflow::RunStarter>,
     ) -> Result<Occupancy, WorkflowErr> {
         self.occupancies.set(self.occupancies.get() + 1);
         if let Some(check) = &*self.on_occupancy.borrow() {

@@ -268,6 +268,11 @@ pub enum PendingWaitTrigger {
         #[serde(default)]
         stage: Option<String>,
     },
+    /// A workflow run this agent started without `--detach`, owed its report; the wait name is
+    /// the run id and armed_at is the run's creation.
+    Workflow {
+        workflow: String,
+    },
     Timer {
         due: Timestamp,
         #[serde(default)]
@@ -312,6 +317,9 @@ impl PendingWait {
         match &self.trigger {
             PendingWaitTrigger::Subagent { .. } => format!("wakes when {} reports", self.name),
             PendingWaitTrigger::Team { .. } => format!("wakes when {} reaches Done", self.name),
+            PendingWaitTrigger::Workflow { workflow } => {
+                format!("wakes when workflow {workflow} ends")
+            }
             PendingWaitTrigger::Timer { due, .. } if *due <= now => "wakes now".to_owned(),
             PendingWaitTrigger::Timer { .. } => format!("wakes {headline}"),
             PendingWaitTrigger::Pid { .. } => {
@@ -332,6 +340,7 @@ impl PendingWaitTrigger {
         match self {
             Self::Subagent { .. } => "subagent",
             Self::Team { .. } => "team",
+            Self::Workflow { .. } => "workflow",
             Self::Timer { .. } => "timer",
             Self::Pid { .. } => "pid",
             Self::Command { .. } => "command",
@@ -361,6 +370,7 @@ impl PendingWaitTrigger {
                 |status| format!("{status}, reporting"),
             ),
             Self::Team { stage } => format!("stage {}", stage.as_deref().unwrap_or("unknown")),
+            Self::Workflow { workflow } => workflow.clone(),
             Self::Timer { due, .. } => {
                 if *due <= now {
                     "due".to_owned()

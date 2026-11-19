@@ -4,11 +4,13 @@
 use super::*;
 use std::process::{Child, Command, Output, Stdio};
 
+use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
 
 /// Deploys workflow `name`, whose check waits until its marker file exists and then passes.
-fn deploy(env: &Env, name: &str) -> PathBuf {
+pub(super) fn deploy(env: &Env, name: &str) -> PathBuf {
     let dir = env.rimz_home().join("workflows").join(name);
     let marker = dir.join("passed");
     fs::create_dir_all(dir.join("checks")).unwrap();
@@ -36,7 +38,7 @@ fn run(env: &Env, name: &str, extra: &[&str], vars: &[(&str, &str)]) -> Output {
     command.output().unwrap()
 }
 
-fn started(output: Output) -> String {
+pub(super) fn started(output: Output) -> String {
     success(output)
         .split_whitespace()
         .find(|word| word.starts_with("wf_"))
@@ -62,7 +64,7 @@ fn rewrite(env: &Env, id: &str, edit: impl FnOnce(&mut Value)) {
 }
 
 /// Lets a pending run's check pass and advances it to its end.
-fn pass(env: &Env, id: &str, marker: &Path) {
+pub(super) fn pass(env: &Env, id: &str, marker: &Path) {
     fs::write(marker, "").unwrap();
     rewrite(env, id, |record| {
         record["recheck_at"] = json!("2000-01-01T00:00:00Z");
@@ -321,7 +323,7 @@ fn spawn(mut command: Command) -> Child {
         .unwrap()
 }
 
-fn report(output: &Output) -> Vec<Value> {
+fn report_of(output: &Output) -> Vec<Value> {
     serde_json::from_slice::<Value>(&output.stdout)
         .unwrap_or_else(|error| {
             panic!(
@@ -351,7 +353,7 @@ fn wait_returns_when_its_runs_end_with_their_endings_and_exit() {
     pass(&env, &two, &markers[1]);
     let output = child.wait_with_output().unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let entries = report(&output);
+    let entries = report_of(&output);
     assert_eq!(entries.len(), 2);
     for (entry, id) in entries.iter().zip([&one, &two]) {
         assert_eq!(
@@ -389,7 +391,7 @@ fn wait_returns_when_its_runs_end_with_their_endings_and_exit() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let entries = report(&output);
+    let entries = report_of(&output);
     assert_eq!(
         entries.iter().map(|entry| &entry["id"]).collect::<Vec<_>>(),
         [&json!(five)],
@@ -456,7 +458,7 @@ fn wait_times_out_refuses_unknown_runs_and_stops_for_a_prompt() {
     }
     let output = command.output().unwrap();
     assert_eq!(output.status.code(), Some(75), "{output:?}");
-    let entry = &report(&output)[0];
+    let entry = &report_of(&output)[0];
     assert_eq!(
         (&entry["outcome"], &entry["exit"]),
         (&json!("running"), &json!(75)),
@@ -514,7 +516,7 @@ fn wait_returns_at_once_when_a_run_needs_a_person() {
     }
     let output = wait(&env, &[&quiet, &asking, "--json"]).output().unwrap();
     assert_eq!(output.status.code(), Some(3), "{output:?}");
-    let entries = report(&output);
+    let entries = report_of(&output);
     assert_eq!(
         entries
             .iter()
@@ -544,10 +546,198 @@ fn wait_reads_a_home_deleted_under_it_as_a_quiet_ending() {
     fs::remove_dir_all(&home).unwrap();
     let output = child.wait_with_output().unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let entry = &report(&output)[0];
+    let entry = &report_of(&output)[0];
     assert_eq!(
         (&entry["outcome"], &entry["state"], &entry["exit"]),
         (&json!("ended"), &json!("done"), &json!(0)),
         "{entry:#}"
     );
+}
+
+pub(super) fn reports(env: &Env) -> Vec<MessageRecord> {
+    let (queued, history) = env.store().list_messages_and_history().unwrap();
+    queued
+        .into_iter()
+        .chain(history)
+        .filter(|message| {
+            message.sender
+                == MessageSender::Harness {
+                    notice: HarnessNotice::WorkflowReport,
+                }
+        })
+        .collect()
+}
+
+fn end_agent(env: &Env, name: &str) {
+    let workspace = env.resolve_workspace(&env.project_root);
+    let ended = AgentLifecycleObservation::new(
+        Some(format!("launch_{name}").into()),
+        LifecycleSignal::Ended,
+    );
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            &workspace.session_name,
+            "claude",
+            "AgentEnded",
+            &ended,
+        ))
+        .unwrap();
+}
+
+#[test]
+fn an_agents_run_reports_its_end_once_to_its_starter_and_leaves_the_live_home() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed_agent(&env, "planner");
+    let markers: Vec<_> = ["owed", "detached", "nested"]
+        .map(|name| deploy(&env, name))
+        .into();
+    let (owed, _) = pending(&env, "owed", &AGENT);
+    let detached = started(run(&env, "detached", &["--detach"], &AGENT));
+    until(&env, &detached, |value| value["record"]["wait"].is_object());
+    let (nested, _) = pending(&env, "nested", &[("RIMZ_WORKFLOW_RUN", &owed)]);
+
+    // A detached start and a run's own start owe no report.
+    pass(&env, &detached, &markers[1]);
+    pass(&env, &nested, &markers[2]);
+    assert_eq!(reports(&env).len(), 0);
+
+    pass(&env, &owed, &markers[0]);
+    let sent = reports(&env);
+    assert_eq!(sent.len(), 1, "{sent:#?}");
+    let report = &sent[0];
+    assert_eq!(
+        (
+            report.agent_id.as_str(),
+            report.launch_id.as_ref().map(AgentSessionId::as_str),
+            &report.gate,
+        ),
+        (
+            "launch_planner",
+            Some("launch_planner"),
+            &DeliveryGate::Done
+        )
+    );
+    let entry = &report_of(&wait(&env, &[&owed, "--json"]).output().unwrap())[0];
+    for part in [
+        format!("workflow run {owed} (owed) ended done"),
+        format!("checkout {}", entry["checkout"].as_str().unwrap()),
+        format!("notes {}", entry["notes"].as_str().unwrap()),
+        format!("rimz workflow show {owed} --history"),
+    ] {
+        assert!(report.text.contains(&part), "{part}: {}", report.text);
+    }
+    let record = &show(&env, &owed)["record"];
+    assert_eq!(
+        (&record["loop_report"], &record["report_message"]),
+        (&json!("sent"), &json!(report.message_id)),
+        "{record:#}"
+    );
+    assert_eq!(live_homes(&env), 0, "every ended run left the live home");
+    // A finished run still names who started it.
+    assert_eq!(
+        (
+            &show(&env, &owed)["starter"],
+            &show(&env, &nested)["starter"]
+        ),
+        (
+            &json!({"by":"agent", "kind":"claude", "launch":"launch_planner", "handle":"@planner"}),
+            &json!({"by":"run", "run":owed, "node":"pr"})
+        )
+    );
+
+    // Collecting again reports nothing more.
+    command(&env, &["workflow", "advance", &owed]);
+    assert_eq!(reports(&env).len(), 1);
+}
+
+#[test]
+fn an_ended_starter_gets_no_report_and_its_run_settles() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed_agent(&env, "planner");
+    let marker = deploy(&env, "owed");
+    let (owed, _) = pending(&env, "owed", &AGENT);
+    end_agent(&env, "planner");
+    pass(&env, &owed, &marker);
+    assert_eq!(reports(&env).len(), 0);
+    assert_eq!(show(&env, &owed)["record"]["loop_report"], "sent");
+    assert_eq!(live_homes(&env), 0, "the settled run left the live home");
+}
+
+#[test]
+fn a_lost_collection_reports_on_the_next_pass_once() {
+    use std::os::unix::net::UnixListener;
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed_agent(&env, "planner");
+    let marker = deploy(&env, "owed");
+    let (owed, _) = pending(&env, "owed", &AGENT);
+    fs::write(&marker, "").unwrap();
+    rewrite(&env, &owed, |record| {
+        record["recheck_at"] = json!("2000-01-01T00:00:00Z");
+    });
+    let socket = env.runtime_root.join("report.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut advance = env.rimz();
+    advance
+        .args(["workflow", "advance", &owed])
+        .env("RIMZ_TEST_WORKFLOW_REPORT_GATE", &socket);
+    let mut child = spawn(advance);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let held = loop {
+        if let Ok((stream, _)) = listener.accept() {
+            break Some(stream);
+        }
+        if Instant::now() > deadline || child.try_wait().unwrap().is_some() {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let _ = child.kill();
+    child.wait().unwrap();
+    assert!(
+        held.is_some(),
+        "the collection reaches the starter's report"
+    );
+    assert_eq!(reports(&env).len(), 0, "the killed collection sent nothing");
+    let record = &show(&env, &owed)["record"];
+    assert_eq!(
+        (&record["state"], &record["loop_report"]),
+        (&json!("done"), &json!("owed")),
+        "{record:#}"
+    );
+    assert_eq!(live_homes(&env), 1, "an owed run stays in the live home");
+
+    success(command(&env, &["workflow", "advance", &owed]));
+    command(&env, &["workflow", "advance", &owed]);
+    let sent = reports(&env);
+    assert_eq!(sent.len(), 1, "{sent:#?}");
+    assert_eq!(sent[0].agent_id.as_str(), "launch_planner");
+    assert_eq!(live_homes(&env), 0);
+}
+
+#[test]
+fn a_stranded_run_reports_to_its_starter_as_failed() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed_agent(&env, "planner");
+    deploy(&env, "owed");
+    let (owed, _) = pending(&env, "owed", &AGENT);
+    rewrite(&env, &owed, |record| {
+        record["version"] = json!(rimz::store::workflow::VERSION - 1);
+    });
+    success(command(&env, &["workflow", "reconcile"]));
+    let sent = reports(&env);
+    assert_eq!(sent.len(), 1, "{sent:#?}");
+    assert!(
+        sent[0]
+            .text
+            .contains(&format!("workflow run {owed} (owed) ended failed")),
+        "{}",
+        sent[0].text
+    );
+    assert_eq!(live_homes(&env), 0);
 }

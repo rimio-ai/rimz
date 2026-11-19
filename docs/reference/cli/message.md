@@ -176,6 +176,7 @@ Read plan.md when the planner finishes.
 | `SUBAGENT_REPORT` | The status digest sent once all of an agent's [subagents](./subagents.md) settle | `@rimz` |
 | `AGENT_REPORT` | The status digest for a fleet containing solo agents, including background runs and interactive peers | `@rimz` |
 | `TEAM_REPORT` | The leader's final response, sent to the agent that launched a [team](./teams.md#team-reports) when its board reaches `Done` or the cohort ends before `Done` | `@rimz` |
+| `WORKFLOW_REPORT` | How a [workflow run](./workflow.md#starters-and-depth) ended (`done`, `failed`, or `canceled`, with its reason), its checkout and branch, its notes folder, and its `rimz workflow show <run> --history` command, sent once to the agent that started it without `--detach`; none when that agent has ended | `@rimz` |
 | `SUBAGENT_RESTARTED` | A [subagent restarted](./agents.md#restart) into a new pane with its run still open, queued for its parent once per restart unless the parent ran it; withdrawn if its run ends before delivery | `@rimz` |
 | `SUBAGENT_STALLED` | A [subagent silent mid-turn, not yet started, or stopped on a turn error nothing will retry, past the stall window](./subagents.md#a-child-silent-past-the-stall-window), queued for its parent once per run; withdrawn if its run ends before delivery | `@rimz` |
 | `TEAM_STALLED` | An opt-in [stalled-team nudge](../../guide/configuration.md#stalled-team-nudge), queued to the last-active teammate at 55 minutes of quiet, once per unfinished stage visit | `@rimz` |

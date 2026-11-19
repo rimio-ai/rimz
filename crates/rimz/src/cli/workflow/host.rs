@@ -56,6 +56,7 @@ impl<'a> Host<'a> {
                 &card_status,
                 &eviction.checkout,
                 &eviction.project_root,
+                &|agent| owed(eviction.beside.as_ref(), agent),
             )?;
             let peers = rimz::address::addressable_agents(&snapshot);
             if let Takeover::Stop(agents) = &takeover
@@ -143,6 +144,11 @@ fn host_error(error: impl std::fmt::Display) -> WorkflowErr {
     WorkflowErr::Refused(error.to_string())
 }
 
+/// Whether `agent` is the starter a run owes its report, which runs beside the run's launches.
+fn owed(starter: Option<&rimz::store::workflow::RunStarter>, agent: &AgentState) -> bool {
+    starter.is_some_and(|starter| starter.is_agent(agent))
+}
+
 /// The checkout's occupants as a workflow step reads them, by handle.
 fn occupancy_of(takeover: Takeover<'_>, peers: &[&AgentState]) -> workflow::Occupancy {
     let handle = |agent: &AgentState| rimz::address::agent_handle(agent, peers, true);
@@ -195,12 +201,18 @@ fn queue_notice(
 }
 
 impl workflow::AttemptHost for Host<'_> {
-    fn occupancy(&self, scope: &Path, root: &Path) -> Result<workflow::Occupancy, WorkflowErr> {
+    fn occupancy(
+        &self,
+        scope: &Path,
+        root: &Path,
+        beside: Option<&rimz::store::workflow::RunStarter>,
+    ) -> Result<workflow::Occupancy, WorkflowErr> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
             let snapshot = ctx.alive_snapshot()?;
             let card_status = rimz::harness::CardStatus::new(&ctx.store);
-            let takeover = takeover::read(&snapshot, &card_status, scope, root)?;
+            let beside = |agent: &AgentState| owed(beside, agent);
+            let takeover = takeover::read(&snapshot, &card_status, scope, root, &beside)?;
             let peers = rimz::address::addressable_agents(&snapshot);
             Ok(occupancy_of(takeover, &peers))
         })()

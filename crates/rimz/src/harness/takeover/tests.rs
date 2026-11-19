@@ -83,6 +83,7 @@ fn decide_at(
         &card_status,
         &paths(checkouts),
         &paths(owned),
+        &|_| false,
         now,
         liveness,
     ) {
@@ -390,6 +391,7 @@ fn spent_provider_pauses_stop_but_recoverable_pauses_block_takeover() {
             &reader,
             &[PathBuf::from("/repo/wt")],
             &[],
+            &|_| false,
             now(),
             |_| AgentLiveness::Unknown,
         ) {

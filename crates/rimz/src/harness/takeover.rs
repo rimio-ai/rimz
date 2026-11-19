@@ -46,12 +46,15 @@ pub enum Takeover<'a> {
 /// Candidate owners are checked again because the cached roster can outlive
 /// them; known-dead owners do not occupy. Returned agents borrow those unchanged
 /// rows; the clock is sampled after owned-worktree discovery. No multiplexer is
-/// consulted.
+/// consulted. `beside` picks an agent that runs beside the launch and never
+/// occupies it: a workflow run's own agent starter while the run owes it the
+/// report, so the run never waits on, or stops, the agent waiting for it.
 pub fn read<'a>(
     snapshot: &'a SidebarSnapshot,
     card_status: &CardStatus,
     checkout: &Path,
     project_root: &Path,
+    beside: &dyn Fn(&AgentState) -> bool,
 ) -> Result<Takeover<'a>, WorktreeErr> {
     let checkouts = path_forms(checkout.to_path_buf()).collect::<Vec<_>>();
     let owned = match worktree::discover_owned(project_root) {
@@ -67,6 +70,7 @@ pub fn read<'a>(
         card_status,
         &checkouts,
         &owned,
+        beside,
         Timestamp::now(),
         agent_liveness,
     ))
@@ -89,6 +93,7 @@ fn plan<'a>(
     card_status: &CardStatus,
     checkouts: &[PathBuf],
     owned: &[PathBuf],
+    beside: &dyn Fn(&AgentState) -> bool,
     now: Timestamp,
     liveness: impl Fn(&AgentState) -> AgentLiveness,
 ) -> Takeover<'a> {
@@ -104,7 +109,9 @@ fn plan<'a>(
     let mut occupants: Vec<&AgentState> = crate::address::launch_occupants(snapshot.agents.iter())
         .into_iter()
         .filter(|agent| {
-            occupies(agent, &checkouts, &nested) && liveness(agent) != AgentLiveness::Dead
+            occupies(agent, &checkouts, &nested)
+                && !beside(agent)
+                && liveness(agent) != AgentLiveness::Dead
         })
         .collect();
     occupants.sort_by_key(|agent| agent.is_launched_child());

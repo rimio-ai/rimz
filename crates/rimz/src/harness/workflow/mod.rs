@@ -100,7 +100,14 @@ pub fn cancel_args(id: &WorkflowRunId, reason: &str) -> Vec<std::ffi::OsString> 
 }
 
 pub trait AttemptHost {
-    fn occupancy(&self, scope: &Path, project_root: &Path) -> Result<Occupancy, WorkflowErr>;
+    /// Who occupies `scope`, leaving out `beside`, the run's own agent starter while the run
+    /// owes it the report (`RunRecord::owed_starter`).
+    fn occupancy(
+        &self,
+        scope: &Path,
+        project_root: &Path,
+        beside: Option<&crate::store::workflow::RunStarter>,
+    ) -> Result<Occupancy, WorkflowErr>;
     fn launch(&self, step: StepLaunch) -> Result<Result<AttemptRun, NotLaunched>, WorkflowErr>;
     fn observe(&self, run: &AttemptRun, observation: Observation) -> Result<Observed, WorkflowErr>;
     fn push(
@@ -205,6 +212,7 @@ pub struct StepLaunch {
 pub struct Eviction {
     pub checkout: PathBuf,
     pub project_root: PathBuf,
+    pub beside: Option<crate::store::workflow::RunStarter>,
 }
 
 /// The provider reset a limited agent's account and model report, as an observation reads it.

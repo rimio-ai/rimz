@@ -58,7 +58,7 @@ The checkout name is the basename of the run's recorded scope path, kept after t
 | `--at <NODE>` | Start at this check or step instead of the definition's `start`, whether or not a route reaches it. An unknown node refuses with `unknown workflow node <node>` (exit 1) and creates nothing. The run's journal opens with a `start` row naming the node. |
 | `--input <OBJECT>` | One JSON object handed to the start node as its `input`, as an answer that routed there would be: it needs a string `outcome`, and its `key`, when present, is a string or an integer and becomes the run's key. Anything else exits 2 naming `--input`. The run's journal opens with a `start` row carrying it. |
 | `--once` | Try the start node: the run ends `tried` at that node's first answer that is not an `unknown` wait, whatever the route it would take, and the command waits for it ([trying one node](#trying-one-node)). |
-| `--detach` | From an agent: the run owes the agent no report when it ends, and does not hold the agent open while it runs. Join it with [`workflow wait`](#wait-for-runs) instead. Accepted from a shell too, where it changes nothing. |
+| `--detach` | From an agent: the run owes the agent no [`WORKFLOW_REPORT`](#starters-and-depth) when it ends, and does not hold the agent open while it runs. Join it with [`workflow wait`](#wait-for-runs) instead. Accepted from a shell too, where it changes nothing. |
 
 Before creating a run, the command validates the definition and refuses on any error, printing each as `<workflow>: <path>: <message>`. Warnings alone do not refuse: each prints to stderr as `warning: <workflow>: <path>: <reason>` before starting. It needs an existing room (`rimz start` creates one).
 
@@ -80,7 +80,17 @@ A run started from a run's command, script, or check (a process that carries `RI
 
 The depth of a run started by a run is that run's depth plus one. A run started by an agent sits one deeper than the agent: a workflow step's agent, and its peers and subagents, carry their run's depth (read as 1 on an agent launched before agents carried it), and a run any other agent starts is at depth 1. A run with no starter is at depth 1. A start deeper than `[agents] max-workflow-depth` (default 3, [configuration](../../guide/configuration.md#agent-launch-chains)) refuses with exit 1: ``workflow run refused: it would start at workflow depth <N>, past this machine's `[agents] max-workflow-depth` of <limit>; nothing was created. Do not retry it from here; a person can raise the limit with `rimz config set agents.max-workflow-depth <N>` ``.
 
-A run an agent started without `--detach` owes that agent its outcome report: while it owes it, the finished run's home stays in the live directory and its paced advance stays due.
+A run an agent started without `--detach` owes that agent its outcome report. When the run ends, the agent gets one `WORKFLOW_REPORT` message from `@rimz`, parked for its next turn boundary:
+
+```text
+workflow run <run> (<workflow>) ended <done|canceled|failed>
+reason <reason>
+checkout <path> on branch <branch>
+notes <notes folder>
+history: rimz workflow show <run> --history
+```
+
+The `reason` line appears when the run recorded one, the branch when the checkout is on one, and the `notes` line when the run kept notes. A try that ended `tried` reads `done`. Until the report is queued, the finished run's home stays in the live directory and its paced advance stays due, and the agent is held open and shows the run as a wait. An agent that ended before the run did is sent nothing. A run started by hand, by a loop task, by another run, or with `--detach` sends no report.
 
 ### Trying one node
 
@@ -359,7 +369,7 @@ An agent step does not start until its admission passes, in this order: its usag
 | `admission` field | Meaning |
 | --- | --- |
 | `window` | A usage-window term such as `5h.left>=40` ([window terms](#window-terms)). Holds until every agent cell's provider has room. |
-| `occupancy` | `wait` (default): wait until no agent occupies the checkout. `takeover`: stop an idle occupant, and wait for one mid-turn. `share`: launch beside any occupant and stop nobody. Agents in other RimZ worktrees do not count. A sharing agent still occupies the checkout for later steps. |
+| `occupancy` | `wait` (default): wait until no agent occupies the checkout. `takeover`: stop an idle occupant, and wait for one mid-turn. `share`: launch beside any occupant and stop nobody. Agents in other RimZ worktrees do not count, and neither does the agent that started the run while the run owes it its report: the run never waits on it, and a takeover never stops it. A sharing agent still occupies the checkout for later steps. |
 | `max-parallel`, `stagger` | The step's own [limit](#limits-and-capacity). |
 | `throttle` | `off` skips the machine turn, stagger, resource limits, and capacity check, never the machine caps or the workflow and step limits. |
 | `give-up` | A positive duration, measured from the first capacity hold, or `forever`. Unset, the run's `--give-up` instant bounds the wait, and without one the step waits until the run is canceled. |
