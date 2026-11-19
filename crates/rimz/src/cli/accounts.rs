@@ -263,6 +263,7 @@ fn redeem(
         return Ok(());
     }
     let request_id = uuid::Uuid::now_v7();
+    let read_at_ms = rimz::utils::time::unix_now_ms();
     let redeemed = match preview.consume(&runtime, &key, request_id) {
         Ok(redeemed) => redeemed,
         Err(error) => {
@@ -273,7 +274,9 @@ fn redeem(
         }
     };
     if let Some((identity, snapshot)) = redeemed.usage {
-        rimz::sidebar::refresh::publish_account_usage_snapshot(&runtime, &key, identity, snapshot);
+        rimz::sidebar::refresh::publish_account_usage_snapshot(
+            &runtime, &key, identity, snapshot, read_at_ms,
+        );
     }
     append_manual_report(&key, request_id, &redeemed.report, None);
     if in_room && redeemed.report.outcome == Some(RedemptionCode::Reset) {

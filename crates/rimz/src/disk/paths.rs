@@ -1423,6 +1423,12 @@ impl RuntimePaths {
         self.shared_root.join("accounts.lock")
     }
 
+    /// Serializes every read-modify-write of `accounts.json`; the probe
+    /// election's lock above is held across a whole probe batch.
+    pub(crate) fn shared_accounts_write_lock(&self) -> PathBuf {
+        self.shared_root.join("accounts.write.lock")
+    }
+
     /// An account budget ledger; `component` names the login whose pool it is.
     pub(crate) fn shared_account_budget_ledger(&self, component: &str) -> PathBuf {
         self.persistent_shared_root

@@ -25,7 +25,9 @@ fn policy() -> SeatPolicy {
 }
 
 #[test]
-fn sign_in_stamp_drives_cache_clocks_and_live_account_wins() {
+fn sign_in_stamp_drives_cache_clocks_from_the_account_record() {
+    // A live session's account reaches sign-in only through the record merge,
+    // so the display reads the record even when the live context disagrees.
     use crate::agents::context::SignIn::{ApiKey, Subscription};
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(
@@ -91,7 +93,7 @@ fn sign_in_stamp_drives_cache_clocks_and_live_account_wins() {
             (Some(Subscription), 43200),
             (Some(ApiKey), 1800),
             (None, 1800),
-            (Some(Subscription), 43200)
+            (Some(ApiKey), 1800)
         ]
     );
 }

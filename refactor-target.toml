@@ -424,7 +424,15 @@ upward-dependencies = ["address"]
 # server and a profile's mcps list to the Claude and Codex launch argv (+4).
 # account::{KnownLogin, ACCOUNTS_TTL}, ProviderRecord::known_login and ProviderStatus::at_launch
 # keep the last answered login across failed checks for the report and launch routing (+4).
-surface-budget = 1301
+# AccountStamps, merge_account_reading and ProviderRecord::merge_reading are the one merge every
+# account reading (probe, live session, usage read) lands through (+3).
+# ReadingSource names which source a reading came from, so a probe switches the account and a
+# live reading only an id no probe stated, ProviderRecord::display_account builds every
+# surface's alternates from the record, and AgentContextRecord::stamped_account stamps a live
+# account with its source read instant (+3).
+# ProviderRecord::see_live_credentials marks the credentials a room's live sessions run on, each
+# expiring unless a room sees it again (+1).
+surface-budget = 1308
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -1631,7 +1639,8 @@ allowed-dependencies = [
 # loop_launch_logs_dir names the per-fire launch-child log directory beside the other loop paths (+1).
 # The model refusal record's path and lock are built here (+2).
 # paths::claude_mod_dir_in places the RimZ Claude mod folder every account lists (+1).
-surface-budget = 346
+# RuntimePaths::shared_accounts_write_lock serializes every accounts.json read-modify-write (+1).
+surface-budget = 347
 
 [[verdict]]
 kind = "item"
@@ -4112,7 +4121,9 @@ path = "crates/rimz/src/sidebar"
 # replaced it, else its launch's holder (+1).
 # produce::hosting::read_hosting_in gives the sidebar host's card focus the read by the room's
 # identity, without a resolved workspace (+1).
-surface-budget = 263
+# refresh::read_provider_accounts and its refresh re-export let `accounts list` re-read the
+# record after its own usage refresh (+2).
+surface-budget = 265
 
 [[verdict]]
 kind = "item"
@@ -13391,3 +13402,43 @@ reason = "Room-birth policy moves legacy team archives through store-owned dated
 kind = "item"
 key = "harness::team_notes::migrate"
 reason = "Room birth migrates archives before agents start and repoints only checkout links that resolved to each old run."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::AccountStamps"
+reason = "The public ProviderRecord carries each merged field's reading instant through the shared accounts publication."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::merge_account_reading"
+reason = "The one per-field merge every account reading goes through: the probe publisher, the live-session step and the usage publishers in sidebar::refresh, and the store view tests."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::ReadingSource"
+reason = "Which source a reading came from: a probe may switch a login's account, a live reading only an account id no probe stated, and a usage reading never."
+
+[[verdict]]
+kind = "item"
+key = "agents::context::record::AgentContextRecord::stamped_account"
+reason = "Stamps a live account with the instant its source read it, kept while the account is unchanged, so a later refresh never makes an old reading look new."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::accounts::read_provider_accounts"
+reason = "Reads the published account records without probing, so `rimz accounts list` prints what its own usage refresh merged."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::ProviderRecord::merge_reading"
+reason = "Record-level merge entry for sidebar::refresh writers holding a whole cache record."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::shared_accounts_write_lock"
+reason = "Every accounts.json writer re-reads and merges under one classed machine lock, separate from the probe election."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::SidebarSnapshot::gather_live_windows"
+reason = "The producer's rate-limit step gathers live session windows into panels before publishing them to the cache, the only way they reach the display."

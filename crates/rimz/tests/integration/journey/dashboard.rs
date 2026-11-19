@@ -170,6 +170,8 @@ fn accounts() -> AccountsCache {
                     ok: true,
                     account: None,
                     login_at_ms: None,
+                    stamps: Default::default(),
+                    live_credentials: Default::default(),
                 },
             )
         })
@@ -197,6 +199,8 @@ fn accounts() -> AccountsCache {
                 ..Default::default()
             }),
             login_at_ms: None,
+            stamps: Default::default(),
+            live_credentials: Default::default(),
         },
     );
     providers.insert(
@@ -222,6 +226,8 @@ fn accounts() -> AccountsCache {
                 ..Default::default()
             }),
             login_at_ms: None,
+            stamps: Default::default(),
+            live_credentials: Default::default(),
         },
     );
     AccountsCache {

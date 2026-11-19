@@ -38,6 +38,7 @@ fn unmetered_alternate_preserves_a_metered_siblings_kind_wide_unknown_episode() 
     let (first, refresh) = project_rate_limits(
         &mut snapshot,
         &RateLimitsCache::default(),
+        &BTreeMap::new(),
         &RoomLoginSet::native(),
         true,
         None,
@@ -50,8 +51,14 @@ fn unmetered_alternate_preserves_a_metered_siblings_kind_wide_unknown_episode() 
     );
     let since = first.entries[&key].unknown_since_ms;
     assert!(since.is_some());
-    let (second, refresh) =
-        project_rate_limits(&mut snapshot, &first, &RoomLoginSet::native(), true, None);
+    let (second, refresh) = project_rate_limits(
+        &mut snapshot,
+        &first,
+        &BTreeMap::new(),
+        &RoomLoginSet::native(),
+        true,
+        None,
+    );
     assert!(
         refresh.is_empty(),
         "an unchanged unknown episode is not a new refresh"
@@ -94,6 +101,7 @@ fn alternate_windows_project_for_consumers_and_publish_for_producers() {
         let (next, _) = project_rate_limits(
             &mut snapshot,
             if producer { &empty } else { &cached },
+            &BTreeMap::new(),
             &RoomLoginSet::native(),
             producer,
             None,
@@ -348,8 +356,14 @@ fn account_reset_stamp_survives_identity_change_repeated_read_and_projection() {
         let mut frame =
             snapshot_with_panels(workspace, vec![provider_panel("claude", incoming.windows)]);
         frame.now = now;
-        let (next, _) =
-            project_rate_limits(&mut frame, &cache, &RoomLoginSet::native(), true, None);
+        let (next, _) = project_rate_limits(
+            &mut frame,
+            &cache,
+            &BTreeMap::new(),
+            &RoomLoginSet::native(),
+            true,
+            None,
+        );
         assert_eq!(
             next.unwrap().entries[&key.clone().into()].reset_spotted_at_ms,
             stamp
@@ -397,8 +411,14 @@ fn projection_preserves_entry_identity_and_old_bound_truth() {
             vec![provider_panel("claude", live.windows.clone())],
         );
         frame.now = now;
-        let (next, refresh) =
-            project_rate_limits(&mut frame, &cached, &RoomLoginSet::native(), true, None);
+        let (next, refresh) = project_rate_limits(
+            &mut frame,
+            &cached,
+            &BTreeMap::new(),
+            &RoomLoginSet::native(),
+            true,
+            None,
+        );
         let expected = RateLimitCacheEntry {
             reset_spotted_at_ms: None,
             scope: Default::default(),
@@ -450,6 +470,7 @@ fn projection_trace_keeps_key_order_and_snapshot_clock_for_both_roles() {
         project_rate_limits(
             &mut frame,
             &cached,
+            &BTreeMap::new(),
             &RoomLoginSet::native(),
             producer,
             Some(&path),
@@ -506,6 +527,7 @@ fn unmetered_projection_drops_only_its_login_without_trace_or_refresh() {
     let (next, refresh) = project_rate_limits(
         &mut frame,
         &cached,
+        &BTreeMap::new(),
         &RoomLoginSet::native(),
         true,
         Some(&path),
@@ -549,8 +571,14 @@ fn consumer_reset_and_unknown_transitions_never_persist_or_refresh() {
                 vec![provider_panel("claude", windows.clone())],
             );
             frame.now = now;
-            let (next, refresh) =
-                project_rate_limits(&mut frame, &cache, &RoomLoginSet::native(), producer, None);
+            let (next, refresh) = project_rate_limits(
+                &mut frame,
+                &cache,
+                &BTreeMap::new(),
+                &RoomLoginSet::native(),
+                producer,
+                None,
+            );
             assert_eq!(next.is_some(), producer);
             assert_eq!(
                 refresh,
@@ -2347,8 +2375,14 @@ fn parked_refill_requests_refresh_once_then_authoritative_read_corrects_display(
             vec![provider_panel("claude", vec![live.clone()])],
         );
         frame.now = now;
-        let (next, refresh) =
-            project_rate_limits(&mut frame, &cache, &RoomLoginSet::native(), producer, None);
+        let (next, refresh) = project_rate_limits(
+            &mut frame,
+            &cache,
+            &BTreeMap::new(),
+            &RoomLoginSet::native(),
+            producer,
+            None,
+        );
         assert_eq!(frame.providers[0].windows[0].used_percentage, Some(58));
         assert_eq!(
             refresh,
@@ -2372,8 +2406,14 @@ fn parked_refill_requests_refresh_once_then_authoritative_read_corrects_display(
         vec![provider_panel("claude", vec![live])],
     );
     frame.now = now;
-    let (next, refresh) =
-        project_rate_limits(&mut frame, &cache, &RoomLoginSet::native(), true, None);
+    let (next, refresh) = project_rate_limits(
+        &mut frame,
+        &cache,
+        &BTreeMap::new(),
+        &RoomLoginSet::native(),
+        true,
+        None,
+    );
     let corrected = next.unwrap();
     assert_eq!(frame.providers[0].windows[0].used_percentage, Some(2));
     assert!(
@@ -2388,6 +2428,7 @@ fn parked_refill_requests_refresh_once_then_authoritative_read_corrects_display(
     let (next, refresh) = project_rate_limits(
         &mut consumer,
         &corrected,
+        &BTreeMap::new(),
         &RoomLoginSet::native(),
         false,
         None,
@@ -2434,8 +2475,14 @@ fn parked_refill_refresh_transition_is_per_window() {
         let mut frame =
             snapshot_with_panels(workspace.clone(), vec![provider_panel("claude", windows)]);
         frame.now = now;
-        let (next, refresh) =
-            project_rate_limits(&mut frame, &cache, &RoomLoginSet::native(), true, None);
+        let (next, refresh) = project_rate_limits(
+            &mut frame,
+            &cache,
+            &BTreeMap::new(),
+            &RoomLoginSet::native(),
+            true,
+            None,
+        );
         assert_eq!(
             refresh,
             if should_refresh {
@@ -2777,4 +2824,146 @@ fn best_effort_refill_requires_sustained_low_reading() {
     );
     assert_eq!(truth.unwrap().used_percentage, Some(41));
     assert!(pending.is_none());
+}
+
+fn write_claude_floor(runtime: &RuntimePaths, floor: Timestamp) {
+    let record = crate::agents::account::ProviderRecord {
+        stamps: crate::agents::account::AccountStamps {
+            floor_at_ms: Some(u64::try_from(floor.as_millisecond()).unwrap()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    super::super::accounts::write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &crate::agents::account::AccountsCache {
+            logins: BTreeMap::from([(login_key("claude"), record)]),
+        },
+    );
+}
+
+fn claude_durations(runtime: &RuntimePaths) -> Vec<Option<u32>> {
+    let cache = read_rate_limits_cache(&RateLimitsCache::shared_path(runtime));
+    cache
+        .entries
+        .get(&login_key("claude").into())
+        .map(|entry| {
+            entry
+                .limits
+                .windows
+                .iter()
+                .map(|w| w.duration_mins)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn stored_windows_observed_before_the_identity_floor_are_not_prior_truth() {
+    let floor = fuse_now();
+    let reset = floor + SignedDuration::from_hours(4);
+    let before = be(70, reset, floor - SignedDuration::from_hours(1));
+    let after = RateLimitWindow {
+        duration_mins: Some(10_080),
+        ..be(
+            40,
+            reset + SignedDuration::from_hours(48),
+            floor + SignedDuration::from_mins(1),
+        )
+    };
+    for floored in [false, true] {
+        let (_dir, workspace, runtime) = runtime();
+        write_claude_windows(&runtime, vec![before.clone(), after.clone()]);
+        if floored {
+            write_claude_floor(&runtime, floor);
+        }
+        let mut producer = snapshot_with_panels(
+            workspace.clone(),
+            vec![provider_panel("claude", Vec::new())],
+        );
+        producer.now = fuse_now();
+        refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
+        let mut consumer =
+            snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+        consumer.now = fuse_now();
+        apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
+        let shown: Vec<_> = consumer.providers[0]
+            .windows
+            .iter()
+            .map(|window| window.duration_mins)
+            .collect();
+        let expected = if floored {
+            vec![Some(10_080)]
+        } else {
+            vec![Some(300), Some(10_080)]
+        };
+        assert_eq!(shown, expected, "consumer display, floored: {floored}");
+        assert_eq!(
+            claude_durations(&runtime),
+            expected,
+            "persisted, floored: {floored}"
+        );
+    }
+}
+
+#[test]
+fn live_windows_observed_before_the_identity_floor_stay_out_of_the_cache() {
+    let floor = fuse_now();
+    let reset = floor + SignedDuration::from_hours(4);
+    for floored in [false, true] {
+        let (_dir, workspace, runtime) = runtime();
+        if floored {
+            write_claude_floor(&runtime, floor);
+        }
+        let live = be(70, reset, floor - SignedDuration::from_secs(1));
+        let mut producer =
+            snapshot_with_panels(workspace, vec![provider_panel("claude", vec![live])]);
+        producer.now = fuse_now();
+        refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
+        let expected = if floored { vec![] } else { vec![Some(300)] };
+        assert_eq!(claude_durations(&runtime), expected, "floored: {floored}");
+    }
+}
+
+#[test]
+fn a_usage_read_started_before_the_identity_floor_writes_nothing() {
+    let (_dir, _workspace, runtime) = runtime();
+    let floor = fuse_now();
+    write_claude_floor(&runtime, floor);
+    let reset = floor + SignedDuration::from_hours(4);
+    let written = merge_account_rate_limits(
+        &runtime,
+        &login_key("claude"),
+        AccountUsageIdentity::default(),
+        AgentRateLimits {
+            windows: vec![auth(70, reset, floor - SignedDuration::from_secs(1))],
+        },
+    );
+    assert!(!written);
+    assert!(claude_durations(&runtime).is_empty());
+}
+
+#[test]
+fn a_display_read_drops_cached_windows_from_before_the_identity_floor() {
+    let floor = fuse_now();
+    let reset = floor + SignedDuration::from_hours(4);
+    let (_dir, workspace, runtime) = runtime();
+    let after = RateLimitWindow {
+        duration_mins: Some(10_080),
+        ..be(40, reset, floor + SignedDuration::from_mins(1))
+    };
+    write_claude_windows(
+        &runtime,
+        vec![be(70, reset, floor - SignedDuration::from_hours(1)), after],
+    );
+    write_claude_floor(&runtime, floor);
+    let mut consumer = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    consumer.now = fuse_now();
+    apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
+    let shown: Vec<_> = consumer.providers[0]
+        .windows
+        .iter()
+        .map(|window| window.duration_mins)
+        .collect();
+    assert_eq!(shown, [Some(10_080)]);
 }

@@ -2149,6 +2149,8 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
                         ok: true,
                         account: None,
                         login_at_ms: None,
+                        stamps: Default::default(),
+                        live_credentials: Default::default(),
                     },
                 )
             })

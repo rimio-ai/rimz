@@ -86,6 +86,8 @@ pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
     let mut probe = exit_outcome(output.status.code(), &output.stdout, login_env);
     if let AccountProbe::Found(account) = &mut probe {
         account.credentials_updated_at_ms = super::oauth_usage::credentials_stamp(login_env);
+        // The usage identity's owner, so a usage read of this login matches it.
+        account.account_key = super::oauth_usage::load_account_key(login_env).ok();
         if account.plan.as_deref() == Some("max") {
             let tier = super::oauth_usage::read_max_rate_limit_tier(login_env);
             refine_max_plan(account, tier.as_deref());

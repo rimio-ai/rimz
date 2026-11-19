@@ -693,6 +693,8 @@ pub mod fleet {
                             ok: false,
                             account: None,
                             login_at_ms: None,
+                            stamps: Default::default(),
+                            live_credentials: Default::default(),
                         },
                     )
                 })

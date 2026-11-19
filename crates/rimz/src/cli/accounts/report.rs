@@ -28,7 +28,9 @@ use rimz::harness::spend_ladder::{SpendFacts, SpendStep};
 use rimz::ids::{AgentKind, LoginKey, LoginName};
 use rimz::room::{AccountStanding, AgentStateCounts, Deciding, Scope, Scopes};
 use rimz::sidebar::enrich::{provider_panel_for_login, provider_panels_from_caches};
-use rimz::sidebar::refresh::{query_provider_accounts, refresh_provider_usage};
+use rimz::sidebar::refresh::{
+    query_provider_accounts, read_provider_accounts, refresh_provider_usage,
+};
 use rimz::store::snapshot::{DailyBudgetView, ProviderPlan, SidebarProviderPanel};
 
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
@@ -127,6 +129,8 @@ pub(super) fn list(args: ListArgs, target: Option<&str>, globals: &GlobalFlags) 
         refresh_provider_usage(&runtime, login, &probe_logins, args.refresh);
     }
     drop(spinner);
+    // A usage read above may have merged a newer plan into the records.
+    let accounts = with_republished_records(accounts, read_provider_accounts(&runtime));
 
     let provider_spending = read_provider_spending_cache(&runtime.shared_provider_spending_path());
     let account_facts: BTreeMap<_, _> = logins
@@ -136,8 +140,7 @@ pub(super) fn list(args: ListArgs, target: Option<&str>, globals: &GlobalFlags) 
             accounts
                 .logins
                 .get(&login.key())?
-                .account
-                .clone()
+                .display_account()
                 .map(|account| (login.key(), account))
         })
         .collect();
@@ -171,7 +174,7 @@ pub(super) fn list(args: ListArgs, target: Option<&str>, globals: &GlobalFlags) 
         let account = accounts
             .logins
             .get(&login.key())
-            .and_then(|record| record.account.clone());
+            .and_then(ProviderRecord::display_account);
         if let Some(panel) = provider_panel_for_login(
             &runtime,
             login,
@@ -1795,6 +1798,22 @@ fn deadline_word(deadline: Timestamp, now: Timestamp) -> String {
     } else {
         format!("in {}", rimz::theme::fmt::reset_countdown(deadline, now))
     }
+}
+
+/// The records re-read after the usage reads, except where the re-read file
+/// holds an older probe than the query returned: that query's result was never
+/// published (its write lock failed), so the queried record stands.
+fn with_republished_records(queried: AccountsCache, republished: AccountsCache) -> AccountsCache {
+    let mut logins = republished.logins;
+    for (key, record) in queried.logins {
+        if logins
+            .get(&key)
+            .is_none_or(|reread| reread.probed_at_ms < record.probed_at_ms)
+        {
+            logins.insert(key, record);
+        }
+    }
+    AccountsCache { logins }
 }
 
 #[cfg(test)]

@@ -21,7 +21,7 @@ use crate::agents::{
 use crate::ids::{LoginKey, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 
-use super::accounts::cached_account_usage_hint;
+use super::accounts::{cached_account_usage_hint, merge_usage_plan};
 use super::credits::{
     CreditsWrite, account_usage_claim_matches, cancel_provider_account_usage_claim,
     claim_idle_account_usage, claim_provider_account_usage, complete_provider_account_usage,
@@ -31,6 +31,7 @@ use super::credits::{
 use super::rate_limits::{drop_account_rate_limits, merge_account_rate_limits};
 use super::trace;
 use super::trace::{TraceEvent, duration_ms};
+use crate::utils::time::unix_now_ms;
 
 /// Record subscription-access rejection for a login and make its next direct read due.
 pub fn mark_entitlement_lapsed(runtime: &RuntimePaths, key: &LoginKey, at_ms: u64) {
@@ -259,6 +260,7 @@ fn refresh_claimed_account_usage_with(
         return false;
     };
     let realtime_started = Instant::now();
+    let realtime_read_at_ms = unix_now_ms();
     // The realtime leg asks this room's app server, which speaks for the
     // room's own login; other accounts are read by the direct probe alone.
     let realtime = if set.default_key(kind).as_ref() == Some(key) {
@@ -283,7 +285,7 @@ fn refresh_claimed_account_usage_with(
     let mut cache_publication_ms = 0;
     if let Some((identity, usage)) = realtime {
         let publication_started = Instant::now();
-        wrote |= publish_account_usage_snapshot(runtime, key, identity, usage);
+        wrote |= publish_account_usage_snapshot(runtime, key, identity, usage, realtime_read_at_ms);
         cache_publication_ms += duration_ms(publication_started.elapsed());
     }
     if !renew_provider_account_usage_claim(runtime, key, claim_id) {
@@ -299,11 +301,13 @@ fn refresh_claimed_account_usage_with(
         return wrote;
     }
     let direct_started = Instant::now();
+    let direct_read_at_ms = unix_now_ms();
     let direct_probe = probe(adapter, &login_env, sub_provider);
     let direct_ms = duration_ms(direct_started.elapsed());
     let mut outcome = account_usage_outcome(&direct_probe);
     let publication_started = Instant::now();
-    let completed = complete_direct_account_usage(runtime, key, claim_id, direct_probe);
+    let completed =
+        complete_direct_account_usage(runtime, key, claim_id, direct_probe, direct_read_at_ms);
     cache_publication_ms += duration_ms(publication_started.elapsed());
     if completed == CreditsWrite::Failed {
         outcome = "write_failed";
@@ -359,10 +363,15 @@ pub fn complete_realtime_account_usage(
     login: &ProviderLogin,
     logins: &RoomLoginSet,
     realtime: (AccountUsageIdentity, AccountUsageSnapshot),
+    read_at_ms: u64,
 ) -> bool {
-    complete_realtime_account_usage_with(runtime, &login.key(), realtime, |runtime, _| {
-        merge_account_usage_if_due(runtime, login, logins)
-    })
+    complete_realtime_account_usage_with(
+        runtime,
+        &login.key(),
+        realtime,
+        read_at_ms,
+        |runtime, _| merge_account_usage_if_due(runtime, login, logins),
+    )
 }
 
 /// Refresh one provider's account usage for `rimz accounts`, forcing a read
@@ -402,6 +411,7 @@ fn complete_realtime_account_usage_with(
     runtime: &RuntimePaths,
     key: &LoginKey,
     (identity, realtime): (AccountUsageIdentity, AccountUsageSnapshot),
+    read_at_ms: u64,
     complete_direct: impl FnOnce(&RuntimePaths, &LoginKey) -> bool,
 ) -> bool {
     if crate::agents::credits::oauth_usage_offline() {
@@ -415,7 +425,7 @@ fn complete_realtime_account_usage_with(
         || realtime.rate_limits.is_none();
     let mut wrote = false;
     if publish {
-        wrote |= publish_account_usage_snapshot(runtime, key, identity, realtime);
+        wrote |= publish_account_usage_snapshot(runtime, key, identity, realtime, read_at_ms);
     }
     if run_direct {
         wrote |= complete_direct(runtime, key);
@@ -451,11 +461,13 @@ fn merge_account_usage_if_due(
     else {
         return false;
     };
+    let read_at_ms = unix_now_ms();
     complete_direct_account_usage(
         runtime,
         &key,
         claim_id,
         adapter.probe_account_usage(&login_env),
+        read_at_ms,
     )
     .is_saved()
 }
@@ -467,12 +479,20 @@ fn complete_direct_account_usage(
     key: &LoginKey,
     claim_id: Uuid,
     probe: crate::agents::AccountUsageProbe,
+    read_at_ms: u64,
 ) -> CreditsWrite<()> {
     let completion = match complete_provider_account_usage(runtime, key, claim_id, probe) {
         CreditsWrite::Saved(completion) => completion,
         CreditsWrite::Skipped => return CreditsWrite::Skipped,
         CreditsWrite::Failed => return CreditsWrite::Failed,
     };
+    if let Some(plan) = completion
+        .snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.plan.as_deref())
+    {
+        merge_usage_plan(runtime, key, &completion.identity, plan, read_at_ms);
+    }
     let windows = completion
         .snapshot
         .and_then(|snapshot| snapshot.rate_limits);
@@ -501,14 +521,19 @@ fn complete_direct_account_usage(
 /// This is the one entry through which any caller publishes a normalized
 /// account-usage snapshot, harness-originated redemptions included. True when
 /// the credits merge or the windows merge was saved; a busy credits lock or a
-/// failed write counts as not saved.
+/// failed write counts as not saved. `read_at_ms` is when the read that
+/// produced the snapshot started, the instant its plan is stamped with.
 pub fn publish_account_usage_snapshot(
     runtime: &RuntimePaths,
     key: &LoginKey,
     identity: AccountUsageIdentity,
     mut snapshot: AccountUsageSnapshot,
+    read_at_ms: u64,
 ) -> bool {
     let windows = snapshot.rate_limits.take();
+    if let Some(plan) = snapshot.plan.as_deref() {
+        merge_usage_plan(runtime, key, &identity, plan, read_at_ms);
+    }
     let has_credits = snapshot.plan.is_some()
         || snapshot.extra_credits.is_some()
         || snapshot.reset_credits.is_some();

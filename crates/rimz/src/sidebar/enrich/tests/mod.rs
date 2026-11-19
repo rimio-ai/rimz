@@ -338,6 +338,7 @@ fn entitlement_projection_overrides_cached_max_and_fresh_windows_only_for_its_lo
             extra_credits: Some(crate::agents::ExtraCredits::Disabled),
             ..Default::default()
         },
+        1,
     );
     let entry = serde_json::json!({
         "observed_at_ms": 0,
@@ -818,4 +819,111 @@ fn cost_row_at(
         ..crate::agents::AgentContext::new("claude", Timestamp::from_second(1_750_000_000).unwrap())
     });
     row
+}
+
+/// Stage one login's stored account record and rate-limit entry beside a live
+/// session whose context reports another plan and other windows. Returns the
+/// runtime and the snapshot holding that session.
+fn stage_record_beside_a_disagreeing_session(
+    kind: &str,
+) -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {
+    let (dir, runtime, snapshot) = runtime();
+    let now = snapshot.now;
+    let key = crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(kind));
+    let window = |used: u8| crate::agents::RateLimitWindow {
+        used_percentage: Some(used),
+        duration_mins: Some(300),
+        resets_at: Some(now + SignedDuration::from_hours(2)),
+        observed_at: Some(now),
+        ..Default::default()
+    };
+    let account = |plan: &str| crate::agents::AgentAccount {
+        plan: Some(plan.to_owned()),
+        metered: Some(true),
+        ..Default::default()
+    };
+    atomic::write_temp_then_rename_cache(
+        &runtime.shared_accounts_path(),
+        &serde_json::json!({"logins": {key.to_string(): {
+            "probed_at_ms": unix_now_ms(),
+            "ok": true,
+            "account": account("stored-plan"),
+        }}}),
+    )
+    .unwrap();
+    atomic::write_temp_then_rename_cache(
+        &crate::agents::account::RateLimitsCache::shared_path(&runtime),
+        &crate::agents::account::RateLimitsCache {
+            entries: BTreeMap::from([(
+                crate::agents::account::AccountUsageKey::from(key),
+                crate::agents::account::RateLimitCacheEntry {
+                    limits: crate::agents::AgentRateLimits {
+                        windows: vec![window(33)],
+                    },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut agent = root_agent(kind, &format!("{kind}-live"), None);
+    let mut context = crate::agents::AgentContext::new(kind, now);
+    context.account = Some(account("live-plan"));
+    context.rate_limits = Some(crate::agents::AgentRateLimits {
+        windows: vec![window(77)],
+    });
+    agent.context = Some(context);
+    let snapshot =
+        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], now);
+    (dir, runtime, snapshot)
+}
+
+#[test]
+fn every_surface_shows_the_stored_record_over_a_live_context_for_every_adapter() {
+    let config = crate::config::MachineConfig::default();
+    let logins = crate::agents::RoomLoginSet::native();
+    let shown = |panel: Option<&SidebarProviderPanel>| {
+        panel.map(|panel| {
+            (
+                panel.plan.as_ref().map(|plan| plan.tier.clone()),
+                panel
+                    .windows
+                    .iter()
+                    .map(|window| window.used_percentage)
+                    .collect::<Vec<_>>(),
+            )
+        })
+    };
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for definition in crate::agents::all_definitions() {
+        let kind = definition.spec().kind;
+        let (_dir, runtime, snapshot) = stage_record_beside_a_disagreeing_session(kind);
+        let sidebar = fold_machine_config(
+            snapshot,
+            &runtime,
+            &config,
+            &config.remote_control,
+            &logins.clone().with_agents(&[]),
+            Default::default(),
+            None,
+        )
+        .0;
+        let accounts = crate::agents::account::read_accounts_cache(&runtime.shared_accounts_path())
+            .logins
+            .into_iter()
+            .filter_map(|(key, record)| Some((key, record.account?)))
+            .collect();
+        let cached =
+            provider_panels_from_caches(&runtime, &logins, &config, accounts, &Default::default());
+        let stored = Some((Some("stored-plan".to_owned()), vec![Some(33)]));
+        actual.push((
+            kind,
+            shown(sidebar.providers.iter().find(|panel| panel.kind == kind)),
+            shown(cached.iter().find(|panel| panel.kind == kind)),
+        ));
+        expected.push((kind, stored.clone(), stored));
+    }
+    assert_eq!(actual, expected);
 }

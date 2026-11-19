@@ -13,6 +13,7 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
     let runtime = runtime_paths_for(request.workspace_id)?;
     let config = MachineConfig::load().context("loading auto-redeem config")?;
 
+    let read_at_ms = rimz::utils::time::unix_now_ms();
     let result = rimz::harness::auto_redeem::execute_auto_redeem(
         &runtime,
         &request.login,
@@ -29,6 +30,7 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
                     &request.login,
                     identity,
                     snapshot,
+                    read_at_ms,
                 );
             }
             append_report(&request.login, request.request_id, &redeemed.report, None);

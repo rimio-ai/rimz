@@ -7,7 +7,7 @@ use crate::agents::{
 };
 use crate::ids::{AgentKind, AgentSessionId};
 
-use super::AgentContext;
+use super::{AgentAccount, AgentContext};
 
 #[cfg(any(test, feature = "testkit"))]
 mod fixture;
@@ -105,6 +105,7 @@ impl AgentContextRecord {
     ) -> bool {
         let mut context = context;
         self.stamp_incoming_windows(&mut context, owner_started_at);
+        context.account = self.stamped_account(context.account, context.observed_at);
         let observed_cost = context.cost.is_some();
         let model_id = context.model_id.clone().or(self.context.model_id.clone());
         if let Some(error) = &mut context.turn_error {
@@ -217,6 +218,20 @@ impl AgentContextRecord {
         self.merge_observed(kind, context, observed_at)
     }
 
+    /// Stamp an incoming account with the instant its source read it. A re-read
+    /// of unchanged facts takes the new instant too: a pane that outlives a
+    /// logout states its account again, and only a reading from after the
+    /// identity floor can restore it.
+    pub(crate) fn stamped_account(
+        &self,
+        incoming: Option<AgentAccount>,
+        read_at: Timestamp,
+    ) -> Option<AgentAccount> {
+        let mut incoming = incoming?;
+        incoming.read_at_ms = Some(read_at.as_millisecond().max(0) as u64);
+        Some(incoming)
+    }
+
     pub(crate) fn apply_local_refresh(
         &mut self,
         definition: &AgentSpec,
@@ -247,6 +262,7 @@ impl AgentContextRecord {
         if let Some(error) = &mut context.turn_error {
             error.stamp_model(self.context.turn_error.as_ref(), model_id.as_deref());
         }
+        context.account = self.stamped_account(context.account, observed_at);
         let mut changed = false;
         macro_rules! merge_optional {
             ($field:ident) => {

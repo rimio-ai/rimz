@@ -209,6 +209,8 @@ fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> Provide
         ok,
         account,
         login_at_ms: None,
+        stamps: Default::default(),
+        live_credentials: Default::default(),
     }
 }
 
@@ -2789,4 +2791,111 @@ fn detail_pace_gates_the_floor_and_omits_blank_states() {
     ] {
         assert_eq!(block_window(&blank, now).as_deref(), Some(expected));
     }
+}
+
+#[test]
+fn report_rows_show_the_panel_plan_and_windows_for_every_adapter() {
+    // The panel is the cached account record folded with the rate-limit
+    // cache, the one view every surface shares; a usage cache's own plan
+    // never stands in for the record's.
+    use rimz::agents::account::{RateLimitCacheEntry, RateLimitsCache};
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = rimz::ids::WorkspaceId::from_project_root(dir.path());
+    let runtime = rimz::RuntimePaths::under(workspace, dir.path()).unwrap();
+    let config = MachineConfig::default();
+    let now = rimz::utils::time::unix_now_ms();
+    let window = RateLimitWindow {
+        used_percentage: Some(33),
+        duration_mins: Some(300),
+        ..Default::default()
+    };
+    let logins: Vec<_> = rimz::agents::all_definitions()
+        .map(|definition| {
+            ProviderLogin::default_for(AgentKind::new_unchecked(definition.spec().kind))
+        })
+        .collect();
+    let mut limits = RateLimitsCache::default();
+    let mut credits = serde_json::Map::new();
+    for login in &logins {
+        limits.entries.insert(
+            rimz::agents::account::AccountUsageKey::new(login.key(), Default::default()),
+            RateLimitCacheEntry {
+                limits: rimz::agents::AgentRateLimits {
+                    windows: vec![window.clone()],
+                },
+                ..Default::default()
+            },
+        );
+        credits.insert(
+            login.key().to_string(),
+            serde_json::json!({"observed_at_ms": now, "ok": true, "plan": "credits-plan"}),
+        );
+    }
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &RateLimitsCache::shared_path(&runtime),
+        &limits,
+    )
+    .unwrap();
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_credits_path(),
+        &serde_json::json!({"refreshed_at_ms": now, "logins": credits}),
+    )
+    .unwrap();
+    let panels = rimz::sidebar::enrich::provider_panels_from_caches(
+        &runtime,
+        &rimz::agents::RoomLoginSet::native(),
+        &config,
+        logins
+            .iter()
+            .map(|login| (login.key(), account("record-plan", true)))
+            .collect(),
+        &ProviderSpendingCache::default(),
+    );
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for login in &logins {
+        let kind = login.kind().as_str();
+        let report = build_report(
+            login,
+            Some(&record(now, true, Some(account("record-plan", true)))),
+            panels.iter().find(|panel| panel.kind == kind),
+            &ProviderSpendingCache::default(),
+            &ReportContext {
+                day_cutoff_secs: None,
+                config: &config,
+                installed: &BTreeSet::new(),
+                spend_step: &|_| SpendStep::Subscription,
+            },
+        );
+        actual.push((kind.to_owned(), report.plan, report.windows));
+        expected.push((
+            kind.to_owned(),
+            Some("record-plan".to_owned()),
+            vec![window.clone()],
+        ));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn a_probe_result_the_query_could_not_publish_survives_the_re_read() {
+    let key = LoginKey::default_for(AgentKind::new_unchecked("codex"));
+    let cache = |record: ProviderRecord| AccountsCache {
+        logins: BTreeMap::from([(key.clone(), record)]),
+    };
+    let queried = cache(record(2_000, true, Some(account("plus", true))));
+    // The re-read file holds an older probe: the query's own result was never published.
+    let stale = cache(record(1_000, true, Some(account("team", true))));
+    let kept = with_republished_records(queried.clone(), stale);
+    assert_eq!(
+        kept.logins[&key].account.as_ref().unwrap().plan.as_deref(),
+        Some("plus")
+    );
+    // A published probe with a usage plan merged after it reads the newer plan.
+    let merged = cache(record(2_000, true, Some(account("pro", true))));
+    let shown = with_republished_records(queried, merged);
+    assert_eq!(
+        shown.logins[&key].account.as_ref().unwrap().plan.as_deref(),
+        Some("pro")
+    );
 }

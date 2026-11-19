@@ -593,13 +593,14 @@ fn antigravity_account_stays_metered_before_and_after_quota_arrives() {
     ]);
     account.plan = None;
     accounts.insert(provider_key("antigravity"), account);
-    let with_quota = room(vec![agent]).with_provider_aggregates(
+    let mut with_quota = room(vec![agent]).with_provider_aggregates(
         &Default::default(),
         &accounts,
         &BTreeMap::new(),
         &BTreeMap::new(),
         &shown(&["antigravity"]),
     );
+    with_quota.gather_live_windows(&BTreeMap::new());
     let panel = with_quota.providers.first().expect("live panel");
     assert!(panel.metered);
     assert_eq!(
@@ -853,11 +854,31 @@ fn panel_version_is_the_newest_reported_whichever_session_spoke_last() {
             },
         )])
     };
-    let version = |sessions: Vec<AgentState>, probed: &BTreeMap<_, _>| {
+    // Each session's version reaches the panel only through the record merge.
+    let version = |sessions: Vec<AgentState>, probed: &BTreeMap<_, AgentAccount>| {
+        let mut record = probed
+            .get(&provider_key("claude"))
+            .cloned()
+            .unwrap_or_default();
+        let mut stamps = crate::agents::account::AccountStamps::default();
+        for context in sessions.iter().filter_map(|agent| agent.context.as_ref()) {
+            let reading = AgentAccount {
+                version: context.agent_version.clone(),
+                ..Default::default()
+            };
+            let read_at_ms = context.observed_at.as_millisecond() as u64;
+            crate::agents::account::merge_account_reading(
+                &mut record,
+                &mut stamps,
+                &reading,
+                read_at_ms,
+                crate::agents::account::ReadingSource::Live,
+            );
+        }
         room(sessions)
             .with_provider_aggregates(
                 &Default::default(),
-                probed,
+                &BTreeMap::from([(provider_key("claude"), record)]),
                 &BTreeMap::new(),
                 &BTreeMap::new(),
                 &shown(&["claude"]),

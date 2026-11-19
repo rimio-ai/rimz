@@ -39,6 +39,20 @@ fn legacy_or_missing_pi_inventory_keeps_the_top_level_without_alternates() {
     }
 }
 
+/// The account the fold reads for a login whose live sessions run on these
+/// credentials beside the selected one, as the live merge records them.
+fn live_account(account: AgentAccount) -> AgentAccount {
+    crate::agents::account::ProviderRecord {
+        account: Some(account),
+        live_credentials: ["custom", "openai-codex"]
+            .map(|provider| (provider.to_owned(), crate::utils::time::unix_now_ms()))
+            .into(),
+        ..crate::agents::account::ProviderRecord::default()
+    }
+    .display_account()
+    .unwrap()
+}
+
 #[test]
 fn pi_credentials_partition_live_windows_without_partitioning_stats() {
     let credential = |provider: &str, owner: &str| AgentAccount {
@@ -72,7 +86,7 @@ fn pi_credentials_partition_live_windows_without_partitioning_stats() {
         session.context.as_mut().unwrap().sub_provider = provider.map(ToOwned::to_owned);
         session
     };
-    let snapshot = room_with_agent_panes(vec![
+    let mut snapshot = room_with_agent_panes(vec![
         session("a", Some("anthropic"), Some("a"), 20, 10),
         session("b", Some("openai-codex"), Some("b"), 70, 20),
         session("old-b", Some("openai-codex"), Some("old-b"), 99, 30),
@@ -81,7 +95,7 @@ fn pi_credentials_partition_live_windows_without_partitioning_stats() {
     ])
     .with_provider_aggregates(
         &Default::default(),
-        &BTreeMap::from([(provider_key("pi"), account)]),
+        &BTreeMap::from([(provider_key("pi"), live_account(account))]),
         &BTreeMap::new(),
         &BTreeMap::from([(
             provider_key("pi"),
@@ -96,6 +110,7 @@ fn pi_credentials_partition_live_windows_without_partitioning_stats() {
         )]),
         &shown(&["pi"]),
     );
+    snapshot.gather_live_windows(&BTreeMap::new());
     let top = &snapshot.providers[0];
     let panels: Vec<_> = std::iter::once(top).chain(&top.alternates).collect();
     let actual: Vec<_> = panels
@@ -248,7 +263,7 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
     let mut probed: BTreeMap<crate::ids::LoginKey, AgentAccount> = BTreeMap::new();
     probed.insert(provider_key("pi"), account);
 
-    let snapshot = room(vec![
+    let mut snapshot = room(vec![
         agent("codex", "x1", AgentStatus::Idle, 10).limits(vec![codex_reading]),
         agent("pi", "p1", AgentStatus::Idle, 20).limits(vec![pi_reading.clone()]),
     ])
@@ -259,6 +274,7 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
         &BTreeMap::new(),
         &shown(&["codex", "pi"]),
     );
+    snapshot.gather_live_windows(&BTreeMap::new());
     let pi_panel = snapshot
         .providers
         .iter()

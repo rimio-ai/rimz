@@ -207,6 +207,7 @@ fn published_usage_preserves_identity_and_only_writes_present_credits() {
                 }),
                 ..Default::default()
             },
+            1,
         );
 
         let cache =
@@ -533,6 +534,7 @@ fn account_usage_completion_publishes_complete_realtime_without_fallback() {
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
         (AccountUsageIdentity::default(), realtime),
+        1,
         |_, _| unreachable!("complete realtime usage needs no direct fallback"),
     );
 
@@ -572,6 +574,7 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
         (AccountUsageIdentity::default(), realtime),
+        1,
         |runtime, kind| {
             publish_account_usage_snapshot(
                 runtime,
@@ -581,6 +584,7 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
                     rate_limits: Some(usage_windows(34)),
                     ..Default::default()
                 },
+                1,
             )
         },
     );
@@ -663,6 +667,7 @@ fn completed_realtime_reading_publishes_under_its_own_identity_and_survives_the_
         &runtime,
         &key,
         (owner_identity(), realtime),
+        1,
         |_, _| unreachable!("a complete reading needs no direct read"),
     ));
     assert_published_under_owner(&runtime, &key, 12);
@@ -671,7 +676,7 @@ fn completed_realtime_reading_publishes_under_its_own_identity_and_survives_the_
         .saved()
         .unwrap();
     assert!(
-        complete_direct_account_usage(&runtime, &key, claim, same_account_direct_read(),)
+        complete_direct_account_usage(&runtime, &key, claim, same_account_direct_read(), 1,)
             .is_saved()
     );
     assert_published_under_owner(&runtime, &key, 12);
@@ -703,6 +708,7 @@ fn account_usage_completion_offline_skips_publication_and_probe() {
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
         (AccountUsageIdentity::default(), complete_realtime()),
+        1,
         |_, _| {
             called.set(true);
             true
@@ -800,6 +806,7 @@ fn authoritative_direct_completion_survives_live_session_exit() {
                     ..Default::default()
                 },
             },
+            1,
         )
         .is_saved()
     );
@@ -938,6 +945,7 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
                     ..Default::default()
                 },
             },
+            1,
         )
         .is_saved()
     );
@@ -964,6 +972,7 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
             &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
             claim(&runtime),
             crate::agents::AccountUsageProbe::Failed(usage_identity(Some("owner-b"))),
+            1,
         )
         .is_saved()
     );
@@ -979,6 +988,7 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
                 )),
                 claim(&runtime),
                 crate::agents::AccountUsageProbe::Failed(failed_identity),
+                1,
             )
             .is_saved()
         );
@@ -998,6 +1008,7 @@ fn unknown_owner_source_reuses_same_scope_owner_until_ttl() {
                 identity: usage_identity(Some("owner-a")),
                 snapshot: AccountUsageSnapshot::default(),
             },
+            1,
         )
         .is_saved()
     );
@@ -1035,6 +1046,8 @@ fn lagging_published_hint_spawns_once_until_it_moves() {
                 profile: None,
                 probe_error: None,
                 login_at_ms: None,
+                stamps: Default::default(),
+                live_credentials: Default::default(),
             },
         )]),
     };
@@ -1119,6 +1132,8 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
                         ..Default::default()
                     }),
                     login_at_ms: None,
+                    stamps: Default::default(),
+                    live_credentials: Default::default(),
                 },
             )]),
         },
@@ -1197,6 +1212,8 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
                         ..Default::default()
                     }),
                     login_at_ms: None,
+                    stamps: Default::default(),
+                    live_credentials: Default::default(),
                 },
             )]),
         },
@@ -1275,6 +1292,8 @@ fn undecided_account_creates_no_synchronous_usage_claim_or_probe() {
                     probe_error: None,
                     login: None,
                     login_at_ms: None,
+                    stamps: Default::default(),
+                    live_credentials: Default::default(),
                 },
             )]),
         },
@@ -1388,6 +1407,8 @@ fn failed_spawn_cancels_claim_for_immediate_retry() {
                         ..Default::default()
                     }),
                     login_at_ms: None,
+                    stamps: Default::default(),
+                    live_credentials: Default::default(),
                 },
             )]),
         },
@@ -1449,6 +1470,8 @@ fn simultaneous_schedulers_spawn_once_per_provider_kind() {
                         ..Default::default()
                     }),
                     login_at_ms: None,
+                    stamps: Default::default(),
+                    live_credentials: Default::default(),
                 },
             )]),
         },
@@ -1507,6 +1530,8 @@ fn metered_claude_room() -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {
                         ..Default::default()
                     }),
                     login_at_ms: None,
+                    stamps: Default::default(),
+                    live_credentials: Default::default(),
                 },
             )]),
         },
@@ -1591,6 +1616,7 @@ fn an_unsaved_completion_publishes_no_windows() {
                 ..Default::default()
             },
         },
+        1,
     );
     super::super::credits::fail_credits_writes(false);
     let used = windows(&runtime)
@@ -1623,7 +1649,8 @@ fn an_unsaved_credits_merge_is_not_reported_as_published() {
         &runtime,
         &key,
         AccountUsageIdentity::default(),
-        plan_only()
+        plan_only(),
+        1
     ));
 }
 
@@ -1645,7 +1672,74 @@ fn publication_reports_only_a_saved_merge() {
             &key,
             AccountUsageIdentity::default(),
             snapshot,
+            1,
         ));
     }
     assert_eq!(published, [false, true, true]);
+}
+
+#[test]
+fn published_usage_plan_merges_into_the_record_and_a_delegated_plan_only_fills() {
+    let mut actual = Vec::new();
+    for (scope, stored) in [
+        (ProviderAccountScope::KindWide, Some("plus")),
+        (ProviderAccountScope::KindWide, None),
+        (
+            ProviderAccountScope::sub_provider("openai", "oauth"),
+            Some("OpenAI OAuth"),
+        ),
+        (ProviderAccountScope::sub_provider("openai", "oauth"), None),
+    ] {
+        let (_dir, runtime) = account_usage_runtime();
+        let key = LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"));
+        let account = AgentAccount {
+            scope: scope.clone(),
+            plan: stored.map(str::to_owned),
+            ..Default::default()
+        };
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &runtime.shared_accounts_path(),
+            &AccountsCache {
+                logins: BTreeMap::from([(
+                    key.clone(),
+                    ProviderRecord {
+                        probed_at_ms: 1,
+                        consecutive_failures: 0,
+                        version_probed_at_ms: None,
+                        ok: true,
+                        inputs_stamp: None,
+                        account: Some(account),
+                        login: None,
+                        login_at_ms: None,
+                        probe_error: None,
+                        profile: None,
+                        stamps: Default::default(),
+                        live_credentials: Default::default(),
+                    },
+                )]),
+            },
+        )
+        .unwrap();
+        publish_account_usage_snapshot(
+            &runtime,
+            &key,
+            crate::agents::AccountUsageIdentity {
+                scope,
+                account_key: None,
+                credentials_stamp: None,
+            },
+            AccountUsageSnapshot {
+                plan: Some("pro".to_owned()),
+                ..Default::default()
+            },
+            1,
+        );
+        let cache = crate::agents::account::read_accounts_cache(&runtime.shared_accounts_path());
+        actual.push(cache.logins[&key].account.as_ref().unwrap().plan.clone());
+    }
+    let some = |plan: &str| Some(plan.to_owned());
+    assert_eq!(
+        actual,
+        [some("pro"), some("pro"), some("OpenAI OAuth"), some("pro")]
+    );
 }

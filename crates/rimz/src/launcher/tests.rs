@@ -142,6 +142,8 @@ fn explicit_account_keeps_the_tier_provider_and_stamps_every_agent_cell() {
                     ok: true,
                     account: None,
                     login_at_ms: None,
+                    stamps: Default::default(),
+                    live_credentials: Default::default(),
                 },
             )]
             .into(),

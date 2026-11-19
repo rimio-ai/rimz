@@ -1701,3 +1701,69 @@ fn closed_pr_term_needs_a_merge_the_rest_cannot_replace() {
         assert_eq!(pick(expr, readings).as_deref(), expected, "{expr}");
     }
 }
+
+#[test]
+fn window_readings_drop_windows_read_before_the_identity_floor() {
+    use crate::agents::AgentRateLimits;
+    use crate::agents::account::{
+        AccountStamps, AccountsCache, ProviderRecord, RateLimitCacheEntry,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let runtime = crate::RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(root.path()),
+        root.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let floor = Timestamp::from_second(2_000_000_000).unwrap();
+    let claude = AgentKind::new_unchecked("claude");
+    let key = LoginKey::default_for(claude.clone());
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &RateLimitsCache::shared_path(&runtime),
+        &RateLimitsCache {
+            entries: [(
+                key.clone().into(),
+                RateLimitCacheEntry {
+                    limits: AgentRateLimits {
+                        windows: vec![RateLimitWindow {
+                            duration_mins: Some(300),
+                            used_percentage: Some(92),
+                            observed_at: Some(floor - jiff::SignedDuration::from_hours(1)),
+                            resets_at: Some(floor + jiff::SignedDuration::from_hours(4)),
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(
+                key,
+                ProviderRecord {
+                    stamps: AccountStamps {
+                        floor_at_ms: Some(floor.as_millisecond() as u64),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )]),
+        },
+    )
+    .unwrap();
+    let windows = WindowReadings::new(Some(&runtime), floor);
+    let expr = WhenExpr::parse(&["window.5h.left>=50".to_owned()]).unwrap();
+    let readings = BTreeMap::from([("window.5h.left".to_owned(), Some("8".to_owned()))]);
+    assert!(
+        windows
+            .resets(&expr, Some(&claude), None, &readings)
+            .is_empty()
+    );
+}

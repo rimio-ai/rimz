@@ -8,7 +8,8 @@ use crate::RuntimePaths;
 #[cfg(test)]
 use crate::agents::ProviderAccountScope;
 use crate::agents::account::{
-    AccountUsageKey, PendingRefill, RateLimitCacheEntry, RateLimitsCache, read_rate_limits_cache,
+    AccountUsageKey, PendingRefill, RateLimitCacheEntry, RateLimitsCache, read_accounts_cache,
+    read_rate_limits_cache,
 };
 use crate::agents::context::RateLimitWindowKey;
 use crate::agents::{AccountUsageIdentity, AgentRateLimits, RateLimitWindow, RoomLoginSet};
@@ -111,6 +112,46 @@ impl WindowIndex {
     }
 }
 
+/// Each login's identity floor: the instant of its record's last account
+/// switch or logout. A window observed before it describes the previous
+/// account, so it is neither prior truth nor a live reading.
+pub(super) fn identity_floors(runtime: &RuntimePaths) -> BTreeMap<LoginKey, Timestamp> {
+    read_accounts_cache(&runtime.shared_accounts_path())
+        .logins
+        .into_iter()
+        .filter_map(|(login, record)| {
+            let floor = i64::try_from(record.stamps.floor_at_ms?).ok()?;
+            Some((login, Timestamp::from_millisecond(floor).ok()?))
+        })
+        .collect()
+}
+
+/// Whether a window may stand for the account behind `floor`. An unstamped
+/// window cannot be placed before it and stays.
+fn observed_since(window: &RateLimitWindow, floor: Option<Timestamp>) -> bool {
+    floor.is_none_or(|floor| window.observed_at.is_none_or(|observed| observed >= floor))
+}
+
+fn retain_since(limits: &mut AgentRateLimits, floor: Option<Timestamp>) {
+    limits
+        .windows
+        .retain(|window| observed_since(window, floor));
+}
+
+/// A cached entry without the windows and refills from before `floor`.
+fn entry_since(entry: &RateLimitCacheEntry, floor: Option<Timestamp>) -> RateLimitCacheEntry {
+    let mut entry = entry.clone();
+    let Some(floor) = floor else {
+        return entry;
+    };
+    retain_since(&mut entry.limits, Some(floor));
+    if let Some(bound) = &mut entry.bound_limits {
+        retain_since(bound, Some(floor));
+    }
+    entry.pending.retain(|refill| refill.first_seen_at >= floor);
+    entry
+}
+
 fn authoritative_windows(prior: Option<&RateLimitCacheEntry>) -> &[RateLimitWindow] {
     prior.map_or(&[], |entry| {
         entry
@@ -172,7 +213,8 @@ fn reset_spotted(
 /// section so an accepted OAuth observation is published before its five-minute
 /// attempt throttle advances. Used by the detached `rimz agents refresh-usage`
 /// helper, never on the per-tick path. True once the merge is saved; a lock
-/// failure or a failed write is false.
+/// failure, a failed write, or a read whose every window predates the login's
+/// identity floor is false.
 pub(super) fn merge_account_rate_limits(
     runtime: &RuntimePaths,
     key: &LoginKey,
@@ -192,8 +234,18 @@ pub(super) fn merge_account_rate_limits(
     // and the current time for reset detection and window fusion.
     let now = Timestamp::now();
     let mut windows = windows.stamped_at(now);
+    let floor = identity_floors(runtime).get(key).copied();
+    let read = !windows.windows.is_empty();
+    retain_since(&mut windows, floor);
+    if read && windows.windows.is_empty() {
+        return false;
+    }
     let key = AccountUsageKey::new(key.clone(), identity.scope.clone());
-    let prior_entry = cache.entries.get(&key);
+    let prior_entry = cache
+        .entries
+        .get(&key)
+        .map(|entry| entry_since(entry, floor));
+    let prior_entry = prior_entry.as_ref();
     let reset_spotted_at_ms = if reset_spotted(prior_entry, &windows, now) {
         Some(cache.refreshed_at_ms)
     } else {
@@ -309,7 +361,8 @@ pub(in crate::sidebar) fn apply_cached_rate_limits(
         return;
     }
     let cached = read_rate_limits_cache(&RateLimitsCache::shared_path(runtime));
-    let _ = project_rate_limits(snapshot, &cached, logins, false, None);
+    let floors = identity_floors(runtime);
+    let _ = project_rate_limits(snapshot, &cached, &floors, logins, false, None);
 }
 
 /// Fuse live account windows into the shared cache and project producer panels.
@@ -330,9 +383,10 @@ pub(super) fn refresh_rate_limits(
             return;
         };
         let cached = read_rate_limits_cache(&path);
+        let floors = identity_floors(runtime);
         let trace = rate_limits_trace_path(runtime);
         let (next, reset_kinds) =
-            project_rate_limits(snapshot, &cached, logins, true, trace.as_deref());
+            project_rate_limits(snapshot, &cached, &floors, logins, true, trace.as_deref());
         if let Some(next) = next {
             // Best-effort: the writer logs a failure, and the next pass fuses again.
             let _ = write_rate_limits_cache(&path, &next);
@@ -408,6 +462,7 @@ fn complete_omitted_duration_windows(prior: &[RateLimitWindow], current: &mut Ag
 fn project_rate_limits(
     snapshot: &mut SidebarSnapshot,
     cached: &RateLimitsCache,
+    floors: &BTreeMap<LoginKey, Timestamp>,
     logins: &RoomLoginSet,
     producer: bool,
     trace: Option<&Path>,
@@ -455,8 +510,12 @@ fn project_rate_limits(
             // Complete authoritative omissions against matching persisted truth
             // before indexing the live reading, then fuse each stable duration or
             // named-quota identity independently.
+            let floor = floors.get(&panel.login_key()).copied();
             let cached_entry = usage_key.as_ref().and_then(|key| cached.entries.get(key));
-            let prior_entry = cached_entry.filter(|entry| entry.scope == panel.account_scope);
+            let floored_entry = cached_entry.map(|entry| entry_since(entry, floor));
+            let prior_entry = floored_entry
+                .as_ref()
+                .filter(|entry| entry.scope == panel.account_scope);
             let foreign_account = matches!(
                 (
                     prior_entry.and_then(|entry| entry.account_key.as_deref()),
@@ -470,6 +529,7 @@ fn project_rate_limits(
             if foreign_account {
                 live_limits.windows.clear();
             }
+            retain_since(&mut live_limits, floor);
             complete_omitted_duration_windows(authoritative_windows(prior_entry), &mut live_limits);
             let index = WindowIndex::new(prior_entry, live_limits.windows);
 

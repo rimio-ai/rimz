@@ -266,8 +266,11 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
     if let Some(tokens) = auth.tokens
         && tokens.access_token.is_some_and(|token| !token.is_empty())
     {
+        let account_id = tokens.account_id.as_deref().and_then(non_empty_trimmed);
+        // The usage read names its owner by the same account id.
         return AccountProbe::Found(AgentAccount {
-            account_id: tokens.account_id.as_deref().and_then(non_empty_trimmed),
+            account_key: account_id.clone(),
+            account_id,
             metered: Some(true),
             ..Default::default()
         });
@@ -343,6 +346,8 @@ mod tests {
         // The plan tier and budgets ride the live app-server context, not the file.
         assert_eq!(account.plan, None);
         assert_eq!(account.account_id.as_deref(), Some("acc_1"));
+        // The usage read names its owner by the same id.
+        assert_eq!(account.account_key.as_deref(), Some("acc_1"));
         assert_eq!(account.metered, Some(true));
 
         // A readable auth file remains authoritative. The CLI fallback is only
