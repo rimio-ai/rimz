@@ -631,6 +631,10 @@ MCP connections negotiate protocol version `2026-07-28` by default. This applies
 
 Claude Code supports Program Status Protocol (OSC 7501) from 2.1.295 ([release notes](https://github.com/anthropics/claude-code/blob/v2.1.296/CHANGELOG.md#21295)). Supporting terminals can show working, waiting, and completed activity. The 2.1.296 Linux encoder emits colon-separated `key=value` fields, including `state` and `app=claude-code`. Optional fields include `id`, blocked-state `kind`, `progress`, and base64-encoded `title` and `msg`. This is an encoder observation, not a complete protocol schema. The hook `terminalSequence` allowlist does not admit OSC 7501.
 
+### Pasted image paths
+
+Observed in the installed Claude Code 2.1.327 on 2026-11-18, from the shipped bundle's strings and a probe in a private tmux with no prompt submitted. No upstream documentation of this behaviour was found. The paste handler splits a paste on newlines and on a space followed by the start of a path. It strips quotes and backslash escapes from each part. Each part that names an existing file ending in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp` attaches as an image, and the other parts stay text. So several image paths in one paste each attach, in the space-joined, backslash-escaped form a terminal drop produces. The handler's names are minified and change per release. `rimz remote connect` pastes uploaded paths in that form ([remote guide](../../guide/remote.md)).
+
 ## Agent view
 
 `claude agents` opens agent view, one screen for every background session; `claude --bg`, `/background`, or `←` in a session sends a session to the background ([agent view](https://code.claude.com/docs/en/agent-view)). Agent view first shipped in 2.1.139. `--bg` cannot be combined with `-p`. Since 2.1.281, an untrusted directory requires interactive trust approval, or startup exits. Since 2.1.285, `--resume <id>` opens a running background session. An accompanying prompt becomes its next turn ([release notes](https://github.com/anthropics/claude-code/blob/v2.1.296/CHANGELOG.md#21285)).

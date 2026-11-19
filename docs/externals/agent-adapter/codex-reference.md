@@ -334,6 +334,10 @@ The composer treats plain characters arriving at most 8 ms apart as a suspected 
 
 `tui.disable_paste_burst = true` turns the heuristic off (`config/src/types.rs`, default false). Since 0.153.0 that is the key's home. The top-level `disable_paste_burst` still works as a fallback.
 
+### Pasted image paths
+
+Read in source at `rust-v0.170.0` (not run). A paste attaches as an image only when the whole paste is one path to an existing file that decodes as an image. Quotes, backslash escapes and a `file://` prefix are accepted ([`normalize_pasted_path` in `tui/src/clipboard_paste.rs`](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/tui/src/clipboard_paste.rs), [`ChatComposer::handle_paste_image_path` in `tui/src/bottom_pane/chat_composer.rs`](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/tui/src/bottom_pane/chat_composer.rs)). Several space-joined paths in one paste stay text. The check rides the composer's paste handling, so both a bracketed paste and a [paste burst](#paste-burst) reach it, and it is on only while the model accepts images (`ChatWidget::sync_image_paste_enabled`). `rimz remote connect` pastes uploaded paths as one space-joined paste, so its [guide](../../guide/remote.md) tells Codex users to paste images one at a time.
+
 ### `notify`
 
 `notify` runs an external program when a turn completes, independent of hooks. It must be set in the user-level config. A project-local `notify` is ignored with a startup warning (`PROJECT_LOCAL_CONFIG_DENYLIST`, `config/src/loader/mod.rs`).
