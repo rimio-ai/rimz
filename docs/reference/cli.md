@@ -21,7 +21,7 @@ This page indexes every command and states the rules that hold across all of the
 | Load and customize definition and skill packs | `packs` | [Packs](./cli/packs.md) |
 | Find RimZ's files | `paths` | [Paths](./cli/paths.md) |
 | Save and list notes | `notes` | [Notes](./cli/notes.md) |
-| Serve RimZ tools to a Claude or Codex launch | `mcp serve` | [MCP server](./cli/mcp.md) |
+| Serve RimZ tools to a Claude or Codex launch, and list them | `mcp serve`, `mcp tools` | [MCP server](./cli/mcp.md) |
 | Read the sidebar | `sidebar frame` | [Sidebar frames](./cli/pane.md#render-a-sidebar-frame) |
 | Navigate and act on cards | `sidebar walk`, `slot`, `last`, `filter`, `close`, `reopen` | [Sidebar cards](./cli/sidebar.md) |
 | Show the dashboard or a numbered terminal | `tab dashboard`, `tab terminal` | [Tab](./cli/tab.md) |
