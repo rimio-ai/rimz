@@ -3722,6 +3722,133 @@ fn auto_continue_withdraws_when_a_prompt_landed_after_the_producer_decided() {
 }
 
 #[test]
+fn a_booking_from_an_unbound_pane_reads_you_as_at_me_resolves() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    // Two same-kind, same-profile agents, and a caller whose pane binds neither: only the
+    // launch id `@me` resolves by tells them apart.
+    for (id, pane) in [("provider-session", "1"), ("sibling-session", "2")] {
+        let process = dummy_agent_process();
+        let owner = agent_owner(id, &process);
+        reap_later(process);
+        append_lifecycle(
+            &env,
+            "claude",
+            "SessionStart",
+            id,
+            LifecycleSignal::Registered,
+            |observation| {
+                observation.agent_name = Some(id.into());
+                observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, pane));
+                observation.runtime_owner = Some(owner);
+            },
+        );
+    }
+    let agents = env.store().snapshot_cached().unwrap().agents.clone();
+    assert_eq!(agents.len(), 2, "{agents:#?}");
+    let output = run_success(
+        env.rimz()
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "provider-session")
+            .args(["agents", "stop", "@me", "--when-idle"]),
+        "agents stop @me --when-idle",
+    );
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        receipt.lines().next(),
+        Some(
+            "stop booked: you close after 3m idle, once nothing holds you. A prompt from the \
+             user withdraws it."
+        ),
+        "{receipt}"
+    );
+}
+
+#[test]
+fn a_started_command_carries_root_when_the_reader_resolves_another_room() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "provider-session",
+        LifecycleSignal::Registered,
+        |_| {},
+    );
+    let store = env.store();
+    let agent = store.snapshot_cached().unwrap().agents[0].clone();
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        &agent,
+        "rebase first".to_owned(),
+        DeliveryGate::Done,
+    );
+    store.queue_message(&message, "started-root-test").unwrap();
+    // The reader's room pin names another directory, which the printed command's resolver
+    // ranks above the working directory.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let elsewhere_root = elsewhere.path().canonicalize().unwrap();
+    let elsewhere_id = rimz::ids::WorkspaceId::from_project_root(&elsewhere_root);
+    let pinned = || {
+        let mut command = env.rimz();
+        command
+            .env("RIMZ_PROJECT_ROOT", &elsewhere_root)
+            .env("RIMZ_WORKSPACE_ID", elsewhere_id.as_str());
+        command
+    };
+    let command_of = |mut command: std::process::Command| {
+        let output = run_success(
+            command.args(["agents", "show", "@claude", "--json"]),
+            "agents show",
+        );
+        let shown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        shown["started"]["holding"][0]["command"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no holding command: {shown}"))
+            .to_owned()
+    };
+    let mut own = env.rimz();
+    own.arg("--root").arg(&env.project_root);
+    assert_eq!(
+        command_of(own),
+        format!("rimz message cancel {}", message.message_id),
+        "the reader's own room needs no --root"
+    );
+    let mut shown = pinned();
+    shown.arg("--root").arg(&env.project_root);
+    let printed = command_of(shown);
+    let home = env
+        .rimz()
+        .get_envs()
+        .find(|(key, _)| *key == "HOME")
+        .and_then(|(_, value)| value.map(PathBuf::from))
+        .expect("fixture HOME");
+    let argv: Vec<String> = printed
+        .split_whitespace()
+        .skip(1)
+        .map(|word| match word.strip_prefix("~/") {
+            Some(tail) => home.join(tail).display().to_string(),
+            None => word.to_owned(),
+        })
+        .collect();
+    assert_eq!(
+        argv.first().map(String::as_str),
+        Some("--root"),
+        "{printed}"
+    );
+    run_success(pinned().args(&argv), &printed);
+    assert!(
+        !store
+            .list_messages()
+            .unwrap()
+            .iter()
+            .any(|queued| queued.message_id == message.message_id && queued.status.is_open()),
+        "the printed command canceled the message in the shown room: {printed}"
+    );
+}
+
+#[test]
 fn human_prompt_withdraws_idle_stop_but_harness_turn_still_stops() {
     use rimz::harness::idle_stop::IdleStopHelperRequest;
     use rimz::store::idle_stop::{self, IdleStopRequest};
@@ -3922,7 +4049,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             stop(&["@claude", "--when-idle"]),
             (
                 true,
-                "@claude#main stops once idle for 3m with nothing owed; a prompt from the user withdraws it\n".to_owned()
+                "stop booked: @claude#main closes after 3m idle, once nothing holds it. A prompt from the user withdraws it.\n".to_owned()
             )
         );
         let shown = run_success(
@@ -3941,7 +4068,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             stop(&["@claude", "--when-idle", "0s"]),
             (
                 true,
-                "@claude#main stops once idle for 0s with nothing owed (replaces the pending 3m request); a prompt from the user withdraws it\n"
+                "stop booked: @claude#main closes after 0s idle (replaces the pending 3m request), once nothing holds it. A prompt from the user withdraws it.\n"
                     .to_owned()
             )
         );
@@ -4072,6 +4199,72 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
                 "a declined stop is no assist ({owed}): {assists:?}"
             );
             if owed == "wait" {
+                // The forgotten wait and a queued message: the receipt lists both as holding
+                // the stop, in the order `show` reads them, and `show` names the first on the
+                // idle_stop row.
+                let agent = store.snapshot_cached().unwrap().agents[0].clone();
+                let message = MessageRecord::new(
+                    env.workspace_id.clone(),
+                    &agent,
+                    "rebase first".to_owned(),
+                    DeliveryGate::Done,
+                );
+                store.queue_message(&message, "idle-stop-test").unwrap();
+                let (ok, receipt) = stop(&["@claude", "--when-idle", "0s"]);
+                assert!(ok, "{receipt}");
+                let mut lines = receipt.lines();
+                assert_eq!(
+                    lines.next(),
+                    Some(
+                        "stop booked: @claude#main closes after 0s idle (replaces the pending 0s \
+                         request), once nothing holds it. A prompt from the user withdraws it."
+                    ),
+                    "{receipt}"
+                );
+                assert_eq!(lines.next(), Some(""), "{receipt}");
+                assert_eq!(lines.next(), Some("holding its stop"), "{receipt}");
+                let held: Vec<(String, String)> = lines
+                    .map(|row| {
+                        let mut cells = row.split_whitespace().map(str::to_owned);
+                        (
+                            cells.next().unwrap_or_default(),
+                            cells.next().unwrap_or_default(),
+                        )
+                    })
+                    .collect();
+                let shown = run_success(
+                    env.rimz()
+                        .env("RIMZ_TEST_PANE_LIST", &fixture)
+                        .args(["agents", "show", "@claude", "--json"]),
+                    "agents show",
+                );
+                let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+                let listed: Vec<(String, String)> = shown["started"]["holding"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("no holding rows: {shown}"))
+                    .iter()
+                    .map(|row| {
+                        let cell = |key: &str| row[key].as_str().unwrap_or_default().to_owned();
+                        (cell("kind"), cell("name"))
+                    })
+                    .collect();
+                assert_eq!(held, listed, "{receipt}");
+                assert_eq!(
+                    held.iter()
+                        .map(|(kind, _)| kind.as_str())
+                        .collect::<Vec<_>>(),
+                    ["wait", "message"],
+                    "{receipt}"
+                );
+                let name = &held[0].1;
+                let shown = run_success(
+                    env.rimz()
+                        .env("RIMZ_TEST_PANE_LIST", &fixture)
+                        .args(["agents", "show", "@claude"]),
+                    "agents show",
+                );
+                let shown = String::from_utf8_lossy(&shown.stdout);
+                assert!(shown.contains(&format!("held by wait {name}")), "{shown}");
                 as_agent(&["wait", "cancel", "--all"]);
             }
             if let Some(other) = &collision {
@@ -4137,7 +4330,7 @@ fn stop_when_idle_reference_reparse_and_usage_errors() {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains("idle for 3m"),
+            String::from_utf8_lossy(&output.stdout).contains("closes after 3m idle"),
             "{output:?}"
         );
     }

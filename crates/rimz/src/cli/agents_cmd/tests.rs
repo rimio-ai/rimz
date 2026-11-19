@@ -3210,3 +3210,92 @@ fn mark_completes_its_three_marks() {
         .collect::<Vec<_>>();
     assert_eq!(values, ["read", "unread", "alert"]);
 }
+
+#[test]
+fn idle_stop_receipt_names_the_person_and_prints_the_groups_after_the_booking() {
+    use rimz::harness::idle_stop::started::{RowKind, Started, StartedRow};
+    let now = jiff::Timestamp::from_second(3_600).unwrap();
+    let row = |kind, name: &str| StartedRow {
+        kind,
+        name: name.to_owned(),
+        status: "queued".to_owned(),
+        tone: rimz::agents::AgentStatus::Sleeping,
+        phase: rimz::agents::TurnPhase::Idle,
+        provider: None,
+        since: Some(jiff::Timestamp::from_second(3_480).unwrap()),
+        due: None,
+        detail: Vec::new(),
+        command: None,
+    };
+    let started = Started {
+        holding: vec![row(RowKind::Message, "msg_1")],
+        closing: vec![row(RowKind::Subagent, "@child")],
+        outliving: vec![row(RowKind::Agent, "@peer")],
+    };
+    // A blank line before each group, its name at column 0, and one alignment for every row.
+    let groups = |[holding, closing, outliving]: [&str; 3]| {
+        format!(
+            "\n{holding}\n  message   msg_1   queued  2m ago\n\
+             \n{closing}\n  subagent  @child  queued  2m ago\n\
+             \n{outliving}\n  agent     @peer   queued  2m ago\n"
+        )
+    };
+    let receipt = |subject: Option<&str>, replaced: &str, read: anyhow::Result<Started>| {
+        let (mut out, mut err) = (anstream::StripStream::new(Vec::new()), Vec::new());
+        super::stop::write_idle_receipt(&mut out, &mut err, subject, "3m", replaced, read, now)
+            .expect("a receipt never fails the booking");
+        (
+            String::from_utf8(out.into_inner()).unwrap(),
+            String::from_utf8(err).unwrap(),
+        )
+    };
+
+    assert_eq!(
+        receipt(None, "", Ok(started.clone())),
+        (
+            "stop booked: you close after 3m idle, once nothing holds you. A prompt from the user \
+             withdraws it.\n"
+                .to_owned()
+                + &groups([
+                    "holding your stop",
+                    "closing with you",
+                    "still running after you close",
+                ]),
+            String::new()
+        )
+    );
+    assert_eq!(
+        receipt(
+            Some("@coder"),
+            " (replaces the pending 5m request)",
+            Ok(started.clone())
+        ),
+        (
+            "stop booked: @coder closes after 3m idle (replaces the pending 5m request), once \
+             nothing holds it. A prompt from the user withdraws it.\n"
+                .to_owned()
+                + &groups([
+                    "holding its stop",
+                    "closing with it",
+                    "still running after it closes",
+                ]),
+            String::new()
+        )
+    );
+    let first_line = "stop booked: @coder closes after 3m idle, once nothing holds it. A prompt \
+                      from the user withdraws it.\n";
+    assert_eq!(
+        receipt(Some("@coder"), "", Ok(Started::default())),
+        (first_line.to_owned(), String::new()),
+        "empty groups print nothing"
+    );
+    assert_eq!(
+        receipt(Some("@coder"), "", Err(anyhow::anyhow!("runs unreadable"))),
+        (
+            first_line.to_owned(),
+            "warning: the stop is booked, but what it started could not be read: runs unreadable\n"
+                .to_owned()
+        ),
+        "a failed read after the booking keeps the first line and the booking"
+    );
+}

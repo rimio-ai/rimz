@@ -427,10 +427,83 @@ fn request_idle_stop(reference: &str, when_idle: WhenIdle, globals: &GlobalFlags
             )
         })
         .unwrap_or_default();
+    let reader = ctx.address_context();
+    let you = super::report::is_me(&ctx.store, &snapshot, &reader, agent);
+    let prefix = super::report::rimz_for(&ctx.workspace.project_root);
+    // The snapshot `agents show` reads, so both list the holding rows in one order.
+    let booked = ctx.published_snapshot();
+    let now = booked
+        .as_ref()
+        .map_or_else(|_| jiff::Timestamp::now(), |booked| booked.now);
+    let started = booked.and_then(|booked| {
+        let shown = session_row(&booked.agents, agent)
+            .ok_or_else(|| anyhow::anyhow!("{label} left the room snapshot"))?;
+        let seat = rimz::harness::idle_stop::started::Seat {
+            root: &ctx.workspace.project_root,
+            reader: &reader,
+            you,
+            rimz: &prefix,
+        };
+        Ok(rimz::harness::idle_stop::started::started(
+            &ctx.store, &booked, shown, &seat, now,
+        )?)
+    });
+    let subject = (!you).then_some(label.as_str());
+    write_idle_receipt(
+        &mut out,
+        &mut render::err(),
+        subject,
+        &duration,
+        &replaced,
+        started,
+        now,
+    )
+}
+
+/// The `--when-idle` receipt: the booking, then what holds the stop and what the stop
+/// reaches, read after the booking was written. `subject` is `None` when the reader is the
+/// agent. A failed read warns on `err` and leaves the booking standing.
+pub(super) fn write_idle_receipt(
+    out: &mut impl Write,
+    err: &mut impl Write,
+    subject: Option<&str>,
+    duration: &str,
+    replaced: &str,
+    started: Result<rimz::harness::idle_stop::started::Started>,
+    now: jiff::Timestamp,
+) -> Result<()> {
+    let (headings, first_line) = match subject {
+        None => (
+            [
+                "holding your stop",
+                "closing with you",
+                "still running after you close",
+            ],
+            format!("you close after {duration} idle{replaced}, once nothing holds you"),
+        ),
+        Some(subject) => (
+            [
+                "holding its stop",
+                "closing with it",
+                "still running after it closes",
+            ],
+            format!("{subject} closes after {duration} idle{replaced}, once nothing holds it"),
+        ),
+    };
     writeln!(
         out,
-        "{label} stops once idle for {duration} with nothing owed{replaced}; a prompt from the user withdraws it"
+        "stop booked: {first_line}. A prompt from the user withdraws it."
     )?;
+    match started {
+        Ok(started) => super::report::render_started(
+            out,
+            &started,
+            headings,
+            super::report::StartedPlace::Receipt,
+            now,
+        )?,
+        Err(read) => super::report::warn_started_unread(err, "the stop is booked, but ", &read)?,
+    }
     Ok(())
 }
 
