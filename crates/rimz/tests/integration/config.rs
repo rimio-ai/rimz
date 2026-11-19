@@ -127,6 +127,36 @@ fn team_notes_retention_config_round_trips_and_names_invalid_values() {
     }
 }
 
+#[test]
+fn config_unset_returns_a_key_to_its_default_and_refuses_an_unknown_key() {
+    let env = Env::new();
+    env.rimz()
+        .args(["config", "set", "theme.display.highlight_steps.band", "128"])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["config", "unset", "theme.display.highlight_steps.band"])
+        .assert()
+        .success()
+        .stdout("unset theme.display.highlight_steps.band  (was 128; default 5)\n");
+    let theme = std::fs::read_to_string(theme_config_path(&env)).unwrap();
+    assert!(theme.contains("\n## band = 5 "), "{theme}");
+    env.rimz()
+        .args(["config", "unset", "theme.display.highlight_steps.band"])
+        .assert()
+        .success()
+        .stdout("unset theme.display.highlight_steps.band  (unchanged)\n");
+    env.rimz()
+        .args(["config", "unset", "theme.nope"])
+        .assert()
+        .failure()
+        .stderr(contains("unknown config key `theme.nope`"));
+    assert_eq!(
+        std::fs::read_to_string(theme_config_path(&env)).unwrap(),
+        theme
+    );
+}
+
 fn machine_config_path(env: &Env) -> std::path::PathBuf {
     env.rimz_home().join("config.toml")
 }

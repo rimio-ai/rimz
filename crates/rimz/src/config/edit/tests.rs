@@ -3481,3 +3481,254 @@ fn account_tables_land_beside_the_templated_accounts_block() {
         Some("rimio".to_owned())
     );
 }
+
+fn unset_editor(dir: &tempfile::TempDir) -> ConfigEditor {
+    ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ))
+}
+
+#[test]
+fn unset_after_set_restores_the_template_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = unset_editor(&dir);
+    let path = editor.files().path(Kind::Theme);
+
+    editor
+        .set("theme.display.highlight_steps.band", "128")
+        .unwrap();
+    assert_eq!(
+        editor.unset("theme.display.highlight_steps.band").unwrap(),
+        "unset theme.display.highlight_steps.band  (was 128; default 5)"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        Kind::Theme.template()
+    );
+
+    editor.set("theme.selection_bg", "#2f3b63").unwrap();
+    assert_eq!(
+        editor.unset("theme.selection_bg").unwrap(),
+        "unset theme.selection_bg  (was \"#2f3b63\"; now the scheme default)"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        Kind::Theme.template()
+    );
+}
+
+#[test]
+fn unset_table_key_clears_every_key_under_it_and_keeps_the_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = unset_editor(&dir);
+    let path = editor.files().path(Kind::Theme);
+    editor
+        .set("theme.display.highlight_steps.band", "128")
+        .unwrap();
+    editor
+        .set("theme.display.highlight_steps.wash", "3")
+        .unwrap();
+
+    assert_eq!(
+        editor.unset("theme.display.highlight_steps").unwrap(),
+        "unset theme.display.highlight_steps  \
+         (was { band = 128, wash = 3 }; default { band = 5, indexed = 4, wash = 1 })"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        Kind::Theme.template()
+    );
+}
+
+#[test]
+fn unset_of_a_whole_entry_table_removes_its_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = unset_editor(&dir);
+    let path = editor.files().path(Kind::Theme);
+    editor
+        .set(
+            "theme.display.context_meter.red",
+            "{ percent = 90, tokens = 400000 }",
+        )
+        .unwrap();
+
+    let receipt = editor.unset("theme.display.context_meter.red").unwrap();
+
+    assert!(
+        receipt.starts_with(
+            "unset theme.display.context_meter.red  (was { percent = 90, tokens = 400000 }; "
+        ),
+        "{receipt}"
+    );
+    // `set` moved the section's comments beside the block it wrote; each survives.
+    let rendered = std::fs::read_to_string(&path).unwrap();
+    assert!(!rendered.contains("context_meter.red]"), "{rendered}");
+    for comment in [
+        "# Agent-card context meter geometry",
+        "## yellow = { percent = 70",
+    ] {
+        assert!(rendered.contains(comment), "{comment}: {rendered}");
+    }
+
+    // A table above a whole-entry table removes that entry whole too.
+    for parent in ["theme.display.context_meter", "theme.display"] {
+        editor
+            .set(
+                "theme.display.context_meter.red",
+                "{ percent = 90, tokens = 400000 }",
+            )
+            .unwrap();
+        let receipt = editor.unset(parent).unwrap();
+        assert!(
+            receipt.starts_with(&format!("unset {parent}  (was ")),
+            "{receipt}"
+        );
+        let rendered = std::fs::read_to_string(&path).unwrap();
+        assert!(!rendered.contains("context_meter.red]"), "{rendered}");
+    }
+
+    // An inline entry under its parent keeps the comment above it.
+    std::fs::write(
+        &path,
+        "[theme.display.context_meter]\n# keep me\nred = { percent = 90, tokens = 400000 }\n",
+    )
+    .unwrap();
+    editor.unset("theme.display.context_meter").unwrap();
+    let rendered = std::fs::read_to_string(&path).unwrap();
+    assert!(rendered.contains("# keep me"), "{rendered}");
+    assert!(!rendered.contains("percent = 90"), "{rendered}");
+}
+
+#[test]
+fn unset_of_an_absent_key_is_unchanged_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = unset_editor(&dir);
+    let path = editor.files().path(Kind::Theme);
+
+    assert_eq!(
+        editor.unset("theme.selection_bg").unwrap(),
+        "unset theme.selection_bg  (unchanged)"
+    );
+    assert!(!path.exists());
+
+    std::fs::write(&path, Kind::Theme.template()).unwrap();
+    for key in ["theme.selection_bg", "theme.display.highlight_steps"] {
+        assert_eq!(
+            editor.unset(key).unwrap(),
+            format!("unset {key}  (unchanged)")
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        Kind::Theme.template()
+    );
+}
+
+#[test]
+fn unset_expands_the_theme_shorthand() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = unset_editor(&dir);
+    editor.set("theme", "Catppuccin Mocha").unwrap();
+
+    let receipt = editor.unset("theme").unwrap();
+
+    assert_eq!(
+        receipt,
+        "unset theme.scheme  (was \"Catppuccin Mocha\"; default \"TokyoNight Night\")"
+    );
+    assert!(matches!(
+        editor.get(Some("theme.scheme")),
+        Err(ConfigEditErr::UnsetKey { .. })
+    ));
+}
+
+#[test]
+fn unset_keeps_comments_and_restores_no_line_outside_its_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = unset_editor(&dir);
+    let path = editor.files().path(Kind::Theme);
+    std::fs::write(
+        &path,
+        "[theme]\n# my pick\nselection_bg = \"#111111\" # dark\n\n\
+         [theme.display]\n# steps\nhighlight_steps.band = 9\nmax_cols = 60\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        editor.unset("theme.display.highlight_steps.band").unwrap(),
+        "unset theme.display.highlight_steps.band  (was 9; default 5)"
+    );
+    editor.unset("theme.selection_bg").unwrap();
+
+    let selection_line = Kind::Theme
+        .template()
+        .lines()
+        .find(|line| line.starts_with("## selection_bg = "))
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        format!(
+            "[theme]\n# my pick\n{selection_line}\n\n\
+             [theme.display]\n# steps\nmax_cols = 60\n"
+        )
+    );
+}
+
+#[test]
+fn unset_inside_an_inline_table_keeps_its_siblings() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = unset_editor(&dir);
+    let path = editor.files().path(Kind::Theme);
+    std::fs::write(
+        &path,
+        "[theme.display]\nhighlight_steps = { band = 9, wash = 2 }\n",
+    )
+    .unwrap();
+
+    editor.unset("theme.display.highlight_steps.band").unwrap();
+
+    let rendered = std::fs::read_to_string(&path).unwrap();
+    let doc: toml::Table = toml::from_str(&rendered).unwrap();
+    let steps = &doc["theme"]["display"]["highlight_steps"];
+    assert_eq!(steps.get("band"), None, "{rendered}");
+    assert_eq!(steps["wash"].as_integer(), Some(2), "{rendered}");
+}
+
+#[test]
+fn unset_refuses_what_set_refuses_and_named_accounts() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = unset_editor(&dir);
+    let core = editor.files().core_path().to_path_buf();
+    std::fs::write(&core, "[accounts.claude.work]\nlabel = \"Work\"\n").unwrap();
+
+    assert!(matches!(
+        editor.unset("theme.nope"),
+        Err(ConfigEditErr::UnknownKey { key }) if key == "theme.nope"
+    ));
+    assert!(matches!(
+        editor.unset("theme..scheme"),
+        Err(ConfigEditErr::InvalidKey(_))
+    ));
+    for (key, reason) in [
+        ("agents.profiles.coder", "edit "),
+        ("notifications.handler", "is an array of tables"),
+        ("loop", "is the whole of"),
+        ("accounts.claude.work", "rimz accounts remove claude work"),
+        ("accounts.claude", "rimz accounts remove claude <name>"),
+    ] {
+        let error = editor.unset(key).expect_err(key);
+        let ConfigEditErr::InvalidKey(message) = &error else {
+            panic!("{key}: expected InvalidKey, got {error:?}");
+        };
+        assert!(message.contains(reason), "{key}: {message}");
+    }
+    assert_eq!(
+        editor.unset("accounts.claude.work.label").unwrap(),
+        "unset accounts.claude.work.label  (was \"Work\"; no default)"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&core).unwrap(),
+        "[accounts.claude.work]\n"
+    );
+}

@@ -10,6 +10,7 @@
 //! the position of the previously visited table. Document trailing text always
 //! renders last, so a comment-only file keeps all its text there.
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use toml_edit::{
@@ -96,6 +97,8 @@ pub enum ConfigEditErr {
     InvalidValue(String),
     #[error("`{segment}` is not a table")]
     DocumentShape { segment: String },
+    #[error("cannot unset `{key}`: {message}")]
+    UnsetInvalid { key: String, message: String },
 }
 
 #[derive(Clone, Debug)]
@@ -192,6 +195,69 @@ impl ConfigEditor {
         let receipt = format!("set {key} = {}  ({was})", receipt_value(value));
         write(file.path(), doc.to_string().as_bytes())?;
         Ok(receipt)
+    }
+
+    /// Return a key to its default by removing it from its owning file. A table
+    /// key clears every key under it and keeps its headers, except a table whose
+    /// fields only validate together, which goes whole. A removed line whose
+    /// key the template documents as a commented default gets that line back, so
+    /// `unset` undoes the uncommenting `set` does.
+    pub fn unset(&self, key: &str) -> Result<String> {
+        let key = normalize_unset_key(parse_key(key)?);
+        validate_unset_key(&self.files, &key)?;
+        let file = file_for_key(&self.files, &key);
+        let doc_key = document_key_for_set(&key);
+        let path = key;
+        let key = path.join(".");
+        let unchanged = format!("unset {key}  (unchanged)");
+        let Some(existing) = read_existing(file.path())? else {
+            return Ok(unchanged);
+        };
+        let mut doc = parse_document(file.path(), &existing)?;
+        let Some(previous) = item_at(&doc, &doc_key).and_then(item_to_value) else {
+            return Ok(unchanged);
+        };
+        let containers = match previous {
+            Value::InlineTable(_) => doc_key.as_slice(),
+            _ => &doc_key[..doc_key.len() - 1],
+        };
+        convert_inline_tables(&mut doc, containers)?;
+        let mut whole_entries = Vec::new();
+        if let Some(item) = item_at(&doc, &doc_key) {
+            collect_whole_entries(item, &path, &doc_key, &mut whole_entries);
+        }
+        for whole_entry in &whole_entries {
+            convert_inline_tables(&mut doc, whole_entry)?;
+            remove_keeping_comments(&mut doc, whole_entry)?;
+        }
+        let text = doc.to_string();
+        let lines = unset_lines(file.path(), &text, file.template(), &doc_key)?;
+        if whole_entries.is_empty() && lines.is_empty() {
+            return Ok(unchanged);
+        }
+        let mut edited = String::with_capacity(text.len());
+        let mut kept = 0;
+        for (range, restored) in lines {
+            edited.push_str(&text[kept..range.start]);
+            edited.push_str(&restored);
+            kept = range.end;
+        }
+        edited.push_str(&text[kept..]);
+        MachineConfig::parse_text_for_edit(file.path(), &edited, self.files.agents_home())
+            .map_err(|source| ConfigEditErr::UnsetInvalid {
+                key: key.clone(),
+                message: source.validation_message(),
+            })?;
+        let now = match built_in_default(&key)? {
+            Some(default) => format!("default {default}"),
+            None if is_scheme_color_key(&key) => "now the scheme default".to_owned(),
+            None => "no default".to_owned(),
+        };
+        write(file.path(), edited.as_bytes())?;
+        Ok(format!(
+            "unset {key}  (was {}; {now})",
+            receipt_value(previous)
+        ))
     }
 
     /// Declare `[accounts.<kind>.<name>]`, or set the given fields of a
@@ -565,25 +631,31 @@ fn apply_merge_keys(
 }
 
 fn uncomment_template_default(text: &str, doc_key: &[String]) -> Option<String> {
+    let (start, line) = commented_default_line(text, doc_key)?;
+    let trimmed = line.trim_start();
+    let indent = &line[..line.len() - trimmed.len()];
+    let uncommented = uncomment_line(trimmed)?;
+    let rest = &text[start + line.len()..];
+    Some(format!("{}{indent}{uncommented}{rest}", &text[..start]))
+}
+
+/// The first commented `key = value` line for `doc_key` under its own active
+/// section header, as its byte offset in `text` and its text without the line
+/// ending.
+fn commented_default_line<'t>(text: &'t str, doc_key: &[String]) -> Option<(usize, &'t str)> {
     let (leaf, parents) = doc_key.split_last()?;
     let mut section = Vec::new();
     let mut inside_commented_table = false;
-    let mut rendered = String::with_capacity(text.len());
-    let mut matched = false;
+    let mut start = 0;
 
     for line in text.split_inclusive('\n') {
-        let (content, ending) = if let Some(content) = line.strip_suffix("\r\n") {
-            (content, "\r\n")
-        } else if let Some(content) = line.strip_suffix('\n') {
-            (content, "\n")
-        } else {
-            (line, "")
-        };
+        let line_start = start;
+        start += line.len();
+        let content = line
+            .strip_suffix('\n')
+            .map_or(line, |line| line.strip_suffix('\r').unwrap_or(line));
         let trimmed = content.trim_start();
-        let uncommented = trimmed
-            .strip_prefix('#')
-            .map(|line| line.trim_start_matches('#'))
-            .map(|line| line.strip_prefix(' ').unwrap_or(line));
+        let uncommented = uncomment_line(trimmed);
 
         if let Some(header) = template_table_header(trimmed) {
             section = header.split('.').map(str::trim).collect();
@@ -592,29 +664,141 @@ fn uncomment_template_default(text: &str, doc_key: &[String]) -> Option<String> 
             inside_commented_table = true;
         }
 
-        let target = uncommented.filter(|line| {
-            !matched
-                && !inside_commented_table
-                && section
-                    .iter()
-                    .copied()
-                    .eq(parents.iter().map(String::as_str))
-                && line
-                    .split_once('=')
-                    .is_some_and(|(key, _)| key.trim() == leaf)
-        });
-
-        if let Some(uncommented) = target {
-            rendered.push_str(&content[..content.len() - trimmed.len()]);
-            rendered.push_str(uncommented);
-            matched = true;
-        } else {
-            rendered.push_str(content);
+        if !inside_commented_table
+            && section
+                .iter()
+                .copied()
+                .eq(parents.iter().map(String::as_str))
+            && uncommented
+                .and_then(|line| line.split_once('='))
+                .is_some_and(|(key, _)| key.trim() == leaf)
+        {
+            return Some((line_start, content));
         }
-        rendered.push_str(ending);
+    }
+    None
+}
+
+fn uncomment_line(trimmed: &str) -> Option<&str> {
+    trimmed
+        .strip_prefix('#')
+        .map(|line| line.trim_start_matches('#'))
+        .map(|line| line.strip_prefix(' ').unwrap_or(line))
+}
+
+/// The document path of each table at or under `doc_key` whose fields only
+/// validate together, so `unset` removes it whole: `key` is the logical key
+/// `doc_key` stands for.
+fn collect_whole_entries(
+    item: &Item,
+    key: &[String],
+    doc_key: &[String],
+    out: &mut Vec<Vec<String>>,
+) {
+    if is_whole_struct_table(key) {
+        out.push(doc_key.to_vec());
+        return;
+    }
+    let Some(table) = item.as_table_like() else {
+        return;
+    };
+    for (child, item) in table.iter() {
+        let child = [child.to_owned()];
+        collect_whole_entries(
+            item,
+            &[key, &child].concat(),
+            &[doc_key, &child].concat(),
+            out,
+        );
+    }
+}
+
+/// The line span of each value at or under `doc_key` in `text`, in file
+/// order, with the text that replaces it: the template's commented default line
+/// when the value sits under its own header and the file has none left, or
+/// nothing.
+fn unset_lines(
+    path: &Path,
+    text: &str,
+    template: &str,
+    doc_key: &[String],
+) -> Result<Vec<(Range<usize>, String)>> {
+    let parsed =
+        toml_edit::Document::parse(text).map_err(|source| ConfigEditErr::DocumentParse {
+            path: path.to_path_buf(),
+            diagnosis: Box::new(ConfigFileDiagnosis::from_toml_edit(path, text, &source)),
+        })?;
+    let mut lines = Vec::new();
+    let Some((leaf, parents)) = doc_key.split_last() else {
+        return Ok(lines);
+    };
+    let mut table: &dyn TableLike = parsed.as_table();
+    for segment in parents {
+        let Some(parent) = table.get(segment).and_then(Item::as_table_like) else {
+            return Ok(lines);
+        };
+        table = parent;
+    }
+    let mut place = UnsetPlace {
+        text,
+        template,
+        lines: &mut lines,
+    };
+    place.collect(table, parents, leaf);
+    lines.sort_by_key(|(range, _)| range.start);
+    Ok(lines)
+}
+
+struct UnsetPlace<'a> {
+    text: &'a str,
+    template: &'a str,
+    lines: &'a mut Vec<(Range<usize>, String)>,
+}
+
+impl UnsetPlace<'_> {
+    fn collect(&mut self, table: &dyn TableLike, table_path: &[String], key: &str) {
+        let Some((key_repr, item)) = table.get_key_value(key) else {
+            return;
+        };
+        let path = [table_path, &[key.to_owned()]].concat();
+        match item {
+            Item::Value(value) => {
+                // A document parsed from text carries the span of every key and value.
+                let start = key_repr.span().expect("parsed key has a span").start;
+                let end = value.span().expect("parsed value has a span").end;
+                let start = self.text[..start].rfind('\n').map_or(0, |at| at + 1);
+                let end = self.text[end..]
+                    .find('\n')
+                    .map_or(self.text.len(), |at| end + at + 1);
+                let ending = if self.text[..end].ends_with("\r\n") {
+                    "\r\n"
+                } else if self.text[..end].ends_with('\n') {
+                    "\n"
+                } else {
+                    ""
+                };
+                let restored = commented_default_line(self.template, &path)
+                    .filter(|_| !table.is_dotted())
+                    .filter(|_| commented_default_line(self.text, &path).is_none())
+                    .map(|(_, line)| format!("{line}{ending}"))
+                    .unwrap_or_default();
+                self.lines.push((start..end, restored));
+            }
+            Item::Table(child) => self.collect_all(child, &path),
+            Item::ArrayOfTables(tables) => {
+                for child in tables.iter() {
+                    self.collect_all(child, &path);
+                }
+            }
+            Item::None => {}
+        }
     }
 
-    matched.then_some(rendered)
+    fn collect_all(&mut self, table: &Table, path: &[String]) {
+        for (key, _) in table.iter() {
+            self.collect(table, path, key);
+        }
+    }
 }
 
 fn template_table_header(line: &str) -> Option<&str> {
@@ -1315,6 +1499,90 @@ fn validate_set_key(files: &MachineConfigFiles, path: &[String]) -> Result<()> {
         .map_err(|source| ConfigEditErr::TemplateParse { source })?;
     set_document_value(&mut doc, &doc_key, Value::from("__rimz_probe__"))?;
     reject_if_ignored(file.path(), path, &doc_key, &doc)
+}
+
+/// The built-in default at `key`. Serialization skips a theme section left at
+/// its default, so each such section is serialized on its own.
+fn built_in_default(key: &str) -> Result<Option<toml::Value>> {
+    fn table(value: impl serde::Serialize) -> Result<toml::Table> {
+        toml::Table::try_from(value).map_err(|source| ConfigEditErr::Serialize { source })
+    }
+    let mut defaults = table(MachineConfig::default())?;
+    let mut display = table(super::DisplayConfig::default())?;
+    display.insert(
+        "popup".to_owned(),
+        table(super::PopupConfig::default())?.into(),
+    );
+    let mut theme = table(super::ThemeConfig::default())?;
+    theme.insert(
+        "scheme".to_owned(),
+        super::scheme::DEFAULT_SCHEME.to_owned().into(),
+    );
+    theme.insert(
+        "mode".to_owned(),
+        toml::Value::try_from(super::ThemeMode::default())
+            .map_err(|source| ConfigEditErr::Serialize { source })?,
+    );
+    theme.insert("display".to_owned(), display.into());
+    theme.insert(
+        "glyphs".to_owned(),
+        table(super::ThemeGlyphsConfig::default())?.into(),
+    );
+    theme.insert(
+        "animations".to_owned(),
+        table(super::ThemeAnimationsConfig::default())?.into(),
+    );
+    theme.insert(
+        "pets".to_owned(),
+        table(super::PetsConfig::default())?.into(),
+    );
+    defaults.insert("theme".to_owned(), theme.into());
+    Ok(value_at(&defaults.into(), key).cloned())
+}
+
+/// A color the scheme supplies when unset: a palette slot, a provider color,
+/// or a `[theme]` color role such as `selection_bg`.
+fn is_scheme_color_key(key: &str) -> bool {
+    match key.split('.').collect::<Vec<_>>().as_slice() {
+        ["theme", "colors" | "providers", ..] => true,
+        ["theme", role] => *role != "style",
+        _ => false,
+    }
+}
+
+fn normalize_unset_key(path: Vec<String>) -> Vec<String> {
+    let expanded: &[&str] = match path.as_slice() {
+        [root] if root == "theme" => &["theme", "scheme"],
+        [root, child] if root == "theme" && child == "glyphs" => &["theme", "glyphs", "set"],
+        _ => return path,
+    };
+    expanded.iter().copied().map(str::to_owned).collect()
+}
+
+/// `set`'s keys, plus each table `set` refuses as a whole that `get` reads.
+fn validate_unset_key(files: &MachineConfigFiles, path: &[String]) -> Result<()> {
+    let joined = path.join(".");
+    if document_key_for_set(path).is_empty() {
+        let file = file_for_key(files, path);
+        return Err(ConfigEditErr::InvalidKey(format!(
+            "`{joined}` is the whole of {}; unset one key inside it",
+            file.path().display()
+        )));
+    }
+    if let [root, kind, name @ ..] = path
+        && root == "accounts"
+        && name.len() <= 1
+        && is_named_account_kind(kind)
+    {
+        let name = name.first().map_or("<name>", String::as_str);
+        return Err(ConfigEditErr::InvalidKey(format!(
+            "`{joined}` declares accounts; run `rimz accounts remove {kind} {name}`"
+        )));
+    }
+    match validate_set_key(files, path) {
+        Err(ConfigEditErr::UnknownKey { .. }) if is_known_get_key(files, path)? => Ok(()),
+        result => result,
+    }
 }
 
 fn reject_reserved_set_key(path: &[String], core_path: &Path) -> Result<()> {
