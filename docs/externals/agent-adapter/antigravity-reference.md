@@ -575,6 +575,10 @@ Read-only slash commands answer without an agent turn, quota, or conversation: `
 
 Since 1.2.15, terminal `/usage` output shows reset times in local time. Piped and JSON output retain UTC ([1.2.15 changelog](https://github.com/google-antigravity/antigravity-cli/blob/800852ea61796e9fe53077a2f945e74daacb4be6/CHANGELOG.md#1215)).
 
+1.5.12 probes (scratch `HOME` under `env -i`): `agy -p /usage --output-format json` answers in 1.8 to 2.8 s with `num_turns: 0` and zero tokens, fires no hook, runs no statusline, and leaves no conversation. Stdout is one object: `{"status": "SUCCESS", "num_turns": 0, "command": {"name": "usage", "data": {"groups": [{"name", "buckets": [{"id", "window", "remaining_fraction", "reset_time"}]}]}}, ...}`. Observed bucket ids are `gemini-5h`, `gemini-weekly`, `3p-5h`, and `3p-weekly`; `window` is `5h` or `weekly`, and `reset_time` is RFC 3339 UTC.
+
+1.5.12 probes, logged out: the same command prints a sign-in URL on stderr and waits 60 s whatever `--print-timeout` says, and calls `xdg-open` whatever `DISPLAY`, `WAYLAND_DISPLAY`, `BROWSER`, or `CI` say. Any one of `SSH_TTY`, `SSH_CONNECTION`, or `SSH_CLIENT` in its environment selects the URL-and-code flow, which opens no browser, and a newline on stdin answers the code prompt: it then exits 1 within a second with stdout `{"status":"ERROR","error":"authentication failed or timed out",...}`. Logged in, the variable and the newline change nothing. Offline (`unshare -rn`) and logged in, it exits 1 after 7.3 s with `status: "ERROR"` and an `error` beginning `/usage failed: retrieving quota summary`; the login survives.
+
 ## Settings and permissions
 
 `~/.gemini/antigravity-cli/settings.json` is sparse: it stores only non-default values. Since 1.1.16 a file the CLI cannot parse is left byte-identical and the status line names it.
@@ -664,6 +668,8 @@ A running `agy` exposes an undocumented Connect-over-HTTPS service on process-ow
 | `/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary` | `{"forceRefresh":true}` | per-model quota buckets grouped by period |
 
 Both take `Content-Type: application/json` and `Connect-Protocol-Version: 1`. The quota summary can sit at the root, under `response`, or under `summary`, and a bucket's remaining fraction can be direct, nested, or in a oneof wrapper. Period labels include explicit five-hour and weekly periods. The complete label set is unpublished.
+
+RimZ uses none of this service: it reads quota through print-mode `/usage` ([Exit, timeout, and read-only commands](#exit-timeout-and-read-only-commands)).
 
 ## Remote control, MCP, plugins, and custom agents
 

@@ -540,7 +540,7 @@ fn parse_environ_pair(pair: &str) -> Option<(&str, &str)> {
 
 /// Socket inodes held by a Linux process, bounded to 4096 file descriptors.
 #[cfg(target_os = "linux")]
-pub(crate) fn socket_inodes(fd_dir: &Path) -> BTreeSet<u64> {
+fn socket_inodes(fd_dir: &Path) -> BTreeSet<u64> {
     let Ok(entries) = std::fs::read_dir(fd_dir) else {
         return BTreeSet::new();
     };

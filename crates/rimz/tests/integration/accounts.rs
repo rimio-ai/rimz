@@ -240,6 +240,71 @@ fn unavailable_login_probe_keeps_accounts_stderr_quiet() {
 }
 
 #[test]
+fn antigravity_windows_come_from_one_usage_print_per_list() {
+    let env = Env::new();
+    let calls = env.home_root.join("agy-calls.log");
+    let at = |hours| (jiff::Timestamp::now() + jiff::SignedDuration::from_hours(hours)).to_string();
+    let answer = json!({"status": "SUCCESS", "num_turns": 0, "command": {"name": "usage", "data": {
+        "groups": [{"name": "Gemini", "buckets": [
+            {"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.25, "reset_time": at(2)},
+            {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.5, "reset_time": at(72)}
+        ]}]
+    }}});
+    crate::common::write_path_shim(
+        &provider_bin(&env),
+        "agy",
+        &format!(
+            "printf '%s\\n' \"$*\" >> '{}'\nprintf '%s\\n' '{answer}'",
+            calls.display()
+        ),
+    );
+    succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .args(["hooks", "install", "antigravity"])
+            .output()
+            .unwrap(),
+    );
+    let _ = std::fs::remove_file(&calls);
+    let list = hermetic(&env, &mut env.rimz())
+        .args(["accounts", "list", "--json"])
+        .env("RIMZ_OAUTH_USAGE_OFFLINE", "0")
+        .output()
+        .unwrap();
+    let rows: Value = serde_json::from_str(&succeeded(&list)).unwrap();
+    let row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["account"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("antigravity"))
+        })
+        .unwrap_or_else(|| panic!("no antigravity row in {rows}"));
+    let windows: Vec<_> = row["windows"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{row}"))
+        .iter()
+        .map(|window| {
+            (
+                window["duration_mins"].clone(),
+                window["used_percentage"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        windows,
+        [(json!(300), json!(75)), (json!(10_080), json!(50))],
+        "{row}"
+    );
+    let log = std::fs::read_to_string(&calls).unwrap_or_default();
+    assert_eq!(
+        log, "-p /usage --output-format json\n",
+        "one agy start serves the whole list"
+    );
+}
+
+#[test]
 fn single_markers_disappear_but_filtered_multi_account_markers_remain() {
     let env = Env::new();
     crate::common::write_path_shim(

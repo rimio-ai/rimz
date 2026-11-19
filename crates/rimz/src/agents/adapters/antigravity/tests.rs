@@ -2082,347 +2082,384 @@ fn launch_resume_permissions_and_model_preset_match_agy() {
         assert_eq!(resumed.as_deref(), expected);
     }
 }
-mod local_account_api {
-    use super::super::local_api::{self, LoopbackEndpoint};
+mod usage_probe {
+    use super::super::usage::{self, Quota, Read};
     use super::*;
+    use crate::agents::account::{AccountProbe, AccountProbeError};
+    use crate::agents::context::{AgentAccount, AgentRateLimits, WindowSource};
+    use crate::agents::{AccountUsageProbe, AccountUsageSnapshot};
     use jiff::Timestamp;
     use serde_json::json;
-    use std::collections::BTreeSet;
-    use std::ffi::OsStr;
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-    use std::time::Duration;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::time::{Duration, Instant};
     const OBSERVED_AT: &str = "2026-06-15T08:00:00Z";
     const FIVE_HOUR_RESET: &str = "2026-06-15T12:00:00Z";
     const WEEK_RESET: &str = "2026-06-20T08:00:00Z";
     fn observed_at() -> Timestamp {
         OBSERVED_AT.parse().unwrap()
     }
-    #[test]
-    fn process_identity_requires_exact_binary_argv_uid_and_start_token() {
-        use local_api::process::{candidate_identity_matches, identity_matches};
-        let agy = Path::new("/home/me/.local/bin/agy");
-        let argv = OsStr::new("agy");
-        for (uid, expected_uid, executable, argv0, expected) in [
-            (Some(501), 501, agy, agy.as_os_str(), true),
-            (Some(502), 501, agy, argv, false),
-            (Some(501), 501, Path::new("/usr/bin/sh"), argv, false),
-            (Some(501), 501, agy, OsStr::new("wrapper"), false),
-        ] {
-            assert_eq!(
-                identity_matches(uid, expected_uid, executable, argv0),
-                expected
-            );
+    fn envelope(buckets: Value) -> String {
+        json!({"status": "SUCCESS", "num_turns": 0, "command": {"name": "usage", "data": {
+            "groups": [{"name": "Gemini", "buckets": buckets}]
+        }}})
+        .to_string()
+    }
+    fn usage_buckets() -> Value {
+        json!([
+            {"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.75, "reset_time": FIVE_HOUR_RESET},
+            {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.5, "reset_time": WEEK_RESET}
+        ])
+    }
+    fn fold(buckets: Value) -> Quota {
+        match usage::classify(Some(0), envelope(buckets).as_bytes(), observed_at()) {
+            Read::Usage(quota) => quota,
+            other => panic!("expected a usage read, got {other:?}"),
         }
-        let candidate = local_api::Candidate {
-            pid: 42,
-            uid: 501,
-            start_token: "1000".to_owned(),
-            endpoints: Vec::new(),
+    }
+    fn windows(buckets: Value) -> AgentRateLimits {
+        match fold(buckets) {
+            Quota::Windows(limits) => limits,
+            other => panic!("expected windows, got {other:?}"),
+        }
+    }
+    fn script(dir: &Path, body: &str) -> PathBuf {
+        let path = dir.join("agy");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+    #[test]
+    fn every_outcome_maps_both_probe_columns() {
+        let found = format!(
+            "{:?}",
+            AccountProbe::Found(AgentAccount {
+                metered: Some(true),
+                ..AgentAccount::default()
+            })
+        );
+        let failed = AccountUsageProbe::Failed(Default::default());
+        let no_credentials = AccountUsageProbe::NoCredentials(Default::default());
+        let usage_found = AccountUsageProbe::Found {
+            identity: Default::default(),
+            snapshot: AccountUsageSnapshot {
+                rate_limits: Some(windows(usage_buckets())),
+                plan: None,
+                ..Default::default()
+            },
         };
-        for (token, expected) in [(Some("1000"), true), (Some("1001"), false)] {
-            assert_eq!(
-                candidate_identity_matches(&candidate, Some(501), agy, argv, token,),
-                expected
-            );
-        }
-    }
-    #[test]
-    fn socket_parsers_accept_process_owned_loopback_listeners_only() {
-        let inodes = BTreeSet::from([12345, 67890]);
-        let tcp = "\
-  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n\
-   0: 0100007F:1F90 00000000:0000 0A 0:0 00:0 0 501 0 12345\n\
-   1: 00000000:2382 00000000:0000 0A 0:0 00:0 0 501 0 67890\n\
-   2: 0100007F:2383 00000000:0000 01 0:0 00:0 0 501 0 67890\n\
-   3: 0100007F:2384 00000000:0000 0A 0:0 00:0 0 501 0 99999";
-        let ipv4 = local_api::process::parse_proc_net(tcp, &inodes, false);
-        assert_eq!(
-            (ipv4[0].address, ipv4[0].port),
-            (IpAddr::V4(Ipv4Addr::LOCALHOST), 8080)
-        );
-        assert_eq!(ipv4.len(), 1);
-        let tcp6 = "\
-  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n\
-   0: 00000000000000000000000001000000:18EB 00000000000000000000000000000000:0000 0A 0:0 00:0 0 501 0 67890";
-        let ipv6 = local_api::process::parse_proc_net(tcp6, &inodes, true);
-        assert_eq!(
-            (ipv6[0].address, ipv6[0].port),
-            (IpAddr::V6(Ipv6Addr::LOCALHOST), 6379)
-        );
-        assert_eq!(ipv6.len(), 1);
-        let endpoints = local_api::process::parse_lsof(
-            "p42\nn127.0.0.1:5000\nn[::1]:5001\nn0.0.0.0:5002\nn10.0.0.2:5003\n",
-        );
-        assert_eq!(endpoints.len(), 2);
-        assert_eq!(endpoints[0].url("/status"), "https://127.0.0.1:5000/status");
-        assert_eq!(endpoints[1].url("/status"), "https://[::1]:5001/status");
-    }
-    #[test]
-    fn identity_status_normalizes_owner_plan_and_success_wire() {
-        let base = json_value(
-            r#"{"userStatus":{"email":" user@example.com ","userTier":{"name":" Google AI Ultra "},"planStatus":{"planInfo":{"planName":"Pro"}}}}"#,
-        );
-        for code in [json!(0), json!("success")] {
-            let account =
-                local_api::wire::parse_identity(&with(&base, [("code", code)]).to_string())
-                    .unwrap();
-            assert_eq!(account.account_id.as_deref(), Some("user@example.com"));
-            assert_eq!(account.plan.as_deref(), Some("Google AI Ultra"));
-            assert_eq!(account.metered, Some(true));
-        }
-        let fallback = local_api::wire::parse_identity(
-            r#"{"userStatus":{"planStatus":{"planInfo":{"displayName":" Antigravity Pro "}}}}"#,
-        )
-        .unwrap();
-        assert_eq!(fallback.plan.as_deref(), Some("Antigravity Pro"));
-        for body in [
-            json!({"code": 16, "userStatus": {"email": "user@example.com"}}),
-            json!({"code": "denied", "userStatus": {"email": "user@example.com"}}),
-            json!({"userStatus": {"email": " ", "userTier": {"name": " "}}}),
-            json!({"response": {}}),
-        ] {
-            assert!(local_api::wire::parse_identity(&body.to_string()).is_err());
-        }
-    }
-    #[test]
-    fn account_keys_bind_normalized_owners_and_preserve_plan() {
-        let expected =
-            "antigravity:v1:03036c73f6a2c8d3a1461c99f6f41c04e8b66e84d1d437f234387c73fd50a726";
-        for email in ["user@example.com", " USER@EXAMPLE.COM "] {
-            let key = local_api::wire::account_key(email).unwrap();
-            assert_eq!(key, expected);
-            assert!(!key.contains("user@example.com"));
-        }
-        assert_ne!(
-            local_api::wire::account_key("user@example.com"),
-            local_api::wire::account_key("other@example.com")
-        );
-        assert_eq!(local_api::wire::account_key("  "), None);
-        let body = json_value(
-            r#"{"userStatus":{"email":" User@Example.com ","userTier":{"name":" Google AI Ultra "}}}"#,
-        );
-        let (identity, plan) =
-            local_api::wire::parse_account_usage_identity(&body.to_string()).unwrap();
-        assert_eq!(identity.account_key.as_deref(), Some(expected));
-        assert_eq!(
-            identity.scope,
-            crate::agents::ProviderAccountScope::KindWide
-        );
-        assert_eq!(plan.as_deref(), Some("Google AI Ultra"));
-        let plan_only = json!({"userStatus": {"userTier": {"name": "Pro"}}});
-        assert!(local_api::wire::parse_identity(&plan_only.to_string()).is_ok());
-        assert!(local_api::wire::parse_account_usage_identity(&plan_only.to_string()).is_err());
-    }
-    #[test]
-    fn quota_envelopes_and_fraction_shapes_choose_strictest_windows() {
-        let groups = json_value(
-            r#"[{"buckets":[{"bucketId":"gemini-5h","remainingFraction":0.8,"resetTime":"2026-06-15T12:00:00Z"},{"bucketId":"3p-5h","remaining":{"remainingFraction":0.3},"resetTime":"2026-06-15T11:00:00Z"},{"bucketId":"other-5h","remainingFraction":0.3,"resetTime":"2026-06-15T12:00:00Z"},{"bucketId":"gemini-weekly","remaining":{"case":"remainingFraction","value":0.4},"resetTime":"2026-06-20T08:00:00Z"},{"bucketId":"3p-weekly","remaining":{"remainingFraction":0.6},"resetTime":"2026-06-21T08:00:00Z"}]}]"#,
-        );
-        for body in [
-            json!({"response": {"groups": groups.clone()}}),
-            json!({"summary": {"groups": groups.clone()}}),
-            json!({"groups": groups.clone()}),
-        ] {
-            let limits =
-                local_api::wire::parse_rate_limits(&body.to_string(), observed_at()).unwrap();
-            assert_eq!(limits.windows.len(), 2);
-            assert_eq!(
-                (
-                    limits.windows[0].duration_mins,
-                    limits.windows[0].used_percentage,
-                    limits.windows[0].resets_at,
-                    limits.windows[1].duration_mins,
-                    limits.windows[1].used_percentage,
-                    limits.windows[1].resets_at
-                ),
-                (
-                    Some(300),
-                    Some(70),
-                    Some(FIVE_HOUR_RESET.parse().unwrap()),
-                    Some(10_080),
-                    Some(60),
-                    Some(WEEK_RESET.parse().unwrap())
-                )
-            );
-            assert!(limits.windows.iter().all(|window| {
-                window.source == crate::agents::context::WindowSource::Authoritative
-                    && !window.lifted
-            }));
-        }
-    }
-    #[test]
-    fn quota_preserves_empty_windows_and_detects_display_name_periods() {
-        let body = json_value(
-            r#"{"groups":[{"buckets":[{"bucketId":"gemini-5h","disabled":true,"remainingFraction":0.5},{"bucketId":"3p-5h"},{"displayName":"Weekly Limit","remainingFraction":0.001,"resetTime":"2026-06-20T08:00:00Z"}]}]}"#,
-        );
-        let limits = local_api::wire::parse_rate_limits(&body.to_string(), observed_at()).unwrap();
-        assert_eq!(limits.windows.len(), 2);
-        assert_eq!(
+        let unknown = json!([{"id": "gemini-month", "window": "monthly", "remaining_fraction": 0.5,
+            "reset_time": FIVE_HOUR_RESET}]);
+        let auth =
+            r#"{"status":"ERROR","error":"Authentication failed or timed out","num_turns":0}"#;
+        let offline = r#"{"status":"ERROR","error":"/usage failed: retrieving quota summary"}"#;
+        let credits = r#"{"status":"SUCCESS","command":{"name":"credits","data":{}}}"#;
+        let no_data = r#"{"status":"SUCCESS","command":{"name":"usage"}}"#;
+        let unavailable = |cause| format!("{:?}", AccountProbe::Unavailable(cause));
+        for (case, code, stdout, account, usage) in [
             (
-                limits.windows[0].used_percentage,
-                limits.windows[0].resets_at,
-                limits.windows[1].used_percentage
+                "windows",
+                Some(0),
+                envelope(usage_buckets()),
+                found.clone(),
+                usage_found,
             ),
-            (None, None, Some(99))
-        );
-        let exhausted = json_value(
-            r#"{"groups":[{"buckets":[{"bucketId":"gemini-weekly","remainingFraction":0,"resetTime":"2026-06-20T08:00:00Z"}]}]}"#,
-        );
-        let limits =
-            local_api::wire::parse_rate_limits(&exhausted.to_string(), observed_at()).unwrap();
-        assert_eq!(limits.windows.len(), 1);
-        assert_eq!(limits.windows[0].used_percentage, Some(100));
-    }
-    #[test]
-    fn quota_rejects_malformed_authoritative_and_unknown_only_data() {
-        for bucket in [
-            json!({"bucketId": "gemini-5h", "remainingFraction": -0.1, "resetTime": FIVE_HOUR_RESET}),
-            json!({"bucketId": "gemini-5h", "remainingFraction": 0.5, "resetTime": "invalid"}),
-            json!({"bucketId": "gemini-5h", "remainingFraction": 0.5, "resetTime": OBSERVED_AT}),
+            (
+                "no bucket",
+                Some(0),
+                envelope(json!([])),
+                found.clone(),
+                no_credentials.clone(),
+            ),
+            (
+                "no data",
+                Some(0),
+                no_data.to_owned(),
+                found.clone(),
+                no_credentials.clone(),
+            ),
+            (
+                "unknown windows",
+                Some(0),
+                envelope(unknown),
+                found.clone(),
+                failed.clone(),
+            ),
+            (
+                "logged out",
+                Some(1),
+                auth.to_owned(),
+                format!("{:?}", AccountProbe::LoggedOut),
+                no_credentials,
+            ),
+            (
+                "offline",
+                Some(1),
+                offline.to_owned(),
+                unavailable(AccountProbeError::SourceUnavailable),
+                failed.clone(),
+            ),
+            (
+                "an error envelope at exit 0",
+                Some(0),
+                offline.to_owned(),
+                unavailable(AccountProbeError::SourceUnavailable),
+                failed.clone(),
+            ),
+            (
+                "a numeric bucket id",
+                Some(0),
+                envelope(json!([{"id": 7, "window": "5h", "remaining_fraction": 0.5,
+                    "reset_time": FIVE_HOUR_RESET}])),
+                found.clone(),
+                failed.clone(),
+            ),
+            (
+                "a string fraction",
+                Some(0),
+                envelope(
+                    json!([{"id": "gemini-5h", "window": "5h", "remaining_fraction": "0.5",
+                    "reset_time": FIVE_HOUR_RESET}]),
+                ),
+                found.clone(),
+                failed.clone(),
+            ),
+            (
+                "exit without envelope",
+                Some(2),
+                String::new(),
+                unavailable(AccountProbeError::ExitNonZero(Some(2))),
+                failed.clone(),
+            ),
+            (
+                "not the envelope",
+                Some(0),
+                "Signed in.".to_owned(),
+                unavailable(AccountProbeError::UnparseableOutput),
+                failed.clone(),
+            ),
+            (
+                "another command",
+                Some(0),
+                credits.to_owned(),
+                unavailable(AccountProbeError::UnparseableOutput),
+                failed.clone(),
+            ),
         ] {
-            let body = json!({"groups": [{"buckets": [
+            let read = usage::classify(code, stdout.as_bytes(), observed_at());
+            assert_eq!((case, format!("{:?}", read.account())), (case, account));
+            assert_eq!((case, read.usage()), (case, usage));
+        }
+        for cause in [AccountProbeError::TimedOut, AccountProbeError::SpawnFailed] {
+            let read = Read::Failed(cause);
+            assert_eq!(format!("{:?}", read.account()), unavailable(cause));
+            assert_eq!(read.usage(), failed);
+        }
+    }
+    #[test]
+    fn offline_reads_answer_without_starting_agy() {
+        let dir = tempfile::tempdir().unwrap();
+        if !crate::agents::credits::oauth_usage_offline() {
+            script(dir.path(), "exit 0\n");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "agents::adapters::antigravity::tests::usage_probe::offline_reads_answer_without_starting_agy",
+                    "--nocapture",
+                ])
+                .env("RIMZ_OAUTH_USAGE_OFFLINE", "1")
+                .env("PATH", dir.path())
+                .env("HOME", dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let spawns = crate::proc::testkit::spawn_count();
+        let read = usage::read(Some(dir.path().join("offline-home")), Some("/login/home"));
+        assert_eq!(read, Read::Failed(AccountProbeError::SourceUnavailable));
+        assert_eq!(crate::proc::testkit::spawn_count(), spawns, "no agy start");
+    }
+    #[test]
+    fn a_missing_binary_could_not_start() {
+        let dir = tempfile::tempdir().unwrap();
+        for binary in [None, Some(dir.path().join("agy"))] {
+            assert_eq!(
+                usage::run(binary, None, Duration::from_secs(10)),
+                Read::Failed(AccountProbeError::SpawnFailed)
+            );
+        }
+    }
+    #[test]
+    fn the_child_gets_the_print_argv_a_newline_an_ssh_session_and_the_login_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path();
+        let reset = (Timestamp::now() + jiff::SignedDuration::from_hours(1)).to_string();
+        let answer = envelope(json!([
+            {"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.25, "reset_time": reset}
+        ]));
+        let agy = script(
+            out,
+            &format!(
+                "printf '%s\\n' \"$@\" > '{d}/argv'\ncat > '{d}/stdin'\n\
+                 printf '%s' \"$SSH_CONNECTION\" > '{d}/ssh'\nprintf '%s' \"$HOME\" > '{d}/home'\n\
+                 printf '%s\\n' '{answer}'\n",
+                d = out.display()
+            ),
+        );
+        let read = usage::run(Some(agy), Some("/login/home"), Duration::from_secs(10));
+        let Read::Usage(Quota::Windows(limits)) = read else {
+            panic!("expected windows, got {read:?}")
+        };
+        assert_eq!(limits.windows[0].used_percentage, Some(75));
+        let file = |name: &str| std::fs::read_to_string(out.join(name)).unwrap();
+        assert_eq!(file("argv"), "-p\n/usage\n--output-format\njson\n");
+        assert_eq!(file("stdin"), "\n");
+        assert_eq!(file("ssh"), usage::SSH_SESSION_VALUE);
+        assert_eq!(file("home"), "/login/home");
+    }
+    #[test]
+    fn the_deadline_kills_and_reaps_the_process_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let agy = script(
+            dir.path(),
+            &format!(
+                "sleep 347.913 &\necho $! > '{}'\nwait\n",
+                pid_file.display()
+            ),
+        );
+        let started = Instant::now();
+        let read = usage::run(Some(agy), None, Duration::from_millis(500));
+        assert_eq!(read, Read::Failed(AccountProbeError::TimedOut));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        let pid: u32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let gone_by = Instant::now() + Duration::from_secs(5);
+        while crate::proc::process_is_live(pid, None) && Instant::now() < gone_by {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !crate::proc::process_is_live(pid, None),
+            "sleep {pid} survived the deadline"
+        );
+    }
+    #[test]
+    fn one_read_serves_a_provider_home_for_sixty_seconds() {
+        let reads = Default::default();
+        let start = Instant::now();
+        let home = Some(PathBuf::from("/home/a/.gemini/antigravity-cli"));
+        let mut runs = 0;
+        let mut read = |key: &Option<PathBuf>, at: Duration, answer: Read| {
+            usage::read_with(&reads, key.clone(), start + at, || {
+                runs += 1;
+                answer
+            })
+        };
+        let failed = Read::Failed(AccountProbeError::TimedOut);
+        assert_eq!(read(&home, Duration::ZERO, failed.clone()), failed);
+        assert_eq!(
+            read(&home, Duration::from_secs(59), Read::LoggedOut),
+            failed
+        );
+        assert_eq!(
+            read(&None, Duration::from_secs(59), Read::LoggedOut),
+            Read::LoggedOut
+        );
+        assert_eq!(
+            read(&home, Duration::from_secs(61), Read::LoggedOut),
+            Read::LoggedOut
+        );
+        assert_eq!(runs, 3, "a second home and an expired read each spawn once");
+    }
+    #[test]
+    fn competing_buckets_choose_the_strictest_window_per_period() {
+        let limits = windows(json!([
+            {"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.8, "reset_time": FIVE_HOUR_RESET},
+            {"id": "3p-5h", "window": "5h", "remaining_fraction": 0.3, "reset_time": "2026-06-15T11:00:00Z"},
+            {"id": "other-5h", "window": "5h", "remaining_fraction": 0.3, "reset_time": FIVE_HOUR_RESET},
+            {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.4, "reset_time": WEEK_RESET},
+            {"id": "3p-weekly", "window": "weekly", "remaining_fraction": 0.6, "reset_time": "2026-06-21T08:00:00Z"}
+        ]));
+        let summary: Vec<_> = limits
+            .windows
+            .iter()
+            .map(|window| {
+                (
+                    window.duration_mins,
+                    window.used_percentage,
+                    window.resets_at,
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (Some(300), Some(70), Some(FIVE_HOUR_RESET.parse().unwrap())),
+                (Some(10_080), Some(60), Some(WEEK_RESET.parse().unwrap())),
+            ]
+        );
+        assert!(limits.windows.iter().all(|window| {
+            window.source == WindowSource::Authoritative
+                && !window.lifted
+                && window.scope.is_none()
+                && window.observed_at == Some(observed_at())
+        }));
+    }
+    #[test]
+    fn empty_and_disabled_buckets_keep_their_window_and_exhaustion_reads_full() {
+        let limits = windows(json!([
+            {"id": "gemini-5h", "window": "5h", "disabled": true, "remaining_fraction": 0.5},
+            {"id": "3p-5h", "window": "5h"},
+            {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.001, "reset_time": WEEK_RESET}
+        ]));
+        let summary: Vec<_> = limits
+            .windows
+            .iter()
+            .map(|window| (window.used_percentage, window.resets_at))
+            .collect();
+        assert_eq!(
+            summary,
+            [(None, None), (Some(99), Some(WEEK_RESET.parse().unwrap()))]
+        );
+        let exhausted = windows(json!([
+            {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0, "reset_time": WEEK_RESET}
+        ]));
+        assert_eq!(exhausted.windows.len(), 1);
+        assert_eq!(exhausted.windows[0].used_percentage, Some(100));
+    }
+    #[test]
+    fn bad_fractions_past_resets_ownerless_and_unknown_only_buckets_are_rejected() {
+        for bucket in [
+            json!({"id": "gemini-5h", "window": "5h", "remaining_fraction": -0.1, "reset_time": FIVE_HOUR_RESET}),
+            json!({"id": "gemini-5h", "window": "5h", "remaining_fraction": 1.5, "reset_time": FIVE_HOUR_RESET}),
+            json!({"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.5, "reset_time": "invalid"}),
+            json!({"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.5, "reset_time": OBSERVED_AT}),
+            json!({"id": " ", "window": "5h", "remaining_fraction": 0.5, "reset_time": FIVE_HOUR_RESET}),
+        ] {
+            let buckets = json!([
                 bucket,
-                {"bucketId": "3p-5h", "remainingFraction": 0.9, "resetTime": FIVE_HOUR_RESET}
-            ]}]});
-            assert!(local_api::wire::parse_rate_limits(&body.to_string(), observed_at()).is_err());
+                {"id": "3p-5h", "window": "5h", "remaining_fraction": 0.9, "reset_time": FIVE_HOUR_RESET}
+            ]);
+            assert_eq!(fold(buckets.clone()), Quota::Invalid, "{buckets}");
         }
-        let unknown = json_value(
-            r#"{"groups":[{"buckets":[{"bucketId":"legacy-model-quota","remainingFraction":0.5,"resetTime":"2026-06-15T12:00:00Z"}]}]}"#,
-        );
-        assert!(local_api::wire::parse_rate_limits(&unknown.to_string(), observed_at()).is_err());
-    }
-    fn candidate(pid: u32, ports: &[u16]) -> local_api::Candidate {
-        local_api::Candidate {
-            pid,
-            uid: 501,
-            start_token: format!("start-{pid}"),
-            endpoints: ports
-                .iter()
-                .map(|port| LoopbackEndpoint {
-                    address: IpAddr::V4(Ipv4Addr::LOCALHOST),
-                    port: *port,
-                })
-                .collect(),
-        }
-    }
-    fn status_body(email: Option<&str>, plan: &str) -> String {
-        json!({"userStatus": {"email": email, "userTier": {"name": plan}}}).to_string()
-    }
-    fn quota_body() -> String {
-        r#"{"groups":[{"buckets":[{"bucketId":"gemini-5h","remainingFraction":0.75,"resetTime":"2099-06-15T12:00:00Z"},{"bucketId":"gemini-weekly","remainingFraction":0.5,"resetTime":"2099-06-20T08:00:00Z"}]}]}"#.to_owned()
-    }
-    #[test]
-    fn paired_usage_probe_revalidates_one_endpoint_for_both_rpcs() {
-        let mut discovery_calls = 0;
-        let mut revalidated = Vec::new();
-        let mut requests = Vec::new();
-        let mut status_at = None;
-        let mut quota_at = None;
-        let probe = local_api::probe_account_usage_with(
-            |_| {
-                discovery_calls += 1;
-                Ok(vec![candidate(42, &[5000, 5001])])
-            },
-            |candidate| {
-                revalidated.push(candidate.pid);
-                Ok(())
-            },
-            |endpoint, path, body, timeout| {
-                requests.push((endpoint, path.to_owned(), body.to_owned(), timeout));
-                if path.ends_with("GetUserStatus") {
-                    status_at = Some(jiff::Timestamp::now());
-                    Ok(status_body(Some("user@example.com"), "Pro"))
-                } else {
-                    quota_at = Some(jiff::Timestamp::now());
-                    Ok(quota_body())
-                }
-            },
-        );
-        let crate::agents::AccountUsageProbe::Found { identity, snapshot } = probe else {
-            panic!("expected paired account usage")
-        };
-        assert_eq!(discovery_calls, 1);
-        assert_eq!(revalidated, [42, 42]);
-        assert_eq!(requests.len(), 2);
-        assert!(requests.iter().all(|request| request.0.port == 5000));
-        assert_eq!(
-            requests[0].1,
-            "/exa.language_server_pb.LanguageServerService/GetUserStatus"
-        );
-        assert_eq!(requests[0].2, "{}");
-        assert_eq!(
-            requests[1].1,
-            "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
-        );
-        assert_eq!(requests[1].2, r#"{"forceRefresh":true}"#);
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.3 <= Duration::from_millis(750))
-        );
-        assert_eq!(snapshot.plan.as_deref(), Some("Pro"));
-        assert_eq!(
-            (snapshot.extra_credits, snapshot.reset_credits),
-            (None, None)
-        );
-        let windows = snapshot.rate_limits.unwrap().windows;
-        assert_eq!(windows.len(), 2);
-        let stamp = windows[0].observed_at.unwrap();
-        assert!(
-            stamp > status_at.unwrap() && stamp <= quota_at.unwrap(),
-            "{stamp} must come after status {status_at:?} and no later than quota request {quota_at:?}"
-        );
-        assert_eq!(windows[1].observed_at, Some(stamp));
-        assert!(identity.account_key.is_some());
-        assert!(AntigravityAdapter.spec().capabilities.direct_account_usage);
-    }
-    #[test]
-    fn known_owner_quota_failure_stays_attributed_without_endpoint_fallback() {
-        let mut requests = Vec::new();
-        let probe = local_api::probe_account_usage_with(
-            |_| Ok(vec![candidate(42, &[5000, 5001]), candidate(41, &[6000])]),
-            |_| Ok(()),
-            |endpoint, path, _, _| {
-                requests.push((endpoint.port, path.to_owned()));
-                if path.ends_with("GetUserStatus") {
-                    Ok(status_body(Some("new@example.com"), "Pro"))
-                } else {
-                    Err(local_api::LocalApiError::Transport)
-                }
-            },
-        );
-        let crate::agents::AccountUsageProbe::Failed(identity) = probe else {
-            panic!("known-owner partial failure must stay attributable")
-        };
-        assert!(identity.account_key.is_some());
-        assert_eq!(requests.len(), 2);
-        assert!(requests.iter().all(|request| request.0 == 5000));
-    }
-    #[test]
-    fn ownerless_discovery_and_status_failures_remain_unattributed() {
-        let discovery_failure = local_api::probe_account_usage_with(
-            |_| Err(local_api::LocalApiError::Unavailable),
-            |_| Ok(()),
-            |_, _, _, _| Ok(String::new()),
-        );
-        assert_eq!(
-            discovery_failure,
-            crate::agents::AccountUsageProbe::Failed(Default::default())
-        );
-        let mut status_requests = 0;
-        let status_failure = local_api::probe_account_usage_with(
-            |_| Ok(vec![candidate(42, &[5000, 5001])]),
-            |_| Ok(()),
-            |_, _, _, _| {
-                status_requests += 1;
-                Ok(status_body(None, "Pro"))
-            },
-        );
-        assert_eq!(status_requests, 2);
-        assert_eq!(
-            status_failure,
-            crate::agents::AccountUsageProbe::Failed(Default::default())
-        );
+        let unknown = json!([
+            {"id": "legacy-model-quota", "remaining_fraction": 0.5, "reset_time": FIVE_HOUR_RESET},
+            {"id": "gemini-month", "window": "monthly", "remaining_fraction": 0.5, "reset_time": FIVE_HOUR_RESET}
+        ]);
+        assert_eq!(fold(unknown), Quota::Invalid);
     }
 }
 fn read_json(path: &Path) -> Value {
