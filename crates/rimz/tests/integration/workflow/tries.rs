@@ -32,6 +32,22 @@ fn id_of(stdout: &str) -> String {
         .into()
 }
 
+/// The finished work dir appears once in a try's output, whether the try ended in its first
+/// pass or after it.
+fn assert_names_finished_work_once(env: &Env, id: &str, stdout: &str) {
+    let work = run_home(env, id).work;
+    let tail = work
+        .strip_prefix(work.parent().unwrap().parent().unwrap().parent().unwrap())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        stdout.lines().filter(|line| line.ends_with(&tail)).count(),
+        1,
+        "{tail}: {stdout}"
+    );
+}
+
 fn finished_record(env: &Env, id: &str) -> Value {
     let paths = run_home(env, id);
     assert!(
@@ -93,6 +109,7 @@ fn a_try_prints_its_answer_and_the_route_it_did_not_take_and_exits_zero_whatever
         );
         assert!(stdout.contains(&format!("said {answer}")), "{stdout}");
         assert!(stdout.contains("start by hand · input "), "{stdout}");
+        assert_names_finished_work_once(&env, &id, &stdout);
         let record = finished_record(&env, &id);
         assert_eq!(
             (
@@ -175,6 +192,7 @@ fn a_try_whose_definition_stops_fitting_it_ends_failed_and_exits_one() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
     let id = id_of(&stdout);
+    assert_names_finished_work_once(&env, &id, &stdout);
     assert_eq!(
         stderr.trim_end(),
         format!("error: workflow run {id} ended failed, not tried")

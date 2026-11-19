@@ -933,6 +933,15 @@ fn a_finished_header_only_history_shows_its_headline_once() {
         text.contains(&format!("run {id}; the run is finished")),
         "{text}"
     );
+    let work = format!("/finished-workflows/{id}/work\n");
+    let line = text.find("\nwork dir ").zip(text.find(&work));
+    assert!(
+        line.is_some_and(
+            |(start, end)| start > text.find("the run is finished").unwrap()
+                && !text[start + 1..end].contains('\n')
+        ),
+        "the header names the finished work dir: {text}"
+    );
     assert_shows_saved_once(&text, &saved);
     assert_eq!(
         success(command(

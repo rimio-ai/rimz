@@ -159,21 +159,22 @@ fix-tests · 1 active · started by hand
       ╰─ ☾ fix ↑
 ```
 
-`☾` marks a node that waits, here for the checkout to be free, and the row names the agents that hold it ([Share the checkout](#share-the-checkout)). `show` on the run starts with where the run is and what it waits for. Below that it paints the graph from the run's definition as it is now: filled glyphs (`●`, `◆`) for nodes the run reached, hollow ones for nodes it has not, and each reached node's last answer beside it. A trail of the last routing decisions follows, then the work directory. The output here stops at the work directory, after which `show` prints the notes path and the `--history` command:
+`☾` marks a node that waits, here for the checkout to be free, and the row names the agents that hold it ([Share the checkout](#share-the-checkout)). `show` on the run starts with where the run is and what it waits for. Below that it paints the graph from the run's definition as it is now: filled glyphs (`●`, `◆`) for nodes the run reached, hollow ones for nodes it has not, and each reached node's last answer beside it. A trail of the last routing decisions follows, then the work directory and, at an agent step, the step's [sign](#rules-for-writing-nodes) file. The output here stops at the sign, after which `show` prints the notes path and the `--history` command:
 
 ```console
 $ rimz workflow show 'fix-tests#probe'
 fix-tests#probe
-☾ fix occupied
-started 03:15 by hand · 0 attempts
+☾ fix occupied by @coder#probe, @reviewer#probe
+started 12:40 by hand · 0 attempts
 
-◆ tests  check  sh: false · waits ≤30m, then @failed · fail · 03:15
+◆ tests  check  sh: false · waits ≤30m, then @failed · fail · 12:40
 │   fail → fix · pass @done
 │
-├─☾ fix  step  claude · 1 turn ≤1h · ↑ tests · 3 visits, then @failed · since 03:15
+├─☾ fix  step  claude · 1 turn ≤1h · ↑ tests · 3 visits, then @failed · since 12:40
 │
-trail  03:15 tests fail → fix · now
-work dir ~/.rimz/ws/room-770e/owned/workflows/wf_01a1de7d104d7480a6ce0e557f583b77/work
+trail  12:40 tests fail → fix · now
+work dir ~/.rimz/ws/room-ddff/owned/workflows/wf_01a1f51caa7b7146b7da2d44f9a1cbd4/work
+sign ~/.rimz/ws/room-ddff/owned/workflows/wf_01a1f51caa7b7146b7da2d44f9a1cbd4/work/signs/fix.md
 ```
 
 Read the second line first: it names the node the run is at and why it is not moving. `◆ tests` is filled because the run reached it, and `fail · 12:40` is its last answer. While an agent step runs, its agent has a [card](./sidebar.md) in the sidebar and a pane you can watch, and the sidebar draws the run as a [workflow strip](../interface/sidebar.md#workflow-strips) above its checkout's cards. The [run view reference](../reference/cli/workflow.md#inspect-runs) explains every mark.
@@ -575,7 +576,7 @@ The engine stays simple because nodes follow four rules:
 
 1. **Make every node safe to repeat.** An agent step launches the same prompt on every visit, and a command step runs the same command. Both learn how far things got from the world: the repository, the PR, and the run's notes. A check can run twice for one decision, because the process hosting it can die after the check ran.
 2. **Say what to do with a dirty tree.** A stopped attempt can leave uncommitted work. An agent step's prompt tells the agent to keep it, commit it, or discard it, and a command handles that state itself.
-3. **Tune an agent step through its sign, never its prompt file.** The prompt file is shared by every run of the workflow. A sign is a file, `$RIMZ_WORKFLOW_DIR/signs/<step>.md`, that RimZ adds after the step's prompt at every launch of this run until someone deletes it. A judge can write one to steer the next attempt, and so can you before a resume.
+3. **Tune an agent step through its sign, never its prompt file.** The prompt file is shared by every run of the workflow. A sign is a file, `$RIMZ_WORKFLOW_DIR/signs/<step>.md`, that RimZ adds after the step's prompt at every launch of this run until someone deletes it. While the run is at the step, `rimz workflow show` prints the sign's path as `sign` under the work directory, except on an `asked` park, where the `you can` lines name it. A judge can write one to steer the next attempt, and so can you before a resume.
 4. **Keep judges read-only.** A judge reads and answers. Work belongs in a step.
 
 Each agent step gets a working-memory file, `<step>-notes.md`, in the run's notes folder, which `$RIMZ_WORKFLOW_DIR/notes/` links to and `rimz workflow show` prints. The launch reminder tells the agent to keep it for someone arriving cold, including changes outside the repository such as pushes and PR comments. The file outlives restarts and the run itself. Set `notes = false` on a step to leave the instruction out. RimZ never reads the notes. A check that walks a list can record its finished items there too, one file per item, so a repeat overwrites its own file.

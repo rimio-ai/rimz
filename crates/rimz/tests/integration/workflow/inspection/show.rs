@@ -19,8 +19,11 @@ fn show_now_reads_the_first_condition_on_active_steps_and_parked_runs_without_wr
             fs::read(&paths.record).unwrap(),
             fs::read(&paths.journal).unwrap(),
         );
-        let expected = json!({"address":record.address().to_string(), "dir":paths.work,
+        let mut expected = json!({"address":record.address().to_string(), "dir":paths.work,
             "record":record,"journal":[]});
+        if node == "build" {
+            expected["sign"] = json!(paths.signs(Some("build")));
+        }
         let json_before = success(command(
             &env,
             &["workflow", "show", record.id.as_str(), "--json"],
@@ -437,6 +440,60 @@ fn asked_names_the_closed_pane_and_sign_to_write_before_resuming() {
         ],
     );
     commands(&text, &["resume 'review#main'", "cancel 'review#main'"]);
+}
+
+#[test]
+fn a_live_agent_or_message_step_names_its_sign_once_under_the_work_dir() {
+    let tell = "[workflow]\nscope='worktree'\nstart='build'\n[message.build]\nmessage='@planner'\nthen='gate'\n[script.gate]\ntimeout='1h'\nrun='true'\non.ok='@done'\n";
+    for (spec, state, park, node, signed) in [
+        (NOW_SPEC, "active", None, "build", true),
+        (tell, "active", None, "build", true),
+        (NOW_SPEC, "parked", Some("user"), "build", true),
+        (NOW_SPEC, "parked", Some("asked"), "build", false),
+        (NOW_SPEC, "active", None, "gate", false),
+    ] {
+        let (env, mut record) = fixture(state, park, vec![]);
+        record.node = node.into();
+        save(&env, &record);
+        write_definition(&record, spec);
+        let paths = env
+            .state_path_for(&record.project_root)
+            .workflow(&record.id);
+        let sign = paths.signs(Some(node));
+        let text = human(&env, &record, false);
+        let case = format!("{state} {park:?} at {node}");
+        let lines = text.lines().collect::<Vec<_>>();
+        let work = lines
+            .iter()
+            .position(|line| line.starts_with("work dir "))
+            .unwrap();
+        let named = text.matches(&format!("/signs/{node}.md")).count();
+        if signed {
+            assert!(
+                lines[work + 1].starts_with("sign ")
+                    && lines[work + 1].ends_with("/signs/build.md"),
+                "{case}: {text}"
+            );
+            assert_eq!(named, 1, "{case}: {text}");
+        } else {
+            assert!(!text.contains("\nsign "), "{case}: {text}");
+            assert_eq!(named, usize::from(park == Some("asked")), "{case}: {text}");
+        }
+        let json = json_show(&env, record.id.as_str());
+        let keyed = signed || park == Some("asked");
+        assert_eq!(
+            json.get("sign"),
+            keyed.then(|| json!(sign)).as_ref(),
+            "{case}"
+        );
+    }
+    // A definition that cannot load drops the sign and never fails show.
+    let (env, mut record) = fixture("active", None, vec![]);
+    record.node = "build".into();
+    save(&env, &record);
+    write_definition(&record, "not a spec");
+    assert!(!human(&env, &record, false).contains("\nsign "));
+    assert!(json_show(&env, record.id.as_str()).get("sign").is_none());
 }
 
 #[test]
