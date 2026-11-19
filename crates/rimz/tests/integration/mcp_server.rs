@@ -269,6 +269,65 @@ fn serve_in_a_terminal_prints_a_note_and_exits() {
 }
 
 #[test]
+fn marked_capabilities_carry_their_load_mode_in_the_listing() {
+    let env = Env::new();
+    let meta = |args: &[&str]| {
+        let mut server = serve(&env, args);
+        server.initialize();
+        let tools = server.request(1, "tools/list", json!({}));
+        server.close();
+        tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| (tool["name"].clone(), tool.get("_meta").cloned()))
+            .collect::<Vec<_>>()
+    };
+    assert!(meta(&[]).iter().all(|(_, meta)| meta.is_none()));
+    let always = Some(json!({"anthropic/alwaysLoad": true}));
+    let deferred = Some(json!({"anthropic/alwaysLoad": false}));
+    let only = [
+        "--only",
+        "rimz-lsp",
+        "--only",
+        "rimz-wait",
+        "--only",
+        "rimz-notes",
+    ];
+    let marks = ["--always", "rimz-lsp", "--deferred", "rimz-wait"];
+    assert_eq!(
+        meta(&[&only[..], &marks].concat()),
+        [
+            (json!("lsp"), always),
+            (json!("wait"), deferred.clone()),
+            (json!("wait_list"), deferred.clone()),
+            (json!("wait_cancel"), deferred),
+            (json!("notes_add"), None),
+            (json!("notes_list"), None),
+        ]
+    );
+
+    let output = env
+        .rimz()
+        .args([
+            "mcp",
+            "serve",
+            "--always",
+            "rimz-lsp",
+            "--deferred",
+            "rimz-lsp",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("rimz-lsp is marked both --always and --deferred"),
+        "{output:?}"
+    );
+}
+
+#[test]
 fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
     let env = Env::new();
     let run = |args: &[&str]| {

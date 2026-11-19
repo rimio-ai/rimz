@@ -445,7 +445,7 @@ fn pi_native_tools_render_portably_after_an_engine_switch() {
     .unwrap();
     let cell = layout.agent_cells().next().unwrap();
     assert_eq!(cell.kind, "claude");
-    assert_eq!(cell.args, ["--strict-mcp-config", "--tools", "Read,Bash"]);
+    assert_eq!(cell.args, ["--tools", "Read,Bash"]);
 }
 
 #[test]

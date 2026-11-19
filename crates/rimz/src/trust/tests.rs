@@ -701,6 +701,13 @@ fn hash_covers_every_documented_surface_field() {
             );
         }
     }
+    // An unmarked `mcps` entry serializes as its bare name, as the string list
+    // it replaced did, so a hash pinned before marks existed holds.
+    let entry: crate::config::McpName = "rimz-lsp".parse().unwrap();
+    assert_eq!(
+        serde_json::to_value(&entry).unwrap(),
+        serde_json::json!("rimz-lsp")
+    );
     // One config per documented executable-surface field. Any two must
     // hash to distinct values; if a future refactor drops a field from
     // `ExecutableSurface`, two cases collide and this test fires. A field
@@ -734,6 +741,8 @@ fn hash_covers_every_documented_surface_field() {
         "[subagents.profiles.x]\nagent = \"claude\"\nskills = [\"merge\"]\n",
         "[profiles.x]\nagent = \"claude\"\nmcps = []\n",
         "[profiles.x]\nagent = \"claude\"\nmcps = [\"rimz-lsp\"]\n",
+        "[profiles.x]\nagent = \"claude\"\nmcps = [\"rimz-lsp:always\"]\n",
+        "[profiles.x]\nagent = \"claude\"\nmcps = [\"*\"]\n",
         "[subagents.profiles.x]\nagent = \"claude\"\nmcps = []\n",
         "[subagents.profiles.x]\nagent = \"claude\"\nmcps = [\"rimz-lsp\"]\n",
         "[profiles.x]\nagent = \"claude\"\nmode = \"ask\"\n",

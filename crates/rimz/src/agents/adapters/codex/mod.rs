@@ -46,7 +46,7 @@ pub(in crate::agents) use install::trust_hook_config_for_test;
 
 pub(crate) use crate::agents::capabilities::*;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -1073,31 +1073,49 @@ fn selected_profile(extra_args: &[String]) -> Option<&str> {
     selected
 }
 
-/// `{ <name> = { enabled = false }, ... }` for each server the account's
-/// config defines that `mcps` does not name.
-fn unlisted_servers(
-    mcps: &[crate::config::McpName],
+/// The servers the account's config and the selected profile file define
+/// under `mcp_servers`.
+fn configured_servers(
     extra_args: &[String],
     login_env: &BTreeMap<String, String>,
-) -> Result<toml_edit::InlineTable> {
+) -> Result<BTreeSet<String>> {
     let config = AccountConfig::read(extra_args, login_env);
-    let mut disabled = toml_edit::InlineTable::new();
+    let mut names = BTreeSet::new();
     for table in [config.base?, config.profile?] {
-        let Some(servers) = table.get("mcp_servers").and_then(toml::Value::as_table) else {
-            continue;
-        };
-        for name in servers.keys() {
-            if name == crate::mcp::catalog::SERVER_NAME
-                || mcps.iter().any(|listed| listed.as_str() == name)
-            {
-                continue;
-            }
-            let mut entry = toml_edit::InlineTable::new();
-            entry.insert("enabled", false.into());
-            disabled.insert(name, entry.into());
+        if let Some(servers) = table.get("mcp_servers").and_then(toml::Value::as_table) {
+            names.extend(servers.keys().cloned());
         }
     }
-    Ok(disabled)
+    Ok(names)
+}
+
+/// `{ <name> = { enabled = false }, ... }` for each configured server that
+/// `mcps` does not name.
+fn unlisted_servers(
+    mcps: &[crate::config::McpName],
+    configured: &BTreeSet<String>,
+) -> toml_edit::InlineTable {
+    let mut disabled = toml_edit::InlineTable::new();
+    for name in configured {
+        if name == crate::mcp::catalog::SERVER_NAME
+            || mcps.iter().any(|listed| listed.user_server() == Some(name))
+        {
+            continue;
+        }
+        let mut entry = toml_edit::InlineTable::new();
+        entry.insert("enabled", false.into());
+        disabled.insert(name, entry.into());
+    }
+    disabled
+}
+
+/// Codex's `omit_tools_from` for a load mode: always keeps a server's tools
+/// out of deferral, deferred restores Codex's default.
+fn omit_tools_from(mode: crate::mcp::catalog::LoadMode) -> toml_edit::Array {
+    match mode {
+        crate::mcp::catalog::LoadMode::Always => ["deferred"].into_iter().collect(),
+        crate::mcp::catalog::LoadMode::Deferred => toml_edit::Array::new(),
+    }
 }
 
 impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
@@ -1257,19 +1275,73 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         _artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<Vec<String>, crate::agents::skills::LaunchSettingsErr> {
         let mut warnings = Vec::new();
-        if let Some(mcps) = launch.mcps {
-            match unlisted_servers(mcps, extra_args, launch.login_env) {
-                Ok(disabled) if disabled.is_empty() => {}
-                // Before any dotted `mcp_servers.*` override: the table form
-                // given after one drops the server that override named.
-                Ok(disabled) => {
-                    extra_args.splice(0..0, ["-c".to_owned(), format!("mcp_servers={disabled}")]);
+        let listed = launch.mcps.unwrap_or_default();
+        let limits = crate::config::mcps_limit(launch.mcps);
+        let user_marks: Vec<_> = listed
+            .iter()
+            .filter(|entry| entry.user_server().is_some() && entry.mode().is_some())
+            .collect();
+        let configured = (limits || !user_marks.is_empty())
+            .then(|| configured_servers(extra_args, launch.login_env));
+        if limits && let Some(configured) = &configured {
+            match configured {
+                Ok(configured) => {
+                    let disabled = unlisted_servers(listed, configured);
+                    // Before any dotted `mcp_servers.*` override: the table
+                    // form given after one drops the server that override
+                    // named.
+                    if !disabled.is_empty() {
+                        extra_args
+                            .splice(0..0, ["-c".to_owned(), format!("mcp_servers={disabled}")]);
+                    }
                 }
                 Err(error) => warnings.push(format!(
                     "the profile's mcps list switches off none of the account's Codex MCP \
                      servers: {error}"
                 )),
             }
+        }
+        let mut marks = Vec::new();
+        for entry in listed.iter().filter(|entry| entry.mode().is_some()) {
+            let not_applied =
+                |reason: String| format!("the mcps entry `{entry}` is not applied: {reason}");
+            let name = entry.name();
+            if let Some(capability) = entry.capability() {
+                warnings.push(not_applied(format!(
+                    "Codex takes a load mode per server, so {} loads as the {} server does",
+                    capability.name(),
+                    crate::mcp::catalog::SERVER_NAME
+                )));
+            } else if entry.user_server().is_none() {
+                if launch.server.is_none() {
+                    warnings.push(not_applied(
+                        "RimZ's MCP server is off for this launch".into(),
+                    ));
+                }
+            } else if name.contains(['.', '=']) {
+                warnings.push(not_applied(
+                    "a Codex -c override cannot name a server whose name holds a `.` or `=`".into(),
+                ));
+            } else {
+                match &configured {
+                    Some(Ok(configured)) if configured.contains(name) => marks.push(entry),
+                    Some(Err(error)) => warnings.push(not_applied(error.to_string())),
+                    _ => warnings.push(not_applied(format!(
+                        "the account's Codex config defines no MCP server `{name}`"
+                    ))),
+                }
+            }
+        }
+        for entry in marks {
+            let Some(mode) = entry.mode() else { continue };
+            extra_args.extend([
+                "-c".to_owned(),
+                format!(
+                    "mcp_servers.{}.omit_tools_from={}",
+                    entry.name(),
+                    omit_tools_from(mode)
+                ),
+            ]);
         }
         if let Some(server) = &launch.server {
             let mode = if server.grant { "approve" } else { "prompt" };
@@ -1282,7 +1354,7 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
                 .map(String::as_str)
                 .chain(["--parent-env"])
                 .collect();
-            let entries: [(&str, toml_edit::Value); 5] = [
+            let mut entries: Vec<(&str, toml_edit::Value)> = vec![
                 ("command", server.command.to_string_lossy().as_ref().into()),
                 ("args", args.into()),
                 (
@@ -1292,6 +1364,13 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
                 ("tool_timeout_sec", 600.into()),
                 ("default_tools_approval_mode", mode.into()),
             ];
+            let server_mode = listed
+                .iter()
+                .find(|entry| entry.name() == crate::mcp::catalog::SERVER_NAME)
+                .and_then(crate::config::McpName::mode);
+            if let Some(mode) = server_mode {
+                entries.push(("omit_tools_from", omit_tools_from(mode).into()));
+            }
             for (field, value) in entries {
                 extra_args.extend([
                     "-c".to_owned(),

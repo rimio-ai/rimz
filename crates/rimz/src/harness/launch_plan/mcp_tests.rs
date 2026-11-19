@@ -230,15 +230,15 @@ fn claude_entry_is_never_followed_by_a_passthrough_positional() {
 #[test]
 fn claude_mcps_lists_become_only_args_and_the_exact_allowlist() {
     let room = Room::new();
-    let strict = ["--strict-mcp-config", "--tools", "Bash"];
+    let tools = ["--tools", "Bash"];
     let argv = |machine: &str, mcps: Option<&[&str]>| {
-        room.compile(machine, &launch("claude", mcps, &strict))
+        room.compile(machine, &launch("claude", mcps, &tools))
             .process()
             .provider_argv
             .clone()
     };
     let unlisted = argv(&switches(true, true), None);
-    assert!(unlisted.iter().any(|arg| arg == "--strict-mcp-config"));
+    assert!(!unlisted.iter().any(|arg| arg == "--strict-mcp-config"));
     assert_eq!(allowlist(&claude_settings(&unlisted)), None);
 
     let listed = argv(
@@ -329,7 +329,7 @@ fn codex_mcps_lists_disable_only_the_unlisted_servers_the_account_configures() {
     let room = Room::new();
     room.codex_config(
         "config.toml",
-        "[mcp_servers.github]\ncommand = 'gh'\n[mcp_servers.\"my.server\"]\ncommand = 'x'\n[mcp_servers.keep]\ncommand = 'k'\n",
+        "[mcp_servers.github]\ncommand = 'gh'\n[mcp_servers.\"my.server\"]\ncommand = 'x'\n[mcp_servers.keep]\ncommand = 'k'\n[mcp_servers.rimz-lsp]\ncommand = 'l'\n",
     );
     room.codex_config("work.config.toml", "[mcp_servers.chosen]\ncommand = 'c'\n");
     let disabled = |mcps: Option<&[&str]>, args: &[&str]| {
@@ -341,17 +341,24 @@ fn codex_mcps_lists_disable_only_the_unlisted_servers_the_account_configures() {
     assert_eq!(disabled(None, &[]), Vec::<String>::new());
     assert_eq!(
         disabled(Some(&["keep", "absent", "rimz-lsp"]), &[]),
-        ["github", "my.server"]
+        ["github", "my.server", "rimz-lsp"]
+    );
+    assert_eq!(
+        disabled(Some(&["keep", "rimz-lsp:always"]), &[]),
+        ["github", "my.server", "rimz-lsp"]
     );
     assert_eq!(
         disabled(Some(&["keep"]), &["--profile", "work"]),
-        ["chosen", "github", "my.server"]
+        ["chosen", "github", "my.server", "rimz-lsp"]
     );
     assert_eq!(
         disabled(Some(&["keep"]), &["-pwork"]),
-        ["chosen", "github", "my.server"]
+        ["chosen", "github", "my.server", "rimz-lsp"]
     );
-    assert_eq!(disabled(Some(&[]), &[]), ["github", "keep", "my.server"]);
+    assert_eq!(
+        disabled(Some(&[]), &[]),
+        ["github", "keep", "my.server", "rimz-lsp"]
+    );
     let plan = room.compile(&switches(true, true), &launch("codex", Some(&[]), &[]));
     assert_eq!(codex_entry(&plan.process().provider_argv), None);
 
@@ -401,5 +408,234 @@ fn other_kinds_get_no_entry_and_a_warning_for_a_list() {
             &[]
         };
         assert_eq!(warnings, expected);
+    }
+}
+
+fn mcps_warnings(plan: &LaunchPlan) -> Vec<String> {
+    plan.warnings
+        .iter()
+        .map(ToString::to_string)
+        .filter(|warning| warning.contains("mcps"))
+        .collect()
+}
+
+/// `*` limits nothing, alone or beside marks: every capability, no
+/// `--only`, no allowlist or switch-off, and the `lsp` tool as when absent.
+#[test]
+fn a_star_list_limits_nothing_on_claude_or_codex() {
+    let room = Room::new();
+    room.codex_config("config.toml", "[mcp_servers.github]\ncommand = 'gh'\n");
+    for mcps in [
+        &["*"][..],
+        &["*", "rimz:always"],
+        &["rimz-lsp:deferred", "*", "github:always"],
+    ] {
+        let request = launch("claude", Some(mcps), &["--tools", "Bash"]);
+        let argv = room
+            .compile(&switches(true, true), &request)
+            .process()
+            .provider_argv
+            .clone();
+        let (entry, _) = claude_entry(&argv).unwrap();
+        let args: Vec<_> = entry["args"].as_array().unwrap().iter().collect();
+        assert!(!args.contains(&&serde_json::json!("--only")), "{argv:?}");
+        assert_eq!(allowlist(&claude_settings(&argv)), None, "{mcps:?}");
+        let reminders = crate::harness::launch_reminders::LaunchReminders {
+            mcp_server: Some((PathBuf::from("/bin/rimz"), Vec::new())),
+            ..Default::default()
+        };
+        assert!(reminders.lsp_tool(&request), "{mcps:?}");
+
+        let argv = room
+            .compile(&switches(true, true), &launch("codex", Some(mcps), &[]))
+            .process()
+            .provider_argv
+            .clone();
+        assert_eq!(codex_disabled(&argv), Vec::<String>::new(), "{mcps:?}");
+        let args = codex_entry(&argv).unwrap()["args"].clone();
+        assert!(
+            !args.as_array().unwrap().contains(&"--only".into()),
+            "{args}"
+        );
+    }
+}
+
+/// Claude: a mark on `rimz` sets the server's `alwaysLoad` unless a
+/// capability's own `always` would be overridden by it; a capability's own
+/// mark becomes a `serve` flag.
+#[test]
+fn claude_marks_become_always_load_and_serve_flags() {
+    let room = Room::new();
+    let compile = |mcps: &[&str]| {
+        let plan = room.compile(&switches(true, true), &launch("claude", Some(mcps), &[]));
+        let (entry, _) = claude_entry(&plan.process().provider_argv).unwrap();
+        (entry, mcps_warnings(&plan))
+    };
+    for (mcps, always_load, args) in [
+        (&["rimz:always"][..], Some(true), &["mcp", "serve"][..]),
+        (&["rimz:deferred"], Some(false), &["mcp", "serve"]),
+        (
+            &["rimz:deferred", "rimz-lsp:always"],
+            None,
+            &["mcp", "serve", "--always", "rimz-lsp"],
+        ),
+        (
+            &["rimz:always", "rimz-lsp:deferred"],
+            Some(true),
+            &["mcp", "serve", "--deferred", "rimz-lsp"],
+        ),
+        (
+            &["*", "rimz-wait:deferred", "rimz-notes:always"],
+            None,
+            &[
+                "mcp",
+                "serve",
+                "--deferred",
+                "rimz-wait",
+                "--always",
+                "rimz-notes",
+            ],
+        ),
+        (
+            &["rimz-lsp:always", "rimz-wait"],
+            None,
+            &[
+                "mcp",
+                "serve",
+                "--only",
+                "rimz-lsp",
+                "--only",
+                "rimz-wait",
+                "--always",
+                "rimz-lsp",
+            ],
+        ),
+    ] {
+        let (entry, warnings) = compile(mcps);
+        assert_eq!(
+            entry.get("alwaysLoad").and_then(serde_json::Value::as_bool),
+            always_load,
+            "{mcps:?}"
+        );
+        assert_eq!(entry["args"], serde_json::json!(args), "{mcps:?}");
+        assert_eq!(warnings, Vec::<String>::new(), "{mcps:?}");
+    }
+}
+
+/// A mark a launch cannot apply warns once, names its entry, and the launch
+/// still compiles without it.
+#[test]
+fn claude_marks_it_cannot_apply_warn_once_each() {
+    let room = Room::new();
+    let plan = room.compile(
+        &switches(true, true),
+        &launch(
+            "claude",
+            Some(&["*", "github:always", "linear:deferred"]),
+            &[],
+        ),
+    );
+    let (entry, _) = claude_entry(&plan.process().provider_argv).unwrap();
+    assert_eq!(entry.get("alwaysLoad"), None);
+    assert_eq!(
+        mcps_warnings(&plan),
+        [
+            "the mcps entry `github:always` is not applied: Claude takes a load mode only for RimZ's server and its capabilities",
+            "the mcps entry `linear:deferred` is not applied: Claude takes a load mode only for RimZ's server and its capabilities",
+        ]
+    );
+    let plan = room.compile(
+        &switches(true, false),
+        &launch(
+            "claude",
+            Some(&["rimz:always", "rimz-lsp:deferred", "github"]),
+            &[],
+        ),
+    );
+    assert_eq!(claude_entry(&plan.process().provider_argv), None);
+    assert_eq!(
+        mcps_warnings(&plan),
+        [
+            "the mcps entry `rimz:always` is not applied: RimZ's MCP server is off for this launch",
+            "the mcps entry `rimz-lsp:deferred` is not applied: RimZ's MCP server is off for this launch",
+        ]
+    );
+}
+
+/// The `omit_tools_from` override for `server`, when the argv carries one.
+fn codex_omit(argv: &[String], server: &str) -> Option<toml::Value> {
+    codex_overrides(argv).into_iter().find_map(|table| {
+        table
+            .get("mcp_servers")?
+            .get(server)?
+            .get("omit_tools_from")
+            .cloned()
+    })
+}
+
+/// Codex: always omits a server's tools from deferral, deferred restores
+/// Codex's default; a user server takes a mark only when the account's config
+/// defines it under a name a `-c` key can address.
+#[test]
+fn codex_marks_set_omit_tools_from_per_server() {
+    let room = Room::new();
+    room.codex_config(
+        "config.toml",
+        "[mcp_servers.github]\ncommand = 'gh'\n[mcp_servers.\"my.server\"]\ncommand = 'x'\n\
+         [mcp_servers.\"team=lab\"]\ncommand = 't'\n",
+    );
+    room.codex_config("work.config.toml", "[mcp_servers.chosen]\ncommand = 'c'\n");
+    let deferred = toml::Value::Array(Vec::new());
+    let always = toml::Value::try_from(["deferred"]).unwrap();
+    let compile = |mcps: &[&str], args: &[&str]| {
+        let plan = room.compile(&switches(true, true), &launch("codex", Some(mcps), args));
+        (plan.process().provider_argv.clone(), mcps_warnings(&plan))
+    };
+    let (argv, warnings) = compile(&["*", "rimz:always", "github:deferred"], &[]);
+    assert_eq!(codex_omit(&argv, "rimz"), Some(always.clone()));
+    assert_eq!(codex_omit(&argv, "github"), Some(deferred.clone()));
+    assert_eq!(warnings, Vec::<String>::new());
+    let (argv, _) = compile(&["rimz:deferred", "chosen:always"], &["--profile", "work"]);
+    assert_eq!(codex_omit(&argv, "rimz"), Some(deferred));
+    assert_eq!(codex_omit(&argv, "chosen"), Some(always));
+    let (argv, _) = compile(&["*"], &[]);
+    assert_eq!(codex_omit(&argv, "rimz"), None);
+
+    let (argv, warnings) = compile(
+        &[
+            "*",
+            "rimz-lsp:always",
+            "absent:always",
+            "my.server:deferred",
+            "team=lab:always",
+        ],
+        &[],
+    );
+    assert_eq!(codex_omit(&argv, "rimz"), None);
+    assert!(
+        !argv.iter().any(|arg| arg.starts_with("mcp_servers.team")),
+        "{argv:?}"
+    );
+    assert_eq!(
+        warnings,
+        [
+            "the mcps entry `rimz-lsp:always` is not applied: Codex takes a load mode per server, so rimz-lsp loads as the rimz server does",
+            "the mcps entry `absent:always` is not applied: the account's Codex config defines no MCP server `absent`",
+            "the mcps entry `my.server:deferred` is not applied: a Codex -c override cannot name a server whose name holds a `.` or `=`",
+            "the mcps entry `team=lab:always` is not applied: a Codex -c override cannot name a server whose name holds a `.` or `=`",
+        ]
+    );
+}
+
+#[test]
+fn a_kind_without_mcp_servers_takes_a_bare_star_silently() {
+    let room = Room::new();
+    for (mcps, warns) in [
+        (&["*"][..], false),
+        (&["*", "*"], false),
+        (&["*", "github"], true),
+    ] {
+        let plan = room.compile(&switches(true, true), &launch("opencode", Some(mcps), &[]));
+        assert_eq!(mcps_warnings(&plan).len(), usize::from(warns), "{mcps:?}");
     }
 }

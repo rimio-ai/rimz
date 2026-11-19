@@ -5,7 +5,7 @@ use std::io::{IsTerminal, Write};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
-use rimz::mcp::catalog::{Capability, Tool, tools_for, tools_list};
+use rimz::mcp::catalog::{Capability, LoadMode, Tool, tools_for, tools_list};
 
 use crate::cli::render::{self, Table, cell};
 
@@ -22,6 +22,13 @@ enum McpSubcmd {
         /// Serve only this capability's tools (repeatable); every capability when absent.
         #[arg(long, value_name = "CAPABILITY", value_parser = parse_capability)]
         only: Vec<Capability>,
+        /// Mark this capability's tools for Claude to load from the start (repeatable).
+        #[arg(long, value_name = "CAPABILITY", value_parser = parse_capability)]
+        always: Vec<Capability>,
+        /// Mark this capability's tools for Claude to defer until its tool search
+        /// finds them (repeatable).
+        #[arg(long, value_name = "CAPABILITY", value_parser = parse_capability)]
+        deferred: Vec<Capability>,
         /// Give each one-shot the parent process's environment beneath this
         /// server's own, for a provider that starts the server with a reduced one.
         #[arg(long)]
@@ -50,8 +57,31 @@ pub fn run(args: McpArgs) -> Result<()> {
         McpSubcmd::Serve { .. } if std::io::stdin().is_terminal() => {
             render::finish(writeln!(render::err(), "{TERMINAL_NOTE}"))
         }
-        McpSubcmd::Serve { only, parent_env } => {
-            rimz::mcp::serve(&only, parent_env).context("rimz mcp serve")
+        McpSubcmd::Serve {
+            only,
+            always,
+            deferred,
+            parent_env,
+        } => {
+            if let Some(both) = always
+                .iter()
+                .find(|capability| deferred.contains(capability))
+            {
+                anyhow::bail!(
+                    "rimz mcp serve: {} is marked both --always and --deferred",
+                    both.name()
+                );
+            }
+            let modes: Vec<(Capability, LoadMode)> = always
+                .into_iter()
+                .map(|capability| (capability, LoadMode::Always))
+                .chain(
+                    deferred
+                        .into_iter()
+                        .map(|capability| (capability, LoadMode::Deferred)),
+                )
+                .collect();
+            rimz::mcp::serve(&only, &modes, parent_env).context("rimz mcp serve")
         }
         McpSubcmd::Tools { only, json } => {
             let tools: Vec<&Tool> = tools_for(&only).collect();
@@ -67,7 +97,7 @@ pub fn run(args: McpArgs) -> Result<()> {
 
 fn render_json(tools: &[&Tool]) -> std::io::Result<()> {
     let listing =
-        serde_json::to_string_pretty(&tools_list(tools)).map_err(std::io::Error::other)?;
+        serde_json::to_string_pretty(&tools_list(tools, &[])).map_err(std::io::Error::other)?;
     writeln!(render::out(), "{listing}")
 }
 
