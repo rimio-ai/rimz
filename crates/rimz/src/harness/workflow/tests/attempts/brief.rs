@@ -171,15 +171,32 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
 
 #[test]
 fn origin_notes_distinguish_automatic_loop_fire_and_workflow_run_prompts() {
-    for origin in ["automatic", "fire", "run"] {
+    let parent = "wf_0190b8172c0070008000000000000009";
+    let from_parent = format!(
+        "The workflow run `{parent}` started this run with `rimz workflow run` from its node `pr`."
+    );
+    for origin in ["automatic", "fire", "run", "agent", "parent"] {
         for prompt in [false, true] {
             let (_dir, state, mut record) =
                 setup(&format!("{OUTCOME_STEP}admission.throttle='off'\n"));
             if !prompt {
                 record.prompt = None;
             }
-            if origin != "run" {
-                task(&mut record, origin == "fire");
+            match origin {
+                "automatic" | "fire" => task(&mut record, origin == "fire"),
+                "agent" => {
+                    record.starter = Some(crate::store::workflow::RunStarter::Agent {
+                        kind: crate::ids::AgentKind::new_unchecked("claude"),
+                        launch: "launch_planner".into(),
+                    });
+                }
+                "parent" => {
+                    record.starter = Some(crate::store::workflow::RunStarter::Run {
+                        run: parent.parse().unwrap(),
+                        node: "pr".into(),
+                    });
+                }
+                _ => {}
             }
             update(&state, &record);
             let host = FakeHost::new();
@@ -189,11 +206,17 @@ fn origin_notes_distinguish_automatic_loop_fire_and_workflow_run_prompts() {
                     "RimZ started this run automatically, when `pr=open && team.stage=Done && !ci=pending,failed` held in this worktree for 3m (loop task `land`)."
                 }
                 "fire" => "The user started this run by hand with `rimz loop fire land`.",
+                "agent" => {
+                    "A `claude` agent (launch `launch_planner`) started this run with `rimz workflow run`."
+                }
+                "parent" => from_parent.as_str(),
                 _ => "The user started this run by hand with `rimz workflow run`.",
             };
             let extra = match (prompt, origin) {
                 (false, _) => "",
-                (true, "run") => " The text given with `--prompt` to `rimz workflow run` ends it.",
+                (true, "run" | "agent" | "parent") => {
+                    " The text given with `--prompt` to `rimz workflow run` ends it."
+                }
                 _ => " The loop fire's prompt ends it: the task's prompt, what fired it, or both.",
             };
             let expected = format!(

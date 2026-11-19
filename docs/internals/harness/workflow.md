@@ -190,7 +190,7 @@ A new cause touches every place below. The compiler stops you at only some of th
 6. When the cause can fire only with a field set, add its case to `Definition::fireability` with a `NeverReason`, so validation and inspection do not show an edge that never fires.
 7. When a step's cause is raised before the node acts and counts no visit, add it to the `[Cause::Visits, Cause::Capacity]` list in `crates/rimz/src/harness/workflow/validate.rs::returning_failures`. Otherwise a route back to the node repeats the failure without end. A check counts no visits, so a check cause never goes there.
 8. When a loop task should report the run differently from `failed`, extend `engine::failure`, which classifies a failed run's `RunEnding` from the journal, and the mapping from `RunEnding` to a loop result in `crates/rimz/src/harness/schedule/run_log.rs::report_row`.
-9. A new reserved word refuses every definition that already uses it as an author outcome, and a live run of such a definition waits at its next engine read ([Engine reads](#engine-reads)). It raises no version. A new `AttemptOutcome` variant changes the record's shape, so it raises `store::workflow::VERSION` ([The record and its version](#the-record-and-its-version)). The record snapshot `crates/rimz/src/store/workflow/snapshots/rimz__store__workflow__tests__record.snap` and each "version 16" on this page and in the reference change with it. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists the readers of run homes the raise must audit.
+9. A new reserved word refuses every definition that already uses it as an author outcome, and a live run of such a definition waits at its next engine read ([Engine reads](#engine-reads)). It raises no version. A new `AttemptOutcome` variant changes the record's shape, so it raises `store::workflow::VERSION` ([The record and its version](#the-record-and-its-version)). The record snapshot `crates/rimz/src/store/workflow/snapshots/rimz__store__workflow__tests__record.snap` and each "version 17" on this page and in the reference change with it. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists the readers of run homes the raise must audit.
 10. Document it: the cause table above, each "eight causes" on this page (the count moves with the set), in the reference, and in the guide, the guide's sample `workflow validate` output when the kind it shows raises the cause, the [failures section of the reference](../../reference/cli/workflow.md#failures), and the guide's [When something fails](../../guide/workflows.md#when-something-fails) when a user meets the cause.
 
 Run the module's tests with `cargo xtask test 'harness::workflow'` and the store's with `cargo xtask test 'store::workflow'`. [rust-conventions.md](../../contributing/rust-conventions.md#tests) owns the gate stack.
@@ -304,10 +304,10 @@ Every view of a run is a projection of the record and the journal, and never tra
 
 ### The run home
 
-Each room holds one home per run: `owned/workflows/<run-id>/` while the run is live, and `owned/finished-workflows/<run-id>/` once it has ended and owes its loop task no report. Every path in either directory comes from the disk path module (`crates/rimz/src/disk/paths.rs::WorkflowPaths`, `StatePaths::workflow`, `StatePaths::finished_workflow`):
+Each room holds one home per run: `owned/workflows/<run-id>/` while the run is live, and `owned/finished-workflows/<run-id>/` once it has ended and owes neither its loop task nor its starting agent a report (`RunRecord::owes_report`). Every path in either directory comes from the disk path module (`crates/rimz/src/disk/paths.rs::WorkflowPaths`, `StatePaths::workflow`, `StatePaths::finished_workflow`):
 
 ```text
-record.json        current run, version 16 (reads only 16)
+record.json        current run, version 17 (reads only 17)
 journal.jsonl      append-only evidence: transitions, and a row per check evaluation, so a polling check grows it on every recheck
 definition/        an inline run's generated definition: its text and assets (no deployed run has one)
 history.txt        the history saved as the run leaves the live directory, written before the rename (a failed rename leaves it in the live home)
@@ -346,7 +346,7 @@ A run of checks alone allocates no notes folder when it is inline (a loop task's
 
 ### Finishing a run
 
-After CLI `advance`, `cancel`, or `restart` returns from the engine, `crates/rimz/src/cli/workflow.rs::finish_run` finishes a run that is terminal and owes no loop report:
+After CLI `advance`, `cancel`, or `restart` returns from the engine, `crates/rimz/src/cli/workflow.rs::finish_run` finishes a run that is terminal and owes no report:
 
 1. It renders the run's history (`crates/rimz/src/cli/workflow_view/history.rs::saved`: the `show --history` renderer with raw prose, no colour, and log paths pointed at the finished home). A definition it cannot read then, as for a deployed run canceled without its directory, costs the history its route targets only ([Inspection](#inspection)).
 2. It copies that history to the run's notes folder as `history.txt` when the folder exists.
@@ -375,12 +375,13 @@ Optional fields carry:
 - `abandoned`, the runs of judges whose evaluation ended while their agent ran, owed a stop ([Judges](#judges))
 - `once`, true for a try (`rimz workflow run --once`), omitted when false and never changed after the start
 - two start arguments: `give_up`, the run's give-up instant for an agent step that sets no `admission.give-up` (`rimz workflow run --give-up`, and no loop fire sets one), and `capacity`, `skip` for a `--skip-capacity` run and omitted for the default `wait`
-- the loop facts: `task` (the starting loop task), `manual` (true only for a run `rimz loop fire` created, omitted when false), `loop_report`, and `fire`, what the fire tells its briefs, frozen at creation: `manual` with the task's name for `rimz loop fire`, or `scheduled` with the task's name and the brief's trigger clause (none for a watch trigger)
+- the loop facts: `task` (the starting loop task), `manual` (true only for a run `rimz loop fire` created, omitted when false), `loop_report` (the one report mark, owed to the task or to an agent starter), and `fire`, what the fire tells its briefs, frozen at creation: `manual` with the task's name for `rimz loop fire`, or `scheduled` with the task's name and the brief's trigger clause (none for a watch trigger)
 - `outcome`, the typed run outcome, written with the terminal state ([Loop tasks](#loop-tasks))
+- `starter`, the agent (by launch id) or the run and node that started it, omitted for a start by hand and for a task's run, and `depth`, `1` when omitted; `harness::workflow::starting` resolves both before `create`, and `Starting::admit` refuses a depth past `[agents] max-workflow-depth` before a worktree, a home, or a record exists ([starters and depth](../../reference/cli/workflow.md#starters-and-depth))
 
 Each step's visits serialize as one integer under the step's name. Keys keep integer versus string identity. Unknown `Wait.hold` strings load as absent, and the shared [hold-kind contract](./loops.md#holds-and-their-kinds) covers workflow and condition waits alike.
 
-Runs use version 16 (`store::workflow::VERSION`), the record's own shape version. It rises when a binary on either side of a change would misread the other's record. A change to what a definition means raises nothing, since every run reads its definition as it is at each engine read. `crates/rimz/src/store/workflow.rs::load` reads the version before it decodes the record and refuses any other version with one message naming the run and the version this RimZ reads. A change to what a stored record means raises `VERSION`, so a record an older RimZ wrote refuses rather than being misread. Raising it strands every unfinished run on disk, which the [workflow pass](#the-workflow-pass) ends. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists what such a change must audit.
+Runs use version 17 (`store::workflow::VERSION`), the record's own shape version. It rises when a binary on either side of a change would misread the other's record. A change to what a definition means raises nothing, since every run reads its definition as it is at each engine read. `crates/rimz/src/store/workflow.rs::load` reads the version before it decodes the record and refuses any other version with one message naming the run and the version this RimZ reads. A change to what a stored record means raises `VERSION`, so a record an older RimZ wrote refuses rather than being misread. Raising it strands every unfinished run on disk, which the [workflow pass](#the-workflow-pass) ends. The root [AGENTS.md](../../../AGENTS.md#implementation-rules) lists what such a change must audit.
 
 `crates/rimz/src/store/workflow.rs::classify` reads a home's record as data, `RunClass`:
 
@@ -388,7 +389,7 @@ Runs use version 16 (`store::workflow::VERSION`), the record's own shape version
 | --- | --- |
 | `Current` | A run this RimZ runs. |
 | `Ended` | A record whose `RunHeader` (the few fields read without decoding the body) says it ended, but whose body this RimZ does not decode. |
-| `Stranded` | A run this RimZ cannot continue, with its `StrandedCause`: an older, missing, or invalid version, or a version-16 body that does not decode. |
+| `Stranded` | A run this RimZ cannot continue, with its `StrandedCause`: an older, missing, or invalid version, or a version-17 body that does not decode. |
 | `Newer` | A newer RimZ's run. Its record is read no further than its version. |
 | `NotObject` | A record that holds no JSON object. |
 | `Recordless` | No record. |
@@ -938,15 +939,15 @@ An active run is due when:
 
 Parked runs are never spawned. The engine decides everything else (bounds, window, occupancy, capacity, a live host). The tick reads `recheck_at` so that early advances do not inflate an ordinary wait's count, and it never clears backoff the way the signal helper does.
 
-A terminal run is due only while it still owes its loop task a report ([Loop tasks](#loop-tasks)), and that advance's command only collects it. The terminal transition keeps the run's last spawn stamp, so its first report advance waits out the same 60 seconds from that spawn. After that it is due again once the time since the last spawn reaches the time the run had been finished at that spawn, clamped to between 60 s and one hour (`crates/rimz/src/harness/schedule/fire.rs::tick_pace`), so the gap between failed collections doubles.
+A terminal run is due only while it still owes its loop task or its starting agent a report ([Loop tasks](#loop-tasks)), and that advance's command only collects it: the collector reports to a loop task alone (`RunRecord::owes_loop_report`), so a run that owes an agent its report keeps its live home and stays due. The terminal transition keeps the run's last spawn stamp, so its first report advance waits out the same 60 seconds from that spawn. After that it is due again once the time since the last spawn reaches the time the run had been finished at that spawn, clamped to between 60 s and one hour (`crates/rimz/src/harness/schedule/fire.rs::tick_pace`), so the gap between failed collections doubles.
 
 Spawns are paced by the runtime cache `lanes/workflow-tick.json`, a map of run id to last spawn: at most one spawn per run per 60 seconds (`WORKFLOW_TICK_SECS`), except that a `recheck_at` or deadline that passed since the last spawn fires at once. A plain sleep stores its end as `recheck_at`, so it gets no intermediate spawn. A conditional sleep stores no end, so it keeps sampling each minute, during a hold too. The tick writes the cache before spawning and drops runs that are neither active nor owed a report. A read failure counts as an empty cache, and a write failure warns and skips that tick's spawns. `fire.rs` is in the sidebar import graph, so it writes only that cache and spawns, and the invariant grep keeps it off the writer and the wake socket. Under the systemd timer the spawned advance leaves the oneshot service's cgroup, as a loop run does.
 
-When any live home awaits [the workflow pass](#the-workflow-pass) (`RunClass::awaits_pass`: a terminal run this RimZ reads that owes no loop report, a terminal record this RimZ cannot decode, a run this RimZ cannot continue, or a record that holds no JSON object), the tick also spawns `rimz --root <root> workflow reconcile`, at most once per room per 60 seconds, paced by the runtime cache `lanes/workflow-reconcile.json`, whose stamp it publishes before the spawn.
+When any live home awaits [the workflow pass](#the-workflow-pass) (`RunClass::awaits_pass`: a terminal run this RimZ reads that owes no report, a terminal record this RimZ cannot decode, a run this RimZ cannot continue, or a record that holds no JSON object), the tick also spawns `rimz --root <root> workflow reconcile`, at most once per room per 60 seconds, paced by the runtime cache `lanes/workflow-reconcile.json`, whose stamp it publishes before the spawn.
 
 The cadence a workflow author sees: an ordinary check's `@wait` without `recheck_at` is re-evaluated about every minute, so a check that wants a slower pace sets `recheck_at`. A held rest-check `@wait` follows the same cadence and subscribed signal wakes while the leader rests on its judged turn. A live step is observed every tick, so a descendant's ask or provider limit is noticed within a minute.
 
-The external timer's roots (`crates/rimz/src/cli/loop_timer.rs::task_roots`) include, beside the rooms of task rows and open fire marks, every room whose live directory holds a nonterminal run this RimZ continues, a terminal one that owes its loop report, or a home that awaits the workflow pass. So a manual run in a room with no loop task and no sidebar still ticks, and a stranded run is ended there too.
+The external timer's roots (`crates/rimz/src/cli/loop_timer.rs::task_roots`) include, beside the rooms of task rows and open fire marks, every room whose live directory holds a nonterminal run this RimZ continues, a terminal one that owes a report, or a home that awaits the workflow pass. So a manual run in a room with no loop task and no sidebar still ticks, and a stranded run is ended there too.
 
 ### The workflow pass
 
@@ -954,10 +955,10 @@ The external timer's roots (`crates/rimz/src/cli/loop_timer.rs::task_roots`) inc
 
 | Home | Action |
 | --- | --- |
-| Stranded | `store::workflow::end_stranded` patches the record in place under the lock: `state` `failed`, a first `terminal_at`, `outcome.ending` `failed` with the reason `this RimZ cannot continue the run: <cause>; it reads only record version 16`, `outcome.acted` kept or `false`, `loop_report` owed when the record names a task, and `stranded: true`. Every other member and the version stay. Then, off the lock, its report is made from the header, its agents are released (`harness::run::release_workflow`), and the home moves with a header-only `history.txt`. |
+| Stranded | `store::workflow::end_stranded` patches the record in place under the lock: `state` `failed`, a first `terminal_at`, `outcome.ending` `failed` with the reason `this RimZ cannot continue the run: <cause>; it reads only record version 17`, `outcome.acted` kept or `false`, `loop_report` owed when the record names a task, and `stranded: true`. Every other member and the version stay. Then, off the lock, its report is made from the header, its agents are released (`harness::run::release_workflow`), and the home moves with a header-only `history.txt`. |
 | `NotObject` | Agents released, then the home moves unmodified, with no history. |
 | `Current`, terminal, owing a report | Nothing: its paced advance collects it ([The tick](#the-tick)). |
-| `Ended`: a terminal record that is not version 16, or a version 16 record that does not decode | A report from the header when it owes one, `mark_header_report_sent`, then a header-only `history.txt` and the move. |
+| `Ended`: a terminal record that is not version 17, or a version 17 record that does not decode | A report from the header when it owes one, `mark_header_report_sent`, then a header-only `history.txt` and the move. |
 | `Current`, terminal, owing nothing | The history and the move. |
 | `Current` nonterminal, `Newer` (any state), `Recordless` | Nothing. |
 
@@ -993,7 +994,7 @@ The fire takes no start-throttle turn, and an agent its command launches takes i
 
 A task-started run reports its outcome to the task once it ends. The scheduler, not the engine, delivers that report.
 
-1. `create` marks the record `loop_report = owed`.
+1. `create` marks the record `loop_report = owed` for a task's run, and for a run an agent started without `--detach`; every other run is created `none`. Every debt gate (the tick, the workflow pass, GC's live-home rule, the agent's owed-wake read) reads the one predicate `RunRecord::owes_report`; the collector below reads `owes_loop_report`, the same mark for a task's run alone, so a run that owes an agent its report is never collected by loop code.
 2. The record write that makes a run terminal also writes its typed outcome (`RunRecord.outcome`, a `store::workflow::RunOutcome`): the ending (`done`, `tried` for a try that ended done, `failed`, `canceled`, or a capacity give-up with its wait and reason), the summed attempt and evaluation cost, whether the run entered an agent or message step, and a failed run's last reason. The ending comes from the record's state, whether it acted from its visit counts, and the cost and reason from the journal. A journal that cannot be read there does not hold the transition back: the outcome then carries the ending the state names, no cost, and no reason, with a warning.
 3. `crates/rimz/src/harness/schedule/run_log.rs::collect_run` collects. Under the workspace lock it reloads the record and, while the run is terminal and owed, appends the report row through `run_log::report_run`, notes its strike when the task's row exists, and then rewrites the mark as `sent`.
 

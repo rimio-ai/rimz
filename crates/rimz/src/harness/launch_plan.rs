@@ -1003,6 +1003,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         "RIMZ_WORKFLOW_RUN",
         "RIMZ_WORKFLOW_DIR",
         "RIMZ_WORKFLOW_DEFINITION",
+        "RIMZ_WORKFLOW_NODE",
     ] {
         unset.insert(key.to_owned(), sandbox::EnvPin::Unset);
     }

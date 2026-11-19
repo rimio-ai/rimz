@@ -2789,6 +2789,33 @@ fn gc_older_than_is_a_validated_duration_string() {
 }
 
 #[test]
+fn max_workflow_depth_takes_a_count_from_one_and_refuses_zero_and_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    editor.set("agents.max-workflow-depth", "4").unwrap();
+    assert_eq!(
+        editor
+            .get(Some("agents.max-workflow-depth"))
+            .unwrap()
+            .as_integer(),
+        Some(4)
+    );
+    for bad in ["0", "256", "deep"] {
+        let error = editor
+            .set("agents.max-workflow-depth", bad)
+            .expect_err(bad)
+            .to_string();
+        assert!(
+            error.contains("agents.max-workflow-depth must be a whole number from 1 to 255"),
+            "{bad}: {error}"
+        );
+    }
+}
+
+#[test]
 fn gc_transcript_retention_round_trips_both_forms_and_refuses_invalid_values() {
     let dir = tempfile::tempdir().unwrap();
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(

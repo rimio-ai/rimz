@@ -3555,6 +3555,7 @@ fn a_provider_temp_root_follows_tmpdir() {
                         "RIMZ_WORKFLOW_RUN"
                             | "RIMZ_WORKFLOW_DIR"
                             | "RIMZ_WORKFLOW_DEFINITION"
+                            | "RIMZ_WORKFLOW_NODE"
                             | "RIMZ_LAUNCH_FAST"
                             | "RIMZ_LAUNCH_AUTO_APPROVE"
                             | "RIMZ_LONG_CACHE_ENV"

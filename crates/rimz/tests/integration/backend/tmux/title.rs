@@ -228,6 +228,7 @@ fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
                 automation: Some(rimz::agents::Automation::Workflow {
                     workflow: "nightly".into(),
                     step: "build".into(),
+                    depth: None,
                 }),
                 ..Default::default()
             },

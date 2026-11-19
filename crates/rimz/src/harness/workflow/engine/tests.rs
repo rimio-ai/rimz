@@ -813,6 +813,7 @@ fn a_continued_restart_that_gives_up_on_capacity_leaves_no_session_to_the_routed
             crate::agents::Automation::Workflow {
                 workflow: record.workflow.clone(),
                 step: "fix".into(),
+                depth: Some(record.depth),
             },
             None
         )
@@ -1780,4 +1781,173 @@ fn an_older_task_start_payload_with_fire_tree_still_decodes() {
         (start.task.as_str(), start.loop_fire, start.manual),
         ("nightly", fire, true)
     );
+}
+
+#[test]
+fn a_start_takes_its_starter_and_depth_from_the_enclosing_run_and_the_calling_agent() {
+    use crate::agents::{Automation, WorkflowAttemptRef, WorkflowAttemptRole};
+    use crate::store::workflow::RunStarter;
+    let (_home, _state, mut run, _) = fixture(ONE_TURN);
+    run.depth = 2;
+    let mut inline = run.clone();
+    inline.origin = RunOrigin::Inline;
+    let at = jiff::Timestamp::UNIX_EPOCH;
+    let mut outside = crate::testkit::agent_state("claude", "outside", at);
+    outside.launch_id = Some("launch-outside".into());
+    let mut step = crate::testkit::agent_state("claude", "step", at);
+    step.launch_id = Some("launch-step".into());
+    step.workflow = Some(WorkflowAttemptRef {
+        run: run.id.clone(),
+        seq: 1,
+        role: WorkflowAttemptRole::Step,
+    });
+    step.automation = Some(Automation::Workflow {
+        workflow: "review".into(),
+        step: "pr".into(),
+        depth: Some(2),
+    });
+    let mut peer = crate::testkit::agent_state("codex", "peer", at);
+    peer.automation = step.automation.clone();
+    let mut older = peer.clone();
+    older.automation = Some(Automation::Workflow {
+        workflow: "review".into(),
+        step: "pr".into(),
+        depth: None,
+    });
+    let agent = |agent: &crate::agents::AgentState| RunStarter::Agent {
+        kind: agent.kind.clone(),
+        launch: agent
+            .launch_id
+            .clone()
+            .unwrap_or_else(|| agent.agent_id.clone()),
+    };
+    let from_run = RunStarter::Run {
+        run: run.id.clone(),
+        node: "pr".into(),
+    };
+    // A kept step agent: its detach cleared the pin, its automation stamp and variables stay.
+    let mut kept = step.clone();
+    kept.workflow = None;
+    let mut ended = run.clone();
+    ended.state = RunState::Done;
+    let cases = [
+        (starting(Some(&inline), Some(&step), false), None, 1),
+        (
+            starting(Some(&run), Some(&step), false),
+            Some(agent(&step)),
+            3,
+        ),
+        (
+            starting(Some(&run), Some(&kept), false),
+            Some(agent(&kept)),
+            3,
+        ),
+        (
+            starting(Some(&ended), Some(&kept), false),
+            Some(agent(&kept)),
+            3,
+        ),
+        (
+            starting(Some(&run), Some(&outside), false),
+            Some(agent(&outside)),
+            1,
+        ),
+        (starting(Some(&run), None, false), Some(from_run.clone()), 3),
+        // A command step's child names the run, whatever agent its variables resolve to.
+        (
+            starting(Some(&run), Some(&step), true),
+            Some(from_run.clone()),
+            3,
+        ),
+        (
+            starting(Some(&ended), Some(&kept), true),
+            Some(from_run.clone()),
+            3,
+        ),
+        (starting(Some(&run), None, true), Some(from_run), 3),
+        (starting(None, Some(&kept), true), None, 1),
+        (starting(None, Some(&peer), false), Some(agent(&peer)), 3),
+        (starting(None, Some(&older), false), Some(agent(&older)), 2),
+        (
+            starting(None, Some(&outside), false),
+            Some(agent(&outside)),
+            1,
+        ),
+        (starting(None, None, false), None, 1),
+    ];
+    for (index, (got, starter, depth)) in cases.into_iter().enumerate() {
+        assert_eq!((index, got.starter, got.depth), (index, starter, depth));
+    }
+}
+
+#[test]
+fn a_start_past_the_depth_limit_refuses_naming_the_depth_limit_and_key() {
+    let at_limit = Starting {
+        starter: None,
+        depth: 3,
+    };
+    assert!(at_limit.admit(3).is_ok());
+    let past = Starting {
+        starter: None,
+        depth: 4,
+    };
+    let error = past.admit(3).unwrap_err().to_string();
+    assert!(
+        error.contains("workflow depth 4")
+            && error.contains("max-workflow-depth` of 3")
+            && error.contains("nothing was created"),
+        "{error}"
+    );
+}
+
+#[test]
+fn only_an_agent_starter_without_detach_is_owed_a_report() {
+    use crate::store::workflow::{ReportMark, RunStarter};
+    let agent = RunStarter::Agent {
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        launch: "launch-1".into(),
+    };
+    let from_run = RunStarter::Run {
+        run: WorkflowRunId::new(),
+        node: "pr".into(),
+    };
+    let cases = [
+        (Some(agent.clone()), false, ReportMark::Owed),
+        (Some(agent), true, ReportMark::None),
+        (Some(from_run), false, ReportMark::None),
+        (None, false, ReportMark::None),
+    ];
+    for (starter, detach, mark) in cases {
+        let (home, state) = bare_room();
+        open_room(&state, home.path());
+        let dir = home.path().join("nightly");
+        fs::create_dir_all(dir.join("prompts")).unwrap();
+        fs::write(crate::disk::paths::workflow_spec_file(&dir), ONE_TURN).unwrap();
+        fs::write(dir.join("prompts/fix.md"), "fix the build").unwrap();
+        let (record, _) = create(
+            &state,
+            deployed(&dir),
+            ScopeRoots {
+                checkout: home.path().into(),
+                project: home.path().into(),
+            },
+            || Ok(None),
+            false,
+            StartArgs {
+                starting: Starting {
+                    starter: starter.clone(),
+                    depth: 2,
+                },
+                detach,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let stored = workflow::load(&state.workflow(&record.id)).unwrap();
+        assert_eq!(
+            (&stored.starter, stored.depth, stored.report),
+            (&starter, 2, mark),
+            "detach {detach}"
+        );
+    }
 }

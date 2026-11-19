@@ -224,7 +224,7 @@ fn workflow_roots() -> std::result::Result<BTreeSet<PathBuf>, rimz::disk::paths:
         for home in homes {
             match &home.class {
                 rimz::store::workflow::RunClass::Current(record)
-                    if !record.state.is_terminal() || record.owes_loop_report() =>
+                    if !record.state.is_terminal() || record.owes_report() =>
                 {
                     roots.insert(record.project_root.clone());
                 }

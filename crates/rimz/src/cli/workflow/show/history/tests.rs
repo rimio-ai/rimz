@@ -93,6 +93,7 @@ fn history_of(spec: &str, journal: &[JournalEntry]) -> String {
         journal,
         now: at(20),
         commands: resolve::RunCommands::new(&record, &globals),
+        starter: None,
     };
     let mut out = Vec::new();
     view.history(&workflow_view::history::LiveAgents::default(), &mut out)

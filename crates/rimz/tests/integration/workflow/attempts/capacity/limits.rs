@@ -36,6 +36,7 @@ fn fill_limit(room: &Room, source: &records::RunRecord) {
         observation.launch.automation = Some(rimz::agents::Automation::Workflow {
             workflow: "review".into(),
             step: "build".into(),
+            depth: None,
         });
         room.env
             .store()

@@ -21,6 +21,7 @@ expression: value
   "created_at": "2026-01-01T00:00:00Z",
   "deadline": null,
   "deadline_fired": false,
+  "depth": 2,
   "entered_at": "2026-01-01T00:00:00Z",
   "id": "wf_0190b8172c0070008000000000000001",
   "input": null,
@@ -73,10 +74,15 @@ expression: value
     "path": "/project"
   },
   "spec_dir": "/definitions/review",
+  "starter": {
+    "by": "agent",
+    "kind": "claude",
+    "launch": "launch-1"
+  },
   "state": "active",
   "task": null,
   "terminal_at": null,
-  "version": 16,
+  "version": 17,
   "visit_grant": 0,
   "visits": {
     "build": 2

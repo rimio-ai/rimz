@@ -301,6 +301,7 @@ fn install_includes_shared_routine_rules_golden() {
         prefix_rule(pattern=["rimz", "workflow", "run"], decision="allow")
         prefix_rule(pattern=["rimz", "workflow", "list"], decision="allow")
         prefix_rule(pattern=["rimz", "workflow", "show"], decision="allow")
+        prefix_rule(pattern=["rimz", "workflow", "wait"], decision="allow")
         prefix_rule(pattern=["rimz", "workflow", "cancel"], decision="allow")
         prefix_rule(pattern=["rimz", "workflow", "resume"], decision="allow")
         prefix_rule(pattern=["rimz", "workflow", "restart"], decision="allow")

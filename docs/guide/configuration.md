@@ -926,6 +926,15 @@ max-chain-length = 3
 
 An agent that runs `rimz agents` or `rimz teams` launches independent top-level peers, not children. `max-chain-length` caps how many of those launches can chain from one human-started root, and defaults to three. A launch past the limit fails before it creates a pane, a worktree, or a provisional agent, and tells the calling agent not to retry. [`rimz agents fork`](../reference/cli/agents.md#fork) is not a launch: the fork takes the chain position of the agent it copies, so a fork of an agent at the limit cannot launch peers either, and a fork is never refused by the limit. `rimz agents molt` replaces the calling agent at the same generation, so repeated molts do not consume the limit.
 
+Workflow runs chain the same way: an agent or a running workflow can start another workflow run, and that run's agents can start more. `max-workflow-depth` caps how deep those runs can nest, and defaults to three.
+
+```toml
+[agents]
+max-workflow-depth = 3
+```
+
+A run started by hand, or by a loop task, is at depth 1; a run started from inside a run, or by one of its agents, sits one deeper. A start past the limit fails before it creates a worktree or a run, and tells the calling agent not to retry. `rimz config set agents.max-workflow-depth <N>` takes a whole number from 1 to 255. A value written by hand outside that range makes `config.toml` unreadable, which [falls back to defaults](#when-a-file-is-broken) with a warning, so the limit reads as three. The [workflow reference](../reference/cli/workflow.md#starters-and-depth) spells out who a run's starter is.
+
 #### Startup relaunches
 
 ```toml

@@ -7991,7 +7991,7 @@ fn fired_record(env: &Env, task: &str) -> LoopRunRecord {
 /// its run `Sent` only after the history row, the strike, any auto-disable, and the strike-out
 /// notice, so the row alone can be read before the state that follows it.
 fn wait_for_loop_reports_sent(env: &Env, task: &str, runs: usize) {
-    use rimz::store::workflow::LoopReport;
+    use rimz::store::workflow::ReportMark;
     let task = &task_id(env, task);
     let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     loop {
@@ -8005,12 +8005,12 @@ fn wait_for_loop_reports_sent(env: &Env, task: &str, runs: usize) {
         let reports: Vec<_> = records
             .into_iter()
             .filter(|run| run.ran_for(task))
-            .map(|run| (run.state, run.loop_report))
+            .map(|run| (run.state, run.report))
             .collect();
         if reports.len() == runs
             && reports
                 .iter()
-                .all(|(_, report)| *report == LoopReport::Sent)
+                .all(|(_, report)| *report == ReportMark::Sent)
         {
             return;
         }

@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
 use jiff::Timestamp;
-use rimz::store::workflow::{RunState, Wait};
+use rimz::store::workflow::RunState;
+
+use super::workflow_view::capacity_wait;
 use unicode_width::UnicodeWidthStr;
 
 use super::*;
@@ -14,7 +16,7 @@ struct Row<'a> {
     address: String,
     glyph: String,
     state: RunState,
-    calls_you: bool,
+    origin: String,
     detail: String,
     age: String,
     since: Timestamp,
@@ -22,22 +24,12 @@ struct Row<'a> {
 
 impl Row<'_> {
     fn needs_you(&self) -> bool {
-        self.state == RunState::Parked
-            || self.calls_you
-            || capacity_wait(self.record)
-                .is_some_and(|wait| wait.hold.is_some_and(rimz::ids::HoldKind::needs_fix))
+        workflow_view::needs_you(self.record)
     }
 
     fn held(&self) -> bool {
         !self.needs_you() && capacity_wait(self.record).is_some()
     }
-}
-
-fn capacity_wait(record: &RunRecord) -> Option<&Wait> {
-    record
-        .wait
-        .as_ref()
-        .filter(|wait| record.state == RunState::Active && wait.outcome == "capacity")
 }
 
 pub(super) fn run(
@@ -402,7 +394,7 @@ pub(super) fn render(
                 address: record.address().to_string(),
                 glyph: glyph(role),
                 state: record.state,
-                calls_you,
+                origin: run_origin(record, view.starter(&run.state, record).as_deref()),
                 detail,
                 age: render::age_short(since, now),
                 since,
@@ -468,12 +460,13 @@ fn live_json(runs: &[resolve::Located], now: Timestamp) -> Vec<serde_json::Value
         .map(|run| {
             let spec = workflow::load(&run.record.definition_dir(&run.paths)).ok();
             let detail = workflow_view::detail(&run.record, spec.as_ref(), now, None);
-            json_row(&run.record, &detail)
+            let handle = RoomView::new(&run.record.project_root).starter(&run.state, &run.record);
+            json_row(&run.record, &detail, handle.as_deref())
         })
         .collect()
 }
 
-fn json_row(record: &RunRecord, detail: &str) -> serde_json::Value {
+fn json_row(record: &RunRecord, detail: &str, handle: Option<&str>) -> serde_json::Value {
     let mut row = serde_json::json!({
         "id": record.id,
         "address": record.address().to_string(),
@@ -489,6 +482,9 @@ fn json_row(record: &RunRecord, detail: &str) -> serde_json::Value {
     }
     if record.once {
         row["once"] = serde_json::json!(true);
+    }
+    if let Some(starter) = starter_json(record, handle) {
+        row["starter"] = starter;
     }
     row
 }
@@ -508,12 +504,14 @@ fn write_groups(out: &mut impl Write, rows: &[Row], width: Option<usize>) -> std
         if held > 0 {
             heading.push_str(&format!(" · {held} held"));
         }
-        let origin = (group[0].record.task.as_deref(), group[0].record.manual);
-        let shared = group
-            .iter()
-            .all(|row| (row.record.task.as_deref(), row.record.manual) == origin);
+        let first = group[0].record;
+        let shared = group.iter().all(|row| {
+            let record = row.record;
+            (&record.task, record.manual, &record.starter)
+                == (&first.task, first.manual, &first.starter)
+        });
         if shared {
-            heading.push_str(&format!(" · started by {}", run_origin(group[0].record)));
+            heading.push_str(&format!(" · started by {}", group[0].origin));
         }
         if let Some(width) = width {
             heading = render::clip_to_width(&heading, width);
@@ -557,7 +555,7 @@ fn write_rows(
         .iter()
         .map(|row| {
             let mark = if show_origin {
-                format!(" · by {}", run_origin(row.record))
+                format!(" · by {}", row.origin)
             } else {
                 String::new()
             };
@@ -811,7 +809,7 @@ mod tests {
             }
             .into(),
             state: record.state,
-            calls_you: false,
+            origin: run_origin(record, None),
             detail: if capacity_wait(record).is_some() {
                 "held · queued"
             } else {
@@ -1011,7 +1009,7 @@ mod tests {
                 }))
                 .unwrap(),
             );
-            let row = json_row(&record, "recorded detail");
+            let row = json_row(&record, "recorded detail", None);
             assert_eq!(row.get("hold"), hold.map(serde_json::Value::from).as_ref());
             assert_eq!(row["detail"], "recorded detail");
             assert_eq!(row["since"], serde_json::json!(record.entered_at));
@@ -1043,7 +1041,7 @@ mod tests {
                 workflow_view::glyph_role(&record),
             ),
             state: RunState::Parked,
-            calls_you: false,
+            origin: run_origin(&record, None),
             detail: "user: This decision needs a long explanation".repeat(3),
             age: "47m".into(),
             since: Timestamp::UNIX_EPOCH,

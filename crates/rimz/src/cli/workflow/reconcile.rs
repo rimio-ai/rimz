@@ -95,7 +95,7 @@ pub(super) fn settle(room: &Room<'_>, id: &WorkflowRunId) -> Result<Settled> {
         }
         // An owed report of a run this RimZ reads is retried by its paced advance.
         records::RunClass::Current(record)
-            if !record.state.is_terminal() || record.owes_loop_report() =>
+            if !record.state.is_terminal() || record.owes_report() =>
         {
             return Ok(Settled::default());
         }
@@ -177,7 +177,7 @@ fn finish_any(state: &rimz::StatePaths, id: &WorkflowRunId) -> Result<bool> {
     };
     Ok(match found.class {
         records::RunClass::Current(_) => finish_run(state, id)?.moved,
-        records::RunClass::Ended(header) if !header.owes_loop_report() => {
+        records::RunClass::Ended(header) if !header.owes_report() => {
             let why = match header.version {
                 Some(version) if version != u64::from(records::VERSION) => format!(
                     "record version {version} was written by another RimZ, so its steps are not \

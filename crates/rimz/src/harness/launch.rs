@@ -1472,6 +1472,7 @@ fn spawn_env_names(
             "RIMZ_WORKFLOW_RUN",
             "RIMZ_WORKFLOW_DIR",
             "RIMZ_WORKFLOW_DEFINITION",
+            "RIMZ_WORKFLOW_NODE",
             "TMPDIR",
             "SCCACHE_CLIENT_SIDE",
             crate::config::Isolation::SCOPED_HOST_PATHS_ENV,

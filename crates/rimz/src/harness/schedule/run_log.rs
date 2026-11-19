@@ -468,7 +468,7 @@ fn collect_under_lock(
         });
     match report_run(&record, &outcome, command)? {
         Collected::Reported(_) => {
-            record.loop_report = workflow::LoopReport::Sent;
+            record.report = workflow::ReportMark::Sent;
             workflow::write(&paths, &record, &guard)?;
         }
         Collected::Forgotten => {
@@ -1767,7 +1767,7 @@ fn in_flight(
         .unwrap_or_default();
     let mut rows: Vec<_> = runs
         .into_iter()
-        .filter(|run| run.loop_report != crate::store::workflow::LoopReport::Sent)
+        .filter(|run| run.report != crate::store::workflow::ReportMark::Sent)
         .filter_map(|run| {
             let fire = run.loop_fire.clone().filter(|_| run.task.is_some())?;
             let task = fire.task();

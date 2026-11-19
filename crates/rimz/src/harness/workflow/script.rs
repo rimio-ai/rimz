@@ -211,6 +211,7 @@ pub(super) fn evaluate(
         .env("RIMZ_WORKFLOW_DIR", &paths.work)
         .env("RIMZ_WORKFLOW_DEFINITION", record.definition_dir(paths))
         .env("RIMZ_WORKFLOW_RUN", record.id.as_str())
+        .env("RIMZ_WORKFLOW_NODE", &record.node)
         .envs(crate::workspace::pin_env(
             &state.workspace_id,
             &record.project_root,
@@ -525,8 +526,8 @@ fn with_child<T>(
     (result, decided.get())
 }
 
-/// The environment of a shell check or command step: the room pin, the run's directories and
-/// id, and the loop task that started the run, as a loop guard's shell had it.
+/// The environment of a shell check or command step: the room pin, the run's directories, id
+/// and node, and the loop task that started the run, as a loop guard's shell had it.
 fn child_env(
     state: &StatePaths,
     paths: &WorkflowPaths,
@@ -539,6 +540,7 @@ fn child_env(
         record.definition_dir(paths).display().to_string(),
     );
     env.insert("RIMZ_WORKFLOW_RUN".into(), record.id.to_string());
+    env.insert("RIMZ_WORKFLOW_NODE".into(), record.node.clone());
     env.extend(loop_task_env(record));
     env
 }

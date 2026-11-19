@@ -183,6 +183,20 @@ From inside a workflow step, or one of its subagents, omit the run: `rimz workfl
 
 Keep the room open while a run works. The room checks every unfinished run about once a minute, and that check moves a waiting run on. With no room open, only the [loop timer](./loops.md#who-keeps-time) does it, if you installed one.
 
+### Wait for a run to end
+
+A script or an agent that starts a run often needs its result before it goes on. Polling `workflow show` in a loop works, but it misses the moment a run stops for you. `rimz workflow wait` blocks until the runs you name end, and returns at once when one of them needs a person, so an agent waiting on a run never sits while the run waits on you:
+
+```sh
+rimz workflow wait "$RUN"                      # until it ends
+rimz workflow wait "$A" "$B" --any             # until the first ends
+rimz workflow wait "$RUN" --timeout 30m --json # bounded, for a script
+```
+
+It prints one line per run, with how it ended, its checkout and its notes folder, and exits `0` when every run ended done, `1` when one failed or was canceled, `3` when one needs you, and `124` on timeout ([every exit](../reference/cli/workflow.md#wait-for-runs)). It reads the run records and changes nothing.
+
+A run an agent starts is the agent's to follow: RimZ records the agent as its starter, and `workflow list` and `show` name it. Start it with `--detach` when the agent should not be held to its outcome. A run started from inside another run sits one level deeper, and `[agents] max-workflow-depth` ([configuration](./configuration.md#agent-launch-chains)) caps how deep they nest.
+
 ## What a run does on your machine
 
 `rimz workflow run` creates the run directory `~/.rimz/ws/<workspace-dir>/owned/workflows/<run-id>/`, with these entries:

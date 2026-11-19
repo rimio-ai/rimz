@@ -68,7 +68,7 @@ fn title_with_parents(seat: Seat<'_>, agents: &[AgentState], remaining: u8) -> P
         PaneTitle::with_origin(PaneTitleOrigin::Team, team, seat.role.unwrap_or(short))
     } else {
         match seat.automation {
-            Some(Automation::Workflow { workflow, step }) => {
+            Some(Automation::Workflow { workflow, step, .. }) => {
                 PaneTitle::with_origin(PaneTitleOrigin::Automation, workflow, step)
             }
             Some(Automation::Loop) => {
@@ -172,6 +172,7 @@ mod tests {
         seat.automation = Some(Automation::Workflow {
             workflow: "夜間".into(),
             step: "build".into(),
+            depth: None,
         });
         let rendered = title(Seat::from(&seat), &[]);
         assert_eq!(rendered.as_str(), "夜間 · build (@swift-otter)");
@@ -213,6 +214,7 @@ mod tests {
             Automation::Workflow {
                 workflow: "nightly".into(),
                 step: "build".into(),
+                depth: None,
             },
         ] {
             seat.automation = Some(automation);
@@ -231,6 +233,7 @@ mod tests {
         root.automation = Some(Automation::Workflow {
             workflow: "nightly".into(),
             step: "build".into(),
+            depth: None,
         });
         let mut parent = agent("codex", "parent", "second", Some("explorer"));
         parent.parent_agent_id = Some(root.agent_id.clone());
@@ -374,6 +377,7 @@ mod tests {
             Automation::Workflow {
                 workflow: "nightly".into(),
                 step: "build".into(),
+                depth: None,
             },
         ] {
             let launch = LaunchParams {

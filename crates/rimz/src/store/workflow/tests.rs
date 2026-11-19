@@ -110,17 +110,62 @@ fn a_fire_tree_record_still_decodes_at_this_version() {
 
 #[test]
 fn the_pass_awaits_a_finished_run_only_once_it_owes_no_report() {
-    let pass = |state: RunState, report: LoopReport| {
+    let pass = |state: RunState, report: ReportMark| {
         let mut record = record();
         record.task = Some("sweep".into());
         record.state = state;
-        record.loop_report = report;
+        record.report = report;
         RunClass::Current(Box::new(record)).awaits_pass()
     };
-    assert!(!pass(RunState::Active, LoopReport::Owed));
+    assert!(!pass(RunState::Active, ReportMark::Owed));
     // The paced advance retries an owed report.
-    assert!(!pass(RunState::Failed, LoopReport::Owed));
-    assert!(pass(RunState::Failed, LoopReport::Sent));
+    assert!(!pass(RunState::Failed, ReportMark::Owed));
+    assert!(pass(RunState::Failed, ReportMark::Sent));
+}
+
+#[test]
+fn an_agent_starter_owes_its_report_until_sent_and_a_run_starter_owes_none() {
+    let agent = RunStarter::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        launch: AgentSessionId::from("launch-1"),
+    };
+    let owes = |starter: Option<RunStarter>, task: Option<&str>, report: ReportMark| {
+        let mut record = record();
+        record.state = RunState::Done;
+        record.starter = starter;
+        record.task = task.map(Into::into);
+        record.report = report;
+        let header = RunHeader::read(serde_json::to_value(&record).unwrap().as_object().unwrap());
+        assert_eq!(header.starter, record.starter);
+        (
+            record.owes_report(),
+            header.owes_report(),
+            record.owes_loop_report(),
+            RunClass::Current(Box::new(record)).awaits_pass(),
+        )
+    };
+    assert_eq!(
+        owes(Some(agent.clone()), None, ReportMark::Owed),
+        (true, true, false, false),
+        "an agent starter's debt keeps the run live, and no loop collector takes it"
+    );
+    assert_eq!(
+        owes(Some(agent), None, ReportMark::Sent),
+        (false, false, false, true)
+    );
+    let run = RunStarter::Run {
+        run: WorkflowRunId::new(),
+        node: "build".into(),
+    };
+    assert_eq!(
+        owes(Some(run), None, ReportMark::Owed),
+        (false, false, false, true),
+        "a run starter is owed nothing in this version"
+    );
+    assert_eq!(
+        owes(None, Some("nightly"), ReportMark::Owed),
+        (true, true, true, false)
+    );
 }
 
 #[test]
@@ -229,7 +274,7 @@ fn finish_moves_only_an_ended_run_and_never_replaces_a_finished_home() {
     );
     record.state = RunState::Done;
     record.task = Some("nightly".into());
-    record.loop_report = LoopReport::Owed;
+    record.report = ReportMark::Owed;
     write(&live, &record, &guard).unwrap();
     assert_eq!(
         finish(&state, &record.id, Some(b"h"), &guard).unwrap(),
@@ -246,7 +291,7 @@ fn finish_moves_only_an_ended_run_and_never_replaces_a_finished_home() {
         Finished::Kept,
         "a stranded run waits for the pass to end it"
     );
-    record.loop_report = LoopReport::Sent;
+    record.report = ReportMark::Sent;
     write(&live, &record, &guard).unwrap();
     fs::create_dir_all(&finished.home).unwrap();
     assert_eq!(
@@ -895,6 +940,11 @@ fn durable_record_round_trip_and_json_shape() {
         )
         .unwrap(),
     );
+    record.starter = Some(RunStarter::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        launch: AgentSessionId::from("launch-1"),
+    });
+    record.depth = 2;
     let value = serde_json::to_value(record).unwrap();
     insta::assert_json_snapshot!("record", value);
 }

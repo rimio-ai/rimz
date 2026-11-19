@@ -52,6 +52,12 @@ pub enum WorkflowErr {
     Refused(String),
     #[error("no room at {}; run `rimz start` there first", .0.display())]
     NoRoom(std::path::PathBuf),
+    #[error(
+        "workflow run refused: it would start at workflow depth {depth}, past this machine's \
+         `[agents] max-workflow-depth` of {limit}; nothing was created. Do not retry it from \
+         here; a person can raise the limit with `rimz config set agents.max-workflow-depth <N>`"
+    )]
+    TooDeep { depth: u32, limit: u8 },
 }
 
 type Result<T> = std::result::Result<T, WorkflowErr>;
@@ -101,6 +107,83 @@ pub struct StartArgs {
     pub input: Option<serde_json::Map<String, serde_json::Value>>,
     /// The run is a try: it ends at its start node's first route ([`RunRecord::once`]).
     pub once: bool,
+    /// Who started the run and how deep it sits ([`starting`]); a loop task's run has none.
+    pub starting: Starting,
+    /// `--detach`: an agent starter is told nothing when the run ends.
+    pub detach: bool,
+}
+
+/// What starts a run and its depth on the launch path, resolved before anything is created.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Starting {
+    pub starter: Option<workflow::RunStarter>,
+    pub depth: u32,
+}
+
+impl Default for Starting {
+    fn default() -> Self {
+        Self {
+            starter: None,
+            depth: 1,
+        }
+    }
+}
+
+impl Starting {
+    /// Refuse a start whose depth would pass `limit`, `[agents] max-workflow-depth`.
+    pub fn admit(&self, limit: u8) -> Result<()> {
+        if self.depth > u32::from(limit) {
+            return Err(WorkflowErr::TooDeep {
+                depth: self.depth,
+                limit,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Who starts a run from `enclosing`, the run `RIMZ_WORKFLOW_RUN` names, `agent`, the
+/// calling agent's row, and `hosted`, whether this process descends from a run's command step
+/// or check (`RIMZ_WORKFLOW_NODE`, which the host stamps on those children and every agent
+/// launch clears). A loop shell task's own command run starts nothing on the launch path: no
+/// starter and depth 1. A hosted process never names an agent, since an advance and its
+/// children can inherit an agent pane's variables (a kept agent's hook spawns advances): the
+/// enclosing run starts it, at its node, one deeper. Otherwise a living agent starts it and is
+/// owed the report, pinned to a run or not (a kept step agent whose pin was cleared, while its
+/// run lives or after it ended), one deeper than the workflow its automation names. With no
+/// agent, the enclosing run starts it.
+pub fn starting(
+    enclosing: Option<&RunRecord>,
+    agent: Option<&crate::agents::AgentState>,
+    hosted: bool,
+) -> Starting {
+    let agent_start = |agent: &crate::agents::AgentState| Starting {
+        starter: Some(workflow::RunStarter::Agent {
+            kind: agent.kind.clone(),
+            launch: agent
+                .launch_id
+                .clone()
+                .unwrap_or_else(|| agent.agent_id.clone()),
+        }),
+        depth: agent
+            .automation
+            .as_ref()
+            .map_or(0, crate::agents::Automation::workflow_depth)
+            + 1,
+    };
+    match (enclosing, agent) {
+        (Some(run), _) if run.origin == RunOrigin::Inline => Starting::default(),
+        (None, _) if hosted => Starting::default(),
+        (_, Some(agent)) if !hosted => agent_start(agent),
+        (Some(run), _) => Starting {
+            starter: Some(workflow::RunStarter::Run {
+                run: run.id.clone(),
+                node: run.node.clone(),
+            }),
+            depth: run.depth + 1,
+        },
+        (None, _) => Starting::default(),
+    }
 }
 
 /// What a workflow task's fire hands the `rimz workflow run` it spawns, as
@@ -314,11 +397,18 @@ fn publish(
         id,
         origin: start.origin,
         workflow: start.name,
-        loop_report: if start.task.is_some() {
-            workflow::LoopReport::Owed
+        report: if start.task.is_some()
+            || matches!(
+                args.starting.starter,
+                Some(workflow::RunStarter::Agent { .. })
+            ) && !args.detach
+        {
+            workflow::ReportMark::Owed
         } else {
-            workflow::LoopReport::None
+            workflow::ReportMark::None
         },
+        starter: args.starting.starter.clone(),
+        depth: args.starting.depth,
         task: start.task,
         loop_fire: start.loop_fire,
         manual,
@@ -2317,7 +2407,7 @@ pub(crate) fn reassign_task(
             continue;
         }
         record.task = None;
-        record.loop_report = workflow::LoopReport::None;
+        record.report = workflow::ReportMark::None;
         workflow::write(&state.workflow(&record.id), &record, &guard)?;
         reassigned.push(record.id);
     }

@@ -2555,6 +2555,16 @@ reason = "The CLI host finds a run's leader row for push-back and signal forward
 
 [[verdict]]
 kind = "item"
+key = "harness::workflow::Starting"
+reason = "The CLI resolves who starts a run and at what depth before the engine creates anything, and the engine refuses a start past the depth limit."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::starting"
+reason = "One rule picks a start's starter and depth from the enclosing run and the calling agent, for the CLI and the engine's tests alike."
+
+[[verdict]]
+kind = "item"
 key = "harness::workflow::launch_groups"
 reason = "The start-group resolver stays in the library; the CLI attempt host's start_groups delegates to it."
 
@@ -4527,7 +4537,7 @@ path = "crates/rimz/src/store"
 # Pass 33d: SidebarProviderPanel::budget returns ProviderBudget, ProviderBar, WindowReading and CreditDisplay, the quota reading the renderer draws (+4).
 # SkippedSettings carries the skipped-settings count and list digest to the renderer (+1).
 # workflow::RunOrigin and workflow::seal_definition record and seal an inline run's definition (+2).
-# workflow::LoopReport and RunRecord::owes_loop_report mark a task-started run's outcome report for the engine, the tick backstop, and GC (+2).
+# workflow::ReportMark and RunRecord::owes_loop_report mark a run's outcome report for the engine, the tick backstop, and GC.
 # A fire-tree run's checkout key left with `--fresh-worktree`; a run keys on its scope path, and its slot stays under the budget.
 # store::run::LimitHold records a limit-parked child's hold on its run, for the harness and the park-notice helper (+1).
 # Store::hook_ingress_at lets the run fold tell a delayed hook from one after a limit park (+1).
@@ -4569,7 +4579,9 @@ path = "crates/rimz/src/store"
 # store::message::read_record finds a compaction continue's command anywhere in the queue or history (+1).
 # SidebarUpload carries the paste upload row the upload lane folds into the snapshot (+1).
 # store::message::paste_order is the one batch paste order the send path and the aligner share (+1).
-surface-budget = 670
+# workflow::RunStarter, ReportMark::owes_report and RunRecord::owes_report record who started a run
+# and whether it owes an agent its report (+3).
+surface-budget = 673
 
 [[verdict]]
 kind = "item"
@@ -5899,7 +5911,8 @@ allowed-dependencies = [
 # submit lets a judge's `rimz workflow submit` answer its check through the engine (+1).
 # AttemptHost::budget_refusal and budget_refusal let the engine hold a launch the budget gate would refuse (+2).
 # Limited moves here from store::workflow, an in-memory observation no record stores (+1).
-surface-budget = 101
+# Starting and starting resolve a start's starter and depth before anything is created (+2).
+surface-budget = 103
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
@@ -12233,8 +12246,13 @@ reason = "A run record says whether a deployed workflow or a loop task's inline 
 
 [[verdict]]
 kind = "item"
-key = "store::workflow::LoopReport"
-reason = "A run record carries whether it still owes its loop task the outcome report; the run is created owing it, the scheduler's collector marks it sent (or removes a quiet run's home instead), and the workflow tick and GC read it."
+key = "store::workflow::ReportMark"
+reason = "A run record carries whether it still owes its loop task or its agent starter the outcome report; a task's run is created owing it, the scheduler's collector marks it sent (or removes a quiet run's home instead), and the workflow tick and GC read it through one predicate."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::RunStarter"
+reason = "A run record names the agent or run that started it, for the depth of the runs it starts, the report it owes, and the views."
 
 [[verdict]]
 kind = "item"

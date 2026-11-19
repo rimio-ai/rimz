@@ -763,7 +763,7 @@ fn finished_workflow_homes_expire_by_age_whatever_wrote_them_and_live_homes_stay
         }))
         .unwrap();
         record.task = Some("nightly".to_owned());
-        record.loop_report = serde_json::from_value(serde_json::json!(report)).unwrap();
+        record.report = serde_json::from_value(serde_json::json!(report)).unwrap();
         let bytes = serde_json::to_vec(&record).unwrap();
         cases.push((Some(bytes.clone()), true, false));
         cases.push((Some(bytes), true, true));

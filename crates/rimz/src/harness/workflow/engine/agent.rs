@@ -564,6 +564,7 @@ fn step_launch(
     let automation = crate::agents::Automation::Workflow {
         workflow: record.workflow.clone(),
         step: record.node.clone(),
+        depth: Some(record.depth),
     };
     let booked_by = record
         .fire
