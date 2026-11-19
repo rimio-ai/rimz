@@ -55,6 +55,7 @@ pub(super) fn list_agents(
     };
     let channel = lane_scope.clone().lane(&query);
     let reader = crate::cli::current_channel(&workspace, Some(&store)).address_context();
+    let query = crate::cli::select::bind_caller(query, &store, &snapshot, &reader)?;
     let now = jiff::Timestamp::now();
     let machine_config = crate::cli::machine_config();
     let demotion = crate::cli::select::park_demotion(&store, &state, &runtime, &snapshot, now);

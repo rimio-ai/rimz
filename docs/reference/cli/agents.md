@@ -737,6 +737,7 @@ The status is derived for display. Codex launched in `auto` mode shows `running`
 rimz agents list --filter 'status=waiting,failed'      # attention only
 rimz agents list --filter 'parent=*'                   # launched children, no roots
 rimz agents list --filter 'parent=@coder' -q           # @coder's children, one address each
+rimz agents list --filter 'launcher=@me'               # what the calling agent launched, any lane
 rimz agents list --all --filter 'live=no'              # closed sessions in the room
 rimz agents list --filter 'lane=*' --filter 'ctx>=80%' # the room's nearly full contexts
 rimz agents list --filter help                         # the field table
@@ -744,7 +745,7 @@ rimz agents list --filter help                         # the field table
 
 A query is terms separated by spaces, each `<field><op><value>[,<value>...]`. Repeated `--filter` flags and the terms of one query all must match. Under `=` a term matches when any of its values does; under `!=` when none does. `>`, `>=`, `<`, and `<=` take one value and only the ordered fields. Field names and enum values are case-insensitive. Quote a value holding a space, comma, or quote as a JSON string (`name="my agent"`). `none` matches a missing value and `*` any present one, so `error=none` and `error!=rate-limit` both match a row with no error, and `ctx>50%` never matches a row with no context reading. A text value takes `*` as a wildcard anywhere in it. `=` and `!=` on `age`, `ctx`, `tokens`, and `cost` compare the exact value, not the unit the table prints, so `age=5m` matches only a row idle exactly 300 seconds; a range (`age>=5m age<6m`) matches what the table shows. `--filter help` prints the field table below and exits 0.
 
-Without a filter, `list` shows live, top-level agents in its scope. A term naming `live` replaces the `live=yes` default, one naming `parent` replaces the top-level default (`parent=none`), and one naming `lane` replaces the current-lane default, so `lane=*` covers the room. An explicit scope (`SCOPE`, `-w`, `--all`) applies first, and a filter never widens it. Closed sessions are read only when a `live` term can match `no`; a failed audit read fails the command.
+Without a filter, `list` shows live, top-level agents in its scope. A term naming `live` replaces the `live=yes` default, one naming `parent` replaces the top-level default (`parent=none`), and one naming `lane` replaces the current-lane default, so `lane=*` covers the room. A term naming `launcher` replaces both the top-level and the current-lane defaults, since what an agent launched includes its children and can sit in any lane; `live=yes` still holds. In `parent` and `launcher`, `@me` (or `me`) names the agent running the command, so an agent stops everything it launched directly with `rimz agents stop --filter launcher=@me --all`; outside an agent pane `@me` refuses as it does as an address. An explicit scope (`SCOPE`, `-w`, `--all`) applies first, and a filter never widens it. Closed sessions are read only when a `live` term can match `no`; a failed audit read fails the command.
 
 | Field | Type | Holds |
 | --- | --- | --- |
@@ -758,6 +759,7 @@ Without a filter, `list` shows live, top-level agents in its scope. A term namin
 | `team` | address | The team name, optionally `team#lane`. |
 | `role` | text | The team role. |
 | `parent` | address | The launching agent's address; a value without `*` resolves as an address and must name the parent. |
+| `launcher` | address | The address of the agent that launched this one: the parent of a `rimz subagents` child, or the agent that started a peer or a team seat. A value without `*` resolves as an address and must name that agent, matched by its launch, so a molted launcher keeps its rows. An agent a loop task fired has none. |
 | `status` | enum | The `STATUS` column: `running`, `waiting`, `idle`, `success`, `failed`, `paused`, `sleeping`. |
 | `error` | enum | The turn error class: `rate-limit`, `spend-limit`, `overloaded`, `not-entitled`, `failed`, `unknown`, or `none`. It is independent of `status`: a child parked on a rate limit keeps `rate-limit` once it shows `failed`, and a budget park is `paused` with `error=none`. |
 | `live` | enum | `yes` while the agent has a live pane, `no` for an ended or closed session. |
@@ -773,7 +775,7 @@ $ rimz agents list --filter stauts=idle
 error: filter term `stauts=idle`: unknown field `stauts`; did you mean `status`?
 ```
 
-`--json` emits `{"schema":2,"agents":[...]}`, one entry per listed row. Each entry carries the field table's 17 keys, with `null` for a missing value, beside the card the table renders, not the store's provider-shaped record. `age` is whole seconds, `ctx` a whole percent, `tokens` a count, and `cost` dollars. A launched child is its own entry with `parent` set. `login`, `checkout`, `add_dirs`, `untrusted_checkout`, `idle_stop`, `hibernation`, and `model_detail.tier` are omitted when unset; every other key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
+`--json` emits `{"schema":2,"agents":[...]}`, one entry per listed row. Each entry carries the field table's 18 keys, with `null` for a missing value, beside the card the table renders, not the store's provider-shaped record. `age` is whole seconds, `ctx` a whole percent, `tokens` a count, and `cost` dollars. A launched child is its own entry with `parent` set. `login`, `checkout`, `add_dirs`, `untrusted_checkout`, `idle_stop`, `hibernation`, and `model_detail.tier` are omitted when unset; every other key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
 
 | Field | Contents |
 | --- | --- |

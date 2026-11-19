@@ -6,7 +6,7 @@
 use std::io::Write as _;
 use std::process::{Child, Command, Output, Stdio};
 
-use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
+use rimz::agents::{AgentLifecycleObservation, LaunchParams, LaunchedBy, LifecycleSignal};
 use rimz::ids::{AgentKind, MuxName, PaneId, ViewKind};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 
@@ -17,6 +17,16 @@ use crate::common::{
 
 /// Every row the fixture holds: two top-level agents and one launched child.
 const EVERY: &str = "parent=*,none";
+
+/// The fixture's panes: one per agent of [`seed`], then the two
+/// [`seed_launcher_room`] adds.
+const PANES: [&str; 5] = [
+    "terminal_1",
+    "terminal_2",
+    "terminal_3",
+    "terminal_4",
+    "terminal_5",
+];
 
 /// A room with two top-level agents, `parent` and `peer`, and `kin`, a child
 /// `parent` launched, stamped with the parent's launch id as
@@ -116,7 +126,7 @@ fn seed(owned: bool) -> Env {
     }
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
-    let panes = ["terminal_1", "terminal_2", "terminal_3"]
+    let panes = PANES
         .into_iter()
         .map(|raw| frame_pane(&workspace.session_name, raw, &env.project_root))
         .collect();
@@ -130,11 +140,51 @@ fn seed(owned: bool) -> Env {
     env
 }
 
+/// [`seed_stoppable_room`], plus two agents `parent` launched as peers: `far` in
+/// lane `#far` and `seat`, a seat of team `forge`.
+fn seed_launcher_room() -> Env {
+    let env = seed(true);
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    for (id, name, pane, team, lane) in [
+        ("far", "seat-far", "terminal_4", None, Some("far")),
+        ("seat", "seat-forge", "terminal_5", Some("forge"), None),
+    ] {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+        observation.agent_name = Some(name.to_owned());
+        observation.worktree_path = Some(env.project_root.display().to_string());
+        observation.pane_id = Some(pane_id(pane));
+        observation.runtime_owner = Some(owner_process(id));
+        observation.launch.launched_by = Some(Box::new(LaunchedBy {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "launch-parent".into(),
+        }));
+        observation.launch.team = team.map(str::to_owned);
+        observation.launch.lane = lane.map(|name| {
+            serde_json::from_value(serde_json::json!({
+                "home": "trunk",
+                "path": env.project_root.display().to_string(),
+                "name": name,
+            }))
+            .expect("lane")
+        });
+        let event = EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &session,
+            "claude",
+            "SessionStart",
+            &observation,
+        );
+        env.store().append_event(&event).expect("register");
+    }
+    env
+}
+
 /// The fixture's panes as the deterministic pane list a fresh pane read takes
 /// in place of the mux.
 fn pane_fixture(env: &Env) -> std::path::PathBuf {
     let session = env.resolve_workspace(&env.project_root).session_name;
-    let panes = ["terminal_1", "terminal_2", "terminal_3"]
+    let panes = PANES
         .into_iter()
         .map(|raw| frame_pane(&session, raw, &env.project_root))
         .collect::<Vec<_>>();
@@ -1105,4 +1155,63 @@ fn message_stdin_me_from_no_agent_misses_alone() {
         );
         assert_eq!(recipients(), sent, "{stdin:?}: {}", text(&out));
     }
+}
+
+/// `stop --filter launcher=@me --all`, run by an agent, stops what it launched
+/// directly in every lane (a peer in the current lane `#far`, a child and a
+/// team seat outside it) and
+/// nothing else; from a shell, `@me` is refused rather than read as a handle.
+#[test]
+fn stop_launcher_me_stops_what_the_caller_launched_in_every_lane() {
+    let env = seed_launcher_room();
+    let as_parent = |command: &mut Command| {
+        command
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "parent")
+            .env(rimz::workspace::ENV_CHANNEL, "far");
+    };
+    let listed = spawn_with(
+        &env,
+        &["agents", "list", "--filter", "launcher=@me", "-q"],
+        "",
+        as_parent,
+    )
+    .wait_with_output()
+    .expect("rimz output");
+    assert!(listed.status.success(), "{}", text(&listed));
+    assert_eq!(
+        sorted_lines(&listed.stdout),
+        // `seat-far` is the lone agent of the current lane, so its kind names it.
+        ["@claude", "@kin", "@seat"],
+        "{}",
+        text(&listed)
+    );
+    let lane_default = spawn_with(&env, &["agents", "list", "-q"], "", as_parent)
+        .wait_with_output()
+        .expect("rimz output");
+    assert_eq!(
+        sorted_lines(&lane_default.stdout),
+        ["@claude"],
+        "the plain list keeps to the current lane: {}",
+        text(&lane_default)
+    );
+    let refused = rimz(&env, &["agents", "list", "--filter", "launcher=@me"], "");
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains(
+            "@me requires an agent RimZ can identify; run this command from an agent pane"
+        ),
+        "{}",
+        text(&refused)
+    );
+    let stopped = spawn_with(
+        &env,
+        &["agents", "stop", "--filter", "launcher=@me", "--all"],
+        "",
+        as_parent,
+    )
+    .wait_with_output()
+    .expect("rimz output");
+    assert!(stopped.status.success(), "{}", text(&stopped));
+    assert_eq!(closed(&env), ["3", "4", "5"], "{}", text(&stopped));
 }

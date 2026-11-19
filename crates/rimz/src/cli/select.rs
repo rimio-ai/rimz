@@ -219,11 +219,12 @@ fn filter_rows(ctx: &Ctx, query: &Query, scope: LaneScope<&str>) -> Result<Vec<S
     };
     let lane = scope.map(|lane| LaneSelector::parse(Some(lane)));
     let reader = ctx.address_context();
+    let query = bind_caller(query.clone(), &ctx.store, &snapshot, &reader)?;
     let rows = selector::rows_in_scope(
         &snapshot,
         audit.as_ref(),
         lane.as_ref(),
-        query,
+        &query,
         &demotion,
         &reader,
         now,
@@ -235,6 +236,21 @@ fn filter_rows(ctx: &Ctx, query: &Query, scope: LaneScope<&str>) -> Result<Vec<S
             agent: Some((row.agent().kind.clone(), row.agent().agent_id.clone())),
         })
         .collect())
+}
+
+/// `query` with its `@me` values bound to the calling agent, refused as an
+/// `@me` reference is when RimZ cannot identify one.
+pub(crate) fn bind_caller(
+    query: Query,
+    store: &Store,
+    snapshot: &SidebarSnapshot,
+    reader: &rimz::address::AddressContext,
+) -> Result<Query> {
+    if !query.names_me() {
+        return Ok(query);
+    }
+    let caller = super::resolve_agent_one(store, snapshot, "@me", None, reader)?;
+    Ok(query.with_caller(caller))
 }
 
 fn source(flags: &TargetFlags<'_>) -> Result<Source, UsageError> {
@@ -290,8 +306,8 @@ fn require_consent(
 
 /// What `agents list` and an action command's `--filter` select until a term
 /// names the field.
-pub(crate) const FILTER_DEFAULTS: &str =
-    "naming lane, live, or parent replaces its default: the current lane, live=yes, parent=none";
+pub(crate) const FILTER_DEFAULTS: &str = "naming lane, live, or parent replaces its default: the current lane, live=yes, parent=none; \
+     naming launcher replaces the lane and parent defaults";
 
 #[cfg(test)]
 mod tests {
