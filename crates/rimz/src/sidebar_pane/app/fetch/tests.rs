@@ -2148,6 +2148,7 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
                         probed_at_ms: now_ms,
                         ok: true,
                         account: None,
+                        login_at_ms: None,
                     },
                 )
             })

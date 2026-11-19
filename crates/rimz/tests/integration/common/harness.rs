@@ -95,6 +95,7 @@ impl Harness {
                             probed_at_ms: now_ms,
                             ok: false,
                             account: None,
+                            login_at_ms: None,
                         },
                     )
                 })

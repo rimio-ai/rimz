@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use crate::RuntimePaths;
 use crate::agents::account::{
-    AccountProbe, AccountProfileAnswer, AccountProfileState, AccountsCache,
+    ACCOUNTS_TTL, AccountProbe, AccountProfileAnswer, AccountProfileState, AccountsCache,
     INFORMATIONAL_PROBE_TIMEOUT, ProviderRecord, RateLimitsCache, RecordedLogin,
     read_accounts_cache, read_rate_limits_cache,
 };
@@ -15,7 +15,7 @@ use crate::agents::spending::read_provider_spending_cache;
 use crate::agents::version::newest_version;
 use crate::agents::{AgentAccount, ProviderLogin, RoomLoginSet};
 use crate::ids::LoginKey;
-use crate::sidebar::timing::{ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL};
+use crate::sidebar::timing::ACCOUNTS_RETRY_TTL;
 use crate::utils::time::unix_now_ms;
 
 use super::trace::{TraceEvent, duration_ms};
@@ -680,12 +680,14 @@ fn merge_probe_results(
             AccountProbe::Unavailable(cause) => Some(*cause),
             _ => None,
         };
-        let login = match &outcome {
-            AccountProbe::Found(_) => Some(RecordedLogin::LoggedIn),
-            AccountProbe::LoggedOut => Some(RecordedLogin::LoggedOut),
-            AccountProbe::Unavailable(_) => None,
-        };
         let previous_record = previous.logins.get(&key);
+        let (login, login_at_ms) = match &outcome {
+            AccountProbe::Found(_) => (Some(RecordedLogin::LoggedIn), Some(probed_at_ms)),
+            AccountProbe::LoggedOut => (Some(RecordedLogin::LoggedOut), Some(probed_at_ms)),
+            AccountProbe::Unavailable(_) => previous_record
+                .and_then(ProviderRecord::known_login)
+                .map_or((None, None), |known| (Some(known.login), Some(known.at_ms))),
+        };
         let consecutive_failures = if ok {
             0
         } else {
@@ -749,6 +751,7 @@ fn merge_probe_results(
                 ok,
                 account,
                 login,
+                login_at_ms,
             },
         );
     }

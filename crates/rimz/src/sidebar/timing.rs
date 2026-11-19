@@ -155,16 +155,6 @@ pub(super) const GIT_ACTIVITY_WINDOW: Duration = Duration::from_secs(60);
 /// worktree's first agent groups correctly on its first snapshot.
 pub(super) const WORKTREE_ROOTS_TTL: Duration = Duration::from_secs(60);
 
-/// How long the producer trusts a *successful* provider-account map before it
-/// re-probes. A subscription tier and login state change rarely, so a coarse
-/// TTL keeps the `claude auth status` subprocess off the per-tick produce path
-/// while still picking up a login or logout within a few minutes. A confident
-/// logged-out answer rides this same window. An answer derived from sessions
-/// (Pi's provider) changes at a session's start instead, so an adapter that
-/// stamps its account inputs re-probes on a stamp change behind
-/// `ACCOUNTS_RETRY_TTL`.
-pub(super) const ACCOUNTS_TTL: Duration = Duration::from_secs(10 * 60);
-
 /// The first retry delay after a failed account probe, also the floor for
 /// provisional answers and changed adapter inputs. Consecutive failures double
 /// the delay up to `ACCOUNTS_TTL`, unless an inputs stamp moves. A newly installed

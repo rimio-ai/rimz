@@ -422,7 +422,9 @@ upward-dependencies = ["address"]
 # read and render the off switches (+5).
 # McpLaunch, McpServer, LaunchCapability::{takes_mcp_servers, mcp_server_args} hand RimZ's MCP
 # server and a profile's mcps list to the Claude and Codex launch argv (+4).
-surface-budget = 1297
+# account::{KnownLogin, ACCOUNTS_TTL}, ProviderRecord::known_login and ProviderStatus::at_launch
+# keep the last answered login across failed checks for the report and launch routing (+4).
+surface-budget = 1301
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -727,6 +729,16 @@ reason = "Profile reads share the bounded, redirect-refusing OAuth transport wit
 kind = "item"
 key = "agents::account::INFORMATIONAL_PROBE_TIMEOUT"
 reason = "The account lane derives its forced-producer wait from the same informational subprocess deadline."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::KnownLogin"
+reason = "The last login a check answered, with its time, read by the accounts report and launch routing so a failed check never erases it."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::ACCOUNTS_TTL"
+reason = "One freshness window shared by the account lane's re-probe and launch routing's trust in a login kept behind a failed check."
 
 [[verdict]]
 kind = "item"

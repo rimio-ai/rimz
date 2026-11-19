@@ -327,6 +327,8 @@ struct ProviderReport {
     pool: LoginKey,
     product_name: String,
     status: ProviderStatus,
+    login_at: Option<Timestamp>,
+    check_failed: bool,
     entitlement: Entitlement,
     probed_at: Option<Timestamp>,
     probe_error: Option<String>,
@@ -403,6 +405,7 @@ fn build_report(
     let definition = rimz::agents::spec_by_kind(kind)
         .expect("reports are assembled only for registered provider kinds");
     let account = record.and_then(|record| record.account.as_ref());
+    let known = record.and_then(ProviderRecord::known_login);
     let undecided = panel.is_some_and(|panel| panel.undecided)
         || account.is_some_and(|account| account.is_undecided());
     let entitlement = panel.map_or(Entitlement::Ok, |panel| panel.entitlement);
@@ -441,7 +444,9 @@ fn build_report(
                     .accounts
                     .provider_title(&identity.product_name, &login.key())
             }),
-        status: ProviderStatus::from_record(record),
+        status: known.map_or(ProviderStatus::Unavailable, |known| known.login.into()),
+        login_at: known.and_then(|known| timestamp_from_millis(known.at_ms)),
+        check_failed: record.is_some_and(|record| !record.ok),
         entitlement,
         probed_at: record.and_then(|record| timestamp_from_millis(record.probed_at_ms)),
         probe_error: record.and_then(|record| record.probe_error.as_ref().map(ToString::to_string)),
@@ -540,8 +545,14 @@ struct AccountRow {
     spend_step: Option<SpendStep>,
     /// `false` for an account without subscription windows.
     metered: Option<bool>,
-    /// This run's probe outcome; `None` when no record is available.
+    /// The last answer a check got, kept when a later check failed;
+    /// `None` when no record is available.
     login: Option<ProviderStatus>,
+    /// When the check that got `login` started.
+    login_at: Option<Timestamp>,
+    /// The latest check failed; `probed_at` and `probe_error` describe it.
+    #[serde(skip)]
+    check_failed: bool,
     pool: LoginKey,
     product_name: String,
     probed_at: Option<Timestamp>,
@@ -575,6 +586,8 @@ impl AccountRow {
         self.product_name = report.product_name.clone();
         self.probed_at = report.probed_at;
         self.probe_error = report.probe_error.clone();
+        self.login_at = report.login_at;
+        self.check_failed = report.check_failed;
         self.plan = report.plan.clone();
         self.plan_label = report.plan_label.clone();
         self.plan_key = report.plan_key;
@@ -742,6 +755,8 @@ fn account_rows(
             spend_step: None,
             metered: None,
             login: None,
+            login_at: None,
+            check_failed: false,
             pool: catalog.pool(&key),
             product_name: accounts
                 .provider_title(&render::palette::identity_name(kind.as_str()), &key),
@@ -935,11 +950,7 @@ fn write_overview(
                     |command| format!("log in once: {command}"),
                 )
             };
-            table.row([
-                cell(account),
-                cell(status_label(row, false)).fg(plan_tone(row)),
-                cell(fix),
-            ]);
+            table.row([cell(account), login_cell(row, now), cell(fix)]);
         }
         table.render(out)?;
         printed = true;
@@ -976,9 +987,9 @@ fn write_other_providers(
     let mut table = render::Table::new(headers).indent(3);
     for row in reports {
         let login = if matches!(row.state(), RowState::LoggedIn) && row.plan_label.is_some() {
-            plan_cell(row)
+            plan_cell(row, now)
         } else {
-            cell(status_label(row, false)).fg(plan_tone(row))
+            login_cell(row, now)
         };
         let mut cells = vec![
             cell(render::palette::identity_name(row.kind.as_str()))
@@ -1218,7 +1229,7 @@ fn write_comparison(
         if labelled {
             cells.push(cell(report.label.as_deref().unwrap_or_default()));
         }
-        cells.push(plan_cell(report));
+        cells.push(plan_cell(report, now));
         cells.extend(columns.iter_mut().map(|column| {
             let value = column.next().flatten();
             if report.without_login() || matches!(report.entitlement, Entitlement::Lapsed { .. }) {
@@ -1375,6 +1386,9 @@ fn write_pretty(
                 " · {}",
                 render::paint(plan_tone(report), &status_label(report, true))
             )?;
+            if let Some(marker) = check_failed_marker(report, now) {
+                write!(out, " {}", render::paint(check_failed_tone(), &marker))?;
+            }
         }
         let scopes = report.default_for.label();
         if named && scopes != "-" {
@@ -1514,7 +1528,7 @@ fn plan_tone(report: &AccountRow) -> anstyle::Style {
     render::status::provider(report.login.unwrap_or(ProviderStatus::Unavailable))
 }
 
-fn plan_cell(report: &AccountRow) -> render::Cell {
+fn plan_cell(report: &AccountRow, now: Timestamp) -> render::Cell {
     if report.installed
         && !setup_problem(report)
         && !matches!(report.entitlement, Entitlement::Lapsed { .. })
@@ -1523,9 +1537,44 @@ fn plan_cell(report: &AccountRow) -> render::Cell {
         && rimz::agents::spec_by_kind(report.kind.as_str())
             .is_some_and(|spec| !spec.user_coverage.account.is_unsupported())
     {
-        return value_cell(report.plan_label.as_deref().map(render::one_line));
+        return with_check_failed(
+            value_cell(report.plan_label.as_deref().map(render::one_line)),
+            report,
+            now,
+        );
     }
-    cell(status_label(report, false)).fg(plan_tone(report))
+    login_cell(report, now)
+}
+
+fn login_cell(report: &AccountRow, now: Timestamp) -> render::Cell {
+    with_check_failed(
+        cell(status_label(report, false)).fg(plan_tone(report)),
+        report,
+        now,
+    )
+}
+
+fn with_check_failed(login: render::Cell, report: &AccountRow, now: Timestamp) -> render::Cell {
+    match check_failed_marker(report, now) {
+        Some(marker) => login.suffix(marker, check_failed_tone()),
+        None => login,
+    }
+}
+
+/// `· check failed 3m ago` after a kept answer whose latest check failed, aged
+/// from that attempt.
+fn check_failed_marker(report: &AccountRow, now: Timestamp) -> Option<String> {
+    if !report.check_failed || !matches!(report.state(), RowState::LoggedIn | RowState::LoggedOut) {
+        return None;
+    }
+    Some(format!(
+        "· check failed {}",
+        render::rel_age(report.probed_at?, now)
+    ))
+}
+
+fn check_failed_tone() -> anstyle::Style {
+    render::status::role(render::status::StateRole::Waiting)
 }
 
 fn status_label(report: &AccountRow, cause: bool) -> String {

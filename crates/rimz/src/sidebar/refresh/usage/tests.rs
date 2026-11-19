@@ -1034,6 +1034,7 @@ fn lagging_published_hint_spawns_once_until_it_moves() {
                 login: None,
                 profile: None,
                 probe_error: None,
+                login_at_ms: None,
             },
         )]),
     };
@@ -1117,6 +1118,7 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
                         credentials_updated_at_ms: Some(7),
                         ..Default::default()
                     }),
+                    login_at_ms: None,
                 },
             )]),
         },
@@ -1194,6 +1196,7 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
                         credentials_updated_at_ms: Some(8),
                         ..Default::default()
                     }),
+                    login_at_ms: None,
                 },
             )]),
         },
@@ -1271,6 +1274,7 @@ fn undecided_account_creates_no_synchronous_usage_claim_or_probe() {
                     profile: None,
                     probe_error: None,
                     login: None,
+                    login_at_ms: None,
                 },
             )]),
         },
@@ -1383,6 +1387,7 @@ fn failed_spawn_cancels_claim_for_immediate_retry() {
                         credentials_updated_at_ms: Some(7),
                         ..Default::default()
                     }),
+                    login_at_ms: None,
                 },
             )]),
         },
@@ -1443,6 +1448,7 @@ fn simultaneous_schedulers_spawn_once_per_provider_kind() {
                         metered: Some(true),
                         ..Default::default()
                     }),
+                    login_at_ms: None,
                 },
             )]),
         },
@@ -1500,6 +1506,7 @@ fn metered_claude_room() -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {
                         metered: Some(true),
                         ..Default::default()
                     }),
+                    login_at_ms: None,
                 },
             )]),
         },

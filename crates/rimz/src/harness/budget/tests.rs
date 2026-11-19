@@ -202,6 +202,7 @@ fn publish_account_metering(runtime: &RuntimePaths, readings: &[(&str, Option<bo
                         login: None,
                         probe_error: None,
                         profile: None,
+                        login_at_ms: None,
                     },
                 )
             })
@@ -1840,6 +1841,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
             probed_at_ms: 1,
             ok: false,
             account: None,
+            login_at_ms: None,
         },
     );
     crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_accounts_path(), &accounts)
