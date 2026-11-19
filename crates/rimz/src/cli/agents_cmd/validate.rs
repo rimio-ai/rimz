@@ -408,7 +408,7 @@ fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfi
             let Some(profile) = profiles.0.get(&row.name) else {
                 return false;
             };
-            let lsp_tool = machine.agents.mcp_tools
+            let lsp_tool = machine.agents.rimz_mcp_server
                 && rimz::agents::find_definition(&row.kind)
                     .is_some_and(|definition| definition.takes_mcp_servers())
                 && rimz::config::mcp_capabilities(profile.mcps.as_deref())

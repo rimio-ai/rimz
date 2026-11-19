@@ -93,8 +93,8 @@ pub struct AgentsConfig {
     #[serde(rename = "allow-routine-rimz")]
     pub allow_routine_rimz: bool,
     /// Hand RimZ's own MCP server to every Claude and Codex launch.
-    #[serde(rename = "mcp-tools")]
-    pub mcp_tools: bool,
+    #[serde(rename = "rimz-mcp-server")]
+    pub rimz_mcp_server: bool,
     /// The shell every agent launch runs under in place of the user's own;
     /// validated at use, since a lenient load would turn a bad path into a
     /// silent fallback.
@@ -124,7 +124,7 @@ impl Default for AgentsConfig {
             env_reminder: true,
             runtime_env: true,
             allow_routine_rimz: true,
-            mcp_tools: true,
+            rimz_mcp_server: true,
             shell: None,
             worktree: WorktreeConfig::default(),
             attention: AttentionConfig::default(),

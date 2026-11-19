@@ -31,6 +31,29 @@ fn machine_throttle_lives_in_core_and_rejects_invalid_limits() {
 }
 
 #[test]
+fn rimz_mcp_server_gates_the_server_and_mcp_tools_is_unknown() {
+    let server_on = |text: &str| {
+        let parsed = parse_core_text_collecting(Path::new("config.toml"), text).unwrap();
+        let machine =
+            MachineConfig::assemble(parsed.value, ThemeConfig::default(), LoopConfig::default());
+        let value = serde_json::to_value(machine).unwrap();
+        (
+            value["agents"]["rimz-mcp-server"].clone(),
+            parsed.unknown_keys,
+        )
+    };
+    assert_eq!(server_on(""), (serde_json::json!(true), Vec::new()));
+    assert_eq!(
+        server_on("[agents]\nrimz-mcp-server = false\n"),
+        (serde_json::json!(false), Vec::new())
+    );
+    assert_eq!(
+        server_on("[agents]\nmcp-tools = false\n"),
+        (serde_json::json!(true), vec!["agents.mcp-tools".to_owned()])
+    );
+}
+
+#[test]
 fn loop_throttle_is_unknown_and_does_not_change_the_catalog() {
     let parsed = parse_loop_text_collecting(
         Path::new("loop.toml"),
