@@ -1012,6 +1012,7 @@ fn launch_availability_reads_model_client_account_facts() {
                             probed_at_ms: 1,
                             ok: true,
                             account: None,
+                            login_at_ms: None,
                         },
                     )
                 })
@@ -1088,6 +1089,7 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
             probed_at_ms: 1,
             ok: true,
             account: None,
+            login_at_ms: None,
         };
         crate::disk::atomic::write_temp_then_rename_cache(
             &runtime.shared_accounts_path(),
@@ -1138,6 +1140,7 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
             version: Some("1.0.0".to_owned()),
             ..Default::default()
         }),
+        login_at_ms: None,
     };
     let skip = |record: ProviderRecord| {
         crate::disk::atomic::write_temp_then_rename_cache(
@@ -1161,6 +1164,33 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
             "{login:?}"
         );
     }
+
+    // A failed check keeps the last answer: routing trusts it for the
+    // account TTL, read against the launch's `now`, and not past it.
+    let now_ms = now.as_millisecond() as u64;
+    let ttl_ms = crate::agents::account::ACCOUNTS_TTL.as_millis() as u64;
+    let kept = |login, login_at_ms| ProviderRecord {
+        ok: false,
+        consecutive_failures: 1,
+        probe_error: Some(crate::agents::account::AccountProbeError::SpawnFailed),
+        probed_at_ms: now_ms,
+        login: Some(login),
+        login_at_ms: Some(login_at_ms),
+        ..version_only(None)
+    };
+    assert_eq!(
+        skip(kept(RecordedLogin::LoggedOut, now_ms - ttl_ms)),
+        Some(TierSkipReason::LoggedOut)
+    );
+    assert_ne!(
+        skip(kept(RecordedLogin::LoggedIn, now_ms - ttl_ms)),
+        Some(TierSkipReason::LoggedOut)
+    );
+    assert_ne!(
+        skip(kept(RecordedLogin::LoggedOut, now_ms - ttl_ms - 1)),
+        Some(TierSkipReason::LoggedOut),
+        "a kept answer older than the TTL is unknown"
+    );
 }
 
 #[test]
@@ -5216,6 +5246,7 @@ fn supervised_account_pin_keeps_the_provider_while_unpinned_falls_back() {
                     probed_at_ms: 1,
                     ok: true,
                     account: None,
+                    login_at_ms: None,
                 },
             )]
             .into(),

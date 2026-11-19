@@ -1118,6 +1118,10 @@ fn accounts_add_rejects_exported_named_homes_before_writing() {
                 if row["probed_at"].is_string() {
                     row["probed_at"] = json!("<probe time>");
                 }
+                // A confident probe stamps its answer with the same time.
+                if row["login_at"].is_string() {
+                    row["login_at"] = json!("<probe time>");
+                }
             }
             rows
         };
@@ -1330,6 +1334,7 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
             "machine_default": false,
             "status": "login_unknown",
             "login": "unavailable",
+            "login_at": null,
             "entitlement": "ok",
             "active": false,
             "default_for": [],
@@ -2568,7 +2573,7 @@ fn list_probes_a_logged_out_account_again_on_every_run() {
 #[test]
 fn list_reads_the_recorded_login_and_probes_an_ambiguous_record_again() {
     let env = Env::new();
-    for name in ["out", "bare", "legacy"] {
+    for name in ["out", "bare", "legacy", "kept"] {
         succeeded(&accounts(&env, &["add", "claude", name]));
     }
     // Only `out` is logged out; a fresh probe of the others finds a login.
@@ -2610,6 +2615,17 @@ fn list_reads_the_recorded_login_and_probes_an_ambiguous_record_again() {
             "claude@out": record(Some("logged_out")),
             "claude@bare": record(Some("logged_in")),
             "claude@legacy": record(None),
+            // A check that failed after a logout: the answer is kept, and the
+            // failure backs off rather than counting as stale.
+            "claude@kept": {
+                "probed_at_ms": now_ms - 1_000,
+                "consecutive_failures": 1,
+                "ok": false,
+                "account": {"version": "2.1.0"},
+                "login": "logged_out",
+                "login_at_ms": now_ms - 61_000,
+                "probe_error": "spawn_failed",
+            },
         }})
         .to_string(),
     )
@@ -2628,6 +2644,16 @@ fn list_reads_the_recorded_login_and_probes_an_ambiguous_record_again() {
     assert_eq!(status("out"), "logged_out", "{rows}");
     assert_eq!(status("bare"), "ready", "{rows}");
     assert_eq!(status("legacy"), "ready", "{rows}");
+    assert_eq!(status("kept"), "logged_out", "{rows}");
+    let kept = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["account"] == "claude@kept")
+        .unwrap();
+    assert_eq!(kept["login"], "logged_out", "{kept}");
+    assert!(kept["login_at"].is_string(), "{kept}");
+    assert_eq!(kept["probe_error"], "could not start", "{kept}");
     let probed = std::fs::read_to_string(&log).unwrap_or_default();
     let mut probed: Vec<&str> = probed
         .lines()
@@ -2642,6 +2668,15 @@ fn list_reads_the_recorded_login_and_probes_an_ambiguous_record_again() {
     let stored: Value = serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
     assert_eq!(stored["logins"]["claude@legacy"]["login"], "logged_in");
     assert_eq!(stored["logins"]["claude@out"]["login"], "logged_out");
+    assert_eq!(stored["logins"]["claude@kept"]["login"], "logged_out");
+
+    let table = succeeded(&accounts(&env, &["list"]));
+    let line = table
+        .lines()
+        .find(|line| line.contains("kept"))
+        .unwrap_or_else(|| panic!("no kept row: {table}"));
+    assert!(line.contains("logged out · check failed"), "{table}");
+    assert!(!table.contains("probe failed"), "{table}");
 }
 
 #[test]

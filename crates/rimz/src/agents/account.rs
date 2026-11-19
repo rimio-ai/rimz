@@ -39,6 +39,17 @@ use crate::ids::LoginKey;
 /// shared account cache producer indefinitely.
 pub(crate) const INFORMATIONAL_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// How long the producer trusts a *successful* provider-account map before it
+/// re-probes. A subscription tier and login state change rarely, so a coarse
+/// TTL keeps the `claude auth status` subprocess off the per-tick produce path
+/// while still picking up a login or logout within a few minutes. A confident
+/// logged-out answer rides this same window. An answer derived from sessions
+/// (Pi's provider) changes at a session's start instead, so an adapter that
+/// stamps its account inputs re-probes on a stamp change behind
+/// `ACCOUNTS_RETRY_TTL`. Launch routing trusts an answer a failed attempt kept
+/// for this same window.
+pub(crate) const ACCOUNTS_TTL: Duration = Duration::from_secs(10 * 60);
+
 #[cfg(test)]
 mod tests;
 
@@ -70,11 +81,16 @@ pub struct ProviderRecord {
     /// Probed account facts. `None` on an `ok` record is a logged-out result,
     /// but a logout can also carry the CLI version, so `login` decides.
     pub account: Option<AgentAccount>,
-    /// What the last confident probe found. Absent on an unavailable probe
-    /// and on a record an older build wrote, which `ProviderStatus::from_record`
-    /// reads from `ok` and `account`.
+    /// The last answer a check got, kept across failed attempts: `ok`,
+    /// `probed_at_ms` and `probe_error` describe the latest attempt alone.
+    /// Absent when no check has answered and on a record an older build wrote,
+    /// which `ProviderStatus::from_record` reads from `ok` and `account`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<RecordedLogin>,
+    /// When the check that got `login` started. Absent on a record an older
+    /// build wrote, whose answer dates from `probed_at_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe_error: Option<AccountProbeError>,
     /// Last profile attempt and answer, independent of account availability.
@@ -122,6 +138,13 @@ pub enum RecordedLogin {
     LoggedOut,
 }
 
+/// The last answer a login check got, and when the check that got it started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KnownLogin {
+    pub login: RecordedLogin,
+    pub at_ms: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderStatus {
@@ -145,6 +168,20 @@ impl ProviderRecord {
                 account.version.is_some() && facts == AgentAccount::default()
             })
     }
+
+    /// The last answer a check got, whether or not the latest attempt failed.
+    pub fn known_login(&self) -> Option<KnownLogin> {
+        let login = match ProviderStatus::from_record(Some(self)) {
+            ProviderStatus::LoggedIn => RecordedLogin::LoggedIn,
+            ProviderStatus::LoggedOut => RecordedLogin::LoggedOut,
+            ProviderStatus::Unavailable if !self.ok => self.login?,
+            ProviderStatus::Unavailable => return None,
+        };
+        Some(KnownLogin {
+            login,
+            at_ms: self.login_at_ms.unwrap_or(self.probed_at_ms),
+        })
+    }
 }
 
 impl ProviderStatus {
@@ -161,6 +198,28 @@ impl ProviderStatus {
             None if record.login_is_ambiguous() => Self::Unavailable,
             None if record.account.is_some() => Self::LoggedIn,
             None => Self::LoggedOut,
+        }
+    }
+
+    /// What launch routing reads: the latest attempt's answer, or the answer
+    /// a failed attempt kept while it is no older than `ACCOUNTS_TTL` at
+    /// `now_ms`; older, it is unknown.
+    pub fn at_launch(record: Option<&ProviderRecord>, now_ms: u64) -> Self {
+        let Some(record) = record.filter(|record| !record.ok) else {
+            return Self::from_record(record);
+        };
+        record
+            .known_login()
+            .filter(|known| now_ms.saturating_sub(known.at_ms) <= ACCOUNTS_TTL.as_millis() as u64)
+            .map_or(Self::Unavailable, |known| known.login.into())
+    }
+}
+
+impl From<RecordedLogin> for ProviderStatus {
+    fn from(login: RecordedLogin) -> Self {
+        match login {
+            RecordedLogin::LoggedIn => Self::LoggedIn,
+            RecordedLogin::LoggedOut => Self::LoggedOut,
         }
     }
 }

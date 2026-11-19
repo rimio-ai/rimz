@@ -288,6 +288,7 @@ fn judgment_warns_for_shared_account_budget_and_subscription_month_cap() {
         login: None,
         probe_error: None,
         profile: None,
+        login_at_ms: None,
     };
     crate::disk::atomic::write_temp_then_rename_cache(
         &runtime.shared_accounts_path(),

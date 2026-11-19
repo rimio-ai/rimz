@@ -169,6 +169,7 @@ fn accounts() -> AccountsCache {
                     probed_at_ms: now_ms,
                     ok: true,
                     account: None,
+                    login_at_ms: None,
                 },
             )
         })
@@ -195,6 +196,7 @@ fn accounts() -> AccountsCache {
                 profile_fingerprint: None,
                 ..Default::default()
             }),
+            login_at_ms: None,
         },
     );
     providers.insert(
@@ -219,6 +221,7 @@ fn accounts() -> AccountsCache {
                 profile_fingerprint: None,
                 ..Default::default()
             }),
+            login_at_ms: None,
         },
     );
     AccountsCache {

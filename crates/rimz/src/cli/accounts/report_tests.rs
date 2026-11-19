@@ -129,6 +129,8 @@ fn merged(reports: &[ProviderReport]) -> Vec<AccountRow> {
             spend_step: Some(report.spend_step),
             metered: report.metered,
             login: Some(report.status),
+            login_at: report.login_at,
+            check_failed: report.check_failed,
             pool: report.pool.clone(),
             product_name: report.product_name.clone(),
             probed_at: report.probed_at,
@@ -206,6 +208,7 @@ fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> Provide
         probed_at_ms,
         ok,
         account,
+        login_at_ms: None,
     }
 }
 
@@ -2025,6 +2028,87 @@ fn failed_probe_and_missing_readings_have_reasons() {
         serde_json::to_value(&reports).unwrap()[0]["probe_error"],
         "timed out"
     );
+}
+
+#[test]
+fn a_failed_check_shows_the_kept_answer_with_its_marker() {
+    use rimz::agents::account::RecordedLogin;
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let attempt_ms = 1_700_000_000_000 - 3 * 60_000;
+    let kept = |login, account| ProviderRecord {
+        probe_error: Some(rimz::agents::account::AccountProbeError::SpawnFailed),
+        consecutive_failures: 1,
+        login: Some(login),
+        login_at_ms: Some(attempt_ms - 60_000),
+        ..record(attempt_ms, false, account)
+    };
+    let mut accounts = AccountsCache::default();
+    accounts.logins.insert(
+        "claude@default".parse().unwrap(),
+        kept(RecordedLogin::LoggedOut, None),
+    );
+    accounts.logins.insert(
+        "codex@default".parse().unwrap(),
+        kept(RecordedLogin::LoggedIn, Some(account("pro", false))),
+    );
+    let reports = assemble_reports(
+        &default_logins(),
+        &accounts,
+        BTreeMap::new(),
+        &ProviderSpendingCache::default(),
+        None,
+    );
+    let healthy = overview(&reports, now, &BTreeMap::new(), false);
+    let unchecked = healthy
+        .lines()
+        .find(|line| line.starts_with("Not checked"))
+        .unwrap();
+    assert!(
+        !unchecked.contains("claude") && !unchecked.contains("codex"),
+        "a kept answer leaves the unchecked group: {healthy}"
+    );
+    let text = overview(&reports, now, &BTreeMap::new(), true);
+    assert!(text.contains("logged out · check failed 3m ago"), "{text}");
+    assert_eq!(text.matches("check failed 3m ago").count(), 2, "{text}");
+    assert!(!text.contains("probe failed"), "{text}");
+    assert!(!text.contains("login read failed"), "{text}");
+    let codex = text
+        .lines()
+        .find(|line| line.contains("check failed") && !line.contains("logged out"))
+        .unwrap();
+    assert!(
+        !codex.contains("logged in"),
+        "the plan label stands: {codex}"
+    );
+
+    let json = serde_json::to_value(&reports).unwrap();
+    let row = |account: &str| {
+        json.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["account"] == account)
+            .unwrap()
+            .clone()
+    };
+    for (account, login) in [
+        ("claude@default", "logged_out"),
+        ("codex@default", "logged_in"),
+    ] {
+        let row = row(account);
+        assert_eq!(row["login"], login, "{row}");
+        assert_eq!(row["login_at"], "2023-11-14T22:09:20Z", "{row}");
+        assert_eq!(row["probed_at"], "2023-11-14T22:10:20Z", "{row}");
+        assert_eq!(row["probe_error"], "could not start", "{row}");
+    }
+
+    let mut out = anstream::StripStream::new(Vec::new());
+    write_pretty(&mut out, &reports, now, &TimeZone::UTC).unwrap();
+    let shown = String::from_utf8(out.into_inner()).unwrap();
+    assert!(
+        shown.contains("logged out · check failed 3m ago"),
+        "{shown}"
+    );
+    assert_eq!(shown.matches("check failed 3m ago").count(), 2, "{shown}");
 }
 
 #[test]

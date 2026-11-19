@@ -65,6 +65,7 @@ impl LaunchAvailability {
             })
             .collect();
         let accounts = read_accounts_cache(&runtime.shared_accounts_path());
+        let now_ms = u64::try_from(now.as_millisecond()).unwrap_or_default();
         let provider = crate::agents::spending::read_provider_spending_cache(
             &runtime.shared_provider_spending_path(),
         );
@@ -107,7 +108,8 @@ impl LaunchAvailability {
             let Some(login) = logins.get(kind) else {
                 continue;
             };
-            if ProviderStatus::from_record(accounts.logins.get(login)) == ProviderStatus::LoggedOut
+            if ProviderStatus::at_launch(accounts.logins.get(login), now_ms)
+                == ProviderStatus::LoggedOut
             {
                 result.logged_out.insert(login.kind.clone());
             }

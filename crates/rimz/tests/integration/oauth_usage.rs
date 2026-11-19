@@ -503,6 +503,7 @@ fn lagging_published_hint_does_not_repeat_the_usage_request_on_the_next_snapshot
                 login: Some(rimz::agents::account::RecordedLogin::LoggedIn),
                 profile: None,
                 probe_error: None,
+                login_at_ms: None,
             },
         )]),
     };

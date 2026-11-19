@@ -177,6 +177,7 @@ impl Fixture {
                                 version: Some("1.0.0".to_owned()),
                                 ..Default::default()
                             }),
+                            login_at_ms: None,
                         },
                     )
                 })

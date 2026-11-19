@@ -141,6 +141,7 @@ fn explicit_account_keeps_the_tier_provider_and_stamps_every_agent_cell() {
                     probed_at_ms: 1,
                     ok: true,
                     account: None,
+                    login_at_ms: None,
                 },
             )]
             .into(),

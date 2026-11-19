@@ -28,6 +28,7 @@ fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> Provide
         probed_at_ms,
         ok,
         account,
+        login_at_ms: None,
     }
 }
 
@@ -1719,16 +1720,40 @@ fn refreshed_accounts_keep_versions_and_logged_out_active_kinds_keep_version_onl
     );
     assert_eq!(status(&bare), ProviderStatus::LoggedIn);
 
-    // A failed probe records no outcome: it keeps what it had and retries.
-    let failed = probe_accounts_with(&due, &logged_out, &active, 30, |_kind, _active| {
+    // A failed probe keeps the last answer and its time, while the attempt
+    // fields and the backoff advance as before.
+    let timed_out = |_kind: &str, _active: bool| {
         Some((
             AccountProbe::Unavailable(crate::agents::account::AccountProbeError::TimedOut),
             None,
         ))
-    });
-    assert_eq!(failed.logins[&key("pi")].login, None);
-    assert!(!failed.logins[&key("pi")].ok);
-    assert_eq!(status(&failed), ProviderStatus::Unavailable);
+    };
+    assert_eq!(logged_out.logins[&key("pi")].login_at_ms, Some(20));
+    let failed = probe_accounts_with(&due, &logged_out, &active, 30, timed_out);
+    let again = probe_accounts_with(&due, &failed, &active, 40, timed_out);
+    for (cache, at, failures) in [(&failed, 30, 1), (&again, 40, 2)] {
+        let record = &cache.logins[&key("pi")];
+        assert_eq!(record.login, Some(RecordedLogin::LoggedOut), "{at}");
+        assert_eq!(
+            record.login_at_ms,
+            Some(20),
+            "the first answer's time at {at}"
+        );
+        assert!(!record.ok);
+        assert_eq!(record.probed_at_ms, at);
+        assert_eq!(record.consecutive_failures, failures);
+        assert_eq!(
+            record.probe_error,
+            Some(crate::agents::account::AccountProbeError::TimedOut)
+        );
+        assert_eq!(status(cache), ProviderStatus::Unavailable);
+    }
+
+    // A failure with no earlier answer (here an older build's ambiguous
+    // record) keeps nothing.
+    let unanswered = probe_accounts_with(&due, &previous, &active, 30, timed_out);
+    assert_eq!(unanswered.logins[&key("pi")].login, None);
+    assert_eq!(unanswered.logins[&key("pi")].login_at_ms, None);
 }
 
 #[test]

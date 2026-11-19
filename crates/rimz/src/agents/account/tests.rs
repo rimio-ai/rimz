@@ -241,6 +241,13 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
         (true, planned(), None, LoggedIn, "an older build's login"),
         (true, None, None, LoggedOut, "an older build's logout"),
         (false, planned(), None, Unavailable, "a failed probe"),
+        (
+            false,
+            planned(),
+            Some(Login::LoggedOut),
+            Unavailable,
+            "a failed probe behind a kept logout",
+        ),
     ] {
         let record = ProviderRecord {
             consecutive_failures: 0,
@@ -252,6 +259,7 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
             ok,
             account,
             login,
+            login_at_ms: None,
         };
         assert_eq!(
             ProviderStatus::from_record(Some(&record)),
@@ -299,6 +307,81 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
     assert_eq!(
         serde_json::to_string(&recorded).unwrap(),
         r#"{"probed_at_ms":1,"ok":true,"account":null,"login":"logged_out"}"#
+    );
+}
+
+#[test]
+fn a_failed_attempt_keeps_its_known_answer_and_launch_trusts_it_for_the_ttl() {
+    use ProviderStatus::{LoggedIn, LoggedOut, Unavailable};
+    use RecordedLogin as Login;
+    let ttl = ACCOUNTS_TTL.as_millis() as u64;
+    let record = |ok: bool, login, login_at_ms| ProviderRecord {
+        consecutive_failures: u32::from(!ok),
+        version_probed_at_ms: None,
+        inputs_stamp: None,
+        profile: None,
+        probe_error: (!ok).then_some(AccountProbeError::SpawnFailed),
+        probed_at_ms: 5_000,
+        ok,
+        account: None,
+        login,
+        login_at_ms,
+    };
+    let known = |login, at_ms| Some(KnownLogin { login, at_ms });
+
+    let kept = record(false, Some(Login::LoggedOut), Some(1_000));
+    assert_eq!(kept.known_login(), known(Login::LoggedOut, 1_000));
+    assert_eq!(ProviderStatus::from_record(Some(&kept)), Unavailable);
+    assert_eq!(
+        ProviderStatus::at_launch(Some(&kept), 1_000 + ttl),
+        LoggedOut
+    );
+    assert_eq!(
+        ProviderStatus::at_launch(Some(&kept), 1_001 + ttl),
+        Unavailable,
+        "a kept answer older than the TTL is unknown"
+    );
+    let kept_in = record(false, Some(Login::LoggedIn), Some(1_000));
+    assert_eq!(ProviderStatus::at_launch(Some(&kept_in), 1_000), LoggedIn);
+    assert_eq!(
+        record(false, Some(Login::LoggedOut), None).known_login(),
+        known(Login::LoggedOut, 5_000),
+        "an answer with no stamp dates from the attempt"
+    );
+
+    let never = record(false, None, None);
+    assert_eq!(never.known_login(), None);
+    assert_eq!(ProviderStatus::at_launch(Some(&never), 5_000), Unavailable);
+    assert_eq!(ProviderStatus::at_launch(None, 5_000), Unavailable);
+
+    let fresh = record(true, Some(Login::LoggedOut), Some(5_000));
+    assert_eq!(fresh.known_login(), known(Login::LoggedOut, 5_000));
+    assert_eq!(
+        ProviderStatus::at_launch(Some(&fresh), 5_000 + 10 * ttl),
+        LoggedOut,
+        "a confident record reads as it always has, whatever its age"
+    );
+    let legacy_in = ProviderRecord {
+        account: Some(AgentAccount::default()),
+        ..record(true, None, None)
+    };
+    assert_eq!(legacy_in.known_login(), known(Login::LoggedIn, 5_000));
+    let ambiguous = ProviderRecord {
+        account: Some(AgentAccount {
+            version: Some("2.1.0".to_owned()),
+            ..Default::default()
+        }),
+        ..record(true, None, None)
+    };
+    assert_eq!(ambiguous.known_login(), None);
+
+    assert_eq!(
+        serde_json::to_string(&ProviderRecord {
+            probe_error: None,
+            ..fresh
+        })
+        .unwrap(),
+        r#"{"probed_at_ms":5000,"ok":true,"account":null,"login":"logged_out","login_at_ms":5000}"#
     );
 }
 
