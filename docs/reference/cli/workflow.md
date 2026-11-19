@@ -794,7 +794,7 @@ The compact view of an unfinished run prints, in order:
 7. The definition rail ([below](#the-definition-rail)) on an active run, or the horizontal rail after `you can` on a parked run.
 8. `visits  <step> <used>[ of <max>][ · key <key>: <n>]` for each visited step that is capped or has visits under the run's current key: ` of <max>` for a capped step, the run's grant included, and ` · key <key>: <n>` for the visits charged under the current key. Counts run since the step's last manual restart. An uncapped step with no visit under the current key prints no row.
 9. The `trail`: routing decisions projected from the definition and journal, consecutive matching check answers folded as `×N`, with resumes, restarts, parks, and termination. It keeps the newest eight hops with `+N earlier` for the rest, and ends in `now` while live.
-10. The home-relative work directory, the absolute notes folder when the run has one, and the command for full history.
+10. The home-relative work directory, then `sign <path>` in the same style while the run is at an agent or message step whose definition loads: the step's sign file ([prompts](#agent-steps)), printed whether or not it exists, and left out on an `asked` park, whose `you can` lines name it. Then the absolute notes folder when the run has one, and the command for full history.
 
 The headline:
 
@@ -972,7 +972,7 @@ A run ends `done` at `@done`, `failed` at `@failed` or on an unrouted failure, o
 
 A finished run id still resolves, from any room, and `show` prints it without reading its definition:
 
-- The compact view prints `<address>`, its end state, its reason when the record names one, and `run <run>; the run is finished`, then the rows of the saved `history.txt`, without that file's opening name, end state, and reason.
+- The compact view prints `<address>`, its end state, its reason when the record names one, and `run <run>; the run is finished`, then `work dir <path>` (home-relative, in the finished directory), then the rows of the saved `history.txt`, without that file's opening name, end state, and reason.
 - `--history` prints the saved text alone.
 - `--json` prints `address`, `dir`, `record`, `journal`, and the saved text as `history`, whatever record version wrote it. `record` is the record as this RimZ decodes it, or as written when another version wrote it or it does not decode.
 - Log paths in a finished run's journal and decoded record name the files in the finished run directory, as `dir` does. `prev_attempt.claim_path`, and every run-directory path in a record printed as written, name the run directory as it was while live. A deployed run's `spec_dir` names its deployed folder.
@@ -1009,7 +1009,7 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 
 `list --json` and `show <workflow> --json` print arrays of `{id, address, workflow, scope, state, node, since, detail}`, with optional `hold` for a known capacity cause and `once: true` for a try. `list --all --json` appends the finished runs to the same array, unfolded and at most `-n` of them, each in that shape with an empty `detail` and an `ended` key (RFC 3339). `scope` is the scope path: the checkout, or the project root for `scope = "project"`. `since` is node entry, not the human row's state-specific age. `detail` is the [waiting line](#the-waiting-line), so its capacity bounds follow the same day-qualified clock as rechecks and passed deadlines. Read the node and its entry time from `node` and `since`, never from `detail`.
 
-`show [RUN] --json` prints `{address, dir, record, journal}`: the short run address, work directory, run record, and journal entries. Runs with kept notes add `notes`, the absolute folder path. When the definition cannot load, it still prints the record and journal. A finished run adds `history` ([finished runs](#finished-runs)).
+`show [RUN] --json` prints `{address, dir, record, journal}`: the short run address, work directory, run record, and journal entries. Runs with kept notes add `notes`, the absolute folder path. A live run at an agent or message step adds `sign`, the absolute path of the step's sign file, on an `asked` park too. When the definition cannot load, it still prints the record and journal, without `sign`. A finished run adds `history` ([finished runs](#finished-runs)).
 
 ### The record
 

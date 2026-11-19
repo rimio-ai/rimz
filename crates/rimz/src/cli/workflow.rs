@@ -716,10 +716,14 @@ fn start(
     } else {
         ctx.store.paths().finished_workflow(&record.id).work
     };
+    // A try that ended in its first pass names its finished work dir in the view it closes with.
+    let tried = once && passed.as_ref().is_some_and(|run| run.state.is_terminal());
+    if !tried {
+        writeln!(render::out(), "{}", work.display())?;
+    }
     writeln!(
         render::out(),
-        "{}\n→ {}",
-        work.display(),
+        "→ {}",
         resolve::run_command(&record, "show", globals, None, &[], &[])
     )?;
     match passed {

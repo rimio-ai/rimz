@@ -1,7 +1,7 @@
 use jiff::Timestamp;
 use rimz::config::GlyphRole;
 use rimz::harness::workflow::{Definition, HopKind, Kind, Target};
-use rimz::store::workflow::{JournalEntry, JournalEvent, RunState};
+use rimz::store::workflow::{JournalEntry, JournalEvent, ParkReason, RunState};
 
 use super::*;
 
@@ -47,6 +47,9 @@ pub(super) fn render(
         });
         if let Some(notes) = notes {
             value["notes"] = serde_json::json!(notes);
+        }
+        if let Some(sign) = spec.as_ref().ok().and_then(|spec| sign(run, spec)) {
+            value["sign"] = serde_json::json!(sign);
         }
         return render::json_pretty(&value);
     }
@@ -132,6 +135,11 @@ pub(super) fn render(
         "work dir {}",
         render::home_relative_path(&run.paths.work)
     )?;
+    // An asked park already names the sign as the place to write the answer.
+    let asked = matches!(&run.record.park, Some(park) if park.reason == ParkReason::Asked);
+    if let Some(sign) = sign(run, &spec).filter(|_| !asked) {
+        writeln!(out, "sign {}", render::home_relative_path(&sign))?;
+    }
     if let Some(notes) = notes {
         writeln!(out, "notes {}", notes.display())?;
     }
@@ -141,6 +149,16 @@ pub(super) fn render(
         view.command("show", None, &[], &["--history"])
     )?;
     Ok(())
+}
+
+/// The sign file a live run's agent or message step reads at its next launch, whether or not it
+/// exists yet; a check has none.
+fn sign(run: &resolve::Located, spec: &Definition) -> Option<std::path::PathBuf> {
+    let step = matches!(
+        spec.step(&run.record.node).and_then(|step| step.kind()),
+        Some(Kind::Agent(_) | Kind::Message(_))
+    );
+    (step && !run.record.state.is_terminal()).then(|| run.paths.signs(Some(&run.record.node)))
 }
 
 /// `workflow show` of a live run whose definition admission refuses: the run from its record
@@ -254,6 +272,7 @@ pub(super) fn render_other(other: &resolve::Other, json: bool, history: bool) ->
         };
         let text = workflow_view::history::header_only(&other.id, header.as_deref(), &why);
         out.write_all(&text)?;
+        writeln!(out, "work dir {}", render::home_relative_path(&paths.work))?;
     }
     match saved {
         Some(saved) => {
