@@ -27,7 +27,7 @@ rimz config set timezone "America/New_York"    # transcript times, scheduling, a
 
 It takes a dotted key and routes it to the file that owns it: `theme.*` to `theme.toml`, `loop.*` to `loop.toml`, everything else to `config.toml`. A key RimZ does not know is refused, so a typo never reaches the file. The edit itself is in place, through `toml_edit`, so your comments and surrounding formatting survive. RimZ then re-validates the whole result and writes it as a temp file renamed over the original, so a crash mid-write never leaves half a file.
 
-What lands is byte-for-byte the file you would have edited by hand, which is what makes undoing ordinary: run `set` again with the old value, or delete the line to fall back to the default.
+What lands is byte-for-byte the file you would have edited by hand, which is what makes undoing ordinary: run `set` again with the old value, or run `rimz config unset <key>` to fall back to the default. `unset` removes the line and, where the template documented the key as a commented default, puts that commented line back.
 
 A bare value becomes a TOML value when it parses (`80`, `false`, an array, an inline table) and a string otherwise (`fresh`, `always`). Set a whole color band as an inline table: `rimz config set theme.display.context_meter.red '{ percent = 90, tokens = 400000 }'`. Keys under `theme.colors.*` write to the root `[colors.*]` table in `theme.toml`, so an Alacritty palette pasted there stays paste-compatible. The step list, the value grammar, and every refusal are in the [config reference](../reference/cli/config.md#set-a-value).
 

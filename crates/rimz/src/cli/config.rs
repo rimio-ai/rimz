@@ -24,6 +24,8 @@ enum ConfigSubcmd {
     Get(GetArgs),
     /// Set one dotted key while preserving TOML comments.
     Set(SetArgs),
+    /// Return one dotted key, or every key under a table, to its default.
+    Unset(UnsetArgs),
 }
 
 #[derive(Debug, Args)]
@@ -59,12 +61,22 @@ struct SetArgs {
     value: String,
 }
 
+#[derive(Debug, Args)]
+struct UnsetArgs {
+    /// Dotted config key or table, for example `theme.display.highlight_steps`.
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::config_keys
+    ))]
+    key: String,
+}
+
 pub fn run(args: ConfigArgs, _globals: &GlobalFlags) -> Result<()> {
     match args.command {
         ConfigSubcmd::Init(args) => init(args),
         ConfigSubcmd::Path => print_path(),
         ConfigSubcmd::Get(args) => get(args),
         ConfigSubcmd::Set(args) => set(args),
+        ConfigSubcmd::Unset(args) => unset(args),
     }
 }
 
@@ -169,15 +181,37 @@ fn set(args: SetArgs) -> Result<()> {
     Ok(())
 }
 
+fn unset(args: UnsetArgs) -> Result<()> {
+    let receipt = ConfigEditor::machine().unset(&args.key)?;
+    let hosts = match args.key.as_str() {
+        "remote_control" => vec![
+            rimz::remote_control::RemoteControlHost::Claude,
+            rimz::remote_control::RemoteControlHost::Codex,
+        ],
+        key => remote_control_host(key).into_iter().collect(),
+    };
+    if !hosts.is_empty() {
+        let machine = rimz::config::MachineConfig::load()?;
+        for host in hosts {
+            rimz::remote_control::apply_runtime_toggle(host, &machine)?;
+        }
+    }
+    print_line(&receipt)
+}
+
+fn remote_control_host(key: &str) -> Option<rimz::remote_control::RemoteControlHost> {
+    match key {
+        "remote_control.claude" => Some(rimz::remote_control::RemoteControlHost::Claude),
+        "remote_control.codex" => Some(rimz::remote_control::RemoteControlHost::Codex),
+        _ => None,
+    }
+}
+
 fn remote_control_transition(
     key: &str,
     raw_value: &str,
 ) -> Option<(rimz::remote_control::RemoteControlHost, bool)> {
-    let host = match key {
-        "remote_control.claude" => rimz::remote_control::RemoteControlHost::Claude,
-        "remote_control.codex" => rimz::remote_control::RemoteControlHost::Codex,
-        _ => return None,
-    };
+    let host = remote_control_host(key)?;
     raw_value
         .parse::<toml::Value>()
         .ok()?

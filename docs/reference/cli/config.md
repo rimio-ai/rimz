@@ -7,6 +7,7 @@ rimz config init [--force] [--print]
 rimz config path
 rimz config get [KEY] [--json]
 rimz config set <KEY> <VALUE>
+rimz config unset <KEY>
 rimz list-themes [--json]
 rimz list-pets [--json]
 ```
@@ -15,7 +16,7 @@ A refusal or error exits 1, following the CLI-wide [exit codes](../cli.md#exit-c
 
 ## The config files
 
-The directory is `$RIMZ_HOME`, or `~/.rimz/` when `RIMZ_HOME` is unset; [`rimz paths`](./paths.md) prints it with every other location. A dotted key's first segment decides which file `rimz config set` writes.
+The directory is `$RIMZ_HOME`, or `~/.rimz/` when `RIMZ_HOME` is unset; [`rimz paths`](./paths.md) prints it with every other location. A dotted key's first segment decides which file `rimz config set` and `rimz config unset` write.
 
 | File | Keys routed to it | What it holds |
 | --- | --- | --- |
@@ -97,7 +98,7 @@ rimz config set notifications.triggers '["waiting", "failed"]'
 rimz config set theme.display.context_meter.red '{ percent = 90, tokens = 400000 }'
 ```
 
-To undo a change, set the old value again, or delete the line from the file to return to the default.
+To undo a change, set the old value again, or [unset the key](#unset-a-value) to return to the default.
 
 ### How the value is parsed
 
@@ -181,6 +182,41 @@ Four keys check or change the machine beyond the file.
 `agents.shell` accepts an installed shell's bare name or absolute path. A bare name is looked up on this process's PATH and validated before writing; the file keeps the name. Its receipt adds `  resolves to <path> here`, followed by `  also on PATH: <path>; pass its full path to use that one instead` for each later distinct file in PATH order. Copies of the same file collapse, including symlinks and, on Unix, hard links. An unknown name, a relative path containing a slash, a login-disabled shell such as `nologin` or `false`, or a csh-family shell refuses without writing. Absolute paths are validated and used as written. See [launch preferences](../../guide/configuration.md#agent-definitions-and-launch-preferences) for the room-start lookup, per-launch fallback, and full-path pin.
 
 `remote_control.claude` and `remote_control.codex` switch the provider's remote-control host on the running machine. Setting either to `true` checks the host's preconditions first and refuses with the fix when they fail. After the write, `claude` adds or closes the `claude remote-control` pane in every running room's `rimzd` view, and `codex` starts or stops the shared Codex remote-control daemon. A hand edit reaches Claude hosts on the `rimzd` view's next repair pass, but for Codex it changes only what later room starts do, so use `set` to start or stop a running daemon. A stopped room starts with blocked hosts off for that run and records the warnings without prompting or changing `config.toml`. Entry to a live room warns without changing its applied policy. What each host runs is in the [remote guide](../../guide/remote.md#answer-asks-from-your-phone).
+
+## Unset a value
+
+`rimz config unset <KEY>` returns one key to its default by removing it from its owning file, and prints a receipt on stdout: `unset <full key>  (was <old TOML>; <default>)`. The default part is `default <TOML>` for a key with a built-in default, `now the scheme default` for a color the color scheme supplies (a `[theme]` color role such as `selection_bg`, a `theme.colors.*` slot, or a `theme.providers.*` color), and `no default` otherwise. A key that is not in the file, or a file that does not exist, prints `unset <full key>  (unchanged)`, writes nothing, and exits 0.
+
+```console
+$ rimz config set theme.display.highlight_steps.band 128
+set theme.display.highlight_steps.band = 128  (was unset)
+$ rimz config unset theme.display.highlight_steps.band
+unset theme.display.highlight_steps.band  (was 128; default 5)
+$ rimz config unset theme.display.highlight_steps.band
+unset theme.display.highlight_steps.band  (unchanged)
+$ rimz config unset theme.selection_bg
+unset theme.selection_bg  (was "#2f3b63"; now the scheme default)
+```
+
+A table key, such as `theme.display.highlight_steps`, clears every key under it, including those in its sub-tables, and keeps each `[table]` header and every comment. A table whose fields only validate together, a `theme.display.context_meter.<band>` or an `lsp.servers.<name>` entry, is removed whole, header included; comments above its header move to the next one. The receipt prints the old and default tables inline. The shorthands `theme` and `theme.glyphs` unset `theme.scheme` and `theme.glyphs.set`.
+
+It runs these steps, and stops without writing at the first one that fails:
+
+1. Rejects the keys `set` rejects ([What set refuses](#what-set-refuses)), except a whole table that `get` can read, which `unset` accepts.
+2. Reads the owning file. An inline table on the key's path becomes a standard `[table]` block, keeping its comments, as `set` does.
+3. Removes each value's line, with any comment on that line. A key the template documents as a commented `## key = default` line under the same header gets that line back, unless the file still has one: this undoes the uncommenting `set` does, so a `set` followed by an `unset` of the same key leaves a file written from the template as it was. A key written as a dotted key under another header (`highlight_steps.band = 9` under `[theme.display]`) is removed without restoring a line. Every other line stays as it was.
+4. Validates the whole resulting file.
+5. Writes the file atomically.
+
+`unset` also refuses these:
+
+| Attempt | Error |
+| --- | --- |
+| `loop`, which names all of `loop.toml` | `` `loop` is the whole of <path to loop.toml>; unset one key inside it ``. `rimz config init --force` resets every file. |
+| `accounts.<kind>` or `accounts.<kind>.<name>` for a kind with named accounts | `` `KEY` declares accounts; run `rimz accounts remove <kind> <name>` ``. Its fields (`label`, `home`, `history`, `budget`) unset one at a time. |
+| A removal that leaves the file invalid, such as a required field of a whole-entry table | `` cannot unset `KEY`: <validation message> `` |
+
+`unset remote_control.claude` or `unset remote_control.codex` returns the host to its default, off, and applies that to the running machine as `set ... false` does. `unset remote_control` does the same for both hosts ([Keys that do more than write](#keys-that-do-more-than-write)).
 
 ## List themes
 
