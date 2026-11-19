@@ -153,12 +153,12 @@ no active or parked runs of fix-tests
 ```console
 $ rimz workflow list
 fix-tests · 1 active · started by hand
-  ☾ #probe  occupied  36s
+  ☾ #probe  occupied by @coder#probe, @reviewer#probe  8s
       ◆ tests
       ╰─ ☾ fix ↑
 ```
 
-`☾` marks a node that waits, here for the checkout to be free ([Share the checkout](#share-the-checkout)). `show` on the run starts with where the run is and what it waits for. Below that it paints the graph from the run's definition as it is now: filled glyphs (`●`, `◆`) for nodes the run reached, hollow ones for nodes it has not, and each reached node's last answer beside it. A trail of the last routing decisions follows, then the work directory. The output here stops at the work directory, after which `show` prints the notes path and the `--history` command:
+`☾` marks a node that waits, here for the checkout to be free, and the row names the agents that hold it ([Share the checkout](#share-the-checkout)). `show` on the run starts with where the run is and what it waits for. Below that it paints the graph from the run's definition as it is now: filled glyphs (`●`, `◆`) for nodes the run reached, hollow ones for nodes it has not, and each reached node's last answer beside it. A trail of the last routing decisions follows, then the work directory. The output here stops at the work directory, after which `show` prints the notes path and the `--history` command:
 
 ```console
 $ rimz workflow show 'fix-tests#probe'
@@ -175,7 +175,7 @@ trail  03:15 tests fail → fix · now
 work dir ~/.rimz/ws/room-770e/owned/workflows/wf_01a1de7d104d7480a6ce0e557f583b77/work
 ```
 
-Read the second line first: it names the node the run is at and why it is not moving. `◆ tests` is filled because the run reached it, and `fail · 03:15` is its last answer. While an agent step runs, its agent has a [card](./sidebar.md) in the sidebar and a pane you can watch, and the sidebar draws the run as a [workflow strip](../interface/sidebar.md#workflow-strips) above its checkout's cards. The [run view reference](../reference/cli/workflow.md#inspect-runs) explains every mark.
+Read the second line first: it names the node the run is at and why it is not moving. `◆ tests` is filled because the run reached it, and `fail · 12:40` is its last answer. While an agent step runs, its agent has a [card](./sidebar.md) in the sidebar and a pane you can watch, and the sidebar draws the run as a [workflow strip](../interface/sidebar.md#workflow-strips) above its checkout's cards. The [run view reference](../reference/cli/workflow.md#inspect-runs) explains every mark.
 
 From inside a workflow step, or one of its subagents, omit the run: `rimz workflow show` finds the step's own run.
 

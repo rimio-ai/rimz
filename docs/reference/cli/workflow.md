@@ -866,7 +866,7 @@ Folding:
 
 - Adjacent check answers with the same node, origin, outcome, and condition case index fold into one row, whatever their reasons or other fields. The row uses the newest time, `#first–last` (or `#—` without sequences), `×N over <span>`, the newest answer, and the summed judge cost. The span runs from the oldest to the newest member, and `over <span>` is omitted under one second.
 - Adjacent wakes fold when their node and signal agree. A wake between answers keeps its own row and breaks their run.
-- A closing check-wait summary takes no row when an earlier answer row at its node with its outcome overlaps the wait's inclusive span. Other waits print `×N over <span>` when N > 1, then ` · <detail>` when present. Omitting a summary does not break an answer run.
+- A closing check-wait summary takes no row when an earlier answer row at its node with its outcome overlaps the wait's inclusive span. Other waits print `×N over <span>` when N > 1, then ` · <detail>` when present, except an `occupied` wait, which names the occupants its detail holds in its phrase (`occupied by <handles>`) and adds no detail after the count. Omitting a summary does not break an answer run.
 - `--json` keeps every journal entry unfolded, including closing waits and duplicate routes.
 
 Live runs keep the compact view's headline and clocks. A finished run's history uses its recorded end in the headline and date-qualified local clocks (`YYYY-MM-DD HH:MM`) on every row, so a later view or a GC backfill reproduces the saved text.
@@ -891,7 +891,7 @@ review · 1 active · started by hand
 | `window <term>` | An agent step or judge whose provider `window` is closed, with the failing term and its reading, such as `window 5h.left=12<40`. |
 | `budget <reason>` | An agent step or judge whose launch a room or account dollar budget would refuse, with the gate's reason, such as `budget fleet budget exhausted ($50.21 of $50.00/day)` and the command that raises it. The first advance after the budget allows the launch launches it. |
 | `takeover` | The checkout holds an agent mid-turn, so the step cannot stop it yet. A step with `occupancy = "share"` never waits here. |
-| `occupied` | The checkout holds an idle agent and the step's `occupancy` is `wait`, the default. |
+| `occupied by <handles>` | The checkout holds an idle agent and the step's `occupancy` is `wait`, the default. The handles are the occupants the last read found, each with its channel, such as `occupied by @coder#probe, @reviewer#probe`; a wait recorded without them reads `occupied`. |
 | `retry: <reason>` | The step's launch failed stopping the checkout's occupants, before it started anything, and the next advance (the scheduler's minute tick or a hook wake) launches it once more. A second failure is a counted `died` attempt. |
 | `held <age>[, gives up <clock>]` | An agent step held by machine capacity, a workflow or step limit, or a start queue still busy after 30 seconds. The give-up time is absent for `forever` and when nothing bounds the wait. The reason follows ` · `. |
 | `recheck` | The check's `recheck_at`, before which nothing evaluates. A signal matching the check's subscription clears it. For a `for` hold it is when the hold completes. |

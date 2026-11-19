@@ -1455,8 +1455,8 @@ fn prepare(
                 // A step launched into a named worktree occupies that checkout, not the run's.
                 let destination = destination(&t.record, step)?;
                 let occupancy = host.occupancy(&destination, &t.record.project_root)?;
-                if let Some(wait) = occupancy_wait(&occupancy, step) {
-                    t.step_wait(wait, None);
+                if let Some((wait, occupants)) = occupancy_wait(&occupancy, step) {
+                    t.step_wait(wait, occupants);
                     persist(&mut t, &guard)?;
                     return Ok(Decision::Stop);
                 }
@@ -1828,13 +1828,17 @@ fn from_leader(
         .is_some_and(|recorded| session(leader).is_some_and(|agent| agent.as_str() == recorded))
 }
 
-/// The wait an occupied checkout puts an agent step in, or `None` when the step may launch: an
-/// open turn blocks every step, and any occupant blocks a step without `takeover`.
-fn occupancy_wait(occupancy: &Occupancy, step: &Node) -> Option<&'static str> {
+/// The wait an occupied checkout puts an agent step in, with its detail, or `None` when the step
+/// may launch: an open turn blocks every step, and any occupant blocks a step without
+/// `takeover`. An `occupied` wait keeps the occupants' handles, joined by ", ", as its detail.
+fn occupancy_wait(occupancy: &Occupancy, step: &Node) -> Option<(&'static str, Option<String>)> {
     match occupancy {
-        Occupancy::Blocked(_) => Some("takeover"),
-        Occupancy::Occupied(_) if step.occupancy() != Some(OccupancyPolicy::Takeover) => {
-            Some("occupied")
+        Occupancy::Blocked(_) => Some(("takeover", None)),
+        Occupancy::Occupied(handles) if step.occupancy() != Some(OccupancyPolicy::Takeover) => {
+            Some((
+                "occupied",
+                (!handles.is_empty()).then(|| handles.join(", ")),
+            ))
         }
         Occupancy::Free | Occupancy::Occupied(_) => None,
     }

@@ -592,7 +592,7 @@ Each blocked window, budget, occupancy, or capacity check merges a wait that kee
 | The step's `window` is closed for any agent cell's provider. | `window`, with the blocking term and its reading in `Wait.detail` (`5h.left=12<42`). |
 | The launcher's budget gate would refuse the launch: the room's budget, or the account budget of a cell's resolved login (`crates/rimz/src/harness/workflow/engine.rs::budget_refusal`, read for a judge too). The provider window gate needs a prepared launch, so the launch answers for it. | `budget`, with the gate's reason in `Wait.detail`. |
 | An occupant is mid-turn. | `takeover` |
-| An idle occupant, and the step's `admission.occupancy` is `wait` (the default). | `occupied` |
+| An idle occupant, and the step's `admission.occupancy` is `wait` (the default). | `occupied`, with the occupants' handles joined by `, ` in `Wait.detail` (`@otter, @fox`), rewritten at each recheck. The views print `occupied by @otter, @fox`; the sidebar strip keeps the bare word. |
 | The shared start throttle or a workflow or step limit holds the step. | `capacity`, with `Wait.kinds`, `Wait.detail`, an optional typed `Wait.hold`, and an optional `Wait.gives_up_at`. The kind survives retries and closing the wait into history. |
 | Admission times out waiting for `loops/throttle.lock`, and no capacity wait is open. | `capacity`, held as `queue`, with `waiting for the start queue: <lock error>` in `Wait.detail`. |
 

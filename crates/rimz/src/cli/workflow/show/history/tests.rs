@@ -252,13 +252,18 @@ fn unrepresented_waits_show_their_span_and_detail_but_no_singleton_count() {
     if let JournalEvent::Wait { detail, .. } = &mut window.event {
         *detail = Some("5h.left=12<42".into());
     }
-    let text = history(&[window, wait(4, "pending", 4, 4, 1)]);
+    let mut occupied = wait(5, "occupied", 5, 5, 1);
+    if let JournalEvent::Wait { detail, .. } = &mut occupied.event {
+        *detail = Some("@otter, @fox".into());
+    }
+    let text = history(&[window, wait(4, "pending", 4, 4, 1), occupied]);
     assert_eq!(
         text,
         format!(
-            "  {} #— build wait window ×3 over 2m · 5h.left=12<42\n  {} #— pr wait pending\n",
+            "  {} #— build wait window ×3 over 2m · 5h.left=12<42\n  {} #— pr wait pending\n  {} #— pr wait occupied by @otter, @fox\n",
             clock(3),
             clock(4),
+            clock(5),
         )
     );
 }
