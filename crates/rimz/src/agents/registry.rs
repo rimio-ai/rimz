@@ -244,8 +244,8 @@ pub fn compact_reminder(agent: &AgentState) -> Option<String> {
     let suffix = "RimZ compacts you once this turn ends and then tells you to continue.";
     Some(if command.instruction == CompactInstruction::Trailing {
         format!(
-            "{prefix}run `rimz agents compact @me` with no instruction of your own, since RimZ \
-             supplies your role's compaction brief. {suffix}"
+            "{prefix}run `rimz agents compact @me` with no instruction of your own: RimZ adds \
+             any compaction brief itself. {suffix}"
         )
     } else {
         format!(
