@@ -5,23 +5,25 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
-use crate::agents::provider_file;
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, ManagedIntegration, Result, StatusLineChange, agent_config_path,
-    read_optional_file,
+    HookUninstallReport, ManagedIntegration, Result, agent_config_path, read_optional_file,
     settings_json::{self, PendingWrite},
 };
 
 use super::super::install_report::report_files;
+use super::super::owned_statusline::{OwnedStatusLine, StateChange};
 use super::{
     CURSOR_HOOKS, RETAINED_RENDERING_KEYS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER,
     RIMZ_STATUS_LINE_COMMAND, RIMZ_STATUS_LINE_MARKER,
 };
 
-const STATUS_LINE_KEY: &str = "statusLine";
-const LEGACY_MANAGED_KEY: &str = "_rimz_managed";
-const LEGACY_WRAPPED_KEY: &str = "_rimz_wrapped";
+const STATUS_LINE: OwnedStatusLine = OwnedStatusLine {
+    agent: "cursor",
+    command: RIMZ_STATUS_LINE_COMMAND,
+    marker: RIMZ_STATUS_LINE_MARKER,
+    retained_keys: RETAINED_RENDERING_KEYS,
+};
 
 pub(super) static MANAGED_INTEGRATION: CursorManagedIntegration = CursorManagedIntegration;
 
@@ -37,21 +39,12 @@ pub(super) fn outdated_files_at(hooks: &Path, configs: &[PathBuf]) -> Vec<PathBu
             files.push(hooks.to_path_buf());
         }
     }
-    for path in configs {
-        let (Ok(root), Ok((candidate, _))) =
-            (read_existing_json(path), statusline_install_candidate(path))
-        else {
-            continue;
-        };
-        if root
-            .get(STATUS_LINE_KEY)
-            .and_then(statusline_command)
-            .is_some_and(|command| command.contains(RIMZ_STATUS_LINE_MARKER))
-            && root.get(STATUS_LINE_KEY) != candidate.get(STATUS_LINE_KEY)
-        {
-            files.push(path.clone());
-        }
-    }
+    files.extend(
+        configs
+            .iter()
+            .filter(|path| STATUS_LINE.outdated_at(path))
+            .cloned(),
+    );
     files
 }
 
@@ -146,14 +139,18 @@ pub(super) fn install_all(
     config_paths: &[PathBuf],
     state_path: &Path,
 ) -> Result<HookInstallReport> {
+    let state = record_change(config_paths, state_path)?;
+    let state_existed = state_path.exists();
+    STATUS_LINE.apply_state(state_path, &state)?;
     let mut files = Vec::new();
     let mut installed_events = Vec::new();
-    // The last write wins the one displaced-statusline record, so the primary
-    // config dir goes last.
     for config_path in config_paths.iter().rev() {
-        let report = install_into(hooks_path, config_path, state_path)?;
+        let report = install_pair(hooks_path, config_path)?;
         files.extend(report.files);
         installed_events = report.installed_events;
+    }
+    if !matches!(state, StateChange::Keep) {
+        files.extend(report_files([(state_path, state_existed)]));
     }
     Ok(HookInstallReport {
         plugin_dir: None,
@@ -163,15 +160,36 @@ pub(super) fn install_all(
     })
 }
 
+/// The one record change an install over `config_paths` makes. Passes run in
+/// reverse, so the last displacement in that order wins and the primary (the
+/// first path) goes last. With no displacement, only the primary, whose
+/// original the forwarder reads, can remove the record.
+fn record_change(config_paths: &[PathBuf], state_path: &Path) -> Result<StateChange> {
+    let Some(primary) = config_paths.first() else {
+        return Ok(StateChange::Keep);
+    };
+    let mut displaced = None;
+    for config_path in config_paths.iter().rev() {
+        if let (_, Some(original)) = STATUS_LINE.install_candidate(config_path)? {
+            displaced = Some(original);
+        }
+    }
+    STATUS_LINE.state_change(primary, state_path, displaced.as_ref())
+}
+
 pub(super) fn preview_all(
     hooks_path: &Path,
     config_paths: &[PathBuf],
     state_path: &Path,
 ) -> Result<HookInstallPreview> {
     let (primary, others) = config_paths.split_first().ok_or_else(no_config_dir)?;
-    let mut preview = preview_at(hooks_path, primary, state_path)?;
+    let mut preview = preview_pair(hooks_path, primary)?;
+    let state = record_change(config_paths, state_path)?;
+    preview
+        .files
+        .extend(STATUS_LINE.state_preview(state_path, &state)?);
     for config_path in others {
-        let extra = preview_at(hooks_path, config_path, state_path)?;
+        let extra = preview_pair(hooks_path, config_path)?;
         preview.files.extend(
             extra
                 .files
@@ -252,25 +270,23 @@ pub(super) fn cursor_statusline_state_path() -> Result<PathBuf> {
         .unwrap_or_else(|| crate::disk::paths::rimz_home().join("cursor-statusline.json")))
 }
 
+#[cfg(test)]
 pub(super) fn install_into(
     hooks_path: &Path,
     config_path: &Path,
     state_path: &Path,
 ) -> Result<HookInstallReport> {
+    install_all(hooks_path, &[config_path.to_path_buf()], state_path)
+}
+
+/// One config's hook and statusline pair, written as one transaction.
+fn install_pair(hooks_path: &Path, config_path: &Path) -> Result<HookInstallReport> {
     let hooks_original = settings_json::read_optional_bytes("cursor", hooks_path)?;
     let config_original = settings_json::read_optional_bytes("cursor", config_path)?;
     let (hooks, events) = install_candidate(hooks_path)?;
-    let (config, displaced) = statusline_install_candidate(config_path)?;
-    let state_original = displaced
-        .as_ref()
-        .map(|_| settings_json::read_optional_bytes("cursor", state_path))
-        .transpose()?
-        .flatten();
+    let (config, _) = STATUS_LINE.install_candidate(config_path)?;
     let hooks_candidate = settings_json::render_json("cursor", &hooks)?;
     let config_candidate = settings_json::render_json("cursor", &config)?;
-    if let Some(original) = displaced.as_ref() {
-        write_statusline_state(state_path, original)?;
-    }
     settings_json::commit_pair(
         "cursor",
         PendingWrite::required(hooks_path, &hooks_candidate),
@@ -281,34 +297,31 @@ pub(super) fn install_into(
     Ok(HookInstallReport {
         plugin_dir: None,
         agent: "cursor",
-        files: report_files(
-            [
-                (hooks_path, hooks_original.is_some()),
-                (config_path, config_original.is_some()),
-            ]
-            .into_iter()
-            .chain(
-                displaced
-                    .is_some()
-                    .then_some((state_path, state_original.is_some())),
-            ),
-        ),
+        files: report_files([
+            (hooks_path, hooks_original.is_some()),
+            (config_path, config_original.is_some()),
+        ]),
         installed_events: events,
     })
 }
 
+#[cfg(test)]
 pub(super) fn preview_at(
     hooks_path: &Path,
     config_path: &Path,
     state_path: &Path,
 ) -> Result<HookInstallPreview> {
+    preview_all(hooks_path, &[config_path.to_path_buf()], state_path)
+}
+
+fn preview_pair(hooks_path: &Path, config_path: &Path) -> Result<HookInstallPreview> {
     let hooks_original = read_optional_file("cursor", hooks_path)?;
     let config_original = read_optional_file("cursor", config_path)?;
     let existing_config = read_existing_json(config_path)?;
-    let status_line_change = classify_statusline(&existing_config);
+    let status_line_change = STATUS_LINE.classify(&existing_config);
     let (hooks, events) = install_candidate(hooks_path)?;
-    let (config, displaced) = statusline_install_candidate(config_path)?;
-    let mut files = vec![
+    let (config, _) = STATUS_LINE.install_candidate(config_path)?;
+    let files = vec![
         HookInstallFilePreview {
             path: hooks_path.to_path_buf(),
             existed: hooks_original.is_some(),
@@ -322,15 +335,6 @@ pub(super) fn preview_at(
             candidate: settings_json::render_json("cursor", &config)?,
         },
     ];
-    if let Some(original) = displaced.as_ref() {
-        let state_original = read_optional_file("cursor", state_path)?;
-        files.push(HookInstallFilePreview {
-            path: state_path.to_path_buf(),
-            existed: state_original.is_some(),
-            original: state_original,
-            candidate: render_statusline_state(original)?,
-        });
-    }
     Ok(HookInstallPreview {
         agent: "cursor",
         files,
@@ -364,7 +368,7 @@ fn uninstall_pair(
     let mut hooks = read_existing_json(hooks_path)?;
     let mut config = read_existing_json(config_path)?;
     let removed_events = strip_owned(&mut hooks);
-    strip_statusline(&mut config, state_path)?;
+    STATUS_LINE.strip(&mut config, state_path)?;
     let hooks_candidate = hooks_original
         .is_some()
         .then(|| settings_json::render_json("cursor", &hooks))
@@ -381,7 +385,7 @@ fn uninstall_pair(
         config_original.as_deref(),
     )?;
     if state_existed && remove_state {
-        remove_statusline_state(state_path)?;
+        STATUS_LINE.remove_state(state_path)?;
     }
     Ok(HookUninstallReport {
         agent: "cursor",
@@ -395,27 +399,6 @@ fn uninstall_pair(
         ),
         removed_events,
     })
-}
-
-fn statusline_install_candidate(path: &Path) -> Result<(Map<String, Value>, Option<Value>)> {
-    let mut root = read_existing_json(path)?;
-    let existing = root.get(STATUS_LINE_KEY).cloned();
-    let displaced = displaced_statusline(existing.as_ref());
-    let mut statusline = Map::new();
-    if let Some(Value::Object(object)) = existing.as_ref() {
-        for key in RETAINED_RENDERING_KEYS {
-            if let Some(value) = object.get(*key) {
-                statusline.insert((*key).to_owned(), value.clone());
-            }
-        }
-    }
-    statusline.insert("type".to_owned(), Value::String("command".to_owned()));
-    statusline.insert(
-        "command".to_owned(),
-        Value::String(RIMZ_STATUS_LINE_COMMAND.to_owned()),
-    );
-    root.insert(STATUS_LINE_KEY.to_owned(), Value::Object(statusline));
-    Ok((root, displaced))
 }
 
 pub(super) fn hooks_installed_at(path: &Path) -> bool {
@@ -449,186 +432,18 @@ pub(super) fn managed_artifacts_at(path: &Path) -> bool {
 }
 
 pub(super) fn statusline_installed_at(path: &Path) -> bool {
-    read_existing_json(path).is_ok_and(|root| {
-        root.get(STATUS_LINE_KEY)
-            .and_then(Value::as_object)
-            .and_then(|object| object.get("command"))
-            .and_then(Value::as_str)
-            == Some(RIMZ_STATUS_LINE_COMMAND)
-    })
+    STATUS_LINE.installed_at(path)
 }
 
 pub(super) fn statusline_artifact_at(path: &Path) -> bool {
-    read_existing_json(path).is_ok_and(|root| {
-        root.get(STATUS_LINE_KEY)
-            .and_then(Value::as_object)
-            .and_then(|object| object.get("command"))
-            .and_then(Value::as_str)
-            .is_some_and(|command| command.contains(RIMZ_STATUS_LINE_MARKER))
-    })
+    STATUS_LINE.artifact_at(path)
 }
 
 pub(super) fn wrapped_status_line_command_at(
     config_path: &Path,
     state_path: &Path,
 ) -> Option<String> {
-    match read_statusline_state(state_path).ok()? {
-        Some(value) => statusline_command(&value)
-            .filter(|command| !command.contains(RIMZ_STATUS_LINE_MARKER))
-            .map(ToOwned::to_owned),
-        None => {
-            let root = read_existing_json(config_path).ok()?;
-            let wrapped = legacy_wrapped(root.get(STATUS_LINE_KEY)?)?;
-            statusline_command(&wrapped)
-                .filter(|command| !command.contains(RIMZ_STATUS_LINE_MARKER))
-                .map(ToOwned::to_owned)
-        }
-    }
-}
-
-fn displaced_statusline(existing: Option<&Value>) -> Option<Value> {
-    let existing = existing?;
-    if statusline_command(existing).is_some_and(|command| command.contains(RIMZ_STATUS_LINE_MARKER))
-    {
-        legacy_wrapped(existing).and_then(non_recursive_statusline)
-    } else {
-        Some(existing.clone())
-    }
-}
-
-fn classify_statusline(root: &Map<String, Value>) -> Option<StatusLineChange> {
-    match root.get(STATUS_LINE_KEY) {
-        None => Some(StatusLineChange::Added),
-        Some(value)
-            if statusline_command(value)
-                .is_some_and(|command| command.contains(RIMZ_STATUS_LINE_MARKER)) =>
-        {
-            Some(StatusLineChange::Unchanged)
-        }
-        Some(Value::Object(object))
-            if object
-                .get("command")
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty) =>
-        {
-            Some(StatusLineChange::Added)
-        }
-        Some(value) => Some(StatusLineChange::Wrapping {
-            original: display_statusline(value),
-        }),
-    }
-}
-
-fn strip_statusline(root: &mut Map<String, Value>, state_path: &Path) -> Result<()> {
-    let Some(current) = root.get(STATUS_LINE_KEY) else {
-        return Ok(());
-    };
-    let owned = current
-        .as_object()
-        .and_then(|object| object.get("command"))
-        .and_then(Value::as_str)
-        .is_some_and(|command| command.contains(RIMZ_STATUS_LINE_MARKER));
-    if !owned {
-        return Ok(());
-    }
-    let legacy = legacy_wrapped(current).and_then(non_recursive_statusline);
-    let original = match read_statusline_state(state_path)? {
-        Some(value) => Some(value),
-        None => legacy.map(strip_legacy_keys),
-    };
-    if let Some(original) = original {
-        root.insert(STATUS_LINE_KEY.to_owned(), original);
-    } else {
-        root.remove(STATUS_LINE_KEY);
-    }
-    Ok(())
-}
-
-fn legacy_wrapped(value: &Value) -> Option<Value> {
-    value.as_object()?.get(LEGACY_WRAPPED_KEY).cloned()
-}
-
-fn non_recursive_statusline(value: Value) -> Option<Value> {
-    if statusline_command(&value).is_some_and(|command| command.contains(RIMZ_STATUS_LINE_MARKER)) {
-        None
-    } else {
-        Some(value)
-    }
-}
-
-fn strip_legacy_keys(value: Value) -> Value {
-    let Value::Object(mut object) = value else {
-        return value;
-    };
-    object.remove(LEGACY_MANAGED_KEY);
-    object.remove(LEGACY_WRAPPED_KEY);
-    Value::Object(object)
-}
-
-fn statusline_command(value: &Value) -> Option<&str> {
-    match value {
-        Value::String(command) if !command.is_empty() => Some(command),
-        Value::Object(object) => object
-            .get("command")
-            .and_then(Value::as_str)
-            .filter(|command| !command.is_empty()),
-        _ => None,
-    }
-}
-
-fn display_statusline(value: &Value) -> String {
-    statusline_command(value)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| value.to_string())
-}
-
-fn read_statusline_state(path: &Path) -> Result<Option<Value>> {
-    let Some(bytes) = settings_json::read_optional_bytes("cursor", path)? else {
-        return Ok(None);
-    };
-    let value: Value = serde_json::from_slice(&bytes).map_err(|source| AgentErr::InstallParse {
-        agent: "cursor",
-        path: path.to_path_buf(),
-        source: Box::new(source),
-    })?;
-    let Value::Object(mut root) = value else {
-        return Err(AgentErr::Install {
-            agent: "cursor",
-            reason: format!(
-                "expected {} to contain only a `statusLine` object field",
-                path.display()
-            ),
-        });
-    };
-    if root.len() != 1 || !root.contains_key(STATUS_LINE_KEY) {
-        return Err(AgentErr::Install {
-            agent: "cursor",
-            reason: format!(
-                "expected {} to contain only a `statusLine` field",
-                path.display()
-            ),
-        });
-    }
-    Ok(root.remove(STATUS_LINE_KEY))
-}
-
-fn render_statusline_state(original: &Value) -> Result<String> {
-    let mut root = Map::new();
-    root.insert(STATUS_LINE_KEY.to_owned(), original.clone());
-    settings_json::render_json("cursor", &root)
-}
-
-fn write_statusline_state(path: &Path, original: &Value) -> Result<()> {
-    provider_file::write_bytes(path, render_statusline_state(original)?.as_bytes())?;
-    Ok(())
-}
-
-fn remove_statusline_state(path: &Path) -> Result<()> {
-    std::fs::remove_file(path).map_err(|source| AgentErr::InstallIo {
-        agent: "cursor",
-        path: path.to_path_buf(),
-        source,
-    })
+    STATUS_LINE.wrapped_command_at(config_path, state_path)
 }
 
 fn install_candidate(path: &Path) -> Result<(Map<String, Value>, Vec<String>)> {

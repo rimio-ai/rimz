@@ -2308,6 +2308,127 @@ fn foreign_cursor_statusline_stays_unowned_and_survives_uninstall() {
 }
 
 #[test]
+fn reinstall_after_the_statusline_key_is_deleted_drops_the_stale_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks_path = dir.path().join("hooks.json");
+    let config_path = dir.path().join("cli-config.json");
+    let state_path = dir.path().join("cursor-statusline.json");
+    let custom = r#"{"statusLine":{"type":"command","command":"user-status"}}"#;
+    std::fs::write(&config_path, custom).unwrap();
+    install::install_into(&hooks_path, &config_path, &state_path).unwrap();
+    assert!(state_path.exists());
+    std::fs::write(&config_path, r#"{"theme":"dark"}"#).unwrap();
+    let preview = install::preview_at(&hooks_path, &config_path, &state_path).unwrap();
+    let record = preview
+        .files
+        .iter()
+        .find(|file| file.path == state_path)
+        .expect("the record's removal is previewed");
+    assert!(record.existed && record.candidate.is_empty());
+    let report = install::install_into(&hooks_path, &config_path, &state_path).unwrap();
+    assert!(!state_path.exists());
+    assert!(
+        report
+            .files
+            .iter()
+            .any(|file| file.path == state_path && file.existed),
+        "the receipt lists the removed record"
+    );
+    assert_eq!(
+        install::wrapped_status_line_command_at(&config_path, &state_path),
+        None
+    );
+    install::uninstall_from(&hooks_path, &config_path, &state_path).unwrap();
+    assert!(
+        install::read_existing_json(&config_path)
+            .unwrap()
+            .get("statusLine")
+            .is_none()
+    );
+
+    let secondary = dir.path().join("secondary/cli-config.json");
+    std::fs::create_dir_all(secondary.parent().unwrap()).unwrap();
+    std::fs::write(&secondary, custom).unwrap();
+    install::install_all(&hooks_path, &[config_path, secondary], &state_path).unwrap();
+    assert_eq!(
+        install::read_existing_json(&state_path).unwrap()["statusLine"]["command"],
+        "user-status",
+        "a config without a statusline keeps the record another config just wrote"
+    );
+}
+
+#[test]
+fn a_secondary_config_without_a_statusline_keeps_the_primary_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks_path = dir.path().join("hooks.json");
+    let primary = dir.path().join("cli-config.json");
+    let secondary = dir.path().join("secondary/cli-config.json");
+    let state_path = dir.path().join("cursor-statusline.json");
+    std::fs::create_dir_all(secondary.parent().unwrap()).unwrap();
+    std::fs::write(
+        &primary,
+        r#"{"statusLine":{"type":"command","command":"user-status"}}"#,
+    )
+    .unwrap();
+    let configs = [primary.clone(), secondary.clone()];
+    install::install_all(&hooks_path, &configs, &state_path).unwrap();
+    std::fs::write(&secondary, r#"{"theme":"dark"}"#).unwrap();
+    let preview = install::preview_all(&hooks_path, &configs, &state_path).unwrap();
+    assert!(
+        preview.files.iter().all(|file| file.path != state_path),
+        "a secondary without a statusline previews no record change"
+    );
+    install::install_all(&hooks_path, &configs, &state_path).unwrap();
+    assert_eq!(
+        install::read_existing_json(&state_path).unwrap()["statusLine"]["command"],
+        "user-status",
+        "a secondary pass never removes the primary's record"
+    );
+    assert_eq!(
+        install::wrapped_status_line_command_at(&primary, &state_path).as_deref(),
+        Some("user-status")
+    );
+    install::uninstall_all(&hooks_path, &configs, &state_path).unwrap();
+    assert_eq!(
+        install::read_existing_json(&primary).unwrap()["statusLine"]["command"],
+        "user-status"
+    );
+}
+
+#[test]
+fn preview_all_shows_the_record_a_secondary_displaces_beside_a_bare_primary() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks_path = dir.path().join("hooks.json");
+    let primary = dir.path().join("cli-config.json");
+    let secondary = dir.path().join("secondary/cli-config.json");
+    let state_path = dir.path().join("cursor-statusline.json");
+    std::fs::create_dir_all(secondary.parent().unwrap()).unwrap();
+    std::fs::write(&primary, r#"{"theme":"dark"}"#).unwrap();
+    std::fs::write(
+        &secondary,
+        r#"{"statusLine":{"type":"command","command":"user-status"}}"#,
+    )
+    .unwrap();
+    let configs = [primary, secondary];
+    let preview = install::preview_all(&hooks_path, &configs, &state_path).unwrap();
+    let record = preview
+        .files
+        .iter()
+        .find(|file| file.path == state_path)
+        .expect("the record install writes is previewed");
+    assert!(
+        record.candidate.contains("user-status"),
+        "{}",
+        record.candidate
+    );
+    install::install_all(&hooks_path, &configs, &state_path).unwrap();
+    assert_eq!(
+        install::read_existing_json(&state_path).unwrap()["statusLine"]["command"],
+        "user-status"
+    );
+}
+
+#[test]
 fn legacy_hook_install_is_detected_and_repaired_additively() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks.json");
