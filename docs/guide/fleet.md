@@ -136,7 +136,7 @@ Identity
 
 ```
 
-Run, Messages, and Recent transcript appear before Context when present, so recent activity comes before stable facts. The context size names the published capacity while the percentage measures the usable window, so they need not divide directly ([context fields](../reference/cli/agents.md#list)). Waiting cards give you the next answer command, or point to the pane when the prompt needs its own UI. Live runs show a moving duration; only a finished run has an exit code. Add `--capture` to append the pane's visible text, or `--json` for the structured record a script can read.
+Run, Messages, Started, and Recent transcript appear before Context when present, so recent activity comes before stable facts. Started is what the agent set going that is still alive: what would hold a stop of it, what closes with it, and what keeps running after it, each with the command that ends it. The context size names the published capacity while the percentage measures the usable window, so they need not divide directly ([context fields](../reference/cli/agents.md#list)). Waiting cards give you the next answer command, or point to the pane when the prompt needs its own UI. Live runs show a moving duration; only a finished run has an exit code. Add `--capture` to append the pane's visible text, or `--json` for the structured record a script can read.
 
 If the provider's screen hid a launch warning, find it under `launch_warnings` in the Identity section. A clean relaunch clears those warnings. When the provider reports an effort different from the launch's request, Identity adds an `effort` row, for example `running max, requested xhigh`. This read-time notice changes neither the saved request nor JSON output.
 

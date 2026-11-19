@@ -602,6 +602,7 @@ mod tests {
             entry,
             None,
             None,
+            None,
             false,
             snapshot.now,
         )

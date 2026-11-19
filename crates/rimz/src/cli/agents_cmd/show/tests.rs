@@ -1,5 +1,6 @@
 use super::*;
 use rimz::agents::{AgentStatus, TurnPhase};
+use rimz::harness::idle_stop::started::{RowKind, Started, StartedRow};
 use rimz::ids::{PaneId, WorkspaceId};
 
 fn entry() -> AgentReportEntry {
@@ -54,7 +55,7 @@ fn raised_waiting_activity_shows_the_question_instead_of_the_old_task() {
         snapshot.now,
         ReportOverrides::default(),
     );
-    let text = strip(|w| render_activity_section(w, &entry, None, None, false, snapshot.now));
+    let text = strip(|w| render_activity_section(w, &entry, None, None, None, false, snapshot.now));
     assert!(text.contains("  waiting: Which deployment?"), "{text}");
 }
 
@@ -277,6 +278,7 @@ fn card_projection_show_turn_elapsed_is_a_duration() {
             &entry,
             None,
             None,
+            None,
             true,
             jiff::Timestamp::from_second(120).unwrap(),
         )
@@ -296,6 +298,7 @@ fn card_projection_show_turn_elapsed_is_a_duration() {
                 &entry,
                 None,
                 None,
+                None,
                 false,
                 jiff::Timestamp::from_second(3600).unwrap(),
             )
@@ -312,7 +315,15 @@ fn paused_and_failed_show_their_reason_once() {
         entry.status = status;
         entry.description = Some("provider unavailable".into());
         let text = strip(|w| {
-            render_activity_section(w, &entry, None, None, false, jiff::Timestamp::UNIX_EPOCH)
+            render_activity_section(
+                w,
+                &entry,
+                None,
+                None,
+                None,
+                false,
+                jiff::Timestamp::UNIX_EPOCH,
+            )
         });
         assert_eq!(text.matches("provider unavailable").count(), 1, "{text}");
         assert!(
@@ -431,6 +442,10 @@ fn card_projection_show_sections_follow_activity_before_stable_facts() {
             age: "1m ago".into(),
             text: "check".into(),
         }],
+        started: Some(Started {
+            outliving: vec![started_row(RowKind::Agent, "@first", "running", None)],
+            ..Started::default()
+        }),
         recent_transcript: Some(crate::cli::transcript::RenderedChat {
             lane_label: None,
             channel: None,
@@ -456,6 +471,7 @@ fn card_projection_show_sections_follow_activity_before_stable_facts() {
     let positions = [
         "Run\n",
         "Messages\n",
+        "Started\n",
         "Recent transcript\n",
         "Context\n",
         "Identity\n",
@@ -463,6 +479,170 @@ fn card_projection_show_sections_follow_activity_before_stable_facts() {
     ]
     .map(|section| text.find(section).unwrap());
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+}
+
+fn started_row(kind: RowKind, name: &str, status: &str, command: Option<&str>) -> StartedRow {
+    StartedRow {
+        kind,
+        name: name.to_owned(),
+        status: status.to_owned(),
+        tone: AgentStatus::Idle,
+        phase: rimz::agents::TurnPhase::Idle,
+        provider: None,
+        since: Some(jiff::Timestamp::from_second(3_480).unwrap()),
+        due: None,
+        detail: Vec::new(),
+        command: command.map(str::to_owned),
+    }
+}
+
+fn all_groups() -> Started {
+    let mut wait = started_row(
+        RowKind::Wait,
+        "wait-gate",
+        "sleeping",
+        Some("rimz wait cancel wait-gate"),
+    );
+    wait.detail = vec!["wakes after cargo xtask gate".to_owned()];
+    Started {
+        holding: vec![
+            wait,
+            started_row(
+                RowKind::Message,
+                "msg_1",
+                "queued",
+                Some("rimz message cancel msg_1"),
+            ),
+            started_row(RowKind::Run, "run_1", "running", None),
+        ],
+        closing: vec![started_row(RowKind::Subagent, "@child", "idle", None)],
+        outliving: vec![started_row(
+            RowKind::Agent,
+            "@first › @second",
+            "running",
+            Some("rimz agents stop @second"),
+        )],
+    }
+}
+
+#[test]
+fn started_section_heads_each_group_with_rows_and_drops_empty_ones() {
+    let now = jiff::Timestamp::from_second(3_600).unwrap();
+    let agent = entry();
+    let report = ShowReport {
+        started: Some(all_groups()),
+        ..ShowReport::default()
+    };
+    let text = strip(|w| render_show_sections(w, &report, &agent, now));
+    let section = &text[text.find("Started\n").expect("section")..text.find("Context\n").unwrap()];
+    assert_eq!(
+        section,
+        "Started\n\
+         \x20 would hold a stop\n\
+         \x20   wait      wait-gate         sleeping  2m ago · wakes after cargo xtask gate  rimz wait cancel wait-gate\n\
+         \x20   message   msg_1             queued    2m ago                                 rimz message cancel msg_1\n\
+         \x20   run       run_1             running   2m ago\n\
+         \x20 close with it\n\
+         \x20   subagent  @child            idle      2m ago\n\
+         \x20 outlive it\n\
+         \x20   agent     @first › @second  running   2m ago                                 rimz agents stop @second\n\
+         \n"
+    );
+
+    let only_outliving = ShowReport {
+        started: Some(Started {
+            outliving: all_groups().outliving,
+            ..Started::default()
+        }),
+        ..ShowReport::default()
+    };
+    let text = strip(|w| render_show_sections(w, &only_outliving, &agent, now));
+    assert!(text.contains("Started\n  outlive it\n"), "{text}");
+    assert!(
+        !text.contains("would hold a stop") && !text.contains("close with it"),
+        "{text}"
+    );
+
+    for started in [None, Some(Started::default())] {
+        let report = ShowReport {
+            started,
+            ..ShowReport::default()
+        };
+        let text = strip(|w| render_show_sections(w, &report, &agent, now));
+        assert!(!text.contains("Started"), "no rows, no heading: {text}");
+    }
+}
+
+#[test]
+fn idle_stop_row_names_what_holds_it_and_counts_the_rest() {
+    let now = jiff::Timestamp::from_second(3_600).unwrap();
+    let mut agent = entry();
+    agent.idle_stop = Some(rimz::agents::state::PendingIdleStop {
+        stop: rimz::agents::state::IdleStop {
+            after_secs: 180,
+            requested_at: jiff::Timestamp::from_second(3_000).unwrap(),
+            requested_by: None,
+        },
+        due_at: None,
+    });
+    let one = Started {
+        holding: all_groups().holding[..1].to_vec(),
+        ..Started::default()
+    };
+    let only_outliving = Started {
+        outliving: all_groups().outliving,
+        ..Started::default()
+    };
+    for (started, suffix) in [
+        (
+            Some(all_groups()),
+            Some(", held by wait wait-gate and 2 more"),
+        ),
+        (Some(one), Some(", held by wait wait-gate")),
+        (Some(only_outliving), None),
+        (None, None),
+    ] {
+        let report = ShowReport {
+            started,
+            ..ShowReport::default()
+        };
+        let text = strip(|w| render_show_sections(w, &report, &agent, now));
+        let row = text
+            .lines()
+            .find(|line| line.contains("idle_stop"))
+            .expect("idle_stop row");
+        match suffix {
+            Some(suffix) => {
+                assert!(row.contains(suffix), "{row}");
+                assert_eq!(text.matches("held by").count(), 1, "{text}");
+            }
+            None => assert!(!row.contains("held by"), "{row}"),
+        }
+    }
+}
+
+#[test]
+fn show_json_carries_started_only_when_it_has_rows() {
+    let report = ShowReport {
+        started: Some(all_groups()),
+        ..ShowReport::default()
+    };
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(
+        json["started"]["holding"][0],
+        serde_json::json!({
+            "kind": "wait",
+            "name": "wait-gate",
+            "status": "sleeping",
+            "since": "1970-01-01T00:58:00Z",
+            "detail": ["wakes after cargo xtask gate"],
+            "command": "rimz wait cancel wait-gate",
+        })
+    );
+    assert_eq!(json["started"]["closing"][0]["kind"], "subagent");
+    assert_eq!(json["started"]["outliving"][0]["name"], "@first › @second");
+    let json = serde_json::to_value(ShowReport::default()).unwrap();
+    assert!(json.get("started").is_none(), "{json}");
 }
 
 fn strip<E: std::fmt::Debug>(
@@ -540,6 +720,8 @@ fn show_json_wraps_the_projected_agent() {
         messages: Vec::new(),
         system_messages_hidden: 0,
         capture: None,
+        started: None,
+        started_unread: None,
         recent_transcript: None,
     };
 
@@ -574,7 +756,7 @@ fn activity_shows_hibernation_time_and_reclaimed_bytes() {
         now,
         ReportOverrides::default(),
     );
-    let text = strip(|w| render_activity_section(w, &entry, None, None, false, now));
+    let text = strip(|w| render_activity_section(w, &entry, None, None, None, false, now));
     let json = serde_json::to_value(&entry).unwrap();
     assert_eq!(json["hibernation"]["reclaimed_bytes"], 2048);
     assert_eq!(json["hibernation"]["wake_error"], "permission denied");
@@ -764,4 +946,23 @@ fn tool_calls_render_total_then_top_three() {
     ]);
 
     assert_eq!(format_tool_calls(&calls), "36 · Bash 18, Edit 9, Read 7, …");
+}
+
+#[test]
+fn a_failed_started_read_leaves_no_section_and_warns_with_its_error() {
+    let read = std::io::Error::other("runs unreadable");
+    let (started, unread) = split_started::<std::io::Error>(Some(Err(read)));
+    assert!(started.is_none());
+    let mut err = Vec::new();
+    super::super::report::warn_started_unread(&mut err, "", &unread.expect("the read's error"))
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        "warning: what it started could not be read: runs unreadable\n"
+    );
+    let (started, unread) = split_started::<std::io::Error>(Some(Ok(Started::default())));
+    assert!(started.is_none() && unread.is_none());
+    let (started, unread) = split_started::<std::io::Error>(Some(Ok(all_groups())));
+    assert_eq!(started, Some(all_groups()));
+    assert!(unread.is_none());
 }

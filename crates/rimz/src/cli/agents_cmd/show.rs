@@ -3,10 +3,11 @@ use super::*;
 use super::list::agent_pr;
 use super::report::{
     AgentReportEntry, PrInfo, ReportOverrides, SelfIdentity, build_entry, child_for_agent,
-    row_for_agent, status_style,
+    render_started, row_for_agent, status_style,
 };
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent, print_run_line};
 use crate::cli::render;
+use rimz::harness::idle_stop::started::Started;
 
 #[derive(serde::Serialize, Default)]
 struct ShowReport {
@@ -30,6 +31,11 @@ struct ShowReport {
     system_messages_hidden: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     capture: Option<rimz::mux::PaneCapture>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started: Option<Started>,
+    /// Why the started read failed: an enrichment, so the card prints without it.
+    #[serde(skip)]
+    started_unread: Option<anyhow::Error>,
     #[serde(skip)]
     recent_transcript: Option<crate::cli::transcript::RenderedChat>,
 }
@@ -38,6 +44,18 @@ struct ShowReport {
 struct CaptureRequest {
     ansi: bool,
     mux: Option<rimz::ids::MuxName>,
+}
+
+/// The started section with rows, or why its read failed: an enrichment, so a failure leaves the
+/// card whole and only warns.
+fn split_started<E: std::error::Error + Send + Sync + 'static>(
+    read: Option<std::result::Result<Started, E>>,
+) -> (Option<Started>, Option<anyhow::Error>) {
+    match read {
+        Some(Ok(started)) => (Some(started).filter(|started| !started.is_empty()), None),
+        Some(Err(read)) => (None, Some(anyhow::Error::new(read))),
+        None => (None, None),
+    }
 }
 
 fn collect_show_report(
@@ -131,6 +149,24 @@ fn collect_show_report(
         snapshot.resume_outcomes.as_deref().unwrap_or_default(),
         now,
     );
+    let prefix = super::report::rimz_for(&workspace.project_root);
+    let started = agent.as_ref().map(|agent| {
+        let seat = rimz::harness::idle_stop::started::Seat {
+            root: &workspace.project_root,
+            reader: &reader,
+            you: super::report::is_me(store, snapshot, &reader, agent),
+            rimz: &prefix,
+        };
+        let mut started =
+            rimz::harness::idle_stop::started::started(store, snapshot, agent, &seat, now)?;
+        // An ended agent holds and closes nothing: only what outlives it prints.
+        if stale {
+            started.holding.clear();
+            started.closing.clear();
+        }
+        Ok::<_, rimz::store::StoreErr>(started)
+    });
+    let (started, started_unread) = split_started(started);
     let report_agent = agent.as_ref().map(|agent| {
         build_entry(
             &demotion,
@@ -179,6 +215,8 @@ fn collect_show_report(
             messages,
             system_messages_hidden,
             capture: pane_capture,
+            started,
+            started_unread,
             recent_transcript,
         },
         deferred_error,
@@ -219,6 +257,7 @@ fn render_show_sections(
     render_activity_section(
         w,
         agent,
+        report.started.as_ref(),
         report.ask.as_ref(),
         report.ask_next_step.as_deref(),
         report.stale,
@@ -234,6 +273,21 @@ fn render_show_sections(
             report.system_messages_hidden,
             &agent.id,
         )?;
+    }
+    if let Some(started) = report
+        .started
+        .as_ref()
+        .filter(|started| !started.is_empty())
+    {
+        section(w, "Started")?;
+        render_started(
+            w,
+            started,
+            SHOW_HEADINGS,
+            super::report::StartedPlace::Card,
+            now,
+        )?;
+        writeln!(w)?;
     }
     if let Some(view) = report.recent_transcript.as_ref() {
         section(w, "Recent transcript")?;
@@ -293,6 +347,9 @@ pub(super) fn show_agent(
             mux: ctx.mux(),
         }),
     )?;
+    if let Some(read) = &report.started_unread {
+        super::report::warn_started_unread(&mut render::err(), "", read)?;
+    }
     if json {
         // A miss is an error in either format: an empty report is not an answer.
         if report.agent.is_none() && report.run.is_none() {
@@ -363,6 +420,21 @@ struct ShowMessage {
     text: String,
 }
 
+/// The `Started` section's group headings: holding, closing, outliving.
+const SHOW_HEADINGS: [&str; 3] = ["would hold a stop", "close with it", "outlive it"];
+
+/// The `idle_stop` row's suffix naming the first thing holding the stop.
+fn held_by(started: &Started) -> String {
+    let Some(first) = started.holding.first() else {
+        return String::new();
+    };
+    let more = match started.holding.len() - 1 {
+        0 => String::new(),
+        more => format!(" and {more} more"),
+    };
+    format!(", held by {} {}{more}", first.kind.as_str(), first.name)
+}
+
 fn section(w: &mut impl Write, title: &str) -> std::io::Result<()> {
     writeln!(w, "{}", render::paint(render::palette::header(), title))
 }
@@ -420,6 +492,7 @@ fn render_agent_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io
 pub(super) fn render_activity_section(
     w: &mut impl Write,
     agent: &AgentReportEntry,
+    started: Option<&Started>,
     ask_view: Option<&crate::cli::transcript::AskView>,
     next_step: Option<&str>,
     stale: bool,
@@ -491,9 +564,10 @@ pub(super) fn render_activity_section(
             .as_deref()
             .map(|by| format!(" ({by})"))
             .unwrap_or_default();
+        let held = started.map(held_by).unwrap_or_default();
         kv.push(
             "idle_stop",
-            render::cell(format!("{}{requester}", pending.label(now))),
+            render::cell(format!("{}{held}{requester}", pending.label(now))),
         );
     }
     if let Some(hibernation) = &agent.hibernation {
