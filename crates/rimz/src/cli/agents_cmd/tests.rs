@@ -2697,8 +2697,16 @@ mod render {
         let idle = report(&idle);
 
         let mut active_out = anstream::StripStream::new(Vec::new());
-        super::show::render_activity_section(&mut active_out, &active, None, None, false, now)
-            .expect("render active activity");
+        super::show::render_activity_section(
+            &mut active_out,
+            &active,
+            None,
+            None,
+            None,
+            false,
+            now,
+        )
+        .expect("render active activity");
         let active_text = String::from_utf8(active_out.into_inner()).expect("utf8");
         assert!(
             active_text.contains("running (acting)")
@@ -2718,7 +2726,7 @@ mod render {
         );
 
         let mut idle_out = anstream::StripStream::new(Vec::new());
-        super::show::render_activity_section(&mut idle_out, &idle, None, None, false, now)
+        super::show::render_activity_section(&mut idle_out, &idle, None, None, None, false, now)
             .expect("render idle activity");
         let idle_text = String::from_utf8(idle_out.into_inner()).expect("utf8");
         assert!(idle_text.starts_with("idle ·"), "{idle_text}");
@@ -2751,8 +2759,16 @@ mod render {
         native_wait.context = Some(context);
         let native_wait = report(&native_wait);
         let mut native_out = anstream::StripStream::new(Vec::new());
-        super::show::render_activity_section(&mut native_out, &native_wait, None, None, false, now)
-            .expect("render native wait activity");
+        super::show::render_activity_section(
+            &mut native_out,
+            &native_wait,
+            None,
+            None,
+            None,
+            false,
+            now,
+        )
+        .expect("render native wait activity");
         let native_text = String::from_utf8(native_out.into_inner()).expect("utf8");
         assert!(native_text.contains("waiting"), "{native_text}");
         assert!(!native_text.contains("phase:"), "{native_text}");

@@ -1216,6 +1216,9 @@ pub(crate) struct Table {
     align: Vec<Align>,
     rows: Vec<Body>,
     indent: usize,
+    /// Section labels' indent, and whether a blank line comes before each.
+    section_indent: usize,
+    section_gap: bool,
     max_width: Option<usize>,
 }
 
@@ -1233,6 +1236,8 @@ impl Table {
             align,
             rows: Vec::new(),
             indent: 0,
+            section_indent: 0,
+            section_gap: true,
             max_width: None,
         }
     }
@@ -1256,6 +1261,13 @@ impl Table {
     /// Indent the header row and body rows by `n` spaces.
     pub(crate) fn indent(mut self, n: usize) -> Self {
         self.indent = n;
+        self
+    }
+
+    /// Indent section labels by `n` spaces, after a blank line only when `gap`.
+    pub(crate) fn sections(mut self, n: usize, gap: bool) -> Self {
+        self.section_indent = n;
+        self.section_gap = gap;
         self
     }
 
@@ -1358,7 +1370,10 @@ impl Table {
     }
 
     fn write_section(&self, w: &mut impl Write, cells: &[Cell]) -> std::io::Result<()> {
-        writeln!(w)?;
+        if self.section_gap {
+            writeln!(w)?;
+        }
+        write!(w, "{:width$}", "", width = self.section_indent)?;
         for (idx, cell) in cells.iter().enumerate() {
             if idx > 0 {
                 write!(w, " ")?;

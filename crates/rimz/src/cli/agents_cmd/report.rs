@@ -581,6 +581,117 @@ pub(super) fn child_for_agent<'a>(
     rimz::address::selector::child_card(snapshot, agent)
 }
 
+/// Where a started list prints, which places its group names and rows.
+#[derive(Clone, Copy)]
+pub(super) enum StartedPlace {
+    /// Under `show`'s Started heading: names indented 2, rows 4, no blank lines.
+    Card,
+    /// Under a receipt's line: a blank line before each name at column 0, rows indented 2.
+    Receipt,
+}
+
+/// What an agent started, one headed table per group that has rows (`headings` names the
+/// holding, closing, and outliving groups), as `agents show` and the `--when-idle` receipt print it.
+pub(super) fn render_started(
+    w: &mut impl std::io::Write,
+    started: &rimz::harness::idle_stop::started::Started,
+    headings: [&str; 3],
+    place: StartedPlace,
+    now: jiff::Timestamp,
+) -> std::io::Result<()> {
+    let (names, gap) = match place {
+        StartedPlace::Card => (2, false),
+        StartedPlace::Receipt => (0, true),
+    };
+    // One table, so the columns line up from group to group.
+    let mut table = render::Table::new(["kind", "name", "state", "facts", "command"])
+        .without_headers()
+        .indent(names + 2)
+        .sections(names, gap);
+    let groups = [&started.holding, &started.closing, &started.outliving];
+    for (heading, rows) in headings.into_iter().zip(groups) {
+        if rows.is_empty() {
+            continue;
+        }
+        table.section_cells(vec![render::cell(heading).fg(render::palette::muted())]);
+        for row in rows {
+            table.row(started_cells(row, now));
+        }
+    }
+    table.render(w)
+}
+
+/// Whether `agent` is the caller as `@me` resolves it: the same launch, whichever session holds
+/// it now.
+pub(super) fn is_me(
+    store: &rimz::Store,
+    snapshot: &SidebarSnapshot,
+    reader: &rimz::address::AddressContext,
+    agent: &AgentState,
+) -> bool {
+    crate::cli::resolve_agent_one(store, snapshot, "@me", None, reader)
+        .is_ok_and(|me| me.launch_key() == agent.launch_key())
+}
+
+/// What a command printed for the room at `root` starts with: `rimz`, with `--root` when the
+/// reader's own commands resolve another room, by the resolver they run.
+pub(super) fn rimz_for(root: &std::path::Path) -> String {
+    let home = rimz::workspace::WorkspaceResolver::resolve_participant(".", None)
+        .is_ok_and(|own| own.project_root == root);
+    crate::cli::workflow_view::resolve::rimz_prefix((!home).then_some(root))
+}
+
+/// The warning a failed started read leaves on stderr, after `lead`; what it would have joined
+/// prints without it.
+pub(super) fn warn_started_unread(
+    err: &mut impl std::io::Write,
+    lead: &str,
+    read: &anyhow::Error,
+) -> std::io::Result<()> {
+    writeln!(
+        err,
+        "warning: {lead}what it started could not be read: {read:#}"
+    )
+}
+
+/// An agent's name in its provider's identity and a team's as `teams list` paints it; any
+/// other name in the default foreground.
+fn started_name(row: &rimz::harness::idle_stop::started::StartedRow) -> render::Cell {
+    let name = render::cell(row.name.as_str());
+    match (&row.provider, row.kind) {
+        (Some(provider), _) => name.fg(render::palette::identity(provider.as_str())),
+        (None, rimz::harness::idle_stop::started::RowKind::Team) => {
+            name.fg(render::palette::accent())
+        }
+        (None, _) => name,
+    }
+}
+
+fn started_cells(
+    row: &rimz::harness::idle_stop::started::StartedRow,
+    now: jiff::Timestamp,
+) -> Vec<render::Cell> {
+    let facts: Vec<String> = row
+        .since
+        .map(|since| render::rel_age(since, now))
+        .into_iter()
+        .chain(row.due.map(|due| render::rel_until(due, now)))
+        .chain(row.detail.iter().cloned())
+        .collect();
+    let mut cells = vec![
+        render::cell(row.kind.as_str()).fg(render::palette::meta()),
+        started_name(row),
+        render::cell(row.status.as_str()).fg(render::status::agent(row.tone, row.phase)),
+        render::cell(facts.join(" · ")).fg(render::palette::faint()),
+    ];
+    cells.extend(
+        row.command
+            .as_deref()
+            .map(|command| render::cell(command).fg(render::palette::faint())),
+    );
+    cells
+}
+
 pub(super) fn status_style(entry: &AgentReportEntry) -> anstyle::Style {
     render::status::agent(entry.status, entry.phase)
 }
