@@ -34,10 +34,7 @@ Local contract for `crates/rimz/src/mux/`, the Zellij/tmux seam. Extends [crates
 - `mux` never imports `sidebar`. The wire every renderer listens on is the leaf [`wakeup/`](../wakeup/mod.rs) module below `store`; every sender reaches down to it, and none reaches another module through it.
 - The path, schema, and freshness rules of every runtime file the multiplexer writes or dispatches on stay here, even where the writer sits elsewhere: another module publishes through the owning file's helpers and never spells the path.
 - A bound lives with the module whose behaviour it defines: command deadlines beside their commands, the presence-stamp freshness both backends share in [`mod.rs`](./mod.rs), and only the sidebar's own cadences in `sidebar::timing`.
-- A caller that needs both backends' live sessions borrows `selection::LiveSessions`, the one batch snapshot, and does not list them again.
 
 ## Tests
-
-Planner, width, and selection logic stay unit-level, with no mux required. Live-backend behaviour belongs in [`tests/integration/backend/`](../../tests/integration/backend/), which self-skips when the mux binary is absent.
 
 A change to the tmux commands RimZ issues also runs the `backend::tmux::` live tests three times: under the local tmux, under CI's `TMUX_VERSION` from `ci/Dockerfile`, and under the 3.5 floor, each first on `PATH`. Layout behaviour differs across versions, and CI builds only its own.
