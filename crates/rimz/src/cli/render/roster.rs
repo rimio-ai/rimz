@@ -20,6 +20,9 @@ pub(crate) struct RosterSignal {
     pub role: String,
 }
 
+/// Agent roster rows. Each handle pads to the longest handle plus one before the two-space
+/// separator, so a handle one character shorter than the longest carries four spaces, not
+/// three.
 pub(crate) struct Roster {
     rows: Vec<RosterRow>,
     signals: Vec<RosterSignal>,

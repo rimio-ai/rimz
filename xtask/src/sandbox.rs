@@ -704,7 +704,9 @@ fn reap_sandbox_processes(_root: &Path) {
 /// an instant earlier, before its exec published the environment, may be missing; a caller
 /// that spawns and then reaps waits until the child is listed before starting the reap. An
 /// exited process left as a zombie reads empty too, which is what lets `reap_sandbox_processes`
-/// end its rescans once every signalled process has exited.
+/// end its rescans once every signalled process has exited. The other reaper,
+/// `rimz::testkit::sandbox::sandbox_processes`, finds processes by the same `/proc/<pid>/environ`
+/// match, so a race fix here checks that one's tests for the same read.
 #[cfg(target_os = "linux")]
 fn sandbox_processes(root: &Path) -> Vec<u32> {
     let Ok(entries) = std::fs::read_dir("/proc") else {

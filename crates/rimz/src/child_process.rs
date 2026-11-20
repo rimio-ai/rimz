@@ -2,6 +2,8 @@
 //! fire-and-forget children to the global reaper and supervise foreground
 //! children with event-driven exit and signal waits. A child that outlives an
 //! agent's call gets the user's temp environment back, not the agent's unit.
+//! A change that moves a child onto another spawn path keeps every `Command`
+//! setting the old path made: session, process group, stdin, and environment.
 
 use std::ffi::OsStr;
 use std::io;
@@ -471,6 +473,9 @@ pub(crate) fn anchor_detached_command<'a>(
 }
 
 /// Render one typed hidden-agent-helper request as a single JSON argv value.
+/// Tests invoke a hidden helper through this function, often with the verb on
+/// its own line, so a grep for `"agents", "<verb>"` misses them; find a helper's
+/// test callers with `rg -l -U 'agent_helper_argv\(\s*"<verb>"' crates/rimz/tests`.
 pub fn agent_helper_argv<T: Serialize>(verb: &str, request: &T) -> Vec<String> {
     // These internal request types contain only scalar values and cannot fail
     // JSON serialization.

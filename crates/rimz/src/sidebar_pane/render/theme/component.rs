@@ -25,7 +25,9 @@ use super::Palette;
 use super::tone_color;
 
 /// A specific UI use of color. Resolves through [`Component::resolve`] to a
-/// semantic tone; never to a raw terminal color.
+/// semantic tone; never to a raw terminal color. A new variant also names the
+/// element it paints in the Color slots table of `docs/guide/theme.md`, on the
+/// row of the slot `resolve` maps it to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Component {
     /// `◎` sessions glyph — the cockpit summary and the W/M store rows.

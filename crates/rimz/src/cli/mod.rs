@@ -333,10 +333,15 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
     }
 }
 
+/// Refuse a retired top-level command before clap parses, with the hint that replaced it.
 fn reject_removed_top_level_tokens() -> Result<()> {
     reject_removed_top_level_tokens_from(std::env::args_os().skip(1))
 }
 
+/// Refuse a retired top-level command (`autoping`, `run`, `event`, `feed`, `channel`)
+/// before clap parses, with the hint that replaced it. A name listed here never reaches a
+/// handler, so a new command that reuses one must remove its arm, which drops the hint users
+/// of the old command were given.
 fn reject_removed_top_level_tokens_from<I>(args: I) -> Result<()>
 where
     I: IntoIterator<Item = OsString>,

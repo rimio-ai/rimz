@@ -1112,6 +1112,10 @@ impl Views {
         self.panes.insert(pane.clone(), view);
     }
 
+    /// A change to this routing or to `reconcile_routes` rules on, and tests, each
+    /// retained view a pane can land on against a live client's current view: an
+    /// anonymous view, a view another pane holds, a departed client's own view, and
+    /// the copy `fork` makes of a departed or held view.
     fn route(&mut self, pane: &PaneId, now: Instant) -> ViewId {
         if let Some(retention) = self.retention {
             self.expire(now, retention);

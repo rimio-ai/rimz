@@ -106,6 +106,9 @@ impl SpendWindow {
         self.sessions += other.sessions;
     }
 
+    /// The token total `rimz stats` prints: `tokens` (the sidebar's `◇`, input
+    /// with cache-write plus output) plus cache-read (`◌`). The two surfaces print
+    /// different totals for one window, so a doc quoting one names its surface.
     pub fn display_tokens(&self) -> u64 {
         self.tokens.saturating_add(self.cache_read)
     }

@@ -1,4 +1,9 @@
 //! Team lifecycle reactions and stage transitions: subscription retirement and arming, lifecycle signals, locked board edits, owner delivery, and hand-off compaction; the typed `StageSignal` payload and `stage_flips`, the read side `rimz transcript` renders.
+//!
+//! A change to a stage flip or to what it queues also runs the live test
+//! `backend::tmux::team_stage::flip_and_registration_rewake_reach_receiver_after_done`
+//! (`tests/integration/backend/tmux/team_stage.rs`), which `gate` does not run: it runs
+//! under the nextest `live` profile.
 
 use std::path::{Path, PathBuf};
 

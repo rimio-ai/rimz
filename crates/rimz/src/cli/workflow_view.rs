@@ -296,6 +296,9 @@ pub(super) fn park(
     })
 }
 
+/// The one-line state of a live run, empty once terminal. It is also the `detail` string
+/// of `workflow list --json` and `workflow_runs[].detail` in `loop list --json` and
+/// `loop show --json`, so a change to its words or clocks changes those fields too.
 pub(super) fn detail(
     record: &RunRecord,
     spec: Option<&Definition>,

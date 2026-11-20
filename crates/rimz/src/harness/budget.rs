@@ -970,6 +970,10 @@ fn daily_scope_park(
 
 /// Producer-side enforcement. Ledger files are cache-class durability; pane
 /// interruption and run-store writes stay in the hidden CLI helper.
+/// The account ledger is machine-shared, so the first room to evaluate rewrites
+/// the park every room projects: a change to when a park fires or clears is
+/// tested with two rooms on one ledger, one room's enforce running between the
+/// other room's passes.
 pub(crate) fn enforce(
     mut deferred: impl FnMut(&AgentState) -> bool,
     snapshot: &SidebarSnapshot,

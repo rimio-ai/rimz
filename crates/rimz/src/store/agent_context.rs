@@ -76,7 +76,10 @@ pub fn write(
 
 /// Attach provider rest certificates to raw-active root sessions before a
 /// caller makes an ownership or reaping decision. Missing sidecars leave the
-/// durable lifecycle status authoritative.
+/// durable lifecycle status authoritative. A test of a caller stages two live
+/// holders of one launch, rests the one the bare rows would pick with
+/// [`write()`], and names the expected row outright: an expectation computed by
+/// `launch_row` over the same rows passes either way.
 pub fn attach_rest_certificates<'a>(
     runtime: &RuntimePaths,
     agents: impl IntoIterator<Item = &'a mut AgentState>,

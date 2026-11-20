@@ -206,6 +206,9 @@ pub(crate) fn dollars_estimate(usd: f64) -> Option<String> {
     })
 }
 
+/// A budget cap for the cockpit and provider headline: whole dollars print without cents
+/// (`$50`), others with two decimals. `BudgetPark::label` prints through
+/// `BudgetWindow::fmt_spend` instead, which always shows two decimals (`$50.00`).
 pub(crate) fn dollars_cap(usd: f64) -> String {
     let cents = (usd.max(0.0) * 100.0).round() as u64;
     if cents.is_multiple_of(100) {

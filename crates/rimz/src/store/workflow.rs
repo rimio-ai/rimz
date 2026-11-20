@@ -15,6 +15,9 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The run record's own shape version, raised when a binary on either side of a change would
 /// misread the other's record; `load` refuses a record of any other version before decoding it.
 /// A change to what a definition means raises nothing: every run reads its definition as it is.
+/// Raising it strands every unfinished run on disk: `live_runs` and `unfinished_under` skip a
+/// home of another version, and a new reader that walks run homes skips or ends one too rather
+/// than failing on it.
 pub const VERSION: u32 = 18;
 
 #[derive(Debug, thiserror::Error)]
@@ -269,6 +272,10 @@ pub struct LiveAttempt {
     pub lifecycle: StepLifecycle,
     pub seq: u64,
     pub node: String,
+    /// The visit this attempt counts: `engine::prepare` sets it for a step's attempt, and a
+    /// check attempt carries none. `fit::misfit` reads a script attempt with a visit as a
+    /// command step, so a fixture that copies a step's attempt into a check without clearing it
+    /// ends the run as a misfit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visit: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -837,6 +844,11 @@ pub struct RunRecord {
     pub park: Option<Park>,
     pub node: String,
     pub entered_at: Timestamp,
+    /// The object the current node was entered with. An engine route out of a step replaces
+    /// it, with the run's key: a failure with `{outcome: "failed", cause, node, reason, detail}`,
+    /// an asked turn with `{outcome: "asked", reason, asked}`, and an errored turn with
+    /// `{outcome: "errored", reason, errored}`. A rule that derives state from it at a step
+    /// states what it reads when such a route re-enters the step, and a test drives that route.
     pub input: Option<Value>,
     pub key: Option<Key>,
     pub recheck_at: Option<Timestamp>,

@@ -1206,10 +1206,12 @@ const CARD_DETAIL_MAX_LINES: usize = 3;
 
 /// A borderless table whose columns auto-fit their widest cell. Headers render
 /// in the [`palette::header()`] tone; every body cell keeps its own style. Cells
-/// are joined with a two-space gap and the trailing column is never padded, so
-/// lines carry no trailing whitespace. [`Table::section`] groups rows under a
-/// spanning label while every row shares one width computation, so groups stay
-/// column-aligned.
+/// are joined with a two-space gap, and a left-aligned trailing column is never
+/// padded, while a right-aligned one ([`Table::right`]) is. Each width counts the
+/// header; a section prints a blank line before its label, consecutive cards are
+/// separated by a blank line, and card detail indents two past the table.
+/// [`Table::section`] groups rows under a spanning label while every row shares
+/// one width computation, so groups stay column-aligned.
 pub(crate) struct Table {
     headers: Vec<String>,
     show_headers: bool,
@@ -1525,7 +1527,8 @@ pub(crate) fn clip_to_width(text: &str, max_width: usize) -> String {
 
 /// A block of aligned `key: value` lines. Keys render in [`palette::muted()`]; the
 /// value column aligns to the widest key, and each value keeps its own style.
-/// Reports that nest pairs under a heading set an [`KeyVals::indent`].
+/// Reports that nest pairs under a heading set an [`KeyVals::indent`]. The value
+/// column starts at `indent + longest key + 2` (the colon and one space).
 pub(crate) struct KeyVals {
     rows: Vec<(String, Vec<Vec<Cell>>)>,
     indent: usize,

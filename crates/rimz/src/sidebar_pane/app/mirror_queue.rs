@@ -1,4 +1,9 @@
 //! Ranked hidden paints share four slots and one host-wide input pause.
+//!
+//! A change here also runs the live test
+//! `backend::tmux::sidebar::hidden_sidebar_mirrors_a_new_card_before_native_switch` and its twin
+//! `backend::zellij::shared_view::hidden_sidebar_mirrors_a_new_card_before_native_switch`:
+//! `gate` does not run them, the `live` nextest profile does.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};

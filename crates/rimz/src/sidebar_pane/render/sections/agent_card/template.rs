@@ -18,6 +18,10 @@ pub(super) enum CardStage {
 }
 
 impl CardStage {
+    /// An idle, never-prompted row with no session history or context is `Fresh`,
+    /// and a Fresh card draws only its identity and description slots, never a
+    /// subagents line, so a fixture that draws a parent's subagent or wait entries
+    /// gives the parent a prompt.
     pub(super) fn of(row: &SidebarRow) -> Self {
         let Some(agent) = row.as_agent() else {
             return Self::Engaged;

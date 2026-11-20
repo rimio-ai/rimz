@@ -80,6 +80,10 @@ impl Tally {
         self.section = section;
     }
 
+    /// Record a finding: `text` names the problem, at most with its consequence, in the
+    /// short phrase the row's cells show, and `fix` carries the remedy, which only the
+    /// closing block prints. Keep the remedy out of the row's cells, so the table stays
+    /// narrow and each fix is stated once.
     fn record(&mut self, severity: Severity, text: impl Into<String>, fix: impl Into<String>) {
         let text = text.into();
         self.record_subject(severity, text.clone(), fix, text);

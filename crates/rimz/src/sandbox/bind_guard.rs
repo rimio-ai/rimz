@@ -1,4 +1,9 @@
 //! Live repair of protected read-only binds that a host replacement detached from a running view.
+//!
+//! The guard thread counts against a scoped parked wrapper's memory budget, which only the live
+//! `backend::tmux::agent_lifecycle::scoped_parked_wrapper_holds_host_budget_plus_bind_guard`
+//! test measures. It self-skips where bubblewrap is unusable, CI included, so a change here runs
+//! it locally under `cargo xtask test -P live`.
 
 use std::io;
 use std::path::{Path, PathBuf};
