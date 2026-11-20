@@ -1008,7 +1008,7 @@ A profile's `mcps:` list narrows it: `mcps: [rimz-lsp, github]` keeps only the l
 rimz-mcp-server = false
 ```
 
-This key is machine-only: project config cannot override it. With it off, a profile's `mcps:` list still filters your own servers. `rimz agents explain claude --mcps` shows the servers, tools, and load modes a launch gets without starting an agent.
+This key is machine-only: project config cannot override it. With it off, a profile's `mcps:` list still filters your own servers. `rimz agents explain claude --mcps` shows the servers, tools, and load modes a launch gets without starting an agent, then the full text of RimZ's tools as the agent reads it.
 
 #### Subagent launches
 
