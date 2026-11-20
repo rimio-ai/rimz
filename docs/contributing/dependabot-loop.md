@@ -84,4 +84,4 @@ Use the actual batch numbers in the team address. Team members start asynchronou
 
 - [Loops](../guide/loops.md) — scheduling, timekeeping, and command run history.
 - [Worktrees](../guide/worktrees.md) — creation, base selection, and cleanup.
-- [Rust conventions](./rust-conventions.md) — verification gates and contributor automation.
+- [Gates and test profiles](./gates.md): verification gates and contributor automation.

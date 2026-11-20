@@ -1,6 +1,6 @@
 # Integration suite
 
-Local contract for `crates/rimz/tests/integration/`, the crate's single integration-test binary. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). Test tiers and runner rules live in [rust-conventions.md](../../../../docs/contributing/rust-conventions.md#tests).
+Local contract for `crates/rimz/tests/integration/`, the crate's single integration-test binary. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). The shape of each test tier is in [rust-conventions.md](../../../../docs/contributing/rust-conventions.md#tests), the profiles and the test environment are in [gates.md](../../../../docs/contributing/gates.md#test-profiles), and the runner's flags and reports in [running-gates.md](../../../../docs/contributing/running-gates.md#the-test-runner).
 
 ## Harness
 
@@ -28,7 +28,7 @@ Local contract for `crates/rimz/tests/integration/`, the crate's single integrat
 
 ## Before a test
 
-Before writing or debugging one of these, read the section of [integration-tests.md](../../../../docs/contributing/integration-tests.md) named beside it. Each holds fixture and stand-in behaviour the code does not show, and a test written without it passes for the wrong reason or flakes under load.
+Before writing or debugging one of these, read the section named beside it, in [integration-tests.md](../../../../docs/contributing/integration-tests.md) or, for a flake, in [flakes.md](../../../../docs/contributing/flakes.md). Each holds fixture and stand-in behaviour the code does not show, and a test written without it passes for the wrong reason or flakes under load.
 
 - A fixture struct taken apart, a port handed to a child, a child's stdin, the reaper's marker read straight after `spawn`, an id-only command on a fresh `Env`, files ordered by mtime, the browser suite, or an `examples/` fake host: [Fixtures and their processes](../../../../docs/contributing/integration-tests.md#fixtures-and-their-processes).
 - A variable the scrub removes or sets, a new reader of host state, or proof that a run leaves provider accounts alone: [The session-env scrub](../../../../docs/contributing/integration-tests.md#the-session-env-scrub).
@@ -42,7 +42,7 @@ Before writing or debugging one of these, read the section of [integration-tests
 - A second build, `RIMZ_BIN`, or a wrapper around `rimz`: [Builds and wrapped binaries](../../../../docs/contributing/integration-tests.md#builds-and-wrapped-binaries).
 - A `RIMZ_TEST_*` duration override: [Duration overrides](../../../../docs/contributing/integration-tests.md#duration-overrides).
 - A `backend::` or `journey::` test, or a shared live fixture helper: [Live backend and journey tests](../../../../docs/contributing/integration-tests.md#live-backend-and-journey-tests).
-- A `cargo xtask stress` batch the user allowed: [Stress batches](../../../../docs/contributing/integration-tests.md#stress-batches).
-- A race to prove, or a hold or probe to place in its window: [Forcing a race](../../../../docs/contributing/integration-tests.md#forcing-a-race).
-- A CI-only failure or a nextest `FLAKY` result: [Reading CI evidence](../../../../docs/contributing/integration-tests.md#reading-ci-evidence).
-- A slow or idle command, or a rebirth that resumed no agent: [Tracing a slow or idle command](../../../../docs/contributing/integration-tests.md#tracing-a-slow-or-idle-command).
+- A `cargo xtask stress` batch the user allowed: [Stress batches](../../../../docs/contributing/flakes.md#stress-batches).
+- A race to prove, or a hold or probe to place in its window: [Forcing a race](../../../../docs/contributing/flakes.md#forcing-a-race).
+- A CI-only failure or a nextest `FLAKY` result: [Reading CI evidence](../../../../docs/contributing/flakes.md#reading-ci-evidence).
+- A slow or idle command, or a rebirth that resumed no agent: [Tracing a slow or idle command](../../../../docs/contributing/flakes.md#tracing-a-slow-or-idle-command).

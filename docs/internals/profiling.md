@@ -114,7 +114,7 @@ profiling_binary="$(cargo metadata --format-version 1 --no-deps | jq -r .target_
 "$profiling_binary" --version
 ```
 
-`profile-build` prints the artifact's path. It sits under the Cargo target directory, which `CARGO_TARGET_DIR` may move out of the checkout, so resolve it through `cargo metadata` rather than `target/`. The profile inherits `release` and adds `debug = "line-tables-only"` and `strip = "none"`. xtask adds frame pointers and v0 symbol mangling through `RUSTFLAGS` (`xtask/src/build.rs::PROFILING_RUSTFLAGS`). `cargo xtask install-dev` installs the same profile, with the `sentry` feature, to `~/.cargo/bin`, so a dogfooding binary is directly profilable ([rust-conventions.md](../contributing/rust-conventions.md)).
+`profile-build` prints the artifact's path. It sits under the Cargo target directory, which `CARGO_TARGET_DIR` may move out of the checkout, so resolve it through `cargo metadata` rather than `target/`. The profile inherits `release` and adds `debug = "line-tables-only"` and `strip = "none"`. xtask adds frame pointers and v0 symbol mangling through `RUSTFLAGS` (`xtask/src/build.rs::PROFILING_RUSTFLAGS`). `cargo xtask install-dev` installs the same profile, with the `sentry` feature, to `~/.cargo/bin`, so a dogfooding binary is directly profilable ([contributor installs](../contributing/build-and-ci.md#contributor-installs)).
 
 ### Heap-profiling build
 

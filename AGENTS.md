@@ -51,7 +51,7 @@ These hold for a change anywhere in the tree, and no gate catches a skipped one.
 
 ## Testing
 
-[rust-conventions.md](./docs/contributing/rust-conventions.md#quality-gates) defines the gate stack and the test tiers, and [running-gates.md](./docs/contributing/running-gates.md) has one section per trap of the runner.
+[gates.md](./docs/contributing/gates.md) defines the gate stack and the test profiles, and [running-gates.md](./docs/contributing/running-gates.md) has one section per trap of the runner.
 
 - While iterating, run `cargo fmt --all`, then `cargo xtask check`, then `cargo xtask lint`, and `cargo xtask doc` when you touched rustdoc.
 - Run `cargo xtask gate` before a PR or hand-off. On a cold or loaded tree its 15-minute budget trips, so run it there as `RIMZ_XTASK_TIMEOUT=30m cargo xtask gate`. Escalate past it (journey, live, perf, externals, full CI) when the change touches those surfaces, their fixtures, or shared infrastructure.
@@ -59,7 +59,7 @@ These hold for a change anywhere in the tree, and no gate catches a skipped one.
 - From a room shell, run tests only through `cargo xtask test` or `cargo xtask stress`, never a bare `cargo test`, `cargo nextest run`, or a test binary: those resolve the shell's `RIMZ_HOME`/`HOME`/`XDG_*`.
 - Run no stress batch, mass repeat, or parallel copies of a test unless the user asks or allows it: the host is shared.
 - `cargo xtask invariants` greps tracked text, Rust and Markdown alike, each `AGENTS.md` included: describe a boundary in prose and leave the banned path unwritten. It does not see an untracked file, so stage new files with `git add -N` first.
-- Read the matching section of [running-gates.md](./docs/contributing/running-gates.md) before you [rebase](./docs/contributing/running-gates.md#rebasing), start a gate or test run [in the background](./docs/contributing/running-gates.md#background-runs) or from a Codex shell, name one test or pick its profile, add a `pub` item or a cross-module call, touch platform-gated code, read a [flake](./docs/contributing/running-gates.md#live-tests-and-flakes), or compare timings. Read [probes.md](./docs/contributing/probes.md) before you build a mux, git, sshd, or provider probe by hand, isolate a home, or run a branch binary against real state.
+- Read the matching section of [running-gates.md](./docs/contributing/running-gates.md) before you [rebase](./docs/contributing/running-gates.md#rebasing), start a gate or test run [in the background](./docs/contributing/running-gates.md#background-runs) or from a Codex shell, name one test or pick its profile, add a `pub` item or a cross-module call, touch platform-gated code, or compare timings. Read [flakes.md](./docs/contributing/flakes.md) before you run the live tier, report a failure you leave unfixed, or debug a flake. Read [probes.md](./docs/contributing/probes.md) before you build a mux, git, sshd, or provider probe by hand, isolate a home, or run a branch binary against real state.
 - Capture planned behaviour in the owning doc and add the executable test when the implementation can make it pass. An ignored test standing in for a future product target does not land.
 - A change that deletes a test lists the inputs it covered and carries each into a surviving test, or names the dropped input in the hand-off.
 

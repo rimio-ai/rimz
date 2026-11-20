@@ -504,7 +504,7 @@ A new `LoopRunResult` variant is a durable format change: its `snake_case` name 
 - `LoopRunRecord::polarity` (good or failure, which the history fold and `loop show`'s verdict read, and which ends the quiet streak) and `LoopRunResult::spawn_exit_code` end in a wildcard arm, so a variant left out compiles as `None` without a decision. Polarity and strikes are separate decisions: `replaced` has failure polarity (the display marks it failed) but is strike-neutral.
 - `cli/teams/show.rs` (the subscription cell), `crates/rimz/src/cli/loop_cmd/render.rs::run_status` (the label beside a watch verdict), and three functions in `cli/loop_cmd/run_report.rs` that decide what a manual `loop run` or `loop fire` prints (`manual_early_verdict`, `is_spawn_failure`, `success_result_label`) also end in wildcard arms.
 - The [three judgements](#strikes) above: a result that says nothing about the task is `Neutral`.
-- `strikes::tests` and `run_log::tests` pin the classification and the label of the existing variants. They do not fail on a new variant, so add its cases. Run them with `cargo xtask test -E 'test(/schedule::(strikes|run_log)::tests/)'` ([rust-conventions.md](../../contributing/rust-conventions.md) owns the gates).
+- `strikes::tests` and `run_log::tests` pin the classification and the label of the existing variants. They do not fail on a new variant, so add its cases. Run them with `cargo xtask test -E 'test(/schedule::(strikes|run_log)::tests/)'` ([gates.md](../../contributing/gates.md) owns the gates).
 
 ### Run reports and quiet runs
 

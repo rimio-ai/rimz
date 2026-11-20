@@ -167,7 +167,7 @@ cargo xtask install
 
 `cargo xtask install` builds the Zellij presence plugin as a WebAssembly artifact, embeds it, builds `rimz`, copies the binary into `~/.cargo/bin`, and prints the installed version and path. [rust-toolchain.toml](../../rust-toolchain.toml) pins the channel, components, and the `wasm32-wasip1` target, and `rustup` applies it on the first build, so no target setup is needed by hand.
 
-To share one build with every user on the machine, `cargo xtask install-system` publishes it to `/usr/local/bin/rimz` instead; run it without a `sudo` prefix, since it builds as you and uses sudo only for that last step, and remove that copy with `sudo rm /usr/local/bin/rimz`. The contributor build profiles, the gate stack, and the rest of the task surface are in [the Rust conventions](../contributing/rust-conventions.md).
+To share one build with every user on the machine, `cargo xtask install-system` publishes it to `/usr/local/bin/rimz` instead; run it without a `sudo` prefix, since it builds as you and uses sudo only for that last step, and remove that copy with `sudo rm /usr/local/bin/rimz`. The contributor builds are in [Build, CI, and release](../contributing/build-and-ci.md#contributor-installs), and the gate stack and the rest of the task surface in [Gates and test profiles](../contributing/gates.md).
 
 ### Onto a server you SSH into
 
