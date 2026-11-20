@@ -305,13 +305,13 @@ fn start_runs(at: &Attempt<'_>, machine: &MachineConfig) -> Result<Start> {
                 )));
             }
         };
-        announce(at.state, record, &created.marker);
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RUNS_GATE");
         if let Some(go_on) = at.recheck(None)? {
             discard(record, &created.marker, machine);
             return Ok(Start::Left(go_on));
         }
+        announce(at.state, record, &created.marker);
         // `create` publishes under a commit lock of its own, so a cancel or a bound can still
         // land between the recheck above and the publish: the run then starts after the step
         // left the attempt, and its report finds no attempt to join.
