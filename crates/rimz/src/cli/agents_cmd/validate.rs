@@ -399,6 +399,8 @@ fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfi
     loaded
         .rows
         .iter()
+        // Seat rows are skipped; their definition's row warns for what the definition carries.
+        .filter(|row| row.namespace != "team")
         .filter(|row| {
             let profiles = if row.namespace == "subagents" {
                 &loaded.subagent_profiles
@@ -408,6 +410,10 @@ fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfi
             let Some(profile) = profiles.0.get(&row.name) else {
                 return false;
             };
+            // A kind base has a row in each table; its agents row warns once.
+            if profile.kind_base && row.namespace == "subagents" {
+                return false;
+            }
             let lsp_tool = machine.agents.rimz_mcp_server
                 && rimz::agents::find_definition(&row.kind)
                     .is_some_and(|definition| definition.takes_mcp_servers())
@@ -416,13 +422,11 @@ fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfi
             let lsp_skill =
                 !rimz::agents::skills_lack_skill_tool(&row.kind, profile.tools.as_ref())
                     && rimz::config::skill_is_callable(profile.skills.as_deref(), "rimz-lsp");
-            if !lsp_tool && !lsp_skill {
-                return false;
-            }
-            loaded
-                .tools
-                .get(&row.name)
-                .is_some_and(|tools| tools.iter().any(|tool| tool == "LSP"))
+            (lsp_tool || lsp_skill)
+                && profile
+                    .tools
+                    .as_ref()
+                    .is_some_and(|tools| tools.bases().iter().any(|tool| tool == "LSP"))
         })
         .map(|row| Warning {
             path: row.source.clone(),

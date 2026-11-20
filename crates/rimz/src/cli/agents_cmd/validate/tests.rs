@@ -500,6 +500,35 @@ fn shared_lsp_warning_requires_machine_servers_and_named_tool() {
             "profile skillless"
         ]
     );
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Base\ntools: [Bash, LSP, Skill]\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/heir.md"),
+        "---\ndescription: Test\nagent: claude\n---\n",
+    )
+    .unwrap();
+    let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let mut names: Vec<_> = lsp_warnings(&loaded, &toml::from_str(servers).unwrap())
+        .into_iter()
+        .map(|warning| warning.message.split(':').next().unwrap().to_owned())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "profile child",
+            "profile claude",
+            "profile empty",
+            "profile heir",
+            "profile native",
+            "profile navigator",
+            "profile skillless"
+        ]
+    );
 }
 
 #[test]
@@ -545,7 +574,13 @@ fn validation_keeps_good_rows_and_collects_definition_errors() {
     std::fs::write(root.path().join("agents/bad.md"), "no frontmatter").unwrap();
     let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
     assert!(loaded.rows.iter().any(|row| row.name == "good"));
-    assert_eq!(loaded.tools["good"], ["Read", "LSP"]);
+    assert_eq!(
+        loaded.agent_profiles.0["good"]
+            .tools
+            .as_ref()
+            .map(rimz::agents::ToolSet::bases),
+        Some(["Read".to_owned(), "LSP".to_owned()].as_slice())
+    );
     assert!(
         loaded
             .errors

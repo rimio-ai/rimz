@@ -4040,3 +4040,44 @@ fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
         (Some(true), Some("medium"))
     );
 }
+
+#[test]
+fn markdown_kind_base_fields_reach_bare_kind_launches() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join("agents")).unwrap();
+    std::fs::write(
+        home.path().join("agents/claude.md"),
+        "---\ndescription: Base\ntools: [Bash, Skill]\nallowed-tools: [Read]\nskills: [work]\n\
+         mcps: [github]\n---\nBase.",
+    )
+    .unwrap();
+    let loaded = crate::config::definitions::load(
+        home.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &no_commands(),
+        &home.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    for word in ["claude", "claude-yolo", "claude-fast"] {
+        let cell = agent_cell(word, &loaded.agent_profiles, &no_commands());
+        assert_eq!(
+            (
+                cell.skills
+                    .iter()
+                    .flatten()
+                    .map(crate::config::SkillName::as_str)
+                    .collect::<Vec<_>>(),
+                cell.mcps
+                    .iter()
+                    .flatten()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                cell.allowed_tools.as_ref().map(Vec::len),
+            ),
+            (vec!["work"], vec!["github".to_owned()], Some(1)),
+            "{word}"
+        );
+    }
+}

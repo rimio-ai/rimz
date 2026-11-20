@@ -51,20 +51,22 @@ pub(super) struct AgentFrontmatter {
     pub mcps: Option<Vec<String>>,
 }
 
+/// Fills each listed field `$to` leaves unset from `$from`.
+macro_rules! fill {
+    ($to:ident, $from:ident; $($field:ident),* $(,)?) => { $(
+        if $to.$field.is_none() {
+            $to.$field = $from.$field.clone();
+        }
+    )* };
+}
+
 impl AgentFrontmatter {
     pub(super) fn inherit(&mut self, parent: &Self) {
         if self.model.is_none() && self.tier.is_none() {
             self.model.clone_from(&parent.model);
             self.tier.clone_from(&parent.tier);
         }
-        macro_rules! inherit {
-            ($($field:ident),* $(,)?) => { $(
-                if self.$field.is_none() {
-                    self.$field = parent.$field.clone();
-                }
-            )* };
-        }
-        inherit!(
+        fill!(self, parent;
             isolation,
             empty_dir,
             mode,
@@ -85,21 +87,48 @@ impl AgentFrontmatter {
             smart_compact
         );
     }
-}
 
-/// A kind base's frontmatter: its description and the launch tuning every launch on the
-/// kind starts from. Any other key is collected so the refusal can name it.
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(super) struct BaseFrontmatter {
-    pub description: Option<String>,
-    pub fast: Option<crate::agents::Toggle>,
-    pub code_mode: Option<crate::agents::Toggle>,
-    pub effort: Option<String>,
-    #[serde(default, deserialize_with = "token_count")]
-    pub auto_compact: Option<String>,
-    #[serde(flatten)]
-    pub other: BTreeMap<String, IgnoredAny>,
+    /// Fills what a definition's chain leaves unset from its kind base, below the whole chain.
+    /// The base's description, traits, and launch tuning (effort, fast, code-mode, auto-compact)
+    /// stay its own: the tuning fills at launch below written values and follows the final kind.
+    /// `delegates` skips the base's `subagents` for a chain that lists the `Agent` tool.
+    pub(super) fn inherit_base(&mut self, base: &Self, namespace: &str, delegates: bool) {
+        let mut base = base.clone().for_namespace(namespace);
+        if delegates {
+            base.subagents = None;
+        }
+        if self.model.is_none() && self.tier.is_none() {
+            self.model.clone_from(&base.model);
+        }
+        fill!(self, base;
+            isolation,
+            empty_dir,
+            mode,
+            budget,
+            timeout,
+            tools,
+            allowed_tools,
+            skills,
+            mcps,
+            subagents,
+            model_reminder,
+            keep_warm,
+            idle_compact,
+            smart_compact
+        );
+    }
+
+    /// A kind base's fields less those `namespace` refuses: a subagent takes no
+    /// `idle-compact` or `subagents`, and a direct profile no `timeout`.
+    pub(super) fn for_namespace(mut self, namespace: &str) -> Self {
+        if namespace == "subagents" {
+            self.idle_compact = None;
+            self.subagents = None;
+        } else {
+            self.timeout = None;
+        }
+        self
+    }
 }
 
 #[derive(Deserialize)]

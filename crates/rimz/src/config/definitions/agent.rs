@@ -122,9 +122,45 @@ impl<'a> Resolver<'a> {
             tree,
             foreign,
             allowed_children,
+            seat: None,
             resolved: BTreeMap::new(),
             trail: Vec::new(),
             errors: Vec::new(),
+        }
+    }
+
+    pub(super) fn with_seat(mut self, seat: SeatEdits) -> Self {
+        self.seat = Some(seat);
+        self
+    }
+}
+
+/// What a Markdown team seat changes in its resolved frontmatter, applied below the kind base
+/// so tools and skills the base supplies are changed too.
+#[derive(Clone, Copy)]
+pub(super) struct SeatEdits {
+    /// Only the leader keeps the question tool.
+    pub leader: bool,
+    /// A team running the shipped reflect consensus adds `rimz-reflect` to a skills list.
+    pub reflects: bool,
+}
+
+impl SeatEdits {
+    fn edit(self, fm: &mut AgentFrontmatter) {
+        if !self.leader
+            && let Some(tools) = &mut fm.tools
+        {
+            tools.retain(|tool| {
+                agents::canonical_tool_name(tool.split('(').next().unwrap_or("").trim())
+                    != "AskUserQuestion"
+            });
+        }
+        if self.reflects
+            && let Some(skills) = &mut fm.skills
+            && !skills.is_empty()
+            && !skills.iter().any(|skill| skill.trim() == "rimz-reflect")
+        {
+            skills.push("rimz-reflect".to_owned());
         }
     }
 }
@@ -135,9 +171,25 @@ pub(super) struct Resolver<'a> {
     tree: &'a Namespace,
     foreign: &'a Namespace,
     allowed_children: &'a BTreeSet<String>,
+    seat: Option<SeatEdits>,
     resolved: BTreeMap<String, Option<Resolved>>,
     trail: Vec<String>,
     errors: Vec<DefinitionErr>,
+}
+
+/// The names of `resolver`'s tree that load, resolved without recording anything.
+pub(super) fn loadable(mut resolver: Resolver<'_>) -> BTreeSet<String> {
+    let names: Vec<String> = resolver
+        .tree
+        .definitions
+        .keys()
+        .filter(|name| !name.contains(':'))
+        .cloned()
+        .collect();
+    names
+        .into_iter()
+        .filter(|name| resolver.resolve(name).is_some())
+        .collect()
 }
 
 impl Resolver<'_> {
@@ -438,10 +490,33 @@ impl Resolver<'_> {
         }
     }
 
+    /// The kind base `name` as its row in this resolver's namespace: validated as a profile of
+    /// its kind, less the fields the namespace refuses, its rendered body the system prompt.
+    pub(super) fn kind_base(&self, name: &str) -> Result<Profile, DefinitionErr> {
+        let fm = self.tree.definitions[name]
+            .frontmatter
+            .clone()
+            .for_namespace(self.namespace);
+        let mut profile = empty_profile(name);
+        profile.kind_base = true;
+        let mut profile = self.finish(name, fm, profile)?;
+        profile.system_prompt_file = profile.append_system_prompt_files.pop();
+        if profile.system_prompt_file.is_none() {
+            return Err(DefinitionErr::new(
+                &self.tree.definitions[name].path,
+                super::empty_kind_base(name),
+            ));
+        }
+        // Its tuning fills below written values at launch, so it sets no definition defaults.
+        profile.kind_defaults = false;
+        profile.auto_compact_default = None;
+        Ok(profile)
+    }
+
     fn finish(
         &self,
         name: &str,
-        fm: AgentFrontmatter,
+        mut fm: AgentFrontmatter,
         mut profile: Profile,
     ) -> Result<Profile, DefinitionErr> {
         let definition = &self.tree.definitions[name];
@@ -466,6 +541,19 @@ impl Resolver<'_> {
                     name: kind.to_owned(),
                 },
             ));
+        }
+        if !profile.kind_base
+            && let Some(base) = self.scope.bases.get(kind)
+        {
+            let delegates = fm
+                .tools
+                .as_deref()
+                .and_then(|tools| ToolSet::parse(tools).ok())
+                .is_some_and(|tools| tools.has("Agent"));
+            fm.inherit_base(base, self.namespace, delegates);
+        }
+        if let Some(seat) = self.seat {
+            seat.edit(&mut fm);
         }
         profile.allowed_tools = fm
             .allowed_tools
@@ -508,7 +596,7 @@ impl Resolver<'_> {
                 ),
             ));
         }
-        if fm.tools.is_none() && agents::tools_required(kind) {
+        if fm.tools.is_none() && agents::tools_required(kind) && !profile.kind_base {
             return Err(DefinitionErr::new(
                 path,
                 format!("lists no `tools`, which {kind} needs"),
@@ -520,8 +608,11 @@ impl Resolver<'_> {
             .map(ToolSet::parse)
             .transpose()
             .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
-        agents::render_tool_args(kind, tools.as_ref())
-            .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
+        // A kind base may leave a required list to each definition.
+        if tools.is_some() || !profile.kind_base {
+            agents::render_tool_args(kind, tools.as_ref())
+                .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
+        }
         if fm.idle_compact.is_some() && self.namespace == "subagents" {
             return Err(DefinitionErr::new(
                 path,
@@ -543,38 +634,12 @@ impl Resolver<'_> {
                     "sets `subagents:` and lists the Agent tool; the rimz doorway replaces the native one, so drop whichever this seat does not use",
                 ));
             }
-            let names = names(path, "subagents", listed)?;
-            for name in &names {
-                self.foreign.lookup(name, path)?;
-            }
-            if let Some(failed) = names.iter().find(|name| {
-                (self.foreign.definitions.contains_key(*name)
-                    || self.foreign.failed.contains(*name))
-                    && !self.allowed_children.contains(*name)
-            }) {
-                return Err(DefinitionErr::new(
-                    path,
-                    format!("allows subagent '{failed}', which failed to load"),
-                )
-                .with_cause(DefinitionCause::DependsOnFailed {
-                    name: failed.clone(),
-                }));
-            }
-            let unknown: Vec<_> = names
-                .iter()
-                .filter(|name| {
-                    name.as_str() != "general"
-                        && agents::find_definition(name).is_none()
-                        && !self.allowed_children.contains(*name)
-                })
-                .collect();
-            if !unknown.is_empty() {
-                return Err(DefinitionErr::new(
-                    path,
-                    format!("allows unknown subagent profile(s) {unknown:?}"),
-                ));
-            }
-            profile.subagents = Some(names);
+            // A kind base's names check once the subagents tree has resolved.
+            profile.subagents = Some(if profile.kind_base {
+                names(path, "subagents", listed)?
+            } else {
+                subagent_names(path, listed, self.foreign, self.allowed_children)?
+            });
         }
         let skill_check = match self.scope.skills.check {
             SkillCheck::Check {
@@ -621,6 +686,10 @@ impl Resolver<'_> {
             super::super::agents::native_auto_compact(self.scope.native_auto_compact, kind);
         profile.fast = fm.fast;
         profile.code_mode = fm.code_mode;
+        if let Some(raw) = fm.budget.as_deref() {
+            raw.parse::<crate::harness::budget::BudgetSpec>()
+                .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
+        }
         profile.budget = fm.budget.clone();
         if let Some(value) = fm.timeout.as_deref() {
             if self.namespace != "subagents" {
@@ -680,7 +749,7 @@ impl Resolver<'_> {
             ));
         }
         // Prompt-taking kinds need their base even when the definition adds no craft.
-        if takes_system_prompt && !self.scope.bases.contains(kind) {
+        if takes_system_prompt && !self.scope.bases.contains_key(kind) {
             return Err(DefinitionErr::new(
                 path,
                 format!(
@@ -691,6 +760,47 @@ impl Resolver<'_> {
         }
         Ok(profile)
     }
+}
+
+/// A `subagents:` list's names, each a subagent in `children` (those that loaded, and the
+/// `[agents.commands]` names), a kind, or `general`.
+pub(super) fn subagent_names(
+    path: &Path,
+    listed: &[String],
+    subagents: &Namespace,
+    children: &BTreeSet<String>,
+) -> Result<Vec<String>, DefinitionErr> {
+    let names = names(path, "subagents", listed)?;
+    for name in &names {
+        subagents.lookup(name, path)?;
+    }
+    if let Some(failed) = names.iter().find(|name| {
+        (subagents.definitions.contains_key(*name) || subagents.failed.contains(*name))
+            && !children.contains(*name)
+    }) {
+        return Err(DefinitionErr::new(
+            path,
+            format!("allows subagent '{failed}', which failed to load"),
+        )
+        .with_cause(DefinitionCause::DependsOnFailed {
+            name: failed.clone(),
+        }));
+    }
+    let unknown: Vec<_> = names
+        .iter()
+        .filter(|name| {
+            name.as_str() != "general"
+                && agents::find_definition(name).is_none()
+                && !children.contains(*name)
+        })
+        .collect();
+    if !unknown.is_empty() {
+        return Err(DefinitionErr::new(
+            path,
+            format!("allows unknown subagent profile(s) {unknown:?}"),
+        ));
+    }
+    Ok(names)
 }
 
 fn names(path: &Path, key: &str, listed: &[String]) -> Result<Vec<String>, DefinitionErr> {
