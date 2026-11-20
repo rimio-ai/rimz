@@ -8,6 +8,7 @@ use crate::disk::atomic;
 use crate::packs::{ItemFate, ItemType, PackItem};
 use crate::utils::path::normalize_path_lexical;
 
+use super::frontmatter::AgentFrontmatter;
 use super::{DefinitionErr, catalog, frontmatter};
 
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +37,19 @@ pub enum OverrideErr {
     Exists { path: PathBuf },
     #[error("this item supports only a copy; run `{command}`")]
     CopyOnly { command: String },
+    #[error(
+        "`--set` needs an inheriting override, and this item supports only a copy; \
+         run `{command}` without `--set`"
+    )]
+    SetOnCopy { command: String },
+    #[error("two targets write {path}; customize each item once")]
+    SameDestination { path: PathBuf },
+    #[error("--set {field}={value}: {reason}")]
+    Field {
+        field: String,
+        value: String,
+        reason: String,
+    },
     #[error("cannot inherit failed item {path}; preserve its bytes with `{command}`")]
     Failed { path: PathBuf, command: String },
     #[error("refusing to remove override outside this item's home tree: {path}")]
@@ -97,13 +111,48 @@ impl<'a> PackOverride<'a> {
         Self { home, item }
     }
 
-    pub fn customize(&self, copy: bool) -> Result<PathBuf, OverrideErr> {
+    fn stage(
+        &self,
+        copy: bool,
+        fields: &[(String, String)],
+        destination: PathBuf,
+    ) -> Result<Staged, OverrideErr> {
+        let parent = self.home.join(self.item.kind.as_str());
+        atomic::create_dir_all_mode(&parent, 0o755)?;
+        let stage = Stage(parent.join(format!(".customize-{}", uuid::Uuid::now_v7())));
+        atomic::create_dir_all_mode(&stage.0, 0o700)?;
+        let staged = stage.0.join("item");
+        if is_tree(self.item.kind) {
+            copy_tree(&self.item.path, &staged)?;
+        } else {
+            let bytes = if copy {
+                read(&self.item.path)?
+            } else {
+                self.inheriting_stub(fields)?.into_bytes()
+            };
+            atomic::write_bytes_if_absent_mode(&staged, &bytes, 0o644)?;
+        }
+        atomic::sync_tree(&stage.0)?;
+        Ok(Staged {
+            _stage: stage,
+            staged,
+            destination,
+        })
+    }
+
+    /// Refuses what `stage` would refuse, writing nothing, and returns the destination.
+    fn check(&self, copy: bool, fields: &[(String, String)]) -> Result<PathBuf, OverrideErr> {
         self.require_included()?;
         if let ItemFate::Overridden { path } = &self.item.fate {
             return Err(OverrideErr::Overridden {
                 path: path.clone(),
                 diff: self.command("diff"),
                 reset: self.command("reset"),
+            });
+        }
+        if !fields.is_empty() && (copy || self.copy_only()) {
+            return Err(OverrideErr::SetOnCopy {
+                command: format!("{} --copy", self.command("customize")),
             });
         }
         if !copy && self.copy_only() {
@@ -124,28 +173,11 @@ impl<'a> PackOverride<'a> {
             .ok_or_else(|| OverrideErr::NotRegular {
                 path: self.item.path.clone(),
             })?;
-        let parent = self.home.join(self.item.kind.as_str());
-        let destination = parent.join(filename);
+        let destination = self.home.join(self.item.kind.as_str()).join(filename);
         require_absent(&destination)?;
-        atomic::create_dir_all_mode(&parent, 0o755)?;
-        let stage = Stage(parent.join(format!(".customize-{}", uuid::Uuid::now_v7())));
-        atomic::create_dir_all_mode(&stage.0, 0o700)?;
-        let staged = stage.0.join("item");
-        if is_tree(self.item.kind) {
-            copy_tree(&self.item.path, &staged)?;
-        } else {
-            let bytes = if copy {
-                read(&self.item.path)?
-            } else {
-                self.inheriting_stub()?.into_bytes()
-            };
-            atomic::write_bytes_if_absent_mode(&staged, &bytes, 0o644)?;
+        if !copy {
+            self.inheriting_stub(fields)?;
         }
-        atomic::sync_tree(&stage.0)?;
-        atomic::publish_staged_no_replace(&staged, &destination).map_err(|error| match error {
-            atomic::AtomicErr::Exists { path } => OverrideErr::Exists { path },
-            error => error.into(),
-        })?;
         Ok(destination)
     }
 
@@ -313,7 +345,7 @@ impl<'a> PackOverride<'a> {
         ])
     }
 
-    fn inheriting_stub(&self) -> Result<String, OverrideErr> {
+    fn inheriting_stub(&self, fields: &[(String, String)]) -> Result<String, OverrideErr> {
         let text =
             fs::read_to_string(&self.item.path).map_err(|error| io(&self.item.path, error))?;
         let (yaml, _) = frontmatter::split(&self.item.path, &text)?;
@@ -323,23 +355,76 @@ impl<'a> PackOverride<'a> {
         }
         let description: Description = frontmatter::parse(&self.item.path, yaml)?;
         frontmatter::description(&self.item.path, description.description.as_deref())?;
-        // JSON-quoted strings are YAML scalars too; preserve punctuation and whitespace verbatim.
-        let mut stub = format!(
-            "---\nagent: {}\ndescription: {}\n",
-            serde_json::json!(self.key()),
-            serde_json::json!(description.description)
-        );
+        let mut entries = vec![
+            ("agent".to_owned(), serde_json::json!(self.key())),
+            (
+                "description".to_owned(),
+                serde_json::json!(description.description),
+            ),
+        ];
         if self
             .item
             .path
             .file_stem()
             .is_none_or(|stem| stem != self.item.name.as_str())
         {
-            stub.push_str(&format!("name: {}\n", serde_json::json!(self.item.name)));
+            entries.push(("name".to_owned(), serde_json::json!(self.item.name)));
         }
-        stub.push_str("---\n");
-        Ok(stub)
+        for (field, value) in fields {
+            let refuse = |reason: String| OverrideErr::Field {
+                field: field.clone(),
+                value: value.clone(),
+                reason,
+            };
+            let mut chars = field.chars();
+            let plain = chars.next().is_some_and(|first| first.is_ascii_lowercase())
+                && chars.all(|c| {
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_')
+                });
+            if !plain {
+                return Err(refuse(
+                    "is not a field name; use lowercase letters, digits, `-`, and `_`".to_owned(),
+                ));
+            }
+            if matches!(field.as_str(), "agent" | "name") {
+                return Err(refuse("customize writes this field itself".to_owned()));
+            }
+            let parsed: serde_json::Value = serde_saphyr::from_str(value)
+                .map_err(|error| refuse(format!("is not one YAML value: {error}")))?;
+            match entries.iter_mut().find(|(key, _)| key == field) {
+                Some(entry) => entry.1 = parsed,
+                None => entries.push((field.clone(), parsed)),
+            }
+            frontmatter::parse::<AgentFrontmatter>(&self.item.path, &yaml_lines(&entries))
+                .map_err(|error| refuse(error.to_string()))?;
+        }
+        Ok(format!("---\n{}---\n", yaml_lines(&entries)))
     }
+}
+
+/// Writes an override of each item and returns their paths in order. Every item is checked
+/// first, so a refusal writes nothing. `fields` are `--set` pairs written into each
+/// inheriting override; a copy refuses them.
+pub fn customize(
+    home: &Path,
+    items: &[&PackItem],
+    copy: bool,
+    fields: &[(String, String)],
+) -> Result<Vec<PathBuf>, OverrideErr> {
+    let mut destinations = Vec::new();
+    for &item in items {
+        let path = PackOverride::new(home, item).check(copy, fields)?;
+        if destinations.contains(&path) {
+            return Err(OverrideErr::SameDestination { path });
+        }
+        destinations.push(path);
+    }
+    let staged = items
+        .iter()
+        .zip(destinations)
+        .map(|(&item, destination)| PackOverride::new(home, item).stage(copy, fields, destination))
+        .collect::<Result<Vec<_>, _>>()?;
+    staged.into_iter().map(Staged::publish).collect()
 }
 
 pub fn reset_identical<'a>(
@@ -384,6 +469,15 @@ pub fn reset_identical<'a>(
         }
     }
     outcomes
+}
+
+/// One `key: value` line per entry. JSON is YAML flow syntax, so strings keep their punctuation and
+/// whitespace verbatim and a list stays one value.
+fn yaml_lines(entries: &[(String, serde_json::Value)]) -> String {
+    entries
+        .iter()
+        .map(|(key, value)| format!("{key}: {value}\n"))
+        .collect()
 }
 
 fn reset_identical_entry<'a>(home: &Path, items: &[&'a PackItem]) -> ResetOutcome<'a> {
@@ -543,6 +637,25 @@ fn tree_files(root: &Path, show_symlinks: bool) -> Result<BTreeMap<PathBuf, Vec<
     let mut files = BTreeMap::new();
     collect(root, Path::new(""), show_symlinks, &mut files)?;
     Ok(files)
+}
+
+/// An override written to its stage, awaiting a no-replace publish. Dropping it removes the stage.
+struct Staged {
+    _stage: Stage,
+    staged: PathBuf,
+    destination: PathBuf,
+}
+
+impl Staged {
+    fn publish(self) -> Result<PathBuf, OverrideErr> {
+        atomic::publish_staged_no_replace(&self.staged, &self.destination).map_err(|error| {
+            match error {
+                atomic::AtomicErr::Exists { path } => OverrideErr::Exists { path },
+                error => error.into(),
+            }
+        })?;
+        Ok(self.destination)
+    }
 }
 
 struct Stage(PathBuf);

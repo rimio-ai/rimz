@@ -1,24 +1,21 @@
 use super::*;
 
-#[test]
-fn customize_prints_the_receipt_and_prune_output_before_opening_the_editor() {
+/// Runs `rimz packs customize <args>` on a terminal with `VISUAL` set, returning its exit status
+/// and everything it printed.
+fn customize_on_a_terminal(
+    env: &Env,
+    args: &[&str],
+    visual: &str,
+) -> (portable_pty::ExitStatus, String) {
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
     use std::io::Read as _;
 
-    let env = Env::new();
-    installed(&env);
-    let root = env.home_root.join(".claude/skills");
-    fs::create_dir_all(&root).unwrap();
-    symlink(
-        env.agents_home().join("packs/removed/skills/stale"),
-        root.join("stale"),
-    )
-    .unwrap();
     let pair = native_pty_system().openpty(PtySize::default()).unwrap();
     let mut command = CommandBuilder::new(env.rimz_bin());
     env.pin_pty_command(&mut command);
-    command.args(["packs", "customize", "crew:coder", "--type", "agents"]);
-    command.env("VISUAL", "sh -c 'echo editor-opened; exit 7' editor");
+    command.args(["packs", "customize"]);
+    command.args(args);
+    command.env("VISUAL", visual);
     command.env("NO_COLOR", "1");
     command.cwd(&env.project_root);
     let mut child = pair.slave.spawn_command(command).unwrap();
@@ -42,8 +39,46 @@ fn customize_prints_the_receipt_and_prune_output_before_opening_the_editor() {
             let _ = child.kill();
             panic!("customize did not close its terminal: {error}");
         });
-    let output = String::from_utf8_lossy(&bytes);
-    let status = child.wait().unwrap();
+    let output = String::from_utf8_lossy(&bytes).into_owned();
+    (child.wait().unwrap(), output)
+}
+
+fn frontmatter(path: &Path) -> Value {
+    let text = fs::read_to_string(path).unwrap();
+    let (yaml, _) = text
+        .strip_prefix("---\n")
+        .unwrap()
+        .split_once("\n---")
+        .unwrap();
+    serde_saphyr::from_str(yaml).unwrap()
+}
+
+/// Installs the test packs with `crew:writer`, an agent no other type names.
+fn writer(env: &Env) -> PathBuf {
+    let source = installed(env);
+    write(
+        source.join("crew/agents/writer.md"),
+        "---\ndescription: Writer\nagent: pi\n---\nWrite.",
+    );
+    source
+}
+
+#[test]
+fn customize_prints_the_receipt_and_prune_output_before_opening_the_editor() {
+    let env = Env::new();
+    installed(&env);
+    let root = env.home_root.join(".claude/skills");
+    fs::create_dir_all(&root).unwrap();
+    symlink(
+        env.agents_home().join("packs/removed/skills/stale"),
+        root.join("stale"),
+    )
+    .unwrap();
+    let (status, output) = customize_on_a_terminal(
+        &env,
+        &["crew:coder", "--type", "agents"],
+        "sh -c 'echo editor-opened; exit 7' editor",
+    );
     assert!(status.success(), "{status:?}: {output}");
     let created = output.find("Created ").expect(&output);
     let pruned = output.find("Skill links removed from ").expect(&output);
@@ -666,4 +701,245 @@ fn skill_overrides_reset_with_a_relative_agents_home() {
         .assert()
         .success();
     assert!(!path.exists());
+}
+
+#[test]
+fn customize_sets_fields_on_several_inheriting_overrides_without_opening_an_editor() {
+    let env = Env::new();
+    let source = writer(&env);
+    write(
+        source.join("crew/agents/tiered.md"),
+        "---\ndescription: Tiered\nagent: pi\ntier: senior\n---\nTiered.",
+    );
+    let marker = env.home_root.join("editor-ran");
+    let (status, output) = customize_on_a_terminal(
+        &env,
+        &[
+            "crew:writer",
+            "crew:tiered",
+            "--set",
+            "model=fable",
+            "--set",
+            "tools=[Read, Grep]",
+        ],
+        &format!("touch {}", marker.display()),
+    );
+    assert!(status.success(), "{output}");
+    assert!(!marker.exists(), "{output}");
+    assert!(!output.contains("Edit "), "{output}");
+    let profiles = json(&env, &["agents", "profiles", "--json"]);
+    for name in ["writer", "tiered"] {
+        let path = env.agents_home().join(format!("agents/{name}.md"));
+        assert!(
+            output.contains(&format!(
+                "Created {} (inherits crew:{name}).",
+                path.display()
+            )),
+            "{output}"
+        );
+        let frontmatter = frontmatter(&path);
+        assert_eq!(frontmatter["agent"], format!("crew:{name}"));
+        assert_eq!(frontmatter["model"], "fable");
+        assert_eq!(frontmatter["tools"], serde_json::json!(["Read", "Grep"]));
+        let row = profiles
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap();
+        assert_eq!(row["model"], "fable", "{row}");
+    }
+}
+
+#[test]
+fn customize_opens_the_editor_once_on_every_written_override() {
+    let env = Env::new();
+    writer(&env);
+    let (status, output) = customize_on_a_terminal(
+        &env,
+        &["crew:writer", "crew:helper"],
+        "sh -c 'echo \"editor-opened:$#:$*\"' editor",
+    );
+    assert!(status.success(), "{output}");
+    let writer = env.agents_home().join("agents/writer.md");
+    let helper = env.agents_home().join("subagents/helper.md");
+    assert!(writer.is_file() && helper.is_file(), "{output}");
+    assert_eq!(output.matches("editor-opened").count(), 1, "{output}");
+    assert!(
+        output.contains(&format!(
+            "editor-opened:2:{} {}",
+            writer.display(),
+            helper.display()
+        )),
+        "{output}"
+    );
+}
+
+#[test]
+fn customize_checks_every_target_and_field_before_writing_any() {
+    let copy_only = |name: &str, kind: &str| {
+        format!(
+            "`--set` needs an inheriting override, and this item supports only a copy; \
+             run `rimz packs customize crew:{name} --type {kind} --copy` without `--set`"
+        )
+    };
+    let cases: Vec<(Vec<&str>, i32, Vec<String>)> = vec![
+        (
+            vec!["crew:writer", "crew:missing"],
+            1,
+            vec!["missing".into()],
+        ),
+        (
+            vec!["crew:writer", "crew:craft", "--set", "model=x"],
+            2,
+            vec![copy_only("craft", "traits")],
+        ),
+        (
+            vec!["crew:writer", "crew:ship", "--set", "model=x"],
+            2,
+            vec![copy_only("ship", "workflows")],
+        ),
+        (
+            vec!["crew:writer", "--copy", "--set", "model=x"],
+            2,
+            vec!["'--copy' cannot be used with '--set <FIELD=VALUE>'".into()],
+        ),
+        (
+            vec!["crew:writer", "--set", "model"],
+            2,
+            vec!["invalid value 'model' for '--set <FIELD=VALUE>': use FIELD=VALUE".into()],
+        ),
+        (
+            vec!["crew:writer", "crew:helper", "--set", "#x=1"],
+            2,
+            vec![
+                "--set #x=1: is not a field name; use lowercase letters, digits, `-`, and `_`"
+                    .into(),
+            ],
+        ),
+        (
+            vec!["crew:writer", "crew:helper", "--set", "\"name\"=x"],
+            2,
+            vec![
+                "--set \"name\"=x: is not a field name; use lowercase letters, digits, `-`, and `_`"
+                    .into(),
+            ],
+        ),
+        (
+            vec!["crew:writer", "crew:helper", "--set", "colour=red"],
+            2,
+            vec!["--set colour=red: ".into(), "unknown field `colour`".into()],
+        ),
+        (
+            vec!["crew:writer", "crew:helper", "--set", "model=[a"],
+            2,
+            vec!["--set model=[a: is not one YAML value: ".into()],
+        ),
+        (
+            vec!["crew:writer", "crew:helper", "--set", "effort=[a, b]"],
+            2,
+            vec![
+                "--set effort=[a, b]: ".into(),
+                "malformed frontmatter".into(),
+            ],
+        ),
+        (
+            vec!["crew:writer", "--set", "agent=claude"],
+            2,
+            vec!["--set agent=claude: customize writes this field itself".into()],
+        ),
+        (
+            vec!["crew:writer", "crew:writer", "--type", "agents"],
+            2,
+            vec!["two targets write ".into()],
+        ),
+    ];
+    for (args, code, reasons) in cases {
+        let env = Env::new();
+        writer(&env);
+        let output = env
+            .rimz()
+            .args(["packs", "customize"])
+            .args(&args)
+            .output()
+            .unwrap();
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{args:?}: {output:?}");
+        for reason in reasons {
+            assert!(error.contains(&reason), "{args:?}: {error}");
+        }
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains("Created"),
+            "{args:?}: {output:?}"
+        );
+        for tree in ["agents", "subagents"] {
+            let entries: Vec<_> = fs::read_dir(env.agents_home().join(tree))
+                .into_iter()
+                .flatten()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert!(entries.is_empty(), "{args:?}: {tree} holds {entries:?}");
+        }
+    }
+    let env = Env::new();
+    writer(&env);
+    let helper = env.agents_home().join("subagents/helper.md");
+    write(&helper, "---\ndescription: Home\nagent: pi\n---\nKeep.");
+    let output = env
+        .rimz()
+        .args([
+            "packs",
+            "customize",
+            "crew:writer",
+            "crew:helper",
+            "--set",
+            "model=x",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("rimz packs reset crew:helper --type subagents"),
+        "{error}"
+    );
+    assert!(!env.agents_home().join("agents/writer.md").exists());
+    assert_eq!(
+        fs::read_to_string(helper).unwrap(),
+        "---\ndescription: Home\nagent: pi\n---\nKeep."
+    );
+
+    // A copy that fails in a later item publishes none of the earlier ones.
+    let env = Env::new();
+    let source = writer(&env);
+    symlink(
+        source.join("crew/agents/writer.md"),
+        source.join("crew/workflows/ship/link"),
+    )
+    .unwrap();
+    let output = env
+        .rimz()
+        .args(["packs", "customize", "crew:writer", "crew:ship", "--copy"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains(&format!(
+            "refusing symlink or non-regular entry: {}",
+            env.agents_home()
+                .join("packs/source/crew/workflows/ship/link")
+                .display()
+        )),
+        "{error}"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Created"));
+    for tree in ["agents", "workflows"] {
+        let entries: Vec<_> = fs::read_dir(env.agents_home().join(tree))
+            .into_iter()
+            .flatten()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert!(entries.is_empty(), "{tree} holds {entries:?}");
+    }
 }

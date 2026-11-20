@@ -87,13 +87,24 @@ enum PacksSubcmd {
     Exclude(Selection),
     /// Restore an excluded item or type.
     Include(Selection),
-    /// Create a home override of a shipped item.
+    /// Create home overrides of shipped items.
     Customize {
-        #[command(flatten)]
-        selection: ItemSelection,
-        /// Copy the shipped item instead of inheriting it.
+        #[arg(value_name = "PACK:NAME", required = true)]
+        targets: Vec<String>,
+        /// Item type: agents, subagents, teams, traits, skills, or workflows.
+        #[arg(long = "type", value_name = "TYPE", value_parser = parse_type)]
+        kind: Option<ItemType>,
+        /// Copy the shipped items instead of inheriting them.
         #[arg(long)]
         copy: bool,
+        /// Write a field into each inheriting override instead of opening an editor.
+        #[arg(
+            long = "set",
+            value_name = "FIELD=VALUE",
+            value_parser = parse_field,
+            conflicts_with = "copy"
+        )]
+        set: Vec<(String, String)>,
     },
     /// Compare a home override with its shipped item.
     Diff(ItemSelection),
@@ -132,10 +143,18 @@ fn parse_type(value: &str) -> std::result::Result<ItemType, String> {
         .ok_or_else(|| "use agents, subagents, teams, traits, skills, or workflows".to_owned())
 }
 
+fn parse_field(value: &str) -> std::result::Result<(String, String), String> {
+    value
+        .split_once('=')
+        .filter(|(field, _)| !field.is_empty())
+        .map(|(field, value)| (field.to_owned(), value.to_owned()))
+        .ok_or_else(|| "use FIELD=VALUE".to_owned())
+}
+
 fn editor_command(
     visual: Option<&str>,
     editor: Option<&str>,
-    path: &Path,
+    paths: &[PathBuf],
 ) -> Result<Option<Vec<std::ffi::OsString>>> {
     let Some(editor) = visual
         .filter(|value| !value.trim().is_empty())
@@ -149,14 +168,14 @@ fn editor_command(
         bail!("editor command is empty");
     }
     let mut words: Vec<std::ffi::OsString> = words.into_iter().map(Into::into).collect();
-    words.push(path.as_os_str().to_owned());
+    words.extend(paths.iter().map(|path| path.as_os_str().to_owned()));
     Ok(Some(words))
 }
 
 pub(super) fn run(args: PacksArgs) -> Result<()> {
     let home = paths::agents_home();
     let mut receipt = Vec::new();
-    let mut edit_path = None;
+    let mut edit_paths = Vec::new();
     let mut warnings = Vec::new();
     let mut failures = Vec::new();
     let mut failure_heading = "Pack updates incomplete";
@@ -198,8 +217,13 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
         }
         PacksSubcmd::Exclude(selection) => change(&home, selection, false, &mut receipt)?,
         PacksSubcmd::Include(selection) => change(&home, selection, true, &mut receipt)?,
-        PacksSubcmd::Customize { selection, copy } => {
-            edit_path = Some(customize(&home, selection, copy, &mut receipt)?);
+        PacksSubcmd::Customize {
+            targets,
+            kind,
+            copy,
+            set,
+        } => {
+            edit_paths = customize(&home, &targets, kind, copy, &set, &mut receipt)?;
         }
         PacksSubcmd::Diff(selection) => return diff(&home, selection),
         PacksSubcmd::Reset {
@@ -258,8 +282,8 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
     if !failures.is_empty() {
         bail!("{failure_heading}:\n{}", failures.join("\n"));
     }
-    if let Some(path) = edit_path {
-        edit(&path)?;
+    if !edit_paths.is_empty() {
+        edit(&edit_paths)?;
     }
     Ok(())
 }
@@ -731,95 +755,128 @@ fn parse_selection(target: &str) -> Result<(PackName, Option<&str>)> {
 
 fn selected_item<'a>(
     inventory: &'a PackInventory,
-    selection: &ItemSelection,
+    target: &str,
+    kind: Option<ItemType>,
 ) -> Result<&'a rimz::packs::PackItem> {
-    let (pack, name) = parse_selection(&selection.target)?;
+    let (pack, name) = parse_selection(target)?;
     let name = name.ok_or_else(|| UsageError::new("name an item as <pack>:<name>".to_owned()))?;
     inventory
         .pack(&pack)?
-        .item(name, selection.kind)
+        .item(name, kind)
         .map_err(item_match_error)
 }
 
+/// Checks every target before writing any, so a refusal leaves no override behind. Returns the
+/// paths to open in the editor, none when `fields` were written.
 fn customize(
     home: &Path,
-    selection: ItemSelection,
+    targets: &[String],
+    kind: Option<ItemType>,
     copy: bool,
+    fields: &[(String, String)],
     out: &mut impl Write,
-) -> Result<PathBuf> {
+) -> Result<Vec<PathBuf>> {
+    let usage = |error: OverrideErr| {
+        if matches!(
+            error,
+            OverrideErr::CopyOnly { .. }
+                | OverrideErr::SetOnCopy { .. }
+                | OverrideErr::Field { .. }
+                | OverrideErr::SameDestination { .. }
+        ) {
+            anyhow::Error::new(UsageError::new(error.to_string()))
+        } else {
+            error.into()
+        }
+    };
     let inventory = load_inventory(home);
-    let item = selected_item(&inventory, &selection)?;
-    let path = PackOverride::new(home, item)
-        .customize(copy)
-        .map_err(|error| {
-            if matches!(error, OverrideErr::CopyOnly { .. }) {
-                anyhow::Error::new(UsageError::new(error.to_string()))
-            } else {
-                error.into()
-            }
-        })?;
-    let key = format!("{}:{}", item.pack, item.name);
-    if copy {
+    let items = targets
+        .iter()
+        .map(|target| selected_item(&inventory, target, kind))
+        .collect::<Result<Vec<_>>>()?;
+    let paths = customization::customize(home, &items, copy, fields).map_err(usage)?;
+    let mut edit_paths = Vec::new();
+    for (item, path) in items.into_iter().zip(paths) {
+        let key = format!("{}:{}", item.pack, item.name);
+        if copy {
+            writeln!(
+                out,
+                "Created {} (copy, no longer follows {}).",
+                path.display(),
+                item.pack
+            )?;
+        } else {
+            writeln!(out, "Created {} (inherits {key}).", path.display())?;
+        }
         writeln!(
             out,
-            "Created {} (copy, no longer follows {}).",
-            path.display(),
-            item.pack
-        )?;
-    } else {
-        writeln!(out, "Created {} (inherits {key}).", path.display())?;
-    }
-    writeln!(
-        out,
-        "Next: {}",
-        shell_command(["rimz", "packs", "diff", &key, "--type", item.kind.as_str()])
-    )?;
-    match item.kind {
-        ItemType::Skills => {}
-        ItemType::Workflows => writeln!(
-            out,
             "Next: {}",
-            shell_command(["rimz", "workflow", "validate", &item.name])
-        )?,
-        _ => writeln!(out, "Next: rimz agents validate")?,
+            shell_command(["rimz", "packs", "diff", &key, "--type", item.kind.as_str()])
+        )?;
+        match item.kind {
+            ItemType::Skills => {}
+            ItemType::Workflows => writeln!(
+                out,
+                "Next: {}",
+                shell_command(["rimz", "workflow", "validate", &item.name])
+            )?,
+            _ => writeln!(out, "Next: rimz agents validate")?,
+        }
+        edit_paths.push(match item.kind {
+            ItemType::Skills => path.join("SKILL.md"),
+            ItemType::Workflows => paths::workflow_spec_file(&path),
+            _ => path,
+        });
     }
-    Ok(match item.kind {
-        ItemType::Skills => path.join("SKILL.md"),
-        ItemType::Workflows => paths::workflow_spec_file(&path),
-        _ => path,
-    })
+    if !fields.is_empty() {
+        edit_paths.clear();
+    }
+    Ok(edit_paths)
 }
 
-fn edit(path: &Path) -> Result<()> {
+fn edit(paths: &[PathBuf]) -> Result<()> {
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         let visual = std::env::var("VISUAL").ok();
         let editor = std::env::var("EDITOR").ok();
-        let result = editor_command(visual.as_deref(), editor.as_deref(), path).and_then(|words| {
-            let Some(words) = words else { return Ok(false) };
-            let result = std::process::Command::new(&words[0])
-                .args(&words[1..])
-                .status()?;
-            if !result.success() {
-                bail!("editor exited with {result}");
-            }
-            Ok(true)
-        });
+        let result =
+            editor_command(visual.as_deref(), editor.as_deref(), paths).and_then(|words| {
+                let Some(words) = words else { return Ok(false) };
+                let result = std::process::Command::new(&words[0])
+                    .args(&words[1..])
+                    .status()?;
+                if !result.success() {
+                    bail!("editor exited with {result}");
+                }
+                Ok(true)
+            });
         match result {
             Ok(true) => return Ok(()),
             Ok(false) => {}
             Err(error) => writeln!(
                 render::err(),
                 "warning: {error}; override kept at {}",
-                path.display()
+                display_paths(paths)
             )?,
         }
     }
-    render::finish(writeln!(render::out(), "Edit {}", path.display()))
+    let mut out = render::out();
+    let write = paths
+        .iter()
+        .try_for_each(|path| writeln!(out, "Edit {}", path.display()));
+    render::finish(write)
+}
+
+fn display_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn diff(home: &Path, selection: ItemSelection) -> Result<()> {
     let inventory = load_inventory(home);
-    let item = selected_item(&inventory, &selection)?;
+    let item = selected_item(&inventory, &selection.target, selection.kind)?;
     let mut out = render::out();
     match PackOverride::new(home, item).diff()? {
         OverrideDiff::None => writeln!(
@@ -1284,7 +1341,7 @@ mod tests {
 
     #[test]
     fn editor_resolution_prefers_visual_splits_words_and_appends_the_path() {
-        let path = Path::new("/some path/coder.md");
+        let path = &[PathBuf::from("/some path/coder.md")];
         assert_eq!(
             editor_command(Some("code --wait 'two words'"), Some("vi"), path).unwrap(),
             Some(vec![
