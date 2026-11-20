@@ -2,7 +2,7 @@
 
 The shape every module in `crates/rimz` follows: the CLI, output, errors, identifiers, state, durable writes, long-lived processes, clocks, tests, and the dependency budget. Pick the closest existing module before inventing one: the team values consistency over novelty. Read the root [AGENTS.md](../../AGENTS.md) first, and [ARCHITECTURE.md](../../ARCHITECTURE.md) for where the modules live. The gates that enforce these conventions are in [gates.md](./gates.md), and the toolchain, CI, and release packaging are in [build-and-ci.md](./build-and-ci.md).
 
-Room state and runtime paths are constructed only in `disk/paths.rs`, through the lifetime-class path API, and `cargo xtask invariants` enforces this outside tests. Provider trees, host skill directories, and sandbox mount views are not room roots.
+A path joined onto a room's state or runtime root is built only in `disk/paths.rs`, through the lifetime-class path API. Outside tests, `cargo xtask invariants` rejects a `.root.join(`, `.runtime_root.join(`, or `.rimz_root.join(` anywhere else. A module may join a file name onto a class directory that API returned. Provider trees, host skill directories, and sandbox mount views are not room roots.
 
 ## CLI shape
 
@@ -42,7 +42,9 @@ A `println!` site is legal only under `#[expect(clippy::print_stdout, reason = "
 - the agent-native decision channel: `rimz hooks <agent> ...` stdout is parsed by the agent ([Hook stdout is the decision channel](../internals/agents/adapter.md#hook-stdout-is-the-decision-channel));
 - the `doctor` multi-section diagnostic, a bespoke layout that moves to `render` opportunistically.
 
-Human-facing tables, key/value blocks, and listings render through the shared `cli/render` layer. `render::out()` returns an `anstream::AutoStream` over stdout that strips ANSI when output is piped or color is disabled (`NO_COLOR`/`CLICOLOR`, or `--color never`), so `--json` and snapshot output stay byte-clean, and it writes through `writeln!`, so it needs no `#[expect]` site. Colors come from `render::palette`, which lazily resolves the machine's scheme, slot overrides, depth, and provider styles through the shared theme core, and state tones resolve once in `render::status`, keyed on typed status values rather than rendered strings. Provider identity, state, hierarchy, and quantities follow the [interface language](../internals/theme.md#interface-language). Raw protocol surfaces stay theme-independent.
+Human-facing tables, key/value blocks, and listings render through the shared `cli/render` layer. `render::out()` returns an `anstream::AutoStream` over stdout that strips ANSI when output is piped or color is disabled (`NO_COLOR`/`CLICOLOR`, or `--color never`), so `--json` and snapshot output stay byte-clean. It writes through `writeln!`, so it needs no `#[expect]` site.
+
+Colors come from `render::palette`, which lazily resolves the machine's scheme, slot overrides, depth, and provider styles through the shared theme core. State tones resolve once in `render::status`, keyed on typed status values rather than rendered strings. Provider identity, state, hierarchy, and quantities follow the [interface language](../internals/theme.md#interface-language). Raw protocol surfaces stay theme-independent.
 
 All other output flows through `tracing` to stderr:
 
@@ -169,7 +171,7 @@ The actor shape is for a long-lived process with concurrent in-process writers, 
 
 A process that outlives one command (the sidebar host, `stats --refresh`, the Codex broker, `lsp serve`, the exec wrapper, supervisors, and followers) keeps its thread count and its memory bounded:
 
-- It reuses one named worker and never calls `thread::spawn` in a loop or per event.
+- It reuses one named worker and does not call `thread::spawn` in a loop or per event. The LSP broker's listener (`lsp/broker/socket.rs`) is an exception: it gives each accepted connection a thread.
 - One shape of fan-out is admitted: work split per pass across a constant worker cap, run under `thread::scope`, and joined before the pass returns. No thread outlives the pass, and the count never grows with the input. `bounded_map` in `utils/parallel.rs` is that helper for independent fan-out. A persistent pool would need `'static` jobs and would clone what the scoped form borrows.
 - Every collection the process holds across iterations carries a bound or an eviction rule stated beside it.
 - A deadline built from a configured or user-supplied duration uses `Instant::checked_add` and falls back to waiting without a deadline. `Instant + Duration` panics on overflow, which kills the worker.
@@ -208,22 +210,58 @@ These primitives live next to the durability contract they enforce. No module ha
 
 `cargo xtask test` runs the suite through nextest ([the test runner](./running-gates.md#the-test-runner)). The profile a test runs in and the environment it gets are in [gates.md](./gates.md#test-profiles).
 
-Each test shape keeps its own discipline:
+Each kind of test has its own rules.
 
-- Unit tests: `#[cfg(test)] mod tests` in the module under test, for pure logic only (state-machine transitions, parser shapes, schema round-trips), with no filesystem, network, or subprocess. Inline by default; past 500 lines the whole module moves to a sibling file (`#[cfg(test)] mod tests;` plus `view/tests.rs`) with the same module path and private access, a cap `cargo xtask invariants` enforces. Make the move in the same change when an edit leaves the inline module within about 20 lines of the cap: a module's unit tests live in one place, inline or sibling. A sibling `tests.rs` that grows splits into nested modules by concern, then into a `tests/` directory module, and never returns tests to the source file. An outgrown unit-test module is also a prompt to check whether the weight belongs in a domain module or the integration tier.
-- Integration tests: one binary per crate at `crates/rimz/tests/integration/main.rs`, where each suite is a module (`mod hooks;`) and related suites group under a subdirectory module (`mod backend;` over `backend/{tmux,zellij}.rs`). Real subprocesses, real temp directories under `tempfile::TempDir`, real store files. Spawn `rimz` through the `Env` harness in `crates/rimz/tests/integration/common/` (an `assert_cmd` `cargo-bin` builder); suite layout and local rules live in the [suite contract](../../crates/rimz/tests/integration/AGENTS.md).
-- Performance gates: integration tests under `crates/rimz/tests/integration/performance/` assert deterministic work bounds, not timing. Counters live at the funnel they measure: fsyncs in `disk::atomic::testkit`, event-log bytes in `store::event_log::testkit`, and hot-path subprocess attempts in `proc::testkit`. The crate-level `testkit` feature exposes only synthetic fleet builders and counter readers for tests and benches; shipped artifacts do not enable it. Nothing has to pass `--features testkit` by hand: `crates/rimz/Cargo.toml` carries a self dev-dependency (`rimz = { path = ".", features = ["testkit"] }`), so any build that pulls dev-dependencies (`cargo check --tests`, `cargo nextest`, `cargo bench`, and the crate graph rust-analyzer builds from `cargo metadata`) resolves the feature on, while `cargo build`, the shipped binary, and the install-host lint passes never see it.
-- Performance benches: `crates/rimz/benches/` holds divan benchmarks, including explicit regression ceilings that fail `cargo xtask perf`. They measure wall-clock and allocation figures over synthetic stores, pane frames, and sidecars, never real agents. The benches stay outside CI, and CI carries no timing assertion.
-- Snapshot tests: `insta::assert_snapshot!` for every protocol stdout (CLI, hook, `--json` events) including failure shapes. For clap command or flag changes, include `cargo xtask test --name cli_surface_is_stable` in the focused pass. Normalize UUIDs, timestamps, absolute paths, and other transient identifiers at the assertion boundary before snapshotting: snapshot churn from a transient ID is a bug in the test helper, fixed in its normalization. A shared helper is for normalization several suites need. Sidebar render tests draw through a `vt100::Parser`-backed ratatui backend and snapshot the resulting screen contents, never widget internals. `INSTA_UPDATE=new` writes an `assertion_line:` header into each `.snap.new`: accept with `cargo insta accept`, or strip the `assertion_line:` header before committing a hand-moved `.snap.new`.
-- Property tests: `proptest` for parsers (TOML override values, agent payloads, framing), serializers (round-trip schema types), and state-machine transitions (no path leaves a final state).
+### Unit tests
+
+- A unit test lives in `#[cfg(test)] mod tests` in the module under test and covers pure logic: state-machine transitions, parser shapes, schema round-trips.
+- By default it uses no filesystem, network, or subprocess. A tree's `AGENTS.md` names an exception: the sidebar's launch tests use isolated tempdirs for heartbeat files.
+- The module is inline by default. Past 500 lines the whole module moves to a sibling file (`#[cfg(test)] mod tests;` plus `view/tests.rs`) with the same module path and private access. `cargo xtask invariants` enforces the cap.
+- Make the move in the same change when an edit leaves the inline module within about 20 lines of the cap. A module's unit tests live in one place, inline or sibling.
+- A sibling `tests.rs` that grows splits into nested modules by concern, then into a `tests/` directory module. It never returns tests to the source file.
+- An outgrown unit-test module is a prompt to check whether the weight belongs in a domain module or the integration tier.
+
+### Integration tests
+
+- The crate has one integration binary at `crates/rimz/tests/integration/main.rs`. Each suite is a module (`mod hooks;`), and related suites group under a subdirectory module (`mod backend;` over `backend/tmux/` and `backend/zellij/`).
+- The tests use real subprocesses, real temp directories under `tempfile::TempDir`, and real store files.
+- Spawn `rimz` through the `Env` harness in `crates/rimz/tests/integration/common/`, which builds a `std::process::Command` on the built binary.
+- Suite layout and local rules are in the [suite contract](../../crates/rimz/tests/integration/AGENTS.md).
+
+### Performance gates
+
+- Integration tests under `crates/rimz/tests/integration/performance/` assert deterministic work bounds, not timing.
+- Counters live at the funnel they measure: fsyncs in `disk::atomic::testkit`, event-log bytes in `store::event_log::testkit`, and hot-path subprocess attempts in `proc::testkit`.
+- The crate-level `testkit` feature exposes test seams to tests and benches: synthetic fleet builders, counter readers, and rendezvous points for subprocess tests. Shipped artifacts do not enable it.
+- Nothing has to pass `--features testkit` by hand. `crates/rimz/Cargo.toml` carries a self dev-dependency (`rimz = { path = ".", features = ["testkit"] }`), so any build that pulls dev-dependencies resolves the feature on: `cargo check --tests`, `cargo nextest`, `cargo bench`, and the crate graph rust-analyzer builds from `cargo metadata`. `cargo build`, the shipped binary, and the install-host lint passes never see it.
+
+### Performance benches
+
+- `crates/rimz/benches/` holds divan benchmarks, including explicit regression ceilings that fail `cargo xtask perf`.
+- They measure wall-clock and allocation figures over synthetic stores, pane frames, and sidecars, never real agents. `hook_stop_budget` is the exception when `RIMZ_HOOK_BUDGET_HOME` names a home for it to copy.
+- CI does not run the benches.
+
+### Snapshot tests
+
+- Use `insta::assert_snapshot!` for every protocol stdout (CLI, hook, `--json` events), failure shapes included.
+- For a clap command or flag change, include `cargo xtask test --name cli_surface_is_stable` in the focused pass.
+- Normalize UUIDs, timestamps, absolute paths, and other transient identifiers at the assertion boundary before the snapshot. Snapshot churn from a transient ID is a bug in the test helper, fixed in its normalization.
+- A shared helper is for normalization that several suites need.
+- Sidebar render tests draw through a `vt100::Parser`-backed ratatui backend and snapshot the screen contents, never widget internals.
+- `INSTA_UPDATE=new` writes an `assertion_line:` header into each `.snap.new`. Accept with `cargo insta accept`, or strip the header before you commit a hand-moved `.snap.new`.
+
+### Property tests
+
+Use `proptest` for parsers (TOML override values, agent payloads, framing), serializers (round-trip schema types), and state-machine transitions (no path leaves a final state).
 
 ### Writing a test
 
 - A provider stub that stays alive answers informational probes such as `--version` at once; a stub that sleeps through one spends the launch's startup deadline before the provider is spawned, and the failure appears only under full-suite load.
 - A unit test does not wait out a production command deadline (`LIST_SESSIONS_TIMEOUT`, `COMMAND_TIMEOUT` in `crates/rimz/src/mux/command.rs`): when the path behind a deadline matters, the test reaches it through a shorter bound it passes in, or through a cheaper failure such as a missing binary.
-- Production code never branches on `cfg!(test)` to pick a dependency: inject it (a `Host` trait) and let tests pass the fake.
+- Do not branch production code on `cfg!(test)` to pick a dependency. Inject the dependency (a `Host` trait) and let tests pass the fake.
 - When a change adds a verdict, marker, or timer to an existing state machine, enumerate how the new input interacts with each existing one and test the plausible simultaneous cases, at minimum a structural and a geometry change arriving together, and a pending classification against every backstop and retry path. Single-input tests pass on a machine whose bugs all live in the combined states.
-- A test of a polling consumer holds each state the consumer must observe open for at least three poll intervals: a state that opens and closes between two polls is never seen, and the test then passes on the broken build. The negative control for a regression test is the fix commit's files checked out from its parent, run several times when the test is timing-based, never a hand-made mutant of the fixed code.
+- A test of a polling consumer holds each state the consumer must observe open for at least three poll intervals: a state that opens and closes between two polls is never seen, and the test then passes on the broken build.
+- The negative control for a regression test is the fix commit's files checked out from its parent, run several times when the test is timing-based, never a hand-made mutant of the fixed code.
 - A test of a bounded retry or poll includes a case that succeeds only after several retries and a case asserting that giving up waits at least the bound. Besides the parent-tree negative control, run these cases once against the loop cut down to a single retry: one of them must fail, or the tests do not pin the loop over the simpler design.
 - A test of a timing floor or rate limit queues the inputs it means to merge before the worker can wake (sent from inside the cycle, or held behind a barrier) instead of racing a sleep against the floor; it asserts a delay's lower bound against the floor and its upper bound against the floor plus generous slack.
 - A table test that must be shown red first collects every case's result and asserts the whole vector in one `assert_eq!`, so one failing run shows each case.
