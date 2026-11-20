@@ -4648,7 +4648,8 @@ path = "crates/rimz/src/store"
 # RunRecord::visit_grant reads one step's own grant for every cap reader (+1).
 # RunRecord::moving_to names the step a staged resume move sends the run to, for the extend
 # grant and both receipts (+1).
-surface-budget = 686
+# The open-runs listing serves harness::run's open team and peer run lookups (+1).
+surface-budget = 687
 
 [[verdict]]
 kind = "item"

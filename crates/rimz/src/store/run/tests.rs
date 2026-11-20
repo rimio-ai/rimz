@@ -131,6 +131,129 @@ fn run_listing_drops_deleted_records_and_ignores_temps() {
     assert!(empty.is_empty());
 }
 
+/// `open_listing` on a fresh thread, so only the cache file carries what
+/// earlier listings saw, beside the record files the call read.
+fn open_cold(dir: &Path, cache: &Path) -> (Vec<RunRecord>, usize) {
+    let (dir, cache) = (dir.to_owned(), cache.to_owned());
+    std::thread::spawn(move || {
+        let before = testkit::record_reads();
+        let open = open_listing(&dir, &cache).unwrap();
+        (open, testkit::record_reads() - before)
+    })
+    .join()
+    .unwrap()
+}
+
+/// The full listing's non-terminal records, read on a fresh thread.
+fn open_by_full_listing(dir: &Path) -> Vec<RunRecord> {
+    let dir = dir.to_owned();
+    std::thread::spawn(move || {
+        listing(&dir)
+            .unwrap()
+            .iter()
+            .filter(|record| !record.status.is_terminal())
+            .cloned()
+            .collect()
+    })
+    .join()
+    .unwrap()
+}
+
+fn record_with(status: RunStatus) -> RunRecord {
+    let mut record = listing_record();
+    record.status = status;
+    record
+}
+
+#[test]
+fn open_listing_matches_the_full_listing_in_every_cache_state() {
+    let dir = tempdir().unwrap();
+    let runs = dir.path().join("runs");
+    let cache = dir.path().join("cache/terminal-runs.json");
+    fs::create_dir_all(&runs).unwrap();
+    fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    let mut reopened = record_with(RunStatus::Completed);
+    let mut rewritten = record_with(RunStatus::Failed);
+    let collected = record_with(RunStatus::Canceled);
+    let done = record_with(RunStatus::Completed);
+    for record in [
+        &record_with(RunStatus::Running),
+        &record_with(RunStatus::Pending),
+        &done,
+        &reopened,
+        &rewritten,
+        &collected,
+    ] {
+        write(&runs, record).unwrap();
+    }
+    let check = |state: &str| {
+        let (open, _) = open_cold(&runs, &cache);
+        assert_eq!(open, open_by_full_listing(&runs), "{state}");
+    };
+    check("absent cache");
+    check("cache this listing wrote");
+    let earlier = fs::read(&cache).unwrap_or_default();
+    fs::write(&cache, "{ not json").unwrap();
+    check("corrupt cache");
+    check("cache rewritten over the corrupt one");
+
+    reopened.status = RunStatus::Running;
+    write(&runs, &reopened).unwrap();
+    check("a terminal record reopened in place under the same id");
+
+    rewritten.status = RunStatus::Running;
+    fs::write(
+        run_path(&runs, &rewritten.run_id),
+        serde_json::to_vec(&rewritten).unwrap(),
+    )
+    .unwrap();
+    check("a terminal record rewritten in place by another writer");
+
+    fs::remove_file(run_path(&runs, &collected.run_id)).unwrap();
+    check("a cached terminal record gc deleted");
+    let cached = fs::read_to_string(&cache).unwrap_or_default();
+    assert!(
+        cached.contains(done.run_id.as_str()) && !cached.contains(collected.run_id.as_str()),
+        "the cache names each terminal record present and drops a deleted one: {cached}"
+    );
+
+    fs::write(&cache, &earlier).unwrap();
+    check("an older cache a concurrent reader published last");
+}
+
+#[test]
+fn open_listing_with_a_warm_cache_reads_only_open_records() {
+    let mut reads = Vec::new();
+    for terminal in [3, 30] {
+        let dir = tempdir().unwrap();
+        let runs = dir.path().join("runs");
+        let cache = dir.path().join("terminal-runs.json");
+        write(&runs, &record_with(RunStatus::Running)).unwrap();
+        for _ in 0..terminal {
+            write(&runs, &record_with(RunStatus::Completed)).unwrap();
+        }
+        let (_, cold) = open_cold(&runs, &cache);
+        assert_eq!(cold, terminal + 1);
+        let (open, warm) = open_cold(&runs, &cache);
+        assert_eq!(open.len(), 1);
+        reads.push(warm);
+    }
+    assert_eq!(reads, [1, 1], "a warm cache reads the open record alone");
+}
+
+#[test]
+fn open_listing_reread_in_one_thread_sees_a_reopen() {
+    let dir = tempdir().unwrap();
+    let runs = dir.path().join("runs");
+    let cache = dir.path().join("terminal-runs.json");
+    let mut record = record_with(RunStatus::Completed);
+    write(&runs, &record).unwrap();
+    assert!(open_listing(&runs, &cache).unwrap().is_empty());
+    record.status = RunStatus::Running;
+    write(&runs, &record).unwrap();
+    assert_eq!(open_listing(&runs, &cache).unwrap(), [record]);
+}
+
 #[test]
 fn status_label_is_the_wire_form_with_spaces() {
     for status in [

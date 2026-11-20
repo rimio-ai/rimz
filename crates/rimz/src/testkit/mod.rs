@@ -13,6 +13,7 @@ pub use crate::disk::parse_cache::testkit::read_counts as parse_cache_read_count
 pub use crate::proc::testkit::spawn_count;
 pub use crate::sidebar_pane::app::{HiddenViewSweep, start_hidden_view_sweep};
 pub use crate::store::event_log::testkit::{bytes_read, bytes_read_under, bytes_written};
+pub use crate::store::run::testkit::record_reads as run_record_reads;
 pub use crate::store::sidecar::testkit::read_counts as sidecar_read_counts;
 pub use crate::store::snapshot::fold_testkit::{
     carryover_bytes_parsed, fold_row_copies, rollup_rows_materialized,

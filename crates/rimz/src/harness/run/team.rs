@@ -60,12 +60,11 @@ pub(super) fn create_team_run(
 /// The open team run whose leader is `seat`'s launch.
 pub fn open_team_run(paths: &StatePaths, seat: &AgentState) -> Result<Option<RunRecord>> {
     let launch_id = seat.launch_id.as_ref().unwrap_or(&seat.agent_id);
-    Ok(super::list(paths)?.into_iter().find(|record| {
-        !record.status.is_terminal()
-            && record
-                .team
-                .as_ref()
-                .is_some_and(|team| &team.launch_id == launch_id)
+    Ok(super::open_listing(paths)?.into_iter().find(|record| {
+        record
+            .team
+            .as_ref()
+            .is_some_and(|team| &team.launch_id == launch_id)
     }))
 }
 
