@@ -152,9 +152,10 @@ pub struct AccountStamps {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_id_at_ms: Option<u64>,
     /// The reading instant of the last identity switch or logout, never
-    /// lowered, except that a live switch sets it no later than the switching
-    /// session's own earliest window. A live or usage reading produced before
-    /// it describes the previous identity and applies nothing.
+    /// lowered, except that a live switch by a session whose earliest window is
+    /// no older than the replaced account id's stamp sets it at that window,
+    /// still never below an earlier floor. A live or usage reading produced
+    /// before it describes the previous identity and applies nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub floor_at_ms: Option<u64>,
     /// Whether a probe stated the stored account id, whatever that probe's
