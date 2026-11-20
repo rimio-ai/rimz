@@ -1554,7 +1554,7 @@ fn claude_redeem_fixture(
     std::fs::write(
         env.rimz_home().join("config.toml"),
         format!(
-            "[resume]\nauto_redeem = true\n[accounts.claude.spare]\nhome = {:?}\n",
+            "[harness.auto_redeem]\nlevel = \"paced\"\n[accounts.claude.spare]\nhome = {:?}\n",
             spare.to_str().unwrap()
         ),
     )

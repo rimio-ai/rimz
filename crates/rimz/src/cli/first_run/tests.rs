@@ -70,7 +70,7 @@ fn hand_changed() -> MachineConfig {
     config.theme.glyphs.set = Some("nerd_font".to_owned());
     config.theme.pets.enabled = true;
     config.resume.auto_continue = true;
-    config.resume.auto_redeem = true;
+    config.harness.auto_redeem = toml::from_str("[codex]\nlevel = \"paced\"").unwrap();
     config.harness.idle_compact = IdleCompact::Tokens(250_000);
     config
 }
@@ -253,7 +253,7 @@ fn review_fits_eighty_columns_and_states_changes_without_colour() {
             ("theme.glyphs.set", "unicode".to_owned()),
             ("theme.pets.enabled", "false".to_owned()),
             ("resume.auto_continue", "false".to_owned()),
-            ("resume.auto_redeem", "false".to_owned()),
+            ("harness.auto_redeem.codex.level", "rescue".to_owned()),
             ("harness.idle_compact", "off".to_owned()),
         ]
     );
@@ -482,21 +482,35 @@ fn enter_at_away_on_a_fresh_config_leaves_idle_compaction_unwritten() {
 }
 
 #[test]
+fn the_away_row_reads_any_redeem_level_above_rescue_as_on() {
+    let row = AWAY_ROWS
+        .iter()
+        .find(|row| row.key == "harness.auto_redeem.codex.level")
+        .unwrap();
+    let mut config = MachineConfig::default();
+    for (level, on) in [("rescue", false), ("gain", true), ("paced", true)] {
+        config.harness.auto_redeem =
+            toml::from_str(&format!("[codex]\nlevel = \"{level}\"")).unwrap();
+        assert_eq!((row.is_on)(&config), on, "{level}");
+    }
+}
+
+#[test]
 fn without_codex_the_away_question_never_touches_auto_redeem() {
     let mut config = MachineConfig::default();
-    config.resume.auto_redeem = true;
+    config.harness.auto_redeem = toml::from_str("[codex]\nlevel = \"paced\"").unwrap();
     let mut questions = questions(&config, false, setup(MuxName::Tmux, false));
     let (_, rendered) = ask(&mut questions, Question::Away, b"3\n1 2\n\n");
     assert!(!rendered.contains("auto-redeem"));
     assert!(rendered.contains("  Enter row numbers from 1 to 2, or press Enter."));
     assert!(rendered.contains("Numbers flip a row (for example: 1 2). Enter keeps these."));
     assert!(!rendered.contains("for example: 1 3"));
-    assert!(!change_keys(&questions).contains(&"resume.auto_redeem"));
+    assert!(!change_keys(&questions).contains(&"harness.auto_redeem.codex.level"));
     assert_eq!(questions.current.away.len(), 2);
 
     let mut with = questions_with(&config, true, setup(MuxName::Tmux, false), None);
     let (_, rendered) = ask(&mut with, Question::Away, b"\n");
-    assert!(rendered.contains("spends a Codex reset credit when a limit blocks"));
+    assert!(rendered.contains("spends a Codex reset credit when a limit blocks 3d+"));
 }
 
 #[test]

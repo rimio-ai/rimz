@@ -26,7 +26,7 @@ use crate::store::{
 
 pub struct LaunchAvailability {
     spend: BTreeMap<AgentKind, SpendFacts>,
-    resume: crate::config::ResumeConfig,
+    auto_redeem: crate::config::AutoRedeemConfig,
     logged_out: BTreeSet<AgentKind>,
     daily_caps: BTreeMap<AgentKind, TierSkipReason>,
     model_pins: BTreeMap<AgentKind, BTreeMap<String, String>>,
@@ -88,7 +88,7 @@ impl LaunchAvailability {
                 .filter(|(_, key)| in_use.contains(*key))
                 .map(|(kind, key)| (kind.clone(), SpendFacts::read(runtime, key, now)))
                 .collect(),
-            resume: config.resume.clone(),
+            auto_redeem: config.harness.auto_redeem.clone(),
             logged_out: Default::default(),
             daily_caps: Default::default(),
             model_pins: config.models.clone(),
@@ -144,7 +144,7 @@ impl LaunchAvailability {
             .and_then(|pins| pins.get(model))
             .map_or(model, String::as_str);
         if let Some(facts) = self.spend.get(kind)
-            && facts.step(&self.resume, Some(model), self.now) == SpendStep::Spent
+            && facts.step(&self.auto_redeem, Some(model), self.now) == SpendStep::Spent
             && let Some(capacity) = &facts.capacity
         {
             return Some(TierSkipReason::Exhausted {

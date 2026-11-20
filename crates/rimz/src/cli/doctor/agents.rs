@@ -739,7 +739,7 @@ fn collect_account_usage(
             .and_then(|capacity| capacity.latest_spent_window_reset(now));
         let standing = if resets_at.is_some() {
             AccountStanding::Spent
-        } else if SpendFacts::read(runtime, &key, now).step(&config.resume, None, now)
+        } else if SpendFacts::read(runtime, &key, now).step(&config.harness.auto_redeem, None, now)
             == SpendStep::Spent
         {
             AccountStanding::Exhausted

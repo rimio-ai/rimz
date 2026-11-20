@@ -478,6 +478,8 @@ pub struct HarnessConfig {
     /// covers the producer tick, helper spawn, and submission.
     #[serde(with = "prompt_cache_margin_serde")]
     pub prompt_cache_margin: Duration,
+    /// What RimZ spends at the limit, per provider.
+    pub auto_redeem: super::AutoRedeemConfig,
 }
 
 impl Default for HarnessConfig {
@@ -498,6 +500,7 @@ impl Default for HarnessConfig {
             keep_warm: KeepWarm::Off,
             keep_warm_min_ttl: Some(DEFAULT_KEEP_WARM_MIN_TTL),
             prompt_cache_margin: DEFAULT_PROMPT_CACHE_MARGIN,
+            auto_redeem: super::AutoRedeemConfig::default(),
         }
     }
 }

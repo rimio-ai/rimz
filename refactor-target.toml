@@ -1107,6 +1107,7 @@ reason = "Signal retirement reads shared durable rows through StatePaths without
 path = "crates/rimz/src/config"
 upward-dependencies = [
     "agents",
+    "harness::auto_redeem",
     "harness::budget",
     "harness::name",
     "harness::schedule",
@@ -1120,6 +1121,7 @@ upward-dependencies = [
 # The compaction seat selects the harness brief.
 # The [gc] section and its span parser feed `rimz gc` and the host's auto-gc check.
 # Doctor and start notices classify agents-home fragments and find a legacy root through config's fragment walk.
+# [harness.auto_redeem] reads only the subtables of kinds the redemption policy serves, and warns about the rest.
 # The Markdown definition loader, its rows and errors feed config load and `agents validate`;
 # per-name failures feed launch refusal through the effective-config failed-reference gate.
 # The existing frontmatter splitter supplies Codex's host skill key parser.
@@ -1180,7 +1182,8 @@ upward-dependencies = [
 # read_logo_file and parse_logo_svg give the sidebar's logo worker the checks config validates with (+2).
 # RemoteConfig carries the laptop's `[remote]` paste settings to `remote connect` (+1).
 # mcps_limit tells both MCP adapters whether a profile's `mcps` list limits the launch (+1).
-surface-budget = 299
+# The [harness.auto_redeem] table exports its config, level, and resolved policy to every ladder reader.
+surface-budget = 302
 
 [[verdict]]
 kind = "item"
@@ -7218,7 +7221,7 @@ reason = "Pass 12: TurnCap forbids /day while DayCap requires it, with distinct 
 [[verdict]]
 kind = "item"
 key = "config::harness::HarnessConfig"
-reason = "Pass 12: idle compaction, task timeout and auto_redeem_min_gain share utils::time::parse_duration_units but keep units and storage explicit at each boundary (ffc1f2340)."
+reason = "Pass 12: idle compaction, task timeout and auto_redeem.min_gain share utils::time::parse_duration_units but keep units and storage explicit at each boundary (ffc1f2340)."
 
 [[verdict]]
 kind = "item"
@@ -7228,7 +7231,7 @@ reason = "Pass 12: timeout uses the shared duration parser with its own accepted
 [[verdict]]
 kind = "item"
 key = "config::resume::ResumeConfig"
-reason = "Pass 12: auto_redeem_min_gain uses the shared duration parser with boundary-specific units and storage; backoff and typed-duration redesign remain deferred (ffc1f2340, ce0c00897, e6a4e8829)."
+reason = "Pass 12: auto-redeem min_gain moved to harness.auto_redeem, which keeps the shared duration parser with boundary-specific units and storage; backoff and typed-duration redesign remain deferred (ffc1f2340, ce0c00897, e6a4e8829)."
 
 [[verdict]]
 kind = "item"

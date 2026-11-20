@@ -19,7 +19,7 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
         &request.login,
         request.reason,
         request.request_id,
-        &config.resume,
+        &config.harness.auto_redeem,
     );
     match result {
         Ok(Some(redeemed)) => {

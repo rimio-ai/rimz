@@ -218,7 +218,9 @@ pub(super) fn list(args: ListArgs, target: Option<&str>, globals: &GlobalFlags) 
                 .map(|day| day.timestamp().as_second().max(0) as u64),
             config: &config,
             installed: &installed,
-            spend_step: &|key| SpendFacts::read(&runtime, key, now).step(&config.resume, None, now),
+            spend_step: &|key| {
+                SpendFacts::read(&runtime, key, now).step(&config.harness.auto_redeem, None, now)
+            },
         },
     );
     let readings = reports

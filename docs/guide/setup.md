@@ -220,7 +220,7 @@ So setup lists these behaviors as numbered rows with their current state and wha
 | Row | What it does when on |
 | --- | --- |
 | auto-continue | types `continue` into a parked agent's pane after a rate limit or an API error, once the clock says the retry can succeed |
-| auto-redeem | spends one of the reset credits a Codex plan grants, refilling a spent usage window on the spot, when doing so unblocks at least `resume.auto_redeem_min_gain` of blocked time. Offered only when `codex` is on the machine |
+| auto-redeem | spends one of the reset credits a Codex plan grants, refilling a spent usage window on the spot, when doing so unblocks at least `harness.auto_redeem.min_gain` (72h by default) of blocked time. It reads on at level `gain` or `paced`; turning it on writes `harness.auto_redeem.codex.level = "paced"`, off writes `"rescue"` ([auto-redeem levels](./configuration.md#auto-redeem)). Offered only when `codex` is on the machine |
 | idle compaction | has an idle agent whose context has reached its token floor (`100k` by default) summarize its conversation shortly before its provider prompt cache expires. The detail behind the summary is gone |
 
 ```console
@@ -229,13 +229,13 @@ So setup lists these behaviors as numbered rows with their current state and wha
 Each of these spends something of yours and is logged (rimz stats --assists).
 
   1  [ ] auto-continue    types "continue" once a rate limit or API error clears
-  2  [ ] auto-redeem      spends a Codex reset credit when a limit blocks 12h+
+  2  [ ] auto-redeem      spends a Codex reset credit when a limit blocks 3d+
   3  [x] idle compaction  summarizes an idle 100k+ conversation; detail is gone
 
 Numbers flip a row (for example: 1 3). Enter keeps these. [keep] 1
 
   1  [x] auto-continue    types "continue" once a rate limit or API error clears
-  2  [ ] auto-redeem      spends a Codex reset credit when a limit blocks 12h+
+  2  [ ] auto-redeem      spends a Codex reset credit when a limit blocks 3d+
   3  [x] idle compaction  summarizes an idle 100k+ conversation; detail is gone
 
 Numbers flip a row (for example: 1 3). Enter keeps these. [keep]

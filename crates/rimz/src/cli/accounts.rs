@@ -228,7 +228,12 @@ fn redeem(
     };
     runtime.ensure_shared_dirs()?;
     let key = login.key();
-    let preview = prepare_manual_redeem(&runtime, &key, &login.env(&ambient), &machine.resume)?;
+    let preview = prepare_manual_redeem(
+        &runtime,
+        &key,
+        &login.env(&ambient),
+        &machine.harness.auto_redeem,
+    )?;
     let mut out = render::out();
     write_redeem_preview(
         &mut out,

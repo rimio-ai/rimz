@@ -184,9 +184,6 @@ auto_continue = false
 auto_continue_backoff_secs = [180, 300]
 auto_continue_max_retries = 12
 auto_continue_text = "continue"
-auto_redeem = false
-spend_order = "credits_first"
-auto_redeem_min_gain = "12h"
 ```
 
 Resume covers two moments: bringing the room back after the machine or the multiplexer went down, and picking a turn back up after a provider parked it. The behavior model is [loops → keep the fleet moving](./loops.md#keep-the-fleet-moving); these are its keys.
@@ -205,13 +202,33 @@ A running room never asks about parked agents, whether you use Zellij or tmux. U
 
 Claude Code has its own resume at a usage limit: shortly after the limit resets, it submits a prompt of its own asking Claude to continue the task it was on. With `auto_continue` on, RimZ launches Claude with that resume on (`autoContinueAtUsageLimit: true` in the launch's settings), which outranks an off you set in Claude's own `/config`, so Claude picks the turn back up first. RimZ's own continue for a Claude rate-limit or spend-limit park is the fallback: it waits five minutes past the reset and is typed only if no turn has started by then. A value you set for `autoContinueAtUsageLimit` in a profile's own `--settings` wins; with it off, Claude can open its limit menu by itself, and RimZ's continue then lands in that menu until you close it. The choice is fixed when the agent launches: changing `auto_continue` reaches a running Claude agent at its next restart.
 
-**A Codex reset credit about to go to waste.** A Codex plan grants credits that refill a spent usage window on the spot, and they expire. `auto_redeem = true` lets RimZ spend one for you when an in-use account's subscription window is spent and a useful reset is the next source of capacity, by [three rules](./loops.md#auto-redeem) that the assist record names afterwards. It does not wait for an agent to park. One of those rules, rescuing a credit within thirty minutes of its expiry, runs whether or not you turn the key on, because the capacity is already paid for. That rescue covers every Codex account you declared, not only the ones this room uses.
+`rimz setup` offers `auto_continue`, [auto-redeem](#auto-redeem) (when Codex is installed), and `idle_compact` as numbered rows in one question, each flipped by its number; auto-redeem writes `level = "paced"` under `[harness.auto_redeem.codex]` when on and `"rescue"` when off, idle compaction starts at `100k`, turning it off writes `off`, and turning it back on writes `100k` ([set up your machine](./setup.md#while-youre-away)).
+
+### Auto-redeem
+
+```toml
+[harness.auto_redeem]
+level = "rescue"
+min_gain = "72h"
+spend_order = "credits_first"
+
+[harness.auto_redeem.codex]
+level = "paced"
+```
+
+A Codex plan grants reset credits that refill a spent usage window on the spot, and they expire. `level` sets how far RimZ goes in spending them for you, by the [rules in loops](./loops.md#auto-redeem) that the assist record names afterwards. It does not wait for an agent to park.
+
+- **`rescue` (default) spends a credit only within thirty minutes of its expiry,** because the capacity is already paid for. The rescue runs at every level and covers every Codex account you declared, not only the ones this room uses.
+- **`gain` also refills an in-use account's spent subscription window** when its natural reset is at least `min_gain` away, since that is how much blocked time the credit recovers.
+- **`paced` also spreads credits that expire together** over the week, so each lands on a window with room to use it.
+
+The table's keys are defaults for every provider. A subtable named for a provider, such as `[harness.auto_redeem.codex]`, sets only the keys that differ for it. Codex is the provider auto-redeem serves: room entry warns about a subtable for any other provider, and the room runs without it.
+
+`min_gain` takes `s`, `m`, `h`, or `d` and defaults to `72h`. Lower it to redeem into a window that would block for less than three days.
 
 `spend_order` chooses which paid-for capacity comes next after the subscription: `credits_first` (default) uses available paid credit before a banked reset; `resets_first` prefers a reset when the redemption rules allow it, then paid credit. Expiry rescue runs under either order. Claude can use paid extra usage, but only Codex supports automatic resets.
 
-`auto_redeem_min_gain` is the threshold the main rule uses: RimZ redeems into a spent window when its natural reset is at least this far away, since that is how much blocked time the credit recovers. It takes `s`, `m`, `h`, or `d` and defaults to `12h`. Raise it to redeem only when a window would otherwise block most of a day.
-
-`rimz setup` offers `auto_continue`, `auto_redeem` (when Codex is installed), and `idle_compact` as numbered rows in one question, each flipped by its number; idle compaction starts at `100k`, turning it off writes `off`, and turning it back on writes `100k` ([set up your machine](./setup.md#while-youre-away)).
+The `[resume]` keys `auto_redeem`, `auto_redeem_min_gain`, and `spend_order` have no effect: room entry warns about each and names the key under `[harness.auto_redeem]` that replaces it.
 
 ### Dollar budgets
 

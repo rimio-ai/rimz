@@ -165,6 +165,9 @@ pub(super) fn judge(
     for (setting, message) in machine.accounts.label_warnings() {
         warn(setting, message);
     }
+    for (setting, message) in machine.harness.auto_redeem.provider_warnings() {
+        warn(setting, message);
+    }
     let (catalog, declarations) = crate::agents::LoginCatalog::room_view(&machine.accounts);
     let mut account_warnings = BTreeMap::new();
     for (kind, error) in &declarations {

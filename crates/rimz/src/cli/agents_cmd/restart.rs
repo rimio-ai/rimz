@@ -349,7 +349,7 @@ pub(in crate::cli) fn restart_resolved(
             store.runtime_paths(),
             agent,
             login.as_ref(),
-            &machine_config.resume,
+            &machine_config.harness.auto_redeem,
             jiff::Timestamp::now(),
         )?;
     }
@@ -1059,7 +1059,7 @@ fn refuse_spent(
     runtime: &rimz::RuntimePaths,
     agent: &AgentState,
     login: Option<&rimz::ids::LoginName>,
-    config: &rimz::config::ResumeConfig,
+    config: &rimz::config::AutoRedeemConfig,
     now: jiff::Timestamp,
 ) -> Result<()> {
     let key = rimz::ids::LoginKey {

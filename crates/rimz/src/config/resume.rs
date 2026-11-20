@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use crate::utils::time::{DurationUnit, parse_duration_units};
-
 /// The default nudge an enabled auto-continue sends a parked agent — the text a
 /// human would type to pick the turn back up.
 const DEFAULT_AUTO_CONTINUE_TEXT: &str = "continue";
@@ -17,25 +15,6 @@ const DEFAULT_AUTO_CONTINUE_BACKOFF_SECS: &[u64] = &[180, 300];
 /// this spans ~58min (180 + 300x11) before the producer stops attempting
 /// and leaves the row parked.
 const DEFAULT_AUTO_CONTINUE_MAX_RETRIES: u32 = 12;
-
-/// Minimum blocked time an automatic reset-credit redemption buys by default.
-const DEFAULT_AUTO_REDEEM_MIN_GAIN: &str = "12h";
-
-const AUTO_REDEEM_DURATION_UNITS: &[DurationUnit] = &[
-    DurationUnit::Second,
-    DurationUnit::Minute,
-    DurationUnit::Hour,
-    DurationUnit::Day,
-];
-
-/// Which capacity follows the included subscription windows.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SpendOrder {
-    #[default]
-    CreditsFirst,
-    ResetsFirst,
-}
 
 /// Resume behavior, in two tenses. On session *rebirth* after a machine reboot
 /// — detected by boot id, or by boot time where the boot id is unreadable — or
@@ -80,17 +59,6 @@ pub struct ResumeConfig {
     /// text owes that compaction no continue and withholds the smart-compaction
     /// reminder. Sent through the message queue as a paste plus Enter.
     pub auto_continue_text: String,
-    /// Spend a Codex reset credit automatically when an in-use account's spend
-    /// ladder reaches a useful reset. Expiry rescue remains
-    /// enabled independently of this opt-in.
-    pub auto_redeem: bool,
-    /// Prefer paid usage or a useful banked reset after the subscription is spent.
-    pub spend_order: SpendOrder,
-    /// Minimum blocked time an automatic redemption must recover. A credit that
-    /// keeps the window's schedule (not a Codex credit) and would expire shortly
-    /// after the natural reset redeems regardless.
-    #[serde(deserialize_with = "deserialize_auto_redeem_min_gain")]
-    pub auto_redeem_min_gain: String,
 }
 
 /// The default ceiling on agents auto-resumed into one reborn session, so a
@@ -107,9 +75,6 @@ impl Default for ResumeConfig {
             auto_continue_backoff_secs: DEFAULT_AUTO_CONTINUE_BACKOFF_SECS.to_vec(),
             auto_continue_max_retries: DEFAULT_AUTO_CONTINUE_MAX_RETRIES,
             auto_continue_text: DEFAULT_AUTO_CONTINUE_TEXT.to_owned(),
-            auto_redeem: false,
-            spend_order: SpendOrder::default(),
-            auto_redeem_min_gain: DEFAULT_AUTO_REDEEM_MIN_GAIN.to_owned(),
         }
     }
 }
@@ -124,51 +89,11 @@ impl ResumeConfig {
             .unwrap_or(180);
         Duration::from_secs(backoff_secs.get(idx).copied().unwrap_or(fallback))
     }
-
-    pub(crate) fn auto_redeem_min_gain(&self) -> Duration {
-        parse_auto_redeem_min_gain(&self.auto_redeem_min_gain)
-            .unwrap_or_else(|_| default_auto_redeem_min_gain())
-    }
-}
-
-fn default_auto_redeem_min_gain() -> Duration {
-    // This in-source default is validated by `auto_redeem_min_gain_defaults_and_parses_supported_units`.
-    parse_auto_redeem_min_gain(DEFAULT_AUTO_REDEEM_MIN_GAIN)
-        .expect("DEFAULT_AUTO_REDEEM_MIN_GAIN must be a supported duration")
-}
-
-fn deserialize_auto_redeem_min_gain<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    parse_auto_redeem_min_gain(&value).map_err(serde::de::Error::custom)?;
-    Ok(value)
-}
-
-pub(super) fn parse_auto_redeem_min_gain(value: &str) -> Result<Duration, String> {
-    parse_duration_units(value, AUTO_REDEEM_DURATION_UNITS).map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn spend_order_defaults_to_credits_first_and_rejects_unknown_values() {
-        let config: ResumeConfig = toml::from_str("").unwrap();
-        assert_eq!(
-            serde_json::to_value(config).unwrap()["spend_order"],
-            "credits_first"
-        );
-        let error = toml::from_str::<ResumeConfig>("spend_order = 'typo'");
-        assert!(error.is_err(), "unknown spend order must be refused");
-        let error = error.unwrap_err().to_string();
-        assert!(
-            error.contains("credits_first") && error.contains("resets_first"),
-            "{error}"
-        );
-    }
 
     #[test]
     fn overload_backoff_expands_then_repeats_the_last_step() {
@@ -187,31 +112,5 @@ mod tests {
     #[test]
     fn default_resume_ceiling_is_128() {
         assert_eq!(ResumeConfig::default().max, 128);
-    }
-
-    #[test]
-    fn auto_redeem_min_gain_defaults_and_parses_supported_units() {
-        let default: ResumeConfig = toml::from_str("").unwrap();
-        assert_eq!(
-            default.auto_redeem_min_gain(),
-            Duration::from_secs(12 * 3600)
-        );
-
-        for (raw, seconds) in [("30s", 30), ("20m", 1200), ("4h", 14_400), ("3d", 259_200)] {
-            let config: ResumeConfig =
-                toml::from_str(&format!("auto_redeem_min_gain = \"{raw}\"")).unwrap();
-            assert_eq!(config.auto_redeem_min_gain(), Duration::from_secs(seconds));
-        }
-    }
-
-    #[test]
-    fn auto_redeem_min_gain_rejects_invalid_config() {
-        for raw in ["", "12", "1w", "nope"] {
-            assert!(
-                toml::from_str::<ResumeConfig>(&format!("auto_redeem_min_gain = \"{raw}\""))
-                    .is_err(),
-                "{raw}"
-            );
-        }
     }
 }

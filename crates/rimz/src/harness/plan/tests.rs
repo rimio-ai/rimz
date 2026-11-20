@@ -943,10 +943,16 @@ fn launch_availability_follows_the_spend_ladder() {
         .unwrap();
     };
     let config = |spend_order: SpendOrder, min_gain: &str| {
+        // The codex subtable alone sets the policy, so routing must resolve it per kind.
+        let order = match spend_order {
+            SpendOrder::CreditsFirst => "credits_first",
+            SpendOrder::ResetsFirst => "resets_first",
+        };
         let mut config = MachineConfig::default();
-        config.resume.auto_redeem = true;
-        config.resume.spend_order = spend_order;
-        config.resume.auto_redeem_min_gain = min_gain.into();
+        config.harness.auto_redeem = toml::from_str(&format!(
+            "[codex]\nlevel = \"paced\"\nspend_order = \"{order}\"\nmin_gain = \"{min_gain}\""
+        ))
+        .unwrap();
         config
     };
     let exhausted = Some(TierSkipReason::Exhausted { until: Some(reset) });

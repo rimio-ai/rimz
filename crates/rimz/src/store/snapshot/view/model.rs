@@ -120,8 +120,8 @@ pub struct DailyBudgetView {
 
 /// The reset-credit marker's answer: who redeems the banked credits, and
 /// whether now is a good time. RimZ redeems where the provider supports
-/// automatic redemption and auto-redeem is on; the credits are the user's
-/// everywhere else, judged by the same rule as if auto-redeem were on.
+/// automatic redemption at the login's `gain` or `paced` auto-redeem level; the
+/// credits are the user's everywhere else, judged by the same rule as at `paced`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RedeemForecast {
@@ -132,7 +132,7 @@ pub enum RedeemForecast {
     Armed,
     /// RimZ redeems, and nothing would fire: paid credit comes first or the
     /// natural reset is near. Firm until that reset only when it is nearer than
-    /// `auto_redeem_min_gain` and the nearest credit outlives it by a day.
+    /// the login's `min_gain` and the nearest credit outlives it by a day.
     Holding,
     /// The user's: the longest window has under a tenth left, and a credit
     /// would be worth redeeming once it runs dry.
