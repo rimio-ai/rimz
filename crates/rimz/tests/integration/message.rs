@@ -5517,6 +5517,9 @@ fn stop_cancels_a_never_bound_launch_without_recording_a_session_end() {
     }
 }
 
+/// An agent whose process RimZ does not know is stopped only once its end is recorded:
+/// without one the stop fails in the user's words; an end recorded while the stop waits
+/// makes it a stop.
 #[test]
 fn stop_of_an_unknown_process_succeeds_only_once_its_end_is_recorded() {
     let env = Env::new();
