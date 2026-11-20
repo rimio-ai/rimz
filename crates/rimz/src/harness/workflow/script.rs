@@ -171,7 +171,10 @@ pub(super) fn evaluate(
         }
         Some(Kind::Script(invocation)) => invocation,
         // A judge is an agent the engine launches, never a hosted evaluation.
-        Some(Kind::Judge(_) | Kind::Command(_) | Kind::Agent(_) | Kind::Message(_)) | None => {
+        Some(
+            Kind::Judge(_) | Kind::Command(_) | Kind::Agent(_) | Kind::Message(_) | Kind::Runs(_),
+        )
+        | None => {
             return Evaluation::failed(None, "check needs exactly one runner");
         }
     };

@@ -1490,6 +1490,7 @@ fn schema_is_derived_from_the_loader_types() {
         "AgentNode",
         "CommandNode",
         "MessageNode",
+        "RunsNode",
         "TestNode",
         "ScriptNode",
         "JudgeNode",

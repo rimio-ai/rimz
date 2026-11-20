@@ -48,7 +48,7 @@ pub(super) fn misfit(spec: &Definition, record: &RunRecord) -> Option<String> {
                 check_kind.is_some() && !matches!(check_kind, Some(Kind::Judge(_))),
                 "a check",
             ),
-            AttemptKind::Workflow => (true, ""),
+            AttemptKind::Workflow => (matches!(step_kind, Some(Kind::Runs(_))), "a runs step"),
         };
         if !fits {
             return if spec.node(node).is_none() {

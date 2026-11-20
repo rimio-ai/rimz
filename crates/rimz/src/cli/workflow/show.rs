@@ -135,6 +135,7 @@ pub(super) fn render(
     }
     view.rail(&mut out)?;
     view.visits(&mut out)?;
+    started_runs(run, &mut out)?;
     view.trail(&mut out)?;
     writeln!(
         out,
@@ -157,14 +158,52 @@ pub(super) fn render(
     Ok(())
 }
 
-/// The sign file a live run's agent or message step reads at its next launch, whether or not it
-/// exists yet; a check has none.
+/// The sign file a live run's agent, message or runs step reads at its next launch, whether or not
+/// it exists yet; a check has none.
 fn sign(run: &resolve::Located, spec: &Definition) -> Option<std::path::PathBuf> {
     let step = matches!(
         spec.step(&run.record.node).and_then(|step| step.kind()),
-        Some(Kind::Agent(_) | Kind::Message(_))
+        Some(Kind::Agent(_) | Kind::Message(_) | Kind::Runs(_))
     );
     (step && !run.record.state.is_terminal()).then(|| run.paths.signs(Some(&run.record.node)))
+}
+
+/// The runs the run's `runs` step started, each with its workflow, state and checkout: those its
+/// live attempt waits on, else those it joined.
+fn started_runs(run: &resolve::Located, out: &mut impl Write) -> Result<()> {
+    let runs = run
+        .record
+        .attempt
+        .as_ref()
+        .and_then(|attempt| attempt.runs.as_ref())
+        .map_or(&run.record.joined, |started| &started.runs);
+    for started in runs {
+        let (state, checkout) =
+            match records::find(&run.state, &started.id)?.map(|found| found.class) {
+                Some(records::RunClass::Current(record)) => (
+                    workflow_view::state_word(
+                        record.state,
+                        record.outcome.as_ref().map(|outcome| &outcome.ending),
+                    ),
+                    Some(record.scope.path.clone()),
+                ),
+                Some(_) => ("unreadable", None),
+                None if started.ended.is_some() => (
+                    "ended",
+                    started
+                        .ended
+                        .as_ref()
+                        .and_then(|ended| ended.checkout.clone()),
+                ),
+                None => ("not started", None),
+            };
+        write!(out, "started {} {} {state}", started.id, started.workflow)?;
+        if let Some(checkout) = checkout {
+            write!(out, " · {}", render::home_relative_path(&checkout))?;
+        }
+        writeln!(out)?;
+    }
+    Ok(())
 }
 
 /// `workflow show` of a live run whose definition admission refuses: the run from its record

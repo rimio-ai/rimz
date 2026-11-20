@@ -8,17 +8,18 @@ use serde::Deserialize;
 use serde_path_to_error::Segment;
 
 use super::{
-    Case, Check, CheckTable, Header, OccupancyPolicy, SpecErr, Step, StepEdges, StepTable, Wake,
-    WorkflowSpec, nonempty_cases,
+    Case, Check, CheckTable, Header, OccupancyPolicy, RunEntry, SpecErr, Step, StepEdges,
+    StepTable, Wake, WorkflowSpec, nonempty_cases, nonempty_entries,
 };
 use crate::harness::throttle::Limit;
 use crate::store::workflow::StepLifecycle;
 
 /// Every node kind, by the table word a definition writes it under.
-pub(super) const KINDS: [&str; 8] = [
+pub(super) const KINDS: [&str; 9] = [
     "agent",
     "command",
     "message",
+    "runs",
     "test",
     "script",
     "judge",
@@ -37,6 +38,8 @@ pub struct WorkflowFile {
     command: BTreeMap<String, CommandNode>,
     #[serde(default)]
     message: BTreeMap<String, MessageNode>,
+    #[serde(default)]
+    runs: BTreeMap<String, RunsNode>,
     #[serde(default)]
     test: BTreeMap<String, TestNode>,
     #[serde(default)]
@@ -171,6 +174,25 @@ struct MessageEdges {
     undelivered: Option<String>,
     visits: Option<String>,
     deadline: Option<String>,
+}
+
+/// A step that starts each listed workflow as a run of its own and waits for every one to end.
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+struct RunsNode {
+    summary: Option<String>,
+    #[serde(deserialize_with = "nonempty_entries")]
+    #[schemars(length(min = 1))]
+    start: Vec<RunEntry>,
+    prompt_file: Option<String>,
+    timeout: Option<String>,
+    #[schemars(required)]
+    then: Option<String>,
+    #[serde(default)]
+    on: CommandEdges,
+    #[schemars(range(min = 1))]
+    max_visits: Option<u64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -400,6 +422,7 @@ fn step(table: StepTable) -> Step {
         system_prompt_file: None,
         worktree: None,
         session: None,
+        start: Vec::new(),
     }
 }
 
@@ -512,6 +535,31 @@ impl WorkflowFile {
                     },
                     max_visits: node.max_visits,
                     ..step(StepTable::Message)
+                },
+            );
+        }
+        for (name, node) in self.runs {
+            claim("runs", &name)?;
+            spec.steps.insert(
+                name,
+                Step {
+                    summary: node.summary,
+                    start: node.start,
+                    prompt_file: node.prompt_file,
+                    timeout: node.timeout,
+                    then: node.then.into_iter().collect(),
+                    on: StepEdges {
+                        failed: node.on.failed,
+                        causes: routes([
+                            ("died", node.on.died),
+                            ("timeout", node.on.timeout),
+                            ("visits", node.on.visits),
+                            ("deadline", node.on.deadline),
+                        ]),
+                        ..StepEdges::default()
+                    },
+                    max_visits: node.max_visits,
+                    ..step(StepTable::Runs)
                 },
             );
         }

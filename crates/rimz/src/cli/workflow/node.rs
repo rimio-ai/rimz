@@ -22,6 +22,7 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
         Some(Kind::Condition(_)) => "condition",
         Some(Kind::Sleep(_)) => "sleep",
         Some(Kind::Message(_)) => "message",
+        Some(Kind::Runs(_)) => "workflow",
         None => "invalid runner",
     };
     let (kind, runner, summary) = if let Some(check) = check {

@@ -419,6 +419,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
                 once,
                 starting: workflow::Starting::default(),
                 detach,
+                ..Default::default()
             };
             let task = loop_fire_json
                 .as_deref()
@@ -1133,6 +1134,7 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
                     "run" => row.run.as_deref().unwrap_or("—"),
                     "shell" => row.shell.as_deref().unwrap_or("—"),
                     "message" => "message",
+                    "workflow" => "workflow",
                     _ => row.agent.as_deref().unwrap_or("—"),
                 }),
                 render::cell(if row.agent.is_none() {

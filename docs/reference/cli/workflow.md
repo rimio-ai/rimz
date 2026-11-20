@@ -90,7 +90,7 @@ notes <notes folder>
 history: rimz workflow show <run> --history
 ```
 
-The `reason` line appears when the run recorded one, the branch when the checkout is on one, and the `notes` line when the run kept notes. A try that ended `tried` reads `done`. Until the report is queued, the finished run's home stays in the live directory and its paced advance stays due, and the agent is held open and shows the run as a wait. An agent that ended before the run did is sent nothing. A run started by hand, by a loop task, by another run, or with `--detach` sends no report.
+The `reason` line appears when the run recorded one, the branch when the checkout is on one, and the `notes` line when the run kept notes. A try that ended `tried` reads `done`. Until the report is queued, the finished run's home stays in the live directory and its paced advance stays due, and the agent is held open and shows the run as a wait. An agent that ended before the run did is sent nothing. A run started by hand, by a loop task, by another run, or with `--detach` sends no report; a run a [runs step](#runs-steps) started stores its ending on the run that started it instead.
 
 ### Trying one node
 
@@ -169,7 +169,7 @@ Every workflow agent's launch Environment section has a `- workflow:` line namin
 
 ## Definition fields
 
-A definition is `workflow.toml`: one `[workflow]` table and any number of nodes, each a table named by its kind, `[<kind>.<name>]`. A name is unique across all eight kinds, and takes ASCII letters, digits, `-`, and `_` only. The workflow's folder name follows the same rule. A field marked required refuses when absent. A field a kind's table does not list refuses there ([validation](#validate-and-schema)). Every node also takes `summary`.
+A definition is `workflow.toml`: one `[workflow]` table and any number of nodes, each a table named by its kind, `[<kind>.<name>]`. A name is unique across all nine kinds, and takes ASCII letters, digits, `-`, and `_` only. The workflow's folder name follows the same rule. A field marked required refuses when absent. A field a kind's table does not list refuses there ([validation](#validate-and-schema)). Every node also takes `summary`.
 
 | `[workflow]` | Meaning |
 | --- | --- |
@@ -264,7 +264,7 @@ A `summary` is one nonempty line, not instructions to the runner. A blank or mul
 
 ### Routes
 
-Every work node requires `then`: for an agent one check, `@done`, or `@failed`; for a command one check; for a message exactly one node, `@done`, or `@failed`. A list refuses at `<kind>.<step>.then`. A check's `on.<outcome>` is a target string: a node, `@done`, `@failed`, or `@wait`. A table or any other value refuses. A failure route cannot target `@wait`. `@break` and `@user` refuse as targets anywhere (`<path>: @break is not a route target; route to a node, @done, or @failed`).
+Every work node requires `then`: for an agent or a runs step one check, `@done`, or `@failed`; for a command one check; for a message exactly one node, `@done`, or `@failed`. A list refuses at `<kind>.<step>.then`. A check's `on.<outcome>` is a target string: a node, `@done`, `@failed`, or `@wait`. A table or any other value refuses. A failure route cannot target `@wait`. `@break` and `@user` refuse as targets anywhere (`<path>: @break is not a route target; route to a node, @done, or @failed`).
 
 A step at the start runs through the same admission as any later visit. Its first `context.json` has `input`, `key`, and `prev_attempt` set to null (`input` and `key` from `run --input` when given), with `visit` and `visits` both 1.
 
@@ -410,6 +410,33 @@ Each visit composes a header line naming the workflow, step, and run, followed b
 
 A message step returns at once, so a cycle through it needs `max-visits` and a waiting check.
 
+### Runs steps
+
+A runs step, `[runs.<name>]`, starts other deployed workflows and waits until each has ended. It takes:
+
+| Field | Rule |
+| --- | --- |
+| `start` | Required. A nonempty array of `{workflow, prompt-file}` tables: `workflow` names a workflow deployed under `~/.rimz/workflows/`, and `prompt-file` is optional and confined. An entry takes no other key. |
+| `prompt-file` | Optional and confined. Read for every started run. |
+| `timeout` | Optional. Fails the step with cause `timeout`. |
+| `then` | Required. One check, `@done`, or `@failed`. |
+| `max-visits` | Optional. |
+| `on` | The routes for `died`, `timeout`, `visits`, `deadline`, and `failed`. |
+
+Each visit starts one run per entry, in order, each in a new worktree of the project cut from the commit the run's checkout is at, so every started run begins from the same commit. A started run's prompt is the step's `prompt-file`, the entry's `prompt-file`, the step's sign, then the run's `--prompt`, each when present. A loop fire's evidence line is not included. Each started run is started by this run at this step ([starters and depth](#starters-and-depth)) and sends this run no `WORKFLOW_REPORT`: its ending is stored on this run's record instead.
+
+Before it starts any run, the step fails with cause `died` when:
+
+- the run's checkout has no commit, or has uncommitted changes, untracked files included, which the new worktrees would not see;
+- the started runs would sit past `[agents] max-workflow-depth`;
+- an entry names a workflow that is not deployed, that `workflow run` would refuse, or that has `scope = "project"`, which gets no worktree of its own.
+
+A worktree or run that cannot be created after the first run started also fails the step `died`, and the runs already started keep running.
+
+Once every started run has ended, the step follows `then` when each ended `done`, and otherwise fails with cause `died`, its reason naming each run that did not (`started run <id> (<workflow>) ended <state>[: <reason>]`, joined by `; `). Until then the run waits as `runs`, shown as `runs: <n> of <total> started runs ended`. The next step's `context.json` carries `joined`, one ending per started run, and its launch reminder lists each with its `workflow show` command.
+
+A timeout, the run deadline, a `resume --at`, and a `workflow cancel` end the step's waiting and leave its started runs running. `validate` warns, without refusing, about an entry that a start would refuse as not deployed or project-scoped, and about a workflow that starts itself again through runs steps. `workflow run` and `loop add --workflow` print the same warnings to stderr before they go on.
+
 ### Checks
 
 Every test, script, judge, and condition requires a `timeout`. The timeout starts each time the run enters the check and runs across every evaluation and wait there. A judge's runs from its launch instead, and nothing it is stopped on pauses it. A test does not inherit the loop's default timeout. When it passes, the check fails with cause `timeout`.
@@ -537,6 +564,7 @@ A node fails with one of eight causes, and each kind raises only its own:
 | `agent` | `died`, `timeout`, `visits`, `capacity`, `deadline` |
 | `command` | `died`, `timeout`, `visits`, `deadline` |
 | `message` | `undelivered`, `visits`, `deadline` |
+| `runs` | `died`, `timeout`, `visits`, `deadline` |
 | `test` | `died`, `timeout`, `deadline` |
 | `script` | `died`, `invalid`, `timeout`, `deadline` |
 | `judge` | `died`, `invalid`, `timeout`, `errored`, `deadline` |
@@ -545,7 +573,7 @@ A node fails with one of eight causes, and each kind raises only its own:
 
 | Cause | Raised when |
 | --- | --- |
-| `died` | The node's process could not start or ended abnormally: an agent launch that failed, including a failed continued restart; a turn step's provider exit before its clean turn end; a session's exit away from rest ([how an attempt ends](#how-an-attempt-ends)); an agent attempt a room rebirth ended; a command's or script's nonzero exit or signal; a test killed by a signal; a command, test, or script that could not spawn or open its log; a command whose host died; a judge's session that ended without an answer. |
+| `died` | The node's process could not start or ended abnormally: an agent launch that failed, including a failed continued restart; a turn step's provider exit before its clean turn end; a session's exit away from rest ([how an attempt ends](#how-an-attempt-ends)); an agent attempt a room rebirth ended; a command's or script's nonzero exit or signal; a test killed by a signal; a command, test, or script that could not spawn or open its log; a command whose host died; a judge's session that ended without an answer; a runs step that refused to start its runs, or one of whose started runs did not end `done`. |
 | `invalid` | A script gave an answer the node cannot use (stdout that is not one JSON object, a wrong field type, an outcome its `on` does not name or a reserved word, or a bad `recheck_at`), or a definition edit left a judge's accepted answer unroutable. |
 | `timeout` | The node's `timeout` passed. |
 | `errored` | A judge's own turn ended on a provider error that waiting will not clear. A step's errored turn is not a failure: it takes the step's `on.errored`, or holds the step. |
@@ -683,7 +711,7 @@ The table has these columns:
 | Column | Holds |
 | --- | --- |
 | `WORKFLOW`, `NODE`, `KIND` | The workflow, the node, and the table word it is written under. |
-| `RUNNER` | The run command, shell text, step layout, judge agent, `message`, `condition`, or `sleep`. JSON's `message` field carries a message step's address. |
+| `RUNNER` | The run command, shell text, step layout, judge agent, `message`, `condition`, `sleep`, or `workflow` for a runs step. JSON's `message` field carries a message step's address. |
 | `BACKGROUND` | For agent steps and judges, whether the agent reports background work (`yes` or `no`). `—` for every other node. |
 | `EDGES` | Each edge as `outcome → target (source)`, or `outcome → target (source, mark)` when conditional or unable to fire. |
 
@@ -726,7 +754,7 @@ Route rules read the definition as written:
 
 ### JSON
 
-`--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`. Each row has `workflow`, `node`, `kind`, `runner` (`"run"`, `"shell"`, `"agent"`, `"message"`, `"condition"`, or `"sleep"`), nullable `summary`, `run`, `shell`, `agent`, and `message`, `do_background`, and resolved `edges`. Each edge keeps `outcome`, `target`, and `source`, and adds `fires`: `"yes"`, `"never"`, or `"with-deadline"`. Only `"never"` edges carry `because`: `"no-timeout"` or `"no-max-visits"`. Command and message rows have `agent = null` and `do_background = false`. The row and edge orders above apply.
+`--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`. Each row has `workflow`, `node`, `kind`, `runner` (`"run"`, `"shell"`, `"agent"`, `"message"`, `"condition"`, `"sleep"`, or `"workflow"`), nullable `summary`, `run`, `shell`, `agent`, and `message`, `do_background`, and resolved `edges`. Each edge keeps `outcome`, `target`, and `source`, and adds `fires`: `"yes"`, `"never"`, or `"with-deadline"`. Only `"never"` edges carry `because`: `"no-timeout"` or `"no-max-visits"`. Command and message rows have `agent = null` and `do_background = false`. The row and edge orders above apply.
 
 ### Schema
 
@@ -814,9 +842,9 @@ The compact view of an unfinished run prints, in order:
 5. The origin line: when and how the run started (its [origin](#workflow-list): by hand, by loop task, by an agent, or by another run), the number of attempts started (`1 attempt` while the first one runs, `0 attempts` for a run that has started none), and the known total cost of the ended ones, including judge evaluations. It omits cost when none is recorded, and never estimates a live attempt's spend.
 6. The block below the origin: the full ask text when asking, `takeover:` lines naming the agents that hold the checkout (`blockers unavailable` when the roster or the project's worktrees cannot be read), and for a parked run why and the `you can` commands (resume, grant more bounds, choose another node, or cancel).
 7. The definition rail ([below](#the-definition-rail)) on an active run, or the horizontal rail after `you can` on a parked run.
-8. `visits  <step> <used>[ of <max>][ · key <key>: <n>]` for each visited step that is capped or has visits under the run's current key: ` of <max>` for a capped step, the run's grant included, and ` · key <key>: <n>` for the visits charged under the current key. Counts run since the step's last manual restart. An uncapped step with no visit under the current key prints no row.
+8. `visits  <step> <used>[ of <max>][ · key <key>: <n>]` for each visited step that is capped or has visits under the run's current key: ` of <max>` for a capped step, the run's grant included, and ` · key <key>: <n>` for the visits charged under the current key. Counts run since the step's last manual restart. An uncapped step with no visit under the current key prints no row. After the visits rows, a run at a [runs step](#runs-steps), or one that has joined its started runs, prints one row per started run: `started <id> <workflow> <state>[ · <checkout>]`, where the state is the started run's own (`unreadable` when its record cannot be read, `ended` once its home is gone, `not started` before it exists).
 9. The `trail`: routing decisions projected from the definition and journal, consecutive matching check answers folded as `×N`, with resumes, restarts, parks, and termination. It keeps the newest eight hops with `+N earlier` for the rest, and ends in `now` while live.
-10. The home-relative work directory, then `sign <path>` in the same style while the run is at an agent or message step whose definition loads: the step's sign file ([prompts](#agent-steps)), printed whether or not it exists, and left out on an `asked` park, whose `you can` lines name it. Then the absolute notes folder when the run has one, and the command for full history.
+10. The home-relative work directory, then `sign <path>` in the same style while the run is at an agent, message or runs step whose definition loads: the step's sign file ([prompts](#agent-steps)), printed whether or not it exists, and left out on an `asked` park, whose `you can` lines name it. Then the absolute notes folder when the run has one, and the command for full history.
 
 The headline:
 
@@ -993,7 +1021,7 @@ The command waits up to 30 seconds for the replacement to launch, park, or end t
 
 ### `cancel`
 
-`rimz workflow cancel <RUN>` ends a run as `canceled` and stops its live script, shell command, judge, command step's process group, or every cell of an agent step's layout and its subagents, whether or not the run's definition is missing, unreadable, or refused by validation. It prints `canceled <address>`. An already-finished run id prints `<address> is already <state>; unchanged` and exits 0. Both receipts end with a `workflow show` hint. The checkout's commits and edits, and the run directory, stay. A cancellation journal row may carry `reason`.
+`rimz workflow cancel <RUN>` ends a run as `canceled` and stops its live script, shell command, judge, command step's process group, or every cell of an agent step's layout and its subagents, whether or not the run's definition is missing, unreadable, or refused by validation. It prints `canceled <address>`, and, at a runs step, `its started runs were left running: <ids>` for the started runs that had not ended: a cancel never stops them. An already-finished run id prints `<address> is already <state>; unchanged` and exits 0. Both receipts end with a `workflow show` hint. The checkout's commits and edits, and the run directory, stay. A cancellation journal row may carry `reason`.
 
 An unfinished run holds its worktree against removal and automatic cleanup, even while parked with no agent. `rimz worktree remove NAME --force` removes the checkout and then cancels its unfinished runs with reason `worktree removed`. A failed cancellation leaves the removal standing, exits non-zero, and prints the run id's `rimz workflow cancel` command.
 
@@ -1071,7 +1099,7 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 
 `list --json` and `show <workflow> --json` print arrays of `{id, address, workflow, scope, state, node, since, detail}`, with optional `hold` for a known capacity cause, `once: true` for a try, and `starter` for a run with a starter: the record's `starter` plus `handle` while the starting agent is in the room. `list --all --json` appends the finished runs to the same array, unfolded and at most `-n` of them, each in that shape with an empty `detail` and an `ended` key (RFC 3339). `scope` is the scope path: the checkout, or the project root for `scope = "project"`. `since` is node entry, not the human row's state-specific age. `detail` is the [waiting line](#the-waiting-line), so its capacity bounds follow the same day-qualified clock as rechecks and passed deadlines. Read the node and its entry time from `node` and `since`, never from `detail`.
 
-`show [RUN] --json` prints `{address, dir, record, journal}`: the short run address, work directory, run record, and journal entries. Runs with kept notes add `notes`, the absolute folder path, and runs with a starter add `starter`, as in `list --json`. A live run at an agent or message step adds `sign`, the absolute path of the step's sign file, on an `asked` park too. When the definition cannot load, it still prints the record and journal, without `sign`. A finished run adds `history` ([finished runs](#finished-runs)).
+`show [RUN] --json` prints `{address, dir, record, journal}`: the short run address, work directory, run record, and journal entries. Runs with kept notes add `notes`, the absolute folder path, and runs with a starter add `starter`, as in `list --json`. A live run at an agent, message or runs step adds `sign`, the absolute path of the step's sign file, on an `asked` park too. When the definition cannot load, it still prints the record and journal, without `sign`. A finished run adds `history` ([finished runs](#finished-runs)).
 
 ### The record
 

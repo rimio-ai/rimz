@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::path::Path;
 
 use super::spec::{self, Cause, CheckKind, Invoke, Issue, StepKind, Wake, issue};
-use super::{Definition, Target};
+use super::{Definition, ScopeKind, Target};
 use super::{Edge, EdgeSource};
 use crate::config::definitions::LoadedDefinitions;
 use serde::Serialize;
@@ -62,7 +62,81 @@ pub fn validate(
             return report;
         }
     };
-    validate_spec(dir, name, &spec, definitions, project_root)
+    let mut report = validate_spec(dir, name, &spec, definitions, project_root);
+    started_workflows(
+        &mut report,
+        name,
+        &spec,
+        &crate::disk::paths::workflows_dir(),
+    );
+    report
+}
+
+/// Whether `dir` resolves, links followed, to a directory inside the workflows home other
+/// than the home itself: where a deployed workflow's name must lead.
+pub fn is_deployed(dir: &Path) -> bool {
+    let home = crate::disk::paths::workflows_dir();
+    dir.canonicalize().is_ok_and(|dir| {
+        home.canonicalize()
+            .is_ok_and(|home| dir != home && dir.starts_with(home))
+    })
+}
+
+/// Warn about each workflow a `runs` step lists that its start would refuse: one not deployed
+/// inside `deployed`, or one whose scope is the project, which gets no worktree of its own; and
+/// about a workflow that reaches itself through `runs` steps. These read other definitions, which
+/// a run reads live at the step, so they never refuse a start: the step itself enforces them.
+fn started_workflows(report: &mut Validation, name: &str, spec: &Definition, deployed: &Path) {
+    let load = |workflow: &str| {
+        let dir = deployed.join(workflow);
+        is_deployed(&dir).then(|| super::load(&dir).ok()).flatten()
+    };
+    for (node, step) in &spec.authored().steps {
+        for (index, entry) in step.start.iter().enumerate() {
+            let path = format!("runs.{node}.start.{index}.workflow");
+            let workflow = &entry.workflow;
+            match load(workflow) {
+                None => report.warnings.push(issue(
+                    &path,
+                    format!(
+                        "{workflow} is not a deployed workflow; the step fails when it starts it"
+                    ),
+                )),
+                Some(started) if started.authored().workflow.scope == ScopeKind::Project => {
+                    report.warnings.push(issue(
+                        &path,
+                        format!("{workflow} has scope = \"project\" and gets no worktree of its own; the step fails when it starts it"),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut next: Vec<String> = started_by(spec);
+    while let Some(workflow) = next.pop() {
+        if workflow == name {
+            report.warnings.push(issue(
+                "workflow",
+                format!("{name} starts itself again through runs steps; each start runs one level deeper until [agents] max-workflow-depth refuses it"),
+            ));
+            break;
+        }
+        if seen.insert(workflow.clone())
+            && let Some(started) = load(&workflow)
+        {
+            next.extend(started_by(&started));
+        }
+    }
+}
+
+/// The workflows a definition's `runs` steps start.
+fn started_by(spec: &Definition) -> Vec<String> {
+    spec.authored()
+        .steps
+        .values()
+        .flat_map(|step| step.start.iter().map(|entry| entry.workflow.clone()))
+        .collect()
 }
 
 /// Why a definition is not admitted: its file does not read or parse, or it parses and
@@ -271,7 +345,26 @@ pub(super) fn validate_spec(
         }
         let agent = matches!(step.kind(), Some(StepKind::Agent(_)));
         let message = matches!(step.kind(), Some(StepKind::Message(_)));
+        // A runs step ends where an agent step does.
+        let ends_like_agent = agent || matches!(step.kind(), Some(StepKind::Runs(_)));
         report.step_values(&path, step);
+        if let Some(StepKind::Runs(entries)) = step.kind() {
+            let prompts = entries.iter().enumerate().map(|(index, entry)| {
+                (
+                    format!("{path}.start.{index}.prompt-file"),
+                    &entry.prompt_file,
+                )
+            });
+            for (field, prompt) in
+                std::iter::once((format!("{path}.prompt-file"), &step.prompt_file)).chain(prompts)
+            {
+                if let Some(prompt) = prompt
+                    && let Err(error) = spec::confined_file(dir, prompt)
+                {
+                    report.error(&field, error);
+                }
+            }
+        }
         if let Some(file) = &step.system_prompt_file
             && let Err(error) = spec::confined_file(dir, file)
         {
@@ -328,14 +421,14 @@ pub(super) fn validate_spec(
         if !message && step.then.is_empty() {
             report.error(
                 &format!("{path}.then"),
-                if agent {
+                if ends_like_agent {
                     "then must name a check, @done, or @failed"
                 } else {
                     "then must name a check"
                 },
             );
         }
-        let ends_run = agent
+        let ends_run = ends_like_agent
             && matches!(step.then.as_slice(), [target] if matches!(target.as_str(), "@done" | "@failed"));
         if !message
             && !ends_run
@@ -346,7 +439,7 @@ pub(super) fn validate_spec(
         {
             report.error(
                 &format!("{path}.then"),
-                if agent {
+                if ends_like_agent {
                     "then must name a check, @done, or @failed, never a step"
                 } else {
                     "then must name a check, never a step or @done"
@@ -404,6 +497,7 @@ pub(super) fn validate_spec(
                 Some(StepKind::Command(Invoke::Run(_))) => "run",
                 Some(StepKind::Command(Invoke::Shell(_))) => "shell",
                 Some(StepKind::Message(_)) => "message",
+                Some(StepKind::Runs(_)) => "workflow",
                 Some(StepKind::Agent(_)) | None => "agent",
             }
             .into(),

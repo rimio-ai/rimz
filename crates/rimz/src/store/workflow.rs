@@ -694,7 +694,7 @@ pub struct RunOutcome {
     /// The summed cost of the run's attempts and evaluations; none when none recorded a cost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
-    /// Whether the run entered an agent or message step.
+    /// Whether the run entered an agent, message or runs step.
     pub acted: bool,
     /// Why a failed run's last attempt ended: the newest reason an attempt or a budget route
     /// recorded.

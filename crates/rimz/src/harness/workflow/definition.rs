@@ -199,6 +199,8 @@ pub enum Kind {
     Agent(String),
     /// A message step, to this address.
     Message(String),
+    /// A `runs` step, starting these workflows.
+    Runs(Vec<spec::RunEntry>),
 }
 
 /// How a test, script, or command node invokes its command.
@@ -898,6 +900,7 @@ fn step_node(step: &Step) -> Node {
         spec::StepKind::Agent(agent) => Kind::Agent(agent.into()),
         spec::StepKind::Command(invoke) => Kind::Command(invocation(invoke)),
         spec::StepKind::Message(target) => Kind::Message(target.into()),
+        spec::StepKind::Runs(entries) => Kind::Runs(entries.to_vec()),
     });
     Node {
         kind,

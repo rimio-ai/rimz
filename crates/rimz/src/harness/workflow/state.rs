@@ -867,6 +867,25 @@ impl Transition<'_> {
         if let Some(log) = &evidence.log {
             detail["log"] = json!(log);
         }
+        let unfinished = attempt
+            .runs
+            .iter()
+            .flat_map(|runs| &runs.runs)
+            .filter_map(|run| run.ended.as_ref().map(|ended| (run, ended)))
+            .filter(|(_, ended)| !ended_well(&ended.ending))
+            .map(|(run, ended)| {
+                let mut run = json!({
+                    "id":run.id, "workflow":run.workflow, "ending":ending_word(&ended.ending)
+                });
+                if let Some(reason) = &ended.reason {
+                    run["reason"] = json!(reason);
+                }
+                run
+            })
+            .collect::<Vec<_>>();
+        if !unfinished.is_empty() {
+            detail["runs"] = json!(unfinished);
+        }
         let reason = reason.unwrap_or_else(|| match cause {
             Cause::Timeout => "the step's timeout passed".into(),
             Cause::Undelivered => "the message was not delivered".into(),
@@ -1389,6 +1408,24 @@ pub(super) fn normalize_object(
         object.insert("key".into(), json!(key));
     }
     Ok(Value::Object(object))
+}
+
+/// Whether a run a `runs` step started ended as its step's `then` needs: done, or tried.
+pub(super) fn ended_well(ending: &crate::store::workflow::RunEnding) -> bool {
+    use crate::store::workflow::RunEnding;
+    matches!(ending, RunEnding::Done | RunEnding::Tried)
+}
+
+/// A run's ending in the word its record's `kind` spells.
+pub(super) fn ending_word(ending: &crate::store::workflow::RunEnding) -> &'static str {
+    use crate::store::workflow::RunEnding;
+    match ending {
+        RunEnding::Done => "done",
+        RunEnding::Failed => "failed",
+        RunEnding::Canceled => "canceled",
+        RunEnding::Tried => "tried",
+        RunEnding::CapacityGaveUp { .. } => "capacity_gave_up",
+    }
 }
 
 #[cfg(test)]

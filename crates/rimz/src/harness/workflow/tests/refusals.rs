@@ -10,7 +10,8 @@ const KINDS: &str = "[workflow]\nscope='worktree'\nstart='build'\n\
 [script.after]\ntimeout='1m'\nrun='true'\non.ok='tell'\n\
 [message.tell]\nmessage='@planner'\nthen='run'\n\
 [command.run]\ntimeout='1m'\nshell='true'\nthen='test'\n\
-[test.test]\ntimeout='1m'\nshell='true'\non.pass='judge'\non.fail='@failed'\n\
+[test.test]\ntimeout='1m'\nshell='true'\non.pass='fan'\non.fail='@failed'\n\
+[runs.fan]\nprompt-file='prompts/build.md'\nstart=[{workflow='review',prompt-file='prompts/build.md'}]\ntimeout='1m'\nthen='judge'\n\
 [judge.judge]\ntimeout='1m'\nagent='claude'\nprompt-file='prompts/build.md'\nsummary='Reviews it'\non.ok='gate'\n\
 [condition.gate]\ntimeout='1m'\nelse='no'\non={yes='nap',no='nap',unknown='@failed'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n\
 [sleep.nap]\nsleep='1m'\nthen='@done'\n";
@@ -104,11 +105,16 @@ fn unknown_fields_refuse_at_their_dotted_path_in_every_kind() {
             SIMPLE.replace("[script.pick]", "[checks.pick]"),
             "checks".into(),
         ),
+        (
+            KINDS.replace("{workflow='review',", "{workflow='review',future=true,"),
+            "runs.fan.start.0.future".into(),
+        ),
     ];
     for (header, name) in [
         ("[agent.build]", "agent.build"),
         ("[command.run]", "command.run"),
         ("[message.tell]", "message.tell"),
+        ("[runs.fan]", "runs.fan"),
         ("[test.test]", "test.test"),
         ("[script.after]", "script.after"),
         ("[judge.judge]", "judge.judge"),
@@ -709,6 +715,38 @@ fn only_agents_ask_refuses_human_targets_on_every_route() {
                 && issue.message.contains("@user is not a route target")
                 && issue.message.contains("route to a node")),
             "{path}: {report:?}"
+        );
+    }
+}
+
+#[test]
+fn a_runs_step_routing_to_the_user_refuses_with_that_error_alone() {
+    let fan = SIMPLE.replace("start='pick'", "start='fan'");
+    let runs = "[runs.fan]\nstart=[{workflow='review'}]\n";
+    for (path, text) in [
+        (
+            "runs.fan.then",
+            format!("{fan}{runs}then='@user'\non.failed='pick'\n"),
+        ),
+        (
+            "runs.fan.on.failed",
+            format!("{fan}{runs}then='pick'\non.failed='@user'\n"),
+        ),
+    ] {
+        let (_home, dir) = fixture();
+        fs::write(dir.join("workflow.toml"), &text).unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        let errors: Vec<_> = report
+            .errors
+            .iter()
+            .map(|issue| issue.path.as_str())
+            .collect();
+        assert_eq!(errors, [path], "{text}: {report:?}");
+        assert!(
+            report.errors[0]
+                .message
+                .contains("@user is not a route target"),
+            "{report:?}"
         );
     }
 }

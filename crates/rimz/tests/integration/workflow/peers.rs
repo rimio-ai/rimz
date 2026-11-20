@@ -8,6 +8,10 @@ use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+use std::io::Write as _;
+use std::os::unix::net::UnixListener;
+
+use super::commands::accept_gate;
 
 /// Deploys workflow `name`, whose check waits until its marker file exists and then passes.
 pub(super) fn deploy(env: &Env, name: &str) -> PathBuf {
@@ -740,4 +744,654 @@ fn a_stranded_run_reports_to_its_starter_as_failed() {
         sent[0].text
     );
     assert_eq!(live_homes(&env), 0);
+}
+
+/// Makes the project a git checkout with one commit holding everything in it.
+fn commit_project(env: &Env) -> String {
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(&env.project_root)
+            .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["add", "-A"]);
+    git(&["commit", "--allow-empty", "-qm", "base"]);
+    git(&["rev-parse", "HEAD"])
+}
+
+/// Deploys workflow 'fan', which waits at its 'gate' check until the returned marker exists,
+/// then runs the 'spread' step given as TOML, whose 'then' is the 'after' check that passes.
+fn deploy_fan(env: &Env, spread: &str) -> PathBuf {
+    let dir = env.rimz_home().join("workflows/fan");
+    let marker = dir.join("open");
+    let _ = fs::remove_file(&marker);
+    fs::create_dir_all(dir.join("checks")).unwrap();
+    fs::write(
+        dir.join("workflow.toml"),
+        format!(
+            "[workflow]\nscope = 'worktree'\nstart = 'gate'\n\
+             [script.gate]\nrun = 'sh checks/gate.sh'\non = {{ pending = '@wait', done = 'spread' }}\ntimeout = '1h'\n\
+             [runs.spread]\n{spread}\n\
+             [script.after]\nrun = 'sh checks/after.sh'\non = {{ done = '@done' }}\ntimeout = '1h'\n"
+        ),
+    )
+    .unwrap();
+    let pass = "printf '%s\\n' '{\"outcome\":\"done\"}'";
+    fs::write(
+        dir.join("checks/gate.sh"),
+        format!(
+            "if [ -e '{}' ]; then {pass}; else {PENDING}fi\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    fs::write(dir.join("checks/after.sh"), format!("{pass}\n")).unwrap();
+    fs::write(dir.join("step.md"), "Step").unwrap();
+    fs::write(dir.join("entry.md"), "Entry").unwrap();
+    marker
+}
+
+const TWO_CHILDREN: &str = "prompt-file = 'step.md'\nstart = [{ workflow = 'child' }, { workflow = 'child', prompt-file = 'entry.md' }]\nthen = 'after'";
+
+/// Opens the fan's gate and advances it into its 'spread' step.
+fn open_gate(env: &Env, id: &str, marker: &Path) -> Value {
+    fs::write(marker, "").unwrap();
+    rewrite(env, id, |record| {
+        record["recheck_at"] = json!("2000-01-01T00:00:00Z");
+    });
+    success(command(env, &["workflow", "advance", id]));
+    until(env, id, |value| value["record"]["node"] != "gate")
+}
+
+/// The runs a fan's 'spread' attempt reserved.
+fn children(value: &Value) -> Vec<String> {
+    value["record"]["attempt"]["runs"]["runs"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the attempt reserves its runs: {value:#}"))
+        .iter()
+        .map(|run| run["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn head_of(path: &Path) -> String {
+    let output = Command::new("git")
+        .current_dir(path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+#[test]
+fn a_runs_step_starts_each_entry_in_its_own_worktree_and_follows_then_once_both_ended() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let child_marker = deploy(&env, "child");
+    let gate = deploy_fan(&env, TWO_CHILDREN);
+    let base = commit_project(&env);
+    let parent = started(run(&env, "fan", &[], &[]));
+    until(&env, &parent, |value| value["record"]["wait"].is_object());
+    let signs = run_home(&env, &parent).work.join("signs");
+    fs::create_dir_all(&signs).unwrap();
+    fs::write(signs.join("spread.md"), "Sign").unwrap();
+    let value = open_gate(&env, &parent, &gate);
+    let ids = children(&value);
+    assert_eq!(ids.len(), 2, "{value:#}");
+    assert_ne!(ids[0], ids[1]);
+    assert_eq!(value["record"]["attempt"]["runs"]["base"], json!(base));
+    assert_eq!(value["record"]["wait"]["outcome"], "runs", "{value:#}");
+    assert_eq!(value["sign"], json!(signs.join("spread.md")), "{value:#}");
+    let steps = assists_once(&env, "workflow_steps", 1);
+    let steps: Vec<_> = steps["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["assist"] == "workflow_step")
+        .collect();
+    assert_eq!(steps.len(), 1, "{steps:#?}");
+    assert_eq!(steps[0]["step"], "spread", "{steps:#?}");
+
+    let mut checkouts = Vec::new();
+    for (id, prompt) in ids
+        .iter()
+        .zip(["Step\n\nSign\n\nGo", "Step\n\nEntry\n\nSign\n\nGo"])
+    {
+        let child = until(&env, id, |value| value["record"]["wait"].is_object());
+        let record = &child["record"];
+        assert_eq!(
+            (
+                &record["starter"],
+                &record["depth"],
+                &record["loop_report"],
+                &record["prompt"]
+            ),
+            (
+                &json!({"by":"run", "run":parent, "node":"spread"}),
+                &json!(2),
+                &json!("owed"),
+                &json!(prompt)
+            ),
+            "{record:#}"
+        );
+        let checkout = PathBuf::from(record["scope"]["path"].as_str().unwrap());
+        assert_ne!(checkout, env.project_root.canonicalize().unwrap());
+        assert_eq!(head_of(&checkout), base, "{}", checkout.display());
+        checkouts.push(checkout);
+    }
+    assert_ne!(checkouts[0], checkouts[1]);
+    assert_eq!(
+        rimz::worktree::discover_owned(&env.project_root)
+            .unwrap()
+            .len(),
+        2
+    );
+    let announced: Vec<Value> = env
+        .read_events()
+        .into_iter()
+        .map(|event| serde_json::from_str::<Value>(event.params.get()).unwrap())
+        .filter(|event| event["name"] == "worktree.created")
+        .collect();
+    assert_eq!(
+        announced
+            .iter()
+            .map(|event| {
+                PathBuf::from(event["payload"]["path"].as_str().unwrap())
+                    .canonicalize()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>(),
+        checkouts,
+        "{announced:#?}"
+    );
+    let shown = String::from_utf8(command(&env, &["workflow", "show", &parent]).stdout).unwrap();
+    assert!(
+        shown.contains("runs: 0 of 2 started runs ended")
+            && shown.lines().any(|line| {
+                line.trim_start().starts_with("sign ") && line.ends_with("signs/spread.md")
+            }),
+        "{shown}"
+    );
+    for (id, checkout) in ids.iter().zip(&checkouts) {
+        let row = shown
+            .lines()
+            .find(|line| line.contains(id.as_str()))
+            .unwrap_or_else(|| panic!("{shown}"));
+        let name = checkout.file_name().unwrap().to_str().unwrap();
+        assert!(
+            row.contains("child") && row.contains("active") && row.contains(name),
+            "{shown}"
+        );
+    }
+
+    // A second advance rejoins the reserved children and starts nothing, as does a resume.
+    success(command(&env, &["workflow", "advance", &parent]));
+    assert_eq!(live_homes(&env), 3);
+    success(command(
+        &env,
+        &["workflow", "resume", &parent, "--extend", "visits=+1"],
+    ));
+    success(command(&env, &["workflow", "advance", &parent]));
+    assert_eq!(live_homes(&env), 3);
+
+    // One child ended: its ending is stored and the parent keeps waiting.
+    fs::write(&child_marker, "").unwrap();
+    rewrite(&env, &ids[0], |record| {
+        record["recheck_at"] = json!("2000-01-01T00:00:00Z");
+    });
+    success(command(&env, &["workflow", "advance", &ids[0]]));
+    let value = until(&env, &parent, |value| {
+        !value["record"]["attempt"]["runs"]["runs"][0]["ended"].is_null()
+    });
+    assert_eq!(
+        (&value["record"]["state"], &value["record"]["node"]),
+        (&json!("active"), &json!("spread")),
+        "{value:#}"
+    );
+    assert_eq!(show(&env, &ids[0])["record"]["loop_report"], "sent");
+
+    rewrite(&env, &ids[1], |record| {
+        record["recheck_at"] = json!("2000-01-01T00:00:00Z");
+    });
+    success(command(&env, &["workflow", "advance", &ids[1]]));
+    let value = settled(&env, &parent, "done");
+    let joined = value["record"]["joined"].as_array().unwrap();
+    assert_eq!(joined.len(), 2, "{value:#}");
+    for ((run, id), checkout) in joined.iter().zip(&ids).zip(&checkouts) {
+        assert_eq!(
+            (
+                &run["id"],
+                &run["workflow"],
+                &run["ended"]["ending"]["kind"]
+            ),
+            (&json!(id), &json!("child"), &json!("done")),
+            "{run:#}"
+        );
+        assert_eq!(run["ended"]["checkout"], json!(checkout), "{run:#}");
+        assert!(run["ended"]["branch"].is_string(), "{run:#}");
+    }
+    let context = context(&value);
+    assert_eq!(context["joined"], value["record"]["joined"], "{context:#}");
+}
+
+#[test]
+fn a_runs_step_fails_naming_a_canceled_child_only_once_every_child_ended() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let child_marker = deploy(&env, "child");
+    let gate = deploy_fan(&env, TWO_CHILDREN);
+    commit_project(&env);
+    let parent = started(run(&env, "fan", &[], &[]));
+    until(&env, &parent, |value| value["record"]["wait"].is_object());
+    let ids = children(&open_gate(&env, &parent, &gate));
+
+    success(command(&env, &["workflow", "cancel", &ids[0]]));
+    let value = until(&env, &parent, |value| {
+        !value["record"]["attempt"]["runs"]["runs"][0]["ended"].is_null()
+    });
+    assert_eq!(value["record"]["state"], "active", "{value:#}");
+    assert_eq!(
+        value["record"]["attempt"]["runs"]["runs"][0]["ended"]["ending"]["kind"],
+        "canceled"
+    );
+
+    fs::write(&child_marker, "").unwrap();
+    rewrite(&env, &ids[1], |record| {
+        record["recheck_at"] = json!("2000-01-01T00:00:00Z");
+    });
+    success(command(&env, &["workflow", "advance", &ids[1]]));
+    let value = settled(&env, &parent, "failed");
+    let route = events(&value, "route")
+        .into_iter()
+        .find(|route| route["input"]["cause"] == "died")
+        .unwrap_or_else(|| panic!("the step failed died: {value:#}"));
+    assert_eq!(
+        route["input"]["reason"],
+        json!(format!("started run {} (child) ended canceled", ids[0])),
+        "{route:#}"
+    );
+    assert_eq!(
+        route["input"]["detail"]["runs"],
+        json!([{"id":ids[0], "workflow":"child", "ending":"canceled"}]),
+        "{route:#}"
+    );
+}
+
+#[test]
+fn a_runs_step_timeout_and_cancel_leave_its_children_running() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    deploy(&env, "child");
+    let gate = deploy_fan(
+        &env,
+        "start = [{ workflow = 'child' }, { workflow = 'child' }]\nthen = 'after'\ntimeout = '1s'",
+    );
+    commit_project(&env);
+    let parent = started(run(&env, "fan", &[], &[]));
+    until(&env, &parent, |value| value["record"]["wait"].is_object());
+    let ids = children(&open_gate(&env, &parent, &gate));
+    std::thread::sleep(Duration::from_millis(1100));
+    success(command(&env, &["workflow", "advance", &parent]));
+    let value = settled(&env, &parent, "failed");
+    assert!(
+        events(&value, "route")
+            .iter()
+            .any(|route| route["input"]["cause"] == "timeout"),
+        "{value:#}"
+    );
+    for id in &ids {
+        assert_eq!(show(&env, id)["record"]["state"], "active");
+    }
+
+    let gate = deploy_fan(&env, TWO_CHILDREN);
+    let parent = started(run(&env, "fan", &[], &[]));
+    until(&env, &parent, |value| value["record"]["wait"].is_object());
+    let more = children(&open_gate(&env, &parent, &gate));
+    let receipt =
+        String::from_utf8(command(&env, &["workflow", "cancel", &parent]).stdout).unwrap();
+    for id in &more {
+        assert!(receipt.contains(id.as_str()), "{receipt}");
+        assert_eq!(show(&env, id)["record"]["state"], "active");
+    }
+}
+
+#[test]
+fn validate_warns_about_runs_entries_a_start_would_refuse_and_a_workflow_that_starts_itself() {
+    let env = Env::new();
+    let whole = env.rimz_home().join("workflows/whole");
+    fs::create_dir_all(whole.join("checks")).unwrap();
+    fs::write(
+        whole.join("workflow.toml"),
+        format!("[workflow]\nscope = 'project'\nstart = 'pr'\n{WAIT}"),
+    )
+    .unwrap();
+    fs::write(whole.join("checks/pr.sh"), PENDING).unwrap();
+    deploy_fan(
+        &env,
+        "start = [{ workflow = 'missing' }, { workflow = 'whole' }, { workflow = 'fan' }]\nthen = 'after'",
+    );
+    let output = env
+        .rimz()
+        .args(["workflow", "validate", "fan", "--json"])
+        .output()
+        .unwrap();
+    let report: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&output.stderr)));
+    assert_eq!(report["errors"], json!([]), "{report:#}");
+    assert_eq!(
+        report["warnings"],
+        json!([
+            {"path":"runs.spread.start.0.workflow", "message":"runs.spread.start.0.workflow: missing is not a deployed workflow; the step fails when it starts it"},
+            {"path":"runs.spread.start.1.workflow", "message":"runs.spread.start.1.workflow: whole has scope = \"project\" and gets no worktree of its own; the step fails when it starts it"},
+            {"path":"workflow", "message":"workflow: fan starts itself again through runs steps; each start runs one level deeper until [agents] max-workflow-depth refuses it"},
+        ]),
+        "{report:#}"
+    );
+    let table = success(command(&env, &["workflow", "validate", "fan"]));
+    let row = table
+        .lines()
+        .find(|line| line.split_whitespace().nth(1) == Some("spread"))
+        .unwrap_or_else(|| panic!("{table}"));
+    assert_eq!(
+        row.split_whitespace().take(4).collect::<Vec<_>>(),
+        ["fan", "spread", "runs", "workflow"],
+        "{table}"
+    );
+}
+
+#[test]
+fn a_runs_step_refuses_before_any_child_on_a_dirty_checkout_depth_and_unstartable_workflows() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    deploy(&env, "child");
+    let project = env.rimz_home().join("workflows/whole");
+    fs::create_dir_all(project.join("checks")).unwrap();
+    fs::write(
+        project.join("workflow.toml"),
+        format!("[workflow]\nscope = 'project'\nstart = 'pr'\n{WAIT}"),
+    )
+    .unwrap();
+    fs::write(project.join("checks/pr.sh"), PENDING).unwrap();
+    commit_project(&env);
+    let state = env.state_path_for(&env.project_root);
+    let one = "start = [{ workflow = 'child' }]\nthen = 'after'";
+    let cases = [
+        (one, "dirty", "has uncommitted changes".to_owned()),
+        (one, "deep", "would start at workflow depth 2".to_owned()),
+        (
+            "start = [{ workflow = 'child' }, { workflow = 'missing' }]\nthen = 'after'",
+            "",
+            "missing is not a deployed workflow".to_owned(),
+        ),
+        (
+            "start = [{ workflow = 'whole' }]\nthen = 'after'",
+            "",
+            "whole has scope = \"project\" and gets no worktree of its own".to_owned(),
+        ),
+        (
+            "start = [{ workflow = 'linked' }]\nthen = 'after'",
+            "",
+            "linked is not a deployed workflow".to_owned(),
+        ),
+        (one, "unreadable", "cannot create a worktree: ".to_owned()),
+    ];
+    // A deployed name whose directory resolves outside the workflows home is no deployed workflow.
+    let outside = env.home_root.join("elsewhere/linked");
+    fs::create_dir_all(outside.join("checks")).unwrap();
+    let child = env.rimz_home().join("workflows/child");
+    for file in ["workflow.toml", "checks/pr.sh"] {
+        fs::copy(child.join(file), outside.join(file)).unwrap();
+    }
+    std::os::unix::fs::symlink(&outside, env.rimz_home().join("workflows/linked")).unwrap();
+    for (spread, setup, reason) in cases {
+        let gate = deploy_fan(&env, spread);
+        let parent = started(run(&env, "fan", &[], &[]));
+        until(&env, &parent, |value| value["record"]["wait"].is_object());
+        let untracked = env.project_root.join("untracked.txt");
+        match setup {
+            "dirty" => fs::write(&untracked, "new").unwrap(),
+            "deep" => fs::write(
+                env.rimz_home().join("config.toml"),
+                "[agents]\nmax-workflow-depth = 1\n",
+            )
+            .unwrap(),
+            "unreadable" => fs::write(env.rimz_home().join("config.toml"), "[agents\n").unwrap(),
+            _ => {}
+        }
+        open_gate(&env, &parent, &gate);
+        let value = settled(&env, &parent, "failed");
+        let route = events(&value, "route")
+            .into_iter()
+            .find(|route| route["input"]["cause"] == "died")
+            .unwrap_or_else(|| panic!("{setup}: the step failed died: {value:#}"));
+        assert!(
+            route["input"]["reason"].as_str().unwrap().contains(&reason),
+            "{reason}: {route:#}"
+        );
+        assert!(
+            rimz::store::workflow::live_runs(&state).unwrap().is_empty(),
+            "{reason}"
+        );
+        assert!(
+            rimz::worktree::discover_owned(&env.project_root)
+                .unwrap()
+                .is_empty(),
+            "{reason}"
+        );
+        let _ = fs::remove_file(&untracked);
+        let _ = fs::remove_file(env.rimz_home().join("config.toml"));
+    }
+}
+
+/// Opens the fan's gate and spawns the advance into its 'spread' step, which holds at
+/// `socket` once each child's worktree exists, before the child's run is published.
+fn advance_held(env: &Env, id: &str, marker: &Path, socket: &Path) -> Child {
+    fs::write(marker, "").unwrap();
+    rewrite(env, id, |record| {
+        record["recheck_at"] = json!("2000-01-01T00:00:00Z");
+    });
+    env.rimz()
+        .args(["workflow", "advance", id])
+        .env("RIMZ_TEST_WORKFLOW_RUNS_GATE", socket)
+        .spawn()
+        .unwrap()
+}
+
+/// Releases every hold the advance reaches until it exits.
+fn release_until_exit(listener: &UnixListener, advance: &mut Child) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while advance.try_wait().unwrap().is_none() {
+        if let Ok((mut stream, _)) = listener.accept() {
+            stream.write_all(&[1]).unwrap();
+        }
+        assert!(Instant::now() < deadline, "the held advance never exited");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The fan's started runs that exist in the live home, in their reserved order.
+fn live_children(env: &Env, ids: &[String]) -> Vec<String> {
+    let state = env.state_path_for(&env.project_root);
+    let live = rimz::store::workflow::live_runs(&state).unwrap();
+    ids.iter()
+        .filter(|id| live.iter().any(|record| record.id.to_string() == **id))
+        .cloned()
+        .collect()
+}
+
+fn owned_worktrees(env: &Env) -> usize {
+    rimz::worktree::discover_owned(&env.project_root)
+        .unwrap()
+        .len()
+}
+
+/// Starts the fan given its 'spread' step and holds its advance at the second child's
+/// worktree, the first child already started: returns the advance, the gate listener, the
+/// held connection and the reserved ids.
+fn held_at_second_child(
+    env: &Env,
+    spread: &str,
+) -> (
+    Child,
+    UnixListener,
+    std::os::unix::net::UnixStream,
+    Vec<String>,
+) {
+    deploy(env, "child");
+    let gate = deploy_fan(env, spread);
+    commit_project(env);
+    let parent = started(run(env, "fan", &[], &[]));
+    until(env, &parent, |value| value["record"]["wait"].is_object());
+    let socket = env.runtime_root.join("runs-gate.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let advance = advance_held(env, &parent, &gate, &socket);
+    accept_gate(&listener).write_all(&[1]).unwrap();
+    let held = accept_gate(&listener);
+    let ids = children(&show(env, &parent));
+    (
+        advance,
+        listener,
+        held,
+        vec![parent].into_iter().chain(ids).collect(),
+    )
+}
+
+#[test]
+fn a_cancel_while_a_runs_step_starts_its_children_stops_the_start_and_names_only_started_ones() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let (mut advance, listener, mut held, ids) = held_at_second_child(&env, TWO_CHILDREN);
+    let (parent, ids) = (&ids[0], &ids[1..]);
+    let receipt = success(command(&env, &["workflow", "cancel", parent]));
+    held.write_all(&[1]).unwrap();
+    release_until_exit(&listener, &mut advance);
+    assert_eq!(live_children(&env, ids), [ids[0].clone()]);
+    assert_eq!(
+        owned_worktrees(&env),
+        1,
+        "the unstarted child's worktree is removed"
+    );
+    let left = receipt
+        .lines()
+        .filter(|line| line.contains("left running"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        left,
+        [format!("its started runs were left running: {}", ids[0])],
+        "{receipt}"
+    );
+}
+
+#[test]
+fn a_runs_step_timeout_that_passes_while_it_starts_its_children_routes_as_the_timeout() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let spread = format!("{TWO_CHILDREN}\ntimeout = '1h'");
+    let (mut advance, listener, mut held, ids) = held_at_second_child(&env, &spread);
+    let (parent, ids) = (&ids[0], &ids[1..]);
+    rewrite(&env, parent, |record| {
+        record["attempt"]["started_at"] = json!("1970-01-01T00:00:00Z");
+    });
+    held.write_all(&[1]).unwrap();
+    release_until_exit(&listener, &mut advance);
+    let value = settled(&env, parent, "failed");
+    let causes = events(&value, "route")
+        .iter()
+        .map(|route| route["input"]["cause"].clone())
+        .filter(|cause| !cause.is_null())
+        .collect::<Vec<_>>();
+    assert_eq!(causes, [json!("timeout")], "{value:#}");
+    assert_eq!(live_children(&env, ids), [ids[0].clone()]);
+    assert_eq!(owned_worktrees(&env), 1);
+}
+
+#[test]
+fn a_runs_step_whose_every_ending_is_stored_follows_then_past_its_timeout() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    deploy(&env, "child");
+    let gate = deploy_fan(&env, &format!("{TWO_CHILDREN}\ntimeout = '1h'"));
+    commit_project(&env);
+    let parent = started(run(&env, "fan", &[], &[]));
+    until(&env, &parent, |value| value["record"]["wait"].is_object());
+    children(&open_gate(&env, &parent, &gate));
+    rewrite(&env, &parent, |record| {
+        let attempt = &mut record["attempt"];
+        attempt["started_at"] = json!("1970-01-01T00:00:00Z");
+        for run in attempt["runs"]["runs"].as_array_mut().unwrap() {
+            run["ended"] = json!({"ending": {"kind": "done"}});
+        }
+    });
+    success(command(&env, &["workflow", "advance", &parent]));
+    settled(&env, &parent, "done");
+}
+
+/// Kills the advance held at the second child, leaving a reserved child unstarted.
+fn kill_held(mut advance: Child, held: std::os::unix::net::UnixStream) {
+    advance.kill().unwrap();
+    advance.wait().unwrap();
+    drop(held);
+}
+
+#[test]
+fn a_takeover_starts_only_the_reserved_runs_never_created_and_never_one_that_ended() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let (advance, _listener, held, ids) = held_at_second_child(&env, TWO_CHILDREN);
+    let (parent, ids) = (&ids[0], &ids[1..]);
+    kill_held(advance, held);
+    // The first child ends and reports; its finished home is collected before the takeover.
+    let canceled = env
+        .rimz()
+        .args(["workflow", "cancel", &ids[0]])
+        .env("RIMZ_BIN", "/bin/true")
+        .output()
+        .unwrap();
+    success(canceled);
+    until(&env, parent, |value| {
+        !value["record"]["attempt"]["runs"]["runs"][0]["ended"].is_null()
+    });
+    let state = env.state_path_for(&env.project_root);
+    let finished = state.finished_workflow(&ids[0].parse().unwrap()).home;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !finished.exists() {
+        assert!(Instant::now() < deadline, "{} never moved", ids[0]);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    fs::remove_dir_all(&finished).unwrap();
+
+    success(command(&env, &["workflow", "advance", parent]));
+    assert_eq!(live_children(&env, ids), [ids[1].clone()]);
+    let value = show(&env, parent);
+    assert_eq!(
+        (&value["record"]["state"], &value["record"]["node"]),
+        (&json!("active"), &json!("spread")),
+        "{value:#}"
+    );
+}
+
+#[test]
+fn a_takeover_fails_the_step_when_its_start_list_no_longer_matches_the_reserved_runs() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let (advance, _listener, held, ids) = held_at_second_child(&env, TWO_CHILDREN);
+    let (parent, ids) = (&ids[0], &ids[1..]);
+    kill_held(advance, held);
+    deploy_fan(&env, "start = [{ workflow = 'child' }]\nthen = 'after'");
+    success(command(&env, &["workflow", "advance", parent]));
+    let value = settled(&env, parent, "failed");
+    let route = events(&value, "route")
+        .into_iter()
+        .find(|route| route["input"]["cause"] == "died")
+        .unwrap_or_else(|| panic!("the step failed died: {value:#}"));
+    assert_eq!(
+        route["input"]["reason"], "spread no longer lists the runs it reserved (child, child)",
+        "{route:#}"
+    );
+    assert_eq!(live_children(&env, ids), [ids[0].clone()]);
 }

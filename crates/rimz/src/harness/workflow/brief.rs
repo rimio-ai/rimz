@@ -106,6 +106,9 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
         };
         arrival.push(format!("The previous attempt, {who}, {ended}."));
     }
+    if let Some(joined) = joined(record) {
+        arrival.push(joined);
+    }
     let (mut after, questions) = lifecycle(spec, step, record);
     let mut noted = Vec::new();
     for check in step.rest_check().iter().chain(step.then()) {
@@ -140,6 +143,49 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
     .filter(|part| !part.is_empty())
     .collect::<Vec<_>>()
     .join("\n\n")
+}
+
+/// The runs the run's `runs` step started, once each has ended, with the command that reads one.
+fn joined(record: &RunRecord) -> Option<String> {
+    if record.joined.is_empty() {
+        return None;
+    }
+    let runs = record
+        .joined
+        .iter()
+        .filter_map(|run| {
+            let ended = run.ended.as_ref()?;
+            let branch = ended
+                .branch
+                .as_ref()
+                .map_or_else(String::new, |branch| format!(" on branch {}", span(branch)));
+            let notes = ended.notes.as_ref().map_or_else(String::new, |notes| {
+                format!(", notes in {}", span(&notes.display().to_string()))
+            });
+            let reason = ended
+                .reason
+                .as_ref()
+                .map_or_else(String::new, |reason| format!(": {reason}"));
+            Some(format!(
+                "{} ({}) ended {}{branch}{notes}{reason}: {}.",
+                span(&run.id.to_string()),
+                run.workflow,
+                super::state::ending_word(&ended.ending),
+                span(&format!("rimz workflow show {}", run.id))
+            ))
+        })
+        .collect::<Vec<_>>();
+    let started = match runs.len() {
+        1 => "1 run, which has".to_owned(),
+        count => format!("{count} runs, which have"),
+    };
+    Some(format!(
+        "This run's {} step started {started} ended; {} in {} holds each one's ending. {}",
+        span("runs"),
+        span("joined"),
+        span("context.json"),
+        runs.join(" ")
+    ))
 }
 
 pub(super) fn judge(spec: &Definition, record: &RunRecord) -> String {
@@ -373,7 +419,7 @@ fn check_note(spec: &Definition, name: &str) -> Option<String> {
             span(node.summary().unwrap_or(sleep.duration().text()))
         ),
         Kind::Condition(_) => unreachable!("condition cases returned their note above"),
-        Kind::Command(_) | Kind::Agent(_) | Kind::Message(_) => {
+        Kind::Command(_) | Kind::Agent(_) | Kind::Message(_) | Kind::Runs(_) => {
             unreachable!("a check runs no step kind")
         }
     })
