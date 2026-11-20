@@ -460,10 +460,14 @@ fn merge_live_reading(record: &mut ProviderRecord, context: &crate::agents::Agen
     }
     let read_at_ms = live_read_at_ms(context);
     let floor_before = record.stamps.floor_at_ms;
+    let replaced_id_at = record.stamps.account_id_at_ms;
     let changed = record.merge_reading(&reading, read_at_ms, ReadingSource::Live);
     if record.stamps.floor_at_ms != floor_before {
         // A live switch: the switching session's own windows describe the new
         // account, and a sidecar's first windows date from its process start.
+        // A session that predates the replaced account's id also drew windows
+        // on that account's watch, so its unchanged windows cannot be told from
+        // the other pane's and the floor stays at the switch.
         let own_windows_from = context
             .rate_limits
             .iter()
@@ -472,8 +476,13 @@ fn merge_live_reading(record: &mut ProviderRecord, context: &crate::agents::Agen
             .map(|observed| observed.as_millisecond().max(0) as u64)
             .min()
             .map_or(read_at_ms, |earliest| earliest.min(read_at_ms));
+        let switch_floor = if replaced_id_at.is_some_and(|at| own_windows_from < at) {
+            read_at_ms
+        } else {
+            own_windows_from
+        };
         record.stamps.floor_at_ms =
-            Some(floor_before.map_or(own_windows_from, |floor| floor.max(own_windows_from)));
+            Some(floor_before.map_or(switch_floor, |floor| floor.max(switch_floor)));
     }
     changed
 }
