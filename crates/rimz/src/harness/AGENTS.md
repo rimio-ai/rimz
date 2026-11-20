@@ -10,7 +10,7 @@ Behaviour is documented per topic under `docs/internals/harness/`: [fleet.md](..
 - Harness delivery rides `message`; it never reimplements queues, gates, retries, or transcript audit.
 - `harness` never reaches `sidebar`: a helper that refreshes provider usage returns it, and its CLI entry publishes through `sidebar::refresh`.
 - **Invariant.** `plan` never imports `resume` (`cargo xtask invariants`), and `harness::workflow` imports nothing from `harness::schedule` (its `[[module]]` entry in `refactor-target.toml`).
-- The workflow engine reaches the CLI only through the attempt host seam (`AttemptHost`), and never reports to loop: `run_log::collect_run` reads the outcome the engine wrote on the record.
+- The workflow engine reaches the CLI only through the attempt host seam (`AttemptHost`), and never reports to loop.
 
 ## The sidebar import graph
 
@@ -27,7 +27,7 @@ Behaviour is documented per topic under `docs/internals/harness/`: [fleet.md](..
 
 Each of these is decided in one place. Call it; a second copy drifts.
 
-- Launch: `launch_plan::compile` reads and decides without writing, and `apply` is the only step that materializes, so `agents explain` renders a plan without applying it. The process compiler resolves the launch shell once onto `CompiledAgentProcess`, and no other harness site reads `proc::user_shell`. `launch_reminders.rs` owns the one `<\system_reminder>` tag: producers return bodies and never wrap, no prompt file adds a tag, and reminder text is kept from the compiler's single render. The reminder carries no sampled git state, which goes stale before the agent reads it; `runtime_env.rs` samples at prompt submit.
+- Launch: `launch_plan::compile` reads and decides without writing, and `apply` is the only step that materializes, so `agents explain` renders a plan without applying it. The process compiler resolves the launch shell once. `launch_reminders.rs` owns the one `<\system_reminder>` tag: producers return bodies and never wrap, and no prompt file adds a tag. The reminder carries no sampled git state, which goes stale before the agent reads it; `runtime_env.rs` samples at prompt submit.
 - Relaunch: `resume::resolve_posture` is the one posture resolution for restart, fork, and every resume path.
 - Supervised runs: every status transition is a locked read-modify-write in `run.rs` over the `store::run` record. `response_path` and `earlier_response_path` are the one derivation of a response file. A reflex that asks an agent to end its turn registers its remaining work in `owed.rs`, or a supervised run completes at that turn end.
 - Fleet: `fleet.rs` holds the detached and held rules (`FleetRuns`, `owed_team_runs`, `ended_team_runs`), so no consumer filters on `report_to` or `limit_hold` itself.

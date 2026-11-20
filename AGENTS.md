@@ -34,7 +34,7 @@ The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/
 - A refactor you noticed on the way becomes a note unless it blocks you.
 - Python helpers run under `uv`.
 - `AGENTS.md` and `CLAUDE.md` are one file per directory, joined by symlink. Edit `AGENTS.md`, and give a new one its `CLAUDE.md` link.
-- Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes. A new `disk/` module also gets a row in the Disk module table of `docs/internals/store.md`.
+- Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
 - Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request: it is written as a standalone change once the work merges.
 - `examples/` is sample configuration for users to copy. Do not read it unless the user asks, and do not treat it as authority on behaviour.
 - A change to any Markdown file follows [docs/AGENTS.md](./docs/AGENTS.md).

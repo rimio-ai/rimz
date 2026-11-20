@@ -13,7 +13,6 @@ Local contract for `crates/rimz/src/cli/`: argv to typed requests, the process e
 ## Presentation
 
 - Human colors come from `render::palette` accessors, state tones from typed `render::status` helpers, and provider names and handles from `palette::identity`. Agent prose reaches a human through `render::prose::Prose`: markdown on a styled stdout and raw text when piped; one-line previews stay snippets. JSON, hook stdout, pane capture, scripting values, and streaming protocols stay raw. Which `println!` sites are legal is in [Stdout and tracing](../../../../docs/contributing/rust-conventions.md#stdout-and-tracing).
-- A renderer never re-splits a condition answer's `reason` text itself: per-key unread reasons come from `harness::workflow::unread_reasons`.
 
 ## Stores
 

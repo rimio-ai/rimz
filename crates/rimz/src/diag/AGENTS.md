@@ -6,9 +6,9 @@ Local contract for `crates/rimz/src/diag/`. Extends [crates/rimz/AGENTS.md](../.
 - **Invariant.** [`diag.rs`](../diag.rs) alone names the main log file and the frame-capture directory; `cargo xtask invariants` rejects those two literals in any other source file.
 - **Invariant.** `cargo xtask invariants` rejects `warn!` and `error!` under `store/snapshot/`: a projection re-folds per frame, and either would flood the off-box channel.
 - Writes are best-effort: a failed append logs at debug and returns, and the caller continues unchanged.
-- Only `DiagSink` touches disk. A pure projection layer returns its diagnostics as data.
-- Records are anomaly-first: a steady-state tick writes nothing.
+- A pure projection layer returns its diagnostics as data.
+- Records are anomaly-first.
 - A new key or record shape gets a new serde tag, never a distinguishing field on an existing variant. Builds of different ages share one home, and an older build ignores unknown fields, so it would read the new shape as the old one.
-- `observability.rs` is the separate opt-in off-box channel behind the `sentry` build feature; keep local-only episodes local.
+- `observability.rs` is the separate off-box channel: keep local-only episodes local.
 - An internal repair's durable record (root: Automation is accountable) follows [`focus_repair.rs`](./focus_repair.rs), which pairs the repair with its own rotating log.
 - Test fixtures pin time, so a test asserts a record's whole envelope, not an approximation.

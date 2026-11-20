@@ -6,7 +6,7 @@ Before handing off any renderer change, follow the [sidebar live check](../../..
 
 ## Invariants
 
-`cargo xtask invariants` enforces each of these. It greps text, this file included, so a banned path is described in prose and never written out.
+`cargo xtask invariants` enforces each of these.
 
 - **Read-only on the store.** No store-writer or store atomic-publish import anywhere under this tree, tests included: a fixture writes its runtime files with serde and `std::fs::write`. [`store/`](../store/AGENTS.md) writes.
 - **Event-log history enters through a `RollupCursor` fold**, the rule that also binds [`sidebar/`](../sidebar/AGENTS.md).
@@ -22,7 +22,6 @@ Before handing off any renderer change, follow the [sidebar live check](../../..
 - One [`host.rs`](./host.rs) process per mux session is the only painter. Each pane's [`supervise.rs`](./supervise.rs) holds the pane's tty and hands the host its output fd. Terminal modes and the event reader belong only to the supervisor.
 - Nothing a pane's loop reaches reads the process's own terminal: the host has none, and an ambient read would describe some other pane or block. Geometry, cell aspect, and the cursor come from the pane's [`app/backend.rs`](./app/backend.rs), and pane identity from `ServeConfig::own_pane`.
 - Room-owned state (the shared overlay, notification delivery, the room-wide unread reminder timer, reload decisions) stays with the host, never an attachment.
-- The fetch worker reconciles a final fold's runtime records only through `sidebar::engine::reconcile_final_fold`.
 - [`render/`](./render/mod.rs) draws what the snapshot resolved (`SidebarProviderPanel::budget`, `SidebarRow::call_split`) and never re-reads windows, credits, or the usage blob. [`pets/`](./pets/mod.rs) hands it a `PetView` and nothing more: decode, cache, and I/O stay inside that module. The renderer's one read of `web` is `web::pixel_ttyd_pids`.
 - Paint, frame timing, and hidden skipping follow `LoopState::watched`, which counts resolved membership and focus or input optimism. Pixel slots and kitty graphics follow the host's image permit instead.
 - On tmux a tab switch puts focus on the destination window's active pane, which can be that tab's own sidebar. A rule keyed on focus leaving the sidebar therefore also handles a view arriving at another sidebar pane.
@@ -45,7 +44,6 @@ Before handing off any renderer change, follow the [sidebar live check](../../..
 
 - `LoopState` test rigs share views by default, as every attachment does in production. A test runs without views only when that path is its subject.
 - Render tests golden a full screen through the `assert_snapshot` helper in [`render/tests/`](./render/tests/mod.rs), never `insta` directly: the helper scrubs live durations and ages, so a frame never fails on elapsed time.
-- Reducer, selection, and ordering tests stay pure and in-module.
 - Before a render change, list every frame `rg -l '<glyph or text>' --glob '*.snap'` returns, with the glyph's Unicode and Nerd Font forms (`GLYPH_CATALOG` in `theme/glyphs.rs`) both in the pattern, and narrow the list by reading each card, since width tiers move elements between lines. Preset cards and the `app::play` filmstrip escape that grep, and `insta` stops at a test's first failing frame, so once the change builds, run `INSTA_FORCE_PASS=1 INSTA_UPDATE=new cargo xtask test 'sidebar::scenario'` and the same over `'sidebar_pane'`, review each `.snap.new`, then `cargo insta accept`.
 - A line that admits elements by width is tested at each element's exact drop width and one column either side.
 - A change to the order of groups or rows also runs `cargo xtask test -P journey` and `cargo xtask test -P live`: journey tests drive keys over the rendered order and `journey::deep` drives scroll and focus over it.
