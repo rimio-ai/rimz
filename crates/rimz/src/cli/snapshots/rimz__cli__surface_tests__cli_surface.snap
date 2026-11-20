@@ -2661,13 +2661,14 @@ rimz packs
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz packs customize
-    <target>  [action=set takes=1..=1 required]
+    <targets>  [action=append takes=1..=inf required]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --copy  [action=set-true takes=0..=0]
     -h, --help  [action=help takes=0..=0]
     --type <TYPE>  [action=set takes=1..=1]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --set <FIELD=VALUE>  [action=append takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
