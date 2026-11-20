@@ -2,7 +2,7 @@
 
 The gate stack as reference: the composite tasks, each gate they run, the run budgets, the pre-commit hook, the test profiles, the environment a test run gets, the architectural invariants, and the compatibility surface. The everyday commands are in the root [AGENTS.md](../../AGENTS.md#testing). What the commands print and hide, and how to pick one test, is in [running-gates.md](./running-gates.md). The CI jobs that run these gates are in [build-and-ci.md](./build-and-ci.md#continuous-integration).
 
-`cargo xtask <task>` is the entry point for contributor automation, and new automation lands in `xtask/`. `cargo xtask help` lists every task, and `cargo xtask help <task>` prints the command a task runs. Every PR gate runs in CI with warnings treated as errors, and each has a local `cargo xtask` equivalent.
+`cargo xtask <task>` is the entry point for contributor automation, and new automation lands in `xtask/`. `cargo xtask help` lists every task, and `cargo xtask help <task>` prints the command a task runs. CI runs every PR gate under `RUSTFLAGS=-D warnings`, except the plugin build, which sets its own flags. Each gate has a local `cargo xtask` equivalent except the four [cross-target checks](./running-gates.md#cross-target-checks), which call `cargo-zigbuild` directly.
 
 ## Composites
 
@@ -19,10 +19,11 @@ A new gate task is documented in two places: the row of each composite that runs
 
 ### `gate`
 
-- It prints one compact line per passing step and fails fast with a trimmed excerpt and a `NEXT:` hint. `check`, `lint`, and `test` capture and report failures the same way.
+- It prints one compact line per passing step and fails fast with a trimmed excerpt and a `NEXT:` hint. `check`, the clippy passes of `lint`, and a captured `test` run report a failure in the same form.
 - A test step that passed only on retry adds nextest's `FLAKY` line for each flaky test.
 - `--check` verifies formatting with `cargo fmt --all -- --check` and leaves the tree unmodified.
 - `--keep-going` runs every step and ends with a `gate: fail (<steps>)` line that names each failed step. The lint step runs all three clippy passes under cargo's own `--keep-going`, so one crate's compile failure does not hide another's. The test step adds nextest's `--no-fail-fast`.
+- A step that cannot run at all (a spawn error, a budget overrun) ends the gate at once, with or without `--keep-going`.
 - The two flags combine in either order.
 
 ### `checks`
@@ -30,6 +31,7 @@ A new gate task is documented in two places: the row of each composite that runs
 - The steps are ordered for speed. The instant text gates (`fmt`, `invariants`, the conform ratchet, `docs-links`) run first and fail fast.
 - `deps` runs on its own thread beside the compile gates.
 - The compile gates (`build-plugin`, its `plugin-provenance` byte comparison, `lint`, `doc`) run one after another, because concurrent cargo builds serialize on the target-dir lock.
+- Outside CI, `plugin-provenance` skips the byte comparison when the local rustc differs from the one the vendored plugin records.
 - It prints a per-gate timing summary to stderr.
 
 `cargo xtask check` (singular) is a different task: the fast `cargo check --workspace --all-targets --all-features --locked` compile pass, for early iteration.
@@ -48,15 +50,13 @@ Escalate when the change touches the matching surface:
 - `cargo xtask perf` for the benches and their regression ceilings.
 - `cargo xtask ci` for the checks and the full suite.
 
-Run `cargo xtask build-plugin` before a live Zellij verification. Without the presence wasm the plugin-dependent live tests self-skip, and the self-skip report beneath the summary is the only sign that they did not run.
-
-The `backend::zellij::presence::` tests that load `presence_wasm_artifact` read the vendored `crates/rimz/presence/rimz-presence-zellij.wasm`, so a plugin change reaches them only after `cargo xtask plugin-refresh`.
+After a change to the presence plugin, run `cargo xtask plugin-refresh` before a live Zellij verification. The `backend::zellij::presence::` tests that load `presence_wasm_artifact` read the vendored `crates/rimz/presence/rimz-presence-zellij.wasm`. `cargo xtask build-plugin` compiles the plugin and leaves that file as it is.
 
 ## Run budgets
 
 Two wall clocks bound a run, so a wedged compile, test process, or multiplexer costs a bounded wait.
 
-Every task carries a budget armed at startup ([xtask/src/deadline.rs](../../xtask/src/deadline.rs)):
+Every task carries a budget armed at startup ([xtask/src/deadline.rs](../../xtask/src/deadline.rs)). xtask checks it while it waits on a child it started through its bounded runner. `semver` waits on `cargo semver-checks` outside that runner, so no budget ends it.
 
 | Budget | Tasks |
 | --- | --- |
@@ -66,7 +66,7 @@ Every task carries a budget armed at startup ([xtask/src/deadline.rs](../../xtas
 
 On overrun the running child gets `SIGTERM`, then `SIGKILL` five seconds later, and the task fails naming the command and its elapsed time. A captured step also prints the trimmed output it collected. `RIMZ_XTASK_TIMEOUT` sets the budget for one run: `45m`, `900s`, a bare `900` for seconds, or `off` to lift it. Use it when a cold tree needs a full compile inside the gate.
 
-One test is bounded by `slow-timeout` in [.config/nextest.toml](../../.config/nextest.toml), which warns every two minutes and terminates the test at six. A hung test then fails by name in the run summary while the tests around it keep going. The suite's slowest legitimate waits are the live spawn and lock deadlines, at 150 s and 120 s.
+One test is bounded by `slow-timeout` in [.config/nextest.toml](../../.config/nextest.toml), which warns every two minutes and terminates the test at six. A hung test then fails by name in the run summary. In the `gate` and `live` profiles it counts toward the three-failure stop like any other failure. The suite's slowest legitimate waits are the live spawn and lock deadlines, at 150 s and 120 s.
 
 ## Individual gates
 
@@ -77,7 +77,7 @@ One test is bounded by `slow-timeout` in [.config/nextest.toml](../../.config/ne
 | `check` | `cargo check --workspace --all-targets --all-features --locked` | That the workspace compiles |
 | `test` | `cargo nextest run --workspace --all-features --locked` | The suite ([the test runner](./running-gates.md#the-test-runner)) |
 | `test-archive` | `cargo nextest archive --workspace --all-features --locked --archive-file <path>` | Packages the workspace test binaries for portable execution. Reserve it, with partitioned execution, for large CI suites |
-| `docs-links` | (xtask) | Every relative Markdown link target and `#anchor` resolves in the working tree. Offline and deterministic. External URLs are out of scope |
+| `docs-links` | (xtask) | Every relative inline link in a tracked Markdown file resolves to a file in the working tree, and its `#anchor` to a heading. Offline and deterministic. Reference-style links and external URLs are out of scope |
 | `loop-tests` | `uv run --script <file>` for each `loops/*/tests/test_*.py`, from the repository root | The repository loop tests. A failing file, no matching file, or a missing `uv` fails it |
 | `doc` | `cargo doc --no-deps --workspace --all-features --locked` with `RUSTDOCFLAGS="-D warnings"` | Rustdoc warnings, broken and private intra-doc links included |
 | `invariants` | (xtask) | The [architectural invariants](#architectural-invariants) |
@@ -85,13 +85,13 @@ One test is bounded by `slow-timeout` in [.config/nextest.toml](../../.config/ne
 | `deny` | `cargo deny check -D warnings` | Licenses, advisories, bans, yanked crates |
 | `vet` | `cargo vet --locked` | The supply-chain audit. It fetches the crates.io index directly, bypassing the runners' nexus mirror |
 | `semver` | `cargo semver-checks` | Rust API drift against the published baseline. Advisory |
-| `coverage` | `cargo llvm-cov nextest --workspace --all-features --locked` | Instrumented coverage |
+| `coverage` | `cargo llvm-cov clean --workspace`, then `cargo llvm-cov nextest --lcov --output-path target/ci/coverage/lcov.info --workspace --all-features --locked` | Instrumented coverage |
 
 ### Formatting
 
 `rustfmt.toml` sets no `wrap_comments`, so wrap comments by hand ([AGENTS.md](../../AGENTS.md#engineering-principles)). Wrap by hand also a macro call rustfmt cannot parse (tracing's `%field` and `?field` sigils, an `if` inside `json!`), to the width of the code around it.
 
-rustfmt leaves a whole expression as written when it cannot fit some part of it within `max_width`. This is often a closure passed as an argument, and `cargo fmt --check` and `cargo xtask lint` still pass. When the layout of new code looks hand-made, indent one statement in a scratch copy and run rustfmt. If the indent stays, split the body into named functions until rustfmt restores it.
+rustfmt can leave a whole expression as written when it cannot fit some part of it within `max_width`. This is often a closure passed as an argument, and `cargo fmt --check` and `cargo xtask lint` still pass. When the layout of new code looks hand-made, indent one statement in a scratch copy and run rustfmt. If the indent stays, split the body into named functions until rustfmt restores it.
 
 ### Lint
 
@@ -142,7 +142,7 @@ Three named profiles in `.config/nextest.toml` partition the suite. A run with n
 | `live` | The mux backend-parity suites, the real-browser web suite, deep mux smokes | `cargo xtask test -P live` |
 | `journey` | Non-deep rendered journeys | `cargo xtask test -P journey` |
 
-A test that drives tmux through the integration harness and self-skips without it (`which::which("tmux")`) stays in `gate`. The filters in `.config/nextest.toml` set a test's profile, and its directory does not: match the exact name from `cargo xtask test --list <fragment>` against those filters. The shape each kind of test takes is in [rust-conventions.md](./rust-conventions.md#tests).
+The name filters in `.config/nextest.toml` set a test's profile, and neither its directory nor a self-skip does. A test outside `backend::` and `journey::` that drives tmux and self-skips without it (`which::which("tmux")`) runs in `gate`. To find a test's profile, match the exact name from `cargo xtask test --list <fragment>` against those filters. The shape each kind of test takes is in [rust-conventions.md](./rust-conventions.md#tests).
 
 ## Test environment
 
@@ -163,13 +163,13 @@ Inside the sandbox every `common::Env` and live `ZellijNamespace` owns narrower 
 
 ## Architectural invariants
 
-`cargo xtask invariants` is a grep-and-shape gate over the tracked tree. Its matches are shallow strings, so it is a cheap trip-wire beside the type system and review, never a substitute for either. It guards boundaries the compiler can't see: hook-stdout decision-channel integrity, sidebar/store import separation, spend-parser and diagnostic-write confinement, fsync calls staying in `disk/atomic.rs`, pane-primitive use, the render snapshot clock, the sidebar image-permit mint, [UI-color provenance](../guide/theme.md#color-slots), CLI color-carrier provenance, single-home provider-brand resolution, glyph provenance, vendored presence-plugin freshness, the inline-test size gate, and the deep-journey backend prefix that schedules a test in its live-mux group. The authoritative set is the `ensure_*` list in [xtask/src/invariants.rs](../../xtask/src/invariants.rs); a new boundary lands there as an `ensure_*` check with a self-test.
+`cargo xtask invariants` is a grep-and-shape gate over the tracked tree. Its matches are shallow strings, so it is a cheap trip-wire beside the type system and review, never a substitute for either. It guards boundaries the compiler can't see: hook-stdout decision-channel integrity, sidebar/store import separation, spend-parser and diagnostic-write confinement, fsync calls staying in `disk/atomic.rs`, pane-primitive use, the render snapshot clock, the sidebar image-permit mint, [UI-color provenance](../guide/theme.md#color-slots), CLI color-carrier provenance, single-home provider-brand resolution, glyph provenance, vendored presence-plugin freshness, the inline-test size gate, and the deep-journey backend prefix that schedules a test in its live-mux group. The authoritative set is the `ensure_*` list in [xtask/src/invariants.rs](../../xtask/src/invariants.rs). A new boundary lands there as an `ensure_*` check with a self-test.
 
 A boundary on who may construct a value (a permit, a grant, a proof that a check ran) is held by the compiler before any grep. Give the type a file to itself and keep its field private: a module and every module under it can write a private-field literal, so a type declared in a `mod.rs` can be forged from each child. The `ensure_*` check is then needed only for what the compiler cannot see, the call sites of the named constructor. `ImagePermit` in [pixel/permit.rs](../../crates/rimz/src/sidebar_pane/pixel/permit.rs) is the shape, with `ensure_image_permit_minted_only_by_host` holding its one mint.
 
 ## The conform ratchet
 
-`cargo xtask atlas conform --ratchet` is a gate of its own, outside `invariants` ([atlas.md](./atlas.md#conform--keep-the-target) is its reference). It reads target schema v5 from the root `refactor-target.toml` and fails only when dependency sites, escaping surface, or strangler counts exceed the checked-in constraints. It is inert when that file is absent. `--tighten` only lowers baselines and removes unused dependency admissions, and raising one is a deliberate edit of the target file.
+`cargo xtask atlas conform --ratchet` is a gate of its own, outside `invariants` ([atlas.md](./atlas.md#conform--keep-the-target) is its reference). It reads target schema v5 from the root `refactor-target.toml` and fails when dependency sites, escaping surface, or strangler counts exceed the checked-in constraints. It also fails on a target file it cannot parse and on a configured path that does not exist. It is inert when that file is absent. `--tighten` only lowers baselines and removes unused dependency admissions, and raising one is a deliberate edit of the target file.
 
 Neither `check` nor `lint` sees it, so a change that passes both can still fail `cargo xtask gate` at its `conform` step. Run it as part of the per-commit checks whenever a change adds an item visible outside its module, a module, or an import of one module from another. `pub(crate)` counts the same as `pub`, so narrowing visibility does not clear the gate, though it is still the right visibility to pick. How to admit a new item is in [the surface ratchet](./running-gates.md#the-surface-ratchet).
 
@@ -179,8 +179,8 @@ RimZ ships as a binary, so the surface that carries a compatibility promise is t
 
 Three checks hold that surface, all in the normal test run:
 
-- Flags: [crates/rimz/src/cli/surface_tests.rs](../../crates/rimz/src/cli/surface_tests.rs) snapshots the built clap tree: every command, alias, and flag with its arity, defaults, accepted values, and global/hidden status, and no help prose so wording churn stays out of the diff. A failure is the review prompt. Adding a command or an optional flag is additive; renaming or removing a flag, narrowing a value set, or changing a default breaks callers and earns a CHANGELOG entry. Accept a reviewed diff with `cargo insta accept`.
+- Flags: [crates/rimz/src/cli/surface_tests.rs](../../crates/rimz/src/cli/surface_tests.rs) snapshots the built clap tree: every command with its aliases, and every flag with its long aliases, arity, defaults, accepted value names, and global/hidden status. It holds no help prose, so wording churn stays out of the diff. A failure is the review prompt. Adding a command or an optional flag is additive. Renaming or removing a flag, narrowing a value set, or changing a default breaks callers and earns a CHANGELOG entry. Accept a reviewed diff with `cargo insta accept`.
 - Commands: `visible_commands_are_grouped_exactly_once` in [crates/rimz/src/cli/help.rs](../../crates/rimz/src/cli/help.rs) fails when a visible subcommand appears or disappears without moving its help group.
-- Persisted and wire formats: versioned formats carry their own version constants (`rimz.event.v2`, `rimz.plugin.v6`, `rimz.web.v2`, `SNAPSHOT_VERSION`, and peers), independent of the crate version, and a mismatched record is rejected and rebuilt rather than migrated. A new shared machine-wide cache that rejects other versions puts its format version in its file name (`rate_limits.v<N>.json`), so builds on different versions keep separate files. `spending.json`, `provider-spending.json`, and `model_catalog.<login>.json` are the exceptions: they reject other versions under fixed names, so builds on different versions contend over one file there. The unversioned `credits.json` cache accepts additive, defaulted optional fields. The doctor integration suite pins the event-log and sidebar-plugin versions as literals, so a bump there fails a test that names the old value.
+- Persisted and wire formats: versioned formats carry their own version constants (`rimz.event.v2`, `rimz.plugin.v6`, `rimz.web.v2`, `SNAPSHOT_VERSION`, and peers), independent of the crate version. A reader refuses a record of another version and does not migrate it. A new shared machine-wide cache that rejects other versions puts its format version in its file name (`rate_limits.v<N>.json`), so builds on different versions keep separate files. `spending.json`, `provider-spending.json`, and `model_catalog.<login>.json` are the exceptions: they reject other versions under fixed names, so builds on different versions contend over one file there. The unversioned `credits.json` cache accepts additive, defaulted optional fields. The doctor integration suite pins the event-log and sidebar-plugin versions as literals, so a bump there fails a test that names the old value.
 
 Shared files that builds of different ages rewrite whole (read, change one entry, write all), such as provider caches under `~/.rimz/cache/providers/`, lose the fields an older build does not know on every write by that build, not only at upgrade. A new optional field's absence must preserve the behavior the file had before the field existed.

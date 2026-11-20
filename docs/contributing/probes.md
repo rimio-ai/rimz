@@ -21,7 +21,16 @@ What a probe or live check you build by hand needs so that it measures the thing
 - On 0.45.1, `zellij --layout <file> attach --create <name>` births the session with Zellij's default layout (tab-bar, status-bar, one pane), and ignores the file. Attach first, build the probe's tabs with `zellij --session <name> action new-tab --layout <file>`, close the bootstrap tab, and count tabs and panes before you time anything.
 - A hand-built tmux probe runs as a bash script under `tmux -L <name> -f /dev/null` with `TMUX_TMPDIR=/tmp/<8 chars>`. The session `TMPDIR` makes the socket path exceed the 108-byte limit, and zsh does not word-split an unquoted variable that holds several arguments.
 - `new-window -t` names the session with a trailing colon (`-t s:`). A bare session name resolves to its current window and fails with `index 0 in use`.
-- A probe room of hundreds of panes runs inside `unshare --user --map-root-user --mount` with its own devpts instance: `mount -t devpts -o newinstance,ptmxmode=0666,max=2048 devpts /dev/pts`, then `/dev/pts/ptmx` bound over `/dev/ptmx`. The host's shared PTY pool otherwise fails `new-window` with `fork failed: No space left on device`.
+- A probe room of hundreds of panes runs in its own user and mount namespace with a private devpts instance. The host's shared PTY pool otherwise fails `new-window` with `fork failed: No space left on device`. This opens a shell with room for 2,048 PTYs:
+
+  ```sh
+  unshare --user --map-root-user --mount sh -c '
+    mount -t devpts -o newinstance,ptmxmode=0666,max=2048 devpts /dev/pts
+    mount --bind /dev/pts/ptmx /dev/ptmx
+    exec "$SHELL"
+  '
+  ```
+
 - A probe that reads the drawn status row or sends mouse clicks attaches its client through a Python `pty` driven by `uv run --with pyte`.
 - A probe of key tables writes real bytes through a Python `pty` client. `send-keys -K` left `client_key_table` at `root` and sent the keys to the pane.
 - A pty that does not answer tmux's terminal queries holds a bare `Esc` for 500 ms whatever `escape-time` says, so wait longer than that before you read the result.
@@ -48,14 +57,56 @@ What a probe or live check you build by hand needs so that it measures the thing
 - Stop a process you started by its PID (`$!`, `pgrep -x`), never with `pkill -f PATTERN`, which matches the shell that runs `pkill` and kills it.
 - Find a running build by process name (`pgrep -ax cargo`), never with `pgrep -af PATTERN`. An agent's command line quotes its whole brief, so `-af` matches every agent whose brief names the tool.
 
-A hand-built `rimz remote connect` probe against real OpenSSH runs its own sshd:
+A hand-built `rimz remote connect` probe against real OpenSSH runs its own sshd. This block writes everything under `$TMPDIR/sshd-probe`, starts the server on `127.0.0.1`, and points `RIMZ_SSH_BIN` at a wrapper that reaches it as the host `probe`. Set `port` to any free high port.
 
-1. Generate a host key and a client key under `$TMPDIR` with `ssh-keygen`.
-2. Write an `sshd_config` with a free high `Port`, `ListenAddress 127.0.0.1`, that `HostKey`, a `PidFile` and `AuthorizedKeysFile` under `$TMPDIR`, `StrictModes no`, `UsePAM no`, and a `ForceCommand` script that runs the session under `env -i` with the isolated remote home.
-3. Copy `/etc/group` to `$TMPDIR/group` without its `tty` line.
-4. Start the server as `bwrap --dev-bind / / --ro-bind "$TMPDIR/group" /etc/group -- /usr/sbin/sshd -D -e -f "$TMPDIR/sshd_config"`.
-5. Point `RIMZ_SSH_BIN` at a wrapper script that runs `exec ssh -F "$TMPDIR/ssh_config" "$@"`. The `Host` entry of that scratch configuration sets the port, `IdentityFile`, `IdentitiesOnly yes`, and a scratch `UserKnownHostsFile`.
-6. Stop the sshd by the PID in its `PidFile`.
+```sh
+set -eu
+P="$TMPDIR/sshd-probe"
+port=42222
+mkdir -p "$P/remote-home"
+ssh-keygen -q -t ed25519 -N '' -f "$P/host_key"
+ssh-keygen -q -t ed25519 -N '' -f "$P/client_key"
+cp "$P/client_key.pub" "$P/authorized_keys"
+cat > "$P/force.sh" <<EOF
+#!/bin/sh
+exec env -i HOME="$P/remote-home" PATH="\$PATH" sh -c "\${SSH_ORIGINAL_COMMAND:-exec sh -l}"
+EOF
+chmod +x "$P/force.sh"
+cat > "$P/sshd_config" <<EOF
+Port $port
+ListenAddress 127.0.0.1
+HostKey $P/host_key
+PidFile $P/sshd.pid
+AuthorizedKeysFile $P/authorized_keys
+StrictModes no
+UsePAM no
+ForceCommand $P/force.sh
+EOF
+grep -v '^tty:' /etc/group > "$P/group"
+bwrap --dev-bind / / --ro-bind "$P/group" /etc/group -- /usr/sbin/sshd -D -e -f "$P/sshd_config" 2> "$P/sshd.log" &
+cat > "$P/ssh_config" <<EOF
+Host probe
+  HostName 127.0.0.1
+  Port $port
+  User $(id -un)
+  IdentityFile $P/client_key
+  IdentitiesOnly yes
+  UserKnownHostsFile $P/known_hosts
+  StrictHostKeyChecking accept-new
+EOF
+cat > "$P/ssh" <<EOF
+#!/bin/sh
+exec ssh -F "$P/ssh_config" "\$@"
+EOF
+chmod +x "$P/ssh"
+export RIMZ_SSH_BIN="$P/ssh"
+```
+
+`"$RIMZ_SSH_BIN" -tt probe tty` prints a `/dev/pts/N` path when the server works. The `ForceCommand` script runs each session under `env -i` with `$TMPDIR/sshd-probe/remote-home` as its home. Stop the server by the PID in its `PidFile`:
+
+```sh
+kill "$(cat "$TMPDIR/sshd-probe/sshd.pid")"
+```
 
 - The group copy is needed because the agent sandbox leaves gid 5 unmapped. A plain sshd aborts every PTY session with `chown(/dev/pts/N, <uid>, 5) failed: Invalid argument`.
 - An agent on Codex cannot run this probe. Its sandbox refuses TCP sockets (`socket(AF_INET, SOCK_STREAM)` fails with `Operation not permitted`), so sshd exits with `Cannot bind any address.`. Run the probe from a Claude agent's pane. Unix sockets work under Codex, so a Codex agent still runs the tmux and Zellij integration tests.
@@ -92,14 +143,15 @@ A hand-built isolated home sets or unsets each of these. An agent shell exports 
 - An isolated `rimz accounts` check first runs `rimz accounts add <provider> <name>` (or `rimz hooks install <provider>` for `default`) inside the isolated home. A missing-hooks problem takes the `PLAN` column and hides a lapse or the normal plan label.
 - It also sets a fresh, short `XDG_RUNTIME_DIR` (`/tmp/<8 chars>`). The accounts lane elects its prober through `accounts.lock` under the runtime directory, not under `RIMZ_HOME`, and a caller that loses that election to a live room serves its cache as it stands without probing.
 - A text diff of `rimz accounts list` between a release binary and a `testkit` build expects the Muse row to read `hooks missing` on the `testkit` side. `HOOK_ENV_NAMES` in `crates/rimz/src/agents/hook_types.rs` carries a `testkit`-only entry, and Muse's expected hook environment derives from it, so a `testkit` build never matches a hook that a release build installed.
-- A walk or path comparison rooted at the RimZ home (a size walk, a prefix check, a relative link) is tested with a home that is itself a symlink, and so is a live check of one: the [accounts guide](../guide/accounts.md) supports a `~/.rimz` linked into a dotfiles checkout, and `fs::symlink_metadata` on that root reads the link, not the home behind it. `disk::usage` once walked nothing under such a home, so `rimz doctor --audit` reported the room as not created; `disk::usage::tests::measure_follows_a_symlinked_home_root_only` holds that walk.
+- A walk or path comparison rooted at the RimZ home (a size walk, a prefix check, a relative link) is tested with a home that is itself a symlink, and a live check of one uses such a home too. The [accounts guide](../guide/accounts.md) supports a `~/.rimz` linked into a dotfiles checkout, and `fs::symlink_metadata` on that root reads the link, not the home behind it. `disk::usage` once walked nothing under such a home, so `rimz doctor --audit` reported the room as not created. `disk::usage::tests::measure_follows_a_symlinked_home_root_only` holds that walk.
 - A probe that seeds an isolated home with a user's Markdown definitions also copies the skill library they name (`~/.agents/skills` into the home's `.rimz/skills`). A definition whose skill is missing fails resolution and is dropped, so the probe measures a home without it.
 - It also writes the kind base `agents/<kind>.md`, with a nonempty body, for each kind the definitions run on that takes a system prompt. A definition without its kind base fails to load, and a kind base on a kind that takes none fails in turn.
 - Kind bases live only under `agents/`. Under `subagents/`, a file named after a kind is refused as taking a kind's name.
 - A Claude or Codex definition that the probe writes itself lists `tools`, which those kinds require. Every definition the probe writes carries a non-empty `description:`.
 - A kind base takes no key beside `description:` but the launch tuning `fast`, `code-mode`, `effort`, and `auto-compact`. `tools`, `model`, and the rest go on a profile that names the kind with `agent:`.
 - A live check of a change to definition or skill loading runs `rimz agents explain` on a healthy profile beside each broken item, and on each agent kind a broken item is named after, bare and as `<kind>-yolo` and `<kind>-fast`. `rimz agents validate` and `rimz agents profiles` never show which launches refuse.
-- A hand-built `rimz packs` probe of a Git source runs under `env -i` with its own `HOME`, `RIMZ_HOME`, and short `XDG_RUNTIME_DIR`, and points `GIT_CONFIG_GLOBAL` at a file holding `[url "file://<fixture dir>/"]` with `insteadOf = https://github.com/rimio-ai/`, the fixture directory written as an absolute path: a relative one fails the fetch. It tags each fixture repository (`rimz-crew`, `rimz-skills`) `v<version>`, the crate version that `rimz --version` prints before its `+` suffix, since an official source with no ref resolves to that tag (`crates/rimz/src/packs/git.rs::Client::resolve`). The fixture in `crates/rimz/tests/integration/packs/git.rs` is the shape.
+- A hand-built `rimz packs` probe of a Git source runs under `env -i` with its own `HOME`, `RIMZ_HOME`, and short `XDG_RUNTIME_DIR`. It points `GIT_CONFIG_GLOBAL` at a file holding `[url "file://<fixture dir>/"]` with `insteadOf = https://github.com/rimio-ai/`. Write the fixture directory as an absolute path: a relative one fails the fetch.
+- The probe tags each fixture repository (`rimz-crew`, `rimz-skills`) `v<version>`, the crate version that `rimz --version` prints before its `+` suffix. An official source with no ref resolves to that tag (`crates/rimz/src/packs/git.rs::Client::resolve`). The fixture in `crates/rimz/tests/integration/packs/git.rs` is the shape.
 
 ## Branch binaries against real state
 
@@ -109,7 +161,7 @@ A hand-built isolated home sets or unsets each of these. An agent shell exports 
 - Add `--setenv XDG_RUNTIME_DIR /tmp/<8 chars>` (a fresh, short directory) when the measured process must own the spending walker. With the real runtime directory it joins the live room's spending service and measures nothing of its own. Confirm a `rimz-spending-w` thread (the walker's name, cut to 15 characters) in `/proc/<pid>/task/*/comm`.
 - Build the head for such a comparison with `cargo build --release -p rimz --bin rimz --features testkit`. A debug build's cold fold took 1,933 s where the installed release base took 305 s.
 - Compare the two `--json` outputs with `jq` after rounding every dollar field, since two cold folds can differ in the last digits of a float sum.
-- A live check of a branch binary whose command writes the room's own records (a `rimz lsp` query appends to the room's query usage log; `rimz loop list`, `loop show`, and `loop logs` open `<room>/locks/lease-gate.lock` to probe any run lock there) runs under `bwrap --dev-bind / / --bind "$TMPDIR/records" <room>/records --bind "$TMPDIR/locks" <room>/locks -- <binary> ...`, where `<room>` is the room's state directory under `~/.rimz/ws/` and each bound directory is a copy of the room's, so the real room is read but never written.
+- Some commands of a branch binary write the room's own records: a `rimz lsp` query appends to the room's query usage log, and `rimz loop list`, `loop show`, and `loop logs` open `<room>/locks/lease-gate.lock` to probe any run lock there. Run a live check of such a command under `bwrap --dev-bind / / --bind "$TMPDIR/records" <room>/records --bind "$TMPDIR/locks" <room>/locks -- <binary> ...`. `<room>` is the room's state directory under `~/.rimz/ws/`, and each bound directory is a copy of the room's, so the check reads the real room and never writes it.
 - A live check of a branch binary's `rimz sidebar snapshot` without `--no-produce` also writes outside the room's state directory. So does its `rimz sidebar frame`, which produces when the session has no published sidebar frame. Each republishes `live/agent_context/` and `lanes/` under `$XDG_RUNTIME_DIR/rimz/ws/<room>/`.
 - When free space is under the `gc` floor, its heavy-lane refresh also spawns `rimz gc --tmp-floor`, which evicts ended agents' temp units in every room and appends assist records to `~/.rimz/logs/assists.log.jsonl`. Read `rimz doctor`'s `TEMP UNITS` row first: below the floor, the helper's evictions are real.
 - Bind copies over those two runtime directories and `~/.rimz/logs`, as well as `~/.rimz/cache` and the room's `records`, `locks`, `cache`, `log` and `audit`. Where `log` or `audit` is too large to copy, bind it read-only (`--ro-bind`).

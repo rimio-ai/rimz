@@ -4,9 +4,9 @@ How the gates and the test runner behave in practice: what each command shows an
 
 ## Compile and lint signals
 
-- Compile tests with `cargo xtask check`. A bare `cargo check --tests` compiles the same shape, because the crate's self dev-dependency turns `testkit` on for every build that carries dev-dependencies. Editors and agent harnesses therefore report the gate's diagnostics.
+- Compile tests with `cargo xtask check`. It passes `--workspace --all-targets --all-features`, so it alone covers `sentry` code. A bare `cargo check --tests` still compiles `testkit` code, as editors and agent harnesses do, through the crate's [self dev-dependency](./rust-conventions.md#performance-gates).
 - `cargo xtask check` and `cargo xtask lint` build with `testkit` on (lint runs only the all-features clippy, `lint_all_features` in `xtask/src/gates.rs`), so production code that calls a `cfg(any(test, feature = "testkit"))` item passes both. Before hand-off, run `cargo clippy -p rimz --bin rimz --locked -- -D warnings`, the install-host shape the gate runs (`INSTALL_HOST_LINT_ARGS` in `xtask/src/gates.rs`).
-- `cargo xtask check` prints no compiler warnings. After an edit that can leave test code with unused bindings (a removed parameter, a dropped field), run `cargo xtask lint` before the first test run, or list the warnings with `cargo build --tests -p rimz --message-format short`.
+- A passing `cargo xtask check` prints no compiler warnings. After an edit that can leave test code with unused bindings (a removed parameter, a dropped field), run `cargo xtask lint` before the first test run, or list the warnings with `cargo build --tests -p rimz --message-format short`.
 - A remove-and-compile census (delete an item, count the compile errors) measures the library alone. The unit-test target is the library built under `cfg(test)`, and the crate's self dev-dependency links the library into it, so neither `--tests` nor `--keep-going` type-checks `#[cfg(test)]` code while the library fails. Count test-side reach after the production errors are fixed, or report it as unmeasured.
 - Never gate a command on a piped check (`cargo xtask check | tail && git commit`). The pipe exits with the status of `tail`, so a failed check still commits.
 
@@ -16,8 +16,8 @@ How the gates and the test runner behave in practice: what each command shows an
 
 - Drive the suite through `cargo xtask test`. xtask supplies the disposable host-state roots ([test environment](./gates.md#test-environment)) and the suite's feature set.
 - nextest runs each test in its own process, and the suite relies on that. A unit-test binary run directly runs every selected test in one libtest process, where tests that share process-wide state fail each other. A direct run (a `TZ` reproduction, say) names one test with `--exact` per call.
-- `cargo xtask test` prints only its summary line. `--no-capture` hands the terminal to nextest (`requests_no_capture` in `xtask/src/gates.rs`), which runs the tests one at a time and prints each test's own output and one `PASS [   0.287s]` line per test. Redirect it to keep the stream: `cargo xtask test --no-capture <filter> >/tmp/run.log 2>&1`.
-- A failing captured run, the gate's test step included, saves its complete output to a uniquely named `.output` file under the temporary directory (`$TMPDIR`, with the usual fallback). The excerpt and any skip reports end with `full test output: <path> (<N> lines, <K> KB)` above `NEXT:`. A passing run writes no file, including one refused only by `--deny-skips`, and `--no-capture` saves nothing.
+- A passing `cargo xtask test` prints its summary line, any `FLAKY` lines, and the self-skip report. `--no-capture` hands the terminal to nextest (`requests_no_capture` in `xtask/src/gates.rs`), which runs the tests one at a time and prints each test's own output and one `PASS [   0.287s]` line per test. Redirect it to keep the stream: `cargo xtask test --no-capture <filter> >/tmp/run.log 2>&1`.
+- A failing captured run, the gate's test step included, saves its complete output to a uniquely named `.output` file under the temporary directory (`$TMPDIR`, with the usual fallback). The excerpt and any skip reports end with `full test output: <path> (<N> lines, <K> KB)` above `NEXT:`. A passing run writes no file, including one refused only by `--deny-skips`. `--no-capture` saves nothing, and neither does a run that the xtask budget ends.
 - Long phases show an animated status line on a terminal. For agents and redirected output they print a newline heartbeat after 15 seconds and every 30 seconds after that. `RIMZ_NO_PROGRESS=1` silences both.
 - The `rimz` CLI spinner has no heartbeat: it draws only when stderr is a terminal outside an agent. An agent therefore runs a long `rimz` command under `rimz wait --run`. `xtask/src/spinner.rs` is a separate copy of `crates/rimz/src/cli/spinner.rs`, so that xtask stays independent of the runtime crate.
 - An agent tool sandbox can deny Unix socket binds. `PermissionDenied` from `UnixListener::bind` in `agents::spending::service` tests is one known symptom. When a failure occurs only under that sandbox, rerun the affected tests unsandboxed (`cargo xtask test 'agents::spending::service'`). xtask still supplies its disposable roots.
@@ -26,7 +26,7 @@ How the gates and the test runner behave in practice: what each command shows an
 
 A test that returns early because the host lacks a capability records the skip through the integration harness's skip helper. nextest counts such a test as passed.
 
-- Every xtask test run (`gate`, `test`, `--name`, `--no-capture`) prints a self-skip report after nextest's result: the count of distinct tests that self-skipped, then one line per reason with its count and the first test names. A clean summary with a report beneath it did not exercise those tests. A run with no skip prints no report.
+- Every xtask test run (`gate`, `test`, `--name`, `--no-capture`) prints a self-skip report after nextest's result: the count of distinct tests that self-skipped, then one line per reason with its count and the first test names. A clean summary with a report beneath it did not fully exercise those tests. A run with no skip prints no report.
 - `cargo xtask test --deny-skips` works on every run shape (plain, `--name`, `--no-capture`). It fails the run when a recorded skip reason starts with no entry of `.config/allowed-test-skips.txt`, even when nextest passed. It lists the offending tests by reason, then the fix.
 - Each reason a test records is judged on its own, so an allowed skip recorded later (a partial skip, a retry) does not cover an unlisted one.
 - xtask consumes the flag, and it never reaches nextest. A missing allow-list is an error that names the path.
@@ -50,12 +50,12 @@ A test that returns early because the host lacks a capability records the skip t
 | Run one xtask module | `cargo xtask test -E 'package(xtask) & test(/^sandbox::/)'` |
 | Run one live module | `cargo xtask test -P live -E 'binary(integration) & test(/^backend::tmux::team_stage::/)'` |
 | See every new test fail | add `--no-fail-fast` |
-| Rerun the gate's test step alone, when it times out even under a raised `RIMZ_XTASK_TIMEOUT` | `cargo xtask test --profile gate --no-fail-fast` |
+| Run the gate's tests alone and past the three-failure stop, when the gate times out even under a raised `RIMZ_XTASK_TIMEOUT` | `cargo xtask test --profile gate --no-fail-fast` |
 
 ### Names
 
 - `--name` takes the nextest test name without the binary: an integration test is `lsp::some_test`, never `integration::lsp::some_test`. A leaf name or a full `module::path` name both work, and the match is exact and segment-anchored.
-- Repeat `--name` to batch several tests through one nextest run. Do not launch parallel Cargo processes. xtask lists the selection first, runs every matched test, and fails after the run if any requested name was unmatched.
+- Repeat `--name` to batch several tests through one nextest run. Do not launch parallel Cargo processes. xtask runs the matched tests and prints the selection (before the run under `--no-capture`, after it otherwise). It fails after the run if any requested name was unmatched, and before it if none matched.
 - `--list` prints each binary's id (`rimz::integration`) followed by its exact names. The binary's path comes from `cargo xtask test --list <fragment> --message-format json`, or from the `binary:` line of a `cargo xtask stress` `summary.txt`.
 - `--list` builds the test binaries first. Run a cold one under `rimz wait --run`, never as a foreground call: a cold build on a loaded host outlasts the 10-minute tool cap.
 - During a read-only sweep, run `rimz lsp hover` on the test function. The module path it prints, minus the crate name (`rimz::` or `integration::`), plus `::<fn>`, is the exact name.
@@ -81,13 +81,13 @@ A test in a module you never edited can pin the old behaviour, and only the full
 
 - A refusal, error, or warning whose wording or trigger changed: grep the old text as a fixed string across `crates/rimz/src` and `crates/rimz/tests`. For a refusal, also grep the error variant's typed fields (`rg -n 'field: "<name>"'`), which unit tests assert in place of the text. Reread a new or widened message against each case it covers, including what any command it tells the user to run does in that case.
 - A field added to a record that tests compare as whole JSON rows: update each golden in place, so that its only diff is the new key. Never drop a key from a comparison to make it pass.
-- A field added to a `RunRecord`: two records have that name. The workflow run in `store/workflow.rs` has a JSON-shape snapshot that pins every key. The supervised run in `store/run.rs` has per-field round trips only, so a field added there brings its own round-trip test.
+- A field added to a `RunRecord`: two records have that name. The workflow run in `store/workflow.rs` has a JSON-shape snapshot that pins every key its fixture serializes. A field that is omitted when unset is pinned only once the fixture sets it. The supervised run in `store/run.rs` has per-field round trips only, so a field added there brings its own round-trip test.
 - A field with accessors: a function that returns a field counts as the field. List the accessors with `rimz lsp refs` and run every module that names one. `AgentState::resolved_context_window` returns an adapter's default, so removing Codex's default failed a test that named only the accessor.
 - A guard deleted because its state is no longer written: list every writer of that state, bypass flags such as `--skip-capacity` included, and keep the guard for each case a writer can still produce.
 - A filter deleted from a lookup that returns its first match: list each case where several candidates pass what remains, and pin which one wins. The filter may have been the only thing choosing.
 - A new or extended probe or poll path: test its failure paths as well as success. A first attempt that fails with no prior state backs off and does not rerun on every pass. One target's error does not fail or silence its group. A test over a stubbed command asserts the call count per endpoint.
 - A reader bounded by a window relative to now: make the fixed timestamps of its tests (`rg -n '"20[0-9]{2}-[0-9]{2}-[0-9]{2}T'`) now-relative, or give the reader an explicit floor. A fixture inside the window today falls out of it later.
-- A read pointed at rooms beyond the caller's: trace each diagnostic record it can emit to `classify_diagnostic` in `crates/rimz/src/cli/doctor/runtime.rs`. A record classed `Investigate` files a health incident against the other room's `rimz doctor`, written again on every run.
+- A read pointed at rooms beyond the caller's: trace each diagnostic record it can emit to `classify_diagnostic` in `crates/rimz/src/cli/doctor/runtime.rs`. A record classed `Investigate` shows as a health incident in the other room's `rimz doctor`, and the read writes the record again on every run.
 
 ## The surface ratchet
 
@@ -115,7 +115,7 @@ A new `pub` or `pub(crate)` item, module, or cross-module import can fail the ra
 
 ### Name what a raise covers
 
-- `cargo xtask atlas diff --base "$(git merge-base HEAD origin/main)" --path <boundary>` lists each added surface item. Take the names for a `(+N)` line from it.
+- `cargo xtask atlas diff --base "$(git merge-base HEAD origin/main)" --path <boundary>` lists each added surface item, up to 20 rows unless you pass `--top <N>`. Take the names for a `(+N)` line from it.
 - A `conform --ratchet` failure with the budget one lower proves the sum. It does not prove the names.
 - `atlas diff` has run for over 20 minutes on a shared host, so run it under `rimz wait --run`. When it cannot finish, count each boundary's new `pub` and `pub(crate)` items and `pub use` leaves by hand, and prove the sum the same way.
 
@@ -130,8 +130,8 @@ A new `pub` or `pub(crate)` item, module, or cross-module import can fail the ra
 A plan that routes a call into another module first reads three things:
 
 - The calling module's `allowed-dependencies` (or `upward-dependencies`) entry. A module missing from the list reshapes the design, or needs an admission that the plan names.
-- The `layers` list at the top of `refactor-target.toml`. A call may only reach a module in an earlier layer unless `upward-dependencies` admits it.
-- Every module contract in an `AGENTS.md` that lists what the calling module reaches (``rg -n '`address` reaches' crates --glob AGENTS.md``). Atlas checks only the modules that carry a list.
+- The `layers` list at the top of `refactor-target.toml`. A call may reach a module in its own layer or an earlier one. A call into a later layer needs an admission in the calling module's `allowed-dependencies` or `upward-dependencies`.
+- Every module contract in an `AGENTS.md` that lists what the calling module reaches (``rg -n '`address` reaches' crates --glob AGENTS.md``). Atlas checks every call into a later layer, and checks the other calls only for a module whose rule carries `allowed-dependencies`.
 
 ### Untracked files
 
@@ -165,7 +165,19 @@ A branch that bumps `SNAPSHOT_VERSION` or `ROLLUP_CACHE_VERSION` re-checks each 
 ## Builds and scratch worktrees
 
 - This worktree's built binary is `$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/debug/rimz`. The target directory may be shared with other worktrees, each under its own hash directory, so resolve it this way and never pick the newest.
-- Run a throwaway probe test in a detached scratch worktree: `git worktree add --lock --detach "$TMPDIR/<dir>" HEAD`. Set `CARGO_TARGET_DIR` to your worktree's own target directory (the `cargo metadata` lookup above), so the build reuses that cache. Remove the scratch worktree afterwards with `git worktree remove --force --force "$TMPDIR/<dir>"`.
+- Run a throwaway probe test in a detached scratch worktree. Set `CARGO_TARGET_DIR` to your worktree's own target directory, so the build reuses that cache:
+
+  ```sh
+  target=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
+  scratch="$TMPDIR/rimz-scratch"
+  git worktree add --lock --detach "$scratch" HEAD
+  ```
+
+  Run the probe there as `( cd "$scratch" && CARGO_TARGET_DIR="$target" cargo xtask test --name <test> )`, then remove the worktree:
+
+  ```sh
+  git worktree remove --force --force "$TMPDIR/rimz-scratch"
+  ```
 - The lock keeps another agent's `git worktree prune`, which cannot see a sandbox's `$TMPDIR`, from deleting the admin directory mid-run. A single `--force` refuses to remove a locked worktree.
 - A `cargo xtask` run from a scratch worktree on a shared target directory replaces `target/debug/xtask` with that tree's build. Cargo does not rebuild it for the checkout that owns the target directory, so that checkout's next `cargo xtask` and its pre-commit hook run the scratch tree's gates. Afterwards, run `touch xtask/src/main.rs` in that checkout.
 
@@ -178,7 +190,7 @@ Every test that reaches the interactive shell probe of a launch (`bash_interacti
 ## Codex agent shells
 
 - To reproduce a failure that a Codex agent reports from a `rimz` command, run `codex sandbox -c 'default_permissions=":workspace"' -- <command>` from the checkout, outside a Codex pane. It applies Codex's own bubblewrap and seccomp to that command. The bare `codex sandbox linux` spelling fails with `execvp linux`.
-- A routine `rimz` command that a Codex agent runs bare matches its `prefix_rule` and runs unsandboxed, so reproduce the wrapped form the agent ran.
+- A routine `rimz` command that a Codex agent runs bare matches the `prefix_rule` that RimZ manages (when its Codex integration is enabled) and runs unsandboxed, so reproduce the wrapped form the agent ran.
 - A gate run from a Codex agent's shell hangs the launch-path tests (`agent_launch::`, `sandbox::`, `harness::launch_plan::tests`, `harness::launch::tests`) on every rerun. Some fail at their 30-second child deadlines and the rest at nextest's 370-second timeout. All pass in seconds from a Claude agent's shell. The cause is not diagnosed.
 - Before you read such failures as the change's, rerun those tests by exact name (`cargo xtask test --no-fail-fast --name <test> ...`) from a Claude agent's shell or a user shell. Brief a gate subagent on Codex to list them and report the gate as incomplete.
 
