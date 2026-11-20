@@ -7,13 +7,13 @@ Local contract for `crates/rimz/src/store/`: durable workspace state. Extends [c
 ## Writes and durability
 
 - `store` imports `agents`, and nothing under `agents` imports `store`. `store` reaches nothing in `harness`: `harness` is policy over store records (run, workflow, and signal transitions, each under the workspace lock) and reaches down. Disk mechanics sit below in `disk`.
-- **Invariant.** Every durable write routes through [`disk/atomic.rs`](../disk/atomic.rs), and every fsync syscall lives inside it: `cargo xtask invariants` rejects a `sync_all` or `sync_data` call anywhere else. The event-log frame encoding stays beside its decoder in [`event_log/frame.rs`](./event_log/frame.rs).
+- **Invariant.** Every durable write routes through [`disk/atomic.rs`](../disk/atomic.rs), and every fsync syscall lives inside it: `cargo xtask invariants` rejects a `sync_all` or `sync_data` call anywhere else.
 - Lock order is `workspace.lock`, then exclusive `locks/hook-ingress.lock`, never the reverse ([Hook ingress](../../../../docs/internals/store.md#hook-ingress)).
-- Reads on the `Store` handle take no lock. The exceptions are `list_messages_and_history` and `store::message`'s `read_status` and `read_record`, which hold the workspace lock across the live queue and the message history so that a terminal transition between the two reads cannot hide a record.
+- Reads on the `Store` handle take no lock. The exceptions are `list_messages_and_history` and `store::message`'s `read_status` and `read_record`, which hold the workspace lock across the live queue and the message history.
 - A type carried in an event's params grows only by optional, defaulted fields: a new enum variant or a required field makes an older binary drop the whole event from every fold, and worktrees share one store, so mixed binaries are the ordinary case ([what the log holds](../../../../docs/internals/store.md#what-is-in-it)).
 - A new lifetime class, or a change to what reset, teardown, or GC removes, updates the class table, [Reset](../../../../docs/internals/store.md#reset), and [What survives what](../../../../docs/internals/store.md#what-survives-what) in store.md, and reset's numbered steps in [maintenance.md](../../../../docs/reference/cli/maintenance.md#reset-a-wedged-room).
-- Appends stay O(1) over log history, and wakeups fire before the checkpoint publish: checkpoint cadence is latency tuning.
-- A message status transition goes through [`writer/queue.rs`](./writer/queue.rs), which owns the live `messages.jsonl`, the terminal text under `audit/messages/`, and the terminal outcome in the event log together, under the workspace lock. Every live-queue file write refreshes the message wake stamp under that same lock, and a refresh failure warns without failing the commit.
+- Appends stay O(1) over log history, and checkpoint cadence is latency tuning.
+- A message status transition goes through [`writer/queue.rs`](./writer/queue.rs), which owns the live `messages.jsonl`, the terminal text under `audit/messages/`, and the terminal outcome in the event log together, under the workspace lock.
 - `classify_submitted_prompt` is read-only over confirmed records and the card's in-flight queue view: it never changes a status. `TurnStarted` confirms prompts and `Compaction` confirms commands.
 
 ## Reads
@@ -21,12 +21,10 @@ Local contract for `crates/rimz/src/store/`: durable workspace state. Extends [c
 - `snapshot/` reducers stay pure over the event log plus caller-supplied inputs: nothing under `snapshot/` calls the mux.
 - `Store::snapshot` leaves `focused_pane` and pane enrichment empty, since the sidebar fuses them in. A decision that needs focus reads the published sidebar snapshot or the mux focus anchor.
 - A decision about attention (bucket counts, the pane jump, a projection that overrides a row's status) reads `SidebarRow::attention_status`, not `status()`: a current child's `?` lifts its parent only there.
-- A projection applied to a cached snapshot's shared `Arc` rows copies only when it changes a row: an unconditional `Arc::make_mut` defeats memo reuse (`message::dispatch::tests::dispatch_copies_only_live_rows_and_the_resuming_child`).
 - A field added to `AgentCard` carries what the renderer reads (a bool or a short label), not the record behind it: the sidebar snapshot is persisted as `latest.json` and projected for every pane.
 - A change to the snapshot fold or its reducer times the fold benches, base against head, before hand-off: [Timing comparisons](../../../../docs/contributing/running-gates.md#timing-comparisons).
-- Agent and subagent enrichment scans go through [`sidecar.rs`](./sidecar.rs), which gates each scan on stat.
+- Agent and subagent enrichment scans go through [`sidecar.rs`](./sidecar.rs).
 - [`follow.rs`](./follow.rs) folds lifecycle records apart from the rollup, so a rule that changes how a record folds is one function both call: `AgentState::snapshot_transition` for state snapshots and `session_death::reaped_end_rests_at_idle` for reaper ends.
-- [`disk/single_flight.rs`](../disk/single_flight.rs) stays the lock-and-poll election alone and imports no store-writer module. The sidebar depends on it and no gate checks this file, so the boundary holds only where a change here holds it.
 
 ## Versions and carried shapes
 

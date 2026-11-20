@@ -8,7 +8,7 @@ Local contract for `crates/rimz/src/mux/`, the Zellij/tmux seam. Extends [crates
 - **Invariant.** Every Zellij action is built by `ZellijBackend::zellij_action`, which names its session; `cargo xtask invariants` rejects the action argv word on a line without the session flag.
 - A `zellij` or `tmux` spec is built only in `tmux::tmux_cmd` and `ZellijBackend::cmd`, which hand the child the user's `TMPDIR` back. Mux code reads the temp-root key list and never names a provider key.
 - A managed tmux client runs from `/` with `$TMUX` cleared, so a pane-creating command passes `-c`.
-- A command that can birth a server, on either backend, strips ambient mux identity (`CommandSpec::without_mux_context`) and the remote client channel (`REMOTE_CLIENT_ENV`). The launching process and the Zellij attach client keep that channel, which predecessor reaping needs.
+- A command that can birth a server, on either backend, strips ambient mux identity (`CommandSpec::without_mux_context`) and the remote client channel (`REMOTE_CLIENT_ENV`).
 - Every control command runs through [`CommandSpec`](./command.rs) under a deadline, and its caller degrades on `MuxErr::Timeout`, never blocks ([command discipline](../../../../docs/internals/multiplexers.md#command-discipline)).
 - A runtime record whose lock other writers acquire with a short bound holds no mux subprocess or other I/O of unbounded latency: read first, then lock, reload, and apply.
 
@@ -31,7 +31,7 @@ Local contract for `crates/rimz/src/mux/`, the Zellij/tmux seam. Extends [crates
 
 ## Boundaries
 
-- `mux` never imports `sidebar`. The wire every renderer listens on is the leaf [`wakeup/`](../wakeup/mod.rs) module below `store`; every sender reaches down to it, and none reaches another module through it.
+- `mux` never imports `sidebar`. The wire every renderer listens on is the leaf [`wakeup/`](../wakeup/mod.rs) module below `store`.
 - The path, schema, and freshness rules of every runtime file the multiplexer writes or dispatches on stay here, even where the writer sits elsewhere: another module publishes through the owning file's helpers and never spells the path.
 - A bound lives with the module whose behaviour it defines: command deadlines beside their commands, the presence-stamp freshness both backends share in [`mod.rs`](./mod.rs), and only the sidebar's own cadences in `sidebar::timing`.
 
