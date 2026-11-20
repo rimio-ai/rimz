@@ -17,7 +17,7 @@ rimz packs reset <PACK>:<NAME> [--type <TYPE>] [--identical]
 rimz packs reset <PACK> [--type <TYPE>] --identical
 ```
 
-Pack names use `[A-Za-z0-9_-]+` and are unique across installed sources. Item types are `agents`, `subagents`, `teams`, `traits`, and `skills`. Kind bases belong to `agents`, not a separate type. Qualified `<pack>:<name>` keys select items for exclusions and definition `agent:` parents; they are not launch specs.
+Pack names use `[A-Za-z0-9_-]+` and are unique across installed sources. Item types are `agents`, `subagents`, `teams`, `traits`, `skills`, and `workflows`. Kind bases belong to `agents`, not a separate type. Qualified `<pack>:<name>` keys select items for exclusions and definition `agent:` parents; they are not launch specs.
 
 ## Install from Git
 
@@ -91,7 +91,7 @@ crew       7  /home/me/src/rimz-crew (linked)  -
 
 ## Show a pack
 
-`show` prints the pack name, its description (omitted when the pack cannot resolve), and `Source:` with the same version identity as `list`, then items grouped by type in the order `agents`, `subagents`, `teams`, `traits`, `skills`, skipping empty types. After the items come `Excluded types: <types>` when a whole type is excluded, a `<type>/<name>: excluded (no longer shipped)` line for each item exclusion the pack no longer ships, and the pack's `problem:` lines. An installed but unusable pack can still be inspected; an unknown pack fails and lists installed names.
+`show` prints the pack name, its description (omitted when the pack cannot resolve), and `Source:` with the same version identity as `list`, then items grouped by type in the order `agents`, `subagents`, `teams`, `traits`, `skills`, `workflows`, skipping empty types. After the items come `Excluded types: <types>` when a whole type is excluded, a `<type>/<name>: excluded (no longer shipped)` line for each item exclusion the pack no longer ships, and the pack's `problem:` lines. An installed but unusable pack can still be inspected; an unknown pack fails and lists installed names.
 
 ```console
 $ rimz packs show crew
@@ -140,7 +140,7 @@ Fates use the current machine configuration and shell environment. As with confi
 | `url` | Git fetch URL as given, without the ref suffix and with shorthand expanded. An older record without a URL reports `source` here. Omitted for linked sources. |
 | `ref`, `pinned`, `commit` | Git tag, branch or commit ID; whether explicitly pinned; and the full commit ID. Linked sources have null ref/commit and false pinned. |
 | `excluded` | `{types: [...], items: [{type, name}, ...]}`. |
-| `counts` | Loaded item counts keyed by all five item types. |
+| `counts` | Loaded item counts keyed by all six item types. |
 | `problems` | Problems attributed to this pack. See top-level `problems` for record-wide failures. |
 
 `packs show <pack> --json` returns that pack object, not a `{packs: [...]}` wrapper, and adds:
@@ -159,7 +159,7 @@ rimz packs include crew:coder --type agents
 
 The receipt is `Excluded` or `Included` with the selection, as `crew:coder --type agents` or `crew --type teams`.
 
-With no `--type`, an item name must match exactly one of the pack's five trees. Several matches fail with the explicit `--type` forms to choose from. No match fails; `include` also accepts a recorded item exclusion even when the pack no longer ships it. A bare pack name without an item or type is refused with the `rimz packs remove <pack>` form.
+With no `--type`, an item name must match exactly one of the pack's six trees. Several matches fail with the explicit `--type` forms to choose from. No match fails; `include` also accepts a recorded item exclusion even when the pack no longer ships it. A bare pack name without an item or type is refused with the `rimz packs remove <pack>` form.
 
 ```console
 $ rimz packs exclude crew --type teams
@@ -176,11 +176,11 @@ Including one item while its type remains excluded fails with the whole-type inc
 
 `customize <pack>:<name>` writes an override under the agents home, in the shipped item's tree and with its filename. Agents and subagents inherit by default: the generated Markdown has `agent: <pack>:<name>`, the shipped description, an explicit `name` when it differs from the filename, and no body. Shipped launch settings and craft keep following the pack; fields you add replace inherited fields and your body follows its prompt. A conflicted item can be customized through its qualified parent.
 
-`--copy` writes the shipped bytes instead of inheriting. Teams, traits, kind bases, and skills require it. A skill copies the whole directory, including ancillary files and empty directories; symlinks and other non-regular entries refuse the copy. A failed definition cannot be inherited, but `--copy` can preserve its bytes for repair. Copies stop following changes to the copied file; its parent, trait, and skill references still resolve through the merged chains.
+`--copy` writes the shipped bytes instead of inheriting. Teams, traits, kind bases, skills, and workflows require it. A skill or workflow copies the whole directory, including ancillary files and empty directories; symlinks and other non-regular entries refuse the copy. A failed definition cannot be inherited, but `--copy` can preserve its bytes for repair. Copies stop following changes to the copied file; its parent, trait, and skill references still resolve through the merged chains.
 
 An already-overridden item refuses, naming its winning path and the `diff` and `reset` commands. Any existing file, directory, or symlink at the destination also refuses, and nothing is replaced. Excluded items refuse all three override verbs and name the item or whole-type `include` command. An ambiguous name requires `--type`, as with exclusions.
 
-The receipt is `Created <path> (inherits <pack>:<name>).` or `Created <path> (copy, no longer follows <pack>).`, then `Next:` lines for `rimz packs diff` and, for definitions, `rimz agents validate`. After printing the receipt and any host skill-link cleanup lines, with both stdin and stdout on terminals, RimZ opens the first nonblank of `$VISUAL` and `$EDITOR`, parsed as shell words with the path appended. With no editor, or without both terminals, it prints `Edit <path>`. An invalid editor, spawn failure, or nonzero editor exit warns on stderr and then prints `Edit <path>`. The written override remains and the command succeeds. For a skill, the edit target is its `SKILL.md`. No default editor is chosen.
+The receipt is `Created <path> (inherits <pack>:<name>).` or `Created <path> (copy, no longer follows <pack>).`, then `Next:` lines for `rimz packs diff` and, for definitions, `rimz agents validate`, or, for a workflow, `rimz workflow validate <name>`. After printing the receipt and any host skill-link cleanup lines, with both stdin and stdout on terminals, RimZ opens the first nonblank of `$VISUAL` and `$EDITOR`, parsed as shell words with the path appended. With no editor, or without both terminals, it prints `Edit <path>`. An invalid editor, spawn failure, or nonzero editor exit warns on stderr and then prints `Edit <path>`. The written override remains and the command succeeds. For a skill, the edit target is its `SKILL.md`, and for a workflow its `workflow.toml`. No default editor is chosen.
 
 ```sh
 rimz packs customize crew:coder --type agents
@@ -191,7 +191,7 @@ rimz agents validate
 
 ## Diff an override
 
-`diff` reads without changing files or pruning links. With no override it prints `<pack>:<name> has no override; shipped at <path>.`. When a definition override's own `agent:` is this item's qualified key, it prints `Override inherits <pack>:<name>; fields replace shipped settings, body follows the shipped prompt:` and then the whole override. Other overrides get a unified diff from shipped to yours for each file whose bytes differ: `---` names the shipped path and `+++` the override, with `/dev/null` for a missing side. Skills compare the union of relative file paths, including added and removed files, and identical files print nothing; a symlink appears as `symlink to <target>` without reading its target, and other non-regular entries refuse the diff. A file pair that is not UTF-8 text prints `Binary files differ: <override path>`. When no file differs, it prints `<pack>:<name> override at <path> matches the shipped item.`. A configured-command override prints `Overridden by configured command <name> in <config path>.`. Differences and matching overrides both exit 0.
+`diff` reads without changing files or pruning links. With no override it prints `<pack>:<name> has no override; shipped at <path>.`. When a definition override's own `agent:` is this item's qualified key, it prints `Override inherits <pack>:<name>; fields replace shipped settings, body follows the shipped prompt:` and then the whole override. Other overrides get a unified diff from shipped to yours for each file whose bytes differ: `---` names the shipped path and `+++` the override, with `/dev/null` for a missing side. Skills and workflows compare the union of relative file paths, including added and removed files, and identical files print nothing; a symlink appears as `symlink to <target>` without reading its target, and other non-regular entries refuse the diff. A file pair that is not UTF-8 text prints `Binary files differ: <override path>`. When no file differs, it prints `<pack>:<name> override at <path> matches the shipped item.`. A configured-command override prints `Overridden by configured command <name> in <config path>.`. Differences and matching overrides both exit 0.
 
 ## Reset an override
 
@@ -203,7 +203,7 @@ rimz packs reset crew:coder --type agents
 
 ### Remove identical home copies
 
-`reset --identical` removes only byte-identical home overrides. A definition compares as one file; a skill must have the same relative regular-file paths and bytes, including ancillary files. Empty directories do not affect equality; inner symlinks and other non-regular entries keep the skill. Differing overrides stay, each listed as `Kept <pack>:<name> (<type>); diff: rimz packs diff ...`. The installation record is unchanged, and repeating the command removes nothing more unless files have changed.
+`reset --identical` removes only byte-identical home overrides. A definition compares as one file; a skill or workflow must have the same relative regular-file paths and bytes, including ancillary files. Empty directories do not affect equality; inner symlinks and other non-regular entries keep the skill or workflow. Differing overrides stay, each listed as `Kept <pack>:<name> (<type>); diff: rimz packs diff ...`. The installation record is unchanged, and repeating the command removes nothing more unless files have changed.
 
 With a bare pack, `--identical` is required. Optional `--type` limits the pass to one tree. A pack-wide pass keeps cross-tree and configured-command claims, linked-tree entries that resolve to shipped items, and overrides with read or comparison errors, each listed as `Kept <pack>:<name> (<type>): <reason>`. It continues with the other items, deciding shared home entries once. An item-specific reset still refuses unremovable paths and fails fast on errors. If a proven-identical entry cannot be removed, host skill-link cleanup still runs and completed receipts still print before the command exits 1 with `Pack reset incomplete`. Receipts use the reloaded inventory, so removing one shared home claim can expose a pack conflict rather than a loading item.
 
@@ -234,7 +234,7 @@ The record commits before entry cleanup. For `remove`, a repair or collection fa
 
 ## Manifest
 
-`rimz-packs.toml` lives at the source root. Each pack directory can contain `agents/`, `subagents/`, `teams/`, `traits/`, and `skills/<name>/SKILL.md`, using the same item formats as the home trees.
+`rimz-packs.toml` lives at the source root. Each pack directory can contain `agents/`, `subagents/`, `teams/`, `traits/`, `skills/<name>/SKILL.md`, and `workflows/<name>/workflow.toml`, using the same item formats as the home trees. A directory under `workflows/` without a `workflow.toml`, or whose name starts with `.`, is not an item. A pack workflow runs by name as a home one does, and the home copy wins by name ([run a workflow](./workflow.md#run-a-workflow)).
 
 ```toml
 [[pack]]
@@ -261,7 +261,7 @@ At least one `[[pack]]` is required. Missing required fields, wrong types, unsaf
 
 ## Layout and installation record
 
-The agents home is `~/.rimz` by default. `RIMZ_HOME` moves it with the rest of RimZ; `RIMZ_AGENTS_HOME` overrides it for definitions, the skill library, and packs alone. `rimz paths` prints `agents home`; packs always live in its `packs/` child.
+The agents home is `~/.rimz` by default. `RIMZ_HOME` moves it with the rest of RimZ; `RIMZ_AGENTS_HOME` overrides it for definitions, the skill library, workflows, and packs alone. `rimz paths` prints `agents home`; packs always live in its `packs/` child.
 
 | Path under the agents home | Meaning |
 | --- | --- |

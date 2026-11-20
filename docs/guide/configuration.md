@@ -64,7 +64,7 @@ Two more files in the directory are managed for you, and you reach both through 
 
 Alongside them, `~/.rimz/` holds `agents.d/` for plugins and `agents/`, `subagents/`, `teams/`, and `traits/` for [Markdown definitions](../reference/definitions.md), plus the shared `skills/` library, installed [packs](../reference/cli/packs.md) under `packs/`, and the [`notes/`](../reference/cli/notes.md) store that `rimz notes add` writes. You edit your home Markdown files directly; `rimz config set` refuses profile and team definition keys.
 
-Two environment variables move the directory. `RIMZ_HOME` moves the whole home. `RIMZ_AGENTS_HOME` moves only the definition trees, skill library, and packs, and it wins over `RIMZ_HOME` for them. `rimz doctor` lists it under HOME with the path it resolved to.
+Two environment variables move the directory. `RIMZ_HOME` moves the whole home. `RIMZ_AGENTS_HOME` moves only the definition trees, skill library, workflows, and packs, and it wins over `RIMZ_HOME` for them. `rimz doctor` lists it under HOME with the path it resolved to.
 
 ### Where RimZ keeps its files
 
@@ -854,7 +854,7 @@ rimz packs customize crew:coder --type agents
 
 RimZ writes `agents/coder.md` under your agents home, with the shipped description, `agent: crew:coder`, and an empty body. Add the fields you want to replace; any prompt you add follows the shipped craft. In a terminal it opens your configured editor, otherwise it prints the path to edit. Existing files are never replaced. Subagents work the same way in their own tree.
 
-Use `rimz packs diff crew:coder --type agents` to inspect your layer, and `rimz agents validate` to check it. To return to the shipped item, run `rimz packs reset crew:coder --type agents`; it removes your override without asking. Teams, traits, kind bases, and skills require `customize --copy`, which copies their shipped bytes rather than inheriting. A skill includes its whole directory. The [packs reference](../reference/cli/packs.md#customize-an-item) covers refusals and editor selection.
+Use `rimz packs diff crew:coder --type agents` to inspect your layer, and `rimz agents validate` to check it. To return to the shipped item, run `rimz packs reset crew:coder --type agents`; it removes your override without asking. Teams, traits, kind bases, skills, and workflows require `customize --copy`, which copies their shipped bytes rather than inheriting. A skill or workflow includes its whole directory. The [packs reference](../reference/cli/packs.md#customize-an-item) covers refusals and editor selection.
 
 #### Moving a home crew into a pack
 

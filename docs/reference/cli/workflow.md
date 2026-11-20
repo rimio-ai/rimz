@@ -1,6 +1,6 @@
 # Workflow CLI
 
-`rimz workflow` starts, inspects, and steers durable workflow runs: a graph of checks and steps under `~/.rimz/workflows/<name>/`, driven by the run record rather than by any agent's memory. The [workflows guide](../../guide/workflows.md) teaches the format with worked examples; how the engine decides is [workflow internals](../../internals/harness/workflow.md).
+`rimz workflow` starts, inspects, and steers durable workflow runs: a graph of checks and steps in a workflow directory (`~/.rimz/workflows/<name>/`, an installed [pack](./packs.md)'s `workflows/<name>/`, or any directory a person names), driven by the run record rather than by any agent's memory. The [workflows guide](../../guide/workflows.md) teaches the format with worked examples; how the engine decides is [workflow internals](../../internals/harness/workflow.md).
 
 ```sh
 rimz workflow schema                              # the spec's JSON Schema
@@ -50,7 +50,7 @@ The checkout name is the basename of the run's recorded scope path, kept after t
 
 | Argument or flag | Meaning |
 | --- | --- |
-| `<NAME\|DIR>` | A single path component is a name under `~/.rimz/workflows/`. Anything else is a directory, which must exist inside `~/.rimz/workflows/` (otherwise `<NAME\|DIR>: directory must exist inside <home>`). `.` is the current directory. |
+| `<NAME\|DIR>` | A single path component is a name: the directory of that name under `~/.rimz/workflows/`, else the `workflows/<name>/` an installed pack ships. The home copy wins by name; an excluded pack copy is skipped, and two packs that ship the name refuse with the conflict. A name nothing claims exits 1 with `<name>: no workflow of that name in <home> or an installed pack`, adding `; to run the directory here, write ./<name>` when the current directory holds `<name>/workflow.toml`. Anything else is a directory, anywhere; `.` is the current directory. A start an agent made, directly or from a script, test, or command of a run an agent started, refuses a directory that is neither inside `<home>` nor a pack workflow that loads, and creates no run: `<DIR>: an agent starts only a workflow in <home> or an installed pack; run this directory from your own shell, or move it there or install its pack`. A loop task's start refuses the same directories, `<DIR>: a loop task starts only a workflow in <home> or an installed pack`. Both record the workflow's own path in the home or the pack's entry, not the path as given, so a link the caller made is not followed later. |
 | `-w, --worktree <WORKTREE>` | Run in this RimZ-owned worktree instead of the current checkout, created from the configured base when missing, as an agent launch's `-w` creates one. A linked worktree of that name that RimZ does not manage is entered only on confirmation at a terminal, and refused without one; a directory there that is not a linked worktree of the project refuses. A workflow with `scope = "project"` refuses it before anything is created. |
 | `--prompt <TEXT>` | Stored unchanged, appended to every agent step's prompt and every message step's message, and exposed as `prompt` in `context.json`. The value may begin with `-`. For a value spelled like a flag (`--help`), write `--prompt=<TEXT>`. |
 | `--deadline <WHEN>` | The run's deadline, in place of the definition's `[workflow].deadline`; with neither, the run has no deadline. `<WHEN>` is a [workflow time](#workflow-times), resolved when the run is created and stored on the run, where `extend --deadline` replaces it. Any other value exits 2 with the forms. An instant already past fires the deadline at the run's first advance. |
@@ -137,7 +137,7 @@ While the room is open, its scheduler advances every due run about once a minute
 | --- | --- |
 | `record.json` | The run's current position, the truth the engine reads. |
 | `journal.jsonl` | The append-only history behind `show --history`. `show --json` prints every entry. |
-| `definition/` | A [loop task](#loop-tasks)'s run only: the definition its fire generated, `workflow.toml` and the files beside it. A run of a deployed workflow has none: it reads `~/.rimz/workflows/<name>/` at every step ([live definitions](#live-definitions)). |
+| `definition/` | A [loop task](#loop-tasks)'s run only: the definition its fire generated, `workflow.toml` and the files beside it. Any other run has none: it reads the directory it started from at every step ([live definitions](#live-definitions)). |
 | `work/` | The work directory, `RIMZ_WORKFLOW_DIR`. |
 | `history.txt` | Written at the end: the colorless `--history` view ([finished runs](#finished-runs)). |
 
@@ -152,11 +152,11 @@ While the room is open, its scheduler advances every due run about once a minute
 | `<seq>.step.log` | A command step's combined output. |
 | `<seq>.claim.json` | An agent attempt's claim. |
 
-Every evaluation and attempt takes a new `seq`, a retry included, so a notes write named after the item it records makes a repeat overwrite it. `~/.rimz/workflows/` is never written.
+Every evaluation and attempt takes a new `seq`, a retry included, so a notes write named after the item it records makes a repeat overwrite it. A workflow directory is never written.
 
 ### Live definitions
 
-A run keeps no copy of its definition. Every `workflow advance` loads the definition folder again and validates it as `workflow run` does, so an edit reaches every live run of that workflow at its next step: routes, prompts, scripts, `run` paths, timeouts, and limits are read as they are then. A definition edit cannot change what the run recorded: its scope, its deadline, and its visit grants. Only [`extend`](#extend) changes the deadline and the grants of a live run. Agent profiles and machine configuration are read at each step and judge launch.
+A run keeps no copy of its definition. Every `workflow advance` loads the definition folder again and validates it as `workflow run` does, so an edit reaches every live run of that workflow at its next step: routes, prompts, scripts, `run` paths, timeouts, and limits are read as they are then. A definition edit cannot change what the run recorded: its scope, its deadline, and its visit grants. Only [`extend`](#extend) changes the deadline and the grants of a live run. Agent profiles and machine configuration are read at each step and judge launch. A pack workflow's run reads through the pack's entry, so `rimz packs update` reaches it at its next step. Removing the last installed pack of its source deletes the entry and leaves the run waiting on its definition; an exclusion, or removing another pack of the same source, keeps the entry, and the run goes on advancing.
 
 | The definition | What the run does |
 | --- | --- |
@@ -173,7 +173,7 @@ Workflow agents, judges, tests, scripts, and commands receive:
 | --- | --- |
 | `RIMZ_WORKFLOW_RUN` | The run id. |
 | `RIMZ_WORKFLOW_DIR` | The work directory. |
-| `RIMZ_WORKFLOW_DEFINITION` | The absolute path of the run's definition folder: the deployed `~/.rimz/workflows/<name>/`, shared with every run of that workflow, or a loop task's run's own `definition/`. |
+| `RIMZ_WORKFLOW_DEFINITION` | The absolute path of the run's definition folder: the directory the run started from, shared with every run of that workflow, or a loop task's run's own `definition/`. A pack workflow's path runs through the pack's entry under `~/.rimz/packs/`, so it reads the pack's current checkout after an update. |
 
 Every workflow agent's launch Environment section has a `- workflow:` line naming the definition folder, even with `env_reminder` off. Non-workflow agent launches unset all three variables. Tests, scripts, and commands also receive `RIMZ_WORKFLOW_NODE`, the node they run at, which every agent launch unsets, so a `rimz workflow run` from one of them names the run as its starter ([starters and depth](#starters-and-depth)). If the agent launch cannot read the run record, it warns and omits the definition variable and line. Tests, scripts, and commands also inherit the room's workspace environment.
 
@@ -422,11 +422,11 @@ A message step returns at once, so a cycle through it needs `max-visits` and a w
 
 ### Runs steps
 
-A runs step, `[runs.<name>]`, starts other deployed workflows and waits until each has ended. It takes:
+A runs step, `[runs.<name>]`, starts other home or pack workflows and waits until each has ended. It takes:
 
 | Field | Rule |
 | --- | --- |
-| `start` | Required. A nonempty array of `{workflow, prompt-file}` tables: `workflow` names a workflow deployed under `~/.rimz/workflows/`, and `prompt-file` is optional and confined. An entry takes no other key. |
+| `start` | Required. A nonempty array of `{workflow, prompt-file}` tables: `workflow` names a home or pack workflow, resolved as a `run` name is, and `prompt-file` is optional and confined. An entry takes no other key. |
 | `prompt-file` | Optional and confined. Read for every started run. |
 | `timeout` | Optional. Fails the step with cause `timeout`. |
 | `then` | Required. One check, `@done`, or `@failed`. |
@@ -714,7 +714,7 @@ RimZ rewrites `$RIMZ_WORKFLOW_DIR/context.json` before every check and every att
 
 ## Validate and schema
 
-`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/` whose name does not start with `.`. A single normal path component names a workflow under that home, as in `run`. Any other path is checked where it is, inside that home or not, and its name must still be a valid workflow name. A name may instead select a loop task's one-check graph, as in `show`, with the same `workflow:` and `task:` selectors ([loop task graphs](#loop-task-graphs)). Profiles and teams resolve from the machine's definitions either way. Condition and sleep stage names use the caller's effective teams plus `Done`. Without a resolved workspace, a warning says stage names were not checked. Starting a run always checks against the run's project.
+`rimz workflow validate [DIR] [--json]` checks one directory, or every workflow `run` resolves by name: each directory under `~/.rimz/workflows/` whose name does not start with `.`, then each pack workflow no home copy shadows or exclusion removes. A name two packs ship is an error naming the conflict. A single normal path component names a workflow as in `run`. Any other path is checked where it is, and its name must still be a valid workflow name. A name may instead select a loop task's one-check graph, as in `show`, with the same `workflow:` and `task:` selectors ([loop task graphs](#loop-task-graphs)). Profiles and teams resolve from the machine's definitions either way. Condition and sleep stage names use the caller's effective teams plus `Done`. Without a resolved workspace, a warning says stage names were not checked. Starting a run always checks against the run's project.
 
 The table has these columns:
 
@@ -772,10 +772,10 @@ Route rules read the definition as written:
 
 ## Inspect definitions
 
-`rimz workflow show <WORKFLOW>` draws the current definition in walk order, with returning steps hung beneath their earlier sending check.
+`rimz workflow show <WORKFLOW>` draws the current definition in walk order, with returning steps hung beneath their earlier sending check. `<WORKFLOW>` is a name, or a directory holding a `workflow.toml` by path as `run` takes it, named for the directory it resolves to; its live-runs table lists the runs whose definition folder is that directory.
 
 - Checks draw `◇`, steps `○`. `→` points to a later node and `↑` to an earlier node or itself. Unreached nodes follow under `unreachable from <start>`.
-- The header names the summary, scope, any workflow `limit`, and any configured deadline route. For a deployed workflow it names each loop task added with `--workflow <WORKFLOW>` and its trigger (`started by loop task <task>: <trigger>`). With none it reads `no loop task starts it`, even when a shell task's command runs `rimz workflow run` on it, and gives a `rimz loop add --workflow` command and the by-hand `rimz workflow run` command. A loop task's graph names its own task.
+- The header names the summary, scope, any workflow `limit`, and any configured deadline route. For a deployed workflow it names each loop task added with `--workflow <WORKFLOW>` and its trigger (`started by loop task <task>: <trigger>`). With none it reads `no loop task starts it`, even when a shell task's command runs `rimz workflow run` on it, and gives a `rimz loop add --workflow` command and the by-hand `rimz workflow run` command. A directory by path names only the by-hand command, since a loop task takes only a deployed name. A loop task's graph names its own task.
 - Each node shows its runner, summary when set, routes, and routing limits: timeouts, visit caps, windows, `takes over` or `shares the checkout`, bounded `give-up` waits, and the lifecycle (`1 turn` or `session`). A message step's runner is its target address.
 - Condition cases keep their order and hold durations, followed by `none true`. A note names where an unread term goes.
 - Edges that cannot fire are omitted, and so is each failure edge left to its default `@failed`, a step's `capacity` edge included. An explicit `on.capacity` draws it.
@@ -795,7 +795,7 @@ A missing or unloadable definition prints `<workflow>: definition unavailable: <
 5. Every resolved edge with its source and fireability mark, including never-firing edges and a default `capacity` edge. A sleep's view leaves out its default `sleeping → @wait` and `unknown → @wait` edges, which `validate` lists.
 6. The configured fields: command text (in full, multiple lines included), message target, agent layout, prompt path, lifecycle, `rest-check` (joined by `, `), occupancy, keep, window, throttle, limit, give-up, visit bounds, timeout, provider, and account. A limit reads `max-parallel=N · stagger=<duration>`, omitting unset fields. The definition header prints its workflow limit in the same form.
 
-The two-positional form takes a workflow name only. A run address or run id is a usage error (exit 2), except that a finished run's id or address refuses with exit 1, saying the run is finished and naming the `rimz workflow show <run>` that prints its saved history. It conflicts with `--json` and `--history`. An unknown node refuses with the definition's node names (exit 1). A missing or unloadable definition refuses with the same text (exit 1), with no runs-table fallback.
+The two-positional form takes a workflow name or a directory by path only. A run address or run id is a usage error (exit 2), except that a finished run's id or address refuses with exit 1, saying the run is finished and naming the `rimz workflow show <run>` that prints its saved history. It conflicts with `--json` and `--history`. An unknown node refuses with the definition's node names (exit 1). A missing or unloadable definition refuses with the same text (exit 1), with no runs-table fallback.
 
 ### Loop task graphs
 
@@ -1149,7 +1149,7 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 | `record.depth` | The run's [depth](#starters-and-depth), `1` when omitted. |
 | `record.loop_report` | `owed` while the run owes its loop task, starting agent or starting `runs` step its outcome report, `sent` once made, `none` when nobody is owed one. |
 | `record.outcome.ending` | How a finished run ended: `{kind}` with `kind` one of `done`, `failed`, `canceled`, `tried`, or `capacity_gave_up` (with `waited_ms` and optional `reason`). |
-| `record.spec_dir` | A deployed run's definition folder, canonical at the start. Absent for a loop task's run, which reads its own `definition/`. |
+| `record.spec_dir` | A deployed run's definition folder, made absolute at the start with its links kept; an agent's or a loop task's start records the home or pack path the workflow is deployed at. Absent for a shell loop task's run, which reads its own `definition/`. |
 | `record.visits.<step>` | The step's visit count since its last manual restart. |
 | `record.key_visits.<step>` | The step's visits split by item key, as `key_visits` in [the context file](#the-context-file). Absent when no step has a keyed visit. |
 | `record.prev_attempt` | As in [the context file](#the-context-file). |

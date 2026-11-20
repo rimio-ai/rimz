@@ -93,4 +93,4 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 - `utils::{time, path, parallel, tokens, env}` (`utils::time` holds the crate's one Unix-millisecond clock), `fs_watch`, `theme`.
 - Daemon view: `daemon_view`, `daemon_content`, `reload`, `remote_control`.
 - `observability`, `agent_activity`, `lane`, `proc`, `osc`, `build_id`, `child_process`, `tui`, `testkit`.
-- `blocker` (start preconditions; the CLI owns their presentation), `update` and `uninstall` (install lifecycle), `packs/` (pack sources; definition and skill readers own item scanning), `lsp/` (shared language servers), `mcp/` (the `rimz mcp serve` tool catalog and stdio loop).
+- `blocker` (start preconditions; the CLI owns their presentation), `update` and `uninstall` (install lifecycle), `packs/` (pack sources; the definition, skill, and workflow (`harness::workflow::Deployed`) readers own item scanning), `lsp/` (shared language servers), `mcp/` (the `rimz mcp serve` tool catalog and stdio loop).

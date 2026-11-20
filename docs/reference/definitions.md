@@ -12,10 +12,11 @@ subagents/<name>.md    supervised-child profiles
 teams/<name>.md        team roster and pipeline
 traits/<name>.md       plain Markdown fragments
 skills/<name>/SKILL.md shared skill library
+workflows/<name>/     workflows run by name
 packs/                installed pack sources and record
 ```
 
-The three definition trees are scanned non-recursively for `.md` files, in sorted order, in the home and in each installed pack. Subdirectories and `AGENTS.md`, `CLAUDE.md`, and `README.md` are skipped. These contributor-note names are valid only in the home's `traits/`; pack copies remain documentation. Trait contents are read when referenced. A missing tree is empty. Symlinked trees work too. A dangling home `.md` symlink still claims its name and reports its own read error instead of loading a pack fallback.
+The four definition trees (`agents/`, `subagents/`, `teams/`, `traits/`) are scanned non-recursively for `.md` files, in sorted order, in the home and in each installed pack. Subdirectories and `AGENTS.md`, `CLAUDE.md`, and `README.md` are skipped. These contributor-note names are valid only in the home's `traits/`; pack copies remain documentation. Trait contents are read when referenced. A missing tree is empty. Symlinked trees work too. A dangling home `.md` symlink still claims its name and reports its own read error instead of loading a pack fallback.
 
 The first line must be exactly `---`; another exact `---` line closes a YAML mapping. Unknown keys and wrong value types fail. The remaining Markdown is the prompt body, trimmed at its edges. String-list keys accept YAML lists; an explicit null list means `[]`, not inheritance. Signals have their own rules below.
 
