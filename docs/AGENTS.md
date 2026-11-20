@@ -56,10 +56,13 @@ Each fact has one owning page; every other page links to it with a half-line of 
 **Externals**: `docs/externals/`, upstream protocol references pinned to source URLs, indexed by [its README](./externals/README.md): one page per agent adapter under `agent-adapter/` and per mux backend under `mux-adapter/`.
 
 **Contributing**: `docs/contributing/`
-- [rust-conventions.md](./contributing/rust-conventions.md): Rust shape, timestamps and clocks, test taxonomy, toolchain, quality gates, CI, and release packaging.
+- [rust-conventions.md](./contributing/rust-conventions.md): Rust shape, timestamps and clocks, the shape of each kind of test, and the dependency budget.
+- [gates.md](./contributing/gates.md): the gate stack, run budgets, the pre-commit hook, test profiles and the test environment, architectural invariants, and the compatibility surface.
+- [build-and-ci.md](./contributing/build-and-ci.md): the toolchain, compile cache, contributor installs, target pruning, CI and its image, and release packaging.
 - [running-gates.md](./contributing/running-gates.md): the gates and the test runner in practice.
 - [probes.md](./contributing/probes.md): hand-built probes and live checks.
-- [integration-tests.md](./contributing/integration-tests.md): what a test in the integration suite needs by kind, and how a flake there is stressed, forced, and traced.
+- [integration-tests.md](./contributing/integration-tests.md): what a test in the integration suite needs, by kind.
+- [flakes.md](./contributing/flakes.md): live test runs, reporting a failure, and how a flake is stressed, forced, read from CI, and traced.
 - [cli-scenes.md](./contributing/cli-scenes.md): the scene grammar `rimz agents` and `rimz teams` share, the rules every human history list keeps, and what a change to rendered output checks.
 - [agent-adapters.md](./contributing/agent-adapters.md): the built-in adapter integration playbook, and what a change to a shipped adapter also runs.
 - [model-upgrades.md](./contributing/model-upgrades.md): what a new provider model needs.

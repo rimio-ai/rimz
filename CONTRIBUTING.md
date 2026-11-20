@@ -28,8 +28,8 @@ rustc-wrapper = "sccache"
 
 Leave `incremental` unset. sccache caches the registry dependencies every worktree shares, while Cargo rebuilds the workspace crates incrementally; the large `rimz` crate rarely hits the shared cache across branches, so incremental rebuilds are where its time is saved. Incremental state costs roughly 5-10 GB per active worktree `target/`.
 
-Keep each Git worktree's Cargo `target/` directory local to that worktree. Share compiler work through sccache; do not list `target` in `.worktreelink`, because Cargo fingerprints and final executables from divergent branches can overwrite one another. See the [toolchain and cache guide](./docs/contributing/rust-conventions.md#toolchain) and the [worktree seeding guide](./docs/guide/worktrees.md#seed-the-tree) for details.
+Keep each Git worktree's Cargo `target/` directory local to that worktree. Share compiler work through sccache; do not list `target` in `.worktreelink`, because Cargo fingerprints and final executables from divergent branches can overwrite one another. See the [toolchain and cache guide](./docs/contributing/build-and-ci.md#toolchain) and the [worktree seeding guide](./docs/guide/worktrees.md#seed-the-tree) for details.
 
-Xtask automatically prunes stale Cargo output daily after successful compile tasks; use `cargo xtask prune --dry-run` to preview cleanup (see the [pruning rules](./docs/contributing/rust-conventions.md#target-pruning)).
+Xtask automatically prunes stale Cargo output daily after successful compile tasks; use `cargo xtask prune --dry-run` to preview cleanup (see the [pruning rules](./docs/contributing/build-and-ci.md#target-pruning)).
 
-Contributor rules live in [AGENTS.md](./AGENTS.md). Rust shape, test tiers, command surface, and gate details live in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
+Contributor rules live in [AGENTS.md](./AGENTS.md). The code shape lives in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md), the gate stack and test profiles in [docs/contributing/gates.md](./docs/contributing/gates.md), and the toolchain, CI, and release packaging in [docs/contributing/build-and-ci.md](./docs/contributing/build-and-ci.md).
