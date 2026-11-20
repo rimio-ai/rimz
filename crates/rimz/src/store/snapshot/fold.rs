@@ -332,10 +332,26 @@ impl AgentRollup {
         self.iter().count()
     }
 
-    /// The row for an exact provider and session identity.
+    /// The row for an exact provider and session identity: the live row when
+    /// the active log has one, else the carried row unless it was retired.
+    /// Only [`Self::layered`] puts rows beneath the live layer, and it keeps
+    /// both layers key-sorted, so a carryover-backed rollup answers by binary
+    /// search; rows a fold owns outright keep their given order and are scanned.
     pub fn find(&self, kind: &str, agent_id: &AgentSessionId) -> Option<&AgentState> {
-        self.iter()
-            .find(|agent| agent.kind == kind && agent.agent_id == *agent_id)
+        if self.base.agents.is_empty() {
+            return self
+                .live
+                .iter()
+                .find(|agent| agent.kind == kind && agent.agent_id == *agent_id)
+                .map(Arc::as_ref);
+        }
+        let by_key =
+            |agent: &Arc<AgentState>| (agent.kind.as_str(), &agent.agent_id).cmp(&(kind, agent_id));
+        if let Ok(index) = self.live.binary_search_by(by_key) {
+            return Some(&self.live[index]);
+        }
+        let carried = &self.base.agents[self.base.agents.binary_search_by(by_key).ok()?];
+        (!self.retired.iter().any(|row| Arc::ptr_eq(row, carried))).then_some(carried.as_ref())
     }
 
     pub fn is_empty(&self) -> bool {

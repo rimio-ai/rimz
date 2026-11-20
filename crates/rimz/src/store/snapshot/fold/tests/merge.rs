@@ -143,6 +143,64 @@ fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
     assert_eq!(merged[0].status, AgentStatus::Idle);
 }
 
+#[test]
+fn find_answers_each_key_as_the_merged_iteration_does() {
+    let launch: AgentSessionId = "launch_retired".into();
+    let mut newer_base = agent("claude", "c-base-newer", AgentStatus::Idle, 3_000);
+    newer_base.worktree_branch = Some("carried".into());
+    let carryover = fold_ready(vec![
+        agent("claude", "a-base-only", AgentStatus::Idle, 1_000),
+        agent("claude", "b-both", AgentStatus::Idle, 1_000),
+        newer_base,
+        agent("claude", launch.as_str(), AgentStatus::Idle, 1_000),
+        agent("codex", "b-both", AgentStatus::Idle, 1_000),
+    ]);
+    let live: Vec<_> = [
+        agent("claude", "b-both", AgentStatus::Running, 2_000),
+        agent("claude", "c-base-newer", AgentStatus::Running, 2_000),
+        agent("claude", "d-live-only", AgentStatus::Running, 2_000),
+    ]
+    .into_iter()
+    .map(Arc::new)
+    .collect();
+    let identity: AgentIdentityState =
+        serde_json::from_value(serde_json::json!({ "consumed_launches": [launch.as_str()] }))
+            .unwrap();
+    let layered = AgentRollup::layered(carryover, &live, &identity);
+    let unsorted = AgentRollup::from(vec![
+        agent("claude", "d-live-only", AgentStatus::Running, 2_000),
+        agent("claude", "a-dup", AgentStatus::Running, 2_000),
+        agent("claude", "a-dup", AgentStatus::Idle, 1_000),
+    ]);
+    for rollup in [&layered, &unsorted] {
+        for (kind, id) in [
+            ("claude", "a-base-only"),
+            ("claude", "b-both"),
+            ("codex", "b-both"),
+            ("claude", "c-base-newer"),
+            ("claude", "d-live-only"),
+            ("claude", "a-dup"),
+            ("claude", launch.as_str()),
+            ("claude", "absent"),
+            ("pi", "b-both"),
+        ] {
+            let id = AgentSessionId::from(id);
+            let walked = rollup
+                .iter()
+                .find(|agent| agent.kind == kind && agent.agent_id == id);
+            assert_eq!(
+                rollup.find(kind, &id).map(std::ptr::from_ref),
+                walked.map(std::ptr::from_ref),
+                "{kind}/{id:?}"
+            );
+        }
+    }
+    assert!(
+        layered.find("claude", &launch).is_none(),
+        "a retired row stays hidden"
+    );
+}
+
 fn fold_ready(agents: Vec<AgentState>) -> Arc<FoldCarryover> {
     Arc::new(FoldCarryover::from_raw(EventCarryover {
         agents,
