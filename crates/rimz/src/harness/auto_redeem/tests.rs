@@ -75,7 +75,7 @@ fn verdict(
         credits,
         None,
         Duration::from_secs(12 * 3600),
-        true,
+        RedeemLevel::Paced,
         EXPIRY_RESCUE_LEAD,
         now,
     )
@@ -186,7 +186,7 @@ fn limit_redemption_requires_opt_in_but_rescue_does_not() {
             &credits(now, None),
             None,
             Duration::from_secs(12 * 3600),
-            false,
+            RedeemLevel::Rescue,
             EXPIRY_RESCUE_LEAD,
             now,
         ),
@@ -200,7 +200,7 @@ fn limit_redemption_requires_opt_in_but_rescue_does_not() {
                 &dying,
                 None,
                 Duration::from_secs(12 * 3600),
-                false,
+                RedeemLevel::Rescue,
                 EXPIRY_RESCUE_LEAD,
                 now,
             ),
@@ -223,7 +223,7 @@ fn limit_redemption_needs_no_parked_agent() {
                 &credits,
                 None,
                 Duration::from_secs(12 * 3600),
-                true,
+                RedeemLevel::Paced,
                 EXPIRY_RESCUE_LEAD,
                 now
             ),
@@ -258,7 +258,7 @@ fn a_kept_schedule_redeems_doomed_credits_and_never_schedules() {
             credits,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            true,
+            RedeemLevel::Paced,
             EXPIRY_RESCUE_LEAD,
             now,
         )
@@ -304,20 +304,85 @@ fn the_schedule_fires_only_behind_the_gate() {
     let (spent, chain) = due_chain(now);
     let mut unspent = spent.clone();
     unspent.windows[0].used_percentage = Some(40);
-    let schedule = |capacity: &ProviderCapacity, auto_redeem| {
+    let schedule = |capacity: &ProviderCapacity, level| {
         redeem_verdict(
             Some(capacity),
             &chain,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            auto_redeem,
+            level,
             EXPIRY_RESCUE_LEAD,
             now,
         )
     };
-    assert_eq!(schedule(&unspent, true), None, "no spent window");
-    assert_eq!(schedule(&spent, false), None, "auto-redeem off");
-    assert_eq!(schedule(&spent, true), Some(RedeemReason::ScheduledRedeem));
+    assert_eq!(
+        schedule(&unspent, RedeemLevel::Paced),
+        None,
+        "no spent window"
+    );
+    assert_eq!(schedule(&spent, RedeemLevel::Rescue), None, "rescue only");
+    assert_eq!(
+        schedule(&spent, RedeemLevel::Paced),
+        Some(RedeemReason::ScheduledRedeem)
+    );
+}
+
+#[test]
+fn each_level_adds_its_reasons_to_the_one_below() {
+    let now = ts(1_700_000_000);
+    let hour = Duration::from_secs(3_600);
+    let blocked = spent_capacity(now, 3 * 24 * hour);
+    let (gate, chain) = due_chain(now);
+    let cases = [
+        (
+            "rescue",
+            None,
+            credits(now, Some(Duration::from_secs(20 * 60))),
+            Some(RedeemReason::ExpiryRescue),
+        ),
+        (
+            "blocked",
+            Some(blocked.clone()),
+            credits(now, Some(10 * 24 * hour)),
+            Some(RedeemReason::BlockedGain),
+        ),
+        (
+            "doomed",
+            Some(spent_capacity(now, 24 * hour)),
+            keeping_schedule(credits(now, Some(25 * hour))),
+            Some(RedeemReason::DoomedCredit),
+        ),
+        (
+            "paced",
+            Some(gate),
+            chain,
+            Some(RedeemReason::ScheduledRedeem),
+        ),
+    ];
+    for (level, fires) in [
+        (RedeemLevel::Rescue, &["rescue"][..]),
+        (RedeemLevel::Gain, &["rescue", "blocked", "doomed"][..]),
+        (
+            RedeemLevel::Paced,
+            &["rescue", "blocked", "doomed", "paced"][..],
+        ),
+    ] {
+        for (name, capacity, credits, reason) in &cases {
+            assert_eq!(
+                redeem_verdict(
+                    capacity.as_ref(),
+                    credits,
+                    Some(100.0),
+                    Duration::from_secs(12 * 3_600),
+                    level,
+                    EXPIRY_RESCUE_LEAD,
+                    now,
+                ),
+                reason.filter(|_| fires.contains(name)),
+                "{name} at {level:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -414,7 +479,7 @@ fn chain_deadlines_space_refills_and_fall_back_to_rescue() {
             &credits,
             Some(20.0),
             Duration::from_secs(12 * 3_600),
-            true,
+            RedeemLevel::Paced,
             EXPIRY_RESCUE_LEAD,
             early,
         ),
@@ -426,7 +491,7 @@ fn chain_deadlines_space_refills_and_fall_back_to_rescue() {
             &credits,
             Some(20.0),
             Duration::from_secs(12 * 3_600),
-            true,
+            RedeemLevel::Paced,
             EXPIRY_RESCUE_LEAD,
             deadline,
         ),
@@ -457,7 +522,7 @@ fn expired_credit_does_not_suppress_the_live_chain() {
             &credits,
             Some(20.0),
             Duration::from_secs(12 * 3_600),
-            true,
+            RedeemLevel::Paced,
             EXPIRY_RESCUE_LEAD,
             deadline,
         ),
@@ -486,7 +551,7 @@ fn window_start_paces_a_late_chain_after_every_reset() {
             &credits,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            true,
+            RedeemLevel::Paced,
             EXPIRY_RESCUE_LEAD,
             now,
         ),
@@ -499,7 +564,7 @@ fn window_start_paces_a_late_chain_after_every_reset() {
             &credits,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            true,
+            RedeemLevel::Paced,
             EXPIRY_RESCUE_LEAD,
             later,
         ),
@@ -527,7 +592,7 @@ fn slow_burn_does_not_drain_an_overdue_chain_after_the_cooldown() {
             &credits,
             Some(2.0),
             Duration::from_secs(12 * 3_600),
-            true,
+            RedeemLevel::Paced,
             EXPIRY_RESCUE_LEAD,
             now + POST_SUCCESS_COOLDOWN,
         ),
@@ -564,7 +629,7 @@ fn scheduled_redeem_requires_a_dated_duration_window() {
                 &credits,
                 Some(100.0),
                 Duration::from_secs(12 * 3_600),
-                true,
+                RedeemLevel::Paced,
                 EXPIRY_RESCUE_LEAD,
                 now,
             ),
@@ -601,7 +666,7 @@ fn near_free_reset_defers_only_a_credit_that_comfortably_survives() {
             &chain(reset + MIN_HOLD),
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            true,
+            RedeemLevel::Paced,
             EXPIRY_RESCUE_LEAD,
             now,
         ),
@@ -614,7 +679,7 @@ fn near_free_reset_defers_only_a_credit_that_comfortably_survives() {
             &chain(reset + MIN_HOLD - Duration::from_secs(1)),
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            true,
+            RedeemLevel::Paced,
             EXPIRY_RESCUE_LEAD,
             now,
         ),
@@ -642,7 +707,7 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
             &chain,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            true,
+            RedeemLevel::Paced,
             EXPIRY_RESCUE_LEAD,
             now,
         ),
@@ -663,7 +728,7 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
             &doomed,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            true,
+            RedeemLevel::Paced,
             EXPIRY_RESCUE_LEAD,
             now,
         ),
@@ -675,7 +740,7 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
             &chain,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            false,
+            RedeemLevel::Rescue,
             EXPIRY_RESCUE_LEAD,
             now,
         ),
@@ -995,10 +1060,7 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
         None,
         now,
     );
-    let config = ResumeConfig {
-        auto_redeem: true,
-        ..Default::default()
-    };
+    let config = config_at(RedeemLevel::Paced);
     let stamp_path = runtime.shared_auto_redeem_path(&key);
     let mut spawned = 0;
     for tick in [now, now + Duration::from_secs(1)] {
@@ -1138,10 +1200,7 @@ fn an_idle_account_spawns_a_rescue_only_at_expiry_whatever_its_cached_windows_re
     let mut panel = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
     seed_credit_entry(&runtime, &default, dying.clone(), None, now);
     panel.reset_credits = Some(dying);
-    let config = ResumeConfig {
-        auto_redeem: true,
-        ..Default::default()
-    };
+    let config = config_at(RedeemLevel::Paced);
 
     let mut spawned = Vec::new();
     redeem_credits_with(
@@ -1184,10 +1243,7 @@ fn an_idle_account_spawns_a_rescue_only_at_expiry_whatever_its_cached_windows_re
 #[test]
 fn the_helper_judges_an_idle_login_as_rescue_only_whatever_the_request_carried() {
     let now = ts(1_700_000_000);
-    let config = ResumeConfig {
-        auto_redeem: true,
-        ..Default::default()
-    };
+    let config = config_at(RedeemLevel::Paced);
     let blocked = spent_capacity(now, Duration::from_secs(3 * 86_400));
     let held = credits(now, Some(Duration::from_secs(10 * 86_400)));
     let dying = credits(now, Some(Duration::from_secs(20 * 60)));
@@ -1404,17 +1460,20 @@ fn forecast(
     capacity: Option<&ProviderCapacity>,
     credits: &ResetCredits,
     rate_pct_per_day: Option<f64>,
-    auto_redeem: bool,
+    level: RedeemLevel,
     now: Timestamp,
 ) -> Option<RedeemForecast> {
     redeem_forecast(
         &fresh_facts(capacity, credits, None, rate_pct_per_day),
-        &ResumeConfig {
-            auto_redeem,
-            ..Default::default()
-        },
+        &config_at(level),
         now,
     )
+}
+
+fn config_at(level: RedeemLevel) -> AutoRedeemConfig {
+    let mut config = AutoRedeemConfig::default();
+    config.level = level;
+    config
 }
 
 #[test]
@@ -1426,26 +1485,32 @@ fn forecast_reads_manual_armed_and_holding_from_a_dry_longest_window() {
     let far = open_capacity(now, 3 * day);
     let blocked = chain(now + 5 * day);
     assert_eq!(
-        forecast(Some(&far), &blocked, None, false, now),
+        forecast(Some(&far), &blocked, None, RedeemLevel::Rescue, now),
         Some(RedeemForecast::Manual),
-        "auto-redeem off stays manual even when a dry week would block the gain"
+        "the rescue level stays manual even when a dry week would block the gain"
     );
     assert_eq!(
-        forecast(Some(&far), &blocked, None, true, now),
+        forecast(Some(&far), &blocked, None, RedeemLevel::Paced, now),
         Some(RedeemForecast::Armed),
         "a dry week three days from reset redeems for the blocked gain"
     );
 
     let near = open_capacity(now, 7 * hour);
     assert_eq!(
-        forecast(Some(&near), &chain(now + 19 * hour), None, true, now),
+        forecast(
+            Some(&near),
+            &chain(now + 19 * hour),
+            None,
+            RedeemLevel::Paced,
+            now
+        ),
         Some(RedeemForecast::Holding),
         "a restarting window holds a credit expiring 12h after a near reset"
     );
     let survivor = chain(now + 7 * hour + 3 * day);
     for rate in [None, Some(20.0)] {
         assert_eq!(
-            forecast(Some(&near), &survivor, rate, true, now),
+            forecast(Some(&near), &survivor, rate, RedeemLevel::Paced, now),
             Some(RedeemForecast::Holding),
             "a near reset and a surviving credit hold at rate {rate:?}"
         );
@@ -1455,7 +1520,7 @@ fn forecast_reads_manual_armed_and_holding_from_a_dry_longest_window() {
             Some(&near),
             &chain(now + Duration::from_secs(20 * 60)),
             None,
-            true,
+            RedeemLevel::Paced,
             now
         ),
         Some(RedeemForecast::Armed),
@@ -1468,7 +1533,7 @@ fn forecast_without_a_known_reset_is_armed_and_without_credits_is_none() {
     let now = ts(1_700_000_000);
     let credit = chain(now + Duration::from_secs(3 * 86_400));
     assert_eq!(
-        forecast(None, &credit, None, true, now),
+        forecast(None, &credit, None, RedeemLevel::Paced, now),
         Some(RedeemForecast::Armed)
     );
     let unstarted = ProviderCapacity::from_windows(vec![RateLimitWindow {
@@ -1478,15 +1543,15 @@ fn forecast_without_a_known_reset_is_armed_and_without_credits_is_none() {
         ..Default::default()
     }]);
     assert_eq!(
-        forecast(Some(&unstarted), &credit, None, true, now),
+        forecast(Some(&unstarted), &credit, None, RedeemLevel::Paced, now),
         Some(RedeemForecast::Armed)
     );
     let empty = ResetCredits {
         count: 0,
         ..credit.clone()
     };
-    assert_eq!(forecast(None, &empty, None, true, now), None);
-    assert_eq!(forecast(None, &empty, None, false, now), None);
+    assert_eq!(forecast(None, &empty, None, RedeemLevel::Paced, now), None);
+    assert_eq!(forecast(None, &empty, None, RedeemLevel::Rescue, now), None);
 }
 
 #[test]
@@ -1521,7 +1586,7 @@ fn holding_forecast_stays_firm_until_the_longest_reset() {
             let mut now = start;
             while now < week_reset {
                 assert_eq!(
-                    forecast(Some(&capacity), &credits, rate, true, now),
+                    forecast(Some(&capacity), &credits, rate, RedeemLevel::Paced, now),
                     Some(RedeemForecast::Holding),
                     "hold flipped at {now} (rate {rate:?})"
                 );
@@ -1531,7 +1596,7 @@ fn holding_forecast_stays_firm_until_the_longest_reset() {
                         &credits,
                         rate,
                         Duration::from_secs(12 * 3_600),
-                        true,
+                        RedeemLevel::Paced,
                         EXPIRY_RESCUE_LEAD,
                         now,
                     ),
@@ -1574,14 +1639,11 @@ fn projection_forecasts_only_the_codex_panel_with_credits() {
             .collect::<Vec<_>>()
     };
 
-    let mut config = ResumeConfig {
-        auto_redeem: true,
-        ..Default::default()
-    };
+    let mut config = config_at(RedeemLevel::Paced);
     project_redeem_forecasts(&mut snapshot, &runtime, &config, &logins);
     assert_eq!(forecasts(&snapshot), [Some(RedeemForecast::Armed), None]);
 
-    config.auto_redeem = false;
+    config.level = RedeemLevel::Rescue;
     project_redeem_forecasts(&mut snapshot, &runtime, &config, &logins);
     assert_eq!(forecasts(&snapshot), [Some(RedeemForecast::Manual), None]);
 
@@ -1608,10 +1670,7 @@ fn claude_banked_credits_never_arm_the_automatic_path() {
         &BTreeMap::new(),
         &runtime,
         &RoomLoginSet::native(),
-        &ResumeConfig {
-            auto_redeem: true,
-            ..Default::default()
-        },
+        &config_at(RedeemLevel::Paced),
         now,
         |_, key, _, _| {
             spawned.push(key.clone());
@@ -1709,11 +1768,12 @@ fn producer_follows_the_spend_step_without_a_parked_agent() {
         );
         let mut panel = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
         panel.reset_credits = Some(credits);
-        let config = ResumeConfig {
-            auto_redeem: enabled,
-            spend_order: order,
-            ..Default::default()
-        };
+        let mut config = config_at(if enabled {
+            RedeemLevel::Paced
+        } else {
+            RedeemLevel::Rescue
+        });
+        config.spend_order = order;
         let mut spawned = Vec::new();
         redeem_credits_with(
             &[panel],
@@ -1761,10 +1821,7 @@ fn fresh_paid_credit_prevents_a_consume_but_not_idle_expiry_rescue() {
     let now = ts(1_700_000_000);
     let capacity = spent_capacity(now, Duration::from_secs(3 * 86_400));
     let extra = Some(crate::agents::ExtraCredits::known(None, Some(100.0), None));
-    let config = ResumeConfig {
-        auto_redeem: true,
-        ..Default::default()
-    };
+    let config = config_at(RedeemLevel::Paced);
     let facts = fresh_facts(Some(&capacity), &credits(now, None), extra.clone(), None);
     assert_eq!(fresh_verdict(false, &facts, &config, now), None);
     let dying = fresh_facts(
@@ -1793,10 +1850,7 @@ fn forecast_holds_while_paid_credit_precedes_resets() {
         Some(crate::agents::ExtraCredits::known(None, Some(100.0), None)),
         None,
     );
-    let mut config = ResumeConfig {
-        auto_redeem: true,
-        ..Default::default()
-    };
+    let mut config = config_at(RedeemLevel::Paced);
     assert_eq!(
         redeem_forecast(&facts, &config, now),
         Some(RedeemForecast::Holding)
@@ -1894,7 +1948,7 @@ fn marker(kind: &str, capacity: &ProviderCapacity, credits: &ResetCredits) -> Re
     let now = ts(1_700_000_000);
     marker_forecast(
         &facts_of(kind, Some(capacity), credits),
-        &ResumeConfig::default(),
+        &AutoRedeemConfig::default(),
         false,
         now,
     )
@@ -1904,10 +1958,7 @@ fn marker(kind: &str, capacity: &ProviderCapacity, credits: &ResetCredits) -> Re
 #[test]
 fn the_marker_on_a_kind_rimz_redeems_is_its_forecast() {
     let now = ts(1_700_000_000);
-    let config = ResumeConfig {
-        auto_redeem: true,
-        ..Default::default()
-    };
+    let config = config_at(RedeemLevel::Paced);
     let far = open_capacity(now, Duration::from_secs(3 * 86_400));
     let near = open_capacity(now, Duration::from_secs(7 * 3_600));
     let hour = Duration::from_secs(3_600);
@@ -2271,7 +2322,7 @@ fn projection_marks_a_lit_login_waiting_only_for_its_own_limit_stopped_agent() {
         project_redeem_forecasts(
             &mut snapshot,
             &runtime,
-            &ResumeConfig::default(),
+            &AutoRedeemConfig::default(),
             &RoomLoginSet::native(),
         );
         assert_eq!(snapshot.providers[0].redeem_forecast, Some(expected));

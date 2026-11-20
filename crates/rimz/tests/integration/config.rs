@@ -2201,7 +2201,7 @@ fn setup_pty_offers_auto_redeem_only_with_codex() {
         output.contains("  1  hooks        codex needs an install or refresh"),
         "{output}"
     );
-    assert_eq!(config_get(&env, "resume.auto_redeem"), "true");
+    assert_eq!(config_get(&env, "harness.auto_redeem.codex.level"), "paced");
     assert_eq!(config_get(&env, "harness.idle_compact"), "100k");
 }
 

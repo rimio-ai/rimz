@@ -33,7 +33,7 @@ use crate::agents::{
     AccountUsageIdentity, AccountUsageSnapshot, ProviderLogin, RateLimitWindow, RedeemEffect,
     ResetCredits, RoomLoginSet,
 };
-use crate::config::ResumeConfig;
+use crate::config::{AutoRedeemConfig, RedeemLevel};
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::assist_log::AssistWindowReset;
 use crate::harness::auto_continue::limit_marker_active;
@@ -195,7 +195,7 @@ pub fn prepare_manual_redeem(
     runtime: &RuntimePaths,
     key: &LoginKey,
     login_env: &BTreeMap<String, String>,
-    config: &ResumeConfig,
+    config: &AutoRedeemConfig,
 ) -> Result<ManualRedeem, AutoRedeemErr> {
     let stamp_at_read = read_stamp(&runtime.shared_auto_redeem_path(key));
     let read_at = Timestamp::now();
@@ -203,7 +203,7 @@ pub fn prepare_manual_redeem(
         .map_err(AutoRedeemErr::Provider)?;
     let capacity = offer.capacity.as_ref();
     let credits = offer.credits.clone();
-    let min_gain = config.auto_redeem_min_gain();
+    let min_gain = config.policy(&key.kind).min_gain;
     let rate = cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(key)).as_ref());
     let mut facts = SpendFacts::from_offer(key, &offer, rate);
     facts.last_attempt = stamp_at_read.clone();
@@ -289,15 +289,15 @@ fn consume_manual_redemption(
 
 /// Decide whether current provider-neutral capacity and reset credits warrant
 /// one consume attempt. Expiry rescue, within `expiry_lead` of the soonest
-/// expiry, is unconditional; every other reason needs the user's opt-in and a
-/// spent window with a future reset. What follows depends on what a redemption
-/// does to the window's reset.
+/// expiry, holds at every level; every other reason needs `gain` or above and
+/// a spent window with a future reset. What follows depends on what a
+/// redemption does to the window's reset, and only `paced` schedules.
 pub(super) fn redeem_verdict(
     capacity: Option<&ProviderCapacity>,
     credits: &ResetCredits,
     rate_pct_per_day: Option<f64>,
     min_gain: Duration,
-    auto_redeem: bool,
+    level: RedeemLevel,
     expiry_lead: Duration,
     now: Timestamp,
 ) -> Option<RedeemReason> {
@@ -310,7 +310,7 @@ pub(super) fn redeem_verdict(
     }) {
         return Some(RedeemReason::ExpiryRescue);
     }
-    if !auto_redeem {
+    if level == RedeemLevel::Rescue {
         return None;
     }
     let natural_reset = capacity?.latest_spent_window_reset(now)?;
@@ -318,9 +318,10 @@ pub(super) fn redeem_verdict(
 
     match credits.effect {
         RedeemEffect::RestartsWindow if blocked_gain => Some(RedeemReason::BlockedGain),
-        RedeemEffect::RestartsWindow => {
+        RedeemEffect::RestartsWindow if level == RedeemLevel::Paced => {
             scheduled_redeem(capacity, credits, rate_pct_per_day, min_gain, now)
         }
+        RedeemEffect::RestartsWindow => None,
         RedeemEffect::KeepsSchedule
             if credits.soonest_expiry.is_some_and(|expiry| {
                 expiry.as_second() - natural_reset.as_second() < duration_seconds(MIN_HOLD)
@@ -340,7 +341,7 @@ fn idle_rescue(credits: &ResetCredits, now: Timestamp) -> Option<RedeemReason> {
         credits,
         None,
         Duration::ZERO,
-        false,
+        RedeemLevel::Rescue,
         EXPIRY_RESCUE_LEAD,
         now,
     )
@@ -355,7 +356,7 @@ fn idle_rescue(credits: &ResetCredits, now: Timestamp) -> Option<RedeemReason> {
 fn fresh_verdict(
     idle: bool,
     facts: &SpendFacts,
-    config: &ResumeConfig,
+    config: &AutoRedeemConfig,
     now: Timestamp,
 ) -> Option<RedeemReason> {
     if idle {
@@ -403,13 +404,13 @@ fn scheduled_redeem(
 /// timing, auto mode remains armed unless paid credit demonstrably comes first.
 fn redeem_forecast(
     facts: &SpendFacts,
-    config: &ResumeConfig,
+    config: &AutoRedeemConfig,
     now: Timestamp,
 ) -> Option<RedeemForecast> {
     if facts.reset_credits.as_ref()?.count == 0 {
         return None;
     }
-    if !config.auto_redeem {
+    if config.policy(&facts.kind).level == RedeemLevel::Rescue {
         return Some(RedeemForecast::Manual);
     }
     let Some((capacity, longest)) = facts
@@ -454,16 +455,16 @@ fn with_longest_spent(
 }
 
 /// The marker's answer for one login with banked credits: RimZ's forecast
-/// where it redeems (a provider served by auto-redeem, switched on), and the
-/// user's own advice everywhere else. `limit_stopped` says an agent on the login
+/// where it redeems at the limit (a provider served by auto-redeem at `gain`
+/// or `paced`), and the user's own advice everywhere else. `limit_stopped` says an agent on the login
 /// is stopped on a provider limit.
 fn marker_forecast(
     facts: &SpendFacts,
-    config: &ResumeConfig,
+    config: &AutoRedeemConfig,
     limit_stopped: bool,
     now: Timestamp,
 ) -> Option<RedeemForecast> {
-    if facts.supports_reset() && config.auto_redeem {
+    if facts.supports_reset() && config.policy(&facts.kind).level != RedeemLevel::Rescue {
         return redeem_forecast(facts, config, now);
     }
     if facts.reset_credits.as_ref()?.count == 0 {
@@ -825,7 +826,7 @@ pub(crate) fn redeem_credits(
     idle_credits: &BTreeMap<LoginKey, ResetCredits>,
     runtime: &RuntimePaths,
     logins: &RoomLoginSet,
-    config: &ResumeConfig,
+    config: &AutoRedeemConfig,
     now: Timestamp,
 ) {
     redeem_credits_with(
@@ -844,7 +845,7 @@ fn redeem_credits_with(
     idle_credits: &BTreeMap<LoginKey, ResetCredits>,
     runtime: &RuntimePaths,
     logins: &RoomLoginSet,
-    config: &ResumeConfig,
+    config: &AutoRedeemConfig,
     now: Timestamp,
     mut spawn: impl FnMut(&RuntimePaths, &LoginKey, RedeemReason, uuid::Uuid) -> bool,
 ) {
@@ -894,7 +895,7 @@ fn reserve_and_spawn(
 pub(crate) fn project_redeem_forecasts(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
-    config: &ResumeConfig,
+    config: &AutoRedeemConfig,
     logins: &RoomLoginSet,
 ) {
     let now = snapshot.now;
@@ -931,7 +932,7 @@ pub fn execute_auto_redeem(
     key: &LoginKey,
     requested_reason: RedeemReason,
     request_id: uuid::Uuid,
-    config: &ResumeConfig,
+    config: &AutoRedeemConfig,
 ) -> Result<Option<Redeemed>, AutoRedeemErr> {
     if key.kind.as_str() != CODEX_KIND {
         return Err(AutoRedeemErr::UnsupportedKind(key.kind.to_string()));

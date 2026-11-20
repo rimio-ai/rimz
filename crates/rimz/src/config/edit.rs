@@ -1852,10 +1852,10 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
     }
     if is_auto_redeem_min_gain_edit(path) {
         let Some(raw) = value.as_str() else {
-            invalid_value!("resume.auto_redeem_min_gain must be a duration string");
+            invalid_value!("{} must be a duration string", path.join("."));
         };
-        if let Err(err) = super::parse_auto_redeem_min_gain(raw) {
-            invalid_value!("resume.auto_redeem_min_gain {err}");
+        if let Err(err) = super::parse_min_gain(raw) {
+            invalid_value!("{} {err}", path.join("."));
         }
     }
     if is_gc_duration_edit(path) {
@@ -2067,7 +2067,7 @@ fn is_turn_budget_edit(path: &[String]) -> bool {
 }
 
 fn is_auto_redeem_min_gain_edit(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "resume" && child == "auto_redeem_min_gain")
+    matches!(path, [root, table, leaf] | [root, table, _, leaf] if root == "harness" && table == "auto_redeem" && leaf == "min_gain")
 }
 
 fn is_gc_duration_edit(path: &[String]) -> bool {

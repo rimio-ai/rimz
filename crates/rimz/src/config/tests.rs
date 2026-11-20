@@ -3354,6 +3354,70 @@ fn retired_lsp_floor_warns_once_without_changing_other_settings() {
 }
 
 #[test]
+fn retired_redeem_keys_and_unknown_auto_redeem_names_warn_without_changing_the_policy() {
+    let dir = tempdir().unwrap();
+    let path = write(
+        &dir,
+        concat!(
+            "[resume]\nauto_redeem = true\nauto_redeem_min_gain = \"1h\"\n",
+            "spend_order = \"resets_first\"\n",
+            "[harness.auto_redeem]\nmin_gain = \"4h\"\ntypo = 1\n",
+            "[harness.auto_redeem.cladue]\nlevel = \"gain\"\n",
+            "[harness.auto_redeem.codex]\nlevel = \"gain\"\nbogus = 2\n",
+        ),
+    );
+    for config in [
+        load_no_fragments(&path).unwrap(),
+        load_lenient_no_fragments(&path),
+    ] {
+        assert_eq!(
+            config
+                .harness
+                .auto_redeem
+                .policy(&crate::ids::AgentKind::new_unchecked("codex")),
+            crate::config::RedeemPolicy {
+                level: crate::config::RedeemLevel::Gain,
+                min_gain: Duration::from_secs(4 * 3_600),
+                spend_order: crate::config::SpendOrder::CreditsFirst,
+            }
+        );
+        let notices: BTreeMap<_, _> = config
+            .notices
+            .unknown_keys
+            .iter()
+            .map(|key| (key.key.clone(), key.to_string()))
+            .collect();
+        assert_eq!(
+            notices.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "harness.auto_redeem.cladue",
+                "harness.auto_redeem.codex.bogus",
+                "harness.auto_redeem.typo",
+                "resume.auto_redeem",
+                "resume.auto_redeem_min_gain",
+                "resume.spend_order",
+            ]
+        );
+        for (old, new) in [
+            ("resume.auto_redeem", "level"),
+            ("resume.auto_redeem_min_gain", "min_gain"),
+            ("resume.spend_order", "spend_order"),
+        ] {
+            assert_eq!(
+                notices[old],
+                format!(
+                    "config key `{old}` in {} is retired and has no effect; set `{new}` under \
+                     `[harness.auto_redeem]`, or under a provider's subtable such as \
+                     `[harness.auto_redeem.codex]`; run `rimz setup` to remove it",
+                    path.display()
+                )
+            );
+        }
+        assert!(notices["harness.auto_redeem.cladue"].contains("unknown config key"));
+    }
+}
+
+#[test]
 fn lsp_configuration_has_documented_defaults() {
     let config: MachineConfig = toml::from_str("[lsp.servers.rust]\ncommand = ['rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\ninit-options = { checkOnSave = false }").unwrap();
     let value = serde_json::to_value(config).unwrap();

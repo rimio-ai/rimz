@@ -2,6 +2,14 @@ use super::*;
 use crate::agents::{RateLimitWindow, RedeemEffect};
 use crate::config::SpendOrder;
 
+fn config(spend_order: SpendOrder, min_gain: &str) -> AutoRedeemConfig {
+    let mut config = AutoRedeemConfig::default();
+    config.level = RedeemLevel::Paced;
+    config.spend_order = spend_order;
+    config.min_gain = min_gain.into();
+    config
+}
+
 fn now() -> Timestamp {
     Timestamp::from_second(1_700_000_000).unwrap()
 }
@@ -24,7 +32,7 @@ fn facts(used: u8, extra_credits: Option<ExtraCredits>) -> SpendFacts {
         }),
         rate_pct_per_day: None,
         last_attempt: None,
-        supports_reset: true,
+        kind: AgentKind::new_unchecked("codex"),
     }
 }
 
@@ -36,14 +44,30 @@ fn paid_credit_precedes_resets_unless_resets_first_can_redeem() {
         (SpendOrder::ResetsFirst, "12h", SpendStep::ResetCredit),
         (SpendOrder::ResetsFirst, "4d", SpendStep::PaidCredit),
     ] {
-        let config = ResumeConfig {
-            auto_redeem: true,
-            spend_order,
-            auto_redeem_min_gain: min_gain.into(),
-            ..Default::default()
-        };
+        let config = config(spend_order, min_gain);
         assert_eq!(facts.step(&config, None, now()), expected);
     }
+}
+
+#[test]
+fn the_ladder_reads_the_policy_of_its_own_kind() {
+    let facts = facts(100, Some(ExtraCredits::known(None, Some(100.0), None)));
+    let codex_redeems: AutoRedeemConfig = toml::from_str(
+        "min_gain = \"4d\"\n[codex]\nlevel = \"gain\"\nmin_gain = \"12h\"\nspend_order = \"resets_first\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        facts.step(&codex_redeems, None, now()),
+        SpendStep::ResetCredit
+    );
+    let codex_rescues: AutoRedeemConfig = toml::from_str(
+        "level = \"paced\"\nspend_order = \"resets_first\"\n[codex]\nlevel = \"rescue\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        facts.step(&codex_rescues, None, now()),
+        SpendStep::PaidCredit
+    );
 }
 
 #[test]
@@ -57,12 +81,7 @@ fn extra_out_falls_through_to_resets_then_spent() {
             let facts = facts(100, extra.clone());
             for (min_gain, expected) in [("12h", SpendStep::ResetCredit), ("4d", SpendStep::Spent)]
             {
-                let config = ResumeConfig {
-                    auto_redeem: true,
-                    spend_order,
-                    auto_redeem_min_gain: min_gain.into(),
-                    ..Default::default()
-                };
+                let config = config(spend_order, min_gain);
                 assert_eq!(facts.step(&config, None, now()), expected);
             }
         }
@@ -78,11 +97,7 @@ fn subscription_room_and_unknown_capacity_win_over_credits() {
     ] {
         let mut facts = facts(40, extra);
         for spend_order in [SpendOrder::CreditsFirst, SpendOrder::ResetsFirst] {
-            let config = ResumeConfig {
-                auto_redeem: true,
-                spend_order,
-                ..Default::default()
-            };
+            let config = config(spend_order, "12h");
             assert_eq!(facts.step(&config, None, now()), SpendStep::Subscription);
             facts.capacity = None;
             assert_eq!(facts.step(&config, None, now()), SpendStep::Subscription);
@@ -92,10 +107,7 @@ fn subscription_room_and_unknown_capacity_win_over_credits() {
 
 #[test]
 fn a_recent_failure_or_a_stalled_reservation_closes_the_reset_step() {
-    let config = ResumeConfig {
-        auto_redeem: true,
-        ..Default::default()
-    };
+    let config = config(SpendOrder::CreditsFirst, "12h");
     let mut facts = facts(100, None);
     for (outcome, attempted_at, expected) in [
         (Some("no_credit"), now(), SpendStep::Spent),
@@ -202,7 +214,7 @@ fn cache_evidence_excludes_display_only_limits_stale_scoped_and_lapsed_entries()
         crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_credits_path(), &cache)
             .unwrap();
         assert_eq!(
-            SpendFacts::read(&runtime, &key, now()).step(&ResumeConfig::default(), None, now()),
+            SpendFacts::read(&runtime, &key, now()).step(&AutoRedeemConfig::default(), None, now()),
             expected
         );
     }
@@ -211,24 +223,21 @@ fn cache_evidence_excludes_display_only_limits_stale_scoped_and_lapsed_entries()
 #[test]
 fn a_claude_login_on_a_dry_window_steps_as_spent_and_only_its_advice_redeems() {
     let mut facts = facts(100, None);
-    facts.supports_reset = false;
+    facts.kind = AgentKind::new_unchecked("claude");
     facts.reset_credits = facts.reset_credits.map(|credits| ResetCredits {
         effect: RedeemEffect::KeepsSchedule,
         ..credits
     });
-    let config = ResumeConfig {
-        auto_redeem: true,
-        ..Default::default()
-    };
+    let config = config(SpendOrder::CreditsFirst, "12h");
     assert_eq!(facts.step(&config, None, now()), SpendStep::Spent);
     assert_eq!(facts.redemption(&config, now()), None);
     let lead = std::time::Duration::from_secs(86_400);
-    for config in [config.clone(), ResumeConfig::default()] {
+    for config in [config.clone(), AutoRedeemConfig::default()] {
         assert_eq!(
             facts.advice(&config, lead, now()),
             Some(RedeemReason::BlockedGain),
-            "advice as if auto-redeem were on (switch: {})",
-            config.auto_redeem
+            "advice as if auto-redeem ran at its fullest (level: {:?})",
+            config.level
         );
         assert_eq!(facts.step(&config, None, now()), SpendStep::Spent);
     }

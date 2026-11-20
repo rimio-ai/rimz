@@ -979,12 +979,15 @@ fn attach_unknown_name_preserves_a_record_lookup_error_as_its_cause() {
 }
 
 #[test]
-fn start_warns_and_records_an_unsupported_account_budget() {
+fn start_warns_and_records_unsupported_provider_settings() {
     let env = Env::new();
     let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().expect("config parent")).expect("config dir");
-    std::fs::write(config, "[accounts.budget]\nantigravity = \"50/day\"\n")
-        .expect("machine config");
+    std::fs::write(
+        config,
+        "[accounts.budget]\nantigravity = \"50/day\"\n[harness.auto_redeem.antigravity]\nlevel = \"gain\"\n",
+    )
+    .expect("machine config");
     let output = start_with_accounts(&env, "", &[], Some("budget warnings must permit birth"));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
@@ -998,6 +1001,12 @@ fn start_warns_and_records_an_unsupported_account_budget() {
         &stderr,
         "accounts.budget.antigravity",
         "authoritative account-level dollars",
+    );
+    assert_skipped(
+        &env,
+        &stderr,
+        "harness.auto_redeem.antigravity",
+        "antigravity has no automatic reset-credit redemption",
     );
 }
 

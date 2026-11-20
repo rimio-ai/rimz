@@ -33,6 +33,7 @@ mod accounts;
 mod agents;
 mod animation;
 mod attention;
+mod auto_redeem;
 mod color;
 mod daemon;
 pub mod definitions;
@@ -84,6 +85,8 @@ pub(crate) use animation::{
     ThemeAnimationsConfig, UnreadEffect,
 };
 pub use attention::AttentionConfig;
+use auto_redeem::parse_min_gain;
+pub use auto_redeem::{AutoRedeemConfig, RedeemLevel, RedeemPolicy, SpendOrder};
 pub use color::{ColorDepth, ThemeColor, ThemeMode};
 pub(crate) use color::{PaletteRole, Semantic, nearest_xterm_index, parse_hex, xterm_rgb};
 pub(crate) use daemon::{DaemonConfig, DaemonPane};
@@ -131,8 +134,7 @@ pub(crate) use pets::PetsGlyphMode;
 pub use pets::{CellAspect, PetsConfig};
 pub use remote::RemoteConfig;
 pub(crate) use remote_control::RemoteControlConfig;
-use resume::parse_auto_redeem_min_gain;
-pub use resume::{ResumeConfig, SpendOrder};
+pub use resume::ResumeConfig;
 #[cfg(test)]
 pub(crate) use scheme::parse_scheme_text;
 pub(crate) use scheme::{
@@ -441,12 +443,30 @@ impl std::fmt::Display for UnknownConfigKey {
                 self.path.display()
             );
         }
+        if let Some(new) = retired_redeem_key(&self.key) {
+            return write!(
+                formatter,
+                "config key `{}` in {} is retired and has no effect; set `{new}` under `[harness.auto_redeem]`, or under a provider's subtable such as `[harness.auto_redeem.codex]`; run `rimz setup` to remove it",
+                self.key,
+                self.path.display()
+            );
+        }
         write!(
             formatter,
             "unknown config key `{}` in {} — ignored; run `rimz setup` to remove it",
             self.key,
             self.path.display()
         )
+    }
+}
+
+/// The `[harness.auto_redeem]` key that replaced a removed `[resume]` redeem key.
+fn retired_redeem_key(key: &str) -> Option<&'static str> {
+    match key {
+        "resume.auto_redeem" => Some("level"),
+        "resume.auto_redeem_min_gain" => Some("min_gain"),
+        "resume.spend_order" => Some("spend_order"),
+        _ => None,
     }
 }
 

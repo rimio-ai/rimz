@@ -1041,7 +1041,7 @@ fn enrich_core(
     crate::harness::auto_redeem::project_redeem_forecasts(
         &mut snapshot,
         runtime,
-        &machine_config.resume,
+        &machine_config.harness.auto_redeem,
         &logins,
     );
     super::unread::derive(&mut snapshot, &episodes, &read_marks);
@@ -1279,7 +1279,7 @@ pub fn provider_panels_from_caches(
     crate::harness::auto_redeem::project_redeem_forecasts(
         &mut snapshot,
         runtime,
-        &config.resume,
+        &config.harness.auto_redeem,
         logins,
     );
     snapshot.providers

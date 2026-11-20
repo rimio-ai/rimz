@@ -96,26 +96,47 @@ fn room_style_round_trips_with_config_set_and_get() {
 }
 
 #[test]
-fn spend_order_round_trips_with_config_set_and_get() {
+fn auto_redeem_keys_round_trip_with_config_set_and_get() {
     let dir = tempfile::tempdir().unwrap();
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
         dir.path().join("config.toml"),
         dir.path().join("definitions"),
     ));
-    for value in ["credits_first", "resets_first"] {
-        let result = editor.set("resume.spend_order", value);
-        assert!(result.is_ok(), "spend order must be editable: {result:?}");
-        assert_eq!(
-            editor.get(Some("resume.spend_order")).unwrap().as_str(),
-            Some(value)
-        );
+    for table in ["harness.auto_redeem", "harness.auto_redeem.codex"] {
+        for (leaf, values, typo) in [
+            ("level", &["paced", "gain", "rescue"][..], "always"),
+            (
+                "spend_order",
+                &["resets_first", "credits_first"][..],
+                "typo",
+            ),
+            ("min_gain", &["4h", "3d"][..], "1w"),
+        ] {
+            let key = format!("{table}.{leaf}");
+            for value in values {
+                let result = editor.set(&key, value);
+                assert!(result.is_ok(), "{key} = {value}: {result:?}");
+                assert_eq!(editor.get(Some(&key)).unwrap().as_str(), Some(*value));
+            }
+            assert!(editor.set(&key, typo).is_err(), "{key} = {typo}");
+        }
     }
-    assert!(editor.set("resume.spend_order", "typo").is_err());
-    assert!(
-        Kind::Core
-            .template()
-            .contains("spend_order = \"credits_first\"")
-    );
+    for key in [
+        "harness.auto_redeem.cladue.level",
+        "harness.auto_redeem.codex.bogus",
+        "resume.auto_redeem",
+    ] {
+        let err = editor.set(key, "gain").unwrap_err().to_string();
+        assert!(err.contains(key), "{err}");
+    }
+    let template = Kind::Core.template();
+    for line in [
+        "# level = \"rescue\"",
+        "# min_gain = \"72h\"",
+        "# spend_order = \"credits_first\"",
+    ] {
+        assert!(template.contains(line), "{line}");
+    }
 }
 
 #[test]
@@ -439,9 +460,9 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "resume.auto_continue_backoff_secs",
     "resume.auto_continue_max_retries",
     "resume.auto_continue_text",
-    "resume.auto_redeem",
-    "resume.spend_order",
-    "resume.auto_redeem_min_gain",
+    "harness.auto_redeem.level",
+    "harness.auto_redeem.spend_order",
+    "harness.auto_redeem.min_gain",
     "remote_control.claude",
     "remote_control.codex",
     "notifications.enabled",
@@ -638,9 +659,11 @@ fn validates_config_key_read_and_write_surfaces() {
         "resume.auto_continue_backoff_secs",
         "resume.auto_continue_max_retries",
         "resume.auto_continue_text",
-        "resume.auto_redeem",
-        "resume.spend_order",
-        "resume.auto_redeem_min_gain",
+        "harness.auto_redeem.level",
+        "harness.auto_redeem.spend_order",
+        "harness.auto_redeem.min_gain",
+        "harness.auto_redeem.codex.level",
+        "harness.auto_redeem.claude.min_gain",
         "notifications.title",
         "notifications.body",
         "harness.smart_compact",
@@ -2341,15 +2364,20 @@ fn derived_set_keys_keep_legacy_surface() {
 
 #[test]
 fn validates_auto_redeem_min_gain_edits() {
-    let key = parse_key("resume.auto_redeem_min_gain").unwrap();
-    let value = parse_set_value(&key, "12h");
-    assert_eq!(value.as_str(), Some("12h"));
-    validate_set_value(&key, &value).unwrap();
+    for raw in [
+        "harness.auto_redeem.min_gain",
+        "harness.auto_redeem.codex.min_gain",
+    ] {
+        let key = parse_key(raw).unwrap();
+        let value = parse_set_value(&key, "12h");
+        assert_eq!(value.as_str(), Some("12h"));
+        validate_set_value(&key, &value).unwrap();
 
-    let err = validate_set_value(&key, &Value::from("one week"))
-        .expect_err("invalid duration")
-        .to_string();
-    assert!(err.contains("auto_redeem_min_gain"), "{err}");
+        let err = validate_set_value(&key, &Value::from("one week"))
+            .expect_err("invalid duration")
+            .to_string();
+        assert!(err.contains(raw), "{err}");
+    }
 }
 
 #[test]

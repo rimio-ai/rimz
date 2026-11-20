@@ -8,8 +8,8 @@ use anyhow::Result;
 use rimz::agents::AgentStatus;
 use rimz::config::keys::{KeyChord, KeyMode, RoomKeymap};
 use rimz::config::{
-    CellAspect, ColorDepth, ConfigEditor, IdleCompact, MachineConfig, PetsConfig, RoomStyle,
-    ThemeMode,
+    CellAspect, ColorDepth, ConfigEditor, IdleCompact, MachineConfig, PetsConfig, RedeemLevel,
+    RedeemPolicy, RoomStyle, ThemeMode,
 };
 use rimz::ids::MuxName;
 use rimz::sidebar_pane::pets::{self, PetRenderTier};
@@ -59,17 +59,17 @@ static AWAY_ROWS: [AwayRow; 3] = [
         needs_codex: false,
     },
     AwayRow {
-        key: "resume.auto_redeem",
+        key: "harness.auto_redeem.codex.level",
         label: "auto-redeem",
         detail: |config| {
             format!(
                 "spends a Codex reset credit when a limit blocks {}+",
-                config.resume.auto_redeem_min_gain
+                rimz::utils::time::format_duration_compact(codex_redeem_policy(config).min_gain)
             )
         },
-        on_value: "true",
-        off_value: "false",
-        is_on: |config| config.resume.auto_redeem,
+        on_value: "paced",
+        off_value: "rescue",
+        is_on: |config| codex_redeem_policy(config).level != RedeemLevel::Rescue,
         needs_codex: true,
     },
     AwayRow {
@@ -88,6 +88,13 @@ static AWAY_ROWS: [AwayRow; 3] = [
         needs_codex: false,
     },
 ];
+
+fn codex_redeem_policy(config: &MachineConfig) -> RedeemPolicy {
+    config
+        .harness
+        .auto_redeem
+        .policy(&rimz::ids::AgentKind::new_unchecked("codex"))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OfferedRow {

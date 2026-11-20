@@ -407,7 +407,7 @@ pub(super) fn refresh_heavy_lanes(
             &credits::idle_reset_credits(runtime, &logins),
             runtime,
             &logins,
-            &config.resume,
+            &config.harness.auto_redeem,
             base.now,
         )
     });

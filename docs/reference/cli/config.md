@@ -128,7 +128,7 @@ These keys always take a string: a value that parses as another TOML type is wri
 | `accounts.<kind>.<name>.budget` | an amount ending in `/day` or `/month`, overriding the kind cap; requires `history = "standalone"` |
 | `accounts.use.<kind>` | an account name or `default`; declaration is checked when a room resolves that provider's account for start or launch, not by `set`. Prefer [`rimz accounts use --global`](./accounts.md#use), which preflights a named account before selecting it. `accounts.use` itself and deeper paths are not settable. |
 | `accounts.<kind>.<name>.label` | a display-only string following the [account label rules](./accounts.md#kinds-names-and-homes). `set` validates it and declares the account when `<name>` is not yet declared, so check the name; clear with `rimz accounts add <kind> <name> --label ''`. |
-| `resume.auto_redeem_min_gain` | a duration |
+| `harness.auto_redeem.min_gain`, `harness.auto_redeem.<kind>.min_gain` | a duration (`s`, `m`, `h`, `d`); default `72h`; see [auto-redeem](../../guide/configuration.md#auto-redeem) |
 | `gc.older_than` | a duration such as `8h` or `3d` (default `7d`) |
 | `gc.tmp_grace` | a positive duration (`s`, `m`, `h`, `d`); default `1d`, separate from owned-state retention |
 | `gc.transcript_retention` | `forever` (default) or a positive duration (`s`, `m`, `h`, `d`); governs transcript and message history together |
@@ -148,7 +148,8 @@ These keys follow the general rule, and `set` checks their format:
 | `harness.cache_keepalive` | a boolean, default `true`; `false` disables all cache pings |
 | `harness.stall_nudge` | a boolean, default `false`; `true` enables one [stalled-team nudge](../../guide/configuration.md#stalled-team-nudge) per stage visit after 55 minutes. When `agents.attention.stalled_after_secs` is `3300` or more, room entry warns and the nudge stays off. |
 | `accounts.<kind>.<name>.history` | `shared` or `standalone`; `set` only declares the mode, and `rimz accounts add <kind> <name>` or the next launch on the account links or unlinks its history. `get` reports `shared` as unset, since absent means shared. |
-| `resume.spend_order` | `credits_first` (default) or `resets_first`; paid credit before useful banked resets, or the reverse. Expiry rescue is independent of this order. |
+| `harness.auto_redeem.level`, `harness.auto_redeem.<kind>.level` | `rescue` (default), `gain`, or `paced`; see [auto-redeem](../../guide/configuration.md#auto-redeem) |
+| `harness.auto_redeem.spend_order`, `harness.auto_redeem.<kind>.spend_order` | `credits_first` (default) or `resets_first`; paid credit before useful banked resets, or the reverse. Expiry rescue is independent of this order. |
 | `gc.tmp_floor_percent` | an integer from `0` to `100`; default `10` |
 | `keys.keymap` | `rimz` only |
 | `keys.prefix` | a modified chord such as `Alt+p`; a terminal key alias is refused |
