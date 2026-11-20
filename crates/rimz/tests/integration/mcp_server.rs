@@ -771,8 +771,9 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
 
 /// A profile's own Codex overrides sit in the argv beside RimZ's, and
 /// `explain --mcps` reads what Codex applies: the last `omit_tools_from` for
-/// `rimz`, in either `-c` or `--config=` spelling, and only the entries a
-/// `mcp_servers=` table switches off.
+/// `rimz`, in either `-c` or `--config=` spelling, only the entries a
+/// `mcp_servers=` table switches off, and the `rimz` server off when an override
+/// sets its `enabled` to false, the dotted key or the table.
 #[test]
 fn explain_mcps_reads_a_profiles_own_codex_overrides_as_codex_applies_them() {
     let env = Env::new();
@@ -783,7 +784,11 @@ fn explain_mcps_reads_a_profiles_own_codex_overrides_as_codex_applies_them() {
          [profiles.xconf]\nagent = 'codex'\nmcps = ['*']\n\
          args = \"'--config=mcp_servers.rimz.omit_tools_from=[\\\"deferred\\\"]'\"\n\
          [profiles.xtable]\nagent = 'codex'\nmcps = ['*']\n\
-         args = \"-c 'mcp_servers={notion={enabled=false},github={command=\\\"gh\\\"}}'\"\n",
+         args = \"-c 'mcp_servers={notion={enabled=false},github={command=\\\"gh\\\"}}'\"\n\
+         [profiles.xoff]\nagent = 'codex'\nmcps = ['*']\n\
+         args = \"-c mcp_servers.rimz.enabled=false\"\n\
+         [profiles.xtableoff]\nagent = 'codex'\nmcps = ['*']\n\
+         args = \"-c 'mcp_servers={rimz={enabled=false}}'\"\n",
     );
     let granted = env.rimz().args(["trust", "grant"]).output().unwrap();
     assert!(
@@ -833,6 +838,23 @@ fn explain_mcps_reads_a_profiles_own_codex_overrides_as_codex_applies_them() {
 
     let out = explain("xtable");
     assert!(out.contains("switched off: notion\n"), "{out}");
+
+    for (profile, switch) in [
+        ("xoff", "-c mcp_servers.rimz.enabled=false"),
+        ("xtableoff", "-c mcp_servers={rimz={enabled=false}}"),
+    ] {
+        let out = explain(profile);
+        assert!(
+            out.contains(&format!("rimz:         off: {switch}\n")),
+            "{out}"
+        );
+        assert!(!out.contains("CAPABILITY"), "{out}");
+        assert!(
+            !out.contains("## lsp") && !out.contains(INSTRUCTIONS),
+            "{out}"
+        );
+        assert!(out.contains("mcp_servers.rimz.command="), "{out}");
+    }
 }
 
 /// Codex hands the server only the variables its entry's `env_vars` names, so
