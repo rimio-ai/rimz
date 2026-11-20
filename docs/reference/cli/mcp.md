@@ -14,16 +14,16 @@ rimz mcp serve [--only <capability>]... [--always <capability>]... [--deferred <
 
 ## Tools
 
-Each tool call runs one `rimz` command as the agent that started the server, in that agent's home and room, and returns the command's output. A capability shares its name with the skill that teaches the same commands.
+Each tool call runs one `rimz` command as the agent that started the server, in that agent's home and room, and returns the command's output. A capability shares its name with the skill that teaches the same commands, and its tools' descriptions carry that skill's usage knowledge for the options the tools expose: the `lsp` target forms and result cap, the `wait` triggers and `when` grammar, the `notes_list` filter fields, and when to book a stop. The server's `instructions` say when to reach for each group of tools and how a call runs. `rimz agents explain <profile> --mcps` prints all of that text as one launch is served it.
 
 | Capability | Tool | Arguments | Command |
 | --- | --- | --- | --- |
 | `rimz-lsp` | `lsp` | `verb` (`def`, `hover`, `refs`, `callers`, `callees`, `impl`, `symbols`, `find`, `show`, `check`), `targets[]`; optional `all`, `no_tests`, `external`, `limit`, `full`, `fix`, `hints`, `server` (ignored by `check`), `cwd` | `rimz lsp <verb> [flags] -- <targets>` |
-| `rimz-wait` | `wait` | one trigger of `run`, `check`, `file`, `pid`, `when[]`, `in`, `at`; optional `grep`, `every`, `on` (`fail`, `success`, `any`), `label`, `check_in`, `cwd` | `rimz wait --<trigger>=<value> ...` |
+| `rimz-wait` | `wait` | `trigger` (`run`, `check`, `file`, `pid`, `when`, `in`, `at`) and its `value`, a string; optional `grep`, `every`, `on` (`fail`, `success`, `any`), `label`, `check_in`, `cwd` | `rimz wait --<trigger>=<value> ...` |
 | `rimz-wait` | `wait_list` | none | `rimz wait list` |
 | `rimz-wait` | `wait_cancel` | `name`, or `all` | `rimz wait cancel -- <name>`, or `rimz wait cancel --all` |
 | `rimz-control` | `self_stop` | optional `when_idle` (a duration, or `off`) | `rimz agents stop --when-idle[=<value>] -- @me` |
-| `rimz-control` | `self_compact` | optional `instruction` | `rimz agents compact -- @me [instruction]` |
+| `rimz-control` | `self_compact` | optional `instruction`, `no_continue` | `rimz agents compact [--no-continue] -- @me [instruction]` |
 | `rimz-control` | `self_tune` | optional `setting` (`keep-warm`, `idle-compact`, `smart-compact`), optional `value` (only with `setting`) | `rimz agents tune -- @me [setting] [value]` |
 | `rimz-notes` | `notes_add` | `kind`, `title`, and `body` or `file`, not both; optional `fence`, `meta{}` (keys without `=`), `cwd` | `rimz notes add [flags] -- <kind> <title>`, with `body` on stdin |
 | `rimz-notes` | `notes_list` | optional `filter[]`, `limit` | `rimz notes list [flags]` |
@@ -39,16 +39,16 @@ rimz mcp tools [--only <capability>]... [--json]
 ```console
 $ rimz mcp tools
 CAPABILITY    TOOL          TOKENS
-rimz-lsp      lsp             ~425
-rimz-wait     wait            ~418
-rimz-wait     wait_list        ~36
-rimz-wait     wait_cancel      ~86
-rimz-control  self_stop       ~107
-rimz-control  self_compact     ~68
-rimz-control  self_tune       ~127
-rimz-notes    notes_add       ~239
-rimz-notes    notes_list      ~111
-total: ~1617 tokens in 9 tools
+rimz-lsp      lsp            ~1204
+rimz-wait     wait           ~1227
+rimz-wait     wait_list        ~46
+rimz-wait     wait_cancel     ~135
+rimz-control  self_stop       ~283
+rimz-control  self_compact    ~140
+rimz-control  self_tune       ~251
+rimz-notes    notes_add       ~405
+rimz-notes    notes_list      ~359
+total: ~4050 tokens in 9 tools
 ```
 
 Every command a tool runs is on the [routine list](../agent-support.md) an installed agent runs without asking. The commands themselves are documented on their own pages: [Language servers](./lsp.md), [Wait](./wait.md), [Agents](./agents.md), and [Notes](./notes.md).
@@ -58,8 +58,8 @@ Every command a tool runs is on the [routine list](../agent-support.md) an insta
 - Each call runs `rimz --color=never` with the command's words, flag values joined as `--flag=value`, and every positional after `--`, so no argument an agent passes is read as a flag. The command never gets `--root` or `--json`.
 - `cwd` sets the command's working directory; without it the command runs in the server's directory, the directory the agent launched in. For `notes_add`, an agent's room pin names the note's project ahead of `cwd`.
 - The command's stdin is empty, except for `notes_add`, whose `body` reaches it byte for byte.
-- The result's text is the command's stdout followed by its stderr. A command that exits nonzero returns an error result whose last line is `exit code <N>`, since the [LSP exit codes](./lsp.md#exit-codes) carry meaning.
-- The server checks the shape of the arguments (their types, required fields, and enum values) and refuses four combinations the command would misread: a `wait` with no trigger, which the command reads as a listing; a `self_tune` `value` without a `setting`; a `notes_add` with both `body` and `file`; and a `notes_add` `meta` key containing `=`. Such arguments return an error result without running anything. Which flag fits which verb, and the single trigger a `wait` takes, are the command's own rules, and its usage error comes back as the error result.
+- The result's text is the command's stdout, then, when the command wrote to stderr, a line `stderr:` and its stderr. A command that exits nonzero returns an error result whose last line is `exit code <N>`, since the [LSP exit codes](./lsp.md#exit-codes) carry meaning.
+- The server checks the shape of the arguments (their types, required fields, and enum values), so a `wait` without its `trigger` or its `value` never runs (without a trigger, the command would read the call as a listing). It also refuses three combinations the command would misread: a `self_tune` `value` without a `setting`, a `notes_add` with both `body` and `file`, and a `notes_add` `meta` key containing `=`. Such arguments return an error result starting `invalid arguments:` without running anything. Which flag fits which verb or trigger, and what a `value` must hold (a `pid` value that is not a number, say), are the command's own rules, and its usage error comes back as the error result.
 - Calls run at the same time, so a later call can answer first. A cancelled call's command is killed and the call gets no reply.
 - The server adds no timeout and no output cap.
 
@@ -69,7 +69,7 @@ The server speaks newline-delimited JSON-RPC 2.0 on stdin and stdout, and writes
 
 | Method | Reply |
 | --- | --- |
-| `initialize` | The tools capability, `serverInfo` named `rimz`, a one-line `instructions`, and the client's protocol version when it is `2025-06-18` or `2025-11-25`, else `2025-11-25` |
+| `initialize` | The tools capability, `serverInfo` named `rimz`, `instructions` whose first line says when to reach for each group of tools and whose other lines say how a call runs and what its result holds, and the client's protocol version when it is `2025-06-18` or `2025-11-25`, else `2025-11-25` |
 | `ping` | `{}` |
 | `tools/list` | The served tools, each with its JSON Schema, and `_meta` on the tools of a capability `--always` or `--deferred` names |
 | `tools/call` | The call's result; an unknown or unserved tool is error `-32602` |
@@ -80,7 +80,7 @@ A line that is not JSON gets error `-32700`, and the server goes on reading. The
 
 ## Launch registration
 
-RimZ hands its server to a Claude or Codex launch when `[agents] rimz-mcp-server` is on (the default, set in the [machine config](../../guide/configuration.md#rimz-tools-over-mcp)) and the profile's `mcps` list is absent or holds `*`, `rimz`, or at least one capability. The server's command is the room's `rimz` link, so it survives `rimz update`. Every spawn path does the same, and `rimz agents explain <profile> --mcps` prints the servers, tools, load modes, and arguments one launch gets ([explain a launch](./agents.md#explain-a-launch)).
+RimZ hands its server to a Claude or Codex launch when `[agents] rimz-mcp-server` is on (the default, set in the [machine config](../../guide/configuration.md#rimz-tools-over-mcp)) and the profile's `mcps` list is absent or holds `*`, `rimz`, or at least one capability. The server's command is the room's `rimz` link, so it survives `rimz update`. Every spawn path does the same, and `rimz agents explain <profile> --mcps` prints the servers, tools, load modes, and arguments one launch gets, then the instructions and each tool's description and schema as the server sends them ([explain a launch](./agents.md#explain-a-launch)).
 
 - **Claude** gets one `--mcp-config` holding the `rimz` server, after every other provider argument and before the `--` that precedes a prompt, since the flag takes several values. With [`allow-routine-rimz`](../../guide/configuration.md#routine-rimz-commands) on, `mcp__rimz__*` joins `permissions.allow` in the launch's `--settings`, so the tools run without asking; with it off, Claude asks before each call.
 - **Codex** gets `-c mcp_servers.rimz.*` overrides: the command and its arguments, `--parent-env` among them, `env_vars` naming every variable RimZ spawns Codex with (Codex clears a server's environment to a few names otherwise), `tool_timeout_sec=600`, and `default_tools_approval_mode` set to `"approve"` with `allow-routine-rimz` on and `"prompt"` with it off. The `env_vars` names are collected before the user's login shell runs its startup files, so on Linux and macOS `--parent-env` takes what those files export from Codex's own environment; elsewhere the commands see the `env_vars` set alone.
