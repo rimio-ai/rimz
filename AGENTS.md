@@ -4,22 +4,22 @@
 
 ## How to read this contract
 
-An **invariant** is a product promise, an architectural boundary that a `cargo xtask invariants` grep enforces, or a durability rule, and each one is marked. Change one deliberately, in its own commit, with the doc and the gate moving together. Everything else is a default: depart from it when the work argues otherwise, and say why in the PR or hand-off. When this file and the code disagree, follow the code, then fix the file in the same change.
+An **invariant** is a product promise, an architectural boundary that `cargo xtask invariants` enforces, or a durability rule, and each one is marked. Change one deliberately, in its own commit, with the doc and the gate moving together. Everything else is a default: depart from it when the work argues otherwise, and say why in the PR or hand-off. The invariants are the goal, and the rest describes the current state: where a description and the code disagree, follow the code and fix the file in the same change; where the code breaks an invariant, the code is wrong.
 
-Every `AGENTS.md` is in its reader's window on every turn, so each holds only what all work under its directory needs, and this root only what work of every kind needs. A trap tied to one function or type goes in that item's doc comment, where whoever edits it reads it. A rule for changes inside one tree goes in that tree's `AGENTS.md`. A rule for one kind of change goes in the contributing page that owns that kind, as a bullet in the section whose trigger it shares, and the `AGENTS.md` of the tree where such a change is made routes to that section.
+Every `AGENTS.md` is in its reader's window on every turn, so each holds only what all work under its directory needs, and this root only what work of every kind needs. A trap tied to one function or type goes in that item's doc comment. A rule for one tree goes in that tree's `AGENTS.md`. A rule for one kind of change goes in the contributing page that owns that kind, and the `AGENTS.md` of the tree where such a change is made routes to it.
 
 ## Product invariants
 
-Every bullet here is an invariant, a promise the product is built on. A change to one is a product decision, not an implementation detail.
+Every bullet here is an invariant, and a change to one is a product decision. [DESIGN.md](./DESIGN.md) gives the reasons.
 
 - **Durability first.** Correctness lives in durable records, CAS rules, nonces, and per-request sockets. Wakeups and pane reads are latency, never truth. Every durable write follows the [store durability contract](./docs/internals/store.md).
 - **Only agents ask.** Whatever reaches the user is an agent asking in its own pane. Automation never holds the user's attention itself, and no automation surface moves outside the two named exceptions ([DESIGN.md](./DESIGN.md#invariants)).
 - **Automation is accountable.** User-benefiting automation appends durable assist records and surfaces in `rimz stats`; internal repairs keep durable diagnostic records ([loops.md](./docs/internals/harness/loops.md#the-assist-log), [diagnostics.md](./docs/internals/diagnostics.md)).
-- **One interface language.** Every human-facing surface resolves color through the [shared theme core](./docs/internals/theme.md); invariants enforce the renderer boundaries.
-- **Hook stdout is the decision channel.** Logs go to stderr or RimZ state logs; hook helper children get fresh stdio.
+- **One interface language.** Every human-facing surface resolves color through the [shared theme core](./docs/internals/theme.md).
+- **Hook stdout is the decision channel.** Logs go to stderr or RimZ state logs.
 - **Cross-backend parity.** Zellij and tmux are first-class; core behaviour never depends on a backend-only feature.
-- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives, and `message` routes human text through the same send path. Pane reads stay in five places, which `cargo xtask invariants` admits: rendering, explicit `pane capture` calls, explicit `rimz agents show --capture` calls, a failed supervised run's tail capture before cleanup, and Codex turn-death confirmation.
-- **Transcript origin is explicit.** RimZ-introduced text never renders as the user merely because it lacks a header ([contract and remaining launch gap](./docs/internals/harness/transcript.md#writing-entries)). `rimz pane send` is the boundary: the raw keystroke primitive carries no record by design, and its caller is the author.
+- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives, and `message` routes human text through the same send path. Core code reads a pane only at the sites `cargo xtask invariants` admits.
+- **Transcript origin is explicit.** RimZ-introduced text never renders as the user merely because it lacks a header ([transcript.md](./docs/internals/harness/transcript.md#writing-entries)).
 - **Sidebar is read-only on the store.** Store-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
 - **Security surfaces stay visible.** Project trust, notification handlers, hook install diffs, provider folder-trust grants, pack install summaries and update holds, and privacy settings are product behaviour.
@@ -28,51 +28,38 @@ Every bullet here is an invariant, a promise the product is built on. A change t
 
 The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/rust-conventions.md) is its authority.
 
-- `unwrap`, `expect`, and panics belong in tests, build scripts, and provably impossible states, with a comment naming why the state is impossible.
-- Unsafe code is denied outside two `#[expect(unsafe_code, reason = "...")]` sites: the jemalloc configuration in `crates/rimz/src/main.rs` and the bench-only counting allocator in `crates/rimz/benches/fleet.rs`. A third site is a design decision.
-- rustfmt leaves comments, macro calls it cannot parse, and expressions it cannot fit as written, and no gate catches them: wrap each by hand to the width of the code around it, at most 100 columns ([rust-conventions.md](./docs/contributing/rust-conventions.md#quality-gates)). A harness rule against hard-wrapping prose covers messages and Markdown, not source comments.
+- **Fail-fast at the point of use.** The room always opens: a configuration problem warns at entry, the room runs as if that setting were absent, and the room's record keeps the warning for the sidebar and `rimz doctor`. A configured capability that cannot work fails with the fix at the command that uses it, and that command never reads a broken setting as absent where that would change the account it runs on. Best-effort is for latency and enrichment, never for a precondition the user switched on. The settled cases sit in the subsystem contracts as `Fail-fast, settled` bullets.
+- `unwrap`, `expect`, and panics belong in tests, build scripts, and provably impossible states, with a comment naming why the state is impossible. Unsafe code is denied, and a new site is a design decision.
+- Wrap source comments by hand to the width of the code around them, at most 100 columns: rustfmt leaves them as written and no gate catches them. A harness rule against hard-wrapping prose covers messages and Markdown, not source comments.
 - A refactor you noticed on the way becomes a note unless it blocks you.
 - Python helpers run under `uv`.
-- `AGENTS.md` and `CLAUDE.md` are one file per directory, joined by symlink. Edit `AGENTS.md`, since tools refuse to write through the `CLAUDE.md` link, and give a new `AGENTS.md` its `CLAUDE.md` link.
+- `AGENTS.md` and `CLAUDE.md` are one file per directory, joined by symlink. Edit `AGENTS.md`, and give a new one its `CLAUDE.md` link.
 - Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes. A new `disk/` module also gets a row in the Disk module table of `docs/internals/store.md`.
 - Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request: it is written as a standalone change once the work merges.
 - `examples/` is sample configuration for users to copy. Do not read it unless the user asks, and do not treat it as authority on behaviour.
 - A change to any Markdown file follows [docs/AGENTS.md](./docs/AGENTS.md).
 
-Two invariants sit underneath the house style:
-
-- **Classed room paths.** Room state and runtime paths are constructed only by the disk path module; the classed-path invariant rejects callers assembling paths from room roots outside tests.
-- **Fail-fast at the point of use.** The room always opens. A configuration problem (an unreadable file, an invalid value, a broken account, a plugin manifest, a remote-control blocker) warns at entry, the room runs as if that setting were absent, and the room's record keeps the warning for the sidebar and `rimz doctor`. A configured capability that cannot work fails with the fix at the command that uses it (an agent launch, a team, a subagent, a loop fire), and that command never reads a broken setting as absent where that would change the account it runs on. Best-effort is for latency and enrichment (sidebar wakeups, app-server context), never for a precondition the user switched on. The settled cases sit in the subsystem contracts as `Fail-fast, settled` bullets.
-
 ## Before a change
 
 These hold for a change anywhere in the tree, and no gate catches a skipped one.
 
-- **Rule on every writer and reader.** Before you change a predicate, filter, guard, lookup, or default, or when a field is set or cleared, list every site that writes the value and every site that reads it (`rimz lsp refs`, `rimz lsp callers`), counting the rows other paths synthesize and every launch path a launch default reaches, and rule what each does under the new rule.
+- **Rule on every writer and reader.** Before you change a predicate, filter, guard, lookup, or default, or when a field is set or cleared, list every site that writes the value and every site that reads it (`rimz lsp refs`, `rimz lsp callers`), and decide what each does under the new rule.
 - **One agent is one launch id.** A match that decides whether two rows are the same agent compares launch ids, never `(kind, session id)`.
-- **Prove timing at the consumer.** An event or timing fix is proven at the consumer's decision point: that the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time. Work placed between a decision and the action it gates makes the decision stale, so read it again after the work. [Timestamps and clocks](./docs/contributing/rust-conventions.md#timestamps-and-clocks) holds the rules for stamps, cadences, and deadlines.
-- **Sweep the sentences you made false.** A changed rule, a renamed identifier, a set that gains a member, a changed output, path, argv, or refusal: before hand-off, grep the old words, by stem rather than phrase, across `docs/`, every `AGENTS.md`, rustdoc and comments, tests, and the `refactor-target.toml` verdicts, and fix each hit.
-- **Run the tests that name what you changed.** A test outside the modules you edited can pin the old behaviour: grep `crates/rimz/src` and `crates/rimz/tests` for the field, command, or message you changed and run each module that names it. [Tests outside the change](./docs/contributing/running-gates.md#tests-outside-the-change) lists the subtler pins.
+- **Prove timing at the consumer.** That the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time. Work placed between a decision and the action it gates makes the decision stale, so read it again after the work ([Timestamps and clocks](./docs/contributing/rust-conventions.md#timestamps-and-clocks)).
+- **Sweep the sentences you made false.** After a changed rule, name, set, output, path, argv, or refusal, grep the old words, by stem rather than phrase, across `docs/`, every `AGENTS.md`, rustdoc and comments, tests, and the `refactor-target.toml` verdicts, and fix each hit before hand-off.
+- **Run the tests that name what you changed.** A test outside the modules you edited can pin the old behaviour: grep `crates/rimz/src` and `crates/rimz/tests` for the field, command, or message you changed and run each module that names it ([Tests outside the change](./docs/contributing/running-gates.md#tests-outside-the-change)).
+
 ## Testing
 
-The gate stack, the test tiers, and the one-home rule for a module's unit tests live in [rust-conventions.md](./docs/contributing/rust-conventions.md).
+[rust-conventions.md](./docs/contributing/rust-conventions.md#quality-gates) defines the gate stack and the test tiers, and [running-gates.md](./docs/contributing/running-gates.md) has one section per trap of the runner.
 
-### Running gates and tests
-
-- While iterating, run `cargo fmt --all`, then `cargo xtask check` followed by `cargo xtask lint` (`check` is singular; `checks` is the non-test gate composite). Add `cargo xtask doc` for a change that adds or edits rustdoc: neither denies rustdoc warnings.
-- Run `cargo xtask gate` before a PR or hand-off: `--keep-going` reports every failure in one pass, and `--check` verifies formatting instead of applying it. On a cold or loaded tree the gate's 15-minute budget trips inside the test step, so run it there as `RIMZ_XTASK_TIMEOUT=90m cargo xtask gate`. When the test step still times out, rerun that step alone with `cargo xtask test --profile gate --no-fail-fast`.
-- Run one Cargo-family command at a time in a worktree. A Cargo process from another worktree queues yours on the shared target directory, so start your command and let it queue; do not wait for that process to end.
-- Start a background gate or test run from an agent pane (by a `rimz wait --run` watcher, or with a trailing `&`) as `setsid --wait <command>`; otherwise its launch and sandbox tests time out: [Background runs](./docs/contributing/running-gates.md#background-runs).
-- From a room shell, run tests only through `cargo xtask test` or `cargo xtask stress`, never a bare `cargo test`, `cargo nextest run`, or a loop over `target/*/deps/` binaries: the `cli/` unit tests and the integration binary resolve the shell's `RIMZ_HOME`/`HOME`/`XDG_*`.
-- Run no `cargo xtask stress` batch, mass repeat, or parallel copies of a test, on any test in any crate, unless the user asks or allows it: the host is shared. [Live tests and flakes](./docs/contributing/running-gates.md#live-tests-and-flakes) says how to triage a flake without that leave.
-- Escalate past `gate` to the journey (`cargo xtask test -P journey`), live-backend and `journey::deep` (`cargo xtask test -P live`), performance (`cargo xtask perf`), or dependency (`cargo xtask externals`) gates, or to full CI (`cargo xtask ci`), when the change touches those surfaces, their fixtures, or shared infrastructure. A test's profile is set by the filters in `.config/nextest.toml`, not by its directory: get the exact name from `cargo xtask test --list <fragment>` and match it against those filters.
-- A rebase runs no hook: before you rebase, read [Rebasing](./docs/contributing/running-gates.md#rebasing). [running-gates.md](./docs/contributing/running-gates.md) has one section for each other trap of the runner: naming a test, what `check` and `lint` hide, the surface ratchet (also read before a plan routes a call into another module), tests outside the change, this worktree's binary and scratch worktrees, live runs and flakes, a gate in a Codex agent's shell, cross-target checks, and timing comparisons.
-- Before building a tmux, Zellij, git, sshd, or provider CLI probe by hand, isolating a home, or running a branch binary against real state, read the matching section of [probes.md](./docs/contributing/probes.md).
-- **Invariant.** `cargo xtask invariants` greps tracked text, Rust and Markdown alike. An `AGENTS.md` inside a guarded subtree is scanned with it: describe a boundary in prose and leave the banned path unwritten. A new untracked file escapes both `invariants` and `gate` until the pre-commit hook rejects it, so stage new files with `git add -N` before running either.
-
-### Writing tests
-
-- An inline `mod tests` over 500 lines fails the pre-commit invariant; move the whole module to a sibling `tests.rs`, in the same change when an edit leaves it within about 20 lines of the cap.
+- While iterating, run `cargo fmt --all`, then `cargo xtask check`, then `cargo xtask lint`, and `cargo xtask doc` when you touched rustdoc.
+- Run `cargo xtask gate` before a PR or hand-off. On a cold or loaded tree its 15-minute budget trips, so run it there as `RIMZ_XTASK_TIMEOUT=30m cargo xtask gate`. Escalate past it (journey, live, perf, externals, full CI) when the change touches those surfaces, their fixtures, or shared infrastructure.
+- Run one Cargo-family command at a time in a worktree. When another worktree's Cargo process holds the lock, start yours and let it queue.
+- From a room shell, run tests only through `cargo xtask test` or `cargo xtask stress`, never a bare `cargo test`, `cargo nextest run`, or a test binary: those resolve the shell's `RIMZ_HOME`/`HOME`/`XDG_*`.
+- Run no stress batch, mass repeat, or parallel copies of a test unless the user asks or allows it: the host is shared.
+- `cargo xtask invariants` greps tracked text, Rust and Markdown alike, each `AGENTS.md` included: describe a boundary in prose and leave the banned path unwritten. It does not see an untracked file, so stage new files with `git add -N` first.
+- Read the matching section of [running-gates.md](./docs/contributing/running-gates.md) before you [rebase](./docs/contributing/running-gates.md#rebasing), start a gate or test run [in the background](./docs/contributing/running-gates.md#background-runs) or from a Codex shell, name one test or pick its profile, add a `pub` item or a cross-module call, touch platform-gated code, read a [flake](./docs/contributing/running-gates.md#live-tests-and-flakes), or compare timings. Read [probes.md](./docs/contributing/probes.md) before you build a mux, git, sshd, or provider probe by hand, isolate a home, or run a branch binary against real state.
 - Capture planned behaviour in the owning doc and add the executable test when the implementation can make it pass. An ignored test standing in for a future product target does not land.
 - A change that deletes a test lists the inputs it covered and carries each into a surviving test, or names the dropped input in the hand-off.
 
