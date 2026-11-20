@@ -193,7 +193,7 @@ pub enum DefinitionCause {
 fn missing_kind_base(home: &Path, kind: &str) -> String {
     format!(
         "whose kind base is missing — create {} with a nonempty body, the system prompt every \
-         {kind} definition starts from",
+         {kind} definition starts from, or install a provider pack that ships agents/{kind}.md",
         home.join("agents").join(format!("{kind}.md")).display()
     )
 }

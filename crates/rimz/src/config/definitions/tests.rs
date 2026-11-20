@@ -351,7 +351,8 @@ fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
     assert!(
         message.contains("codex")
             && message.contains("claude")
-            && message.contains("base is missing"),
+            && message.contains("base is missing")
+            && message.contains("or install a provider pack that ships agents/codex.md"),
         "{message}"
     );
 }
@@ -3374,7 +3375,8 @@ fn prompt_taking_kinds_require_their_base_body_or_not() {
     );
     let missing = format!(
         "runs on claude, whose kind base is missing — create {} with a nonempty body, \
-         the system prompt every claude definition starts from",
+         the system prompt every claude definition starts from, or install a provider pack that \
+         ships agents/claude.md",
         root.path().join("agents/claude.md").display()
     );
     error(root.path(), &missing);
@@ -3390,7 +3392,8 @@ fn prompt_taking_kinds_require_their_base_body_or_not() {
     definition(root.path(), "agents/runner.md", "agent: opencode", "");
     let missing = format!(
         "runs on opencode, whose kind base is missing — create {} with a nonempty body, \
-         the system prompt every opencode definition starts from",
+         the system prompt every opencode definition starts from, or install a provider pack \
+         that ships agents/opencode.md",
         root.path().join("agents/opencode.md").display(),
     );
     error(root.path(), &missing);
