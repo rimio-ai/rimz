@@ -293,6 +293,73 @@ fn redeem_preview_shows_a_lifted_window_without_a_redeem_line() {
     assert!(row("5h:").unwrap().contains("∞ not enforced now"), "{text}");
     assert!(row("redeem 5h").is_none(), "{text}");
     assert!(row("redeem 7d").unwrap().contains("refills now"), "{text}");
+    assert!(row("spends").is_none(), "Codex selects no grant: {text}");
+}
+
+#[test]
+fn redeem_preview_names_the_selected_grant_and_refills_only_the_windows_it_clears() {
+    let soon = now() + Duration::from_secs(3600);
+    let own = now() + Duration::from_secs(2 * 86_400);
+    let both = ["five_hour", "seven_day"];
+    for (clears, weekly) in [(&both[..1], false), (&both[..], true)] {
+        let grants = vec![
+            rimz::agents::ResetGrant {
+                count: 1,
+                expiry: Some(soon),
+                label: Some("Other grant".to_owned()),
+                clears: both.map(str::to_owned).to_vec(),
+                ..Default::default()
+            },
+            rimz::agents::ResetGrant {
+                count: 1,
+                expiry: Some(own),
+                label: Some("Fable\nreset".to_owned()),
+                clears: clears.iter().map(|clear| (*clear).to_owned()).collect(),
+                selected: true,
+                usable_now: true,
+                ..Default::default()
+            },
+        ];
+        let credits = ResetCredits {
+            count: 2,
+            soonest_expiry: Some(soon),
+            expiries: vec![soon, own],
+            effect: RedeemEffect::KeepsSchedule,
+            grants,
+        };
+        let mut stream = anstream::StripStream::new(Vec::new());
+        write_redeem_preview(
+            &mut stream,
+            &key("claude", "default"),
+            &credits,
+            &[
+                window(FIVE_HOURS, Some(80), Some(3600)),
+                window(SEVEN_DAYS, Some(40), Some(6 * 86_400)),
+            ],
+            Some(RedeemForecast::Armed),
+            Duration::from_secs(72 * 3600),
+            now(),
+        )
+        .unwrap();
+        let text = String::from_utf8(stream.into_inner()).unwrap();
+        let row = |label: &str| {
+            text.lines()
+                .find(|line| line.trim_start().starts_with(label))
+        };
+        let spends = row("spends:").unwrap();
+        assert!(
+            spends.contains("Fable reset; expires in 2d") && !spends.contains("Other grant"),
+            "{text}"
+        );
+        assert!(row("redeem 5h").unwrap().contains("refills now"), "{text}");
+        let weekly_row = row("redeem 7d").unwrap();
+        assert_eq!(weekly_row.contains("refills now"), weekly, "{text}");
+        assert_eq!(
+            weekly_row.contains("not refilled by this grant"),
+            !weekly,
+            "{text}"
+        );
+    }
 }
 
 #[test]

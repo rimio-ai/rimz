@@ -12,7 +12,9 @@ use clap::{Args, Subcommand};
 use jiff::Timestamp;
 use rimz::RuntimePaths;
 use rimz::agents::account::RedemptionCode;
-use rimz::agents::{LoginCatalog, ProviderLogin, RateLimitWindow, RedeemEffect, ResetCredits};
+use rimz::agents::{
+    LoginCatalog, ProviderLogin, RateLimitWindow, RedeemEffect, ResetCredits, ResetGrant,
+};
 use rimz::config::{AccountHistory, AccountsConfig, ConfigEditor, MachineConfig, NamedAccount};
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::harness::auto_redeem::{RedeemReport, prepare_manual_redeem, supports_kind};
@@ -267,6 +269,7 @@ fn redeem(
         writeln!(std::io::stderr().lock(), "nothing spent")?;
         return Ok(());
     }
+    let spent_label = selected_grant(&preview.credits).map(grant_label);
     let request_id = uuid::Uuid::now_v7();
     let read_at_ms = rimz::utils::time::unix_now_ms();
     let redeemed = match preview.consume(&runtime, &key, request_id) {
@@ -298,7 +301,11 @@ fn redeem(
         .report
         .outcome
         .expect("a completed consume has an outcome");
-    writeln!(out, "{key}: {}", outcome.as_str())?;
+    let spent = spent_label
+        .filter(|_| outcome == RedemptionCode::Reset)
+        .map(|label| format!(" (spent {label})"))
+        .unwrap_or_default();
+    writeln!(out, "{key}: {}{spent}", outcome.as_str())?;
     out.flush()?;
     let code = redeem_exit_code(outcome);
     if code != 0 {
@@ -339,6 +346,23 @@ fn write_redeem_preview(
         "credits",
         render::cell(format!("{}{expiry}", credits.count)),
     );
+    let selected = selected_grant(credits);
+    if let Some(grant) = selected {
+        let expiry = grant.expiry.map_or_else(
+            || "expiry unknown".to_owned(),
+            |expiry| {
+                format!(
+                    "expires {} ({})",
+                    render::rel_until(expiry, now),
+                    format_local_timestamp(expiry)
+                )
+            },
+        );
+        rows.push(
+            "spends",
+            render::cell(format!("{}; {expiry}", grant_label(grant))),
+        );
+    }
     for window in windows {
         if window.lifted {
             rows.push(
@@ -361,6 +385,17 @@ fn write_redeem_preview(
         );
     }
     for window in windows.iter().filter(|window| !window.lifted) {
+        if selected.is_some_and(|grant| {
+            !window
+                .duration_mins
+                .is_some_and(|mins| grant.clears_window(mins))
+        }) {
+            rows.push(
+                format!("redeem {}", rimz::theme::fmt::window_label(window)),
+                render::cell("not refilled by this grant"),
+            );
+            continue;
+        }
         let effect = match credits.effect {
             RedeemEffect::RestartsWindow => {
                 // The harness projects only the duration-bearing 5h and 7d windows.
@@ -422,6 +457,19 @@ fn write_redeem_preview(
         render::cell(format!("{forecast}, if the longest window ran dry now")),
     );
     rows.render(w)
+}
+
+/// The grant the provider's next redemption claims; Codex selects none.
+fn selected_grant(credits: &ResetCredits) -> Option<&ResetGrant> {
+    credits.grants.iter().find(|grant| grant.selected)
+}
+
+fn grant_label(grant: &ResetGrant) -> String {
+    grant
+        .label
+        .as_deref()
+        .and_then(rimz::agents::single_line_description)
+        .unwrap_or_else(|| "unlabelled grant".to_owned())
 }
 
 fn append_manual_report(

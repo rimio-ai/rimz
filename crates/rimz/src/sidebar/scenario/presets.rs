@@ -1806,16 +1806,30 @@ fn add_redeem_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             spend_tally(12.0, 640_000, 2),
             now,
         );
+        let expiry = now + std::time::Duration::from_secs(expiry_hours * 3_600);
+        // Claude's marker judges the selected grant alone; Codex reports none.
+        let grants = if kind == "codex" {
+            Vec::new()
+        } else {
+            vec![crate::agents::ResetGrant {
+                count,
+                expiry: Some(expiry),
+                clears: vec!["five_hour".to_owned(), "seven_day".to_owned()],
+                selected: true,
+                usable_now: true,
+                ..Default::default()
+            }]
+        };
         panel.reset_credits = Some(crate::ResetCredits {
             count,
-            soonest_expiry: Some(now + std::time::Duration::from_secs(expiry_hours * 3_600)),
+            soonest_expiry: Some(expiry),
             expiries: Vec::new(),
             effect: if kind == "codex" {
                 crate::agents::RedeemEffect::RestartsWindow
             } else {
                 crate::agents::RedeemEffect::KeepsSchedule
             },
-            grants: Vec::new(),
+            grants,
         });
         panel.redeem_forecast = Some(forecast);
         panel
