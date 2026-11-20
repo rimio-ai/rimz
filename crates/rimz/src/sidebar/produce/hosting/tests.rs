@@ -573,3 +573,56 @@ fn an_absent_session_hosts_nothing_and_any_other_listing_failure_is_an_error() {
     );
     assert!(matches!(failed, Err(ProduceErr::PaneDiscovery(_))));
 }
+
+/// A pane of `tab`: the sidebar, a tiled pane, or a floating one.
+fn in_tab(id: &str, tab: &str, command: &str, is_floating: bool) -> crate::pane::PaneRef {
+    let mut pane = test_support::pane(id, Some(command), Some("/repo/main"));
+    pane.view_id = Some(tab.to_owned());
+    pane.is_floating = is_floating;
+    pane
+}
+
+#[test]
+fn a_tab_closes_only_beside_another_with_every_working_pane_a_target_and_no_caller_in_it() {
+    let fixture = Fixture::new();
+    let sidebar = crate::pane::SIDEBAR_CHROME_TITLE;
+    let id = |raw: &str| PaneId::from_parts(MuxName::Zellij, raw);
+    let tab = vec![
+        in_tab("terminal_1", "tab_1", sidebar, false),
+        in_tab("terminal_7", "tab_1", "claude", false),
+        in_tab("terminal_8", "tab_1", "sh", false),
+        in_tab("terminal_11", "tab_1", "sh", true),
+    ];
+    let mut beside = tab.clone();
+    beside.push(in_tab("terminal_9", "tab_2", "claude", false));
+    let read = fixture.read(Vec::new(), beside.clone());
+    let both = [id("terminal_7"), id("terminal_8")];
+    assert_eq!(read.tab_anchor(&both, None), Some(&both[0]));
+    assert_eq!(
+        read.tab_anchor(&both[..1], None),
+        None,
+        "terminal_8 is a working pane no target names"
+    );
+    assert_eq!(
+        read.tab_anchor(&both, Some(&id("terminal_9"))),
+        Some(&both[0])
+    );
+    assert_eq!(read.tab_anchor(&both, Some(&id("terminal_11"))), None);
+
+    let mut last = beside;
+    last.retain(|pane| pane.pane_id != id("terminal_8"));
+    let read = fixture.read(Vec::new(), last);
+    assert!(read.closing_empties_tab(&id("terminal_7"), None));
+    assert!(!read.closing_empties_tab(&id("terminal_7"), Some(&id("terminal_1"))));
+
+    let read = fixture.read(Vec::new(), tab.clone());
+    assert_eq!(
+        read.tab_anchor(&both, None),
+        None,
+        "the session's only tab is never closed"
+    );
+    let mut sole = tab;
+    sole.retain(|pane| pane.pane_id != id("terminal_8"));
+    let read = fixture.read(Vec::new(), sole);
+    assert!(!read.closing_empties_tab(&id("terminal_7"), None));
+}

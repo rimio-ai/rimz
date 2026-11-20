@@ -4149,7 +4149,8 @@ path = "crates/rimz/src/sidebar"
 # refresh::read_provider_accounts and its refresh re-export let `accounts list` re-read the
 # record after its own usage refresh (+2).
 # HostingRead::closing_empties_tab answers the Alt+x tab close from the gating read.
-surface-budget = 266
+# HostingRead::tab_anchor picks the listed pane the Alt+Shift+X tab close closes by (+1).
+surface-budget = 267
 
 [[verdict]]
 kind = "item"
@@ -5165,7 +5166,8 @@ path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # StopTerms and stop_resolved_with (+2).
 # Command::is_launch, check_loop_launch and cohort_place_flag let `loop add` check an agent or team tail through the launch's own parser (+3).
 # stop_run_agent stops a run's agent for `loop stop`, the workflow host and the run-id stop (+1).
-surface-budget = 35
+# TabClose is the tab close a sidebar card key sets on StopTerms (+1).
+surface-budget = 36
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"

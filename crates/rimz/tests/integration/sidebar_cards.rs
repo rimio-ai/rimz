@@ -815,6 +815,11 @@ fn agents_stop_of_a_tabs_last_working_pane_closes_only_the_pane() {
 /// A tab of two agents, a shell, and a floating pane beside its sidebar, next to another
 /// agent's tab and the dashboard, with the one client focused on `focus`.
 fn tab_command(env: &Env, focus: Option<&str>) -> Command {
+    tab_command_in(env, focus, true)
+}
+
+/// [`tab_command`], with the other two tabs only when `other_tabs` holds.
+fn tab_command_in(env: &Env, focus: Option<&str>, other_tabs: bool) -> Command {
     let pane = |id: u64, tab: u64, extra: Value| {
         let mut row = json!({"id": id, "is_plugin": false, "tab_id": tab});
         row.as_object_mut()
@@ -831,9 +836,10 @@ fn tab_command(env: &Env, focus: Option<&str>) -> Command {
         pane(9, 2, json!({"pane_command": "claude"})),
         pane(5, 3, json!({"pane_command": "sh", "tab_name": "rimzd"})),
     ];
+    let rows = if other_tabs { &rows[..] } else { &rows[..5] };
     std::fs::write(
         env.home_root.join("panes.json"),
-        serde_json::to_vec(&rows).unwrap(),
+        serde_json::to_vec(rows).unwrap(),
     )
     .unwrap();
     let mut command = command(env, &["close", "--tab"]);
@@ -857,6 +863,72 @@ fn agent_reply(id: &str, pane: u64) -> Value {
     json!({"reply":"close_target", "agent":{
         "kind":"claude", "agent_id":id, "pane":format!("zellij:terminal_{pane}")
     }})
+}
+
+/// The tab close took the focused tab, by its stable id, in one command and no pane close.
+fn assert_one_tab_close(env: &Env) {
+    let log = trace_lines(&env.home_root.join("mux.log"));
+    let tab_closes = tab_closes(env);
+    assert_eq!(tab_closes.len(), 1, "{log:?}");
+    assert!(tab_closes[0].ends_with("--tab-id\t1"), "{log:?}");
+    assert!(closes(env).is_empty(), "{log:?}");
+}
+
+/// The tab close cancels an agent's live run, and reads again after the cancel, before the
+/// one command that closes the tab.
+#[test]
+fn close_tab_cancels_a_live_run_before_it_closes_the_tab() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "running", |_| {});
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("running".into());
+    run.status = rimz::store::run::RunStatus::Running;
+    run.keep = true;
+    rimz::harness::run::create(env.store().paths(), &run).unwrap();
+    let mut command = tab_command(&env, Some("terminal_7"));
+    command.env(
+        "RIMZ_TEST_ZELLIJ_RUNS_AT_CLOSE_TAB",
+        env.workspace_id.as_str(),
+    );
+    let output = exchanges(
+        &env,
+        &[
+            (close_pane_request(7), agent_reply("running", 7)),
+            (
+                close_pane_request(8),
+                json!({"reply":"close_target", "pane":"zellij:terminal_8"}),
+            ),
+            (
+                close_pane_request(10),
+                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
+            ),
+        ],
+        command,
+    );
+    assert_exit(&output, 0);
+    assert_one_tab_close(&env);
+    let log = trace_lines(&env.home_root.join("mux.log"));
+    assert!(
+        log.iter()
+            .any(|line| line == "run-before-tab-close\tCanceled"),
+        "the run was not cancelled before the tab close: {log:?}"
+    );
+    // Each hosting read samples the clients once, as the tab's focus check does; the tab
+    // close's own stable-id lookup lists panes alone.
+    let samples = log
+        .iter()
+        .take_while(|line| !line.contains("close-tab"))
+        .filter(|line| line.contains("list-clients"))
+        .count();
+    // The tab's focus check, the card read, and the read after the cancel.
+    assert_eq!(samples, 3, "{log:?}");
 }
 
 #[test]
@@ -883,12 +955,7 @@ fn close_tab_closes_every_tiled_pane_but_the_sidebar_and_records_each_root() {
         tab_command(&env, Some("terminal_8")),
     );
     assert_exit(&output, 0);
-    let mut closed: Vec<_> = closes(&env)
-        .iter()
-        .map(|line| line.rsplit('\t').next().unwrap().to_owned())
-        .collect();
-    closed.sort();
-    assert_eq!(closed, ["terminal_10", "terminal_7", "terminal_8"]);
+    assert_one_tab_close(&env);
     let entries = read_closed(&env);
     let ids: Vec<_> = entries
         .as_array()
@@ -897,6 +964,139 @@ fn close_tab_closes_every_tiled_pane_but_the_sidebar_and_records_each_root() {
         .map(|entry| entry["agent_id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, ["first", "second"], "{entries}");
+}
+
+/// The session's only tab is not closed: each agent's pane and the shell close on their own,
+/// as before the tab close, so the session outlives them.
+#[test]
+fn close_tab_of_the_sessions_only_tab_closes_each_pane() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "first", |_| {});
+    seed(&env, "second", |observation| {
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_8"));
+    });
+    let output = exchanges(
+        &env,
+        &[
+            (close_pane_request(7), agent_reply("first", 7)),
+            (close_pane_request(8), agent_reply("second", 8)),
+            (
+                close_pane_request(10),
+                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
+            ),
+        ],
+        tab_command_in(&env, Some("terminal_8"), false),
+    );
+    assert_exit(&output, 0);
+    let log = trace_lines(&env.home_root.join("mux.log"));
+    assert!(tab_closes(&env).is_empty(), "{log:?}");
+    let mut closed: Vec<_> = closes(&env)
+        .iter()
+        .map(|line| line.rsplit('\t').next().unwrap().to_owned())
+        .collect();
+    closed.sort();
+    assert_eq!(
+        closed,
+        ["terminal_10", "terminal_7", "terminal_8"],
+        "{log:?}"
+    );
+    let entries = read_closed(&env);
+    let ids: Vec<_> = entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["agent_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["first", "second"], "{entries}");
+}
+
+/// A tab close that fails with no agent's pane awaiting it fails the command, as a failed
+/// pane close does.
+#[test]
+fn close_tab_fails_when_its_tab_close_fails() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "away", |observation| {
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
+    });
+    let mut command = tab_command(&env, Some("terminal_7"));
+    command.env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_TAB", "1");
+    let output = exchanges(
+        &env,
+        &[
+            (close_pane_request(7), agent_reply("away", 7)),
+            (
+                close_pane_request(8),
+                json!({"reply":"close_target", "pane":"zellij:terminal_8"}),
+            ),
+            (
+                close_pane_request(10),
+                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
+            ),
+        ],
+        command,
+    );
+    assert_exit(&output, 1);
+    let log = trace_lines(&env.home_root.join("mux.log"));
+    assert_eq!(tab_closes(&env).len(), 1, "{log:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("simulated zellij close-tab failure"),
+        "{output:?}"
+    );
+}
+
+/// An agent whose stop fails before its close keeps its pane, and so the tab: the other
+/// agent's pane and the shell close on their own.
+#[test]
+fn close_tab_leaves_the_tab_when_an_agent_stop_fails_before_its_close() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "first", |_| {});
+    seed(&env, "wedged", |observation| {
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_8"));
+    });
+    // A recorded scope outside the cgroup root fails the wake the stop runs before a close.
+    rimz::store::hibernate::record(
+        env.store().paths(),
+        rimz::store::hibernate::Entry {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "wedged".into(),
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_8"),
+            scope: PathBuf::from("/tmp/rimz-not-a-cgroup.scope"),
+            provider_pid: 1,
+            frozen_at: jiff::Timestamp::now(),
+            reclaimed_bytes: 0,
+            anon_at_freeze: 0,
+            step: 0,
+            wake_error: None,
+        },
+    )
+    .unwrap();
+    let output = exchanges(
+        &env,
+        &[
+            (close_pane_request(7), agent_reply("first", 7)),
+            (close_pane_request(8), agent_reply("wedged", 8)),
+            (
+                close_pane_request(10),
+                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
+            ),
+        ],
+        tab_command(&env, Some("terminal_7")),
+    );
+    assert_exit(&output, 1);
+    let log = trace_lines(&env.home_root.join("mux.log"));
+    assert!(tab_closes(&env).is_empty(), "{log:?}");
+    let mut closed: Vec<_> = closes(&env)
+        .iter()
+        .map(|line| line.rsplit('\t').next().unwrap().to_owned())
+        .collect();
+    closed.sort();
+    assert_eq!(closed, ["terminal_10", "terminal_7"], "{log:?}");
+    let entries = read_closed(&env);
+    assert_eq!(entries.as_array().unwrap().len(), 1, "{entries}");
+    assert_eq!(entries[0]["agent_id"], "first");
 }
 
 /// A card lagging a swap and the card of the session that replaced it name one holder:
@@ -950,12 +1150,7 @@ fn close_tab_stops_a_parent_and_its_launched_child_and_records_the_parent() {
         tab_command(&env, Some("terminal_8")),
     );
     assert_exit(&output, 0);
-    let mut closed: Vec<_> = closes(&env)
-        .iter()
-        .map(|line| line.rsplit('\t').next().unwrap().to_owned())
-        .collect();
-    closed.sort();
-    assert_eq!(closed, ["terminal_10", "terminal_7", "terminal_8"]);
+    assert_one_tab_close(&env);
     let entries = read_closed(&env);
     assert_eq!(entries.as_array().unwrap().len(), 1, "{entries}");
     assert_eq!(entries[0]["agent_id"], "first");

@@ -553,10 +553,31 @@ pub(in crate::cli) struct StopTerms<'a> {
     /// The first read, a hosting read the caller took with no work since, in place of the
     /// stop's own.
     pub(in crate::cli) read: Option<HostingRead>,
-    /// Close the tab with the pane when the read gating the close finds the pane the last
-    /// working pane of its tab and this process runs in no pane of it. Off by default; a
-    /// sidebar card key sets it.
-    pub(in crate::cli) close_tab: bool,
+    /// Which tab, if any, the stop closes with the panes it closes. A sidebar card key sets it.
+    pub(in crate::cli) tab: TabClose,
+}
+
+/// The tab close of [`StopTerms::tab`].
+#[derive(Default)]
+pub(in crate::cli) enum TabClose {
+    /// Close panes alone.
+    #[default]
+    Never,
+    /// Close the tab with a pane when the read gating the close finds the pane the last
+    /// working pane of its tab and this process runs in no pane of it.
+    WhenLast,
+    /// Every working pane of one tab is a target: its `panes`, as the caller listed them,
+    /// of which `loose` host no agent the stop is given. A pane of them hosting an agent
+    /// stays open while the stop ends that agent, cancels and departure wait included; once
+    /// every agent has been ended, the stop closes the tab in one command, gated as a pane
+    /// close is, and polls each such agent as after a pane close. When the gating read gives
+    /// the tab no anchor (`HostingRead::tab_anchor`), or an agent's stop failed before its
+    /// close, each such agent's pane and each of `loose` closes on its own instead, and a
+    /// failed agent's pane stays.
+    Whole {
+        panes: Vec<PaneId>,
+        loose: Vec<PaneId>,
+    },
 }
 
 /// [`stop_resolved`] under `terms`; `None` when `still_due` withdrew the stop.
@@ -602,17 +623,17 @@ pub(in crate::cli) fn stop_resolved_with(
         }
         None => false,
     };
-    stop_with_read(
+    let stopper = Stopper {
         ctx,
-        &peers,
+        peers: &peers,
         read,
-        agents,
-        terms.run,
+        fresh: !run_cancelled,
+        tab: terms.tab,
+        run: terms.run,
         run_cancelled,
-        !run_cancelled,
-        terms.close_tab,
-    )
-    .map(Some)
+        tracker: HashSet::new(),
+    };
+    stop_with_read(stopper, agents).map(Some)
 }
 
 /// Stop the agent the supervised `run` names, settling the run. The run is cancelled first,
@@ -685,33 +706,21 @@ pub(super) fn stop_run_tree(
     };
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::address::addressable_agents(&snapshot);
-    Ok(stop_with_read(ctx, &peers, read, &[&agent], Some(run), true, true, false)?.remove(0))
-}
-
-/// Stop every tree in `agents` from the first read, `read`; `run_cancelled` says the agent
-/// `run` names counts as one whose run this stop cancelled, `fresh` that no work sat
-/// between `read` and this call, and `close_tab` is [`StopTerms::close_tab`].
-#[allow(clippy::too_many_arguments)]
-fn stop_with_read(
-    ctx: &Ctx,
-    peers: &[&AgentState],
-    read: HostingRead,
-    agents: &[&AgentState],
-    run: Option<&RunRecord>,
-    run_cancelled: bool,
-    fresh: bool,
-    close_tab: bool,
-) -> Result<Vec<TreeStop>> {
-    let mut stopper = Stopper {
+    let stopper = Stopper {
         ctx,
-        peers,
+        peers: &peers,
         read,
-        fresh,
-        close_tab,
-        run,
-        run_cancelled,
+        fresh: true,
+        tab: TabClose::Never,
+        run: Some(run),
+        run_cancelled: true,
         tracker: HashSet::new(),
     };
+    Ok(stop_with_read(stopper, &[&agent])?.remove(0))
+}
+
+/// Stop every tree in `agents` through `stopper`, which holds the first read.
+fn stop_with_read(mut stopper: Stopper<'_>, agents: &[&AgentState]) -> Result<Vec<TreeStop>> {
     let mut trees = agents
         .iter()
         .map(|agent| {
@@ -725,7 +734,9 @@ fn stop_with_read(
             endings
         })
         .collect::<Vec<_>>();
+    let tab = stopper.close_whole_tab(trees.iter_mut().flatten().collect());
     stopper.judge(trees.iter_mut().flatten().collect())?;
+    tab.map_err(anyhow::Error::msg)?;
     Ok(trees
         .into_iter()
         .map(|endings| stopper.receipt(endings))
@@ -770,6 +781,8 @@ struct Ending {
     cancelled: bool,
     /// The final read still found a pane hosting it.
     still_hosted: bool,
+    /// Its pane awaits the tab close of [`TabClose::Whole`].
+    awaits_tab: bool,
     /// A reservation no wrapper had bound and no pane hosted at this stop's first read.
     unbound_unhosted: bool,
     close_error: Option<String>,
@@ -807,7 +820,7 @@ struct Stopper<'a> {
     /// No work of this stop (a cancel, a wait, a thaw, a close) sat between `read` and now,
     /// so `read` may gate a close.
     fresh: bool,
-    close_tab: bool,
+    tab: TabClose,
     run: Option<&'a RunRecord>,
     run_cancelled: bool,
     tracker: HashSet<AgentKey>,
@@ -850,6 +863,7 @@ impl Stopper<'_> {
             closed: false,
             cancelled: false,
             still_hosted: false,
+            awaits_tab: false,
             unbound_unhosted: agent.agent_id.is_provisional()
                 && agent.runtime_owner.is_none()
                 && self.read.session_hosting(&agent.kind, &agent.agent_id) == Hosting::Nowhere,
@@ -1020,8 +1034,9 @@ impl Stopper<'_> {
     /// Close whatever pane the current read says hosts the agent, read again first unless
     /// it is fresh, until none does or the owner-exit bound passes after the first close. A
     /// pane still listed is closed again once `RECLOSE_AFTER` has passed since its last close.
-    /// Under `close_tab`, a pane the gating read finds the last working pane of its tab
-    /// closes with its tab.
+    /// Under [`TabClose::WhenLast`], a pane the gating read finds the last working pane of its
+    /// tab closes with its tab; under [`TabClose::Whole`], a pane of the tab stays open for
+    /// [`Stopper::close_whole_tab`].
     fn close(&mut self, ending: &mut Ending) -> std::result::Result<(), String> {
         let mut deadline = Instant::now() + stop_owner_exit_bound();
         let mut last: Option<(PaneId, Instant)> = None;
@@ -1064,12 +1079,18 @@ impl Stopper<'_> {
                 {
                     continue;
                 }
+                if let TabClose::Whole { panes, .. } = &self.tab
+                    && panes.contains(&pane_id)
+                {
+                    ending.awaits_tab = true;
+                    return Ok(());
+                }
                 let closed_at = Instant::now();
                 if last.is_none() {
                     deadline = closed_at + stop_owner_exit_bound();
                 }
                 let backend = rimz::mux::backend_for(self.read.mux());
-                let result = if self.close_tab
+                let result = if matches!(self.tab, TabClose::WhenLast)
                     && self.read.closing_empties_tab(
                         &pane_id,
                         rimz::mux::own_pane_id(self.read.mux()).as_ref(),
@@ -1086,6 +1107,106 @@ impl Stopper<'_> {
             std::thread::sleep(CLOSE_POLL);
             self.refresh()?;
         }
+    }
+
+    /// Close the tab of [`TabClose::Whole`] once every agent has been ended, deciding each
+    /// ending that awaits it as [`Stopper::close`] would. An agent whose stop failed before
+    /// its close keeps its pane, and so the tab: the awaiting agents' panes and the `loose`
+    /// panes close on their own instead, as they do when the gating read gives the tab no
+    /// anchor. An error is a close that failed with no ending to carry it.
+    fn close_whole_tab(&mut self, endings: Vec<&mut Ending>) -> std::result::Result<(), String> {
+        let TabClose::Whole { panes, loose } = std::mem::take(&mut self.tab) else {
+            return Ok(());
+        };
+        let failed = endings.iter().any(|ending| {
+            !ending.closed
+                && !ending.awaits_tab
+                && ending.outcome.as_ref().is_some_and(Result::is_err)
+        });
+        let mut endings = endings
+            .into_iter()
+            .filter(|ending| ending.awaits_tab)
+            .collect::<Vec<_>>();
+        let anchor = match self.refresh_stale() {
+            Ok(()) => {
+                let own = rimz::mux::own_pane_id(self.read.mux());
+                self.read.tab_anchor(&panes, own.as_ref()).cloned()
+            }
+            Err(reason) => return decide_all(&mut endings, reason),
+        };
+        let Some(anchor) = anchor.filter(|_| !failed) else {
+            return self.close_each(&loose, &mut endings);
+        };
+        match self.close_tab_of(&panes, anchor, &mut endings) {
+            Err(reason) => decide_all(&mut endings, reason),
+            Ok(()) => Ok(()),
+        }
+    }
+
+    /// Close the tab by `anchor` in one command, then wait as [`Stopper::close`] does until
+    /// no pane hosts one of `endings` or the owner-exit bound passes, closing the tab again
+    /// once `RECLOSE_AFTER` has passed while one does and a read still gives it an anchor
+    /// among `panes`.
+    fn close_tab_of(
+        &mut self,
+        panes: &[PaneId],
+        mut anchor: PaneId,
+        endings: &mut [&mut Ending],
+    ) -> std::result::Result<(), String> {
+        let mux = self.read.mux();
+        let own = rimz::mux::own_pane_id(mux);
+        let deadline = Instant::now() + stop_owner_exit_bound();
+        loop {
+            let result = rimz::mux::backend_for(mux)
+                .close_tab_of_pane(&self.ctx.workspace.session_name, &anchor);
+            self.fresh = false;
+            let closed_at = Instant::now();
+            let close_error = result.err().map(|err| format!("{err:#}"));
+            if endings.is_empty() {
+                return close_error.map_or(Ok(()), Err);
+            }
+            for ending in endings.iter_mut() {
+                ending.closed = true;
+                ending.close_error.clone_from(&close_error);
+            }
+            loop {
+                std::thread::sleep(CLOSE_POLL);
+                self.refresh()?;
+                if endings
+                    .iter_mut()
+                    .all(|ending| self.hosting(ending) == Hosting::Nowhere)
+                    || Instant::now() >= deadline
+                {
+                    return Ok(());
+                }
+                if Instant::now() >= closed_at + RECLOSE_AFTER {
+                    break;
+                }
+            }
+            let Some(listed) = self.read.tab_anchor(panes, own.as_ref()) else {
+                return Ok(());
+            };
+            anchor = listed.clone();
+        }
+    }
+
+    /// Close each of `endings` on its own, then each of `loose`.
+    fn close_each(
+        &mut self,
+        loose: &[PaneId],
+        endings: &mut [&mut Ending],
+    ) -> std::result::Result<(), String> {
+        for ending in endings.iter_mut() {
+            if let Err(reason) = self.close(ending) {
+                ending.decide(Err(reason));
+            }
+        }
+        for pane in loose {
+            rimz::mux::backend_for(pane.mux())
+                .close_pane(&self.ctx.workspace.session_name, pane)
+                .map_err(|err| format!("{err:#}"))?;
+        }
+        Ok(())
     }
 
     /// A kept run this stop cancelled can read as hosted nowhere for a moment: its wrapper
@@ -1326,6 +1447,17 @@ impl Stopper<'_> {
         }
         stop
     }
+}
+
+/// Decide each of `endings` failed for `reason`; with none to carry it, `reason` is the error.
+fn decide_all(endings: &mut [&mut Ending], reason: String) -> std::result::Result<(), String> {
+    if endings.is_empty() {
+        return Err(reason);
+    }
+    for ending in endings.iter_mut() {
+        ending.decide(Err(reason.clone()));
+    }
+    Ok(())
 }
 
 /// Whether a stop closes `agent` itself, judged over the rows of a read taken after any swap

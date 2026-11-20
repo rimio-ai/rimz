@@ -9,7 +9,7 @@ use rimz::harness::idle_stop::{IdleStopHelperRequest, Verdict, closing_with, dec
 use rimz::store::snapshot::find_agent;
 
 use super::stop::stop_run;
-use super::{Ctx, GlobalFlags, StopTerms, stop_resolved_with};
+use super::{Ctx, GlobalFlags, StopTerms, TabClose, stop_resolved_with};
 
 pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::for_workspace(request.workspace_id.clone(), Some(request.pane_id.mux()))?;
@@ -63,7 +63,7 @@ pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> R
         run: None,
         still_due: Some(&still_due),
         read: None,
-        close_tab: false,
+        tab: TabClose::Never,
     };
     let Some(mut stops) = stop_resolved_with(&ctx, globals, &snapshot, &[agent], terms)? else {
         return Ok(());

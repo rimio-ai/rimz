@@ -117,7 +117,7 @@ use run_timeout::run_timeout;
 pub(in crate::cli) use show::focus_resolved;
 use show::{focus_agent, show_agent};
 pub(in crate::cli) use stop::{
-    StopTerms, offers_resume, resume_command, resume_worktree_name, stop_resolved,
+    StopTerms, TabClose, offers_resume, resume_command, resume_worktree_name, stop_resolved,
     stop_resolved_with, stop_run_agent,
 };
 use stop::{WhenIdle, parse_when_idle, stop_agent};

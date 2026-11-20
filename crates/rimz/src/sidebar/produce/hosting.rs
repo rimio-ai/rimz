@@ -13,7 +13,8 @@
 //! [`HostingRead::agent_hosting_of_session`] takes the session a caller holds (a sidebar
 //! card's key) and answers the agent that caller acts on: that session while no swap replaced
 //! it, else its launch's holder. From the same listing, [`HostingRead::closing_empties_tab`]
-//! says whether closing a pane leaves its tab without a working pane.
+//! says whether closing a pane leaves its tab without a working pane, and
+//! [`HostingRead::tab_anchor`] picks a listed pane to close a tab by.
 
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
@@ -173,6 +174,26 @@ impl HostingRead {
                     crate::pane::SelfCloseVerdict::Empty { .. }
                 )
             })
+    }
+
+    /// The first of `panes` this read lists, the pane to close their tab by. `None` when it
+    /// lists none, when the tab is the session's only one or holds `caller`, the pane the
+    /// asking process runs in, or when a tiled pane of the tab other than its sidebar is not
+    /// one of `panes`, so a pane that entered the tab since `panes` were listed never goes
+    /// with it.
+    pub fn tab_anchor<'a>(
+        &self,
+        panes: &'a [PaneId],
+        caller: Option<&PaneId>,
+    ) -> Option<&'a PaneId> {
+        let anchor = panes.iter().find(|pane| self.view_of(pane).is_some())?;
+        let view = self.closable_tab(anchor, caller)?;
+        self.panes
+            .iter()
+            .filter(|listed| listed.view_id.as_deref() == Some(view))
+            .filter(|listed| !listed.is_floating && !listed.is_rimz_sidebar())
+            .all(|listed| panes.contains(&listed.pane_id))
+            .then_some(anchor)
     }
 
     /// The tab of `pane` when a close may take it: another tab is listed beside it, since
