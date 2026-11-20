@@ -1001,8 +1001,8 @@ enum AgentsSubcmd {
     /// Hidden helper that refreshes a sleeping agent's prompt cache.
     #[command(hide = true)]
     CacheKeepalive(HelperRequestArgs<rimz::harness::cache_keepalive::CacheKeepaliveRequest>),
-    /// Hidden helper the producer spawns to redeem an account-wide Codex reset
-    /// credit after rechecking current provider state.
+    /// Hidden helper the producer spawns to redeem an account-wide reset
+    /// credit (Codex or Claude) after rechecking current provider state.
     #[command(hide = true)]
     AutoRedeem(HelperRequestArgs<AutoRedeemRequest>),
     /// Hidden helper that interrupts an agent after its dollar cap is crossed.

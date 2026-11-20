@@ -221,24 +221,89 @@ fn cache_evidence_excludes_display_only_limits_stale_scoped_and_lapsed_entries()
 }
 
 #[test]
-fn a_claude_login_on_a_dry_window_steps_as_spent_and_only_its_advice_redeems() {
+fn a_claude_login_on_a_dry_window_steps_to_a_reset_only_on_a_grant_that_clears_it() {
     let mut facts = facts(100, None);
     facts.kind = AgentKind::new_unchecked("claude");
-    facts.reset_credits = facts.reset_credits.map(|credits| ResetCredits {
+    let grant = |clears: &[&str]| ResetCredits {
+        count: 1,
+        soonest_expiry: None,
+        expiries: Vec::new(),
         effect: RedeemEffect::KeepsSchedule,
-        ..credits
-    });
+        grants: vec![crate::agents::ResetGrant {
+            count: 1,
+            clears: clears.iter().map(|clear| (*clear).to_owned()).collect(),
+            selected: true,
+            usable_now: true,
+            ..Default::default()
+        }],
+    };
     let config = config(SpendOrder::CreditsFirst, "12h");
-    assert_eq!(facts.step(&config, None, now()), SpendStep::Spent);
-    assert_eq!(facts.redemption(&config, now()), None);
     let lead = std::time::Duration::from_secs(86_400);
-    for config in [config.clone(), AutoRedeemConfig::default()] {
+    facts.reset_credits = Some(grant(&["five_hour", "seven_day"]));
+    assert_eq!(facts.step(&config, None, now()), SpendStep::ResetCredit);
+    assert_eq!(
+        facts.redemption(&config, now()),
+        Some(RedeemReason::BlockedGain)
+    );
+    let rescue = AutoRedeemConfig::default();
+    assert_eq!(facts.step(&rescue, None, now()), SpendStep::Spent);
+    for config in [&config, &rescue] {
         assert_eq!(
-            facts.advice(&config, lead, now()),
+            facts.advice(config, lead, now()),
             Some(RedeemReason::BlockedGain),
             "advice as if auto-redeem ran at its fullest (level: {:?})",
             config.level
         );
-        assert_eq!(facts.step(&config, None, now()), SpendStep::Spent);
+    }
+
+    facts.reset_credits = Some(grant(&["five_hour", "seven_day_overage_included"]));
+    assert_eq!(facts.step(&config, None, now()), SpendStep::Spent);
+    assert_eq!(facts.redemption(&config, now()), None);
+    assert_eq!(facts.advice(&config, lead, now()), None);
+}
+
+#[test]
+fn a_claude_rescue_of_a_grant_that_leaves_the_week_spent_keeps_the_ladder_spent() {
+    let mut facts = facts(100, None);
+    facts.kind = AgentKind::new_unchecked("claude");
+    if let Some(capacity) = facts.capacity.as_mut() {
+        capacity.windows.push(RateLimitWindow {
+            used_percentage: Some(40),
+            duration_mins: Some(300),
+            resets_at: Some(now() + std::time::Duration::from_secs(2 * 3_600)),
+            ..Default::default()
+        });
+    }
+    let expiry = now() + std::time::Duration::from_secs(20 * 60);
+    facts.reset_credits = Some(ResetCredits {
+        count: 1,
+        soonest_expiry: Some(expiry),
+        expiries: vec![expiry],
+        effect: RedeemEffect::KeepsSchedule,
+        grants: vec![crate::agents::ResetGrant {
+            count: 1,
+            expiry: Some(expiry),
+            clears: vec!["five_hour".to_owned()],
+            selected: true,
+            usable_now: true,
+            ..Default::default()
+        }],
+    });
+    for config in [
+        &config(SpendOrder::CreditsFirst, "12h"),
+        &AutoRedeemConfig::default(),
+    ] {
+        assert_eq!(
+            facts.step(config, None, now()),
+            SpendStep::Spent,
+            "a five-hour refill leaves the week spent (level: {:?})",
+            config.level
+        );
+        assert_eq!(
+            facts.redemption(config, now()),
+            Some(RedeemReason::ExpiryRescue),
+            "the helper still rescues the dying grant (level: {:?})",
+            config.level
+        );
     }
 }

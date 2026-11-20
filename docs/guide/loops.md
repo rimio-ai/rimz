@@ -327,9 +327,9 @@ Each task names one trigger and one command after `--`.
 
 ## Keep the fleet moving
 
-An unattended agent stops for reasons that need no judgment from you. The provider's usage window empties mid-turn. The API sheds load and drops the stream. The context window fills one step short of the finish. A Codex account sits on reset credits that expire unused. Each stop has a known fix: wait for the reset, retry in a few minutes, compact, redeem a credit. A stock CLI leaves each of them to whoever is watching, and overnight that is nobody.
+An unattended agent stops for reasons that need no judgment from you. The provider's usage window empties mid-turn. The API sheds load and drops the stream. The context window fills one step short of the finish. A Codex or Claude account sits on reset credits that expire unused. Each stop has a known fix: wait for the reset, retry in a few minutes, compact, redeem a credit. A stock CLI leaves each of them to whoever is watching, and overnight that is nobody.
 
-RimZ applies each fix as a configurable reflex. The room recognizes the stop from the provider's own evidence, applies the fix when it can work, and the agent carries on in the same session, as if you had typed it. Idle compaction and smart compaction are on by default. Auto-continue is opt-in, and auto-redeem only rescues a Codex credit about to expire until you raise its level. These reflexes type into your panes and spend on your account, so each section states the rules it follows. Every action appears in `rimz stats --assists`.
+RimZ applies each fix as a configurable reflex. The room recognizes the stop from the provider's own evidence, applies the fix when it can work, and the agent carries on in the same session, as if you had typed it. Idle compaction and smart compaction are on by default. Auto-continue is opt-in, and auto-redeem only rescues a Codex or Claude credit about to expire until you raise its level. These reflexes type into your panes and spend on your account, so each section states the rules it follows. Every action appears in `rimz stats --assists`.
 
 ```sh
 rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
@@ -356,15 +356,18 @@ Each attempt sends `continue` (`resume.auto_continue_text`) into the agent's pan
 
 ### Auto-redeem
 
-A Codex plan grants reset credits. Redeem one and a spent usage window refills at once. Managed by hand, credits waste value at both ends: one you forget expires unspent, and one you hold while a spent window parks the fleet costs a night of work. Timing matters too. A credit redeemed just before the window's natural reset buys minutes, while one redeemed the moment a spent window blocks the fleet buys hours. Auto-redeem decides by three rules, the [level](./configuration.md#auto-redeem) you set chooses which of them apply, and each redemption's record names the rule:
+Codex and Claude plans grant reset credits (Claude calls them limit resets). Redeem one and a spent usage window refills at once. Managed by hand, credits waste value at both ends: one you forget expires unspent, and one you hold while a spent window parks the fleet costs a night of work. Timing matters too. A credit redeemed just before the window's natural reset buys minutes, while one redeemed the moment a spent window blocks the fleet buys hours. Auto-redeem decides by three rules, the [level](./configuration.md#auto-redeem) you set chooses which of them apply, and each redemption's record names the rule:
 
-- **A credit about to expire is spent (expiry rescue).** At every level, RimZ redeems a credit within thirty minutes of its expiry on every Codex account you declared, while any room is open. It skips an account whose window shows no usage at all, since a refill there buys nothing.
+- **A credit about to expire is spent (expiry rescue).** At every level, RimZ redeems a credit within thirty minutes of its expiry on every Codex and Claude account you declared, while any room is open. It skips an account whose window shows no usage at all, since a refill there buys nothing.
 - **A spent window far from its reset is refilled now (blocked gain).** At level `gain` or `paced`, when the natural reset is at least `harness.auto_redeem.min_gain` away (72 hours by default), a credit now recovers those hours. A nearer reset makes waiting cheaper.
-- **Credits that expire together are spread out (scheduled redeem).** At level `paced`, when several credits near expiry together, RimZ measures how long your usage takes to fill a fresh window and redeems them that far apart, so each one lands on a window with room to use it.
+- **A Claude credit that would die unused is spent (doomed credit).** At level `gain` or `paced`, a Claude credit that would expire within a day of a spent window's reset is spent now, since a Claude redemption leaves that reset where it was.
+- **Credits that expire together are spread out (scheduled redeem).** At level `paced`, on Codex, when several credits near expiry together, RimZ measures how long your usage takes to fill a fresh window and redeems them that far apart, so each one lands on a window with room to use it.
 
 Blocked gain and scheduled redeem act only on an account this room uses, and only when its subscription window is spent and readable. By default, `harness.auto_redeem.spend_order = "credits_first"` uses the account's paid credit balance before banked reset credits. Set it to `resets_first` to redeem a useful reset first. Attempts per account are at least ten minutes apart, thirty after a success. A redemption refreshes the account's reading at once, and the refilled window wakes the agents [auto-continue](#auto-continue) parked on it.
 
-The Codex block in the sidebar shows the credit count and what auto-redeem would do now, and the [sidebar reference](../interface/sidebar.md) explains each marker. Claude accounts bank limit resets of their own. For those, and for Codex at level `rescue`, the sidebar runs the same rules as advice for [`rimz accounts redeem`](../reference/cli/accounts.md#redeem).
+A Claude account offers one credit at a time, the one Anthropic selects, and RimZ judges that credit alone: another credit's expiry never triggers a redemption, and a credit that refills only the 5-hour window, such as a Fable grant, is spent only to rescue it. Claude is redeemed by the same request as [`rimz accounts redeem`](../reference/cli/accounts.md#redeem), which a live redemption confirmed but Anthropic does not document.
+
+The Codex and Claude blocks in the sidebar show the credit count and what auto-redeem would do now, and the [sidebar reference](../interface/sidebar.md) explains each marker. At level `rescue`, the sidebar runs the same rules as advice for [`rimz accounts redeem`](../reference/cli/accounts.md#redeem).
 
 ### Idle compaction
 

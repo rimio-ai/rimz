@@ -1334,7 +1334,7 @@ fn redeem_keeps_a_live_old_login_continues_idle_once_it_ends_and_cancels_an_unde
             .iter()
             .map(|login| login.key().to_string())
             .collect::<Vec<_>>(),
-        ["codex@default", "codex@work"]
+        ["codex@default", "codex@work", "claude@default"]
     );
     let (_, idle) = redeem_login(&runtime, &key, "request", &unreadable).unwrap();
     assert!(idle);
@@ -1610,7 +1610,7 @@ fn holding_forecast_stays_firm_until_the_longest_reset() {
 }
 
 #[test]
-fn projection_forecasts_only_the_codex_panel_with_credits() {
+fn projection_forecasts_every_redeeming_panel_with_credits() {
     let now = ts(1_700_000_000);
     let dir = tempfile::tempdir().unwrap();
     let runtime =
@@ -1620,16 +1620,18 @@ fn projection_forecasts_only_the_codex_panel_with_credits() {
         SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), Vec::new(), now);
     let mut codex = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
     codex.reset_credits = Some(chain(now + Duration::from_secs(3 * 86_400)));
-    seed_credit_entry(
-        &runtime,
-        &"codex@default".parse().unwrap(),
-        codex.reset_credits.clone().unwrap(),
-        None,
-        now,
-    );
-    let mut other = crate::sidebar::test_support::provider_panel("claude", Vec::new());
-    other.reset_credits = codex.reset_credits.clone();
-    snapshot.providers = vec![codex, other];
+    let mut claude = crate::sidebar::test_support::provider_panel("claude", Vec::new());
+    claude.reset_credits = Some(claude_credit(now, Duration::from_secs(5 * 86_400)));
+    for panel in [&codex, &claude] {
+        seed_credit_entry(
+            &runtime,
+            &panel.login_key(),
+            panel.reset_credits.clone().unwrap(),
+            None,
+            now,
+        );
+    }
+    snapshot.providers = vec![codex, claude];
     let logins = crate::agents::RoomLoginSet::native();
     let forecasts = |snapshot: &SidebarSnapshot| {
         snapshot
@@ -1639,47 +1641,366 @@ fn projection_forecasts_only_the_codex_panel_with_credits() {
             .collect::<Vec<_>>()
     };
 
-    let mut config = config_at(RedeemLevel::Paced);
-    project_redeem_forecasts(&mut snapshot, &runtime, &config, &logins);
-    assert_eq!(forecasts(&snapshot), [Some(RedeemForecast::Armed), None]);
+    for level in [RedeemLevel::Gain, RedeemLevel::Paced] {
+        project_redeem_forecasts(&mut snapshot, &runtime, &config_at(level), &logins);
+        assert_eq!(
+            forecasts(&snapshot),
+            [Some(RedeemForecast::Armed), Some(RedeemForecast::Armed)],
+            "{level:?}"
+        );
+    }
 
-    config.level = RedeemLevel::Rescue;
+    let config = config_at(RedeemLevel::Rescue);
     project_redeem_forecasts(&mut snapshot, &runtime, &config, &logins);
-    assert_eq!(forecasts(&snapshot), [Some(RedeemForecast::Manual), None]);
+    assert_eq!(
+        forecasts(&snapshot),
+        [Some(RedeemForecast::Manual), Some(RedeemForecast::Manual)]
+    );
 
     snapshot.providers[0].reset_credits = None;
     project_redeem_forecasts(&mut snapshot, &runtime, &config, &logins);
-    assert_eq!(forecasts(&snapshot), [None, None]);
+    assert_eq!(forecasts(&snapshot), [None, Some(RedeemForecast::Manual)]);
+}
+
+/// A Claude pair: an unselected grant expiring `unselected` from now, and the
+/// selected grant clearing both windows a month out.
+fn claude_pair(now: Timestamp, unselected: Duration) -> ResetCredits {
+    let selected = claude_credit(now, Duration::from_secs(30 * 86_400))
+        .grants
+        .remove(0);
+    let expiring = crate::agents::ResetGrant {
+        count: 1,
+        expiry: Some(now + unselected),
+        clears: selected.clears.clone(),
+        usable_now: true,
+        ..Default::default()
+    };
+    ResetCredits {
+        count: 2,
+        soonest_expiry: expiring.expiry,
+        expiries: vec![now + unselected, selected.expiry.unwrap()],
+        effect: RedeemEffect::KeepsSchedule,
+        grants: vec![expiring, selected],
+    }
 }
 
 #[test]
-fn claude_banked_credits_never_arm_the_automatic_path() {
+fn the_producer_rescues_a_claude_login_only_for_its_selected_grant() {
+    let now = ts(1_700_000_000);
+    let dying = Duration::from_secs(20 * 60);
+    let default: LoginKey = "claude@default".parse().unwrap();
+    let spare: LoginKey = "claude@spare".parse().unwrap();
+    for (credits, rescued) in [
+        (claude_credit(now, dying), true),
+        (claude_pair(now, dying), false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        seed_credit_entry(&runtime, &default, credits.clone(), None, now);
+        let mut rates = crate::agents::account::RateLimitsCache::default();
+        rates.entries.insert(
+            default.clone().into(),
+            rate_limit_entry(&[(10_080, 40)], now),
+        );
+        write_temp_then_rename_cache(
+            &crate::agents::account::RateLimitsCache::shared_path(&runtime),
+            &rates,
+        )
+        .unwrap();
+        let mut panel = crate::sidebar::test_support::provider_panel("claude", Vec::new());
+        panel.reset_credits = Some(credits.clone());
+        let mut spawned = Vec::new();
+        redeem_credits_with(
+            &[panel],
+            &BTreeMap::from([(spare.clone(), credits)]),
+            &runtime,
+            &RoomLoginSet::native(),
+            &AutoRedeemConfig::default(),
+            now,
+            |_, key, reason, _| {
+                spawned.push((key.clone(), reason));
+                true
+            },
+        );
+        let expected = if rescued {
+            vec![
+                (default.clone(), RedeemReason::ExpiryRescue),
+                (spare.clone(), RedeemReason::ExpiryRescue),
+            ]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(spawned, expected, "selected grant dying: {rescued}");
+        assert!(
+            !runtime.shared_auto_redeem_rate_path(&default).exists(),
+            "a provider that cannot pace samples no burn rate"
+        );
+        for key in [&default, &spare] {
+            assert_eq!(
+                runtime.shared_auto_redeem_path(key).exists(),
+                rescued,
+                "{key}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_automatic_claude_verdict_judges_only_the_selected_grant() {
+    let now = ts(1_700_000_000);
+    let day = Duration::from_secs(86_400);
+    let dying = Duration::from_secs(20 * 60);
+    let judge = |idle, level, capacity: &ProviderCapacity, credits: &ResetCredits| {
+        fresh_verdict(
+            idle,
+            &facts_of("claude", Some(capacity), credits),
+            &config_at(level),
+            now,
+        )
+    };
+    let blocked = spent_capacity(now, 4 * day);
+    let ordinary = claude_credit(now, 30 * day);
+    for level in [RedeemLevel::Gain, RedeemLevel::Paced] {
+        assert_eq!(
+            judge(false, level, &blocked, &ordinary),
+            Some(RedeemReason::BlockedGain),
+            "{level:?}"
+        );
+    }
+    assert_eq!(judge(false, RedeemLevel::Rescue, &blocked, &ordinary), None);
+    let fable = |expiry| {
+        let mut credits = claude_credit(now, expiry);
+        credits.grants[0].clears = vec![
+            "five_hour".to_owned(),
+            "seven_day_overage_included".to_owned(),
+        ];
+        credits
+    };
+    assert_eq!(
+        judge(false, RedeemLevel::Paced, &blocked, &fable(30 * day)),
+        None,
+        "a grant that does not clear the spent week never redeems for gain"
+    );
+    let mut cooling = ordinary.clone();
+    cooling.grants[0].cooldown_until = Some(now + Duration::from_secs(600));
+    let mut unselected = ordinary.clone();
+    unselected.grants[0].selected = false;
+    for refused in [cooling, unselected] {
+        assert_eq!(judge(false, RedeemLevel::Gain, &blocked, &refused), None);
+    }
+
+    let in_use = week_at(now, 40);
+    for idle in [false, true] {
+        assert_eq!(
+            judge(
+                idle,
+                RedeemLevel::Rescue,
+                &in_use,
+                &claude_credit(now, dying)
+            ),
+            Some(RedeemReason::ExpiryRescue),
+            "idle: {idle}"
+        );
+        assert_eq!(
+            judge(idle, RedeemLevel::Rescue, &in_use, &fable(dying)),
+            Some(RedeemReason::ExpiryRescue),
+            "a grant clearing only the 5h is still rescued, idle: {idle}"
+        );
+        assert_eq!(
+            judge(idle, RedeemLevel::Paced, &in_use, &claude_pair(now, dying)),
+            None,
+            "another grant's expiry never rescues, idle: {idle}"
+        );
+    }
+
+    let doomed_week = spent_capacity(now, day);
+    let doomed = Duration::from_secs(36 * 3_600);
+    assert_eq!(
+        judge(
+            false,
+            RedeemLevel::Gain,
+            &doomed_week,
+            &claude_credit(now, doomed)
+        ),
+        Some(RedeemReason::DoomedCredit)
+    );
+    assert_eq!(
+        judge(
+            false,
+            RedeemLevel::Gain,
+            &doomed_week,
+            &claude_pair(now, doomed)
+        ),
+        None,
+        "another grant's doom is no reason to spend the selected one"
+    );
+
+    let mut five_hour_spent = week_at(now, 40);
+    five_hour_spent.windows[0].used_percentage = Some(100);
+    let mut low_gain = config_at(RedeemLevel::Gain);
+    low_gain.min_gain = "1h".to_owned();
+    for (config, expiry) in [
+        (config_at(RedeemLevel::Gain), 6 * 3_600),
+        (config_at(RedeemLevel::Paced), 6 * 3_600),
+        (low_gain.clone(), 6 * 3_600),
+        (low_gain, 30 * 86_400),
+    ] {
+        assert_eq!(
+            fresh_verdict(
+                false,
+                &facts_of(
+                    "claude",
+                    Some(&five_hour_spent),
+                    &fable(Duration::from_secs(expiry))
+                ),
+                &config,
+                now
+            ),
+            None,
+            "a grant that does not clear the week is rescue-only: {config:?}, expiry {expiry}s"
+        );
+    }
+}
+
+#[test]
+fn a_claude_forecast_is_armed_only_on_a_claimable_grant_that_clears_the_longest_window() {
+    let now = ts(1_700_000_000);
+    let config = config_at(RedeemLevel::Gain);
+    let forecast_of = |capacity: Option<&ProviderCapacity>, credits: &ResetCredits| {
+        redeem_forecast(&facts_of("claude", capacity, credits), &config, now)
+    };
+    let open = week_at(now, 40);
+    let ordinary = claude_credit(now, Duration::from_secs(5 * 86_400));
+    for capacity in [Some(&open), None] {
+        assert_eq!(
+            forecast_of(capacity, &ordinary),
+            Some(RedeemForecast::Armed)
+        );
+    }
+    let mut five_hour_only = claude_credit(now, Duration::from_secs(20 * 60));
+    five_hour_only.grants[0].clears = vec!["five_hour".to_owned()];
+    assert_eq!(
+        forecast_of(Some(&open), &five_hour_only),
+        Some(RedeemForecast::Holding),
+        "a rescue that leaves the week spent is no reset"
+    );
+    let mut cooling = ordinary.clone();
+    cooling.grants[0].cooldown_until = Some(now + Duration::from_secs(600));
+    let mut unselected = ordinary.clone();
+    unselected.grants[0].selected = false;
+    let undated = undated_spent_capacity();
+    for refused in [&cooling, &unselected] {
+        for capacity in [None, Some(&undated)] {
+            assert_eq!(
+                forecast_of(capacity, refused),
+                Some(RedeemForecast::Holding),
+                "no claimable grant, capacity known: {}",
+                capacity.is_some()
+            );
+        }
+    }
+}
+
+#[test]
+fn the_assist_report_records_the_expiry_the_verdict_judged() {
+    let now = ts(1_700_000_000);
+    let pair = claude_pair(now, Duration::from_secs(5 * 60));
+    assert_eq!(
+        redemption_report(
+            RedeemReason::ExpiryRescue,
+            &AgentKind::new_unchecked("claude"),
+            &pair,
+            None
+        )
+        .soonest_expiry,
+        pair.grants[1].expiry,
+        "Claude's report carries its selected grant's own expiry"
+    );
+    let pooled = credits(now, Some(Duration::from_secs(600)));
+    assert_eq!(
+        redemption_report(
+            RedeemReason::ExpiryRescue,
+            &AgentKind::new_unchecked(CODEX_KIND),
+            &pooled,
+            None
+        )
+        .soonest_expiry,
+        pooled.soonest_expiry
+    );
+}
+
+#[test]
+fn a_held_offer_leaves_the_pending_stamp_that_throttles_the_next_spawn() {
     let now = ts(1_700_000_000);
     let dir = tempfile::tempdir().unwrap();
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
+    let key: LoginKey = "claude@default".parse().unwrap();
+    let credits = claude_credit(now, Duration::from_secs(20 * 60));
+    seed_credit_entry(&runtime, &key, credits.clone(), None, now);
     let mut panel = crate::sidebar::test_support::provider_panel("claude", Vec::new());
-    panel.reset_credits = Some(keeping_schedule(credits(
-        now,
-        Some(Duration::from_secs(60)),
-    )));
-    let mut spawned = Vec::new();
-    redeem_credits_with(
-        &[panel],
-        &BTreeMap::new(),
-        &runtime,
-        &RoomLoginSet::native(),
-        &config_at(RedeemLevel::Paced),
-        now,
-        |_, key, _, _| {
-            spawned.push(key.clone());
-            true
-        },
+    panel.reset_credits = Some(credits);
+    let mut spawned = 0;
+    // The spawned helper finds the offer held and declines: it leaves the
+    // producer's reservation as it stands.
+    for tick in [now, now + Duration::from_secs(3 * 60)] {
+        redeem_credits_with(
+            std::slice::from_ref(&panel),
+            &BTreeMap::new(),
+            &runtime,
+            &RoomLoginSet::native(),
+            &AutoRedeemConfig::default(),
+            tick,
+            |_, _, _, _| {
+                spawned += 1;
+                true
+            },
+        );
+    }
+    assert_eq!(spawned, 1, "the cached credit still reads claimable");
+}
+
+#[test]
+fn after_an_ambiguous_claude_claim_the_stamp_blocks_and_a_refilled_window_declines() {
+    let now = ts(1_700_000_000);
+    let pending = RedeemStamp {
+        attempted_at: now,
+        request_id: "lost".to_owned(),
+        reason: RedeemReason::BlockedGain,
+        outcome: None,
+    };
+    assert!(!stamp_allows_attempt(
+        Some(&pending),
+        now + Duration::from_secs(9 * 60)
+    ));
+    let later = now + Duration::from_secs(11 * 60);
+    assert!(stamp_allows_attempt(Some(&pending), later));
+    let credits = claude_credit(now, Duration::from_secs(30 * 86_400));
+    let config = config_at(RedeemLevel::Gain);
+    let spent = spent_capacity(later, Duration::from_secs(4 * 86_400));
+    assert_eq!(
+        fresh_verdict(
+            false,
+            &facts_of("claude", Some(&spent), &credits),
+            &config,
+            later
+        ),
+        Some(RedeemReason::BlockedGain),
+        "a claim that did not land leaves the week spent"
     );
-    assert!(spawned.is_empty(), "{spawned:?}");
-    let key = "claude@default".parse().unwrap();
-    assert!(!runtime.shared_auto_redeem_path(&key).exists());
+    assert_eq!(
+        fresh_verdict(
+            false,
+            &facts_of("claude", Some(&week_at(later, 0)), &credits),
+            &config,
+            later
+        ),
+        None,
+        "a claim that landed refilled the week"
+    );
 }
 
 fn seed_credit_entry(
@@ -1962,24 +2283,43 @@ fn the_marker_on_a_kind_rimz_redeems_is_its_forecast() {
     let far = open_capacity(now, Duration::from_secs(3 * 86_400));
     let near = open_capacity(now, Duration::from_secs(7 * 3_600));
     let hour = Duration::from_secs(3_600);
-    for (capacity, credits, expected) in [
+    let five_days = Duration::from_secs(5 * 86_400);
+    for (kind, capacity, credits, expected) in [
         (
+            CODEX_KIND,
             &far,
-            chain(now + Duration::from_secs(5 * 86_400)),
+            chain(now + five_days),
             RedeemForecast::Armed,
         ),
-        (&near, chain(now + 19 * hour), RedeemForecast::Holding),
+        (
+            CODEX_KIND,
+            &near,
+            chain(now + 19 * hour),
+            RedeemForecast::Holding,
+        ),
+        (
+            "claude",
+            &far,
+            claude_credit(now, five_days),
+            RedeemForecast::Armed,
+        ),
+        (
+            "claude",
+            &near,
+            claude_credit(now, five_days),
+            RedeemForecast::Holding,
+        ),
     ] {
         for limit_stopped in [false, true] {
             assert_eq!(
                 marker_forecast(
-                    &facts_of(CODEX_KIND, Some(capacity), &credits),
+                    &facts_of(kind, Some(capacity), &credits),
                     &config,
                     limit_stopped,
                     now
                 ),
                 Some(expected),
-                "limit stopped: {limit_stopped}"
+                "{kind}, limit stopped: {limit_stopped}"
             );
         }
     }

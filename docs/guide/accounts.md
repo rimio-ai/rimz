@@ -21,7 +21,7 @@ rimz accounts redeem claude --dry-run
 rimz accounts redeem claude work
 ```
 
-Without a name, RimZ uses the account a launch here would use. It shows that login, the credit count and expiry, the usage windows, and what spending one credit changes, then asks before spending. A Codex redemption restarts the window's clock: just before a free reset, you give that reset up for little extra capacity. The preview warns when it is near, but leaves the choice to you. Claude keeps its usual reset time; if its banked credits are not usable yet, the preview explains the hold and spends nothing. Claude redemption is manual only. `--yes` skips confirmation for scripts; [the reference](../reference/cli/accounts.md#redeem) lists the outcome exit codes and how to check an uncertain claim. Spending a credit cannot be undone.
+Without a name, RimZ uses the account a launch here would use. It shows that login, the credit count and expiry, the usage windows, and what spending one credit changes, then asks before spending. A Codex redemption restarts the window's clock: just before a free reset, you give that reset up for little extra capacity. The preview warns when it is near, but leaves the choice to you. Claude keeps its usual reset time; if its banked credits are not usable yet, the preview explains the hold and spends nothing. RimZ also redeems on its own at the level [auto-redeem](./loops.md#auto-redeem) sets, by default only a Codex or Claude credit about to expire. `--yes` skips confirmation for scripts; [the reference](../reference/cli/accounts.md#redeem) lists the outcome exit codes and how to check an uncertain claim. Spending a credit cannot be undone.
 
 ## Declare an account
 

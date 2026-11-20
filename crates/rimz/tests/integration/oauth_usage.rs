@@ -1645,7 +1645,7 @@ fn claude_redeem_stamp(env: &Env, name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn claude_redeem_dry_run_has_two_reads_no_forecast_and_no_durable_attempt() {
+fn claude_redeem_dry_run_has_two_reads_a_forecast_and_no_durable_attempt() {
     let env = Env::new();
     let (url, server) = claude_redeem_fixture(
         &env,
@@ -1670,7 +1670,10 @@ fn claude_redeem_dry_run_has_two_reads_no_forecast_and_no_durable_attempt() {
             && stdout.contains("reset stays at"),
         "{stdout}"
     );
-    assert!(!stdout.contains("forecast"), "{stdout}");
+    assert!(
+        stdout.contains("holding, if the longest window ran dry now"),
+        "Claude, served at `gain`, forecasts as Codex does: {stdout}"
+    );
     assert!(!claude_redeem_stamp(&env, "default").exists());
     assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
     let requests = server.join().unwrap();
@@ -1922,6 +1925,155 @@ fn claude_redeem_unknown_transport_outcomes_leave_a_live_reservation() {
             1
         );
     }
+}
+
+/// Runs the hidden auto-redeem helper for `claude@<name>` against a fixture.
+fn claude_auto_redeem(
+    env: &Env,
+    usage_url: &str,
+    name: &str,
+    request_id: uuid::Uuid,
+) -> (
+    rimz::harness::auto_redeem::AutoRedeemRequest,
+    std::process::Output,
+) {
+    let request = rimz::harness::auto_redeem::AutoRedeemRequest {
+        workspace_id: env.workspace_id.clone(),
+        login: format!("claude@{name}").parse().unwrap(),
+        reason: rimz::harness::auto_redeem::RedeemReason::ExpiryRescue,
+        request_id,
+    };
+    let output = env
+        .rimz()
+        .args(rimz::child_process::agent_helper_argv(
+            "auto-redeem",
+            &request,
+        ))
+        .env("RIMZ_CLAUDE_OAUTH_USAGE_URL", usage_url)
+        .env("PATH", path_with_front(&env.home_root.join("bin")))
+        .bounded_output()
+        .unwrap();
+    (request, output)
+}
+
+/// `claude_redeem_usage` with the selected grant clearing both windows and
+/// expiring in ten minutes, and the other grant clearing them too.
+fn claude_dying_usage() -> Value {
+    let mut usage = claude_redeem_usage();
+    let expiry = Timestamp::now() + jiff::SignedDuration::from_secs(10 * 60);
+    for grant in usage["cedar_ember"]["grants"].as_array_mut().unwrap() {
+        grant["clears"] = serde_json::json!(["five_hour", "seven_day"]);
+    }
+    usage["cedar_ember"]["grants"][1]["ends_at"] = expiry.to_string().into();
+    usage
+}
+
+/// The in-use login's windows read 0%, which an idle login's rescue skips, so
+/// its rescue proves the helper judged it in use.
+#[test]
+fn auto_redeem_rescues_an_in_use_and_an_idle_claude_login_and_records_each() {
+    for (name, in_use) in [("default", true), ("spare", false)] {
+        let env = Env::new();
+        let mut usage = claude_dying_usage();
+        if in_use {
+            env.record(&env.project_root);
+            usage["five_hour"]["utilization"] = 0.into();
+            usage["seven_day"]["utilization"] = 0.into();
+        }
+        let (url, server) =
+            claude_redeem_fixture(&env, usage, 200, 200, "reset", 4, Default::default());
+        let (request, output) = claude_auto_redeem(&env, &url, name, uuid::Uuid::now_v7());
+        assert!(
+            output.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let records = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+        let [record] = records.as_slice() else {
+            panic!("{name}: expected one assist record: {records:?}");
+        };
+        let rimz::harness::assist_log::Assist::AutoRedeem {
+            kind,
+            login,
+            reason,
+            request_id,
+            outcome,
+            error,
+            ..
+        } = &record.assist
+        else {
+            panic!("{name}: expected an auto-redeem record: {record:?}");
+        };
+        assert_eq!(kind, "claude");
+        assert_eq!(login.as_ref().map(|login| login.as_str()), Some(name));
+        assert_eq!(
+            *reason,
+            rimz::harness::auto_redeem::RedeemReason::ExpiryRescue
+        );
+        assert_eq!(request_id, &request.request_id.to_string());
+        assert_eq!((outcome.as_deref(), error), (Some("reset"), &None));
+        let stamp = read_json(claude_redeem_stamp(&env, name));
+        assert_eq!(stamp["outcome"], "reset", "{name}");
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 4, "{name}: {requests:?}");
+        let claims = requests
+            .iter()
+            .filter(|request| request.starts_with("POST "))
+            .collect::<Vec<_>>();
+        let [claim] = claims.as_slice() else {
+            panic!("{name}: expected one claim: {requests:?}");
+        };
+        assert!(
+            claim
+                .to_ascii_lowercase()
+                .contains(&format!("authorization: bearer access-{name}")),
+            "{name}: {claim}"
+        );
+        let body: Value = serde_json::from_str(claim.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["grant_id"], "selected", "{name}");
+        assert_eq!(body["request_id"], request.request_id.to_string(), "{name}");
+    }
+}
+
+#[test]
+fn auto_redeem_declines_a_held_claude_offer_and_keeps_the_producer_stamp() {
+    let env = Env::new();
+    let mut usage = claude_dying_usage();
+    usage["cedar_ember"]["cooldown_until"] = "2100-01-01T00:00:00Z".into();
+    let (url, server) =
+        claude_redeem_fixture(&env, usage, 200, 200, "reset", 2, Default::default());
+    let request_id = uuid::Uuid::now_v7();
+    let stamp = claude_redeem_stamp(&env, "default");
+    std::fs::create_dir_all(stamp.parent().unwrap()).unwrap();
+    std::fs::write(
+        &stamp,
+        serde_json::json!({
+            "attempted_at": Timestamp::now(),
+            "request_id": request_id.to_string(),
+            "reason": "expiry_rescue",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (_, output) = claude_auto_redeem(&env, &url, "default", request_id);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let kept = read_json(stamp.clone());
+    assert_eq!(
+        (kept["request_id"].as_str(), kept.get("outcome")),
+        (Some(request_id.to_string().as_str()), None),
+        "the producer's pending stamp stands and throttles the next spawn"
+    );
+    assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
+    let requests = server.join().unwrap();
+    assert!(
+        requests.iter().all(|request| request.starts_with("GET ")),
+        "{requests:?}"
+    );
 }
 
 #[test]
