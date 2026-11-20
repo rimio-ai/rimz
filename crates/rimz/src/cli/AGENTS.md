@@ -32,6 +32,7 @@ Before a change of one of these kinds, read the section named beside it and do w
 
 - A flag, a free-text positional, a mode that refuses flags, a `rimz agents` verb, or a visible top-level command or its doc comment, added, removed, or renamed: [CLI commands and flags](../../../../docs/contributing/change-checklists.md#cli-commands-and-flags).
 - Human rendering or its tests, a `doctor` row, a finding or notice built from a template, the words of `workflow_view::detail`, or a command a view prints for the user to copy: [Rendered output](../../../../docs/contributing/change-checklists.md#rendered-output).
+- A `rimz` child spawned to act on another room's object, or a read pointed at rooms beyond the caller's (a per-room snapshot in a machine-wide list): [Rooms other than the caller's](../../../../docs/contributing/change-checklists.md#rooms-other-than-the-callers).
 - A screen that prints stored records as rows or blocks (a history, recent runs, logs, a timeline): [Human history lists](../../../../docs/contributing/cli-scenes.md#human-history-lists).
 - A `rimz agents`, `rimz teams`, or `rimz subagents` list, verb, exit code, or user-facing noun: [CLI scenes](../../../../docs/contributing/cli-scenes.md).
 - A clap parser shape or a `value_parser` refusal: [CLI shape](../../../../docs/contributing/rust-conventions.md#cli-shape).

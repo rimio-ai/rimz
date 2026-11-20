@@ -2,7 +2,7 @@
 
 Local contract for `crates/rimz/src/sidebar/`, the view-model the renderer draws. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). Behaviour lives in [sidebar.md](../../../../docs/internals/sidebar/sidebar.md) (presence, ranking, reload) and [state.md](../../../../docs/internals/sidebar/state.md) (fetch cycle, lanes, events, fusion, focus intent, cadences): read the matching section before changing one.
 
-Before writing a rule keyed on a pane's tenant or row shape, a liveness test over `snapshot.agents`, or a value stamped at publication, read [Sidebar](../../../../docs/contributing/change-checklists.md#sidebar) and do what it asks.
+Before writing a rule keyed on a pane's tenant or row shape, a liveness test over `snapshot.agents`, or a value stamped at publication, read [Sidebar](../../../../docs/contributing/change-checklists.md#sidebar) and do what it asks. A change to `enrich::enrich_core` or a step it calls times `enrich_cached`, base against head, before hand-off: [Timing comparisons](../../../../docs/contributing/running-gates.md#timing-comparisons).
 
 ## Invariants
 

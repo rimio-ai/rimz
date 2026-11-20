@@ -80,13 +80,14 @@ These pages cut across every subsystem above: where the evidence lands when some
 
 ## From source code to its page
 
-Twelve trees under `crates/rimz/src/` carry their own `AGENTS.md` contract, which states the tree's boundaries and rules. The table links each contract from the tree's name. A top-level module without a row has no page of its own: its `//!` header is its documentation, the pages that use it cite it by path, and the root [AGENTS.md code map](../../AGENTS.md#code-map) places it.
+Thirteen trees under `crates/rimz/src/` carry their own `AGENTS.md` contract, which states the tree's boundaries and rules. The table links each contract from the tree's name. A top-level module without a row has no page of its own: its `//!` header is its documentation, the pages that use it cite it by path, and the root [AGENTS.md code map](../../AGENTS.md#code-map) places it.
 
 | Source | Page |
 | --- | --- |
 | `address.rs`, `address/` | [fleet.md § The address](./harness/fleet.md#the-address) |
 | [`agents/`](../../crates/rimz/src/agents/AGENTS.md) | [adapter.md](./agents/adapter.md), then the other [agent-layer pages](#the-agent-layer) |
 | [`cli/`](../../crates/rimz/src/cli/AGENTS.md) | No internals page. The commands are in the [CLI reference](../reference/cli.md), the shared command grammar in [cli-scenes.md](../contributing/cli-scenes.md), and the house rules in [rust-conventions.md](../contributing/rust-conventions.md). |
+| [`config/`](../../crates/rimz/src/config/AGENTS.md) | No internals page. The `//!` header of `config.rs` is its documentation. |
 | `cli/stats/` | [stats.md](./stats.md) |
 | `daemon_view.rs`, `daemon_view/`, `daemon_content.rs` | [rimzd.md](./rimzd.md) |
 | [`diag/`](../../crates/rimz/src/diag/AGENTS.md), `observability.rs`, `observability/` | [diagnostics.md](./diagnostics.md) |
