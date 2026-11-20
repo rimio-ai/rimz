@@ -181,6 +181,20 @@ A reader that checks a cached value against a generation the writer stores after
 
 On Linux x86-64 and aarch64, both glibc and musl builds select jemalloc for Rust and C allocations in `crates/rimz/src/main.rs`, with immediate dirty-page decay (`dirty_decay_ms:0`), extents kept off transparent huge pages (`thp:never`), and defaults otherwise. Other targets and a [heap-profiling build](../internals/profiling.md#heap-profiling-build) keep their platform allocator. Base metadata can still use huge pages under THP `always`; the [allocator measurements](../internals/performance.md#anti-patterns) record that accepted cost. Reuse workers and bound retained state rather than relying on allocator tuning.
 
+## Timestamps and clocks
+
+These rules hold for any change that stamps, compares, or waits on a time. The root rule, proving a timing fix at the consumer, comes first.
+
+- A stamp another rule compares with is taken at the instant that rule means, and keyed on the state that rule reads: a stamp set on a raw status misses the rows a consumer partitions by their displayed status (a clean turn end parked on background work is raw running and displays as success).
+- A floor that must expire with an existing cadence takes that cadence's own stamp, passed in, not a fresh `now()` after the pass's work, or it outlasts the cadence and skips the next due pass.
+- A freshness stamp checked against later triggers is taken before the request it covers, or a trigger that lands during the request is absorbed.
+- A fix that changes which clock stamps a value audits every comparison against that value for its behaviour at ties, since a stamp that used to trail another may now equal it.
+- A move onto an injected clock keeps every read that followed a lock, I/O, or spawn after that work, and converts between clocks at the present, never at construction.
+- A state a polling consumer reads stays published for at least one of that consumer's read intervals (its backstop tick plus one pass); a design that withdraws such a state names that interval beside the rule that withdraws it.
+- A state that changes with time alone reaches a reader sleeping on a stored retry time only if that time is computed from the change's instant.
+- A change that moves a record's deadline lists every consumer that enforces it (`rimz lsp refs` on the field, plus any caller that keeps its own clock from a `--timeout` flag) and every input the new value is computed from: a message unpark once rearmed a run's `deadline_at` while the foreground waiter still timed the run out by its own clock.
+- A cached answer reused while a key is unchanged keys its reuse on every input the answer reads, configuration included.
+
 ## Atomic writes
 
 Write shapes in `disk/atomic.rs` cover every disk write in the project:
