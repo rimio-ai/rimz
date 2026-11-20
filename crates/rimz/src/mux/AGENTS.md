@@ -40,4 +40,4 @@ Local contract for `crates/rimz/src/mux/`, the Zellij/tmux seam. Extends [crates
 
 Planner, width, and selection logic stay unit-level, with no mux required. Live-backend behaviour belongs in [`tests/integration/backend/`](../../tests/integration/backend/), which self-skips when the mux binary is absent.
 
-A change to the tmux commands RimZ issues, to what `PaneCmd.name` or `SplitPaneOptions::title` carries, or to what a Zellij birth waits on also runs what [Tests a change also runs](../../../../docs/contributing/change-checklists.md#tests-a-change-also-runs) names for it.
+A change to the tmux commands RimZ issues also runs the `backend::tmux::` live tests three times: under the local tmux, under CI's `TMUX_VERSION` from `ci/Dockerfile`, and under the 3.5 floor, each first on `PATH`. Layout behaviour differs across versions, and CI builds only its own.

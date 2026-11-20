@@ -29,6 +29,9 @@ struct Cli {
 - `bin_name = "rimz"` keeps help text stable when the executable is invoked via a platform-specific path.
 - Subcommands are a flat `enum Subcmd { ... }`. Use `#[clap(visible_alias = "<short>")]` for discoverable shorthand and `#[clap(hide = true)]` for hooks-only or internal subcommands.
 - A clap `value_parser` refusal quotes the whole rejected value and prints only the error's own text, not its source. Parse a value that can be large or whose cause matters (a JSON payload, a file's text) in the command, and refuse with `cli::usage::UsageError` so the exit code stays 2.
+- A free-text positional (a note, text, prompt, instruction, or message body) sets `allow_hyphen_values = true`, and its reference page names `--` as the escape for a value that is exactly one of the command's flags, `-h`/`--help` included. Agent and subagent launches reserve `--` for provider passthrough (`#[arg(last = true)]`), so a print run reads such a prompt from `rimz agents -p --stdin` and a subagent reads it from `--prompt-file`.
+- A doc comment on an `Args` struct prints in the `--help` of every subcommand that flattens it, since clap derive applies it to the command it is flattened into. When those verbs take different input, set the help per verb and assert it per verb.
+- A mode that refuses flags another mode accepts first lists every clap constraint on those flags (`rg -n 'requires|conflicts_with|required_unless' <the Args file>`). Clap checks `requires` and `conflicts_with` before the mode's own check runs, so the user gets exit 2 and a fix that is wrong for the mode.
 
 ## Stdout and tracing
 

@@ -23,6 +23,7 @@ Local contract for `crates/rimz/src/cli/`: argv to typed requests, the process e
 ## Command boundaries
 
 - A command module's internals are private: one command never imports another command's functions or types. Shared logic moves to the domain module that owns the knowledge, or, when it is pure presentation, to a shared CLI-layer module: `ctx`, `render/`, `usage`, `send`, `address`, `spinner`, `home_write`, `wake_view`, `workflow_view`, `ask_commands`, `launch_interaction`, `worktree_entry`, `worktree_protection`, `profile_report`, `loop_timer`, and the target-resolution helpers in `mod.rs`.
+- A command that starts refusing or asking where it proceeded, or a flag renamed or removed, is read against its scripted callers in `loops/`, `xtask/src`, `scripts/`, `.github`, and the integration tests: they run with no terminal and take the refusal path, while a test that pins only the argv still passes.
 - One parse entry is admitted across commands: `loop_launch.rs`, through which `rimz loop add` hands a task's parsed launch tail to the `check_loop_launch` of the command it names (`agents_cmd`, `teams`, `workflow`), so each command alone decides what a fire may launch through it.
 - The orchestration entries one command already publishes to another are migration debt: `room` attach execution (used by `remote`), `hooks` install UX (used by `room` start and `setup`), the `supervised` run driver (used by `agents_cmd`, `subagents`, and `loop_cmd`), `agents_cmd` resolved lifecycle operations and resume preconditions (used by `teams`, `subagents`, `workflow`, and `loop_cmd`), and the `subagents` parent-only child resume doorway (used by `message`). Add no other. Rehome passes move these workflows to their library owners; rendering stays here, and `supervised` keeps publishing run rendering (used by `subagents`) as a sanctioned cross-command entry.
 
@@ -30,9 +31,7 @@ Local contract for `crates/rimz/src/cli/`: argv to typed requests, the process e
 
 Before a change of one of these kinds, read the section named beside it and do what it asks. No gate catches a skipped one.
 
-- A flag, a free-text positional, a mode that refuses flags, a `rimz agents` verb, or a visible top-level command or its doc comment, added, removed, or renamed: [CLI commands and flags](../../../../docs/contributing/change-checklists.md#cli-commands-and-flags).
-- Human rendering or its tests, a `doctor` row, a finding or notice built from a template, the words of `workflow_view::detail`, or a command a view prints for the user to copy: [Rendered output](../../../../docs/contributing/change-checklists.md#rendered-output).
-- A `rimz` child spawned to act on another room's object, or a read pointed at rooms beyond the caller's (a per-room snapshot in a machine-wide list): [Rooms other than the caller's](../../../../docs/contributing/change-checklists.md#rooms-other-than-the-callers).
+- A clap parser shape, a free-text positional, a mode that refuses flags another mode accepts, or a `value_parser` refusal: [CLI shape](../../../../docs/contributing/rust-conventions.md#cli-shape).
+- Human rendering, a `doctor` row, a finding or notice built from a template, or a command a view prints for the user to copy: [Changing rendered output](../../../../docs/contributing/cli-scenes.md#changing-rendered-output).
 - A screen that prints stored records as rows or blocks (a history, recent runs, logs, a timeline): [Human history lists](../../../../docs/contributing/cli-scenes.md#human-history-lists).
 - A `rimz agents`, `rimz teams`, or `rimz subagents` list, verb, exit code, or user-facing noun: [CLI scenes](../../../../docs/contributing/cli-scenes.md).
-- A clap parser shape or a `value_parser` refusal: [CLI shape](../../../../docs/contributing/rust-conventions.md#cli-shape).
