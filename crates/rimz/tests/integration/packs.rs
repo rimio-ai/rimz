@@ -19,6 +19,9 @@ fn write(path: impl AsRef<Path>, text: &str) {
     fs::write(path, text).unwrap();
 }
 
+/// A workflow that runs one passing script.
+const SHIP: &str = "[workflow]\nscope = 'worktree'\nstart = 'ship'\n[script.ship]\ntimeout = '365d'\nrun = 'true'\non.ok = '@done'\n";
+
 fn source(env: &Env) -> PathBuf {
     let source = env.home_root.join("source");
     write(
@@ -44,6 +47,10 @@ fn source(env: &Env) -> PathBuf {
         "---\nleader: lead\nstages: [Work]\nroles:\n  - agent: coder\n    role: lead\n    owns: [Work]\n---\nPair.",
     );
     write(source.join("crew/skills/coder/SKILL.md"), "# Coder");
+    write(source.join("crew/workflows/ship/workflow.toml"), SHIP);
+    // Neither a dot directory nor one without workflow.toml is a pack workflow.
+    write(source.join("crew/workflows/.draft/workflow.toml"), SHIP);
+    write(source.join("crew/workflows/notes/readme.md"), "Notes.");
     write(source.join("tools/skills/extra/SKILL.md"), "# Extra");
     source
 }
@@ -979,6 +986,7 @@ fn linked_install_lists_refreshes_and_removes_in_record_order() {
     assert_eq!(rows[0]["linked"], true);
     assert_eq!(rows[0]["entry"], "source");
     assert_eq!(rows[0]["counts"]["skills"], 1);
+    assert_eq!(rows[0]["counts"]["workflows"], 1);
     assert!(rows[0]["problems"].as_array().unwrap().is_empty());
     assert_eq!(
         item(
@@ -1122,6 +1130,7 @@ fn exclusions_match_names_types_and_recorded_missing_items() {
         ("pair", "teams"),
         ("craft", "traits"),
         ("coder", "skills"),
+        ("ship", "workflows"),
     ] {
         env.rimz()
             .args(["packs", "exclude", &format!("crew:{name}"), "--type", kind])
@@ -1142,7 +1151,14 @@ fn exclusions_match_names_types_and_recorded_missing_items() {
             .success()
             .stdout(contains("already"));
     }
-    for kind in ["agents", "subagents", "teams", "traits", "skills"] {
+    for kind in [
+        "agents",
+        "subagents",
+        "teams",
+        "traits",
+        "skills",
+        "workflows",
+    ] {
         env.rimz()
             .args(["packs", "exclude", "crew", "--type", kind])
             .assert()
@@ -1197,6 +1213,7 @@ fn show_reports_definition_and_skill_fates_and_broken_recorded_packs() {
         source.join("tools/skills/coder/SKILL.md"),
         "Conflicting coder.",
     );
+    write(env.agents_home().join("workflows/ship/workflow.toml"), SHIP);
     packs::exclude(
         &env.agents_home(),
         &"crew".parse().unwrap(),
@@ -1220,6 +1237,7 @@ fn show_reports_definition_and_skill_fates_and_broken_recorded_packs() {
         ("subagents", "helper", "excluded_type"),
         ("traits", "craft", "conflict"),
         ("skills", "coder", "conflict"),
+        ("workflows", "ship", "overridden"),
     ] {
         assert_eq!(item(&show, kind, name)["fate"]["state"], fate, "{show}");
     }
@@ -1598,4 +1616,96 @@ fn packs_follow_explicit_agents_home_and_report_newer_records_without_failing_li
         .assert()
         .success()
         .stdout(contains("newer RimZ"));
+}
+
+/// Validates workflow `target` and returns its report.
+fn validate_workflow(env: &Env, target: &[&str]) -> std::process::Output {
+    env.rimz()
+        .args(["workflow", "validate", "--json"])
+        .args(target)
+        .output()
+        .unwrap()
+}
+
+fn workflow_rows(output: &std::process::Output) -> Vec<(String, String)> {
+    let report: Value =
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|_| panic!("{output:?}"));
+    report["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["workflow"].as_str().unwrap().to_owned(),
+                row["node"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn pack_workflows_resolve_by_name_behind_home_copies_exclusions_and_conflicts() {
+    let env = Env::new();
+    let source = installed(&env);
+    let shipped = validate_workflow(&env, &["ship"]);
+    assert!(shipped.status.success(), "{shipped:?}");
+    assert_eq!(workflow_rows(&shipped), [("ship".into(), "ship".into())]);
+    // Validating every workflow reads the packs' too, skipping what is no pack workflow.
+    let every = validate_workflow(&env, &[]);
+    assert!(every.status.success(), "{every:?}");
+    assert_eq!(workflow_rows(&every), [("ship".into(), "ship".into())]);
+
+    write(source.join("tools/workflows/ship/workflow.toml"), SHIP);
+    let conflict = validate_workflow(&env, &["ship"]);
+    assert_eq!(conflict.status.code(), Some(1), "{conflict:?}");
+    let stderr = String::from_utf8_lossy(&conflict.stderr);
+    assert!(
+        stderr.contains("pack conflict for `ship`: crew (")
+            && stderr.contains("), tools (")
+            && stderr.contains("rimz packs exclude crew:ship --type workflows")
+            && stderr.contains("rimz packs exclude tools:ship --type workflows"),
+        "{stderr}"
+    );
+
+    // A home copy wins by name over both packs.
+    write(
+        env.agents_home().join("workflows/ship/workflow.toml"),
+        &SHIP.replace("ship", "home"),
+    );
+    let home = validate_workflow(&env, &["ship"]);
+    assert!(home.status.success(), "{home:?}");
+    assert_eq!(workflow_rows(&home), [("ship".into(), "home".into())]);
+
+    // An excluded pack workflow resolves nowhere; the other pack's is the one left.
+    fs::remove_dir_all(env.agents_home().join("workflows/ship")).unwrap();
+    env.rimz()
+        .args(["packs", "exclude", "tools:ship", "--type", "workflows"])
+        .assert()
+        .success();
+    let left = json(&env, &["packs", "show", "crew", "--json"]);
+    assert_eq!(item(&left, "workflows", "ship")["fate"]["state"], "loads");
+    assert_eq!(
+        item(&left, "workflows", "ship")["path"],
+        env.agents_home()
+            .join("packs/source/crew/workflows/ship")
+            .to_str()
+            .unwrap()
+    );
+    env.rimz()
+        .args(["packs", "exclude", "crew:ship", "--type", "workflows"])
+        .assert()
+        .success();
+    let none = env
+        .rimz()
+        .args(["workflow", "run", "ship"])
+        .output()
+        .unwrap();
+    assert_eq!(none.status.code(), Some(1), "{none:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&none.stderr).trim(),
+        format!(
+            "error: ship: no workflow of that name in {} or an installed pack",
+            env.agents_home().join("workflows").display()
+        )
+    );
 }

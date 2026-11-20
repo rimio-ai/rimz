@@ -1630,9 +1630,9 @@ fn deployed(dir: &Path) -> DefinitionSource<'_> {
     }
 }
 
-/// A deployed run copies nothing: it records its directory canonical and every read takes the
-/// directory as it is, so an entry the definition never names, even one that resolves outside
-/// it or nowhere, no longer stops the start.
+/// A deployed run copies nothing: it records its directory as it was given, links kept, and
+/// every read takes the directory as it is, so an entry the definition never names, even one
+/// that resolves outside it or nowhere, no longer stops the start.
 #[test]
 fn a_deployed_run_reads_its_directory_live_and_keeps_no_copy() {
     let (home, state) = bare_room();
@@ -1645,11 +1645,33 @@ fn a_deployed_run_reads_its_directory_live_and_keeps_no_copy() {
     std::os::unix::fs::symlink(home.path().join("secret.md"), dir.join("prompts/leak.md")).unwrap();
     std::os::unix::fs::symlink(home.path().join("missing.md"), dir.join("prompts/gone.md"))
         .unwrap();
-    let record = start_at(&state, home.path(), deployed(&dir)).unwrap();
+    // A start through a link records the link, as a pack workflow's entry link is recorded.
+    let link = home.path().join("linked");
+    std::os::unix::fs::symlink(&dir, &link).unwrap();
+    let record = start_at(&state, home.path(), deployed(&link)).unwrap();
     let paths = state.workflow(&record.id);
     assert_eq!(record.origin, RunOrigin::Deployed);
-    assert_eq!(record.spec_dir, Some(dir.canonicalize().unwrap()));
+    assert_eq!(record.workflow, "nightly");
+    assert_eq!(record.spec_dir, Some(link));
     assert!(!paths.definition.exists());
+    // A `..` after a link stays in the record, so it names the directory validated.
+    let real = home.path().join("real");
+    fs::create_dir_all(real.join("sub")).unwrap();
+    for flow in [real.join("flow"), home.path().join("flow")] {
+        fs::create_dir_all(&flow).unwrap();
+        fs::write(crate::disk::paths::workflow_spec_file(&flow), CHECK_ONLY).unwrap();
+    }
+    std::os::unix::fs::symlink(real.join("sub"), home.path().join("hop")).unwrap();
+    let hopped = start_at(
+        &state,
+        home.path(),
+        deployed(&home.path().join("hop/../flow")),
+    )
+    .unwrap();
+    assert_eq!(
+        hopped.spec_dir.unwrap().canonicalize().unwrap(),
+        real.join("flow").canonicalize().unwrap()
+    );
     assert!(!crate::disk::paths::workflow_spec_file(&paths.home).exists());
     fs::write(dir.join("prompts/fix.md"), "an edit after start").unwrap();
     let spec = spec::load(&record.definition_dir(&paths)).unwrap();

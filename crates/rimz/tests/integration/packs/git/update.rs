@@ -523,3 +523,49 @@ fn unknown_update_packs_fail_and_list_installed_names() {
     );
     assert_eq!(fixture.record(), before);
 }
+
+#[test]
+fn a_pack_workflow_run_reads_its_definition_through_the_entry_link_across_an_update() {
+    let fixture = Fixture::new();
+    install(&fixture, "crew");
+    fixture.env.record(&fixture.env.project_root);
+    let started = fixture.run(&["workflow", "run", "ship"]);
+    assert!(started.status.success(), "{started:?}");
+    let id = String::from_utf8(started.stdout).unwrap();
+    let id = id.lines().next().unwrap().to_owned();
+    let spec_dir = || {
+        let output = fixture.run(&["workflow", "show", &id, "--json"]);
+        assert!(output.status.success(), "{output:?}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        PathBuf::from(value["record"]["spec_dir"].as_str().unwrap())
+    };
+    let record = fixture.record();
+    let entry = record["sources"][0]["entry"].as_str().unwrap();
+    let packs = fixture.env.agents_home().join("packs");
+    let installed = packs
+        .join(".checkouts")
+        .join(format!("{entry}-{}", fixture.commit));
+    assert!(installed.is_dir());
+    // The run records the stable entry link, never the commit's checkout.
+    assert_eq!(spec_dir(), packs.join(entry).join("workflows/ship"));
+
+    let path = fixture.crew.join("workflows/ship/workflow.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    write(&path, &format!("# updated\n{text}"));
+    let commit = publish(&fixture.crew);
+    let output = fixture.run(&["packs", "update", "crew"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(fixture.record()["sources"][0]["commit"], commit);
+    // The update keeps the checkout it retired; the next pack change collects it.
+    let output = fixture.run(&["packs", "exclude", "crew:craft", "--type", "traits"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(!installed.exists(), "the old checkout is collected");
+    let dir = spec_dir();
+    assert!(
+        fs::read_to_string(dir.join("workflow.toml"))
+            .unwrap()
+            .starts_with("# updated\n"),
+        "{}",
+        dir.display()
+    );
+}

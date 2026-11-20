@@ -311,17 +311,20 @@ fn run_start(source: &DefinitionSource<'_>) -> Result<RunStart> {
             fire,
             fire_facts,
         } => {
-            let dir = dir.canonicalize()?;
+            // The name is the real directory's; the recorded path keeps the links it was given
+            // through, so a pack workflow's stays on the pack's entry link across its updates.
+            let name = dir
+                .canonicalize()?
+                .file_name()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| WorkflowErr::Refused("workflow directory needs a name".into()))?
+                .to_owned();
             RunStart {
                 origin: RunOrigin::Deployed,
-                name: dir
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .ok_or_else(|| WorkflowErr::Refused("workflow directory needs a name".into()))?
-                    .to_owned(),
+                name,
                 task: task.clone(),
                 loop_fire: loop_fire.clone(),
-                spec_dir: dir,
+                spec_dir: std::path::absolute(dir)?,
                 fire: fire.clone(),
                 fire_facts: fire_facts.clone(),
             }

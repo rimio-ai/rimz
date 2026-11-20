@@ -24,34 +24,58 @@ pub(super) fn definitions() -> rimz::config::definitions::LoadedDefinitions {
     )
 }
 
-/// A workflow name resolves under `~/.rimz/workflows/`; any other path stays as given.
-pub(super) fn definition_dir(name: &std::path::Path) -> std::path::PathBuf {
-    let mut components = name.components();
-    if matches!(components.next(), Some(std::path::Component::Normal(_)))
-        && components.next().is_none()
-    {
-        rimz::disk::paths::workflows_dir().join(name)
-    } else {
-        name.to_owned()
-    }
+/// The workflows deployed in the agents home and its installed packs.
+pub(super) fn deployed() -> anyhow::Result<rimz::harness::workflow::Deployed> {
+    let home = rimz::disk::paths::agents_home();
+    rimz::harness::workflow::Deployed::load(&home).map_err(|error| {
+        anyhow::anyhow!(
+            "reading {}: {error}",
+            rimz::disk::paths::workflows_dir_under(&home).display()
+        )
+    })
 }
 
-/// The deployed definition a `workflow run` starts from, refused with every validation error;
-/// warnings print to stderr.
+/// Where a workflow target leads: a target of one bare path component is a deployed name,
+/// `None` when nothing claims it, and any other target is the directory it spells.
+pub(super) fn definition_dir(
+    target: &std::path::Path,
+) -> anyhow::Result<Option<std::path::PathBuf>> {
+    let mut components = target.components();
+    let name = match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(name)), None) => name,
+        _ => return Ok(Some(target.to_owned())),
+    };
+    let Some(name) = name.to_str() else {
+        return Ok(None);
+    };
+    let deployed = deployed()?;
+    let found = deployed
+        .find(name)
+        .map_err(|conflict| anyhow::anyhow!("{conflict}"))?;
+    Ok(found.map(std::path::Path::to_owned))
+}
+
+/// The definition a `workflow run` starts from: a deployed name's directory, or any directory
+/// by path. Refused with every validation error; warnings print to stderr.
 pub(super) fn deployed_definition(
     name: &std::path::Path,
     project_root: Option<&std::path::Path>,
 ) -> anyhow::Result<std::path::PathBuf> {
     use std::io::Write;
-    let dir = definition_dir(name);
-    let home = rimz::disk::paths::workflows_dir();
-    if !rimz::harness::workflow::is_deployed(&dir) {
+    let Some(dir) = definition_dir(name)? else {
+        let home = rimz::disk::paths::workflows_dir_under(&rimz::disk::paths::agents_home());
+        let here = rimz::disk::paths::workflow_spec_file(name).is_file();
         anyhow::bail!(
-            "{}: directory must exist inside {}",
+            "{}: no workflow of that name in {} or an installed pack{}",
             name.display(),
-            home.display()
+            home.display(),
+            if here {
+                format!("; to run the directory here, write ./{}", name.display())
+            } else {
+                String::new()
+            }
         );
-    }
+    };
     let report = rimz::harness::workflow::validate(&dir, &definitions(), project_root);
     if !report.errors.is_empty() {
         anyhow::bail!(

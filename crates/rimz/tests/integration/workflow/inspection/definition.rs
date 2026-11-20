@@ -76,6 +76,12 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
     ] {
         assert!(text.contains(fragment), "missing {fragment:?}:\n{text}");
     }
+    // The selector picks the definition and stays out of the run command, which takes a name.
+    let selected = success(command(&env, &["workflow", "show", "workflow:review"]));
+    assert!(
+        selected.contains("by hand: rimz workflow run review -w '<worktree>'"),
+        "{selected}"
+    );
     let positions = ["◇ begin", "○ sweep", "◇ watch", "├─○ fix", "◇ unused"]
         .map(|name| text.find(name).unwrap());
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");

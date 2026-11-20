@@ -13,6 +13,7 @@ use crate::store::workflow::{Asking, AttemptOutcome, AttemptRun, Children, TurnE
 
 mod brief;
 mod definition;
+mod deployed;
 mod engine;
 mod graph;
 mod inspect;
@@ -23,6 +24,7 @@ mod state;
 mod validate;
 
 pub use definition::{Condition, Definition, Invocation, Kind, Limit, Node, Target};
+pub use deployed::Deployed;
 pub(crate) use engine::hears_lifecycle;
 pub(crate) use engine::join_report;
 pub use engine::{
@@ -42,7 +44,7 @@ pub(crate) use spec::parse;
 pub use spec::{
     Issue, LaunchOverrides, OccupancyPolicy, ScopeKind, SpecErr, When, load, parse_when, schema,
 };
-pub use validate::{Inadmissible, NodeRow, Validation, admit, is_deployed, validate};
+pub use validate::{Inadmissible, NodeRow, Validation, admit, validate};
 
 pub struct ScopeRoots {
     pub checkout: PathBuf,

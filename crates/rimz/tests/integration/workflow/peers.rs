@@ -1158,21 +1158,8 @@ fn a_runs_step_refuses_before_any_child_on_a_dirty_checkout_depth_and_unstartabl
             "",
             "whole has scope = \"project\" and gets no worktree of its own".to_owned(),
         ),
-        (
-            "start = [{ workflow = 'linked' }]\nthen = 'after'",
-            "",
-            "linked is not a deployed workflow".to_owned(),
-        ),
         (one, "unreadable", "cannot create a worktree: ".to_owned()),
     ];
-    // A deployed name whose directory resolves outside the workflows home is no deployed workflow.
-    let outside = env.home_root.join("elsewhere/linked");
-    fs::create_dir_all(outside.join("checks")).unwrap();
-    let child = env.rimz_home().join("workflows/child");
-    for file in ["workflow.toml", "checks/pr.sh"] {
-        fs::copy(child.join(file), outside.join(file)).unwrap();
-    }
-    std::os::unix::fs::symlink(&outside, env.rimz_home().join("workflows/linked")).unwrap();
     for (spread, setup, reason) in cases {
         let gate = deploy_fan(&env, spread);
         let parent = started(run(&env, "fan", &[], &[]));
@@ -1439,4 +1426,176 @@ fn a_takeover_fails_the_step_when_its_start_list_no_longer_matches_the_reserved_
         "{route:#}"
     );
     assert_eq!(live_children(&env, ids), [ids[0].clone()]);
+}
+
+/// Copies deployed workflow `name` to `dir`.
+fn copy_workflow(env: &Env, name: &str, dir: &Path) {
+    let from = env.rimz_home().join("workflows").join(name);
+    fs::create_dir_all(dir.join("checks")).unwrap();
+    for file in ["workflow.toml", "checks/pr.sh"] {
+        fs::copy(from.join(file), dir.join(file)).unwrap();
+    }
+}
+
+/// Installs a linked pack `crew` whose workflow `packed` is a copy of deployed workflow
+/// `name`, and returns the directory a run of it records.
+fn install_packed(env: &Env, name: &str) -> PathBuf {
+    let source = env.home_root.join("source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("rimz-packs.toml"),
+        "[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\n",
+    )
+    .unwrap();
+    copy_workflow(env, name, &source.join("workflows/packed"));
+    rimz::packs::install(&env.agents_home(), &source).unwrap();
+    env.agents_home().join("packs/source/workflows/packed")
+}
+
+#[test]
+fn a_runs_step_starts_pack_workflows_and_home_names_linked_from_elsewhere() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    deploy(&env, "child");
+    let packed = install_packed(&env, "child");
+    // A home name whose directory is a link to elsewhere is the home's workflow.
+    let outside = env.home_root.join("elsewhere/linked");
+    copy_workflow(&env, "child", &outside);
+    let linked = env.rimz_home().join("workflows/linked");
+    std::os::unix::fs::symlink(&outside, &linked).unwrap();
+    let gate = deploy_fan(
+        &env,
+        "start = [{ workflow = 'packed' }, { workflow = 'linked' }]\nthen = 'after'",
+    );
+    commit_project(&env);
+    let parent = started(run(&env, "fan", &[], &[]));
+    until(&env, &parent, |value| value["record"]["wait"].is_object());
+    let ids = children(&open_gate(&env, &parent, &gate));
+    let started: Vec<_> = ids
+        .iter()
+        .map(|id| {
+            let record =
+                until(&env, id, |value| value["record"]["wait"].is_object())["record"].clone();
+            (record["workflow"].clone(), record["spec_dir"].clone())
+        })
+        .collect();
+    assert_eq!(
+        started,
+        [
+            (json!("packed"), json!(packed)),
+            (json!("linked"), json!(linked))
+        ]
+    );
+}
+
+#[test]
+fn an_agent_starts_home_and_pack_workflows_but_never_a_loose_directory() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed_agent(&env, "planner");
+    deploy(&env, "owed");
+    deploy(&env, "plain");
+    install_packed(&env, "owed");
+    let loose = env.home_root.join("elsewhere/loose");
+    copy_workflow(&env, "owed", &loose);
+    let refusal = format!(
+        "error: {}: an agent starts only a workflow in {} or an installed pack; run this \
+         directory from your own shell, or move it there or install its pack",
+        loose.display(),
+        env.rimz_home().join("workflows").display()
+    );
+    let refused = |vars: &[(&str, &str)]| {
+        let homes = live_homes(&env);
+        let output = run(&env, loose.to_str().unwrap(), &[], vars);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stderr).trim(), refusal);
+        assert_eq!(live_homes(&env), homes, "the refusal created no home");
+    };
+    refused(&AGENT);
+    // Setting the hosted variable outside any run does not make an agent a person.
+    refused(&[AGENT[0], AGENT[1], ("RIMZ_WORKFLOW_NODE", "pr")]);
+    // A loop task's start takes only a deployed workflow, whoever calls.
+    let homes = live_homes(&env);
+    let fire = rimz::harness::workflow::TaskStart {
+        task: "t".into(),
+        loop_fire: rimz::ids::FireId::new(&rimz::ids::TaskId::new()),
+        fire: rimz::store::workflow::RunFire::Manual {
+            task: "t".into(),
+            evidence: None,
+            booked_by: vec![],
+        },
+        fire_facts: json!({}),
+        manual: true,
+    };
+    let output = run(
+        &env,
+        loose.to_str().unwrap(),
+        &["--loop-fire-json", &serde_json::to_string(&fire).unwrap()],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim(),
+        format!(
+            "error: {}: a loop task starts only a workflow in {} or an installed pack",
+            loose.display(),
+            env.rimz_home().join("workflows").display()
+        )
+    );
+    assert_eq!(live_homes(&env), homes, "the refusal created no home");
+    // An agent's start through a link it controls records the home's own path.
+    deploy(&env, "aliased");
+    let alias = env.home_root.join("elsewhere/alias");
+    std::os::unix::fs::symlink(env.rimz_home().join("workflows/aliased"), &alias).unwrap();
+    let (_, value) = pending(&env, alias.to_str().unwrap(), &AGENT);
+    assert_eq!(
+        value["record"]["spec_dir"],
+        json!(env.rimz_home().join("workflows/aliased"))
+    );
+    // A directory nested in the home is the home's, as an agent's start.
+    let nested = env.rimz_home().join("workflows/group/nested");
+    copy_workflow(&env, "owed", &nested);
+    let (_, value) = pending(&env, nested.to_str().unwrap(), &AGENT);
+    assert_eq!(value["record"]["spec_dir"], json!(nested));
+    let (_, value) = pending(&env, "packed", &AGENT);
+    assert_eq!(
+        value["record"]["starter"],
+        json!({"by":"agent", "kind":"claude", "launch":"launch_planner"})
+    );
+    let (owed, _) = pending(&env, "owed", &AGENT);
+    // A script of a run an agent started starts as that run, under the agent's rule.
+    refused(&[("RIMZ_WORKFLOW_RUN", &owed), ("RIMZ_WORKFLOW_NODE", "pr")]);
+    // A script of a run a person started is the person's.
+    let (plain, _) = pending(&env, "plain", &[]);
+    let output = run(
+        &env,
+        loose.to_str().unwrap(),
+        &["--detach"],
+        &[("RIMZ_WORKFLOW_RUN", &plain), ("RIMZ_WORKFLOW_NODE", "pr")],
+    );
+    let id = started(output);
+    assert_eq!(
+        show(&env, &id)["record"]["spec_dir"],
+        json!(loose),
+        "a person's run starts the loose directory"
+    );
+    // `show` takes the directory by path, with its runs and its node view.
+    let shown = success(command(
+        &env,
+        &["workflow", "show", loose.to_str().unwrap()],
+    ));
+    assert!(shown.contains("elsewhere/loose/workflow.toml"), "{shown}");
+    assert!(
+        shown.contains(&format!(
+            "one run per worktree · by hand: rimz workflow run {} -w '<worktree>'",
+            loose.display()
+        )),
+        "{shown}"
+    );
+    assert!(shown.contains("loose · 1 active"), "{shown}");
+    let node = success(command(
+        &env,
+        &["workflow", "show", loose.to_str().unwrap(), "pr"],
+    ));
+    assert!(node.contains("pr · check in loose"), "{node}");
 }

@@ -6,8 +6,8 @@ use rimz::harness::workflow::ScopeKind;
 
 use super::*;
 
-/// A definition `show` and `validate` read by name: a deployed workflow, or a loop task's
-/// one-node command graph materialized into a scratch directory named for the task.
+/// A definition `show` and `validate` read: a deployed workflow by name, a directory by path, or
+/// a loop task's one-node command graph materialized into a scratch directory named for the task.
 pub(super) struct Definition {
     name: String,
     raw: String,
@@ -23,6 +23,14 @@ impl Drop for Scratch {
     }
 }
 
+/// Whether `raw` is one plain path component, which names a workflow rather than a path.
+pub(super) fn one_name(raw: &str) -> bool {
+    matches!(
+        Path::new(raw).components().collect::<Vec<_>>()[..],
+        [std::path::Component::Normal(_)]
+    )
+}
+
 impl Definition {
     pub(super) fn name(&self) -> &str {
         &self.name
@@ -36,22 +44,48 @@ impl Definition {
         &self.dir
     }
 
+    /// Whether the target named the directory by path rather than a deployed name.
+    pub(super) fn is_path(&self) -> bool {
+        !one_name(&self.raw)
+    }
+
     /// Resolve `raw`, a bare name or one with a `workflow:` or `task:` selector, against the
-    /// deployed workflows and the caller's loop tasks; `None` for a path or a run target.
+    /// deployed workflows and the caller's loop tasks, or a path to a directory holding a
+    /// definition, named for the directory it resolves to; `None` for any other path or a run
+    /// target.
     pub(super) fn resolve(raw: &str, globals: &super::super::GlobalFlags) -> Result<Option<Self>> {
         let (selector, name) = match raw.split_once(':') {
             Some((selector @ ("workflow" | "task"), name)) => (Some(selector), name),
             _ => (None, raw),
         };
-        let mut components = Path::new(name).components();
-        if !matches!(components.next(), Some(std::path::Component::Normal(_)))
-            || components.next().is_some()
-            || !resolve::names_workflow(name)
-        {
+        if !one_name(name) {
+            let dir = PathBuf::from(raw);
+            if selector.is_some() || !paths::workflow_spec_file(&dir).is_file() {
+                return Ok(None);
+            }
+            let name = dir.canonicalize()?.file_name().map_or_else(
+                || raw.to_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            return Ok(Some(Self {
+                name,
+                raw: raw.into(),
+                dir,
+                task: None,
+            }));
+        }
+        if !resolve::names_workflow(name) {
             return Ok(None);
         }
-        let dir = workflow_view::definition_dir(Path::new(name));
-        let deployed = selector != Some("task") && dir.is_dir();
+        let found = if selector == Some("task") {
+            None
+        } else {
+            workflow_view::definition_dir(Path::new(name))?
+        };
+        let deployed = found.is_some();
+        // A name nothing claims stays a path into the home, where reading it fails.
+        let dir =
+            found.unwrap_or_else(|| paths::workflows_dir_under(&paths::agents_home()).join(name));
         let catalog = (selector != Some("workflow"))
             .then(|| TaskCatalog::load_lenient(validation_root(globals).as_deref()));
         let task = catalog
@@ -192,7 +226,9 @@ fn header(
             let starts = match (&definition.task, task.action()) {
                 (Some(_), _) => task_name == name,
                 (None, Ok(rimz::harness::schedule::TaskAction::Launch(launch))) => {
-                    launch.kind == LaunchKind::Workflow && launch.target == name
+                    !definition.is_path()
+                        && launch.kind == LaunchKind::Workflow
+                        && launch.target == name
                 }
                 (None, _) => false,
             };
@@ -209,17 +245,28 @@ fn header(
         let worktree = spec.scope() == ScopeKind::Worktree;
         let flags: &[&str] = if worktree { &["-w", "<worktree>"] } else { &[] };
         let root = globals.root.as_deref();
-        let command = resolve::command("run", &[name], root, None, flags);
+        let target = if definition.is_path() {
+            &definition.raw
+        } else {
+            name
+        };
+        let command = resolve::command("run", &[target], root, None, flags);
         let rimz = resolve::rimz_prefix(root);
         let task = format!(
             "{rimz} loop add '<task>' --workflow {}{} --every '<duration>'",
             crate::cli::usage::shell_command([name]),
             if worktree { " --each-worktree" } else { "" },
         );
-        writeln!(
-            out,
-            "one run per {scope} · no loop task starts it; from a loop: {task} · by hand: {command}"
-        )?;
+        // A loop task takes only a deployed name, so a directory by path is run by hand.
+        if definition.is_path() {
+            writeln!(out, "one run per {scope} · by hand: {command}")?;
+        } else {
+            writeln!(
+                out,
+                "one run per {scope} · no loop task starts it; from a loop: {task} · by hand: \
+                 {command}"
+            )?;
+        }
     } else {
         writeln!(out, "one run per {scope} · {}", tasks.join(" · "))?;
     }

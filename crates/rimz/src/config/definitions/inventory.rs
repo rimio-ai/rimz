@@ -110,6 +110,24 @@ impl PackInventory {
                 problems.push(problem);
             }
         }
+        match crate::harness::workflow::Deployed::from_packs(home, resolved) {
+            Ok(deployed) => {
+                let (workflows, unread) = deployed.into_pack_items();
+                for workflow in workflows {
+                    items
+                        .entry(workflow.pack.clone())
+                        .or_default()
+                        .push(workflow);
+                }
+                for (pack, problem) in unread {
+                    pack_problems.entry(pack).or_default().push(problem);
+                }
+            }
+            Err(error) => problems.push(Problem {
+                path: crate::disk::paths::workflows_dir_under(home),
+                message: error.to_string(),
+            }),
+        }
         let mut packs = Vec::new();
         for source in &resolved.record.sources {
             for installed in &source.packs {
@@ -125,6 +143,7 @@ impl PackInventory {
                     ItemType::Teams,
                     ItemType::Traits,
                     ItemType::Skills,
+                    ItemType::Workflows,
                 ]
                 .into_iter()
                 .map(|kind| {

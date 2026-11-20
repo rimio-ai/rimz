@@ -78,6 +78,7 @@ pub enum ItemType {
     Teams,
     Traits,
     Skills,
+    Workflows,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -126,6 +127,7 @@ impl ItemType {
             Self::Teams => "teams",
             Self::Traits => "traits",
             Self::Skills => "skills",
+            Self::Workflows => "workflows",
         }
     }
 }
