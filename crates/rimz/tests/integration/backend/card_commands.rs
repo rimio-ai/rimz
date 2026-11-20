@@ -277,6 +277,31 @@ pub(super) fn check_cards(
         "reopen needs a new tab: {new_view}, surviving tabs: {surviving_views:?}"
     );
     wait_focus(backend, session, &runtime, &new_pane);
+    // The tab close asks the host which card owns each pane, and a pane the host still shows
+    // without its card closes as a raw pane, with no stop and no closed-card entry to reopen.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let output = command()
+            .args(["sidebar", "snapshot", "--json", "--no-produce"])
+            .bounded_output()
+            .unwrap();
+        assert!(output.status.success(), "consumer snapshot: {output:?}");
+        let snapshot: SidebarSnapshot = serde_json::from_slice(&output.stdout).unwrap();
+        if snapshot.rows().any(|row| {
+            row.id == reopened.agent_id.as_str()
+                && row
+                    .pane
+                    .as_ref()
+                    .is_some_and(|pane| pane.pane_id == new_pane)
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the reopened card never reached the consumer"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 
     // The tab close stops the agent as a card close does, so its own reopen brings it back,
     // and it takes the tab, sidebar included, in one command.
