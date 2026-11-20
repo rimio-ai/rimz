@@ -9,8 +9,9 @@
 # takes seconds. RimZ sends q=2, which suppresses Ghostty's error replies, so the patch
 # records each command's response before the quiet check drops it. The script writes one
 # "command=N action=A result=R" line per kitty command and one "image=ID" line per image
-# left in storage to <capture>.results, then prints the SUMMARY line and a count of each
-# error result. A clean replay reads errors=0.
+# left in storage to <capture>.results, then prints the SUMMARY line, the capture's own count
+# of graphics sequences, and a count of each error result. A clean replay reads errors=0
+# with commands equal to that count: a sequence Ghostty could not parse adds to neither.
 set -eu
 
 [ "$#" -ge 1 ] || { sed -n '3,4p' "$0" >&2; exit 2; }
@@ -22,6 +23,8 @@ results="$capture.results"
 if [ ! -d "$ghostty" ]; then
     git -c advice.detachedHead=false clone -q --depth 1 --branch v1.3.1 https://github.com/ghostty-org/ghostty "$ghostty"
 fi
+tag=$(git -C "$ghostty" describe --tags --exact-match HEAD 2>/dev/null || true)
+[ "$tag" = v1.3.1 ] || { echo "$ghostty is not a Ghostty v1.3.1 checkout" >&2; exit 1; }
 if ! grep -q rimz_replay_result "$ghostty/src/terminal/kitty/graphics_exec.zig"; then
     git -C "$ghostty" apply "$here/graphics_exec.patch"
 fi
@@ -31,4 +34,5 @@ cp "$here/petchunks_replay.zig" "$ghostty/src/terminal/kitty/"
     uvx --from ziglang==0.15.2 python -m ziglang build test \
     -Dapp-runtime=none -Doptimize=ReleaseFast -Dtest-filter=petchunks-replay)
 grep SUMMARY "$results"
+echo "captured=$(grep -ao "$(printf '\033')_G" "$capture" | wc -l)"
 awk -F 'result=' '/result=/ && $2 !~ /^OK/ { n[$2]++ } END { for (e in n) print n[e], e }' "$results"

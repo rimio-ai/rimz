@@ -3,7 +3,7 @@
 #
 # Copy it into a scratch directory and put that directory first on the PATH of
 # cargo xtask sandbox room. It answers for PR #91 on the room's probe branch against main,
-# at the worktree's HEAD, with passing CI, for a repository named
+# at HEAD of the checkout the host probes from (the probe worktree in a fresh room), with passing CI, for a repository named
 # github.com/rimz-live-check/probe. It reads the PR's mergeable state (CONFLICTING,
 # MERGEABLE, or UNKNOWN) from the file mode beside it on each call, logs every call to
 # gh.calls beside it, and refuses every other command with exit 97.
