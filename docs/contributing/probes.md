@@ -152,7 +152,7 @@ A hand-built isolated home sets or unsets each of these. An agent shell exports 
 - A kind base takes every profile key but `tier:`, and a key it sets fills every definition on its kind that leaves the key unset. A probe base that sets `tools` or `model` changes every definition the probe loads that leaves the key unset.
 - A live check of a change to definition or skill loading runs `rimz agents explain` on a healthy profile beside each broken item, and on each agent kind a broken item is named after, bare and as `<kind>-yolo` and `<kind>-fast`. `rimz agents validate` and `rimz agents profiles` never show which launches refuse.
 - A hand-built `rimz packs` probe of a Git source runs under `env -i` with its own `HOME`, `RIMZ_HOME`, and short `XDG_RUNTIME_DIR`. It points `GIT_CONFIG_GLOBAL` at a file holding `[url "file://<fixture dir>/"]` with `insteadOf = https://github.com/rimio-ai/`. Write the fixture directory as an absolute path: a relative one fails the fetch.
-- The probe tags each fixture repository (`rimz-crew`, `rimz-skills`) `v<version>`, the crate version that `rimz --version` prints before its `+` suffix. An official source with no ref resolves to that tag (`crates/rimz/src/packs/git.rs::Client::resolve`). The fixture in `crates/rimz/tests/integration/packs/git.rs` is the shape.
+- Each fixture repository (`rimz-crew`, `rimz-skills`) needs only a commit on its default branch, which an official source with no ref follows (`crates/rimz/src/packs/git.rs::Client::resolve`). A fixture manifest whose `rimz` range excludes the probe's binary holds the install. The fixture in `crates/rimz/tests/integration/packs/git.rs` is the shape.
 
 ## Branch binaries against real state
 

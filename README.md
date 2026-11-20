@@ -168,7 +168,7 @@ rimz agents codex --from-pr 42                 # worktree checked out from a pul
 
 ```sh
 rimz agents claude:planner,codex:coder -w feat-once   # one-off roles without a saved team
-rimz packs install crew                               # release-matched team definitions
+rimz packs install crew                               # the crew's team definitions
 rimz teams forge -w feat-complex                      # planner, coder, reviewer on one feature
 rimz teams spot -w fix-expiry                         # coder and reviewer on a small fix
 rimz teams show forge#feat-complex                    # roles, status, and where the run stands
