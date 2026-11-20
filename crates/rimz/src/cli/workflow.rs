@@ -320,7 +320,7 @@ enum Command {
         #[arg(long, hide = true, allow_hyphen_values = true, value_name = "TEXT")]
         reason: Option<String>,
     },
-    /// Move a live run to a node, re-enter a parked one, or extend a run's bounds.
+    /// Move a live run to a node, or re-enter a parked one.
     Resume {
         /// Run address `<workflow>#<checkout>`, workflow name, or run id.
         #[arg(value_name = "RUN")]
@@ -328,10 +328,27 @@ enum Command {
         /// Move the run to this node; a live attempt at its current node ends canceled.
         #[arg(long, value_name = "NODE")]
         at: Option<String>,
-        /// Grant this run more bounds: `visits=+N` or `deadline=<WHEN>`, where WHEN takes what
-        /// `run --deadline` takes. Repeatable; an active run takes it without --at.
-        #[arg(long, value_name = "GRANT")]
-        extend: Vec<String>,
+    },
+    /// Grant a live run more visits to one step, or a new deadline; the run stays where it is.
+    #[command(group(
+        clap::ArgGroup::new("grant")
+            .args(["visits", "deadline"])
+            .required(true)
+            .multiple(true)
+    ))]
+    Extend {
+        /// Run address `<workflow>#<checkout>`, workflow name, or run id.
+        #[arg(value_name = "RUN")]
+        id: String,
+        /// The step --visits raises; without it, the step the run is at.
+        #[arg(value_name = "STEP", requires = "visits")]
+        step: Option<String>,
+        /// Add N visits to the step's `max-visits` for this run, written `+N`.
+        #[arg(long, value_name = "+N", value_parser = parse_visits)]
+        visits: Option<u64>,
+        /// Set the run's deadline, re-arming one that fired; takes what `run --deadline` takes.
+        #[arg(long, value_name = "WHEN", value_parser = parse_deadline)]
+        deadline: Option<String>,
     },
     /// Replace the current agent step, resetting its visits.
     Restart {
@@ -442,7 +459,13 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             json,
         } => wait::run(&runs, any, timeout, json, globals),
         Command::Cancel { id, reason } => receipt::cancel(&id, reason.as_deref(), globals),
-        Command::Resume { id, at, extend } => receipt::resume(&id, at.as_deref(), &extend, globals),
+        Command::Resume { id, at } => receipt::resume(&id, at.as_deref(), globals),
+        Command::Extend {
+            id,
+            step,
+            visits,
+            deadline,
+        } => receipt::extend(&id, step.as_deref(), visits, deadline.as_deref(), globals),
         Command::Restart { id, continued } => restart(&id, continued, globals),
         Command::Submit {
             outcome,
@@ -614,6 +637,27 @@ fn answer_object(raw: &str) -> Result<serde_json::Map<String, serde_json::Value>
         Ok(serde_json::Value::Object(object)) => Ok(object),
         _ => Err("expected one JSON object".into()),
     }
+}
+
+/// `--visits +N`: the plus says the visits add to the step's cap, and N is ASCII digits worth at
+/// least 1.
+fn parse_visits(raw: &str) -> Result<u64, String> {
+    raw.strip_prefix('+')
+        .filter(|count| !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|count| count.parse::<u64>().ok())
+        .filter(|count| *count > 0)
+        .ok_or_else(|| {
+            format!(
+                "{raw:?} is not a visit grant; give +N, the visits to add to the step's \
+                 max-visits, with N at least 1"
+            )
+        })
+}
+
+/// `extend --deadline`, checked as `run --deadline` is and kept as written for the commands a
+/// refusal prints.
+fn parse_deadline(raw: &str) -> Result<String, String> {
+    workflow::parse_when(raw).map(|_| raw.to_owned())
 }
 
 /// A `run --input` value: one JSON object with a string `outcome`, and a `key`, when given,
@@ -818,7 +862,7 @@ fn start(
     writeln!(
         render::out(),
         "→ {}",
-        resolve::run_command(&record, "show", globals, None, &[], &[])
+        resolve::run_command(&record, "show", globals, None, None, &[])
     )?;
     match passed {
         Some(passed) if once => {
@@ -992,7 +1036,7 @@ fn show(
         let Some(definition) = definition else {
             let run = target.strip_prefix("workflow:").unwrap_or(target);
             if let Ok(resolve::Selection::Other(other)) =
-                resolve::select(run, "show", globals, None, &[])
+                resolve::select(run, "show", globals, None, None, &[])
                 && other.found.finished
             {
                 bail!(
@@ -1036,7 +1080,7 @@ fn show(
         return list::render(&runs, Some(name), json, globals);
     }
     let target = target.strip_prefix("workflow:").unwrap_or(target);
-    match resolve::select(target, "show", globals, None, &[])? {
+    match resolve::select(target, "show", globals, None, None, &[])? {
         resolve::Selection::Workflow(runs) => {
             if !json && let Some(definition) = &definition {
                 definition::render(definition, globals)?;
@@ -1243,7 +1287,7 @@ mod tests {
 
     #[test]
     fn unwritable_home_adds_the_sandbox_remedy_only_for_a_read_only_filesystem() {
-        for action in ["started", "resumed", "restarted"] {
+        for action in ["started", "resumed", "extended", "restarted"] {
             for kind in [
                 std::io::ErrorKind::ReadOnlyFilesystem,
                 std::io::ErrorKind::PermissionDenied,

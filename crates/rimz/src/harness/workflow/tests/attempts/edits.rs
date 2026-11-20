@@ -484,7 +484,7 @@ fn resume_and_restart_refuse_a_refused_definition_before_touching_the_run() {
         fs::read_to_string(&paths.journal).ok(),
     );
     let refusal = advance(&state, &record.id, &host).unwrap_err().to_string();
-    let resumed = resume(&state, &record.id, &host, Some("build"), &[]);
+    let resumed = resume(&state, &record.id, &host, Some("build"));
     let restarted = restart(&state, &record.id, None, &host);
     assert_eq!(
         (
@@ -504,7 +504,7 @@ fn resume_and_restart_refuse_a_refused_definition_before_touching_the_run() {
     assert_eq!(host.stops.get(), 0);
 
     edit(&state, &record, SESSION);
-    let moved = resume(&state, &record.id, &host, Some("build"), &[]).unwrap();
+    let moved = resume(&state, &record.id, &host, Some("build")).unwrap();
     assert_eq!(moved.node, "build");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while child.try_wait().unwrap().is_none() {

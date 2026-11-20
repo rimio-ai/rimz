@@ -11,7 +11,7 @@ fn workflow_wait(state: &StatePaths, suffix: u32, status: &str, outcome: &str) -
         "spec_dir": "/definitions/review",
         "scope": {"kind": "worktree", "path": "/repo"}, "project_root": "/repo",
         "created_at": at, "state": status, "node": "triage", "entered_at": at,
-        "visits": {}, "visit_grant": 0, "deadline_fired": false, "next_seq": 1,
+        "visits": {}, "deadline_fired": false, "next_seq": 1,
         "wait": {
             "node": "triage", "outcome": outcome, "detail": "free disk low", "hold": "disk",
             "kinds": ["codex"], "first": at, "last": at, "count": 2,

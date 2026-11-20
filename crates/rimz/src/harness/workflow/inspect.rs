@@ -104,7 +104,7 @@ pub fn hops(spec: &Definition, journal: &[JournalEntry], held: Option<&HeldSessi
 /// The latest resume at a node, a `resume --at` that moved the run there or replaced the
 /// attempt it held, or route into it, or else the hand-placed start there, shared by arrival
 /// and park views.
-/// Active-run extensions do not replace the sender.
+/// An `extend` does not replace the sender.
 pub fn routing_hop(
     spec: &Definition,
     journal: &[JournalEntry],
@@ -151,9 +151,7 @@ pub fn routing_hop(
 /// Resume straight after the attempt it canceled, so the relaunch is the resume's.
 fn replaced_attempt(journal: &[JournalEntry], hop: &Hop) -> bool {
     let Some(index) = journal.iter().position(|entry| {
-        entry.at == hop.at
-            && entry.node == hop.node
-            && matches!(entry.event, JournalEvent::Resume { .. })
+        entry.at == hop.at && entry.node == hop.node && matches!(entry.event, JournalEvent::Resume)
     }) else {
         return false;
     };
@@ -302,7 +300,7 @@ fn hop_kind(
         }
         JournalEvent::Start { .. } => return Some((HopKind::Start, None, None)),
         JournalEvent::Restart { .. } => return Some((HopKind::Restart, None, None)),
-        JournalEvent::Resume { .. } => return Some((HopKind::Resume, None, None)),
+        JournalEvent::Resume => return Some((HopKind::Resume, None, None)),
         JournalEvent::VisitsReset { outcome, .. } => {
             return Some((HopKind::VisitsReset, Some(outcome.clone()), None));
         }
@@ -392,7 +390,8 @@ fn held_verdict(
             | JournalEvent::Wake { .. }
             | JournalEvent::Signal { .. }
             | JournalEvent::VisitsReset { .. }
-            | JournalEvent::Resume { .. }
+            | JournalEvent::Resume
+            | JournalEvent::Extend { .. }
             | JournalEvent::Attempt { .. } => {}
             JournalEvent::Route { .. } if repeats_evaluation(next, Some(entry)) => {}
             _ => return false,
@@ -416,7 +415,7 @@ fn attempt_superseded(
         return false;
     };
     // `resume --at` journals its Resume at the node it moved the run to.
-    if outcome == AttemptOutcome::Canceled && matches!(next.event, JournalEvent::Resume { .. }) {
+    if outcome == AttemptOutcome::Canceled && matches!(next.event, JournalEvent::Resume) {
         return true;
     }
     if next.node != entry.node {

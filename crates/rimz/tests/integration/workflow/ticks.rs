@@ -62,10 +62,10 @@ fn tick_fires_a_deadline_granted_after_the_recheck_was_published() {
         &env,
         &[
             "workflow",
-            "resume",
+            "extend",
             &id,
-            "--extend",
-            &format!("deadline={deadline}"),
+            "--deadline",
+            &deadline.to_string(),
         ],
     ));
     let value = tick_until(&env, &id, "failed");

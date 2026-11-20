@@ -641,7 +641,7 @@ outcome = "ready"
             "spec_dir": deployed,
             "scope": {"kind": "worktree", "path": scope.canonicalize().unwrap()},
             "project_root": root.path(), "created_at": now, "state": status,
-            "node": "work", "entered_at": now, "visits": {}, "visit_grant": 0,
+            "node": "work", "entered_at": now, "visits": {},
             "deadline_fired": false, "next_seq": 1
         });
         std::fs::write(paths.record, serde_json::to_vec(&record).unwrap()).unwrap();

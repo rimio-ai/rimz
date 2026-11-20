@@ -757,7 +757,7 @@ fn finished_workflow_homes_expire_by_age_whatever_wrote_them_and_live_homes_stay
             "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
             "created_at":"2026-01-01T00:00:00Z", "state":state, "park":null, "node":"pr",
             "entered_at":"2026-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
-            "wait":null, "visits":{}, "visit_grant":0, "deadline":null,
+            "wait":null, "visits":{}, "deadline":null,
             "deadline_fired":false, "next_seq":1, "attempt":null, "prev_attempt":null,
             "terminal_at":null
         }))

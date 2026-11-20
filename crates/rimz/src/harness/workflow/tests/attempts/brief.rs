@@ -277,7 +277,7 @@ fn extending_a_waiting_step_keeps_its_routing_check_as_the_sender() {
         let host = FakeHost::new();
         if previously_extended {
             answer(&state, &record, &host, json!({"outcome":"red"}));
-            resume(&state, &record.id, &host, None, &["visits=+1".into()]).unwrap();
+            extend(&state, &record.id, &host, Some((None, 1)), None).unwrap();
         }
         *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
         let launches = host.launched.borrow().len();
@@ -286,7 +286,7 @@ fn extending_a_waiting_step_keeps_its_routing_check_as_the_sender() {
         assert_eq!(waiting.node, "build");
         assert_eq!(waiting.wait.unwrap().outcome, "occupied");
         assert_eq!(host.launched.borrow().len(), launches);
-        resume(&state, &record.id, &host, None, &["visits=+1".into()]).unwrap();
+        extend(&state, &record.id, &host, Some((None, 1)), None).unwrap();
         *host.occupancy.borrow_mut() = Occupancy::Free;
         advance_ok(&state, &record.id, &host);
         note(&host)
@@ -308,7 +308,7 @@ fn resuming_an_active_step_at_itself_names_the_resume_as_the_sender() {
     let live = answer(&state, &record, &host, json!({"outcome":"blue"}));
     assert!(live.attempt.is_some(), "{live:#?}");
     assert!(note(&host).contains("You were launched because the check `watch` answered `blue`."));
-    resume(&state, &record.id, &FakeHost::new(), Some("build"), &[]).unwrap();
+    resume(&state, &record.id, &FakeHost::new(), Some("build")).unwrap();
     advance_ok(&state, &record.id, &host);
     advance_ok(&state, &record.id, &host);
     assert_eq!(host.launched.borrow().len(), 2);

@@ -106,7 +106,7 @@ fn record(node: &str) -> RunRecord {
         "spec_dir":"/spec", "project_root":"/repo",
         "scope":{"kind":"worktree", "path":"/repo/lane"},
         "created_at":jiff::Timestamp::UNIX_EPOCH, "entered_at":jiff::Timestamp::UNIX_EPOCH,
-        "state":"active", "node":node, "visits":{}, "visit_grant":0,
+        "state":"active", "node":node, "visits":{},
         "deadline_fired":false, "next_seq":1,
     }))
     .unwrap()

@@ -928,12 +928,12 @@ fn a_runs_step_starts_each_entry_in_its_own_worktree_and_follows_then_once_both_
         );
     }
 
-    // A second advance rejoins the reserved children and starts nothing, as does a resume.
+    // A second advance rejoins the reserved children and starts nothing, as does an extend.
     success(command(&env, &["workflow", "advance", &parent]));
     assert_eq!(live_homes(&env), 3);
     success(command(
         &env,
-        &["workflow", "resume", &parent, "--extend", "visits=+1"],
+        &["workflow", "extend", &parent, "--deadline", "1h"],
     ));
     success(command(&env, &["workflow", "advance", &parent]));
     assert_eq!(live_homes(&env), 3);

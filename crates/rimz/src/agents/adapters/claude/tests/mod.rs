@@ -213,6 +213,7 @@ fn routine_rimz_settings_union_and_idempotence() {
             "workflow wait",
             "workflow cancel",
             "workflow resume",
+            "workflow extend",
             "workflow restart",
             "workflow submit",
             "workflow validate",

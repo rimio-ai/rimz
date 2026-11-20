@@ -291,7 +291,7 @@ pub(super) fn report(ctx: &super::super::ctx::Ctx, ended: &[Ended], notify: bool
     let runs = if count == 1 { "run" } else { "runs" };
     let command = match ended.iter().find(|run| run.task.is_none()) {
         None => format!("{} loop list", resolve::rimz_prefix(Some(root))),
-        Some(run) => resolve::command("show", &[run.id.as_str()], Some(root), None, &[], &[]),
+        Some(run) => resolve::command("show", &[run.id.as_str()], Some(root), None, &[]),
     };
     let agents = ended.iter().map(|run| run.released.len()).sum::<usize>();
     let body = format!(

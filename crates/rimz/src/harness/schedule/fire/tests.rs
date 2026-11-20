@@ -20,7 +20,7 @@ fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
         "version":crate::store::workflow::VERSION,"id":"wf_0190b8172c0070008000000000000001","workflow":"review",
         "spec_dir":"/definitions/review","scope":{"kind":"worktree","path":root.path()},
         "project_root":root.path(),"created_at":"2026-01-01T00:00:00Z","state":"active","node":"pr",
-        "entered_at":"2026-01-01T00:00:00Z","visits":{},"visit_grant":0,"deadline_fired":false,"next_seq":1
+        "entered_at":"2026-01-01T00:00:00Z","visits":{},"deadline_fired":false,"next_seq":1
     })).unwrap();
     let paths = state.workflow(&record.id);
     std::fs::create_dir_all(&paths.home).unwrap();
@@ -140,7 +140,7 @@ fn an_owed_reports_retry_gap_doubles_from_one_tick_up_to_an_hour() {
             "spec_dir":"/definitions/review",
             "scope":{"kind":"worktree","path":root.path()},"project_root":root.path(),
             "created_at":"2026-01-01T00:00:00Z","state":"failed","node":"pr",
-            "entered_at":"2026-01-01T00:00:00Z","visits":{},"visit_grant":0,
+            "entered_at":"2026-01-01T00:00:00Z","visits":{},
             "deadline_fired":false,"next_seq":1,"task":"nightly","loop_report":"owed",
             "terminal_at":Timestamp::from_second(ended).unwrap()
         }))

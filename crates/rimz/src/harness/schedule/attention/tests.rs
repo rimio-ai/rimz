@@ -454,7 +454,7 @@ fn run_record(task: &str, project_root: &Path, state: &str, created_at: Timestam
         "spec_dir": "/definitions/review",
         "scope": {"kind": "worktree", "path": project_root},
         "project_root": project_root, "created_at": created_at, "entered_at": created_at,
-        "state": state, "node": "check", "visits": {}, "visit_grant": 0,
+        "state": state, "node": "check", "visits": {},
         "deadline_fired": false, "next_seq": 1,
     }))
     .unwrap()

@@ -152,9 +152,9 @@ pub enum Inadmissible {
 /// Admit the definition in `dir` as a start does: read and parse its `workflow.toml`, then
 /// validate it under the workflow's `name` against the loaded agent definitions and the
 /// project root. The run views that report a waiting run admit through here; a start
-/// (`engine::publish`), each advance's read (`engine::Reader::read`), `resume`, `restart`,
-/// and the signal wake run the same checks through `admit_parsed`, so they refuse the same
-/// definitions.
+/// (`engine::publish`), each advance's read (`engine::Reader::read`), `resume`, `extend`,
+/// `restart`, and the signal wake run the same checks through `admit_parsed`, so they refuse
+/// the same definitions.
 pub fn admit(
     dir: &Path,
     name: &str,

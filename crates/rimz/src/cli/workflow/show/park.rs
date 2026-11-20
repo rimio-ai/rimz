@@ -86,20 +86,21 @@ impl View<'_> {
         )?;
         match park.reason {
             ParkReason::Cap => {
-                self.option(
+                let node = self.record.node.as_str();
+                writeln!(
                     out,
-                    None,
-                    &["visits=+1".into()],
-                    "run the step once more; every capped step gets one more visit",
+                    "  {}  grant {node} one more visit, then",
+                    self.command("extend", None, Some(node), &["--visits", "+1"])
                 )?;
+                self.option(out, None, &format!("run {node} once more"))?;
                 if let Sender::Edge(node, _) = self.sender(self.journal)
                     && self.spec.check(&node).is_some()
                 {
-                    self.option(out, Some(&node), &[], "check again after a fix by hand")?;
+                    self.option(out, Some(&node), "check again after a fix by hand")?;
                 }
             }
             ParkReason::User => {
-                self.option(out, None, &[], &format!("run {} again", self.record.node))?;
+                self.option(out, None, &format!("run {} again", self.record.node))?;
                 if self.spec.check(&self.record.node).is_some() {
                     let nodes = self
                         .spec
@@ -109,13 +110,17 @@ impl View<'_> {
                         .filter_map(|edge| edge.target.authored_node().map(str::to_owned))
                         .collect::<std::collections::BTreeSet<_>>();
                     for node in nodes {
-                        self.option(out, Some(&node), &[], &format!("continue at {node}"))?;
+                        self.option(out, Some(&node), &format!("continue at {node}"))?;
                     }
                 }
             }
             ParkReason::Deadline => {
-                self.option(out, None, &[], "go on with no deadline; it has fired")?;
-                self.option(out, None, &["deadline=<when>".into()], "set a new deadline")?;
+                self.option(out, None, "go on with no deadline; it has fired")?;
+                writeln!(
+                    out,
+                    "  {}  or set a new deadline, then resume",
+                    self.command("extend", None, None, &["--deadline", "<when>"])
+                )?;
             }
             ParkReason::Asked => {
                 writeln!(
@@ -123,45 +128,32 @@ impl View<'_> {
                     "  write the answer in {}, then",
                     render::home_relative_path(&self.paths.signs(Some(&self.record.node)))
                 )?;
-                self.option(out, None, &[], "relaunch the step with that answer")?;
+                self.option(out, None, "relaunch the step with that answer")?;
             }
             ParkReason::Timeout => {
-                self.option(out, None, &[], "run the node again with a fresh timeout")?
+                self.option(out, None, "run the node again with a fresh timeout")?
             }
             ParkReason::Invalid => self.option(
                 out,
                 None,
-                &[],
                 if self.spec.step(&self.record.node).is_some() {
                     "retry after fixing the launch"
                 } else {
                     "retry after fixing the check"
                 },
             )?,
-            ParkReason::Check => {
-                self.option(out, None, &[], "run the check again; retry cleared")?
-            }
+            ParkReason::Check => self.option(out, None, "run the check again; retry cleared")?,
         }
         writeln!(
             out,
             "  {}  end the run; commits and worktree stay",
-            self.command("cancel", None, &[], &[])
+            self.command("cancel", None, None, &[])
         )?;
         Ok(())
     }
 
-    fn option(
-        &self,
-        out: &mut impl Write,
-        at: Option<&str>,
-        extend: &[String],
-        gloss: &str,
-    ) -> Result<()> {
-        writeln!(
-            out,
-            "  {}  {gloss}",
-            self.command("resume", at, extend, &[])
-        )?;
+    fn option(&self, out: &mut impl Write, at: Option<&str>, gloss: &str) -> Result<()> {
+        writeln!(out, "  {}  {gloss}", self.command("resume", at, None, &[]))?;
         Ok(())
     }
 

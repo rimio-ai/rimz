@@ -18,7 +18,7 @@ fn seed(env: &Env, root: &Path, checkout: &Path, state: &str) -> RunRecord {
         "created_at":now, "entered_at":now, "state":state, "node":"gate",
         "park":(state == "parked").then(|| json!({"reason":"user", "at":now})),
         "terminal_at":(state != "active" && state != "parked").then_some(now),
-        "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
+        "visits":{}, "deadline_fired":false, "next_seq":1,
     }))
     .unwrap();
     save(env, &record);
@@ -393,7 +393,8 @@ fn colliding_addresses_refuse_with_ids_and_checkout_paths() {
     let second = seed(&env, &env.project_root, &env.project_root, "active");
     for (verb, flags) in [
         ("show", vec![]),
-        ("resume", vec!["--at", "build", "--extend", "visits=+1"]),
+        ("resume", vec!["--at", "build"]),
+        ("extend", vec!["build", "--visits", "+1"]),
         ("cancel", vec![]),
     ] {
         let mut args = vec!["workflow", verb, "review#main"];
@@ -402,10 +403,10 @@ fn colliding_addresses_refuse_with_ids_and_checkout_paths() {
         for record in [&first, &second] {
             assert!(text.contains(record.id.as_str()), "{text}");
             assert!(text.contains(record.scope.path.to_str().unwrap()), "{text}");
-            let suffix = if flags.is_empty() {
-                ""
-            } else {
-                " --at build --extend 'visits=+1'"
+            let suffix = match verb {
+                "resume" => " --at build",
+                "extend" => " build --visits +1",
+                _ => "",
             };
             assert!(
                 text.contains(&format!("rimz workflow {verb} {}{suffix}", record.id)),
@@ -478,20 +479,22 @@ fn bare_mutations_prefer_checkout_then_only_run_then_offer_quoted_commands() {
     save(&env, &second);
     let text = refusal(command(
         &env,
-        &[
-            "workflow",
-            "resume",
-            "review",
-            "--at",
-            "build",
-            "--extend",
-            "visits=+1",
-        ],
+        &["workflow", "resume", "review", "--at", "build"],
+    ));
+    for address in ["review#branch-a", "review#feat-x"] {
+        assert!(
+            text.contains(&format!("rimz workflow resume '{address}' --at build")),
+            "{text}"
+        );
+    }
+    let text = refusal(command(
+        &env,
+        &["workflow", "extend", "review", "build", "--visits", "+1"],
     ));
     for address in ["review#branch-a", "review#feat-x"] {
         assert!(
             text.contains(&format!(
-                "rimz workflow resume '{address}' --at build --extend 'visits=+1'"
+                "rimz workflow extend '{address}' build --visits +1"
             )),
             "{text}"
         );
@@ -502,21 +505,24 @@ fn bare_mutations_prefer_checkout_then_only_run_then_offer_quoted_commands() {
     }
     let text = refusal(command(
         &env,
+        &["workflow", "resume", "--at", "build", "--", "-review"],
+    ));
+    for address in ["-review#branch-a", "-review#feat-x"] {
+        assert!(
+            text.contains(&format!("rimz workflow resume --at build -- '{address}'")),
+            "{text}"
+        );
+    }
+    let text = refusal(command(
+        &env,
         &[
-            "workflow",
-            "resume",
-            "--at",
-            "build",
-            "--extend",
-            "visits=+1",
-            "--",
-            "-review",
+            "workflow", "extend", "--visits", "+1", "--", "-review", "build",
         ],
     ));
     for address in ["-review#branch-a", "-review#feat-x"] {
         assert!(
             text.contains(&format!(
-                "rimz workflow resume --at build --extend 'visits=+1' -- '{address}'"
+                "rimz workflow extend --visits +1 -- '{address}' build"
             )),
             "{text}"
         );
@@ -536,7 +542,7 @@ fn bare_mutations_prefer_checkout_then_only_run_then_offer_quoted_commands() {
     ];
     let mut effects = Vec::new();
     let mut expected = Vec::new();
-    for verb in ["resume", "cancel"] {
+    for verb in ["resume", "extend", "cancel"] {
         for record in &records {
             save(&env, record);
         }
@@ -547,8 +553,10 @@ fn bare_mutations_prefer_checkout_then_only_run_then_offer_quoted_commands() {
             verb,
             "review",
         ];
-        if verb == "resume" {
-            args.extend(["--at", "build", "--extend", "visits=+1"]);
+        match verb {
+            "resume" => args.extend(["--at", "build"]),
+            "extend" => args.extend(["build", "--visits", "+1"]),
+            _ => {}
         }
         let text = refusal(command(&env, &args));
         for record in &records[..2] {
@@ -567,15 +575,16 @@ fn bare_mutations_prefer_checkout_then_only_run_then_offer_quoted_commands() {
                 .map(|candidate| {
                     let value = json_show(&env, candidate.id.as_str());
                     let record = &value["record"];
-                    json!([record["state"], record["node"], record["visit_grant"]])
+                    json!([record["state"], record["node"], record["visit_grants"]])
                 })
                 .collect::<Vec<_>>();
             let wanted = records
                 .iter()
                 .map(|candidate| match (candidate.id == record.id, verb) {
-                    (true, "resume") => json!(["active", "build", 1]),
-                    (true, _) => json!(["canceled", "gate", 0]),
-                    (false, _) => json!(["parked", "gate", 0]),
+                    (true, "resume") => json!(["active", "build", null]),
+                    (true, "extend") => json!(["parked", "gate", {"build":1}]),
+                    (true, _) => json!(["canceled", "gate", null]),
+                    (false, _) => json!(["parked", "gate", null]),
                 })
                 .collect::<Vec<_>>();
             effects.push((verb, choice.to_owned(), states));
@@ -792,12 +801,12 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
         .env("RIMZ_BIN", "/bin/true")
         .args([
             "workflow",
-            "resume",
+            "extend",
             "review",
-            "--extend",
-            "visits=+1",
-            "--extend",
-            "deadline=2000-01-01T00:00:00Z",
+            "--visits",
+            "+1",
+            "--deadline",
+            "2000-01-01T00:00:00Z",
         ])
         .output()
         .unwrap();
@@ -805,20 +814,21 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
     let text = success(output);
     assert!(
         text.starts_with(&format!(
-            "extended review#main · every capped step +1 visits · deadline {}",
+            "extended review#main · build +1 visits, 1 of 3 used · deadline {}\n",
             historical_clock("2000-01-01T00:00:00Z")
         )),
         "{text}"
     );
     assert!(
-        stderr.contains("deadline") && stderr.contains("--extend 'deadline=<when>'"),
+        stderr.contains("deadline")
+            && stderr.contains("rimz workflow extend 'review#main' --deadline '<when>'"),
         "{stderr}"
     );
     let before = jiff::Timestamp::now();
     let output = env
         .rimz()
         .env("RIMZ_BIN", "/bin/true")
-        .args(["workflow", "resume", "review", "--extend", "deadline=2h"])
+        .args(["workflow", "extend", "review", "--deadline", "2h"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -832,12 +842,13 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
     let two_hours = jiff::SignedDuration::from_hours(2);
     assert!(
         before + two_hours <= extended && extended <= after + two_hours,
-        "{extended} is not 2h after the resume"
+        "{extended} is not 2h after the extend"
     );
     assert!(
         text.starts_with("extended review#main · deadline "),
         "{text}"
     );
+    assert!(!text.contains("visits"), "{text}");
     assert!(!stderr.contains("already passed"), "{stderr}");
     *record.visits.get_mut("build").unwrap() = 2;
     save(&env, &record);
@@ -877,13 +888,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
     let output = env
         .rimz()
         .env("RIMZ_BIN", "/bin/true")
-        .args([
-            "workflow",
-            "resume",
-            "review#main",
-            "--extend",
-            &format!("deadline={future}"),
-        ])
+        .args(["workflow", "extend", "review#main", "--deadline", &future])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -892,6 +897,119 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
         !stderr.contains("has used"),
         "an admitted visit does not re-enter the step: {stderr}"
     );
+}
+
+#[test]
+fn extend_and_resume_refusals_leave_the_run_untouched() {
+    let env = setup();
+    let mut record = seed(&env, &env.project_root, &env.project_root, "parked");
+    record.visits = serde_json::from_value(json!({"build":2})).unwrap();
+    save(&env, &record);
+    let paths = env.state_path_for(&env.project_root).workflow(&record.id);
+    let before = fs::read(&paths.record).unwrap();
+    for (args, reason) in [
+        (
+            vec!["review", "--visits", "2"],
+            "invalid value '2' for '--visits <+N>': \"2\" is not a visit grant; give +N, the \
+             visits to add to the step's max-visits, with N at least 1",
+        ),
+        (
+            vec!["review", "--visits", "+0"],
+            "invalid value '+0' for '--visits <+N>': \"+0\" is not a visit grant; give +N, the \
+             visits to add to the step's max-visits, with N at least 1",
+        ),
+        (
+            vec!["review", "build", "--deadline", "2h"],
+            "the following required arguments were not provided:\n  --visits <+N>",
+        ),
+        (
+            vec!["review", "--visits", "++2"],
+            "invalid value '++2' for '--visits <+N>': \"++2\" is not a visit grant; give +N, the \
+             visits to add to the step's max-visits, with N at least 1",
+        ),
+        (
+            vec!["review", "--visits", "+-1"],
+            "invalid value '+-1' for '--visits <+N>': \"+-1\" is not a visit grant; give +N, the \
+             visits to add to the step's max-visits, with N at least 1",
+        ),
+        (
+            vec!["review", "--visits", "+ 2"],
+            "invalid value '+ 2' for '--visits <+N>': \"+ 2\" is not a visit grant; give +N, the \
+             visits to add to the step's max-visits, with N at least 1",
+        ),
+        (
+            vec!["review"],
+            "the following required arguments were not provided:\n  <--visits <+N>|--deadline <WHEN>>",
+        ),
+    ] {
+        let output = command(&env, &[&["workflow", "extend"], args.as_slice()].concat());
+        let text = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(output.status.code(), Some(2), "{text}");
+        assert!(text.contains(reason), "{args:?}: {text}");
+    }
+    let output = command(
+        &env,
+        &["workflow", "resume", "review", "--extend", "visits=+1"],
+    );
+    let text = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(2), "{text}");
+    assert!(text.contains("unexpected argument '--extend'"), "{text}");
+    let text = refusal(command(
+        &env,
+        &["workflow", "resume", "review", "--at", "build"],
+    ));
+    assert_eq!(
+        text,
+        "error: cannot resume at build: it has used 2 of 2 visits; grant it another first:\n  \
+         rimz workflow extend 'review#main' build --visits +1\n"
+    );
+    assert_eq!(fs::read(&paths.record).unwrap(), before);
+    assert!(!paths.journal.exists() || fs::read(&paths.journal).unwrap().is_empty());
+    // A cap lowered under a run that already spent more needs more than one visit back.
+    record.visits = serde_json::from_value(json!({"build":5})).unwrap();
+    save(&env, &record);
+    let text = refusal(command(
+        &env,
+        &["workflow", "resume", "review", "--at", "build"],
+    ));
+    assert_eq!(
+        text,
+        "error: cannot resume at build: it has used 5 of 2 visits; grant it another first:\n  \
+         rimz workflow extend 'review#main' build --visits +4\n"
+    );
+    success(command(
+        &env,
+        &[
+            "workflow",
+            "extend",
+            "review#main",
+            "build",
+            "--visits",
+            "+4",
+        ],
+    ));
+    let text = success(
+        env.rimz()
+            .env("RIMZ_BIN", "/bin/true")
+            .args(["workflow", "resume", "review", "--at", "build"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        text.starts_with("resumed review#main at build · build 5 of 6 visits\n"),
+        "{text}"
+    );
+    let ended = seed(
+        &env,
+        &env.project_root,
+        &env.home_root.join("feat-x"),
+        "done",
+    );
+    let text = refusal(command(
+        &env,
+        &["workflow", "extend", ended.id.as_str(), "--deadline", "2h"],
+    ));
+    assert_eq!(text, "error: terminal workflow runs cannot be extended\n");
 }
 
 #[test]
@@ -1090,7 +1208,7 @@ fn list_derives_bound_phrases_from_the_definition_and_ignores_stale_parks() {
         match reason {
             "cap" => {
                 record.node = "build".into();
-                record.visit_grant = 1;
+                record.visit_grants.insert("build".into(), 1);
                 record.visits = serde_json::from_value(json!({"build":3})).unwrap();
             }
             "deadline" => record.deadline = Some("2000-01-01T00:00:00Z".parse().unwrap()),

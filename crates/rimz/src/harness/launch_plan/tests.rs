@@ -672,7 +672,7 @@ fn workflow_env_pins_survive_both_isolations() {
             "project_root":project.path(),
             "scope":{"kind":"worktree","path":project.path()},"state":"active","node":"build",
             "created_at":"2026-01-01T00:00:00Z","entered_at":"2026-01-01T00:00:00Z",
-            "deadline_fired":false,"next_seq":1,"visits":{},"visit_grant":0,
+            "deadline_fired":false,"next_seq":1,"visits":{},
         }))
         .unwrap(),
     )

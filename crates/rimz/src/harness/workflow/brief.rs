@@ -531,7 +531,7 @@ pub(super) fn push(
 }
 
 fn visits(spec: &Definition, step: &Node, record: &RunRecord) -> Option<String> {
-    let max = step.visit_cap(record.visit_grant)?;
+    let max = step.visit_cap(record.visit_grant(&record.node))?;
     let used = record.visits_to(&record.node);
     let mut text = format!("This is visit {used} of {max} to {}", span(&record.node));
     if used == max {

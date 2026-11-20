@@ -346,7 +346,7 @@ fn fixture(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord, Definition)
         "scope":{"kind":"worktree","path":home.path()}, "project_root":home.path(),
         "created_at":"2000-01-01T00:00:00Z", "state":"active", "park":null, "node":"pr",
         "entered_at":"2000-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
-        "wait":null, "visits":{}, "visit_grant":0, "deadline":null,
+        "wait":null, "visits":{}, "deadline":null,
         "deadline_fired":false, "next_seq":1, "attempt":null, "prev_attempt":null,
         "terminal_at":null
     }))

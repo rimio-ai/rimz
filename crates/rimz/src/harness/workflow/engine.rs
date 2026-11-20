@@ -53,6 +53,11 @@ pub enum WorkflowErr {
     Throttle(#[from] throttle::ThrottleError),
     #[error("{0}")]
     Refused(String),
+    /// A `resume --at` to a step that has spent its visits, which would fail at once.
+    #[error(
+        "{step} has used {used} of {max} visits; grant it more with `rimz workflow extend` first"
+    )]
+    SpentVisits { step: String, used: u64, max: u64 },
     #[error("no room at {}; run `rimz start` there first", .0.display())]
     NoRoom(std::path::PathBuf),
     #[error(
@@ -476,7 +481,7 @@ fn publish(
         wait: None,
         visits: BTreeMap::new(),
         key_visits: BTreeMap::new(),
-        visit_grant: 0,
+        visit_grants: BTreeMap::new(),
         deadline: deadline.map(at).transpose()?,
         deadline_fired: false,
         next_seq: 1,
@@ -2375,7 +2380,6 @@ pub fn resume(
     id: &WorkflowRunId,
     host: &dyn AttemptHost,
     at: Option<&str>,
-    extend: &[String],
 ) -> Result<RunRecord> {
     let paths = state.workflow(id);
     let reader = Reader::new();
@@ -2401,9 +2405,23 @@ pub fn resume(
                 "unknown workflow node {node}"
             )));
         }
-        if record.state == RunState::Active && at.is_none() && extend.is_empty() {
+        if let Some(target) = at
+            && let Some(max) = spec
+                .node(target)
+                .and_then(|node| node.visit_cap(record.visit_grant(target)))
+            && record.visits_to(target) >= max
+        {
+            return Err(WorkflowErr::SpentVisits {
+                step: target.into(),
+                used: record.visits_to(target),
+                max,
+            });
+        }
+        if record.state == RunState::Active && at.is_none() {
             return Err(WorkflowErr::Refused(
-                "an active run needs --at <node> or --extend to resume".into(),
+                "an active run needs --at <node> to resume; `rimz workflow extend` changes its \
+                 bounds"
+                    .into(),
             ));
         }
         if at.is_some()
@@ -2425,33 +2443,6 @@ pub fn resume(
             now: Timestamp::now(),
             entries: Vec::new(),
         };
-        for grant in extend {
-            if let Some(value) = grant
-                .strip_prefix("visits=+")
-                .and_then(|s| s.parse::<u64>().ok())
-                .filter(|v| *v > 0)
-            {
-                t.record.visit_grant = t
-                    .record
-                    .visit_grant
-                    .checked_add(value)
-                    .ok_or_else(|| WorkflowErr::Refused("visit grant overflow".into()))?;
-            } else if let Some(raw) = grant.strip_prefix("deadline=") {
-                let zone = crate::config::MachineConfig::load_time_zone_lenient();
-                t.record.deadline = Some(
-                    spec::parse_when(raw)
-                        .and_then(|when| when.resolve(t.now, &zone))
-                        .map_err(|e| {
-                            WorkflowErr::Refused(format!("invalid deadline extension: {e}"))
-                        })?,
-                );
-                t.record.deadline_fired = false;
-            } else {
-                return Err(WorkflowErr::Refused(format!(
-                    "invalid extension {grant:?}; use visits=+N or deadline=<when>"
-                )));
-            }
-        }
         // A pending restart's session resumes at the step it was taken for, and nowhere else.
         if let Some(target) = at
             && t.record
@@ -2487,18 +2478,107 @@ pub fn resume(
             t.record.park = None;
             t.record.state = RunState::Active;
         }
-        t.push(
-            None,
-            JournalEvent::Resume {
-                visit_grant: t.record.visit_grant,
-                deadline: t.record.deadline,
-            },
-        );
+        t.push(None, JournalEvent::Resume);
         persist(&mut t, &guard)?;
         t.record
     };
     spawn(&record)?;
     Ok(record)
+}
+
+/// What `extend` granted: the run as written, and the step its visits went to.
+#[derive(Debug)]
+pub struct Extension {
+    pub record: RunRecord,
+    pub step: Option<String>,
+}
+
+/// Record a grant on a live run and nothing else: `visits` adds visits to one step's
+/// `max-visits`, the step named or else the one the run's session is at, and `deadline` sets
+/// the run's deadline, re-arming a fired one. An active run advances to see it.
+pub fn extend(
+    state: &StatePaths,
+    id: &WorkflowRunId,
+    host: &dyn AttemptHost,
+    visits: Option<(Option<&str>, u64)>,
+    deadline: Option<spec::When>,
+) -> Result<Extension> {
+    let paths = state.workflow(id);
+    let reader = Reader::new();
+    let guard = Commit::acquire(state, Some(host))?;
+    let record = workflow::load(&paths)?;
+    let spec = reader.admitted(&paths, &record)?;
+    if record.state.is_terminal() {
+        return Err(WorkflowErr::Refused(
+            "terminal workflow runs cannot be extended".into(),
+        ));
+    }
+    let granted = visits
+        .map(|(step, count)| granted_step(&spec, &record, step).map(|step| (step, count)))
+        .transpose()?;
+    let mut t = Transition {
+        record,
+        spec: &spec,
+        paths: &paths,
+        now: Timestamp::now(),
+        entries: Vec::new(),
+    };
+    if let Some((step, count)) = &granted {
+        let grant = t.record.visit_grants.entry(step.clone()).or_default();
+        *grant = grant
+            .checked_add(*count)
+            .ok_or_else(|| WorkflowErr::Refused("visit grant overflow".into()))?;
+    }
+    if let Some(when) = deadline {
+        let zone = crate::config::MachineConfig::load_time_zone_lenient();
+        let at = when
+            .resolve(t.now, &zone)
+            .map_err(|e| WorkflowErr::Refused(format!("invalid deadline: {e}")))?;
+        t.record.deadline = Some(at);
+        t.record.deadline_fired = false;
+    }
+    let (step, visits) = granted.map_or((None, None), |(step, count)| (Some(step), Some(count)));
+    t.push(
+        None,
+        JournalEvent::Extend {
+            step: step.clone(),
+            visits,
+            deadline: deadline.and(t.record.deadline),
+        },
+    );
+    persist(&mut t, &guard)?;
+    let record = t.record;
+    drop(guard);
+    if record.state == RunState::Active {
+        spawn(&record)?;
+    }
+    Ok(Extension { record, step })
+}
+
+/// The step a visit grant raises: `named`, else the one a staged `resume --at` moves the run
+/// to, else the one the run's session is at, else its node; refused where that is no step with
+/// a `max-visits` to raise.
+fn granted_step(spec: &Definition, record: &RunRecord, named: Option<&str>) -> Result<String> {
+    let step = named.or(record.moving_to()).unwrap_or_else(|| {
+        record
+            .session_attempt()
+            .map_or(&record.node, |attempt| &attempt.node)
+    });
+    let refusal = match (spec.node(step), spec.step(step)) {
+        (None, _) => format!("{step} is not a step of workflow {}", record.workflow),
+        (Some(_), None) if named.is_some() => {
+            format!("{step} is a check, which has no visits to grant; name a step")
+        }
+        (Some(_), None) => format!(
+            "the run is at the check {step}, which has no visits to grant; name a step: \
+             `rimz workflow extend <run> <step> --visits +N`"
+        ),
+        (_, Some(node)) if node.visit_cap(0).is_none() => {
+            format!("{step} sets no max-visits, so a visit grant changes nothing")
+        }
+        (_, Some(_)) => return Ok(step.to_owned()),
+    };
+    Err(WorkflowErr::Refused(refusal))
 }
 
 /// End the live attempt `resume --at` moves the run away from, its route going to `target`:

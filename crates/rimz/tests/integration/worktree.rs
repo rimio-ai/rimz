@@ -603,7 +603,7 @@ fn waiting_workflow(
 
         "project_root":env.project_root, "scope":{"kind":"worktree", "path":checkout},
         "created_at":now, "entered_at":now, "state":"active", "node":"check",
-        "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
+        "visits":{}, "deadline_fired":false, "next_seq":1,
     });
     let state = env.state_path_for(&env.project_root);
     let paths = state.workflow(&id);

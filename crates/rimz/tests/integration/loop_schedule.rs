@@ -5100,7 +5100,7 @@ fn loop_rename_keeps_the_tasks_runs_by_their_fire_id() {
                     json!({"reason":"user","text":null,"at":"2026-01-01T00:00:00Z"})
                 } else { json!(null) },
                 "node":"pr", "entered_at":"2026-01-01T00:00:00Z", "input":null,
-                "key":null, "recheck_at":null, "wait":null, "visits":{}, "visit_grant":0,
+                "key":null, "recheck_at":null, "wait":null, "visits":{},
                 "deadline":null, "deadline_fired":false, "next_seq":1, "attempt":null,
                 "prev_attempt":null, "terminal_at":if matches!(state, "done" | "failed" | "canceled") {
                     json!("2026-01-01T00:00:00Z")

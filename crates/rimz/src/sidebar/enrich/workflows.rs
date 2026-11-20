@@ -123,7 +123,7 @@ fn project(
         Vec::new()
     };
     let capped = spec
-        .and_then(|spec| spec.step(name)?.visit_cap(record.visit_grant))
+        .and_then(|spec| spec.step(name)?.visit_cap(record.visit_grant(name)))
         .is_some_and(|max| record.visits_to(name) >= max);
     let hold_limit = record
         .wait
@@ -211,7 +211,7 @@ mod tests {
             "spec_dir": "/spec", "project_root": "/repo",
             "scope": {"kind": "worktree", "path": "/trees/lane"},
             "created_at": Timestamp::UNIX_EPOCH, "entered_at": "2026-01-01T00:00:00Z",
-            "state": "active", "node": "watch", "visits": {}, "visit_grant": 0,
+            "state": "active", "node": "watch", "visits": {},
             "deadline_fired": false, "next_seq": 2
         }))
         .unwrap()

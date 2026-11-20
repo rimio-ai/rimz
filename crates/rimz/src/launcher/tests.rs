@@ -94,7 +94,7 @@ fn worktree_recreation_refuses_an_unfinished_workflow_run() {
         "scope":{"kind":"worktree","path":created.marker.worktree_path},
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"check",
         "entered_at":"2026-01-01T00:00:00Z", "deadline_fired":false,
-        "next_seq":1, "visits":{}, "visit_grant":0
+        "next_seq":1, "visits":{}
     }))
     .unwrap();
     let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();

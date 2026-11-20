@@ -1,21 +1,22 @@
 use super::*;
-use rimz::store::workflow::{EndCause, RunState};
+use rimz::store::workflow::RunState;
 
 fn select(
     target: &str,
     verb: &str,
     globals: &super::super::GlobalFlags,
     at: Option<&str>,
-    extend: &[String],
+    step: Option<&str>,
+    flags: &[&str],
 ) -> Result<std::result::Result<resolve::Located, resolve::Other>> {
-    match resolve::select(target, verb, globals, at, extend)? {
+    match resolve::select(target, verb, globals, at, step, flags)? {
         resolve::Selection::Run(run) => Ok(Ok(*run)),
         resolve::Selection::Other(other) => Ok(Err(*other)),
         resolve::Selection::Workflow(_) => unreachable!("only show selects workflow lists"),
     }
 }
 
-/// A run named by id that a resume or restart cannot reach: refused with why, before any
+/// A run named by id that a resume, extend, or restart cannot reach: refused with why, before any
 /// definition is read.
 fn refuse(other: &resolve::Other, verb: &str) -> anyhow::Error {
     other.refusal().map_or_else(
@@ -35,7 +36,7 @@ pub(super) fn cancel(
     reason: Option<&str>,
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
-    let run = match select(target, "cancel", globals, None, &[])? {
+    let run = match select(target, "cancel", globals, None, None, &[])? {
         Ok(run) => run,
         Err(other) => {
             if other.is_stranded() {
@@ -58,7 +59,7 @@ pub(super) fn cancel(
                 writeln!(
                     out,
                     "→ {}",
-                    resolve::run_command(record, "show", globals, None, &[], &[])
+                    resolve::run_command(record, "show", globals, None, None, &[])
                 )?;
                 return Ok(());
             }
@@ -124,7 +125,7 @@ pub(super) fn cancel(
     writeln!(
         out,
         "→ {}",
-        resolve::run_command(&run.record, "show", globals, None, &[], &[])
+        resolve::run_command(&run.record, "show", globals, None, None, &[])
     )?;
     Ok(())
 }
@@ -179,48 +180,47 @@ fn cancel_stranded(other: &resolve::Other, globals: &super::super::GlobalFlags) 
 pub(super) fn resume(
     target: &str,
     at: Option<&str>,
-    extend: &[String],
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
-    let run =
-        select(target, "resume", globals, at, extend)?.map_err(|other| refuse(&other, "resume"))?;
+    let run = select(target, "resume", globals, at, None, &[])?
+        .map_err(|other| refuse(&other, "resume"))?;
     refuse_unwritable_home("resumed")?;
     let spec = workflow::load(&run.record.definition_dir(&run.paths))?;
-    let resumed = run.record.state == RunState::Parked || at.is_some();
-    let record = workflow::resume(
+    let record = match workflow::resume(
         &run.state,
         &run.record.id,
         &Host::new(&run.state, globals, None),
         at,
-        extend,
-    )?;
-    // A live attempt `--at` moved settles off-lock; its staged route names where the run goes.
-    let node = record
-        .attempt
-        .as_ref()
-        .and_then(|attempt| attempt.ending.as_ref())
-        .filter(|ending| ending.cause == EndCause::Resume)
-        .and_then(|ending| ending.route.as_ref())
-        .map_or(record.node.as_str(), |verdict| verdict.target.as_str());
-    let address = record.address().to_string();
-    let now = jiff::Timestamp::now();
-    let grant = record.visit_grant - run.record.visit_grant;
-    let mut text = if resumed {
-        format!("resumed {address} at {node}")
-    } else {
-        format!("extended {address}")
+    ) {
+        Err(workflow::WorkflowErr::SpentVisits { step, used, max }) => {
+            // A cap lowered under a run that spent more needs more than one visit back.
+            let admits_one = format!("+{}", used - max + 1);
+            bail!(
+                "cannot resume at {step}: it has used {used} of {max} visits; grant it another \
+                 first:\n{}",
+                resolve::run_command(
+                    &run.record,
+                    "extend",
+                    globals,
+                    None,
+                    Some(&step),
+                    &["--visits", &admits_one]
+                )
+            )
+        }
+        record => record?,
     };
-    let step = spec.step(node);
-    if resumed && let Some(max) = step.and_then(|step| step.visit_cap(record.visit_grant)) {
-        let used = record.visits_to(node);
-        text.push_str(&format!(" · {node} {used} of {max} visits"));
-    }
-    if grant > 0 {
-        text.push_str(&if resumed {
-            format!(", every capped step +{grant}")
-        } else {
-            format!(" · every capped step +{grant} visits")
-        });
+    let node = record.moving_to().unwrap_or(&record.node);
+    let now = jiff::Timestamp::now();
+    let mut text = format!("resumed {} at {node}", record.address());
+    if let Some(max) = spec
+        .step(node)
+        .and_then(|step| step.visit_cap(record.visit_grant(node)))
+    {
+        text.push_str(&format!(
+            " · {node} {} of {max} visits",
+            record.visits_to(node)
+        ));
     }
     if !record.deadline_fired
         && let Some(deadline) = record.deadline
@@ -235,8 +235,78 @@ pub(super) fn resume(
     writeln!(
         out,
         "→ {}",
-        resolve::run_command(&record, "show", globals, None, &[], &[])
+        resolve::run_command(&record, "show", globals, None, None, &[])
     )?;
+    warn_passed_deadline(&record, &spec, node, now, globals)
+}
+
+pub(super) fn extend(
+    target: &str,
+    step: Option<&str>,
+    visits: Option<u64>,
+    deadline: Option<&str>,
+    globals: &super::super::GlobalFlags,
+) -> Result<()> {
+    let added = visits.map(|count| format!("+{count}"));
+    let flags = added
+        .iter()
+        .flat_map(|added| ["--visits", added.as_str()])
+        .chain(deadline.into_iter().flat_map(|when| ["--deadline", when]))
+        .collect::<Vec<_>>();
+    let run = select(target, "extend", globals, None, step, &flags)?
+        .map_err(|other| refuse(&other, "extend"))?;
+    refuse_unwritable_home("extended")?;
+    let spec = workflow::load(&run.record.definition_dir(&run.paths))?;
+    let when = deadline
+        .map(workflow::parse_when)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    let workflow::Extension { record, step } = workflow::extend(
+        &run.state,
+        &run.record.id,
+        &Host::new(&run.state, globals, None),
+        visits.map(|count| (step, count)),
+        when,
+    )?;
+    let now = jiff::Timestamp::now();
+    let mut text = format!("extended {}", record.address());
+    if let (Some(step), Some(count)) = (&step, visits) {
+        text.push_str(&format!(" · {step} +{count} visits"));
+        if let Some(max) = spec
+            .step(step)
+            .and_then(|node| node.visit_cap(record.visit_grant(step)))
+        {
+            text.push_str(&format!(", {} of {max} used", record.visits_to(step)));
+        }
+    }
+    if when.is_some()
+        && let Some(deadline) = record.deadline
+    {
+        text.push_str(&format!(
+            " · deadline {}",
+            render::workflow_clock(deadline, now)
+        ));
+    }
+    let mut out = render::out();
+    writeln!(out, "{text}")?;
+    writeln!(
+        out,
+        "→ {}",
+        resolve::run_command(&record, "show", globals, None, None, &[])
+    )?;
+    let node = record.moving_to().unwrap_or(&record.node);
+    warn_passed_deadline(&record, &spec, node, now, globals)
+}
+
+/// Warn when the run's armed deadline has already passed at `node`, with what it does there
+/// and the command that sets another.
+fn warn_passed_deadline(
+    record: &RunRecord,
+    spec: &workflow::Definition,
+    node: &str,
+    now: jiff::Timestamp,
+    globals: &super::super::GlobalFlags,
+) -> Result<()> {
     if !record.deadline_fired
         && let Some(deadline) = record.deadline.filter(|deadline| *deadline <= now)
         && let Some(target) = spec.target(node, "deadline")
@@ -247,12 +317,12 @@ pub(super) fn resume(
             render::workflow_clock(deadline, now),
             immediate(&target),
             resolve::run_command(
-                &record,
-                "resume",
+                record,
+                "extend",
                 globals,
                 None,
-                &["deadline=<when>".into()],
-                &[]
+                None,
+                &["--deadline", "<when>"]
             )
         )?;
     }
@@ -264,7 +334,7 @@ pub(in crate::cli) fn restart(
     continued: bool,
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
-    let run = select(target, "restart", globals, None, &[])?
+    let run = select(target, "restart", globals, None, None, &[])?
         .map_err(|other| refuse(&other, "restart"))?;
     refuse_unwritable_home("restarted")?;
     let resume = if continued {
@@ -329,7 +399,7 @@ pub(in crate::cli) fn restart(
     writeln!(
         out,
         "→ {}",
-        resolve::run_command(&record, "show", globals, None, &[], &[])
+        resolve::run_command(&record, "show", globals, None, None, &[])
     )?;
     drop(out);
     write_held(&run.paths, &record, "")
@@ -594,7 +664,7 @@ mod tests {
             "workflow":"review","spec_dir":dir.path(),
             "project_root":dir.path(),"scope":{"kind":"worktree","path":dir.path()},
             "state":"active","node":"build","created_at":now,"entered_at":now,"visits":{},
-            "visit_grant":0,"deadline_fired":false,"next_seq":2,
+            "deadline_fired":false,"next_seq":2,
             "attempt":{"kind":"agent","seq":1,"node":"build","started_at":now,
                 "host":{"pid":std::process::id(),"start":null}},
         }))
@@ -637,7 +707,7 @@ mod tests {
             "workflow":"review","spec_dir":dir.path(),
             "project_root":dir.path(),"scope":{"kind":"worktree","path":dir.path()},
             "state":"active","node":"build","created_at":now,"entered_at":now,"visits":{},
-            "visit_grant":0,"deadline_fired":false,"next_seq":2,
+            "deadline_fired":false,"next_seq":2,
             "attempt":{"kind":"agent","seq":1,"node":"build","started_at":now,
                 "host":{"pid":std::process::id(),"start":null}},
         }))

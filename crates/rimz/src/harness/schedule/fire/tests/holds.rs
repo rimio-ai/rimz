@@ -9,7 +9,7 @@ fn workflow_tick_resamples_a_hold_before_its_due_time() {
         "version":crate::store::workflow::VERSION,"id":"wf_0190b8172c0070008000000000000001","workflow":"review",
         "spec_dir":"/definitions/review","scope":{"kind":"worktree","path":root.path()},
         "project_root":root.path(),"created_at":"2026-01-01T00:00:00Z","state":"active","node":"pr",
-        "entered_at":"2026-01-01T00:00:00Z","visits":{},"visit_grant":0,"deadline_fired":false,"next_seq":1,
+        "entered_at":"2026-01-01T00:00:00Z","visits":{},"deadline_fired":false,"next_seq":1,
         "recheck_at":"1970-01-01T00:06:40Z",
         "wait":{"node":"pr","outcome":"hold","case":0,"detail":"ready","first":"1970-01-01T00:00:00Z","last":"1970-01-01T00:00:00Z","count":1,"recheck_at":"1970-01-01T00:06:40Z"}
     })).unwrap();

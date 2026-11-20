@@ -136,7 +136,7 @@ fn a_trust_wait_closes_when_its_node_no_longer_launches_an_agent() {
             fs::write(definition_file(&waiting), edited).unwrap();
         }
         if let Some(at) = at {
-            let resumed = resume(&state, &record.id, &host, Some(at), &[]).unwrap();
+            let resumed = resume(&state, &record.id, &host, Some(at)).unwrap();
             assert!(
                 resumed.wait.is_none() && !resumed.needs_you(),
                 "{case}: {resumed:#?}"

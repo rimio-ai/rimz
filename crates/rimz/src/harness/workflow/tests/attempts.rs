@@ -38,7 +38,7 @@ pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
         "workflow":"test", "spec_dir":dir.path(), "prompt":"Run request", "project_root":dir.path(),
         "scope":{"kind":"worktree","path":dir.path()},
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":spec.authored().workflow.start,
-        "entered_at":jiff::Timestamp::now(), "deadline_fired":false, "next_seq":1, "visits":{}, "visit_grant":0
+        "entered_at":jiff::Timestamp::now(), "deadline_fired":false, "next_seq":1, "visits":{}
     })).unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     records::initialize(&state, &record, &guard).unwrap();
@@ -134,8 +134,12 @@ fn a_visit_grant_on_a_live_run_raises_the_bound_its_visits_failure_names() {
     answer(&state, &record, &host, json!({"outcome":"queued"}));
     answer(&state, &record, &host, json!({"outcome":"red"}));
     answer(&state, &record, &host, json!({"outcome":"red"}));
-    let extended = resume(&state, &record.id, &host, None, &["visits=+2".into()]).unwrap();
-    assert_eq!(extended.visit_grant, 2);
+    let extended = extend(&state, &record.id, &host, Some((None, 2)), None).unwrap();
+    assert_eq!(extended.step.as_deref(), Some("build"));
+    assert_eq!(
+        extended.record.visit_grants,
+        std::collections::BTreeMap::from([("build".into(), 2)])
+    );
     for _ in 0..2 {
         let live = answer(&state, &record, &host, json!({"outcome":"red"}));
         assert_eq!(live.state, RunState::Active);
@@ -450,7 +454,7 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
         capped.key_visits
     );
     assert_eq!(host.launched.borrow().len(), 2);
-    capped.visit_grant = 1;
+    capped.visit_grants.insert("build".into(), 1);
     capped.state = RunState::Active;
     capped.terminal_at = None;
     capped.outcome = None;
@@ -500,7 +504,7 @@ fn visit_grant_admits_exactly_that_many_more_visits() {
     let host = FakeHost::new();
     let mut capped = advance_ok(&state, &record.id, &host);
     assert_eq!(capped.state, RunState::Failed);
-    capped.visit_grant = 2;
+    capped.visit_grants.insert("build".into(), 2);
     for count in 3..=4 {
         capped.state = RunState::Active;
         capped.terminal_at = None;
@@ -523,6 +527,157 @@ fn visit_grant_admits_exactly_that_many_more_visits() {
             "outcome":"failed", "cause":"visits", "node":"build",
             "reason":"build has used 4 of 4 visits", "detail":{"visits":4, "max":4}, "key":"lint"
         }))
+    );
+}
+
+fn unchanged(state: &StatePaths, record: &RunRecord) -> (RunRecord, Vec<records::JournalEntry>) {
+    let paths = state.workflow(&record.id);
+    (
+        records::load(&paths).unwrap(),
+        records::journal(&paths).unwrap(),
+    )
+}
+
+#[test]
+fn extend_grants_the_step_the_run_is_at_and_refuses_what_it_cannot_raise() {
+    let (_dir, state, record) = setup(OUTCOME_STEP);
+    let host = FakeHost::new();
+    let before = unchanged(&state, &record);
+    for (visits, reason) in [
+        (
+            (None, 1),
+            "the run is at the check watch, which has no visits to grant; name a step: \
+             `rimz workflow extend <run> <step> --visits +N`",
+        ),
+        (
+            (Some("watch"), 1),
+            "watch is a check, which has no visits to grant; name a step",
+        ),
+        ((Some("nope"), 1), "nope is not a step of workflow test"),
+    ] {
+        let error = extend(&state, &record.id, &host, Some(visits), None).unwrap_err();
+        assert!(matches!(error, WorkflowErr::Refused(_)), "{error:?}");
+        assert_eq!(error.to_string(), reason);
+        assert_eq!(unchanged(&state, &record), before);
+    }
+    let live = answer(&state, &record, &host, json!({"outcome":"red"}));
+    assert_eq!(live.node, "build");
+    let extended = extend(&state, &record.id, &host, Some((None, 2)), None).unwrap();
+    assert_eq!(extended.step.as_deref(), Some("build"));
+    assert_eq!(
+        (
+            extended.record.visit_grant("build"),
+            extended.record.node.as_str()
+        ),
+        (2, "build")
+    );
+    assert_eq!(
+        records::journal(&state.workflow(&record.id))
+            .unwrap()
+            .last()
+            .unwrap()
+            .event,
+        JournalEvent::Extend {
+            step: Some("build".into()),
+            visits: Some(2),
+            deadline: None,
+        }
+    );
+    let (_dir, state, record) = setup(&STEP.replace("max-visits=2\n", ""));
+    let before = unchanged(&state, &record);
+    let error = extend(&state, &record.id, &host, Some((Some("build"), 1)), None).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "build sets no max-visits, so a visit grant changes nothing"
+    );
+    assert_eq!(unchanged(&state, &record), before);
+}
+
+/// A `resume --at` move staged on a live agent attempt has not entered its target yet, and a
+/// bare grant goes to that target, the step the run is moving to.
+#[test]
+fn extend_while_a_move_settles_grants_the_step_the_run_moves_to() {
+    let text = STEP.replace(
+        "max-visits=2\n",
+        "max-visits=2\n[agent.fix]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\n\
+         then='@done'\nmax-visits=3\n",
+    );
+    let (_dir, state, record) = setup(&text);
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    let moved = resume(&state, &record.id, &host, Some("fix")).unwrap();
+    assert_eq!(
+        moved.attempt.as_ref().map(|attempt| attempt.node.as_str()),
+        Some("build"),
+        "the move is staged, not settled"
+    );
+    let extended = extend(&state, &record.id, &host, Some((None, 1)), None).unwrap();
+    assert_eq!(
+        (
+            extended.step.as_deref(),
+            extended.record.visit_grant("fix"),
+            extended.record.visit_grant("build")
+        ),
+        (Some("fix"), 1, 0)
+    );
+}
+
+#[test]
+fn extend_deadline_rearms_a_fired_deadline_and_journals_the_grant() {
+    let (_dir, state, mut record) = setup(STEP);
+    record.deadline = Some(Timestamp::now());
+    record.deadline_fired = true;
+    update(&state, &record);
+    let before = Timestamp::now();
+    let when = parse_when("2h").unwrap();
+    let extended = extend(&state, &record.id, &FakeHost::new(), None, Some(when)).unwrap();
+    let deadline = extended.record.deadline.unwrap();
+    assert!(!extended.record.deadline_fired);
+    assert!(
+        deadline >= before + jiff::SignedDuration::from_hours(2),
+        "{deadline}"
+    );
+    assert_eq!(
+        (extended.step, extended.record.visit_grants.len()),
+        (None, 0)
+    );
+    assert_eq!(
+        records::journal(&state.workflow(&record.id))
+            .unwrap()
+            .last()
+            .unwrap()
+            .event,
+        JournalEvent::Extend {
+            step: None,
+            visits: None,
+            deadline: Some(deadline),
+        }
+    );
+}
+
+#[test]
+fn resume_at_a_spent_step_refuses_untouched_until_a_grant() {
+    let (_dir, state, mut record) = setup(OUTCOME_STEP);
+    record.visits.insert("build".into(), 6);
+    update(&state, &record);
+    let host = FakeHost::new();
+    let before = unchanged(&state, &record);
+    let error = resume(&state, &record.id, &host, None).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "an active run needs --at <node> to resume; `rimz workflow extend` changes its bounds"
+    );
+    let error = resume(&state, &record.id, &host, Some("build")).unwrap_err();
+    assert!(
+        matches!(&error, WorkflowErr::SpentVisits { step, used: 6, max: 6 } if step == "build"),
+        "{error:?}"
+    );
+    assert_eq!(unchanged(&state, &record), before);
+    extend(&state, &record.id, &host, Some((Some("build"), 1)), None).unwrap();
+    let moved = resume(&state, &record.id, &host, Some("build")).unwrap();
+    assert_eq!(
+        (moved.node.as_str(), moved.state),
+        ("build", RunState::Active)
     );
 }
 
@@ -1534,7 +1689,7 @@ fn judge_fixture() -> (Definition, crate::disk::paths::WorkflowPaths, RunRecord)
         "version":crate::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"test","spec_dir":"/spec",
         "scope":{"kind":"worktree","path":"/project"},"project_root":"/project",
         "created_at":"2026-01-01T00:00:00Z","state":"active","node":"judge","entered_at":"2026-01-01T00:00:00Z",
-        "deadline_fired":false,"next_seq":2,"visits":{},"visit_grant":0,
+        "deadline_fired":false,"next_seq":2,"visits":{},
         "attempt":{"kind":"judge","seq":1,"node":"judge","started_at":"2026-01-01T00:00:00Z","host":{"pid":123,"start":null}}
     })).unwrap();
     (spec, state.workflow(&record.id), record)

@@ -37,7 +37,7 @@ fn workflow_record(
         "project_root":home,"notes":relative,
         "scope":{"kind":"worktree","path":home},"state":state,"node":"build",
         "created_at":at,"entered_at":at,"terminal_at":at,
-        "deadline_fired":false,"next_seq":1,"visits":{},"visit_grant":0,
+        "deadline_fired":false,"next_seq":1,"visits":{},
     }))
     .unwrap();
     let guard = WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
@@ -195,7 +195,7 @@ fn automation_notes_sweep_reads_workflow_ownership_and_live_launch_records() {
             "version":crate::store::workflow::VERSION,"id":id,"workflow":"test","spec_dir":home.path(),
             "project_root":home.path(),"notes":relative,
             "scope":{"kind":"worktree","path":home.path()},"state":state,"node":"build",
-            "created_at":at,"entered_at":at,"deadline_fired":false,"next_seq":1,"visits":{},"visit_grant":0,
+            "created_at":at,"entered_at":at,"deadline_fired":false,"next_seq":1,"visits":{},
         })).unwrap();
         let guard = WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
         workflow::initialize(&paths, &record, &guard).unwrap();

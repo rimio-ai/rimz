@@ -133,7 +133,7 @@ fn with_runs(view: &mut ShowView, runs: &[(&str, &str, i64)]) {
                         "reason": "user", "text": "review this", "at": at,
                     })),
                     "node": "gate", "entered_at": at + jiff::SignedDuration::from_secs(30),
-                    "visits": {}, "visit_grant": 0,
+                    "visits": {},
                     "deadline_fired": false, "next_seq": 1,
                 }))
                 .unwrap(),
@@ -4338,7 +4338,7 @@ fn task_run(state: &str, lane: &str, node: &str, second: i64) -> rimz::store::wo
         "scope": { "kind": "worktree", "path": format!("/repo/{lane}") },
         "project_root": "/repo", "created_at": at, "state": state, "node": node,
         "entered_at": at, "terminal_at": terminal.then_some(at),
-        "visits": {}, "visit_grant": 0, "deadline_fired": false, "next_seq": 1,
+        "visits": {}, "deadline_fired": false, "next_seq": 1,
     }))
     .unwrap()
 }

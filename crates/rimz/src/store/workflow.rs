@@ -18,7 +18,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// Raising it strands every unfinished run on disk: `live_runs` and `unfinished_under` skip a
 /// home of another version, and a new reader that walks run homes skips or ends one too rather
 /// than failing on it.
-pub const VERSION: u32 = 18;
+pub const VERSION: u32 = 19;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -858,7 +858,9 @@ pub struct RunRecord {
     /// The share of each step's visits charged under each item key, in first-charge order.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub key_visits: BTreeMap<String, Vec<KeyVisits>>,
-    pub visit_grant: u64,
+    /// The visits `rimz workflow extend` granted each step past its `max-visits`, for this run.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub visit_grants: BTreeMap<String, u64>,
     pub deadline: Option<Timestamp>,
     pub deadline_fired: bool,
     pub next_seq: u64,
@@ -959,6 +961,17 @@ impl RunRecord {
             .filter(|attempt| attempt.kind == AttemptKind::Agent)
     }
 
+    /// The node a staged `resume --at` move sends the run to: the move enters it only once the
+    /// attempt it ended settles off-lock, so until then `node` still names the node it leaves.
+    pub fn moving_to(&self) -> Option<&str> {
+        self.attempt
+            .as_ref()
+            .and_then(|attempt| attempt.ending.as_ref())
+            .filter(|ending| ending.cause == EndCause::Resume)
+            .and_then(|ending| ending.route.as_ref())
+            .map(|verdict| verdict.target.as_str())
+    }
+
     /// Resolve the current step's root among the caller's addressable sessions.
     pub fn step_agent<'a>(
         &self,
@@ -998,6 +1011,11 @@ impl RunRecord {
     /// Visits to `node` since its last full reset.
     pub fn visits_to(&self, node: &str) -> u64 {
         self.visits.get(node).copied().unwrap_or_default()
+    }
+
+    /// The visits granted `step` past its `max-visits` for this run.
+    pub fn visit_grant(&self, step: &str) -> u64 {
+        self.visit_grants.get(step).copied().unwrap_or_default()
     }
 
     /// Derive the lane without resolving or reading the checkout, which may be gone:
@@ -1243,9 +1261,17 @@ pub enum JournalEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<Value>,
     },
-    /// Written by workflow resume for both parked-run resumption and active-run `--extend`.
-    Resume {
-        visit_grant: u64,
+    /// Written by `rimz workflow resume`: a parked run re-entered, or a live run moved by
+    /// `--at`, at the node it moved to.
+    Resume,
+    /// Written by `rimz workflow extend`: the visits granted to `step`, the deadline set, or
+    /// both.
+    Extend {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        visits: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         deadline: Option<Timestamp>,
     },
     Wake {

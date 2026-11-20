@@ -2266,7 +2266,7 @@ fn name_workflow_runs(
             let commands = targets.commands(record);
             row.named(
                 commands.target().to_owned(),
-                commands.command("show", None, &[], &[]),
+                commands.command("show", None, None, &[]),
             );
         } else if row.state != "gone" {
             let command = crate::cli::workflow_view::resolve::command(
@@ -2275,7 +2275,6 @@ fn name_workflow_runs(
                 (home.as_ref().map(|home| home.project_root.as_path()) != Some(root))
                     .then_some(root),
                 None,
-                &[],
                 &[],
             );
             row.named(row.id.to_string(), command);

@@ -54,7 +54,7 @@ fn attempt(root: &str, node: &str, lifecycle: StepLifecycle) -> workflow::RunRec
         "scope":{"kind":"worktree", "path":root},
         "project_root":root, "created_at":Timestamp::UNIX_EPOCH,
         "entered_at":Timestamp::UNIX_EPOCH, "node":node, "state":"active",
-        "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":2,
+        "visits":{}, "deadline_fired":false, "next_seq":2,
         "attempt":{
             "kind":"agent", "seq":1, "node":node, "lifecycle":lifecycle,
             "started_at":Timestamp::UNIX_EPOCH, "host":{"pid":1,"start":null},
