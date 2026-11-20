@@ -1,6 +1,6 @@
 # Antigravity adapter
 
-This page maps the Antigravity CLI (`agy`) onto RimZ's types: launch and resume, the hooks RimZ installs, session discovery from the provider's local store, the transcript, subagents, statusline context, the account, and cost. The provider-neutral agent model is in [model.md](./model.md), the integration layer in [adapter.md](./adapter.md), and pane binding and supersession in [instances.md](./instances.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream protocol, pinned at `agy` 1.3.3 with transcript and subagent captures from 1.1.2 and plugin and `/usage` captures from 1.5.12, is in [antigravity-reference.md](../../externals/agent-adapter/antigravity-reference.md).
+This page maps the Antigravity CLI (`agy`) onto RimZ's types: launch and resume, the hooks RimZ installs, session discovery from the provider's local store, the transcript, subagents, statusline context, the account, and cost. The provider-neutral agent model is in [model.md](./model.md), the integration layer in [adapter.md](./adapter.md), and pane binding and supersession in [instances.md](./instances.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream protocol, pinned at `agy` 1.3.3 with transcript and subagent captures from 1.1.2, plugin and `/usage` captures from 1.5.12, and custom-agent captures from 1.5.13, is in [antigravity-reference.md](../../externals/agent-adapter/antigravity-reference.md).
 
 Antigravity reaches RimZ through four sources, and each owns different facts. Command hooks carry turn boundaries and tool progress. The custom statusline carries the live model, account, and context gauge. The provider's local `brain/` store carries conversation identity, history, priced spend, and native questions between hooks. The statusline and a print-mode `agy -p /usage` run both carry the quota. RimZ installs no `PreToolUse` hook, because no documented `PreToolUse` decision is proven to leave native permission policy unchanged ([reference](../../externals/agent-adapter/antigravity-reference.md#decisions)).
 
@@ -10,7 +10,8 @@ Antigravity reaches RimZ through four sources, and each owns different facts. Co
 | --- | --- |
 | `crates/rimz/src/agents/adapters/antigravity/mod.rs` | The `static AgentSpec` (`ANTIGRAVITY_DESCRIPTOR`), the declared coverage, the hook catalog (`ANTIGRAVITY_HOOKS`), hook replies and decoding (`decode_lifecycle_fields`), resume argv, and the capability impls |
 | `crates/rimz/src/agents/adapters/antigravity/payloads.rs` | Typed hook payloads and the failure rules for tool and `Stop` payloads |
-| `crates/rimz/src/agents/adapters/antigravity/install.rs` | The plugin-directory install, the statusline record, preview, uninstall, and the disabled-plugin check |
+| `crates/rimz/src/agents/adapters/antigravity/install.rs` | The plugin-directory install, the statusline record, preview, uninstall, the disabled-plugin check, and the launch's plugin-dir check (`launch_plugin_dir`) |
+| `crates/rimz/src/agents/adapters/antigravity/agent_file.rs` | The launch agent file: the tool-name mapping and its notices, the frontmatter and body, and the content-hashed name |
 | `crates/rimz/src/agents/adapters/antigravity/session.rs` | Provider home resolution, transcript path validation, local-session discovery, the transcript fold, final-message extraction, and the parent-transcript subagent join |
 | `crates/rimz/src/agents/adapters/antigravity/spend.rs` | The spend source glob and the token-row parser with its exact-only pricing |
 | `crates/rimz/src/agents/adapters/antigravity/statusline.rs` | The statusline payload and its `AgentContext` projection, quota windows included |
@@ -31,6 +32,7 @@ The launch spec maps RimZ's launch inputs onto `agy` flags:
 | permission `plan` | `--mode plan` |
 | permission `yolo` | `--dangerously-skip-permissions --mode accept-edits` |
 | exact resume | `agy --conversation <id>` |
+| profile system prompt, fresh launch | `--agent rimz-<label>-<hash>` after the rest of the argv, selecting [the agent file](#the-agent-file) |
 
 The 1.3.3 CLI accepts `low`, `medium`, `high`, `xhigh`, and `max` for `--effort` ([reference](../../externals/agent-adapter/antigravity-reference.md#flags)). The adapter declares no version floor, so an older `agy` that lacks the flag rejects a profile that sets effort at its own startup. Under `yolo`, implementation-plan approval still follows the user's `artifactReviewPolicy`, which RimZ leaves untouched ([reference](../../externals/agent-adapter/antigravity-reference.md#execution-modes)).
 
@@ -40,11 +42,30 @@ Some launch inputs have no Antigravity channel:
 
 | Input | Behaviour |
 | --- | --- |
-| profile system prompt | refused before launch: `presets.system_prompt_file` stays `None`, since upstream publishes no system-prompt flag |
-| launch reminders | no append-system-text channel, so only the child no-delegation body arrives, through the user-prompt fallback ([fleet.md](../harness/fleet.md#launch-reminders)) |
 | `rimz agents fork` | unsupported: native `/fork` switches identity inside the TUI and has no source-id launch flag ([reference](../../externals/agent-adapter/antigravity-reference.md#fork-rewind-and-clear)) |
 | scoped profile `skills` list | refused: the manual-skill marker is `Unsupported` ([sandbox.md](../sandbox.md#skill-roots-and-user-only-markers)) |
 | `sandbox` isolation | warns and launches without a provider sandbox: `has_native_sandbox` keeps its `false` default |
+
+### The agent file
+
+agy publishes no system-prompt flag, so a fresh launch whose definition carries prompt sources (a kind base, a craft body, or a team layer) writes its composed system prompt into an agy custom agent and selects it with `--agent <name>`. `compile` plans the file through `agent_file.rs::plan`, and `apply` writes it through `crates/rimz/src/agents/agent_file.rs::publish_agent_file`. The file is `agents/<name>.md` in RimZ's plugin directory, resolved by the installer's rule from the launch env's `HOME` or `RIMZ_ANTIGRAVITY_HOOKS`. Its frontmatter holds `name`, a quoted `description`, `mainAgent: true`, and `tools`; its body is the composed prompt, a blank line, and the launch reminder, so the file is also the reminder channel. The name is `rimz-<label>-<hash>`: the label is the profile name with every character outside `[A-Za-z0-9._-]` replaced by `-`, or `antigravity` without a profile, and the hash is 12 hex characters of SHA-256 over the rest of the file, so equal content shares one file and any change gets its own. Publishing gives the file a fresh mtime and removes `rimz-*.md` regular files beside it older than seven days.
+
+Whenever a prompt is composed, a profile's own `--agent` is removed, on every action. A resume selects no file and passes no `--agent`: the conversation keeps the prompt and tools it started with. A launch with no prompt sources keeps its argv and writes no file; its launch reminder is not delivered, and a subagent's no-delegation body arrives through the user-prompt fallback ([fleet.md](../harness/fleet.md#launch-reminders)). `compile` refuses the launch when the plugin directory does not hold RimZ's manifest, with the fix `rimz hooks install antigravity`, or when agy has the plugin disabled, with the fix `agy plugin enable rimz`.
+
+agy needs a `tools` list on every definition. `agent_file.rs::map_tools` maps RimZ's names once, for the file and for the launch notices:
+
+| RimZ name | agy names |
+| --- | --- |
+| `Read`, `Grep`, `Glob`, `LS` | `read_file` |
+| `Edit`, `MultiEdit` | `edit_file` |
+| `Write` | `write_file` |
+| `Bash` | `run_command` |
+| `WebSearch`, `WebFetch` | `search_web` |
+| `AskUserQuestion` | `ask_question` |
+| `Agent` | `invoke_subagent`, `define_subagent`, `manage_subagents` |
+| `Skill` | none |
+
+An agy name passes as written: the 13 defaults (`agent_file.rs::DEFAULT_TOOLS`) and `generate_image`. Any other name is dropped with the dropped-tools notice and never reaches the file, and a restriction suffix (`Bash(git *)`) is reported with the restrictions notice while its base name is mapped. A launch with no list writes the 13 defaults. The three subagent names are written only when the launch keeps native subagents on (`crates/rimz/src/harness/launch_reminders.rs::LaunchReminders::disable_native_subagents`). On agy 1.5.13 `read_file` refuses a directory under a custom agent (`path is a directory, not a file`) and agy registers no other listing tool, so `LS` maps to `read_file` and grants no directory listing: a definition that needs one lists `Bash`.
 
 ## Hooks
 
@@ -57,9 +78,10 @@ Some launch inputs have no Antigravity channel:
 | `~/.gemini/config/plugins/rimz/hooks.json` | beside `RIMZ_ANTIGRAVITY_HOOKS` | one top-level hook named `rimz` holding the six handlers below |
 | `~/.gemini/config/plugins/rimz/plugin.json` | beside `RIMZ_ANTIGRAVITY_HOOKS` | the manifest: name `rimz`, author `RimZ`, version, description |
 | `~/.gemini/antigravity-cli/settings.json` | `RIMZ_ANTIGRAVITY_SETTINGS` | `statusLine` set to `rimz statusline feed --source antigravity` |
+| `~/.gemini/config/plugins/rimz/agents/rimz-*.md` | beside `RIMZ_ANTIGRAVITY_HOOKS` | not written by install: launches write [agent files](#the-agent-file) there, install keeps them, and uninstall removes them with the directory |
 | `<rimz home>/antigravity-statusline.json` | the RimZ home | the displaced `statusLine`, written when install displaced one and removed when `statusLine` is absent |
 
-Every path resolves from the process `HOME` (and the RimZ home) through `crates/rimz/src/agents/locate.rs::agent_config_path`, and the installer ignores the login env map. The plugin directory is `plugins/rimz` beside the global `hooks.json` that `RIMZ_ANTIGRAVITY_HOOKS` names, and agy's enablement file is `config.json` there (`install.rs::Paths`). agy 1.5.12 loads a plugin's `hooks.json` with no install step and enables it by default ([reference](../../externals/agent-adapter/antigravity-reference.md#files-and-format)).
+Every path resolves from the process `HOME` (and the RimZ home) through `crates/rimz/src/agents/locate.rs::agent_config_path`, and the installer ignores the login env map. A launch resolves the same rule from its launch env instead (`install.rs::launch_plugin_dir`). The plugin directory is `plugins/rimz` beside the global `hooks.json` that `RIMZ_ANTIGRAVITY_HOOKS` names, and agy's enablement file is `config.json` there (`install.rs::Paths`). agy 1.5.12 loads a plugin's `hooks.json` with no install step and enables it by default ([reference](../../externals/agent-adapter/antigravity-reference.md#files-and-format)).
 
 Ownership of the directory is the manifest, as for MiniMax: `install.rs::check_plugin` accepts an absent or empty path, or a real directory whose `plugin.json` names `rimz` and author `RimZ`, or one holding only a `hooks.json` with RimZ's handlers (a write the manifest has not yet followed). A file, a symlink, a plugin file that is not a regular file, a foreign manifest, a manifest-less `hooks.json` without RimZ's handlers, or any other content refuses install with a move-aside fix naming the path, and uninstall leaves that path in place while it still cleans the rest. Such a path is not a RimZ artifact either, so a home holding only it reads as untouched. Install writes the plugin last, after the settings pair below, so a failed settings, global-hooks, or record write leaves the legacy global handlers as the one hook set. It writes `hooks.json` before `plugin.json`, so agy never sees a manifest whose hooks are missing, and writes only files whose bytes differ. `installed` is every plugin file byte-equal, no owned handler left in the global file, and the statusline command equal to RimZ's.
 

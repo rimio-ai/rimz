@@ -36,6 +36,7 @@ const PLUGIN_AUTHOR: &str = "RimZ";
 const MANIFEST: &str = "plugin.json";
 const PLUGIN_HOOKS: &str = "hooks.json";
 const ENABLE_FIX: &str = "agy plugin enable rimz";
+const INSTALL_FIX: &str = "rimz hooks install antigravity";
 const STACK_WITH_DEFAULT: &str = "stack_with_default";
 
 const STATUS_LINE: OwnedStatusLine = OwnedStatusLine {
@@ -140,15 +141,9 @@ impl ManagedIntegration for AntigravityManagedIntegration {
 
     fn hooks_disabled(&self, _login_env: &BTreeMap<String, String>) -> Option<HookPreflightErr> {
         let config = self.paths().ok()?.config();
-        let root: Value = jsonc::from_slice(&std::fs::read(&config).ok()?).ok()?;
-        (root.pointer("/plugins/rimz/enabled") == Some(&Value::Bool(false))).then(|| {
-            HookPreflightErr::HooksDisabled {
-                reason: format!(
-                    "agy has the RimZ plugin disabled: `plugins.rimz.enabled` is false in {}",
-                    config.display()
-                ),
-                fix: ENABLE_FIX.to_owned(),
-            }
+        disabled_reason(&config).map(|reason| HookPreflightErr::HooksDisabled {
+            reason,
+            fix: ENABLE_FIX.to_owned(),
         })
     }
 
@@ -177,6 +172,62 @@ impl ManagedIntegration for AntigravityManagedIntegration {
         let paths = self.paths().ok()?;
         STATUS_LINE.wrapped_command_at(&paths.settings, &paths.state)
     }
+}
+
+/// Why agy's `config.json` at `config` keeps the RimZ plugin off, if it does.
+fn disabled_reason(config: &Path) -> Option<String> {
+    let root: Value = jsonc::from_slice(&std::fs::read(config).ok()?).ok()?;
+    (root.pointer("/plugins/rimz/enabled") == Some(&Value::Bool(false))).then(|| {
+        format!(
+            "agy has the RimZ plugin disabled: `plugins.rimz.enabled` is false in {}",
+            config.display()
+        )
+    })
+}
+
+/// The RimZ plugin dir the launched agy reads, resolved from the launch env by the
+/// installer's rule, refused unless it holds RimZ's manifest and agy keeps it enabled.
+pub(super) fn launch_plugin_dir(
+    env: &BTreeMap<String, String>,
+) -> std::result::Result<PathBuf, crate::agents::AgentFileRefusal> {
+    let undeliverable = "so the system prompt cannot be delivered";
+    let hooks = crate::agents::agent_config_path_in(
+        AGENT,
+        "RIMZ_ANTIGRAVITY_HOOKS",
+        Path::new(".gemini/config/hooks.json"),
+        env,
+    )
+    .map_err(|error| crate::agents::AgentFileRefusal {
+        reason: format!("{error}, {undeliverable}"),
+        fix: INSTALL_FIX.to_owned(),
+    })?;
+    let plugin = hooks.with_file_name("plugins").join(PLUGIN_NAME);
+    if !manifest_owned(&plugin) {
+        return Err(crate::agents::AgentFileRefusal {
+            reason: format!(
+                "antigravity takes its system prompt through RimZ's agy plugin, and {} does not hold it, {undeliverable}",
+                plugin.display()
+            ),
+            fix: INSTALL_FIX.to_owned(),
+        });
+    }
+    if let Some(reason) = disabled_reason(&hooks.with_file_name("config.json")) {
+        return Err(crate::agents::AgentFileRefusal {
+            reason: format!("{reason}, {undeliverable}"),
+            fix: ENABLE_FIX.to_owned(),
+        });
+    }
+    Ok(plugin)
+}
+
+/// Whether `dir` holds a manifest RimZ wrote.
+fn manifest_owned(dir: &Path) -> bool {
+    std::fs::read(dir.join(MANIFEST))
+        .ok()
+        .and_then(|bytes| jsonc::from_slice::<Value>(&bytes).ok())
+        .is_some_and(|manifest| {
+            manifest["name"] == PLUGIN_NAME && manifest["author"] == PLUGIN_AUTHOR
+        })
 }
 
 pub(super) fn hooks_path() -> Result<PathBuf> {

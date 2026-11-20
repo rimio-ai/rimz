@@ -436,7 +436,10 @@ upward-dependencies = ["address"]
 # agents are the one answer to how long auto-continue waits for a provider's own resume (+3).
 # AgentState::resumed_provider_unreported shares the unstarted-resume reading with delivery and
 # reconciliation (+1).
-surface-budget = 1312
+# AgentFile, AgentFileInput, AgentFileRefusal, publish_agent_file, and LaunchCapability::agent_file
+# carry a fresh launch's provider agent file from the adapter that renders it to harness compile
+# and apply (+5).
+surface-budget = 1317
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

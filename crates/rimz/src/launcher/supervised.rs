@@ -316,7 +316,7 @@ fn prepare(
         agent_cell.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    let prompt = supervised_prompt(request, adapter);
+    let prompt = supervised_prompt(request, adapter, agent_cell);
     let logins = crate::agents::room_accounts(
         &store.paths().workspace_record,
         Some(&workspace.project_root),

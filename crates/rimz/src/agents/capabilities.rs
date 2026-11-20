@@ -82,6 +82,9 @@ pub enum SystemTextChannel {
     /// RimZ's installed in-process extension reads the text from the
     /// `RIMZ_LAUNCH_REMINDERS` launch env and injects it; nothing rides argv.
     ExtensionEnv,
+    /// The text rides the agent file a fresh launch plans
+    /// ([`LaunchCapability::agent_file`]); the process compile merges nothing.
+    AgentFile,
 }
 
 #[doc(hidden)]
@@ -786,6 +789,17 @@ pub trait LaunchCapability: CoreCapability {
     /// probing the executable resolved for this launch rather than ambient PATH.
     fn changed_system_prompt_args(&self, _program: &Path) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Plan the provider agent file that carries a fresh launch's composed
+    /// prompt, reminder, and tools, for an adapter whose system-prompt matcher is
+    /// [`PresetArgMatcher::AgentFile`]. `None` means the adapter has no agent file;
+    /// a refusal names what keeps the provider from reading one.
+    fn agent_file(
+        &self,
+        _input: &super::AgentFileInput<'_>,
+    ) -> Option<std::result::Result<super::AgentFile, super::AgentFileRefusal>> {
+        None
     }
 
     /// Apply final environment overrides on every managed launch, reading the

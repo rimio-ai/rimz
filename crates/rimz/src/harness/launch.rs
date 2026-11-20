@@ -1507,7 +1507,7 @@ fn argv_matcher(channel: &SystemTextChannel) -> Option<crate::agents::PresetArgM
             flags: flags.clone(),
             key: key.clone(),
         }),
-        SystemTextChannel::ExtensionEnv => None,
+        SystemTextChannel::ExtensionEnv | SystemTextChannel::AgentFile => None,
     }
 }
 
@@ -1554,7 +1554,9 @@ fn merge_appended_system_text(
 
     let config_key = match channel {
         SystemTextChannel::ConfigKey { key, .. } => Some(key),
-        SystemTextChannel::TextFlag { .. } | SystemTextChannel::ExtensionEnv => None,
+        SystemTextChannel::TextFlag { .. }
+        | SystemTextChannel::ExtensionEnv
+        | SystemTextChannel::AgentFile => None,
     };
     let existing_text = if config_key.is_some() {
         parse_toml_string_or_raw(&existing.value)
@@ -1586,7 +1588,7 @@ fn render_system_text_channel(channel: &SystemTextChannel, text: &str) -> Option
             flags.first()?.clone(),
             format!("{key}={}", toml::Value::String(text.to_owned())),
         )),
-        SystemTextChannel::ExtensionEnv => None,
+        SystemTextChannel::ExtensionEnv | SystemTextChannel::AgentFile => None,
     }
 }
 

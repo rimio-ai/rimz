@@ -3290,6 +3290,46 @@ fn tier_families_name_a_failed_base_rather_than_asking_to_create_it() {
 }
 
 #[test]
+fn antigravity_definitions_take_a_base_a_craft_body_tools_and_team_seats() {
+    let root = tempfile::tempdir().unwrap();
+    definition(
+        root.path(),
+        "agents/worker.md",
+        "agent: antigravity\ntools: [Bash]",
+        "Craft.",
+    );
+    error(
+        root.path(),
+        &format!(
+            "runs on antigravity, whose kind base is missing — create {} with a nonempty body",
+            root.path().join("agents/antigravity.md").display()
+        ),
+    );
+    definition(
+        root.path(),
+        "agents/antigravity.md",
+        "",
+        "Antigravity base.",
+    );
+    let loaded = clean(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    assert!(loaded.agent_profiles.0.contains_key("worker"));
+    definition(root.path(), "agents/worker.md", "agent: antigravity", "");
+    error(root.path(), "lists no `tools`, which antigravity needs");
+    definition(
+        root.path(),
+        "agents/antigravity.md",
+        "tools: [Read]",
+        "Antigravity base.",
+    );
+    team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+    let loaded = clean(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    assert!(loaded.agent_profiles.0.contains_key("worker"));
+    assert!(loaded.teams.0.contains_key("probe"));
+}
+
+#[test]
 fn crafts_on_non_prompt_kinds_refuse_the_body_not_a_missing_base() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();

@@ -22,7 +22,7 @@ pub struct SystemPromptSources {
 }
 
 impl SystemPromptSources {
-    pub(super) fn from_cell(cell: &crate::harness::spec::AgentCell) -> Self {
+    pub(crate) fn from_cell(cell: &crate::harness::spec::AgentCell) -> Self {
         Self {
             system_prompt_file: cell.system_prompt_file.clone(),
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
@@ -30,7 +30,7 @@ impl SystemPromptSources {
         }
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         !self.composes() && self.system_prompt_file.is_none()
     }
 
@@ -119,6 +119,15 @@ pub(super) fn plan_system_prompt(
         .ok_or(PromptComposeErr::Unsupported { agent })?;
 
     let composed = read_composed(sources, agent)?;
+    // The provider's agent file carries the text; compile plans it once the reminder exists.
+    if matches!(matcher, PresetArgMatcher::AgentFile(_)) {
+        return Ok(SystemPromptPlan {
+            sources: sources.clone(),
+            composed: Some(composed),
+            artifact: None,
+            materialized: MaterializedSystemPrompt::default(),
+        });
+    }
     let artifact = (sources.composes()
         || matches!(matcher, PresetArgMatcher::EnvConfigMember { .. })
         || sources
@@ -208,6 +217,7 @@ fn render(
             ensure_text_prompt_size(agent, contents)?;
             Ok(with_args(render_flag(flags, contents.to_owned(), agent)?))
         }
+        PresetArgMatcher::AgentFile(_) => Ok(MaterializedSystemPrompt::default()),
     }
 }
 

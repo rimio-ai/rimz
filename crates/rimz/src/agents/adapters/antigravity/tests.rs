@@ -819,6 +819,26 @@ fn uninstall_reaches_each_artifact_alone() {
 }
 
 #[test]
+fn agent_files_in_the_plugin_survive_reinstall_and_leave_with_uninstall() {
+    let home = AgyHome::new();
+    let managed = home.integration();
+    managed.install(&env(), Default::default()).unwrap();
+    let agent = home.plugin.join("agents/rimz-antigravity-000000000000.md");
+    std::fs::create_dir_all(agent.parent().unwrap()).unwrap();
+    std::fs::write(&agent, "---\nname: rimz-antigravity-000000000000\n---\n").unwrap();
+    assert!(managed.installed(&env()));
+    assert!(
+        managed
+            .outdated_files(&env(), Default::default())
+            .is_empty()
+    );
+    managed.install(&env(), Default::default()).unwrap();
+    assert!(agent.exists());
+    managed.uninstall(&env()).unwrap();
+    assert!(!home.plugin.exists());
+}
+
+#[test]
 fn reinstall_after_the_statusline_key_is_deleted_drops_the_stale_record() {
     let home = AgyHome::new();
     let managed = home.integration();

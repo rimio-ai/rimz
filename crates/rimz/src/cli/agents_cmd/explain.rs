@@ -296,7 +296,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         if report.prompt.reminder.is_some() && !report.prompt.reminder_delivered {
             writeln!(
                 render::err(),
-                "rimz: {} has no append-system-text channel; the reminder is not delivered",
+                "rimz: this {} launch has no reminder channel; the reminder is not delivered",
                 report.kind
             )?;
         }
@@ -923,7 +923,11 @@ impl<'a> ExplainReport<'a> {
                     .launch
                     .preset_arg_matcher(PresetField::SystemPromptFile)
                     .map(channel_label),
-                artifact: plan.prompt.artifact.as_deref(),
+                artifact: plan
+                    .prompt
+                    .artifact
+                    .as_deref()
+                    .or(plan.agent_file.as_ref().map(|file| file.path.as_path())),
                 reminder: Some(process.reminder.as_str()),
                 reminder_channel: plan.reminder_channel.as_ref().map(|channel| match channel {
                     SystemTextChannel::TextFlag { flags } => flags.join(" "),
@@ -931,6 +935,7 @@ impl<'a> ExplainReport<'a> {
                         format!("{} {key}", flags.join(" "))
                     }
                     SystemTextChannel::ExtensionEnv => "rimz extension".to_owned(),
+                    SystemTextChannel::AgentFile => "the launch's agent file".to_owned(),
                 }),
                 reminder_delivered: plan.reminder_channel.is_some(),
             },
@@ -955,6 +960,7 @@ fn channel_label(matcher: PresetArgMatcher) -> String {
         PresetArgMatcher::ConfigKey { flags, key } => format!("{} {key}", flags.join(" ")),
         PresetArgMatcher::EnvPathVar(key) => key,
         PresetArgMatcher::EnvConfigMember { var, member } => format!("{var} {member}"),
+        PresetArgMatcher::AgentFile(flag) => format!("agent file selected by {flag}"),
     }
 }
 
@@ -1311,7 +1317,7 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
                 .prompt
                 .reminder_channel
                 .as_deref()
-                .unwrap_or("no append-system-text channel (not delivered)")
+                .unwrap_or("no reminder channel on this launch (not delivered)")
         )?;
     }
     Ok(())
