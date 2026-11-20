@@ -471,6 +471,13 @@ fn reconcile_failure(
 /// conservatively protects one physical pane per occupied view. A wholly
 /// unclaimed occupied view uses add-before-close; orphan sidebar-only views
 /// are close-only.
+///
+/// The plan holds only verdicts. tmux converges surviving sidebar widths
+/// outside it, and Zellij's `add_sidebar_to_tab` docks with `move-pane` and
+/// `stack-panes`, which swap or stack that tab's work panes. Before a plan or
+/// doc promises that a reconcile scope moves or resizes no existing pane, list
+/// every mux command each backend's `reconcile_sidebars` and its add path
+/// issue on panes the change did not create.
 pub(super) fn plan_reconcile(
     views: &[ViewSidebars],
     live: &SidebarLiveness,
