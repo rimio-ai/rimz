@@ -538,6 +538,10 @@ fn peers_down_the_chain_and_booked_launches_outlive_the_agent() {
             agent_id: link.agent_id.clone(),
         })
         .to_vec();
+    let mut fired_seat = fired.clone();
+    fired_seat.agent_id = "seat".into();
+    fired_seat.name = Some("seat".to_owned());
+    fired_seat.team = Some("forge".to_owned());
     let agents = [
         agent.clone(),
         first,
@@ -546,6 +550,7 @@ fn peers_down_the_chain_and_booked_launches_outlive_the_agent() {
         ended,
         unrelated,
         fired,
+        fired_seat,
     ];
     let (verdict, read) = both(&store, dir.path(), &agents, &agent, DUE);
     assert_eq!(verdict, Verdict::Stop { idle_secs: 180 });
@@ -556,6 +561,7 @@ fn peers_down_the_chain_and_booked_launches_outlive_the_agent() {
             (RowKind::Agent, "@first"),
             (RowKind::Agent, "@first › @second"),
             (RowKind::Agent, "@ended › @fired"),
+            (RowKind::Team, "@ended › forge#external"),
         ],
         "a peer's own subagents close with that peer, and ended rows never print"
     );

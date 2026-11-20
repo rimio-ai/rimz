@@ -774,7 +774,13 @@ impl<'a> List<'a> {
         for (row, mut path) in booked {
             if let Some(instance) = row.team_instance() {
                 let status = self.cohort_status(&instance);
-                self.push_team(Group::Outliving, &instance, status);
+                path.push(instance.to_string());
+                self.push_team_named(
+                    Group::Outliving,
+                    &instance,
+                    path.join(PATH_SEPARATOR),
+                    status,
+                );
                 continue;
             }
             if !self.seen.insert(agent_key(row)) {
