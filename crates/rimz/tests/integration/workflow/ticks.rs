@@ -81,6 +81,7 @@ fn tick_retries_a_reopened_judge_window() {
         ),
         "",
     );
+    ready_claude(&env);
     judges::capacity(&env, 100);
     let shell = write_fake_login_shell(&env, "window-shell", &[]);
     let bin = env.home_root.join("window-bin");

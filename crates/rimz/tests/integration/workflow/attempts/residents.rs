@@ -266,12 +266,22 @@ fn takeover_launches_over_an_occupant_that_ends_after_its_close_fails() {
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }
 
-/// A launch its preparation refuses is not retried: the step settles `died` on the first
-/// advance, as on trunk, without a `retry` wait and without stopping the occupant.
+/// A launch the trust read refuses mid-run (hooks removed after the start passed) waits on
+/// `trust` with its fix, counts no attempt or visit, stops no occupant and needs the user; once
+/// the hooks are back, the next advance launches the step and closes the wait.
 #[test]
-fn a_refused_preparation_is_not_retried_and_stops_no_occupant() {
+fn a_trust_refused_preparation_waits_and_stops_no_occupant() {
     let room = Room::with_kind("admission.occupancy='takeover'", "claude");
-    fs::remove_file(room.env.agent_config_path("claude")).unwrap();
+    crate::common::trust_claude_project(&room.env, &room.env.project_root);
+    let release = room.env.project_root.join("release-pr");
+    fs::write(
+        room.env.rimz_home().join("workflows/review/checks/pr.sh"),
+        format!(
+            "if grep -q '^  \"node\": \"pr\"' \"$RIMZ_WORKFLOW_DIR/context.json\"; then while [ ! -e '{}' ]; do sleep 0.05; done; printf '{{\"outcome\":\"go\",\"key\":7}}'; else printf '{{\"outcome\":\"done\"}}'; fi\n",
+            release.display()
+        ),
+    )
+    .unwrap();
     fs::write(room.env.project_root.join("panes.json"), "[]").unwrap();
     let mut owner = dummy_agent_process();
     let workspace = room.env.resolve_workspace(&room.env.project_root);
@@ -296,22 +306,48 @@ fn a_refused_preparation_is_not_retried_and_stops_no_occupant() {
         ))
         .unwrap();
     let id = room.start();
-    let value = settled(&room.env, &id, "failed");
-    owner.kill().unwrap();
-    owner.wait().unwrap();
-    let attempts = events(&value, "attempt");
-    assert_eq!(attempts.len(), 1, "{value:#}");
-    assert_eq!(attempts[0]["outcome"], "died");
+    fs::remove_file(room.env.agent_config_path("claude")).unwrap();
+    fs::write(&release, "").unwrap();
+    let fix = "claude hooks are missing, so the supervised turn cannot report completion; \
+               run `rimz hooks install claude`";
+    let value = until(&room.env, &id, |v| {
+        v["record"]["wait"]["outcome"] == "trust"
+    });
+    assert_eq!(value["record"]["state"], "active", "{value:#}");
+    assert_eq!(value["record"]["node"], "build", "{value:#}");
+    assert_eq!(value["record"]["wait"]["detail"], fix, "{value:#}");
+    assert!(value["record"]["attempt"].is_null(), "{value:#}");
+    assert!(value["record"]["visits"]["build"].is_null(), "{value:#}");
+    assert!(events(&value, "attempt").is_empty(), "{value:#}");
+    let shown = success(room.command(&["workflow", "show", &id]).output().unwrap());
+    assert!(shown.contains(&format!("needs trust: {fix}")), "{shown}");
+    let waited = room.command(&["workflow", "wait", &id]).output().unwrap();
+    let text = String::from_utf8_lossy(&waited.stdout);
+    assert_eq!(waited.status.code(), Some(3), "{waited:?}");
     assert!(
-        attempts[0]["reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("requires claude hooks")),
-        "{value:#}"
+        text.contains(&format!("needs you: needs trust: {fix}")),
+        "{text}"
     );
-    assert!(events(&value, "wait").is_empty(), "{value:#}");
-    assert_eq!(value["record"]["launch_retry"], false, "{value:#}");
     let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap_or_default();
     assert!(!trace.contains("close-pane"), "{trace}");
+    // The resident ends before the fix, so the launch that follows has no occupant to take over.
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    room.env.install_agent_hooks("claude");
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let value = until(&room.env, &id, |v| {
+        v["record"]["attempt"]["run"].is_object()
+    });
+    assert!(value["record"]["wait"].is_null(), "{value:#}");
+    assert_eq!(value["record"]["visits"]["build"], 1, "{value:#}");
+    let waits = events(&value, "wait");
+    assert_eq!(waits.len(), 1, "{value:#}");
+    assert_eq!(waits[0]["outcome"], "trust", "{value:#}");
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }
 
 #[test]

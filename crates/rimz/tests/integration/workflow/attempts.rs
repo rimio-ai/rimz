@@ -22,6 +22,7 @@ mod rest;
 mod restart;
 mod subscribe;
 mod takeover;
+mod trust;
 
 fn dummy_agent_process() -> std::process::Child {
     let mut owner = std::process::Command::new("sleep");
@@ -84,42 +85,56 @@ fn agent_step_start_launches_with_null_context_and_counts_its_visit() {
     );
 }
 
-#[test]
-fn missing_leader_hooks_refuse_before_runs_or_panes() {
-    let room = Room::with_kind("", "claude");
-    fs::remove_file(room.env.agent_config_path("claude")).unwrap();
-    let id = room.start();
-    let value = settled(&room.env, &id, "failed");
-    let attempts = events(&value, "attempt");
-    assert_eq!(attempts.len(), 1, "{value:#}");
-    assert_eq!(attempts[0]["outcome"], "died");
-    assert_eq!(
-        attempts[0]["reason"],
-        "`rimz agents -p` requires claude hooks so the supervised turn can report completion; run `rimz hooks install claude`"
-    );
-    let text = success(command(&room.env, &["workflow", "show", &id, "--history"]));
+/// A start the shared trust read refuses exits 1 having created nothing (no run, no supervised
+/// run, no pane), and returns its stderr.
+fn refused_start(room: &Room, args: &[&str]) -> String {
+    let output = room.command(args).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(output.stdout.is_empty(), "{stderr}");
     assert!(
-        text.contains(&format!(
-            "reason: {}",
-            attempts[0]["reason"].as_str().unwrap()
-        )),
-        "{text}"
+        stderr.contains("workflow start refused; nothing was created:"),
+        "{stderr}"
+    );
+    let store = room.env.store();
+    assert!(
+        store.paths().workflow_runs().unwrap().is_empty(),
+        "{stderr}"
     );
     assert!(
-        rimz::harness::run::list(&room.env.state_path_for(&room.env.project_root))
-            .unwrap()
-            .is_empty()
+        rimz::harness::run::list(store.paths()).unwrap().is_empty(),
+        "{stderr}"
     );
     let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap_or_default();
     assert!(
         !trace.contains("new-tab") && !trace.contains("new-pane"),
         "{trace}"
     );
+    stderr
 }
 
 #[test]
-fn missing_companion_hooks_name_the_workflow_before_runs_or_panes() {
+fn missing_leader_hooks_refuse_the_start_before_anything_is_created() {
     let room = Room::with_kind("", "claude");
+    crate::common::trust_claude_project(&room.env, &room.env.project_root);
+    fs::remove_file(room.env.agent_config_path("claude")).unwrap();
+    let stderr = refused_start(
+        &room,
+        &["workflow", "run", "review", "--prompt", "Review this"],
+    );
+    assert!(
+        stderr.contains(
+            "\n  - claude hooks are missing, so the supervised turn cannot report completion; run `rimz hooks install claude` (blocks build)\n"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("rimz agents -p"), "{stderr}");
+}
+
+#[test]
+fn missing_companion_hooks_refuse_the_start_before_anything_is_created() {
+    let room = Room::with_kind("", "claude");
+    crate::common::trust_claude_project(&room.env, &room.env.project_root);
     fs::create_dir_all(room.env.agent_config_path("codex").parent().unwrap()).unwrap();
     let path = room.env.rimz_home().join("workflows/review/workflow.toml");
     fs::write(
@@ -129,32 +144,86 @@ fn missing_companion_hooks_name_the_workflow_before_runs_or_panes() {
             .replace("agent = 'claude'", "agent = 'claude,codex'"),
     )
     .unwrap();
-    let id = room.start();
-    let value = settled(&room.env, &id, "failed");
-    let attempts = events(&value, "attempt");
-    assert_eq!(attempts.len(), 1, "{value:#}");
-    assert_eq!(attempts[0]["outcome"], "died");
-    assert_eq!(
-        attempts[0]["reason"],
-        format!(
-            "workflow launch refused: RimZ hooks are missing for codex account `default` at `{}`; run `rimz hooks install codex`",
+    let stderr = refused_start(
+        &room,
+        &["workflow", "run", "review", "--prompt", "Review this"],
+    );
+    assert!(
+        stderr.contains(&format!(
+            "\n  - RimZ hooks are missing for codex account `default` at `{}`; run `rimz hooks install codex` (blocks build)\n",
             room.env
                 .agent_config_path("codex")
                 .parent()
                 .unwrap()
                 .display()
-        )
+        )),
+        "{stderr}"
+    );
+}
+
+/// The start reads every judge, one on a route no run takes included, and lists a problem once
+/// with every node it blocks; a try at another node reads only that node and its rest check.
+#[test]
+fn a_judge_on_an_untaken_route_refuses_the_start_but_not_a_try_elsewhere() {
+    let room = Room::with_kind("", "claude");
+    crate::common::trust_claude_project(&room.env, &room.env.project_root);
+    fs::create_dir_all(room.env.agent_config_path("codex").parent().unwrap()).unwrap();
+    let path = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &path,
+        fs::read_to_string(&path).unwrap().replace(
+            "on.done = '@done'\n",
+            "on.done = '@done'\non.audit = 'audit'\non.recheck = 'recheck'\n\
+             [judge.audit]\nagent='codex'\nsummary='Audits'\nprompt-file='prompt.md'\n\
+             timeout='1h'\non={pass='@done',fail='@failed'}\n\
+             [judge.recheck]\nagent='codex'\nsummary='Rechecks'\nprompt-file='prompt.md'\n\
+             timeout='1h'\non={pass='@done',fail='@failed'}\n",
+        ),
+    )
+    .unwrap();
+    let stderr = refused_start(
+        &room,
+        &["workflow", "run", "review", "--prompt", "Review this"],
+    );
+    let problem = "codex hooks are missing, so the supervised turn cannot report completion; \
+                   run `rimz hooks install codex` (blocks audit, recheck)";
+    assert_eq!(
+        stderr.matches("codex hooks are missing").count(),
+        1,
+        "{stderr}"
+    );
+    assert!(stderr.contains(problem), "{stderr}");
+    assert!(!stderr.contains("blocks build"), "{stderr}");
+    let tried = room
+        .command(&["workflow", "run", "review", "--at", "pr", "--once"])
+        .output()
+        .unwrap();
+    assert!(
+        tried.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tried.stderr)
+    );
+}
+
+/// The supervised leader refuses a folder with no trust decision at the start, as its launch
+/// would; a companion launches past one with a notice
+/// (`companion_trust_warns_when_undecided_and_refuses_the_start_otherwise`).
+#[test]
+fn an_undecided_leader_folder_refuses_the_start() {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let room = Room::with_kind("", "claude");
+    crate::common::git::init_repo(&room.env.project_root);
+    let stderr = refused_start(
+        &room,
+        &["workflow", "run", "review", "--prompt", "Review this"],
     );
     assert!(
-        rimz::harness::run::list(&room.env.state_path_for(&room.env.project_root))
-            .unwrap()
-            .is_empty()
+        stderr.contains("claude has no trust decision and would stop at its trust prompt"),
+        "{stderr}"
     );
-    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap_or_default();
-    assert!(
-        !trace.contains("new-tab") && !trace.contains("new-pane"),
-        "{trace}"
-    );
+    assert!(stderr.contains("(blocks build)"), "{stderr}");
 }
 
 #[test]
@@ -352,7 +421,7 @@ fn stop_includes_a_cleared_companion() {
 }
 
 #[test]
-fn companion_trust_warns_when_undecided_and_refuses_as_a_workflow() {
+fn companion_trust_warns_when_undecided_and_refuses_the_start_otherwise() {
     if crate::common::git::git_missing() {
         return;
     }
@@ -392,8 +461,17 @@ fn companion_trust_warns_when_undecided_and_refuses_as_a_workflow() {
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&receipt.stderr).into_owned();
-        if !receipt.status.success() {
-            results.push((trust, false, stderr));
+        if trust != "undecided" {
+            let refused = !receipt.status.success()
+                && stderr.contains("workflow start refused; nothing was created:")
+                && stderr.contains(if trust == "hooks" {
+                    "untrusted RimZ hooks"
+                } else {
+                    "saved untrusted"
+                })
+                && stderr.contains("(blocks build)")
+                && room.env.store().paths().workflow_runs().unwrap().is_empty();
+            results.push((trust, refused, stderr));
             continue;
         }
         let id = String::from_utf8(receipt.stdout)
@@ -408,25 +486,8 @@ fn companion_trust_warns_when_undecided_and_refuses_as_a_workflow() {
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         let value = show(&room.env, &id);
-        let correct = if trust == "undecided" {
-            value["record"]["attempt"]["run"].is_object()
-                && stderr.contains("has no trust decision")
-        } else {
-            let attempts = events(&value, "attempt");
-            attempts.iter().any(|attempt| {
-                attempt["outcome"] == "died"
-                    && attempt["reason"].as_str().is_some_and(|reason| {
-                        reason.contains("workflow launch refused:")
-                            && reason.contains(if trust == "hooks" {
-                                "untrusted RimZ hooks"
-                            } else {
-                                "saved untrusted"
-                            })
-                    })
-            }) && rimz::harness::run::list(&room.env.state_path_for(&room.env.project_root))
-                .unwrap()
-                .is_empty()
-        };
+        let correct = value["record"]["attempt"]["run"].is_object()
+            && stderr.contains("has no trust decision");
         results.push((trust, correct, format!("{stderr}\n{value:#}")));
     }
     assert!(

@@ -4,11 +4,9 @@ use crate::harness::run::SupervisedRunRequest;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::writer::AgentLaunchScope;
 
-#[test]
-fn worktree_recreation_refuses_an_unfinished_workflow_run() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path().join("repo");
-    std::fs::create_dir(&repo).unwrap();
+/// A Git repository at `repo` with one empty commit on `main`.
+fn init_repo(repo: &std::path::Path) {
+    std::fs::create_dir(repo).unwrap();
     for args in [
         vec!["init", "-b", "main"],
         vec![
@@ -23,12 +21,50 @@ fn worktree_recreation_refuses_an_unfinished_workflow_run() {
         ],
     ] {
         let output = std::process::Command::new("git")
-            .current_dir(&repo)
+            .current_dir(repo)
             .args(args)
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
     }
+}
+
+/// A refused launch removes a tree it made under a generated name, which each recheck would
+/// make again, and keeps a named one for the user to trust and the recheck to reuse.
+#[test]
+fn a_refused_launch_discards_only_a_generated_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let config = crate::config::MachineConfig::default();
+    let workspace = crate::workspace::WorkspaceResolver::resolve(&repo, None).unwrap();
+    for (name, kept) in [("", false), ("named", true)] {
+        let launch = crate::worktree::resolve_launch_checkout(
+            &workspace,
+            &config.agents.worktree,
+            Some(name),
+            None,
+            None,
+            None,
+            crate::worktree::LaunchBase::Configured,
+        )
+        .unwrap();
+        assert!(launch.created.is_some(), "{name:?}: {launch:?}");
+        checkout::discard_created_tree(&launch, &config.agents.worktree.hooks);
+        assert_eq!(
+            launch.cwd.exists(),
+            kept,
+            "{name:?}: {}",
+            launch.cwd.display()
+        );
+    }
+}
+
+#[test]
+fn worktree_recreation_refuses_an_unfinished_workflow_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
     let config = crate::config::MachineConfig::default();
     let created = crate::worktree::create(
         &repo,

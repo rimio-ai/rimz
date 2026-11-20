@@ -629,6 +629,64 @@ fn a_fire_from_a_shell_pinned_to_another_room_launches_in_the_tasks_room() {
     assert_eq!(report.result, LoopRunResult::Completed, "{report:?}");
 }
 
+/// A workflow fire whose run the trust read refuses at its start (an agent step on an account
+/// without hooks) creates no run: an `error` strike carrying the refusal and its fix. A turn
+/// step is read as the supervised leader; a session step of a task's run as the layout recipe's
+/// leader, with that recipe's own hook verdict.
+#[test]
+fn a_workflow_fire_refused_on_trust_strikes_with_the_refusal() {
+    let env = live_room();
+    let _ = std::fs::remove_file(env.agent_config_path("claude"));
+    let home = env.agent_config_path("claude");
+    std::fs::create_dir_all(home.parent().unwrap()).unwrap();
+    let layout = format!(
+        "RimZ hooks are missing for claude account `default` at `{}`",
+        home.parent().unwrap().display()
+    );
+    for (task, lifecycle, problem) in [
+        (
+            "turn",
+            "turn",
+            "claude hooks are missing, so the supervised turn cannot report completion; \
+             run `rimz hooks install claude` (blocks build)",
+        ),
+        ("session", "session", layout.as_str()),
+    ] {
+        let dir = env.rimz_home().join("workflows").join(task);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("prompt.md"), "Review this\n").unwrap();
+        std::fs::write(
+            dir.join("workflow.toml"),
+            format!(
+                "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\n\
+                 prompt-file='prompt.md'\nlifecycle='{lifecycle}'\nthen='@done'\n"
+            ),
+        )
+        .unwrap();
+        loop_ok(
+            &env,
+            &["loop", "add", task, "--workflow", task, "--every", "1h"],
+        );
+        let before = read_loop_run_records(&env).len();
+        loop_ok(&env, &["loop", "run", task]);
+        let records = read_loop_run_records(&env);
+        assert_eq!(records.len(), before + 1, "{records:?}");
+        let row = records.last().unwrap();
+        assert_eq!(row.result, LoopRunResult::Errored, "{row:?}");
+        assert!(
+            row.error.as_deref().is_some_and(|error| {
+                error.contains("workflow start refused; nothing was created:")
+                    && error.contains(problem)
+            }),
+            "{task}: {row:?}"
+        );
+        assert!(
+            env.store().paths().workflow_runs().unwrap().is_empty(),
+            "{row:?}"
+        );
+    }
+}
+
 /// A target written by hand that no longer resolves fails at the fire's launch: an `error`
 /// strike carrying the launch's own error text.
 #[test]

@@ -264,3 +264,32 @@ pub(super) fn stamp_created_tree(
         tracing::warn!(%fire, %error, path = %launch.cwd.display(), "the launch's tree carries no fire stamp");
     }
 }
+
+/// Remove a tree this launch created under a generated name when the launch is refused after
+/// making it, so a refusal that repeats leaves no checkouts behind. A named tree stays for the
+/// user to trust and the next recheck to reuse, and a reused tree is left alone.
+pub(super) fn discard_created_tree(
+    launch: &crate::worktree::LaunchCheckout,
+    hooks: &crate::config::WorktreeHooks,
+) {
+    let Some(marker) = launch
+        .created
+        .as_ref()
+        .filter(|_| launch.generated_name().is_some())
+    else {
+        return;
+    };
+    let memo = crate::worktree::LandedMemo::load(&marker.repo_root);
+    let removed = crate::worktree::remove_marked_worktree(
+        &marker.repo_root,
+        &marker.worktree_path,
+        marker,
+        true,
+        hooks,
+        &memo,
+    );
+    memo.save();
+    if let Err(error) = removed {
+        tracing::warn!(%error, path = %marker.worktree_path.display(), "the refused launch's tree was not removed");
+    }
+}

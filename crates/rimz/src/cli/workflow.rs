@@ -693,7 +693,8 @@ fn start(
 ) -> Result<()> {
     let dir = workflow_view::deployed_definition(&name, validation_root(globals).as_deref())?;
     let ctx = super::ctx::Ctx::open(globals)?;
-    if worktree.is_some() && workflow::load(&dir)?.scope() == workflow::ScopeKind::Project {
+    let definition = workflow::load(&dir)?;
+    if worktree.is_some() && definition.scope() == workflow::ScopeKind::Project {
         bail!(
             "{} has scope = project, so it runs at {}; start it without -w",
             dir.file_name().unwrap_or(dir.as_os_str()).to_string_lossy(),
@@ -708,21 +709,11 @@ fn start(
         args.starting
             .admit(super::machine_config().agents.max_workflow_depth)?;
     }
-    refuse_unwritable_home("started")?;
     let env_fire = rimz::harness::loop_task::read_fire_env().map(|fire| fire.fire);
-    let scope = match &worktree {
-        Some(name) => {
-            let fire = task
-                .as_ref()
-                .map(|task| &task.loop_fire)
-                .or(env_fire.as_ref());
-            match named_checkout(&ctx, name, fire)? {
-                Some(scope) => scope,
-                None => return Ok(()),
-            }
-        }
-        None => ctx.workspace.worktree_root.clone(),
-    };
+    let fire = task
+        .as_ref()
+        .map(|task| task.loop_fire.clone())
+        .or(env_fire.clone());
     // A workflow task's fire names its run as the task's own. Any other run started under a
     // loop fire carries the fire: listed and stopped by its task, reported to nobody.
     let manual = task.as_ref().is_some_and(|task| task.manual);
@@ -744,13 +735,52 @@ fn start(
             fire_facts: None,
         },
     };
+    let machine = super::machine_config();
+    let planned = match worktree.as_deref() {
+        Some(name) => rimz::worktree::worktree_path(
+            ctx.workspace.launch_repo_root(),
+            &machine.agents.worktree,
+            name,
+        )?,
+        None => ctx.workspace.worktree_root.clone(),
+    };
+    let roots = |checkout: PathBuf| workflow::ScopeRoots {
+        checkout,
+        project: ctx.workspace.project_root.clone(),
+    };
+    // A slot a live run holds is named before the trust read, as `create` names it.
+    let overlap =
+        workflow::refuse_overlap(ctx.store.paths(), &source, roots(planned.clone()), once);
+    if let Err(ref error @ workflow::WorkflowErr::Exists { ref run, .. }) = overlap
+        && owned
+    {
+        writeln!(render::out(), "{run}")?;
+        return Err(super::ExitCodeError {
+            code: workflow::TaskStart::OVERLAP_EXIT_CODE,
+            message: error.to_string(),
+        }
+        .into());
+    }
+    overlap?;
+    refuse_trust_problems(
+        &ctx,
+        &definition,
+        roots(planned).path(definition.scope()),
+        &args,
+        owned,
+    )?;
+    refuse_unwritable_home("started")?;
+    let scope = match &worktree {
+        Some(name) => match named_checkout(&ctx, name, fire.as_ref())? {
+            Some(scope) => scope,
+            None => return Ok(()),
+        },
+        None => ctx.workspace.worktree_root.clone(),
+    };
     let created = workflow::create(
         ctx.store.paths(),
         source,
-        workflow::ScopeRoots {
-            checkout: scope.clone(),
-            project: ctx.workspace.project_root.clone(),
-        },
+        roots(scope),
         || Ok(prompt),
         manual,
         args,
@@ -798,6 +828,39 @@ fn start(
         Some(passed) => receipt::write_held(&paths, &passed, ""),
         None => Ok(()),
     }
+}
+
+/// Refuses the start, before anything is created, when the launcher's trust read refuses an
+/// agent step or judge the run could reach (with `--once`, the tried node and its rest check),
+/// listing each problem once with its fix and the nodes it blocks.
+fn refuse_trust_problems(
+    ctx: &super::ctx::Ctx,
+    definition: &workflow::Definition,
+    scope: &std::path::Path,
+    args: &workflow::StartArgs,
+    task_run: bool,
+) -> Result<()> {
+    let machine = super::machine_config();
+    let tried = args
+        .once
+        .then(|| args.at.as_deref().unwrap_or(definition.start()));
+    let problems = rimz::launcher::trust::workflow_start_problems(
+        &ctx.workspace,
+        &ctx.store,
+        &machine,
+        definition,
+        scope,
+        tried,
+        task_run,
+    )?;
+    if problems.is_empty() {
+        return Ok(());
+    }
+    let mut message = String::from("workflow start refused; nothing was created:");
+    for (problem, nodes) in problems {
+        message.push_str(&format!("\n- {problem} (blocks {})", nodes.join(", ")));
+    }
+    bail!(message)
 }
 
 /// Who starts a run from this process ([`workflow::starting`]): the run `RIMZ_WORKFLOW_RUN` names,

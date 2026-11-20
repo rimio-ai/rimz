@@ -150,6 +150,7 @@ fn definition_hints_parse_hyphen_leading_workflow_and_node_names() {
     ]
     .map(|(name, node)| {
         let (env, dir) = graph();
+        crate::workflow::ready_claude(&env);
         fs::write(dir.join("workflow.toml"), GRAPH.replace("begin", node)).unwrap();
         fs::rename(&dir, dir.with_file_name(name)).unwrap();
         let text = success(command(&env, &["workflow", "show", "--", name]));

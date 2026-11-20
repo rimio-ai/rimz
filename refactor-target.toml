@@ -923,6 +923,16 @@ kind = "item"
 key = "launcher::trust::Unattended"
 reason = "Starter context types the shared folder-trust refusal without changing its wording."
 
+[[verdict]]
+kind = "item"
+key = "launcher::trust::TrustRefusal"
+reason = "The workflow host turns a launch refused only on trust the user clears in place (hooks, folder) into the run's trust wait, with each fix as its detail."
+
+[[verdict]]
+kind = "item"
+key = "launcher::trust::workflow_start_problems"
+reason = "workflow run refuses before creating anything from the same typed hook and folder read each step and judge launch takes."
+
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
 # Spent-child CLI parity shares durable park projection without reaching store or harness.
@@ -2596,6 +2606,11 @@ reason = "The budget gate's first read of a workflow launch stays in the library
 
 [[verdict]]
 kind = "item"
+key = "harness::workflow::refuse_overlap"
+reason = "A start names the run holding its slot before its trust read, by the same overlap rule `create` applies."
+
+[[verdict]]
+kind = "item"
 key = "harness::workflow::orphan"
 reason = "The lookup of a dead launcher's unpublished supervised run stays in the library; the CLI attempt host's orphan delegates to it."
 
@@ -2913,7 +2928,8 @@ path = "crates/rimz/src/launcher"
 # run_exit_policy moves to the shared pane compiler (-1).
 # worktree_entry::occupancy_protections keeps landing separate from removal's workflow pins (+1).
 # agent_pane::open_writer hands the commands that type the writer of the pane the lookup answers (+1).
-surface-budget = 102
+# trust::TrustRefusal with detail and clearable, and trust::workflow_start_problems (+4).
+surface-budget = 106
 
 [[verdict]]
 kind = "item"
@@ -5946,7 +5962,8 @@ allowed-dependencies = [
 # AttemptHost::committed hands the host each committed run edge once the lock is released (+1).
 # join_report lets the loop collection store a started run's ending on its runs step (+1).
 # is_deployed shares the workflows-home containment check with `workflow run` and validate (+1).
-surface-budget = 106
+# refuse_overlap lets a start name the run holding its slot before its trust read (+1).
+surface-budget = 107
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"

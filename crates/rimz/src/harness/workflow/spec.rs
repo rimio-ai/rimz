@@ -137,12 +137,13 @@ impl Cause {
 
 /// Whether `word` is the engine's and no author may write it as an outcome: a cause, the
 /// failure input's own `failed`, an agent's `asked` and `errored`, a reading's `unknown`, a
-/// held condition's `hold`, and `limited`, the cause a refused budget raised before it waited.
+/// held condition's `hold`, `limited`, the cause a refused budget raised before it waited, and
+/// `trust`, the wait a launch refused on trust takes.
 pub(super) fn reserved(word: &str) -> bool {
     Cause::parse(word).is_some()
         || matches!(
             word,
-            "failed" | "asked" | "errored" | "unknown" | "hold" | "limited"
+            "failed" | "asked" | "errored" | "unknown" | "hold" | "limited" | "trust"
         )
 }
 

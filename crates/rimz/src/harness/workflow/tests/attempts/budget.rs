@@ -185,7 +185,7 @@ fn the_deadline_ends_a_budget_wait_and_the_capacity_give_up_does_not() {
 }
 
 /// A cancel or a misfit staged while the launch runs off the lock wins over the launcher's
-/// refusal, budget or taken checkout alike, and settles as staged. (`resume --at` refuses an
+/// refusal, budget, trust or taken checkout alike, and settles as staged. (`resume --at` refuses an
 /// attempt still launching, so it cannot stage one.)
 #[test]
 fn an_ending_staged_during_a_refused_launch_settles_instead_of_waiting() {
@@ -198,11 +198,14 @@ fn an_ending_staged_during_a_refused_launch_settles_instead_of_waiting() {
         ("budget", "cancel"),
         ("budget", "misfit"),
         ("taken", "cancel"),
+        ("trust", "cancel"),
     ] {
         let (_dir, state, record) = setup(&definition);
         let host = FakeHost::new();
         if refusal == "budget" {
             *host.launch_budget.borrow_mut() = Some(REASON.into());
+        } else if refusal == "trust" {
+            *host.launch_trust.borrow_mut() = Some(REASON.into());
         } else {
             *host.arrives_at_launch.borrow_mut() =
                 Some(Occupancy::Occupied(vec!["sweeper".into()]));

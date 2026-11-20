@@ -169,6 +169,12 @@ pub(super) fn since(record: &RunRecord) -> Timestamp {
     if let Some(asking) = asking(record) {
         return asking.since;
     }
+    // A trust wait dates from its first refusal, which each recheck keeps.
+    if record.state == RunState::Active
+        && let Some(wait) = record.wait.as_ref().filter(|wait| wait.outcome == "trust")
+    {
+        return wait.first;
+    }
     held(record).map_or(record.entered_at, |hold| hold.since)
 }
 
@@ -246,6 +252,10 @@ pub(super) fn wait(
             None => wait.outcome.clone(),
         },
         "occupied" => occupied(wait.detail.as_deref()),
+        "trust" => format!(
+            "needs trust: {}",
+            render::one_line(wait.detail.as_deref().unwrap_or("—"))
+        ),
         _ => wait.outcome.clone(),
     };
     let recheck = wait
@@ -547,6 +557,7 @@ mod tests {
             ("runs", "runs: pending"),
             ("occupied", "occupied by pending"),
             ("capacity", "held 0s · pending"),
+            ("trust", "needs trust: pending"),
         ];
         let actual = cases.map(|(outcome, _)| {
             let mut record = record();
