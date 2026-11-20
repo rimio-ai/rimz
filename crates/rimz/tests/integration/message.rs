@@ -5378,9 +5378,10 @@ fn stop_of_an_agent_in_no_pane_with_a_live_process_fails_naming_the_pid() {
     process.wait().unwrap();
 }
 
-/// An agent whose process RimZ does not know is stopped only once its end is recorded:
-/// without one the stop fails in the user's words; an end recorded while the stop waits
-/// makes it a stop.
+/// A pane that is listed again after its first two closes is closed a third time, and once
+/// it is gone the stop ends the owner. The stop closes again only within its owner-exit
+/// bound, and each pass spawns the fake zellij several times, so the bound is wide enough
+/// for slow spawns under gate load (8 s against the 1 s the two reclose waits need).
 #[test]
 fn stop_recloses_a_pane_that_reappears_after_its_first_close() {
     let env = Env::new();
@@ -5409,7 +5410,7 @@ for arg do
 done
 "#,
     );
-    let stop = stop_command(&env, &panes, 2000)
+    let stop = stop_command(&env, &panes, 8000)
         .env("RIMZ_ZELLIJ_BIN", shim)
         .env("RIMZ_TEST_TRACE", zellij_trace_shim())
         .env("RIMZ_TEST_RETURNED", env.home_root.join("returned"))
@@ -5424,6 +5425,9 @@ done
     assert!(owner.try_wait().unwrap().is_some(), "its process is gone");
 }
 
+/// A pane that stays listed is closed again until the owner-exit bound passes, and the stop
+/// fails without signalling the hosted owner. The bound leaves room for one reclose under
+/// slow zellij spawns (5 s against the 0.5 s reclose wait).
 #[test]
 fn stop_bounds_repeated_closes_of_a_reappearing_pane_without_signalling_its_owner() {
     let env = Env::new();
@@ -5438,7 +5442,7 @@ fn stop_bounds_repeated_closes_of_a_reappearing_pane_without_signalling_its_owne
     let started = Instant::now();
     let stop = traced_rimz(&env, "stop-trace.log")
         .args(["--mux", "zellij", "agents", "stop", "@returns"])
-        .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "1500")
+        .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "5000")
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
             r#"[{"id":3,"is_plugin":false,"tab_id":1,"pane_command":"claude"}]"#,
@@ -5446,7 +5450,7 @@ fn stop_bounds_repeated_closes_of_a_reappearing_pane_without_signalling_its_owne
         .output()
         .unwrap();
     assert!(!stop.status.success(), "{stop:?}");
-    assert!(started.elapsed() >= Duration::from_millis(1500));
+    assert!(started.elapsed() >= Duration::from_millis(5000));
     assert!(
         String::from_utf8_lossy(&stop.stderr).contains("a pane still hosts it: zellij:terminal_3")
     );
