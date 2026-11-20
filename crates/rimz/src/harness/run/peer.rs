@@ -52,12 +52,11 @@ pub fn open_peer_run(paths: &StatePaths, peer: &AgentState) -> Result<Option<Run
     let Some(launch_id) = peer_launch_id(peer) else {
         return Ok(None);
     };
-    Ok(super::list(paths)?.into_iter().find(|record| {
-        !record.status.is_terminal()
-            && record
-                .peer
-                .as_ref()
-                .is_some_and(|turn| &turn.launch_id == launch_id)
+    Ok(super::open_listing(paths)?.into_iter().find(|record| {
+        record
+            .peer
+            .as_ref()
+            .is_some_and(|turn| &turn.launch_id == launch_id)
     }))
 }
 

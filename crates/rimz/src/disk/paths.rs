@@ -227,6 +227,8 @@ pub struct StatePaths {
     pub fleet_budget_record: PathBuf,
     pub transcript_dir: PathBuf,
     pub runs_dir: PathBuf,
+    /// The terminal run-record files a listing has seen, each under its file stamp.
+    pub(crate) terminal_runs_cache: PathBuf,
     pub cache_dir: PathBuf,
     /// Runtime lock reference for writers whose durable API takes only state paths.
     pub workspace_lock: PathBuf,
@@ -573,6 +575,7 @@ impl StatePaths {
             last_death_marker: history.last_death_marker,
             doctor_watermark: cache_dir.join("doctor-cleared.json"),
             auto_gc_stamp: cache_dir.join("auto-gc.json"),
+            terminal_runs_cache: cache_dir.join("terminal-runs.json"),
             crashes_dir: audit_dir.join("crashes"),
             cache_dir,
             root,

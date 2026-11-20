@@ -5,9 +5,11 @@
 //! is the product output. Writes therefore use fsyncing temp-file-plus-rename,
 //! unlike cache sidecars whose correctness rides the event log.
 //! Listings share a per-thread sorted view, re-parsing only records whose full file stamp changed.
+//! The open-runs listing skips decoding the records `cache/terminal-runs.json` names terminal
+//! under their current stamp.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::os::unix::net::UnixDatagram as StdUnixDatagram;
@@ -813,8 +815,29 @@ enum ListedRecord {
     Parsed(Box<RunRecord>),
 }
 
+/// The runtime cache behind [`open_listing`]: each record file a listing saw
+/// terminal, keyed by file name, under the stamp it had then. A record is
+/// reopened in place only by a sibling rename, which changes its stamp, so a
+/// remembered stamp that still matches names a record that is still terminal.
+/// Written without a lock; a missing, corrupt, or stale copy costs re-reads.
+#[derive(Default, PartialEq, Serialize, Deserialize)]
+struct TerminalRuns {
+    files: BTreeMap<String, FileStamp>,
+}
+
+/// One thread's [`open_listing`] state: the terminal set it last read or
+/// wrote, and the open records of its last scan under the directory stamp.
+#[derive(Default)]
+struct OpenRunsCache {
+    persisted: Option<TerminalRuns>,
+    directory: Option<(FileStamp, SystemTime)>,
+    open: Option<Vec<RunRecord>>,
+}
+
 thread_local! {
     static RUN_LISTINGS: RefCell<HashMap<PathBuf, RunListingCache>> = RefCell::new(HashMap::new());
+    static OPEN_RUN_LISTINGS: RefCell<HashMap<PathBuf, OpenRunsCache>> =
+        RefCell::new(HashMap::new());
 }
 
 pub(super) fn run_path(runs_dir: &Path, run_id: &RunId) -> PathBuf {
@@ -846,6 +869,16 @@ pub(crate) fn list(runs_dir: &Path) -> Result<Vec<RunRecord>> {
     Ok(listing(runs_dir)?.to_vec())
 }
 
+/// The records whose status is not terminal, in [`listing`] order, without
+/// decoding a record file the terminal cache names under its current stamp.
+pub(crate) fn open_listing(runs_dir: &Path, terminal_cache: &Path) -> Result<Vec<RunRecord>> {
+    OPEN_RUN_LISTINGS.with(|caches| {
+        let mut caches = caches.borrow_mut();
+        let cache = caches.entry(runs_dir.to_path_buf()).or_default();
+        cache.refresh(runs_dir, terminal_cache)
+    })
+}
+
 pub(crate) fn listing(runs_dir: &Path) -> Result<RunListing> {
     RUN_LISTINGS.with(|caches| {
         let mut caches = caches.borrow_mut();
@@ -857,39 +890,15 @@ pub(crate) fn listing(runs_dir: &Path) -> Result<RunListing> {
 impl RunListingCache {
     fn refresh(&mut self, runs_dir: &Path) -> Result<RunListing> {
         let scan_started = SystemTime::now();
-        let directory = match fs::metadata(runs_dir) {
-            Ok(metadata) => Some(FileStamp::from_metadata(&metadata)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(source) => {
-                return Err(RunStoreErr::Io {
-                    path: runs_dir.to_path_buf(),
-                    source,
-                });
-            }
-        };
-        if let Some((stamp, previous_scan)) = self.directory
-            && directory == Some(stamp)
-            && previous_scan
-                .duration_since(
-                    UNIX_EPOCH + Duration::new(stamp.modified_secs, stamp.modified_nanos),
-                )
-                .is_ok_and(|age| age >= Duration::from_secs(2))
+        let directory = directory_stamp(runs_dir)?;
+        if directory_unchanged(self.directory, directory)
             && let Some(listing) = &self.listing
         {
             return Ok(listing.clone());
         }
         #[cfg(test)]
         super::sidecar::testkit::record_enumeration();
-        let entries = match fs::read_dir(runs_dir) {
-            Ok(entries) => Some(entries),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(source) => {
-                return Err(RunStoreErr::Io {
-                    path: runs_dir.to_path_buf(),
-                    source,
-                });
-            }
-        };
+        let entries = read_runs_dir(runs_dir)?;
         let mut found = Vec::new();
         let mut changed = false;
         for entry in entries.into_iter().flatten() {
@@ -922,6 +931,8 @@ impl RunListingCache {
             };
             #[cfg(test)]
             super::sidecar::testkit::record_parse_read();
+            #[cfg(any(test, feature = "testkit"))]
+            testkit::record_read();
             let record = serde_json::from_slice::<RunRecord>(&bytes).map_err(|source| {
                 RunStoreErr::Json {
                     path: path.clone(),
@@ -967,6 +978,136 @@ impl RunListingCache {
         self.files = files;
         self.listing = Some(listing.clone());
         Ok(listing)
+    }
+}
+
+impl OpenRunsCache {
+    fn refresh(&mut self, runs_dir: &Path, terminal_cache: &Path) -> Result<Vec<RunRecord>> {
+        let scan_started = SystemTime::now();
+        let directory = directory_stamp(runs_dir)?;
+        if directory_unchanged(self.directory, directory)
+            && let Some(open) = &self.open
+        {
+            return Ok(open.clone());
+        }
+        let persisted = self
+            .persisted
+            .get_or_insert_with(|| crate::disk::atomic::read_json_cache(terminal_cache));
+        let mut terminal = TerminalRuns::default();
+        let mut open = Vec::new();
+        for entry in read_runs_dir(runs_dir)?.into_iter().flatten() {
+            let entry = entry.map_err(|source| RunStoreErr::Io {
+                path: runs_dir.to_path_buf(),
+                source,
+            })?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let stamp = match fs::metadata(&path) {
+                Ok(metadata) => FileStamp::from_metadata(&metadata),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(source) => return Err(RunStoreErr::Io { path, source }),
+            };
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned);
+            if let Some(name) = &name
+                && persisted.files.get(name) == Some(&stamp)
+            {
+                terminal.files.insert(name.clone(), stamp);
+                continue;
+            }
+            let bytes = match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(source) => return Err(RunStoreErr::Io { path, source }),
+            };
+            #[cfg(any(test, feature = "testkit"))]
+            testkit::record_read();
+            let record = serde_json::from_slice::<RunRecord>(&bytes).map_err(|source| {
+                RunStoreErr::Json {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+            match name {
+                Some(name) if record.status.is_terminal() => {
+                    terminal.files.insert(name, stamp);
+                }
+                _ if record.status.is_terminal() => {}
+                _ => open.push(record),
+            }
+        }
+        self.directory = directory.map(|stamp| (stamp, scan_started));
+        if *persisted != terminal {
+            if let Err(error) =
+                crate::disk::atomic::write_temp_then_rename_cache(terminal_cache, &terminal)
+            {
+                debug!(%error, "run listing: terminal cache write failed");
+            }
+            *persisted = terminal;
+        }
+        open.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
+        self.open = Some(open.clone());
+        Ok(open)
+    }
+}
+
+fn directory_stamp(runs_dir: &Path) -> Result<Option<FileStamp>> {
+    match fs::metadata(runs_dir) {
+        Ok(metadata) => Ok(Some(FileStamp::from_metadata(&metadata))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(RunStoreErr::Io {
+            path: runs_dir.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+/// Whether the directory still has the stamp of a scan that started at least
+/// two seconds after its mtime, so no same-tick rename can hide behind it.
+fn directory_unchanged(
+    previous: Option<(FileStamp, SystemTime)>,
+    directory: Option<FileStamp>,
+) -> bool {
+    previous.is_some_and(|(stamp, previous_scan)| {
+        directory == Some(stamp)
+            && previous_scan
+                .duration_since(
+                    UNIX_EPOCH + Duration::new(stamp.modified_secs, stamp.modified_nanos),
+                )
+                .is_ok_and(|age| age >= Duration::from_secs(2))
+    })
+}
+
+fn read_runs_dir(runs_dir: &Path) -> Result<Option<fs::ReadDir>> {
+    match fs::read_dir(runs_dir) {
+        Ok(entries) => Ok(Some(entries)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(RunStoreErr::Io {
+            path: runs_dir.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) mod testkit {
+    use std::cell::Cell;
+
+    thread_local! {
+        static RECORD_READS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn record_read() {
+        RECORD_READS.set(RECORD_READS.get() + 1);
+    }
+
+    /// Run-record files this thread has read since it started.
+    pub fn record_reads() -> usize {
+        RECORD_READS.get()
     }
 }
 

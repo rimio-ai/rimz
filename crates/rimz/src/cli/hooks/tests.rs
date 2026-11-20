@@ -614,6 +614,93 @@ fn cold_plain_frames_read_a_constant_number_of_sidecars() {
 }
 
 #[test]
+fn cold_team_frames_read_a_constant_number_of_run_records() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::harness::launch::ENV_TEAM;
+    use rimz::store::run::{RunRecord, RunStatus, TeamRun};
+
+    let mut reads = Vec::new();
+    for terminal in [4, 40] {
+        let (_dir, store) = hooks_test_store();
+        let store = std::sync::Arc::new(store);
+        let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+        let instance = rimz::ids::TeamInstanceId::new("forge", None).unwrap();
+        let team_run = |launch: &str, status: RunStatus| {
+            let mut run = RunRecord::new(
+                store.paths().workspace_id.clone(),
+                adapter.spec().kind_id(),
+                rimz::agents::PermissionMode::Auto,
+                "task".into(),
+                "/tmp/hooks-test".into(),
+            );
+            run.status = status;
+            run.team = Some(TeamRun {
+                launch_id: launch.into(),
+                instance: instance.clone(),
+            });
+            rimz::harness::run::create(store.paths(), &run).unwrap();
+            run
+        };
+        for _ in 0..terminal {
+            team_run("leader", RunStatus::Completed);
+        }
+        let open = team_run("leader", RunStatus::Running);
+        let env = std::collections::BTreeMap::from([(ENV_TEAM.to_owned(), "forge".to_owned())]);
+        let apply = |event: &'static str, payload: serde_json::Value| {
+            let store = std::sync::Arc::clone(&store);
+            let env = env.clone();
+            std::thread::spawn(move || {
+                let frame = rimz::store::ingress::HookIngress {
+                    boot_id: None,
+                    schema_version: "1".into(),
+                    event_id: rimz::EventId::new(),
+                    ts: jiff::Timestamp::now(),
+                    source: adapter.spec().kind_id(),
+                    event: Some(event.into()),
+                    payload: payload.to_string(),
+                    cwd: "/tmp/hooks-test".into(),
+                    hook_pid: std::process::id(),
+                    env,
+                };
+                let before = rimz::testkit::run_record_reads();
+                with_frame_env(&frame, FrameAttempt::First, || {
+                    let mut decoded = adapter.decode_hook(event, &payload).unwrap();
+                    handle_lifecycle_hook(
+                        &hooks_test_workspace(Some("main")),
+                        &store,
+                        adapter,
+                        &mut decoded,
+                        &payload,
+                        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                        &hooks_test_globals(),
+                    )
+                    .unwrap()
+                });
+                rimz::testkit::run_record_reads() - before
+            })
+            .join()
+            .unwrap()
+        };
+        apply("SessionStart", serde_json::json!({"session_id": "leader"}));
+        let stop = apply(
+            "Stop",
+            serde_json::json!({"session_id": "leader", "last_assistant_message": "done"}),
+        );
+        let answered = rimz::harness::run::load(store.paths(), &open.run_id).unwrap();
+        assert_eq!(
+            answered.last_message.as_deref(),
+            Some("done"),
+            "the frame found the open team run"
+        );
+        reads.push(stop);
+    }
+    assert_eq!(
+        reads[0], reads[1],
+        "a cold team frame's run-record reads must not grow with terminal runs: {reads:?}"
+    );
+}
+
+#[test]
 fn delayed_progress_hook_preserves_credit_limit_park_instead_of_stall() {
     use rimz::agents::{
         AgentContext, AgentState, AgentStatus, AgentTurnError, PermissionMode, TurnErrorClass,

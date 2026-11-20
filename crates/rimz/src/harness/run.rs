@@ -452,6 +452,12 @@ pub(crate) fn listing(paths: &StatePaths) -> Result<crate::store::run::RunListin
     crate::store::run::listing(&paths.runs_dir)
 }
 
+/// The records whose status is not terminal, without decoding the terminal
+/// ones a listing has already seen.
+fn open_listing(paths: &StatePaths) -> Result<Vec<RunRecord>> {
+    crate::store::run::open_listing(&paths.runs_dir, &paths.terminal_runs_cache)
+}
+
 enum RecordMutation<T> {
     Keep(T),
     Write(T),
