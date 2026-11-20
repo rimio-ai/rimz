@@ -188,6 +188,14 @@ pub fn compact_command(agent: &AgentState, harness: &HarnessConfig) -> Option<St
         .compact_command(harness.compact_instruction(agent.compact_seat()))
 }
 
+/// How long RimZ's fallback for a usage-limit park waits past the reset: the adapter's grace for
+/// a provider that resumes itself there, zero for any other.
+pub(crate) fn usage_limit_fallback_grace(agent: &AgentState) -> std::time::Duration {
+    find_definition(agent.kind.as_str())
+        .and_then(|definition| definition.native_auto_continue_grace())
+        .unwrap_or_default()
+}
+
 /// Why an adapter cannot take the mid-turn smart-compaction reminder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]

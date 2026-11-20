@@ -832,7 +832,8 @@ fn park_action(
         return None;
     }
     let attempts = evidenced_attempts(ctx.resume_messages, agent, record);
-    if !nudge_due(record, attempts, ctx.now, ctx.config) {
+    let grace = crate::agents::usage_limit_fallback_grace(agent);
+    if !nudge_due(record, attempts, ctx.now, ctx.config, grace) {
         return None;
     }
     Some(ParkAction::Nudge {
@@ -863,10 +864,17 @@ fn nudged_record(mut record: ParkRecord, now: Timestamp) -> ParkRecord {
 }
 
 /// Whether a nudge is due for this park class. Rate limits wait for the captured
-/// deadline and then throttle repeats; backoff records wait from park time for
-/// the first try, then from the prior nudge for each retry step until the
-/// evidenced-attempt cap.
-fn nudge_due(record: &ParkRecord, attempts: u32, now: Timestamp, config: &ResumeConfig) -> bool {
+/// deadline, plus `grace` for an agent that resumes itself at the reset, and
+/// budgets for theirs; both then throttle repeats. Backoff records wait from park
+/// time for the first try, then from the prior nudge for each retry step until
+/// the evidenced-attempt cap.
+fn nudge_due(
+    record: &ParkRecord,
+    attempts: u32,
+    now: Timestamp,
+    config: &ResumeConfig,
+    grace: Duration,
+) -> bool {
     match &record.kind {
         ParkKind::RateLimit { deadline }
         | ParkKind::Budget { deadline }
@@ -874,7 +882,11 @@ fn nudge_due(record: &ParkRecord, attempts: u32, now: Timestamp, config: &Resume
             if attempts >= config.auto_continue_max_retries {
                 return false;
             }
-            now >= *deadline
+            let grace = match record.kind {
+                ParkKind::RateLimit { .. } => grace.as_secs() as i64,
+                _ => 0,
+            };
+            now.as_second() - deadline.as_second() >= grace
                 && record.last_nudge_at.is_none_or(|at| {
                     now.as_second() - at.as_second()
                         >= AUTO_CONTINUE_RETRY_INTERVAL.as_secs() as i64

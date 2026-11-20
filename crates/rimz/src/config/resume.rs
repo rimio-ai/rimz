@@ -66,7 +66,8 @@ pub struct ResumeConfig {
     /// limits at the spent-window reset, overloads and transient server errors on
     /// the backoff ramp. Recovery of these parks is off by default, best-effort,
     /// and traced through message records. When on, it also launches Claude with
-    /// its own usage-limit resume off.
+    /// its own usage-limit resume on, and Claude's rate limits wait a grace past
+    /// the reset so that resume goes first.
     pub auto_continue: bool,
     /// Retry ramp, in seconds, for non-clocked auto-continue. The last value
     /// repeats until [`auto_continue_max_retries`](Self::auto_continue_max_retries)
