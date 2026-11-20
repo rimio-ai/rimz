@@ -325,8 +325,17 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         return servers.render(w);
     }
     let process = plan.process();
-    let rimz_line = if !plan.mcp_capabilities.is_empty() {
-        let names: Vec<_> = plan.mcp_capabilities.iter().map(|c| c.name()).collect();
+    let arguments = mcp_arguments(&process.provider_argv);
+    let switched_off = rimz_switched_off(&arguments).filter(|_| !plan.mcp_capabilities.is_empty());
+    let served = if switched_off.is_some() {
+        &[][..]
+    } else {
+        &plan.mcp_capabilities[..]
+    };
+    let rimz_line = if let Some((flag, value)) = switched_off {
+        format!("off: {flag} {value}")
+    } else if !served.is_empty() {
+        let names: Vec<_> = served.iter().map(|c| c.name()).collect();
         format!("serves {}", names.join(", "))
     } else if !server_on {
         "off: [agents] rimz-mcp-server = false".to_owned()
@@ -337,11 +346,10 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     servers.push("your servers", render::cell(user_servers(plan)));
     writeln!(w, "MCP servers")?;
     servers.render(w)?;
-    let arguments = mcp_arguments(&process.provider_argv);
-    if !plan.mcp_capabilities.is_empty() {
+    if !served.is_empty() {
         let mut table = Table::new(["CAPABILITY", "TOOL", "TOKENS", "LOAD"]).right(&[2]);
         let mut total = 0;
-        let tools: Vec<_> = tools_for(&plan.mcp_capabilities).collect();
+        let tools: Vec<_> = tools_for(served).collect();
         for tool in &tools {
             let size = tool.tokens();
             total += size;
@@ -384,12 +392,11 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     for pointer in pointers {
         writeln!(w, "  {pointer}")?;
     }
-    if plan.mcp_capabilities.is_empty() {
+    if served.is_empty() {
         return Ok(());
     }
-    let tools: Vec<_> = tools_for(&plan.mcp_capabilities).collect();
-    let modes: Vec<_> = plan
-        .mcp_capabilities
+    let tools: Vec<_> = tools_for(served).collect();
+    let modes: Vec<_> = served
         .iter()
         .filter_map(|&capability| {
             LoadMode::from_name(load_mode(&arguments, capability)).map(|mode| (capability, mode))
@@ -526,6 +533,37 @@ fn mcp_arguments(argv: &[String]) -> Vec<(&str, &str)> {
         }
     }
     arguments
+}
+
+/// The override that switches RimZ's server off, when the one a launch passes
+/// last on its `enabled` is false. Codex applies overrides in argv order, and
+/// a table value replaces what earlier overrides set under its key.
+fn rimz_switched_off<'a>(arguments: &[(&'a str, &'a str)]) -> Option<(&'a str, &'a str)> {
+    let server = format!("mcp_servers.{SERVER_NAME}");
+    let mut switch = None;
+    for &argument in arguments {
+        let Some((key, value)) = argument.1.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let Ok(table) = toml::from_str::<toml::Table>(&format!("value = {value}")) else {
+            continue;
+        };
+        let value = &table["value"];
+        let enabled = if key == "mcp_servers" {
+            value
+                .get(SERVER_NAME)
+                .and_then(|entry| entry.get("enabled"))
+        } else if key == server {
+            value.get("enabled")
+        } else if key == format!("{server}.enabled") {
+            Some(value)
+        } else {
+            continue;
+        };
+        switch = (enabled.and_then(toml::Value::as_bool) == Some(false)).then_some(argument);
+    }
+    switch
 }
 
 fn validate_target_overrides(args: &ExplainArgs) -> Result<()> {
@@ -1288,6 +1326,32 @@ mod tests {
     struct ParserArgs {
         #[command(flatten)]
         explain: ExplainArgs,
+    }
+
+    /// Codex applies its `-c` overrides in argv order, and a table value
+    /// replaces what earlier overrides set under its key.
+    #[test]
+    fn rimz_switched_off_takes_the_last_word_on_enabled() {
+        type Argument = (&'static str, &'static str);
+        let off = ("-c", "mcp_servers.rimz.enabled=false");
+        let cases: [(&[Argument], Option<Argument>); 7] = [
+            (&[], None),
+            (&[off], Some(off)),
+            (
+                &[off, ("-c", "mcp_servers.rimz.command=\"rimz\"")],
+                Some(off),
+            ),
+            (&[off, ("-c", "mcp_servers.rimz.enabled=true")], None),
+            (&[off, ("-c", "mcp_servers={notion={enabled=false}}")], None),
+            (
+                &[("--config", "mcp_servers.rimz={enabled=false}")],
+                Some(("--config", "mcp_servers.rimz={enabled=false}")),
+            ),
+            (&[("-c", "mcp_servers.notion.enabled=false")], None),
+        ];
+        for (arguments, expected) in cases {
+            assert_eq!(rimz_switched_off(arguments), expected, "{arguments:?}");
+        }
     }
 
     #[test]
