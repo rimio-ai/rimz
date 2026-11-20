@@ -446,11 +446,11 @@ fn refused_session() -> String {
     SESSION.replace("then='pr'", "then='build'")
 }
 
-/// `resume` and `restart` admit the definition before they touch the run: a refused one
+/// `resume`, `extend` and `restart` admit the definition before they touch the run: a refused one
 /// leaves the record, the journal and a held session's running check child as they were, with
 /// the error an advance gives; once it is fixed each proceeds.
 #[test]
-fn resume_and_restart_refuse_a_refused_definition_before_touching_the_run() {
+fn resume_extend_and_restart_refuse_a_refused_definition_before_touching_the_run() {
     use std::os::unix::process::CommandExt;
 
     let (_dir, state, record) = setup(SESSION);
@@ -485,13 +485,15 @@ fn resume_and_restart_refuse_a_refused_definition_before_touching_the_run() {
     );
     let refusal = advance(&state, &record.id, &host).unwrap_err().to_string();
     let resumed = resume(&state, &record.id, &host, Some("build"));
+    let extended = extend(&state, &record.id, &host, Some((Some("build"), 1)), None);
     let restarted = restart(&state, &record.id, None, &host);
     assert_eq!(
         (
             resumed.map(drop).map_err(|error| error.to_string()),
+            extended.map(drop).map_err(|error| error.to_string()),
             restarted.map(drop).map_err(|error| error.to_string()),
         ),
-        (Err(refusal.clone()), Err(refusal))
+        (Err(refusal.clone()), Err(refusal.clone()), Err(refusal))
     );
     assert_eq!(
         (
