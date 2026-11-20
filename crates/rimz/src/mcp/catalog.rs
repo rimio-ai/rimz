@@ -317,9 +317,9 @@ pub static TOOLS: [Tool; 9] = [
         name: "self_compact",
         capability: Capability::Control,
         description: "When the user asks, compact your own context with the configured brief, or \
-                      with the `instruction` you give in its place. Called mid-turn, the \
-                      compaction runs when this turn ends, and you are then prompted to go on with \
-                      your work; `no_continue` leaves you at rest instead.",
+                      with the `instruction` you give in its place, which Codex refuses. \
+                      Called mid-turn, the compaction runs when this turn ends, and you are then \
+                      prompted to go on with your work; `no_continue` leaves you at rest instead.",
         read_only: false,
         command: "agents compact",
         verbs: &[],
