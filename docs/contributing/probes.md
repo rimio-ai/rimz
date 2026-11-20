@@ -1,14 +1,14 @@
 # Hand-built probes and live checks
 
-What a probe or live check you build by hand needs so that it measures the thing you mean and leaves the user's machine alone: a private multiplexer, a fixture repository, a provider CLI, an isolated home, or a branch binary run against real state. The sandbox room procedures are in [sidebar-live-check.md](./sidebar-live-check.md), and the integration suite's own fixtures are in its [suite contract](../../crates/rimz/tests/integration/AGENTS.md) and [integration-tests.md](./integration-tests.md).
+What a probe or live check you build by hand needs so that it measures the thing you mean and leaves the user's machine alone: a private multiplexer, a fixture repository, a provider CLI, an isolated home, or a branch binary run against real state. The sandbox room procedures are in [sandbox-rooms.md](./sandbox-rooms.md), and the integration suite's own fixtures are in its [suite contract](../../crates/rimz/tests/integration/AGENTS.md) and [integration-tests.md](./integration-tests.md).
 
 ## Sandbox rooms
 
 - `cargo xtask sandbox -- <command>` drives a real multiplexer from disposable roots.
-- To run a command as a room agent, hold a room with `sandbox room` and use `sandbox in <root> --as @handle` ([recipe](./sidebar-live-check.md#run-a-command-as-an-agent)).
+- To run a command as a room agent, hold a room with `sandbox room` and use `sandbox in <root> --as @handle` ([recipe](./sandbox-rooms.md#act-as-an-agent)).
 - From an agent pane, run a live room check through `cargo xtask sandbox room`. A bare `rimz start` refuses inside an agent pane's own sandbox.
 - A hand-built check of a command that resolves a room (`rimz worktree new`, `rimz workflow run`) runs the same way, through `sandbox in` on a held room. In a bare repository it refuses with `no room at <root>`.
-- A check that needs a real Claude or Codex turn cannot run in a sandbox room, which replaces `HOME` and holds no provider login. It needs a host room that only the user can start ([real provider login](./sidebar-live-check.md#check-against-a-real-provider-login)). A plan or hand-off that rests on such a check raises it with the user first.
+- A check that needs a real Claude or Codex turn cannot run in a sandbox room, which replaces `HOME` and holds no provider login. It needs a host room that only the user can start ([real provider](./sandbox-rooms.md#check-against-a-real-provider)). A plan or hand-off that rests on such a check raises it with the user first.
 - `cargo xtask sandbox -- rimz <args>` runs an interactive smoke check of a built binary. The sandbox puts this checkout's build directory (`$CARGO_TARGET_DIR/debug`, or `target/debug`) first on the command's `PATH`, so `rimz`, as the program or inside a nested shell, is this checkout's build and not the installed release. With no build there, a bare `rimz` refuses and names `cargo build -p rimz --bin rimz --features testkit`.
 - `sandbox in` puts the held room's stub directory first, then the directory of the room's binary. A program named by path runs as written.
 - The sandbox replaces HOME, every persistent XDG root, `TMUX_TMPDIR`, the Zellij runtime and config roots, and `TMPDIR`. It tears down both private mux servers when the command exits. It drives both multiplexers from inside a scoped agent pane.

@@ -87,7 +87,7 @@ Install meets the machine; these rules keep upgrades and reporting working:
 
 ### Probe a hook reply outside a room
 
-A reply that injects context into the model (Claude's and Codex's `hookSpecificOutput.additionalContext`) has two questions no fixture answers: whether the model reads it, and how the provider stores it in its transcript. A disposable sandbox room cannot answer them, because it replaces `HOME` and holds no provider login ([sidebar-live-check.md → Check against a real provider login](./sidebar-live-check.md#check-against-a-real-provider-login)). Hand-feeding `rimz hooks feed` there proves the hook's output and nothing about the provider. Answer both with a throwaway hook under your own login, outside any room, before the reply shape is built on:
+A reply that injects context into the model (Claude's and Codex's `hookSpecificOutput.additionalContext`) has two questions no fixture answers: whether the model reads it, and how the provider stores it in its transcript. A disposable sandbox room cannot answer them, because it replaces `HOME` and holds no provider login ([sandbox-rooms.md → Check against a real provider](./sandbox-rooms.md#check-against-a-real-provider)). Hand-feeding `rimz hooks feed` there proves the hook's output and nothing about the provider. Answer both with a throwaway hook under your own login, outside any room, before the reply shape is built on:
 
 ```sh
 PROBE="$(mktemp -d)"
