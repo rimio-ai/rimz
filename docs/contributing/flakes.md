@@ -160,7 +160,7 @@ Find where a slow command idles before you read code.
 
 - A gap that matches a production constant (a 25 ms poll for 1.5 s or 3 s) points at a designed wait the fixture never satisfies. A gap in the filtered trace of step 1 can be CPU as well as a wait, which is what steps 3 and 4 settle.
 - Read the trace past the failing step, through the test's next read of state the traced processes write. A value written after the event the test waited on is a second race in the same test.
-- Satisfy a designed wait the way the real writer would, and do not raise a timeout: seed the sidebar heartbeat a live room carries, or bind the child pane the way its hook does (`common::room` holds both, for Zellij and tmux).
+- Satisfy a designed wait the way the real writer would, and do not raise a timeout: seed the sidebar heartbeat a live room carries ([how](integration-tests.md#multiplexer-doubles-and-heartbeats)), or bind the child pane the way its hook does (`common::room` holds both, for Zellij and tmux).
 - Under strace, stop the traced child by its own PID (`pgrep -P <strace pid>`), never strace's. Killing strace leaves the child running, and `wait` never returns.
 - A one-shot `sidebar snapshot` or `frame` walks provider transcripts only when no live sidebar serves spending for the same `RIMZ_HOME` (any room on the machine counts) and no current-version `provider-spending.json` exists. It is slow only when `cache/providers/spending.json` is cold. `Env` isolates `HOME` and hides that cost, so reproduce with a scratch `RIMZ_HOME` and the real `HOME` before you assume a designed poll.
 - A dead room needs its `workspace.json` for `--no-produce` to take the consumer read.
