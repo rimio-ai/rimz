@@ -228,15 +228,26 @@ pub(super) fn check_cards(
     focus(a);
     quiet(card(&["walk", "next"]));
     wait_focus(backend, session, &runtime, b);
+    let views = pane_views(backend, session, &runtime);
+    let b_tab = views
+        .iter()
+        .filter(|(_, view)| Some(*view) == views.get(b))
+        .map(|(pane, _)| pane.clone())
+        .collect::<Vec<_>>();
     assert!(
-        pane_views(backend, session, &runtime).contains_key(b),
-        "original agent tab must exist"
+        b_tab.len() == 2,
+        "original agent tab must exist with its sidebar: {views:?}"
     );
+    // b is its tab's last working pane, so its close takes the tab, sidebar included.
     quiet(card(&["close"]));
     let surviving_views = pane_views(backend, session, &runtime);
     assert!(
         !surviving_views.contains_key(b),
         "closed pane still exists: {b}"
+    );
+    assert!(
+        b_tab.iter().all(|pane| !surviving_views.contains_key(pane)),
+        "the closed card's tab still holds panes: {surviving_views:?}"
     );
     quiet(reopen());
     let deadline = Instant::now() + Duration::from_secs(30);

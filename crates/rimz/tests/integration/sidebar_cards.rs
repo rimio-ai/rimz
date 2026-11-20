@@ -669,6 +669,149 @@ fn close_bounds_the_cache_and_saves_team_worktree_replay() {
     assert_eq!(entries[31]["worktree"], "feature");
 }
 
+/// Rows of one tab holding the sidebar and `panes`, beside a second tab holding terminal_9,
+/// written as the listing every later command reads.
+fn tab_rows(env: &Env, panes: &[Value]) {
+    let mut rows = panes.to_vec();
+    rows.push(json!({"id": 9, "is_plugin": false, "tab_id": 2, "pane_command": "claude"}));
+    sole_tab_rows(env, &rows);
+}
+
+/// Rows of the session's only tab, holding the sidebar and `panes`.
+fn sole_tab_rows(env: &Env, panes: &[Value]) {
+    let mut rows = vec![json!({"id": 1, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"})];
+    rows.extend(panes.iter().cloned());
+    std::fs::write(
+        env.home_root.join("panes.json"),
+        serde_json::to_vec(&rows).unwrap(),
+    )
+    .unwrap();
+}
+
+fn tab_closes(env: &Env) -> Vec<String> {
+    trace_lines(&env.home_root.join("mux.log"))
+        .into_iter()
+        .filter(|line| line.contains("close-tab"))
+        .collect()
+}
+
+/// Alt+x on the last working pane of a tab closes the tab, its floating pane with it, in
+/// one command, and records the card as a pane close does.
+#[test]
+fn close_of_a_tabs_last_working_pane_closes_its_tab() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    tab_rows(
+        &env,
+        &[
+            json!({"id": 7, "is_plugin": false, "tab_id": 1, "pane_command": "claude"}),
+            json!({"id": 11, "is_plugin": false, "tab_id": 1, "pane_command": "sh", "is_floating": true}),
+        ],
+    );
+    seed(&env, "solo", |_| {});
+    let output = close_card(&env, "solo", command(&env, &["close"]));
+    assert_exit(&output, 0);
+    let log = trace_lines(&env.home_root.join("mux.log"));
+    assert_eq!(tab_closes(&env).len(), 1, "{log:?}");
+    assert!(tab_closes(&env)[0].ends_with("--tab-id\t1"), "{log:?}");
+    assert!(closes(&env).is_empty(), "{log:?}");
+    let entries = read_closed(&env);
+    assert_eq!(entries.as_array().unwrap().len(), 1, "{entries}");
+    assert_eq!(entries[0]["agent_id"], "solo");
+}
+
+/// Alt+x on the last working pane of the session's only tab closes the pane alone, so the
+/// session, and the agent's wrapper probing it, outlive the close until the sidebar's
+/// self-close.
+#[test]
+fn close_of_a_sole_tabs_last_working_pane_closes_only_the_pane() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    sole_tab_rows(
+        &env,
+        &[json!({"id": 7, "is_plugin": false, "tab_id": 1, "pane_command": "claude"})],
+    );
+    seed(&env, "solo", |_| {});
+    let output = close_card(&env, "solo", command(&env, &["close"]));
+    assert_exit(&output, 0);
+    let log = trace_lines(&env.home_root.join("mux.log"));
+    assert!(tab_closes(&env).is_empty(), "{log:?}");
+    assert_eq!(closes(&env).len(), 1, "{log:?}");
+    assert!(closes(&env)[0].ends_with("terminal_7"), "{log:?}");
+    let entries = read_closed(&env);
+    assert_eq!(entries.as_array().unwrap().len(), 1, "{entries}");
+    assert_eq!(entries[0]["agent_id"], "solo");
+}
+
+/// Alt+x beside another working pane of the tab closes the pane alone.
+#[test]
+fn close_beside_another_working_pane_closes_only_the_pane() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    tab_rows(
+        &env,
+        &[
+            json!({"id": 7, "is_plugin": false, "tab_id": 1, "pane_command": "claude"}),
+            json!({"id": 10, "is_plugin": false, "tab_id": 1, "pane_command": "sh"}),
+        ],
+    );
+    seed(&env, "paired", |_| {});
+    let output = close_card(&env, "paired", command(&env, &["close"]));
+    assert_exit(&output, 0);
+    let log = trace_lines(&env.home_root.join("mux.log"));
+    assert!(tab_closes(&env).is_empty(), "{log:?}");
+    assert_eq!(closes(&env).len(), 1, "{log:?}");
+    assert!(closes(&env)[0].ends_with("terminal_7"), "{log:?}");
+}
+
+/// Alt+x on a raw pane that is the last working pane of its tab closes the tab.
+#[test]
+fn close_of_a_raw_last_working_pane_closes_its_tab() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    tab_rows(
+        &env,
+        &[json!({"id": 10, "is_plugin": false, "tab_id": 1, "pane_command": "sh"})],
+    );
+    let output = exchange(
+        &env,
+        json!({"command":"close_target"}),
+        json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
+        command(&env, &["close"]),
+    );
+    assert_exit(&output, 0);
+    let log = trace_lines(&env.home_root.join("mux.log"));
+    assert_eq!(tab_closes(&env).len(), 1, "{log:?}");
+    assert!(closes(&env).is_empty(), "{log:?}");
+}
+
+/// `rimz agents stop` of a tab's last working pane closes the pane and leaves the tab to the
+/// sidebar's self-close.
+#[test]
+fn agents_stop_of_a_tabs_last_working_pane_closes_only_the_pane() {
+    let solo = [json!({"id": 7, "is_plugin": false, "tab_id": 1, "pane_command": "claude"})];
+    let env = Env::new();
+    env.record(&env.project_root);
+    tab_rows(&env, &solo);
+    seed(&env, "solo", |_| {});
+    let output = env
+        .rimz()
+        .current_dir(&env.project_root)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES_FILE",
+            env.home_root.join("panes.json"),
+        )
+        .args(["--mux", "zellij", "agents", "stop", "pet-solo"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let log = trace_lines(&env.home_root.join("mux.log"));
+    assert!(tab_closes(&env).is_empty(), "{log:?}");
+    assert_eq!(closes(&env).len(), 1, "{log:?}");
+}
+
 /// A tab of two agents, a shell, and a floating pane beside its sidebar, next to another
 /// agent's tab and the dashboard, with the one client focused on `focus`.
 fn tab_command(env: &Env, focus: Option<&str>) -> Command {

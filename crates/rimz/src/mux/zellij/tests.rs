@@ -5100,6 +5100,34 @@ esac
     assert!(!log.contains("action close-tab --tab-id 2"), "{log}");
 }
 
+/// The tab close names the stable id of the tab holding the pane, never its position.
+#[cfg(unix)]
+#[test]
+fn tab_of_a_pane_is_closed_by_its_stable_id() {
+    let room = TestRoom::new();
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "--version" ]; then printf 'zellij 0.45.1\n'; exit 0; fi
+case " $* " in
+  *" action list-panes "*)
+    printf '[{"id":3,"is_plugin":false,"tab_id":2,"tab_position":0},{"id":7,"is_plugin":false,"tab_id":5,"tab_position":1}]\n' ;;
+esac
+"#,
+    );
+    let pane = PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_7");
+    MuxBackend::close_tab_of_pane(&room.backend(&shim), "work", &pane).unwrap();
+    let log = shim_log(&temp);
+    assert_eq!(
+        command_count(&log, "action close-tab --tab-id 5"),
+        1,
+        "{log}"
+    );
+    assert_eq!(command_count(&log, "close-pane"), 0, "{log}");
+    assert_eq!(command_count(&log, "--tab-id 1"), 0, "{log}");
+}
+
 #[cfg(unix)]
 #[test]
 fn open_tab_moves_by_tab_id_on_zellij_044() {

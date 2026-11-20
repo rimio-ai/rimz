@@ -1462,10 +1462,14 @@ pub trait MuxBackend: Send + Sync {
         name: &str,
         intent: tab_name::TabNameIntent,
     ) -> Result<()>;
-    /// Close one pane by normalized id. Used by supervised one-shot launches
-    /// after their terminal result is recorded; callers treat failure as
-    /// best-effort cleanup.
+    /// Close one pane by normalized id. A stop closing an agent's pane reports a failure;
+    /// cleanup callers (a finished supervised run, a wrapper closing its own pane) treat
+    /// it as best-effort.
     fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()>;
+    /// Close the tab or window holding `pane`, with every pane in it, floating ones
+    /// included. Closing a session's last tab or window ends the session. Zellij resolves
+    /// the tab's stable id from one listing, never its position.
+    fn close_tab_of_pane(&self, session: &str, pane: &PaneId) -> Result<()>;
     /// Close any floating panes sharing `anchor`'s view, returning the closed
     /// pane ids. A self-closing sidebar uses this to tear down multiplexer
     /// overlays that would otherwise keep an empty view alive. Zellij and tmux

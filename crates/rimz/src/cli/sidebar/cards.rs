@@ -58,7 +58,7 @@ pub(super) fn request(
         CardReply::Refused { reason } => Ok(writeln!(render::err(), "{reason}")?),
         CardReply::CloseTarget { target } => {
             let (ctx, globals) = open_room(globals, &session, mux)?;
-            close(&ctx, &globals, &session, vec![target])
+            close(&ctx, &globals, &session, vec![target], true)
         }
     }
 }
@@ -106,14 +106,22 @@ pub(super) fn close_tab(globals: &GlobalFlags, session: Option<String>) -> Resul
         }
     }
     let (ctx, globals) = open_room(globals, &session, mux)?;
-    close(&ctx, &globals, &session, targets)
+    close(&ctx, &globals, &session, targets, false)
 }
 
 /// Close `targets` through one hosting read: raw panes and agents no pane hosts close
 /// their pane, and every hosted agent stops in one batch, children before parents, acting
-/// on that read unless a pane closed here sat between it and the stop. Each
-/// stopped root that offers a resume enters the closed-card list, in `targets` order.
-fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, targets: Vec<CardTarget>) -> Result<()> {
+/// on that read unless a pane closed here sat between it and the stop. Under `close_tab`
+/// (Alt+x), a pane the gating read finds the last working pane of its tab closes with
+/// its tab. Each stopped root that offers a resume enters the closed-card list, in
+/// `targets` order.
+fn close(
+    ctx: &Ctx,
+    globals: &GlobalFlags,
+    session: &str,
+    targets: Vec<CardTarget>,
+    close_tab: bool,
+) -> Result<()> {
     let snapshot = ctx.cached_snapshot()?;
     let read = match read_hosting(&ctx.workspace, &ctx.store, globals.mux) {
         Ok(mut read) => {
@@ -135,7 +143,7 @@ fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, targets: Vec<CardTarge
                 pane,
             } => (kind, agent_id, pane),
             CardTarget::Pane(pane) => {
-                rimz::mux::backend_for(pane.mux()).close_pane(session, &pane)?;
+                close_pane(session, &pane, close_tab && !closed_pane, &read)?;
                 closed_pane = true;
                 continue;
             }
@@ -144,7 +152,7 @@ fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, targets: Vec<CardTarge
             Some(agent) if agents.contains(&agent) => {}
             Some(agent) => agents.push(agent),
             None => {
-                rimz::mux::backend_for(pane.mux()).close_pane(session, &pane)?;
+                close_pane(session, &pane, close_tab && !closed_pane, &read)?;
                 closed_pane = true;
             }
         }
@@ -156,6 +164,7 @@ fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, targets: Vec<CardTarge
     let agents = owned.iter().collect::<Vec<_>>();
     let terms = agents_cmd::StopTerms {
         read: (!closed_pane).then_some(read),
+        close_tab,
         ..Default::default()
     };
     // Without `still_due` every stop goes ahead.
@@ -190,6 +199,21 @@ fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, targets: Vec<CardTarge
     }
     anyhow::ensure!(failures.is_empty(), "{}", failures.join("; "));
     Ok(())
+}
+
+/// Close `pane`, with its tab when `close_tab` holds and `read`, which nothing has acted
+/// on since, finds it the tab's last working pane.
+fn close_pane(
+    session: &str,
+    pane: &rimz::ids::PaneId,
+    close_tab: bool,
+    read: &rimz::sidebar::produce::hosting::HostingRead,
+) -> Result<()> {
+    let backend = rimz::mux::backend_for(pane.mux());
+    if close_tab && read.closing_empties_tab(pane, rimz::mux::own_pane_id(pane.mux()).as_ref()) {
+        return Ok(backend.close_tab_of_pane(session, pane)?);
+    }
+    Ok(backend.close_pane(session, pane)?)
 }
 
 fn read_closed(ctx: &Ctx) -> Vec<ClosedCard> {

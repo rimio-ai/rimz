@@ -3552,7 +3552,8 @@ path = "crates/rimz/src/mux"
 # exclude_pane_input shares pane-write exclusions with the palette (+1).
 # write_client_mode and ClientModeWriteError share mode publication with wake ingestion (+2).
 # MuxBackend::show_view and its ViewShown outcome show a fixed view by name without creating it (+2).
-surface-budget = 341
+# MuxBackend::close_tab_of_pane closes a card's tab with its last working pane (Alt+x).
+surface-budget = 342
 
 [[verdict]]
 kind = "item"
@@ -3777,7 +3778,8 @@ path = "crates/rimz/src/pane"
 # The origin class and lead accessor stay crate-only; all six still cross the pane module boundary.
 # RoomMode and ClientRoomMode carry non-normal client modes without changing pane-view identity (+2).
 # work_pane_behind is the one work-pane-behind-the-sidebar rule `rimz sidebar focus --toggle`, `rimz sidebar split`, `rimz pane zoom` and the in-pane `q` share.
-surface-budget = 53
+# The sidebar self-close verdict moves here so the stop's tab close asks it too, not a copy.
+surface-budget = 54
 
 [[verdict]]
 kind = "item"
@@ -4146,7 +4148,8 @@ path = "crates/rimz/src/sidebar"
 # identity, without a resolved workspace (+1).
 # refresh::read_provider_accounts and its refresh re-export let `accounts list` re-read the
 # record after its own usage refresh (+2).
-surface-budget = 265
+# HostingRead::closing_empties_tab answers the Alt+x tab close from the gating read.
+surface-budget = 266
 
 [[verdict]]
 kind = "item"

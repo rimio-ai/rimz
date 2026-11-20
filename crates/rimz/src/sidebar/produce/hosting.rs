@@ -12,10 +12,12 @@
 //! session a swap replaced still answers its own pane while it is listed.
 //! [`HostingRead::agent_hosting_of_session`] takes the session a caller holds (a sidebar
 //! card's key) and answers the agent that caller acts on: that session while no swap replaced
-//! it, else its launch's holder.
+//! it, else its launch's holder. From the same listing, [`HostingRead::closing_empties_tab`]
+//! says whether closing a pane leaves its tab without a working pane.
 
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
+use crate::pane::PaneRef;
 use crate::sidebar::consumer::{RollupCursor, rollup_snapshot};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::store::runtime::agent_is_runtime_visible;
@@ -60,6 +62,8 @@ pub struct HostingRead {
     audit: Vec<AgentState>,
     /// The fold over runtime-visible rows only, so no ended or dead row takes a pane.
     snapshot: SidebarSnapshot,
+    /// The listing this read folded, which tab each pane is in.
+    panes: Vec<PaneRef>,
 }
 
 /// The lookup could not get the multiplexer's own answer; the backend pick's notices
@@ -143,6 +147,55 @@ impl HostingRead {
     /// Every agent row this read found in the store.
     pub fn agents(&self) -> &[AgentState] {
         &self.audit
+    }
+
+    /// Whether closing `pane` empties its tab in this read: the tab's sidebar, once `pane`
+    /// is gone, would self-close on the verdict `crate::pane::self_close_verdict` gives.
+    /// `false` when `pane` or its tab's sidebar is unlisted, when the tab is the session's only
+    /// one, or when `caller`, the pane the asking process runs in, is in that tab.
+    pub fn closing_empties_tab(&self, pane: &PaneId, caller: Option<&PaneId>) -> bool {
+        let Some(view) = self.closable_tab(pane, caller) else {
+            return false;
+        };
+        let in_view = |listed: &&PaneRef| listed.view_id.as_deref() == Some(view);
+        let rest = self
+            .panes
+            .iter()
+            .filter(|listed| &listed.pane_id != pane)
+            .cloned()
+            .collect::<Vec<_>>();
+        rest.iter()
+            .filter(in_view)
+            .filter(|listed| listed.is_rimz_sidebar())
+            .any(|sidebar| {
+                matches!(
+                    crate::pane::self_close_verdict(&rest, &sidebar.pane_id),
+                    crate::pane::SelfCloseVerdict::Empty { .. }
+                )
+            })
+    }
+
+    /// The tab of `pane` when a close may take it: another tab is listed beside it, since
+    /// closing a session's only tab ends the session before the closed agent's wrapper can
+    /// tell its exit was deliberate (`cli/agents_cmd/exec.rs::close_is_deliberate`), and
+    /// `caller`, the pane the asking process runs in, is not in it.
+    fn closable_tab(&self, pane: &PaneId, caller: Option<&PaneId>) -> Option<&str> {
+        let view = self.view_of(pane)?;
+        if caller.is_some_and(|caller| self.view_of(caller) == Some(view)) {
+            return None;
+        }
+        self.panes
+            .iter()
+            .any(|listed| listed.view_id.as_deref().is_some_and(|other| other != view))
+            .then_some(view)
+    }
+
+    /// The tab of `pane` in this read's listing.
+    fn view_of(&self, pane: &PaneId) -> Option<&str> {
+        self.panes
+            .iter()
+            .find(|listed| &listed.pane_id == pane)
+            .and_then(|listed| listed.view_id.as_deref())
     }
 
     /// The backend this read listed.
@@ -236,6 +289,7 @@ fn fold(
     runtime: &RuntimePaths,
 ) -> HostingRead {
     let session_name = frame.session_name.clone();
+    let panes = frame.to_pane_refs();
     let mut audit = snapshot.agents.to_vec();
     // The holder pick orders live rows by their rest certificates, as the address
     // resolver's snapshot does.
@@ -259,6 +313,7 @@ fn fold(
         notices,
         audit,
         snapshot,
+        panes,
     }
 }
 
