@@ -16,7 +16,7 @@ use rimz::harness::budget::BudgetSpec;
 use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
 use rimz::harness::launch_plan::{self, LaunchPlan, LaunchPlanInputs};
 use rimz::harness::team_prompt::{self, BUILT_IN_CONSENSUS, Consensus};
-use rimz::mcp::catalog::{Capability, LoadMode, SERVER_NAME, tools_for};
+use rimz::mcp::catalog::{Capability, LoadMode, SERVER_NAME, render_listing, tools_for};
 use rimz::sandbox::{EnvPin, Mount, SkippedSkill};
 
 use super::{LaunchOverrideArgs, launch_resolve, restart};
@@ -39,7 +39,8 @@ pub(super) struct ExplainArgs {
     /// Print only the composed system prompt and RimZ reminder.
     #[arg(long)]
     prompt: bool,
-    /// Print only the MCP servers, tools, and load modes the launch gets.
+    /// Print only the MCP servers, tools, and load modes the launch gets, then the full text of
+    /// RimZ's tools.
     #[arg(long, conflicts_with_all = ["json", "prompt"])]
     mcps: bool,
 }
@@ -307,7 +308,8 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
 /// What a launch hands its provider for MCP: RimZ's server and the load mode
 /// of each of its tools, the user's servers it keeps, each `mcps` mark the
 /// adapter did not apply, and the provider arguments that carry them, all read
-/// from the compiled plan.
+/// from the compiled plan; then the instructions and each tool's description
+/// and schema, as the server sends them.
 fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io::Result<()> {
     let kind = plan.request.kind.as_str();
     let adapter = rimz::agents::find_definition(kind).expect("compiled agent has an adapter");
@@ -362,7 +364,7 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     }
     if !arguments.is_empty() {
         writeln!(w, "\nProvider arguments")?;
-        for (flag, value) in arguments {
+        for (flag, value) in &arguments {
             writeln!(w, "  {flag} {value}")?;
         }
     }
@@ -382,7 +384,24 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     for pointer in pointers {
         writeln!(w, "  {pointer}")?;
     }
-    Ok(())
+    if plan.mcp_capabilities.is_empty() {
+        return Ok(());
+    }
+    let tools: Vec<_> = tools_for(&plan.mcp_capabilities).collect();
+    let modes: Vec<_> = plan
+        .mcp_capabilities
+        .iter()
+        .filter_map(|&capability| {
+            LoadMode::from_name(load_mode(&arguments, capability)).map(|mode| (capability, mode))
+        })
+        .collect();
+    writeln!(w, "\nServed text")?;
+    writeln!(
+        w,
+        "  what RimZ's server puts in context, word for word; rimz cannot see the tools of your \
+         own MCP servers\n"
+    )?;
+    write!(w, "{}", render_listing(&tools, &modes))
 }
 
 /// The user's servers a launch keeps, read from what the adapter wrote: a

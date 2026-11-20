@@ -75,14 +75,13 @@ fn values_join_their_flags_and_positionals_follow_the_terminator() {
     assert_eq!(
         args(
             "wait",
-            json!({"run": "--version; echo $(id)", "when": ["pr=merged", "ci=green"], "in": "5m"}),
+            json!({"trigger": "run", "value": "--version; echo $(id)", "on": "fail", "check_in": "5m"}),
         ),
         [
             "wait",
             "--run=--version; echo $(id)",
-            "--when=pr=merged",
-            "--when=ci=green",
-            "--in=5m",
+            "--on=fail",
+            "--check-in=5m",
         ]
     );
     assert_eq!(
@@ -105,6 +104,20 @@ fn values_join_their_flags_and_positionals_follow_the_terminator() {
     assert_eq!(
         args("self_compact", json!({"instruction": "-keep the plan"})),
         ["agents", "compact", "--", "@me", "-keep the plan"]
+    );
+    assert_eq!(
+        args(
+            "self_compact",
+            json!({"instruction": "-keep the plan", "no_continue": true})
+        ),
+        [
+            "agents",
+            "compact",
+            "--no-continue",
+            "--",
+            "@me",
+            "-keep the plan"
+        ]
     );
     assert_eq!(
         args(
@@ -157,8 +170,12 @@ fn arguments_outside_the_schema_shape_are_refused() {
     for (name, arguments) in [
         ("lsp", json!({"verb": "rename", "targets": []})),
         ("lsp", json!({"verb": "def"})),
-        ("wait", json!({"pid": "one"})),
-        ("wait", json!({"timeout": "5m"})),
+        ("wait", json!({"trigger": "sleep", "value": "5m"})),
+        ("wait", json!({"trigger": "pid", "value": 42})),
+        (
+            "wait",
+            json!({"trigger": "in", "value": "5m", "timeout": "5m"}),
+        ),
         ("wait_list", json!({"all": true})),
         ("self_tune", json!({"setting": "budget"})),
         ("notes_add", json!({"kind": "log", "title": 7})),
@@ -178,7 +195,7 @@ fn schemas_are_inline_objects_without_null_types() {
         let schema = &listing["inputSchema"];
         assert_eq!(schema["type"], "object", "{}", tool.name);
         let text = schema.to_string();
-        for absent in ["null", "$ref", "$schema", "definitions", "anyOf"] {
+        for absent in ["null", "$ref", "$schema", "definitions", "anyOf", "oneOf"] {
             assert!(!text.contains(absent), "{}: {text}", tool.name);
         }
     }
@@ -191,30 +208,115 @@ fn schemas_are_inline_objects_without_null_types() {
             "check"
         ])
     );
+    let wait = tool("wait").listing();
     assert_eq!(
-        tool("wait").listing()["inputSchema"]["properties"]["on"]["enum"],
+        wait["inputSchema"]["properties"]["on"]["enum"],
         json!(["fail", "success", "any"])
     );
+    assert_eq!(
+        wait["inputSchema"]["properties"]["trigger"]["enum"],
+        json!(["run", "check", "file", "pid", "when", "in", "at"])
+    );
+    assert_eq!(wait["inputSchema"]["required"], json!(["trigger", "value"]));
+}
+
+/// Claude Code cuts the instructions and each description at 4,096
+/// characters, and may count a tool's property descriptions with it; Codex
+/// shows only the instructions' first line to a deferred tool, and compacts
+/// an input schema over 5,000 bytes.
+#[test]
+fn the_text_fits_what_providers_keep() {
+    let first = INSTRUCTIONS.lines().next().unwrap_or_default();
+    assert!(
+        !first.is_empty() && first.chars().count() <= 250,
+        "{first:?}"
+    );
+    for group in ["`lsp`", "`wait`", "`notes_", "`self_*` when the user asks"] {
+        assert!(first.contains(group), "{group} missing from {first:?}");
+    }
+    assert!(INSTRUCTIONS.chars().count() <= 4096);
+    for tool in &TOOLS {
+        let listing = tool.listing();
+        let properties = listing["inputSchema"]["properties"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(_, property)| property["description"].as_str());
+        let length = properties.map(|text| text.chars().count()).sum::<usize>()
+            + tool.description.chars().count();
+        assert!(length <= 4096, "{}: {length}", tool.name);
+    }
+    for tool in TOOLS
+        .iter()
+        .filter(|tool| tool.capability == Capability::Control)
+    {
+        assert!(
+            tool.description.starts_with("When the user"),
+            "{} acts on the agent unasked: {}",
+            tool.name,
+            tool.description
+        );
+    }
+    let wait = tool("wait").listing()["inputSchema"].to_string();
+    assert!(wait.len() < 5000, "{}", wait.len());
+}
+
+#[test]
+fn the_full_listing_is_the_served_text() {
+    let tools: Vec<&Tool> = tools_for(&[Capability::Lsp, Capability::Control]).collect();
+    let text = render_listing(&tools, &[(Capability::Lsp, LoadMode::Always)]);
+    assert!(text.contains(INSTRUCTIONS), "{text}");
+    let served = tools_list(&tools, &[]);
+    for (tool, entry) in tools.iter().zip(served["tools"].as_array().unwrap()) {
+        let schema = serde_json::to_string_pretty(&entry["inputSchema"]).unwrap();
+        assert!(text.contains(&format!("\n## {}\n", tool.name)), "{text}");
+        assert!(
+            text.contains(entry["description"].as_str().unwrap()),
+            "{text}"
+        );
+        assert!(text.contains(&format!("```json\n{schema}\n```")), "{text}");
+    }
+    let lsp = format!(
+        "## lsp\n~{} tokens · rimz-lsp · load always\n",
+        tool("lsp").tokens()
+    );
+    assert!(text.contains(&lsp), "{text}");
+    assert!(text.contains("· rimz-control · load default\n"), "{text}");
+    assert!(!text.contains("## wait"), "{text}");
 }
 
 /// Without a trigger, `rimz wait` lists the waits and exits 0, which would
 /// read as a wake armed; modifiers alone are no trigger.
 #[test]
-fn a_wait_without_a_trigger_is_refused() {
-    for arguments in [
-        json!({}),
-        json!({"when": []}),
-        json!({"label": "x"}),
-        json!({"every": "1m", "grep": "x", "on": "any", "check_in": "5m"}),
+fn a_wait_needs_one_trigger_and_its_value() {
+    for (arguments, missing) in [
+        (json!({}), "trigger"),
+        (json!({"value": "5m"}), "trigger"),
+        (json!({"trigger": "in"}), "value"),
+        (json!({"label": "x"}), "trigger"),
+        (
+            json!({"every": "1m", "grep": "x", "on": "any", "check_in": "5m"}),
+            "trigger",
+        ),
+        (json!({"when": ["pr=merged"]}), "when"),
     ] {
         let err = tool("wait")
             .invocation(arguments.clone())
-            .expect_err("no trigger");
-        assert!(err.to_string().contains("trigger"), "{arguments}: {err}");
+            .expect_err("refused");
+        assert!(err.to_string().contains(missing), "{arguments}: {err}");
+    }
+    for trigger in ["run", "check", "file", "pid", "when", "in", "at"] {
+        assert_eq!(
+            args("wait", json!({"trigger": trigger, "value": "v"})),
+            ["wait".to_owned(), format!("--{trigger}=v")]
+        );
     }
     assert_eq!(
-        args("wait", json!({"when": ["pr=merged"]})),
-        ["wait", "--when=pr=merged"]
+        args(
+            "wait",
+            json!({"trigger": "when", "value": "pr=merged && !ci=failed", "label": "x"})
+        ),
+        ["wait", "--when=pr=merged && !ci=failed", "--label=x"]
     );
 }
 
