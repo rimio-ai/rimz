@@ -31,14 +31,14 @@ The split itself is yours to design: two roles or five, one provider or several,
 
 ## Run the forge team
 
-`forge` is the team RimZ is built with: three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system prompt. Its roles run the `claude` and `codex` CLIs, so both must be on your `PATH`. Install the release-matched `crew` pack, review its definitions and grants, then validate the merged definitions:
+`forge` is the team RimZ is built with: three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system prompt. Its roles run the `claude` and `codex` CLIs, so both must be on your `PATH`. Install the `crew` pack, review its definitions and grants, then validate the merged definitions:
 
 ```sh
 rimz packs install crew
 rimz agents validate
 ```
 
-Pack definitions load below your own home files and do not overwrite them. The [packs reference](../reference/cli/packs.md) covers the review, version selection, and updates. From a repository checkout you can copy the sample definitions into your home instead, which gives you files to edit in place:
+Pack definitions load below your own home files and do not overwrite them. A profile that names a [model tier](./configuration.md#model-tiers) runs only on a provider with a kind base, so install the provider pack for each subscription you use, or write `agents/<kind>.md` in your home. The [packs reference](../reference/cli/packs.md) covers the review, version selection, and updates. From a repository checkout you can copy the sample definitions into your home instead, which gives you files to edit in place:
 
 ```sh
 mkdir -p ~/.rimz/teams ~/.rimz/agents
