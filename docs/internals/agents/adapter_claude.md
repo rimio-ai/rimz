@@ -226,7 +226,7 @@ Both feeds price the child. [`subagent_cost.rs`](../../../crates/rimz/src/agents
 
 ### RimZ mod reports
 
-The mod ([install](#install)) only observes. Each hook in `rimz_mod/rimz.ts` lets `next(e)` finish first and returns what it gave unchanged; a report that fails, throws, or outlasts its 2-second cap is dropped. Every hook but `turn.step` awaits its report before it returns, and only those reports carry the cap. The `turn.step` hook forwards the stream with `yield* next(e)`, reads the envelope, starts `rimz` with `$.process.spawn` without awaiting it, and returns the result, so the next model request never waits on `rimz`; the report drains the child to its end after the hook returned. It reports at these points:
+The mod ([install](#install)) only observes. Each hook in `rimz_mod/rimz.ts` lets `next(e)` finish first and returns what it gave unchanged; a report that fails, throws, or outlasts its 2-second cap is dropped. Every hook but `turn.step` awaits its report before it returns, and only those reports carry the cap. Claude loads the module only when each hook is passed to `on` inline or is a function or const declared at the top of the module file: a hook of any other form fails the whole module's load, and the session runs without the mod. The `turn.step` hook forwards the stream with `yield* next(e)`, reads the envelope, starts `rimz` with `$.process.spawn` without awaiting it, and returns the result, so the next model request never waits on `rimz`; the report drains the child to its end after the hook returned. It reports at these points:
 
 | Mod event | When it reports | `agent_id` |
 | --- | --- | --- |
