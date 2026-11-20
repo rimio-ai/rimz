@@ -1,11 +1,15 @@
-//! Producer-side Codex reset-credit policy and its detached helper action.
+//! Producer-side reset-credit policy and its detached helper action, for every
+//! provider `supports_kind` admits.
 //!
 //! The room host evaluates the shared spend ladder and spawns a hidden CLI
 //! helper when a reset is next, or a credit needs expiry rescue. The verdict
 //! branches on what a redemption does to the window's reset (the credit's
 //! `RedeemEffect`), never on the provider. The helper serializes provider-account
 //! attempts, refreshes capacity and credits, re-evaluates the ladder, and
-//! performs the provider-specific consume request.
+//! performs the provider-specific consume request. A provider that claims its
+//! selected grant (Claude) is judged on that grant alone, on every path:
+//! `claimed_verdict` is the one decision the producer, the helper, the ladder,
+//! and the marker share.
 //! An idle account, one the machine declares and no agent of this room runs
 //! on, gets the expiry rescue alone: the producer reads its cached credits
 //! from its caller, the helper resolves its login from the machine catalog,
@@ -31,7 +35,7 @@ use crate::agents::account::{
 };
 use crate::agents::{
     AccountUsageIdentity, AccountUsageSnapshot, ProviderLogin, RateLimitWindow, RedeemEffect,
-    ResetCredits, RoomLoginSet,
+    ResetCredits, ResetGrant, RoomLoginSet,
 };
 use crate::config::{AutoRedeemConfig, RedeemLevel};
 use crate::disk::atomic::write_temp_then_rename_cache;
@@ -42,7 +46,7 @@ use crate::ids::{AgentKind, LoginKey, WorkspaceId};
 use crate::store::snapshot::{RedeemForecast, SidebarProviderPanel, SidebarSnapshot};
 
 const CODEX_KIND: &str = "codex";
-pub(super) const EXPIRY_RESCUE_LEAD: Duration = Duration::from_secs(30 * 60);
+const EXPIRY_RESCUE_LEAD: Duration = Duration::from_secs(30 * 60);
 /// How long before a credit expires the marker tells the user to redeem it,
 /// long enough for a person to act.
 const MANUAL_EXPIRY_LEAD: Duration = Duration::from_secs(24 * 60 * 60);
@@ -86,16 +90,60 @@ pub struct AutoRedeemRequest {
     pub request_id: uuid::Uuid,
 }
 
-/// Whether auto-redeem has anything to act on here: the Codex CLI, the only
-/// provider with automated redemption, is installed on this machine.
+/// Whether setup's away question has anything to act on here: the Codex CLI,
+/// the one provider whose credits that question paces, is installed on this
+/// machine.
 pub fn provider_located() -> bool {
     crate::agents::spec_by_kind(CODEX_KIND)
         .is_some_and(|spec| crate::agents::locate_binary(spec).is_some())
 }
 
+/// A provider the automatic path redeems for.
+struct Redeemer {
+    kind: &'static str,
+    /// Its credits restart the window, the only kind pacing can space out.
+    paces: bool,
+    /// A redemption claims the one grant the provider selects, not any credit.
+    claims_selected_grant: bool,
+}
+
+/// The one list of providers automatic redemption serves, read by every redeem
+/// path and by config judgment.
+const REDEEMERS: [Redeemer; 2] = [
+    Redeemer {
+        kind: CODEX_KIND,
+        paces: true,
+        claims_selected_grant: false,
+    },
+    Redeemer {
+        kind: "claude",
+        paces: false,
+        claims_selected_grant: true,
+    },
+];
+
+fn redeemer(kind: &AgentKind) -> Option<&'static Redeemer> {
+    REDEEMERS
+        .iter()
+        .find(|redeemer| redeemer.kind == kind.as_str())
+}
+
 /// Whether this provider is served by the automatic redemption path.
 pub fn supports_kind(kind: &AgentKind) -> bool {
-    kind.as_str() == CODEX_KIND
+    redeemer(kind).is_some()
+}
+
+/// Whether `paced` means more than `gain` for this provider: its credits
+/// restart the window.
+pub(crate) fn can_pace(kind: &AgentKind) -> bool {
+    redeemer(kind).is_some_and(|redeemer| redeemer.paces)
+}
+
+/// Whether a redemption claims the provider's selected grant. A provider
+/// automatic redemption does not serve is read as one, so its cached grants
+/// must show what a redemption would claim.
+fn claims_selected_grant(kind: &AgentKind) -> bool {
+    redeemer(kind).is_none_or(|redeemer| redeemer.claims_selected_grant)
 }
 
 impl RedeemReason {
@@ -129,7 +177,7 @@ pub(super) struct RedeemStamp {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AutoRedeemErr {
-    #[error("auto-redeem supports only the `codex` provider, not `{0}`")]
+    #[error("auto-redeem does not serve the `{0}` provider")]
     UnsupportedKind(String),
     #[error(
         "another redemption or auto-redeem attempt landed during the preview, or auto-redeem has a pending attempt; rerun `rimz accounts redeem`"
@@ -240,7 +288,12 @@ impl ManualRedeem {
             return Err(AutoRedeemErr::Held(hold.clone()));
         }
         let _guard = crate::disk::lock::WorkspaceLock::acquire(&redeem_lock_path(runtime, key))?;
-        let report = redemption_report(RedeemReason::Manual, &self.credits, self.natural_reset);
+        let report = redemption_report(
+            RedeemReason::Manual,
+            &key.kind,
+            &self.credits,
+            self.natural_reset,
+        );
         let request_id = request_id.to_string();
         consume_manual_redemption(
             runtime,
@@ -292,7 +345,7 @@ fn consume_manual_redemption(
 /// expiry, holds at every level; every other reason needs `gain` or above and
 /// a spent window with a future reset. What follows depends on what a
 /// redemption does to the window's reset, and only `paced` schedules.
-pub(super) fn redeem_verdict(
+fn redeem_verdict(
     capacity: Option<&ProviderCapacity>,
     credits: &ResetCredits,
     rate_pct_per_day: Option<f64>,
@@ -333,13 +386,91 @@ pub(super) fn redeem_verdict(
     }
 }
 
+/// The verdict on the credit a redemption claims, the one decision the
+/// producer, the helper, the ladder, and the marker share. A provider that
+/// claims its selected grant is judged on that grant alone: its own expiry
+/// rescues and dooms, and the verdict holds only where the provider would
+/// accept the grant, against the spent window a limit reason is about, or for
+/// a rescue against any window it clears.
+pub(super) fn claimed_verdict(
+    facts: &SpendFacts,
+    min_gain: Duration,
+    level: RedeemLevel,
+    expiry_lead: Duration,
+    now: Timestamp,
+) -> Option<RedeemReason> {
+    let verdict = |facts: &SpendFacts| {
+        redeem_verdict(
+            facts.capacity.as_ref(),
+            facts.reset_credits.as_ref()?,
+            facts.rate_pct_per_day,
+            min_gain,
+            level,
+            expiry_lead,
+            now,
+        )
+    };
+    if !claims_selected_grant(&facts.kind) {
+        return verdict(facts);
+    }
+    let reason = verdict(&claimed_facts(facts)?)?;
+    let dry = facts
+        .capacity
+        .as_ref()
+        .and_then(|capacity| capacity.latest_spent_window(now));
+    let accepted = if reason == RedeemReason::ExpiryRescue {
+        rescue_accepted(facts, dry.is_some(), now)
+    } else {
+        provider_accepts(facts, dry.as_ref(), true, now)
+    };
+    accepted.then_some(reason)
+}
+
+/// The automatic path's verdict at the login's own policy. A selected grant
+/// that does not clear the seven-day window (a Fable grant) is spent by the
+/// expiry rescue alone, at every level and every `min_gain`.
+pub(super) fn automatic_verdict(
+    facts: &SpendFacts,
+    config: &AutoRedeemConfig,
+    now: Timestamp,
+) -> Option<RedeemReason> {
+    let policy = config.policy(&facts.kind);
+    let rescue_only = claims_selected_grant(&facts.kind)
+        && !facts
+            .reset_credits
+            .as_ref()
+            .and_then(|credits| credits.grants.iter().find(|grant| grant.selected))
+            .is_some_and(|grant| grant.clears_window(WindowSpan::SevenDay.minutes()));
+    let level = if rescue_only {
+        RedeemLevel::Rescue
+    } else {
+        policy.level
+    };
+    claimed_verdict(facts, policy.min_gain, level, EXPIRY_RESCUE_LEAD, now)
+}
+
+/// Whether a redemption now refills every spent window: always for a pooled
+/// credit, and for a selected grant only when it is claimable and clears each
+/// one. Only then does the ladder step to a reset.
+pub(super) fn reset_refills_spent_windows(facts: &SpendFacts, now: Timestamp) -> bool {
+    if !claims_selected_grant(&facts.kind) {
+        return true;
+    }
+    let Some(capacity) = facts.capacity.as_ref() else {
+        return false;
+    };
+    claimable_grant(facts, true, now).is_some()
+        && capacity
+            .projected_windows(now)
+            .filter(|window| window.scope.is_none() && window.is_spent())
+            .all(|window| provider_accepts(facts, Some(&window), true, now))
+}
+
 /// The verdict for an idle account, one no agent of this room runs on: the
 /// expiry rescue alone.
-fn idle_rescue(credits: &ResetCredits, now: Timestamp) -> Option<RedeemReason> {
-    redeem_verdict(
-        None,
-        credits,
-        None,
+fn idle_rescue(facts: &SpendFacts, now: Timestamp) -> Option<RedeemReason> {
+    claimed_verdict(
+        facts,
         Duration::ZERO,
         RedeemLevel::Rescue,
         EXPIRY_RESCUE_LEAD,
@@ -367,7 +498,7 @@ fn fresh_verdict(
         {
             return None;
         }
-        return idle_rescue(facts.reset_credits.as_ref()?, now);
+        return idle_rescue(facts, now);
     }
     facts.redemption(config, now)
 }
@@ -402,6 +533,8 @@ fn scheduled_redeem(
 
 /// Forecast the shared ladder on a dry longest-duration window. Without known
 /// timing, auto mode remains armed unless paid credit demonstrably comes first.
+/// A provider that claims its selected grant holds while no grant is claimable
+/// at the limit, or while the grant would leave a spent window spent.
 fn redeem_forecast(
     facts: &SpendFacts,
     config: &AutoRedeemConfig,
@@ -413,6 +546,9 @@ fn redeem_forecast(
     if config.policy(&facts.kind).level == RedeemLevel::Rescue {
         return Some(RedeemForecast::Manual);
     }
+    if claims_selected_grant(&facts.kind) && claimable_grant(facts, true, now).is_none() {
+        return Some(RedeemForecast::Holding);
+    }
     let Some((capacity, longest)) = facts
         .capacity
         .as_ref()
@@ -421,9 +557,11 @@ fn redeem_forecast(
         return Some(RedeemForecast::Armed);
     };
     let dry = with_longest_spent(facts, capacity, &longest, now);
-    Some(if dry.redemption(config, now).is_some() {
+    let refills = reset_refills_spent_windows(&dry, now);
+    Some(if refills && dry.redemption(config, now).is_some() {
         RedeemForecast::Armed
-    } else if dry.step(config, None, now) == crate::harness::spend_ladder::SpendStep::PaidCredit
+    } else if !refills
+        || dry.step(config, None, now) == crate::harness::spend_ladder::SpendStep::PaidCredit
         || longest.resets_at.is_some()
     {
         RedeemForecast::Holding
@@ -456,8 +594,8 @@ fn with_longest_spent(
 
 /// The marker's answer for one login with banked credits: RimZ's forecast
 /// where it redeems at the limit (a provider served by auto-redeem at `gain`
-/// or `paced`), and the user's own advice everywhere else. `limit_stopped` says an agent on the login
-/// is stopped on a provider limit.
+/// or `paced`), and the user's own advice everywhere else. `limit_stopped`
+/// says an agent on the login is stopped on a provider limit.
 fn marker_forecast(
     facts: &SpendFacts,
     config: &AutoRedeemConfig,
@@ -478,25 +616,15 @@ fn marker_forecast(
     } else {
         RedeemForecast::Now
     };
-    let claimed;
-    let advice_facts = if facts.supports_reset() {
-        facts
-    } else {
-        let Some(narrowed) = claimed_facts(facts) else {
-            return Some(RedeemForecast::Manual);
-        };
-        claimed = narrowed;
-        &claimed
-    };
-    let advised = advice_facts
+    let advised = facts
         .advice(config, MANUAL_EXPIRY_LEAD, now)
         .is_some_and(|reason| {
             if reason != RedeemReason::ExpiryRescue {
-                provider_accepts(facts, dry.as_ref(), dry.is_some(), now)
-            } else if facts.supports_reset() {
-                !capacity.is_some_and(|capacity| capacity.known_unused(now))
-            } else {
+                true
+            } else if claims_selected_grant(&facts.kind) {
                 accepted_on_a_window_in_use(facts, capacity, dry.is_some(), now)
+            } else {
+                !capacity.is_some_and(|capacity| capacity.known_unused(now))
             }
         });
     if advised {
@@ -510,7 +638,7 @@ fn marker_forecast(
                     .used_percentage
                     .is_some_and(|used| used > 100 - SOON_LEFT_PCT)
                     && provider_accepts(facts, Some(longest), false, now)
-                    && with_longest_spent(advice_facts, capacity, longest, now)
+                    && with_longest_spent(facts, capacity, longest, now)
                         .advice(config, MANUAL_EXPIRY_LEAD, now)
                         .is_some()
             });
@@ -554,32 +682,46 @@ fn accepted_on_a_window_in_use(
     })
 }
 
+/// Whether the provider would accept a rescue of the selected grant now: on
+/// an unscoped, enforced window it clears, or, where the windows are unknown,
+/// as claimable at all. Unknown capacity is not evidence against a rescue.
+fn rescue_accepted(facts: &SpendFacts, dry: bool, now: Timestamp) -> bool {
+    let Some(capacity) = facts.capacity.as_ref() else {
+        return claimable_grant(facts, dry, now).is_some();
+    };
+    capacity
+        .projected_windows(now)
+        .filter(|window| window.scope.is_none() && !window.lifted)
+        .any(|window| provider_accepts(facts, Some(&window), dry, now))
+}
+
 /// Whether the provider would accept a redemption against `window` now, by
-/// the cached credit; `dry` says a window is spent now. A provider served by
-/// auto-redeem caches no claim facts and is judged at its consume. Every other
-/// provider's selected grant must be claimable, clear `window`, and, when it
-/// is usable only at the limit, meet a dry window: a fact the cache lacks
-/// refuses.
+/// the cached credit; `dry` says a window is spent now. A provider whose
+/// redemption claims no particular grant (Codex) caches no claim facts and is
+/// judged at its consume. Every other provider's selected grant must be
+/// claimable and clear `window`: a fact the cache lacks refuses.
 fn provider_accepts(
     facts: &SpendFacts,
     window: Option<&RateLimitWindow>,
     dry: bool,
     now: Timestamp,
 ) -> bool {
-    if facts.supports_reset() {
+    if !claims_selected_grant(&facts.kind) {
         return true;
     }
-    let Some(credits) = facts.reset_credits.as_ref() else {
-        return false;
-    };
-    let Some(grant) = credits.grants.iter().find(|grant| grant.selected) else {
-        return false;
-    };
-    credits.refusal(dry, now).is_none()
-        && (dry || !grant.use_requires_limit)
-        && window
+    claimable_grant(facts, dry, now).is_some_and(|grant| {
+        window
             .and_then(|window| window.duration_mins)
             .is_some_and(|mins| grant.clears_window(mins))
+    })
+}
+
+/// The selected grant when the provider would accept it now: no refusal, and,
+/// when it is usable only at the limit, a dry window.
+fn claimable_grant(facts: &SpendFacts, dry: bool, now: Timestamp) -> Option<&ResetGrant> {
+    let credits = facts.reset_credits.as_ref()?;
+    let grant = credits.grants.iter().find(|grant| grant.selected)?;
+    (credits.refusal(dry, now).is_none() && (dry || !grant.use_requires_limit)).then_some(grant)
 }
 
 fn paced_chain_deadline(
@@ -805,22 +947,26 @@ fn cancel_attempt_reservation(runtime: &RuntimePaths, key: &LoginKey, request_id
     }
 }
 
-/// The idle accounts: every Codex login the machine declares, `default`
-/// included, that no default or live agent of this room uses. An account
-/// config that did not load declares none.
+/// The idle accounts: every login of a redeeming provider the machine
+/// declares, `default` included, that no default or live agent of this room
+/// uses. An account config that did not load declares none.
 pub(crate) fn idle_logins(logins: &RoomLoginSet) -> Vec<ProviderLogin> {
-    let in_use = logins.in_use(CODEX_KIND);
-    logins
-        .declared(CODEX_KIND)
-        .into_iter()
-        .filter(|login| in_use.iter().all(|used| used.key() != login.key()))
+    REDEEMERS
+        .iter()
+        .flat_map(|redeemer| {
+            let in_use = logins.in_use(redeemer.kind);
+            logins
+                .declared(redeemer.kind)
+                .into_iter()
+                .filter(move |login| in_use.iter().all(|used| used.key() != login.key()))
+        })
         .collect()
 }
 
-/// Evaluate the Codex panel of each in-use login, then the cached credits of
-/// each idle account, and spawn the account-wide helper when due.
-/// Only Codex supports automated redemption; keep that provider choice here
-/// while the verdict above remains provider-neutral.
+/// Evaluate the panel of each in-use login of a redeeming provider, then the
+/// cached credits of each idle account, and spawn the account-wide helper when
+/// due. `REDEEMERS` holds the provider choice; the verdict stays
+/// provider-neutral.
 pub(crate) fn redeem_credits(
     panels: &[SidebarProviderPanel],
     idle_credits: &BTreeMap<LoginKey, ResetCredits>,
@@ -849,20 +995,33 @@ fn redeem_credits_with(
     now: Timestamp,
     mut spawn: impl FnMut(&RuntimePaths, &LoginKey, RedeemReason, uuid::Uuid) -> bool,
 ) {
-    for login in logins.in_use(CODEX_KIND) {
+    let in_use = REDEEMERS
+        .iter()
+        .flat_map(|redeemer| logins.in_use(redeemer.kind));
+    for login in in_use {
         let key = login.key();
         if !panels.iter().any(|panel| panel.login_key() == key) {
             continue;
         }
         let mut facts = SpendFacts::read(runtime, &key, now);
-        facts.rate_pct_per_day = update_rate_cache(runtime, &key, facts.capacity.as_ref(), now);
+        if can_pace(&key.kind) {
+            facts.rate_pct_per_day = update_rate_cache(runtime, &key, facts.capacity.as_ref(), now);
+        }
         let Some(reason) = facts.redemption(config, now) else {
             continue;
         };
         reserve_and_spawn(runtime, &key, reason, now, &mut spawn);
     }
     for (key, credits) in idle_credits {
-        if let Some(reason) = idle_rescue(credits, now) {
+        let facts = SpendFacts {
+            capacity: None,
+            extra_credits: None,
+            reset_credits: Some(credits.clone()),
+            rate_pct_per_day: None,
+            last_attempt: None,
+            kind: key.kind.clone(),
+        };
+        if let Some(reason) = idle_rescue(&facts, now) {
             reserve_and_spawn(runtime, key, reason, now, &mut spawn);
         }
     }
@@ -934,7 +1093,7 @@ pub fn execute_auto_redeem(
     request_id: uuid::Uuid,
     config: &AutoRedeemConfig,
 ) -> Result<Option<Redeemed>, AutoRedeemErr> {
-    if key.kind.as_str() != CODEX_KIND {
+    if !supports_kind(&key.kind) {
         return Err(AutoRedeemErr::UnsupportedKind(key.kind.to_string()));
     }
     let logins = crate::store::room_logins_in_use(runtime);
@@ -959,8 +1118,19 @@ pub fn execute_auto_redeem(
 
     let rate_pct_per_day =
         cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(key)).as_ref());
-    let offer = prepare_reset_credit_redemption(CODEX_KIND, &logins.env(&login))
+    let offer = prepare_reset_credit_redemption(key.kind.as_str(), &logins.env(&login))
         .map_err(AutoRedeemErr::Provider)?;
+    // A held offer binds no grant to claim: decline as a declining fresh
+    // verdict does, leaving the producer's reservation to throttle respawns.
+    if let Some(hold) = &offer.hold {
+        tracing::debug!(
+            kind = key.kind.as_str(),
+            outcome = "held",
+            reason = %hold.reason,
+            "auto-redeem: provider holds the redemption"
+        );
+        return Ok(None);
+    }
     let facts = SpendFacts::from_offer(key, &offer, rate_pct_per_day);
     let Some(reason) = fresh_verdict(idle, &facts, config, Timestamp::now()) else {
         return Ok(None);
@@ -970,7 +1140,7 @@ pub fn execute_auto_redeem(
         .capacity
         .as_ref()
         .and_then(|capacity| capacity.latest_spent_window_reset(now));
-    let report = redemption_report(reason, &offer.credits, natural_reset);
+    let report = redemption_report(reason, &key.kind, &offer.credits, natural_reset);
     let redeemed = finish_redemption(
         key,
         &stamp_path,
@@ -993,15 +1163,27 @@ pub fn execute_auto_redeem(
     Ok(Some(redeemed))
 }
 
+/// The report of one redemption, carrying the expiry its verdict judged: the
+/// selected grant's own where the provider claims one.
 fn redemption_report(
     reason: RedeemReason,
+    kind: &AgentKind,
     credits: &ResetCredits,
     natural_reset: Option<Timestamp>,
 ) -> RedeemReport {
+    let soonest_expiry = if claims_selected_grant(kind) {
+        credits
+            .grants
+            .iter()
+            .find(|grant| grant.selected)
+            .and_then(|grant| grant.expiry)
+    } else {
+        credits.soonest_expiry
+    };
     RedeemReport {
         reason,
         credits: credits.count,
-        soonest_expiry: credits.soonest_expiry,
+        soonest_expiry,
         natural_reset,
         outcome: None,
         windows_reset: false,
@@ -1083,7 +1265,7 @@ fn redeem_login(
 ) -> Option<(ProviderLogin, bool)> {
     let is_key = |login: &ProviderLogin| login.key() == *key;
     let login = logins
-        .in_use(CODEX_KIND)
+        .in_use(key.kind.as_str())
         .into_iter()
         .find(is_key)
         .map(|login| (login, false))
@@ -1144,7 +1326,7 @@ fn spawn_auto_redeem(
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,
-        kind = CODEX_KIND,
+        kind = key.kind.as_str(),
         reason = reason.as_str(),
         "sidebar: auto-redeeming reset credit",
     );

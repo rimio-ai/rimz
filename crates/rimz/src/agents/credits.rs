@@ -548,7 +548,7 @@ pub struct ResetCredits {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expiries: Vec<Timestamp>,
     /// A credit cached before this field existed is a Codex credit, the only
-    /// kind anything redeems, so a missing key reads as `RestartsWindow`.
+    /// kind RimZ redeemed then, so a missing key reads as `RestartsWindow`.
     #[serde(default = "RedeemEffect::restarts_window")]
     pub effect: RedeemEffect,
     /// Per-grant detail, ordered by expiry with undated grants last. Empty for

@@ -96,6 +96,7 @@ impl SpendFacts {
             return SpendStep::PaidCredit;
         }
         if verdict.is_some()
+            && auto_redeem::reset_refills_spent_windows(self, now)
             && !auto_redeem::failed_attempt_cooling_down(self.last_attempt.as_ref(), now)
         {
             return SpendStep::ResetCredit;
@@ -138,10 +139,8 @@ impl SpendFacts {
         expiry_lead: Duration,
         now: Timestamp,
     ) -> Option<RedeemReason> {
-        let verdict = auto_redeem::redeem_verdict(
-            self.capacity.as_ref(),
-            self.reset_credits.as_ref()?,
-            self.rate_pct_per_day,
+        let verdict = auto_redeem::claimed_verdict(
+            self,
             config.policy(&self.kind).min_gain,
             RedeemLevel::Paced,
             expiry_lead,
@@ -159,16 +158,7 @@ impl SpendFacts {
         if !self.supports_reset() {
             return None;
         }
-        let policy = config.policy(&self.kind);
-        auto_redeem::redeem_verdict(
-            self.capacity.as_ref(),
-            self.reset_credits.as_ref()?,
-            self.rate_pct_per_day,
-            policy.min_gain,
-            policy.level,
-            auto_redeem::EXPIRY_RESCUE_LEAD,
-            now,
-        )
+        auto_redeem::automatic_verdict(self, config, now)
     }
 }
 

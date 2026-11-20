@@ -315,10 +315,12 @@ pane_border_status = "top"           # "top" (default), "bottom", "off", or "inh
 ## fallback = "1h"                # off or a duration; fallback is a reserved kind name
 
 [harness.auto_redeem]
-# What RimZ spends at the limit. Codex is the provider auto-redeem serves.
+# What RimZ spends at the limit. Auto-redeem serves Codex and Claude.
 # level = "rescue"                # rescue: only a credit about to expire; gain: also a spent window whose reset is min_gain+ away; paced: also spread credits over the week
 # min_gain = "72h"                # the least blocked time a gain or paced redemption must buy; a doomed credit and a due paced chain ignore it (s/m/h/d)
 # spend_order = "credits_first"   # credits_first or resets_first after the subscription is spent
 # A provider subtable sets only what differs from the lines above.
 ## [harness.auto_redeem.codex]
 ## level = "paced"
+## [harness.auto_redeem.claude]
+## level = "gain"                 # Claude cannot pace: paced runs as gain and warns here

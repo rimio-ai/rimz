@@ -95,6 +95,34 @@ fn a_bad_value_is_refused_in_the_table_and_in_a_subtable() {
 }
 
 #[test]
+fn claude_runs_paced_as_gain_and_warns_only_where_its_own_subtable_sets_it() {
+    let inherited: AutoRedeemConfig = toml::from_str("level = \"paced\"\n").unwrap();
+    assert_eq!(inherited.policy(&kind("codex")).level, RedeemLevel::Paced);
+    assert_eq!(inherited.policy(&kind("claude")).level, RedeemLevel::Gain);
+    assert!(inherited.provider_warnings().is_empty());
+
+    let gain: AutoRedeemConfig = toml::from_str("[claude]\nlevel = \"gain\"\n").unwrap();
+    assert_eq!(gain.policy(&kind("claude")).level, RedeemLevel::Gain);
+    assert!(gain.provider_warnings().is_empty());
+
+    let own: AutoRedeemConfig =
+        toml::from_str("[claude]\nlevel = \"paced\"\nmin_gain = \"1d\"\n").unwrap();
+    assert_eq!(
+        own.policy(&kind("claude")),
+        policy(RedeemLevel::Gain, 24 * HOUR, SpendOrder::CreditsFirst)
+    );
+    assert_eq!(
+        own.provider_warnings(),
+        [(
+            "harness.auto_redeem.claude.level".to_owned(),
+            "`harness.auto_redeem.claude.level = \"paced\"` runs as `gain`: a claude reset \
+             credit keeps the window's schedule, so there is nothing to pace"
+                .to_owned()
+        )]
+    );
+}
+
+#[test]
 fn a_subtable_for_a_provider_that_cannot_redeem_warns_and_is_ignored() {
     let config: AutoRedeemConfig = toml::from_str(
         "[codex]\nlevel = \"paced\"\n[antigravity]\nlevel = \"gain\"\nmin_gain = \"1h\"\n",

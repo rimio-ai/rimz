@@ -94,7 +94,8 @@ impl Default for AutoRedeemConfig {
 impl AutoRedeemConfig {
     /// The policy for `kind`: its subtable's keys over the table defaults. The
     /// subtable of a provider auto-redeem does not serve is ignored, as its
-    /// room-entry warning says.
+    /// room-entry warning says, and `paced` runs as `gain` for a provider that
+    /// cannot pace.
     pub fn policy(&self, kind: &AgentKind) -> RedeemPolicy {
         let provider = self
             .providers
@@ -103,10 +104,15 @@ impl AutoRedeemConfig {
         let min_gain = provider
             .and_then(|provider| provider.min_gain.as_deref())
             .unwrap_or(&self.min_gain);
+        let level = provider
+            .and_then(|provider| provider.level)
+            .unwrap_or(self.level);
         RedeemPolicy {
-            level: provider
-                .and_then(|provider| provider.level)
-                .unwrap_or(self.level),
+            level: if level == RedeemLevel::Paced && !crate::harness::auto_redeem::can_pace(kind) {
+                RedeemLevel::Gain
+            } else {
+                level
+            },
             min_gain: parse_min_gain(min_gain).unwrap_or_else(|_| default_min_gain()),
             spend_order: provider
                 .and_then(|provider| provider.spend_order)
@@ -115,23 +121,35 @@ impl AutoRedeemConfig {
     }
 
     /// One room-entry warning per provider subtable whose provider has no
-    /// automatic redemption.
+    /// automatic redemption, and per subtable that sets `paced` for a provider
+    /// that cannot pace. A `paced` default such a provider inherits runs as
+    /// `gain` silently.
     pub(crate) fn provider_warnings(&self) -> Vec<(String, String)> {
         self.providers
-            .keys()
-            .filter(|kind| {
-                !crate::harness::auto_redeem::supports_kind(&AgentKind::new_unchecked(
-                    kind.as_str(),
-                ))
-            })
-            .map(|kind| {
-                (
-                    format!("harness.auto_redeem.{kind}"),
-                    format!(
-                        "`[harness.auto_redeem.{kind}]` is ignored: {kind} has no automatic \
-                         reset-credit redemption; remove the table"
-                    ),
-                )
+            .iter()
+            .filter_map(|(kind, provider)| {
+                let agent = AgentKind::new_unchecked(kind.as_str());
+                if !crate::harness::auto_redeem::supports_kind(&agent) {
+                    return Some((
+                        format!("harness.auto_redeem.{kind}"),
+                        format!(
+                            "`[harness.auto_redeem.{kind}]` is ignored: {kind} has no automatic \
+                             reset-credit redemption; remove the table"
+                        ),
+                    ));
+                }
+                (provider.level == Some(RedeemLevel::Paced)
+                    && !crate::harness::auto_redeem::can_pace(&agent))
+                .then(|| {
+                    (
+                        format!("harness.auto_redeem.{kind}.level"),
+                        format!(
+                            "`harness.auto_redeem.{kind}.level = \"paced\"` runs as `gain`: \
+                                 a {kind} reset credit keeps the window's schedule, so there is \
+                                 nothing to pace"
+                        ),
+                    )
+                })
             })
             .collect()
     }

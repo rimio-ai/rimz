@@ -148,7 +148,7 @@ These keys follow the general rule, and `set` checks their format:
 | `harness.cache_keepalive` | a boolean, default `true`; `false` disables all cache pings |
 | `harness.stall_nudge` | a boolean, default `false`; `true` enables one [stalled-team nudge](../../guide/configuration.md#stalled-team-nudge) per stage visit after 55 minutes. When `agents.attention.stalled_after_secs` is `3300` or more, room entry warns and the nudge stays off. |
 | `accounts.<kind>.<name>.history` | `shared` or `standalone`; `set` only declares the mode, and `rimz accounts add <kind> <name>` or the next launch on the account links or unlinks its history. `get` reports `shared` as unset, since absent means shared. |
-| `harness.auto_redeem.level`, `harness.auto_redeem.<kind>.level` | `rescue` (default), `gain`, or `paced`; see [auto-redeem](../../guide/configuration.md#auto-redeem) |
+| `harness.auto_redeem.level`, `harness.auto_redeem.<kind>.level` | `rescue` (default), `gain`, or `paced`; `paced` runs as `gain` for `claude`, and `harness.auto_redeem.claude.level = "paced"` warns; see [auto-redeem](../../guide/configuration.md#auto-redeem) |
 | `harness.auto_redeem.spend_order`, `harness.auto_redeem.<kind>.spend_order` | `credits_first` (default) or `resets_first`; paid credit before useful banked resets, or the reverse. Expiry rescue is independent of this order. |
 | `gc.tmp_floor_percent` | an integer from `0` to `100`; default `10` |
 | `keys.keymap` | `rimz` only |
