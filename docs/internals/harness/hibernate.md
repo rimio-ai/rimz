@@ -4,7 +4,7 @@ Hibernation freezes an idle agent's provider process with the cgroup v2 freezer,
 
 The settings are `[agents.hibernate]` `enabled` (unset reads as on), `after` (default `30m`, the rest time before the freeze), and `deep_after` (default `120m`, the rest time at which reclaim reaches zero). The [configuration guide](../../guide/configuration.md#agent-hibernation) owns them for users.
 
-Live checks: [Hibernate an agent](../../contributing/sidebar-live-check.md#hibernate-an-agent) covers freeze, deepen, and wake in a sandbox room with a stub agent. A check against a real provider's turns needs a host room the user starts ([recipe](../../contributing/sidebar-live-check.md#check-against-a-real-provider-login)).
+Live checks: [Live check](#live-check) covers freeze, deepen, and wake in a [sandbox room](../../contributing/sandbox-rooms.md) with a stub agent. A check against a real provider's turns needs a host room the user starts ([recipe](../../contributing/sandbox-rooms.md#check-against-a-real-provider)).
 
 ## Where the code lives
 
@@ -283,3 +283,12 @@ Scopes of other workspaces are untouched. A missing, corrupt, or unknown-version
 For a locked wake, `thaw_ms` runs from wake entry to the thaw write, lock acquisition included. For lock-timeout recovery it runs to the end of the workspace-wide thaw and is the same for every entry. `focus_to_thaw_ms` is set on helper wakes whose request carries `requested_at_ms`, includes the dwell, and is null otherwise. `dwell` is `input` or `elapsed` on helper wakes and is omitted from the other triggers. `error` is null on success and carries the thaw failure otherwise, with the latency measured through the failed attempt.
 
 The refault sampler is the hidden `rimz agents wake-refault --request` helper. A locked thaw that reads `memory.stat` passes it the `workingset_refault_anon` and `workingset_refault_file` counters as a baseline. It samples at about 1, 10, and 60 seconds after the thaw and records the cumulative deltas from that baseline. `after_ms` is the measured time since the thaw, and a counter that decreases gives a delta of zero. A missing or unreadable scope ends sampling and writes the samples already taken. A failed wake and lock-timeout recovery start no sampler.
+
+## Live check
+
+A [sandbox room](../../contributing/sandbox-rooms.md) takes hibernation's skip path as it comes. Two gaps in the sandbox cause this, neither a product bug, and a freeze, deepen, and wake check closes both:
+
+- The sandbox's `XDG_RUNTIME_DIR` is `$ROOT/runtime`, so `systemctl --user` cannot reach the user manager. `$ROOT/runtime/rimz/ws/<room>/live/hibernate/admission.json` reads `"available": false`, and doctor's `active:` line names the unreachable manager. Link the bus into that directory (`ln -s /run/user/$(id -u)/bus /run/user/$(id -u)/systemd "$ROOT/runtime/"`). Then start the room again so its birth publishes a fresh admission: `target/debug/xtask sandbox in "$ROOT" --cwd "$ROOT/home/room" -- "$BIN" --<mux> start "$ROOT/home/room" --no-attach`.
+- The stub `claude` runs as `/bin/sh …/claude`, and provider classification reads `sh` (it unwraps only node, npx, and bun), so no provider pid is found. Edit the room's copy of the stub so its first line re-execs under the provider's name (`exec -a claude bash "$0" "$@"`, guarded so it runs once), then `rimz agents restart` the agent.
+
+Set a short schedule in `$ROOT/home/.rimz/config.toml` (`[agents.hibernate]` with `after = "1m"` and `deep_after = "3m"`) and move client focus off the agent, since a focused pane never freezes. Then read the scope's `cgroup.freeze` and `memory.stat`, and run `agents show` for the hibernation line. Wake the agent with `rimz message`, then check the `wake` and `wake_refault` records in `audit/hibernate.log.jsonl` and the `Hibernate:` line of `rimz stats`.
