@@ -33,11 +33,10 @@ The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/
 - Wrap source comments by hand to the width of the code around them, at most 100 columns: rustfmt leaves them as written and no gate catches them. A harness rule against hard-wrapping prose covers messages and Markdown, not source comments.
 - A refactor you noticed on the way becomes a note unless it blocks you.
 - Python helpers run under `uv`.
-- `AGENTS.md` and `CLAUDE.md` are one file per directory, joined by symlink. Edit `AGENTS.md`, and give a new one its `CLAUDE.md` link.
 - Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
 - Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request: it is written as a standalone change once the work merges.
 - `examples/` is sample configuration for users to copy. Do not read it unless the user asks, and do not treat it as authority on behaviour.
-- A change to any Markdown file follows [docs/AGENTS.md](./docs/AGENTS.md).
+- A change to any Markdown file, an `AGENTS.md` included, follows [docs/AGENTS.md](./docs/AGENTS.md).
 
 ## Before a change
 
@@ -46,7 +45,7 @@ These hold for a change anywhere in the tree, and no gate catches a skipped one.
 - **Rule on every writer and reader.** Before you change a predicate, filter, guard, lookup, or default, or when a field is set or cleared, list every site that writes the value and every site that reads it (`rimz lsp refs`, `rimz lsp callers`), and decide what each does under the new rule.
 - **One agent is one launch id.** A match that decides whether two rows are the same agent compares launch ids, never `(kind, session id)`.
 - **Prove timing at the consumer.** That the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time. Work placed between a decision and the action it gates makes the decision stale, so read it again after the work ([Timestamps and clocks](./docs/contributing/rust-conventions.md#timestamps-and-clocks)).
-- **Sweep the sentences you made false.** After a changed rule, name, set, output, path, argv, or refusal, grep the old words, by stem rather than phrase, across `docs/`, every `AGENTS.md`, rustdoc and comments, tests, and the `refactor-target.toml` verdicts, and fix each hit before hand-off.
+- **Sweep the sentences you made false.** After a changed rule, name, set, output, path, argv, or refusal, grep the old words, by stem rather than phrase, across `docs/`, every `AGENTS.md`, rustdoc and comments, tests, and the `refactor-target.toml` verdicts, and fix each hit before hand-off ([Sweeps](./docs/AGENTS.md#sweeps)).
 - **Run the tests that name what you changed.** A test outside the modules you edited can pin the old behaviour: grep `crates/rimz/src` and `crates/rimz/tests` for the field, command, or message you changed and run each module that names it ([Tests outside the change](./docs/contributing/running-gates.md#tests-outside-the-change)).
 
 ## Testing

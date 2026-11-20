@@ -22,7 +22,7 @@ Each fact has one owning page; every other page links to it with a half-line of 
 ## Mechanics
 
 - Each paragraph, bullet, and table row is one line, never hard-wrapped.
-- Prose carries no em or en dashes. Use a period, comma, colon, or parentheses. A `console` block keeps whatever the command printed.
+- Prose carries no em or en dashes. Use a period, comma, colon, or parentheses.
 - A doc states what the product does now. Words relative to a change ("unchanged", "now", "no longer") belong in the PR, not the page.
 - A `console` block carries output as the command printed it: never invented, never hand-edited.
 - An `sh` block is copy-runnable. Every flag an `sh` block or a prose sentence tells the reader to pass is checked against the clap definition of the command it names.
@@ -30,6 +30,7 @@ Each fact has one owning page; every other page links to it with a half-line of 
 - Before adding a sentence to a paragraph, read the whole paragraph against the code it describes, and fix any statement there that the change makes wrong or that is wrong already.
 - A moved or reworded heading breaks inbound anchors silently. After changing one, grep the repo for the old anchor and run `cargo xtask docs-links`, which validates file targets and `#anchors` in every tracked Markdown file. `cargo xtask lint` does not cover Markdown.
 - A new page is invisible until its index lists it: [docs/README.md](./README.md) for anything a user reads, the tree's own README for `reference/`, `internals/`, and `externals/`, and the [documentation map](#documentation-map) below. A page inside a subsystem folder (an `internals/agents/` adapter page) is listed in its tree's README, not in that map, which names only the folder.
+- `AGENTS.md` and `CLAUDE.md` are one file per directory, joined by symlink. Edit `AGENTS.md`, and give a new one its `CLAUDE.md` link.
 - A change that deletes or moves a page retargets each [CHANGELOG.md](../CHANGELOG.md) link to it (`rg -n -F '<page>.md' CHANGELOG.md`), the one edit a pull request makes there.
 
 ## Sentences about the code
@@ -38,8 +39,19 @@ Each fact has one owning page; every other page links to it with a half-line of 
 - A procedure written or rewritten runs once end to end, on the setup it names, before hand-off. A recipe spread over several `sh` blocks names each file by the path an earlier block created.
 - A measurement names the trunk commit it was built on and the branch commit's subject, never a branch hash. A cause given for a measured change cites the figure from the same run that rules out the other readings, or is written as a hypothesis.
 - A `console` block is captured from a copy of the built binary (the tmpfs hides `target/debug/`) under a scratch home: `bwrap --dev-bind / / --tmpfs /home --bind "$TMPDIR/<dir>" /home/me --setenv HOME /home/me --setenv RIMZ_HOME /home/me/.rimz --chdir /tmp -- "$TMPDIR/rimz" <args>`. Output that needs a room or agents is captured in a held sandbox room ([Sandbox rooms](./contributing/sandbox-rooms.md)). Where it cannot be captured, it is recomputed from the renderer's doc comments (`render::Table`, `render::KeyVals`, `render::roster::Roster`), or, for an error, derived from the format string plus the `error: ` prefix `render::write_report` adds, and the change says it was derived. A change to one cell regrounds the whole block.
-- A sweep for words a change made false greps stems, not phrases, and the verbs a removed mechanism is described by. A set that gains or loses a member is found by two existing members joined by `.*` in both orders and by the old count beside the set's noun; a renumbered list moves every citation by number (`check 13`); a page that gains a new kind of content updates its one-line summary on each page that links to it. Scan Markdown with `rg -o '.{0,80}PATTERN.{0,80}'`, never `cut -c`: a paragraph is one line.
-- A sweep `rg` names its path (`rg PATTERN .`): in an agent shell stdin is not a terminal, so a pathless `rg` reads stdin and hangs. A tree-wide sweep passes `--no-ignore-dot`, since the root `.ignore` skips `docs/externals/`, `examples/`, and `supply-chain/` without saying so, and `--hidden` or `.github` when workflows are in scope. A set documented as a table is also grepped for one member as a cell (``rg -n '^\| `lifted` \|'``), where no `.*` join matches. A renamed identifier's stem is also grepped over test function names without `-w` (`rg -n 'fn <stem>_'`), since `rg -w` cannot match `fn agent_breakdown_folds_tail`. A changed argv is grepped with any separator between its tokens (`'attach.{1,4}--create'`): a test joins them with a tab or lists them as array elements.
+
+## Sweeps
+
+How to find the sentences a change made false, in docs, comments, and tests alike.
+
+- Grep stems, not phrases, and the verbs a removed mechanism is described by.
+- A set that gains or loses a member is found by two existing members joined by `.*` in both orders, by the old count beside the set's noun, and, where a table documents it, by one member as a cell (``rg -n '^\| `lifted` \|'``).
+- A renumbered list moves every citation by number (`check 13`). A page that gains a new kind of content updates its one-line summary on each page that links to it.
+- A renamed identifier's stem is also grepped over test function names without `-w` (`rg -n 'fn <stem>_'`), since `rg -w` cannot match `fn agent_breakdown_folds_tail`.
+- A changed argv is grepped with any separator between its tokens (`'attach.{1,4}--create'`): a test joins them with a tab or lists them as array elements.
+- Every `rg` names its path (`rg PATTERN .`): in an agent shell stdin is not a terminal, so a pathless `rg` reads stdin and hangs.
+- A tree-wide sweep passes `--no-ignore-dot`, since the root `.ignore` skips `docs/externals/`, `examples/`, `supply-chain/`, and `CHANGELOG.md`, and `--hidden` or `.github` when workflows are in scope.
+- Scan Markdown with `rg -o '.{0,80}PATTERN.{0,80}'`, never `cut -c`: a paragraph is one line.
 
 ## Documentation map
 
