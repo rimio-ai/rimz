@@ -2442,7 +2442,8 @@ path = "crates/rimz/src/harness"
 # task_record (Scope, Binding, FireMark, TaskRecord, TaskRecords, TaskRecordErr, load), TaskStoreErr, attention::stamp, LoadedTask::binding and LOOP_FIRE_ENV replace launch memory and the overlay store with one task record by id (+10 net).
 # loop_task::{FireEnv, read_fire_env}, the one reader of a fire's environment, and schedule::launches (the module, AliveLaunch, Launch, alive), what a task's fires launched that is alive, replace the four removed loop-check env readers and request shaper (+2 net).
 # A loop task's launch (TaskLaunch with argv, as_str, launches), its launch child's ProcessMark and FireMark::launching, the settle pass (settle_open_fires, has_open_fires, and open_fire_roots for the external tick), workflow::TaskStart for `workflow run --loop-fire-json`, and check_run::drop_room_identity shared by the launch child, counted from the ratchet (+12).
-surface-budget = 1266
+# The shutdown checklist's read crosses to the CLI: `idle_stop::started` with `Seat`, `Started` and `Started::is_empty`, `StartedRow`, `RowKind` and `RowKind::as_str`, `started`, and `SessionWaits::of`, the catalog waits it shares with `decide` (+9).
+surface-budget = 1275
 
 [[verdict]]
 kind = "item"
