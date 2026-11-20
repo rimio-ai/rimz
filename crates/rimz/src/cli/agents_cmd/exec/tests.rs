@@ -314,6 +314,7 @@ fn only_terminal_subagent_resumes_await_reopening() {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         provider_account: Default::default(),
         run_id: None,
         worktree_path: None,
@@ -471,6 +472,7 @@ pub(super) fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecReques
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -604,6 +606,7 @@ fn bare_exec_args() -> ExecRequest {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -694,6 +697,7 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: Some(
             "run_0123456789abcdef0123456789abcdef"

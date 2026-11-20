@@ -1500,6 +1500,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         mcps: Some(vec!["rimz-lsp".parse().unwrap()]),
         no_skill_tool: true,
         allowed_tools: Some(vec!["Read".parse().unwrap()]),
+        tools: Some(vec!["Read".to_owned()]),
         launch: LaunchParams {
             mode: Some(PermissionMode::Yolo),
             model: Some("o3".to_owned()),
@@ -1526,6 +1527,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         mcps,
         no_skill_tool,
         allowed_tools,
+        tools,
         launch,
     } = cell.clone();
 
@@ -1548,6 +1550,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             mcps,
             no_skill_tool,
             allowed_tools,
+            tools,
             mode: launch.mode,
             model: launch.model,
             effort: launch.effort,
@@ -1624,6 +1627,7 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         launch: LaunchParams {
             profile: role.map(|role| format!("{role}-profile")),
             role: role.map(ToOwned::to_owned),
@@ -1723,6 +1727,7 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         launch: LaunchParams {
             profile: Some(format!("{kind}-coder")),
             model: model.map(str::to_owned),
@@ -3461,6 +3466,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
             mcps: None,
             no_skill_tool: false,
             allowed_tools: None,
+            tools: None,
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
                 mode,
@@ -3564,6 +3570,7 @@ fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         launch: LaunchParams {
             model: Some("gpt-6-astra".to_owned()),
             ..Default::default()
@@ -4023,6 +4030,7 @@ fn launch_request_names_and_metadata() {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         launch: LaunchParams {
             profile: Some("codex-coder".to_owned()),
             mode: Some(PermissionMode::Yolo),
@@ -4702,6 +4710,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         launch: LaunchParams::default(),
     });
     let launch = AgentLaunchIdentity {
@@ -4821,6 +4830,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         launch: LaunchParams {
             profile: Some("new-profile".to_owned()),
             role: Some("new-role".to_owned()),

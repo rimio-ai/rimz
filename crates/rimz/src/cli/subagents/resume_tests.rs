@@ -103,6 +103,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 mcps: None,
                 no_skill_tool: posture.launch.no_skill_tool,
                 allowed_tools: posture.launch.allowed_tools.clone(),
+                tools: posture.launch.tools.clone(),
                 isolation_default: posture.launch.isolation_default,
                 provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
                 run_id: Some(newer.run_id.clone()),

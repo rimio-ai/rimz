@@ -529,6 +529,45 @@ fn allowed_tools_survive_profile_cells_and_fresh_requests() {
 }
 
 #[test]
+fn tools_survive_profile_cells_fresh_requests_and_the_exec_wire() {
+    for (entries, expected) in [
+        (None, None),
+        (Some(vec![]), Some(vec![])),
+        (
+            Some(vec!["read", "Bash(git *)", "Bash"]),
+            Some(vec!["Read", "Bash"]),
+        ),
+    ] {
+        let tools = entries.map(|entries: Vec<&str>| {
+            crate::agents::ToolSet::parse(
+                &entries.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
+            )
+            .unwrap()
+        });
+        let expected =
+            expected.map(|names: Vec<&str>| names.iter().map(|s| (*s).to_owned()).collect());
+        let profiles = ProfilesConfig(BTreeMap::from([(
+            "worker".to_owned(),
+            Profile {
+                tools,
+                ..profile("claude")
+            },
+        )]));
+        let cell = agent_cell("worker", &profiles, &CommandsConfig::default());
+        assert_eq!(cell.tools, expected);
+        let posture = crate::harness::plan::ResumeLaunchPosture::from(&cell);
+        assert_eq!(posture.tools, expected);
+        let request =
+            crate::harness::launch::ExecRequest::fresh(&cell, Default::default(), None, false);
+        assert_eq!(request.tools, expected);
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire.get("tools").is_some(), expected.is_some());
+        let decoded: crate::harness::launch::ExecRequest = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded.tools, expected);
+    }
+}
+
+#[test]
 fn allowed_tools_rebase_preserves_explicit_empty() {
     let mut base = ResolvedProfile::bare("codex");
     base.allowed_tools = Some(vec!["Read".parse().unwrap()]);

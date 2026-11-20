@@ -151,6 +151,7 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
             mcps: None,
             no_skill_tool: false,
             allowed_tools: None,
+            tools: None,
             provider_account: crate::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

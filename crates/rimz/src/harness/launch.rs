@@ -783,6 +783,9 @@ pub struct ExecRequest {
     pub no_skill_tool: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
+    /// The definition's tools list as canonical base names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<String>>,
     #[serde(default)]
     pub provider_account: ProviderAccountState,
     pub run_id: Option<RunId>,
@@ -847,6 +850,7 @@ impl ExecRequest {
             mcps: cell.mcps.clone(),
             no_skill_tool: cell.no_skill_tool,
             allowed_tools: cell.allowed_tools.clone(),
+            tools: cell.tools.clone(),
             isolation_default: cell.isolation_default,
             identity,
             worktree_path,
@@ -869,6 +873,7 @@ impl ExecRequest {
             mcps: None,
             no_skill_tool: false,
             allowed_tools: None,
+            tools: None,
             isolation_default: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: None,

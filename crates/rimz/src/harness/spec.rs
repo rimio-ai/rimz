@@ -122,6 +122,9 @@ pub struct AgentCell {
     pub mcps: Option<Vec<crate::config::McpName>>,
     pub no_skill_tool: bool,
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
+    /// The definition's tools list as canonical base names, for a kind that writes it into a
+    /// provider file rather than argv.
+    pub tools: Option<Vec<String>>,
     /// Canonical shared launch identity selected by profiles, roles, and CLI overlays.
     pub launch: crate::agents::LaunchParams,
 }
@@ -155,6 +158,7 @@ impl Cell {
             mcps: None,
             no_skill_tool: false,
             allowed_tools: None,
+            tools: None,
             isolation_default: None,
             launch: crate::agents::LaunchParams::default(),
         })
@@ -1878,6 +1882,7 @@ fn agent_cell_from(
             resolved.tools.as_ref(),
         ),
         allowed_tools: resolved.allowed_tools.clone(),
+        tools: resolved.tools.as_ref().map(|tools| tools.bases().to_vec()),
         launch: crate::agents::LaunchParams {
             profile,
             mode,

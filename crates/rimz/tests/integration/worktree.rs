@@ -55,6 +55,7 @@ fn worktree_exec_request(worktree: &Path) -> ExecRequest {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: Some(worktree.to_path_buf()),
