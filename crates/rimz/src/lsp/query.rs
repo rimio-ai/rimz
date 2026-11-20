@@ -1372,7 +1372,8 @@ pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String
             format!("not found: {name}")
         } else {
             format!(
-                "not found: {name}; {bound}{count} other {} named {last}:",
+                "not found: {name}; {bound}{count} other {} named {last}; \
+                 rerun with one of these names or a position",
                 if count == 1 { "symbol" } else { "symbols" }
             )
         }

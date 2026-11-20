@@ -1890,7 +1890,7 @@ fn lsp_queries_prefer_written_containers_and_list_reusable_twins() {
         .args(["lsp", "def", "nosuch::child"])
         .assert()
         .code(5)
-        .stdout("not found: nosuch::child; 2 other symbols named child:\nfunction scope::show::child  scope/show.rs:208:4\nfunction scope::show::tests::child  scope/show.rs:210:4\n");
+        .stdout("not found: nosuch::child; 2 other symbols named child; rerun with one of these names or a position\nfunction scope::show::child  scope/show.rs:208:4\nfunction scope::show::tests::child  scope/show.rs:210:4\n");
     let outline_requests = || {
         editor_query(&directory, "requests")["requests"]
             .as_array()
@@ -3622,7 +3622,7 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         (
             "Wrong::Many",
             5,
-            "not found: Wrong::Many; up to 45 other symbols named Many:",
+            "not found: Wrong::Many; up to 45 other symbols named Many; rerun with one of these names or a position",
         ),
         (
             "Many",
@@ -3660,7 +3660,7 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
     ] {
         env.rimz().args(["lsp", "def", name]).assert().success();
     }
-    env.rimz().args(["lsp", "def", "wrong::pathed"]).assert().code(5).stderr("").stdout("not found: wrong::pathed; 1 other symbol named pathed:\nfunction deep::pathed::pathed  src/deep/pathed.rs:1:1\n");
+    env.rimz().args(["lsp", "def", "wrong::pathed"]).assert().code(5).stderr("").stdout("not found: wrong::pathed; 1 other symbol named pathed; rerun with one of these names or a position\nfunction deep::pathed::pathed  src/deep/pathed.rs:1:1\n");
     env.rimz()
         .args(["lsp", "def", "nosuch"])
         .assert()
