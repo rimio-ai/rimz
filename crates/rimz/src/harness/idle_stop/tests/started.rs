@@ -880,6 +880,135 @@ fn a_booked_task_fires_from_its_last_fire_and_carries_its_run() {
     );
 }
 
+/// A run started by `launch`, in `state` with its report `report`, and fired by a task the
+/// agent booked when `booked`.
+fn started_run(
+    store: &Store,
+    agent: &AgentState,
+    launch: &str,
+    (state, report, booked): (&str, &str, bool),
+) -> crate::ids::WorkflowRunId {
+    let id = crate::ids::WorkflowRunId::new();
+    let paths = store.paths().workflow(&id);
+    std::fs::create_dir_all(&paths.home).unwrap();
+    let mut record = serde_json::json!({
+        "version": crate::store::workflow::VERSION, "id": id, "workflow": "review",
+        "spec_dir": "/definitions/review", "prompt": "Review",
+        "scope": {"kind": "worktree", "path": "/project"}, "project_root": "/project",
+        "created_at": ts(900), "state": state, "node": "pr", "entered_at": ts(900),
+        "visits": {}, "visit_grant": 0, "deadline_fired": false, "next_seq": 1,
+        "starter": {"by": "agent", "kind": agent.kind.as_str(), "launch": launch},
+        "depth": 1, "loop_report": report,
+    });
+    if booked {
+        record["fire"] = serde_json::json!({"kind": "scheduled", "task": "gate", "booked_by": [{
+            "kind": agent.kind.as_str(), "agent_id": agent.agent_id.as_str(),
+        }]});
+    }
+    std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+    id
+}
+
+#[test]
+fn a_run_the_agent_started_holds_until_its_report_is_sent_and_a_detached_one_outlives() {
+    // The case, the run's starter, state, report and booking, whether `decide` holds on it,
+    // the group that lists it, and whether that row offers `rimz workflow cancel`.
+    for (case, launch, run, holds, group, cancel) in [
+        (
+            "going",
+            "session-1",
+            ("active", "owed", false),
+            true,
+            Some("holding"),
+            true,
+        ),
+        (
+            "reporting",
+            "session-1",
+            ("done", "owed", false),
+            true,
+            Some("holding"),
+            false,
+        ),
+        (
+            "booked too",
+            "session-1",
+            ("active", "owed", true),
+            true,
+            Some("holding"),
+            true,
+        ),
+        (
+            "detached",
+            "session-1",
+            ("active", "none", false),
+            false,
+            Some("outliving"),
+            true,
+        ),
+        (
+            "detached, booked",
+            "session-1",
+            ("active", "none", true),
+            false,
+            Some("outliving"),
+            true,
+        ),
+        (
+            "reported",
+            "session-1",
+            ("done", "sent", false),
+            false,
+            None,
+            false,
+        ),
+        (
+            "another's",
+            "session-2",
+            ("active", "owed", false),
+            false,
+            None,
+            false,
+        ),
+    ] {
+        let (dir, store) = fixture();
+        let (agent, _) = rested();
+        register(&store, "session-1", None);
+        register(&store, "session-2", None);
+        let id = started_run(&store, &agent, launch, run);
+        let (verdict, read) = both(
+            &store,
+            dir.path(),
+            std::slice::from_ref(&agent),
+            &agent,
+            DUE,
+        );
+        if holds {
+            assert_eq!(
+                verdict,
+                Verdict::Hold(Hold::Owed(OwedWake::Workflow)),
+                "{case}"
+            );
+        } else {
+            assert_eq!(verdict, Verdict::Stop { idle_secs: 180 }, "{case}");
+        }
+        let listed = [(RowKind::Workflow, id.as_str())];
+        let (holding, outliving): (&[_], &[_]) = match group {
+            Some("holding") => (&listed, &[]),
+            Some(_) => (&[], &listed),
+            None => (&[], &[]),
+        };
+        assert_eq!(rows(&read.holding), holding, "{case}");
+        assert_eq!(rows(&read.outliving), outliving, "{case}");
+        let row = read.holding.iter().chain(&read.outliving).next();
+        assert_eq!(
+            row.and_then(|row| row.command.clone()),
+            cancel.then(|| format!("rimz workflow cancel {id}")),
+            "{case}"
+        );
+    }
+}
+
 #[test]
 fn a_disabled_booked_task_reads_disabled() {
     if crate::harness::schedule::test_homes::reexec_with_private_homes(
