@@ -1064,13 +1064,13 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         Ok(())
     }
 
-    fn disable_native_auto_continue_args(
+    fn enable_native_auto_continue_args(
         &self,
         (cwd, artifact_dir): (&Path, &Path),
         extra_args: &mut Vec<String>,
         artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
-        // Observed in the Claude Code 2.1.322 binary, not a published setting.
+        // Read from the Claude Code 2.1.329 binary, not a published setting.
         *artifact = merge_settings(
             cwd,
             artifact_dir,
@@ -1080,11 +1080,16 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
             |object| {
                 object
                     .entry("autoContinueAtUsageLimit")
-                    .or_insert(serde_json::Value::Bool(false));
+                    .or_insert(serde_json::Value::Bool(true));
                 Ok(())
             },
         )?;
         Ok(())
+    }
+
+    fn native_auto_continue_grace(&self) -> Option<std::time::Duration> {
+        // Claude Code 2.1.329 fires at its reset plus 30 to 90 s of jitter on a 30 s tick.
+        Some(std::time::Duration::from_secs(5 * 60))
     }
 
     fn allow_team_notes_args(

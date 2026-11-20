@@ -752,7 +752,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     reminders.long_cache = long_cache_requested(&request, inputs.machine, inputs.effective);
     reminders.disable_native_idle_compaction =
         idle_compact_covered(&request, inputs.machine, inputs.effective);
-    reminders.disable_native_auto_continue = inputs.machine.resume.auto_continue;
+    reminders.enable_native_auto_continue = inputs.machine.resume.auto_continue;
     if request
         .allowed_tools
         .as_ref()

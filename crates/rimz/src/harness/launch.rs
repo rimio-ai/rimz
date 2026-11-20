@@ -1312,8 +1312,8 @@ fn compile_agent_process_with_extra_env(
             &mut settings_artifact,
         )?;
     }
-    if reminders.disable_native_auto_continue {
-        adapter.disable_native_auto_continue_args(
+    if reminders.enable_native_auto_continue {
+        adapter.enable_native_auto_continue_args(
             (cwd, artifact_dir),
             action.extra_args_mut(),
             &mut settings_artifact,

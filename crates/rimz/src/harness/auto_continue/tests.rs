@@ -116,7 +116,7 @@ fn due(
         auto_continue_max_retries: max_retries,
         ..ResumeConfig::default()
     };
-    nudge_due(record, attempts, ts(now), &config)
+    nudge_due(record, attempts, ts(now), &config, Duration::ZERO)
 }
 
 fn resume_message(id: u64, status: MessageStatus, enqueued_at: i64) -> ResumeMessage {
@@ -1598,13 +1598,26 @@ fn model_limit_waits_for_scoped_reset() {
         if model == "claude-opus-4-8" {
             assert_eq!(
                 read_park(&park_path(&runtime)),
-                Some(rate_record(6_000, 1_000, Some(6_000), 1))
+                Some(rate_record(6_000, 1_000, None, 0))
             );
             assert!(resume_gate_recovered(
                 &runtime,
                 &snapshot.agents[0],
                 ts(6_000)
             ));
+            snapshot.now = ts(6_300);
+            resume_parked(
+                |_| false,
+                &snapshot,
+                &runtime,
+                &crate::agents::RoomLoginSet::native(),
+                &config,
+                &[],
+            );
+            assert_eq!(
+                read_park(&park_path(&runtime)),
+                Some(rate_record(6_000, 1_000, Some(6_300), 1))
+            );
             continue;
         }
         assert_eq!(
@@ -1632,7 +1645,20 @@ fn model_limit_waits_for_scoped_reset() {
         );
         assert_eq!(
             read_park(&park_path(&runtime)),
-            Some(rate_record(7_500, 1_000, Some(7_500), 1))
+            Some(rate_record(7_500, 1_000, None, 0))
+        );
+        snapshot.now = ts(7_800);
+        resume_parked(
+            |_| false,
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &config,
+            &[],
+        );
+        assert_eq!(
+            read_park(&park_path(&runtime)),
+            Some(rate_record(7_500, 1_000, Some(7_800), 1))
         );
     }
 }
@@ -1735,7 +1761,8 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
             assert!(read_park(&park_path(&runtime)).is_none());
         }
     }
-    assert_eq!(nudges, vec![6_000, 6_120, 6_240]);
+    // The due-now re-arm at 6,000 waits out Claude's own resume grace.
+    assert_eq!(nudges, vec![6_300, 6_420, 6_540]);
     // The re-park at 7,001 recovers only on a read since it.
     write_recovered_window_read_at(&runtime, 7_002);
     let mut agent = parked_agent(7_000, 7_001, TurnErrorClass::PausedRateLimit, "usage limit");
@@ -1743,7 +1770,8 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
     let mut snapshot =
         SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], ts(7_001));
     snapshot.agent_panes = vec![live_pane()].into();
-    for _ in 0..2 {
+    for now in [7_001, 7_301] {
+        snapshot.now = ts(now);
         resume_parked(
             |_| false,
             &snapshot,
@@ -1755,7 +1783,7 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
     }
     assert_eq!(
         read_park(&park_path(&runtime)).unwrap().last_nudge_at,
-        Some(ts(7_001))
+        Some(ts(7_301))
     );
     assert_eq!(
         read_park(&park_path(&runtime)).unwrap().attempts_since,
@@ -1832,10 +1860,13 @@ fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
         std::sync::Arc::make_mut(&mut snapshot.agents)[0].user_turn_started_at = Some(ts(7_000));
         snapshot.now = ts(7_001);
         resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
+        assert_eq!(read_park(&path).unwrap().last_nudge_at, None);
+        snapshot.now = ts(7_301);
+        resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
         let fresh = read_park(&path).unwrap();
         assert_eq!(fresh.attempts_since, None);
         assert_eq!(fresh.parked_at_activity, ts(7_000));
-        assert_eq!(fresh.last_nudge_at, Some(ts(7_001)));
+        assert_eq!(fresh.last_nudge_at, Some(ts(7_301)));
         assert_eq!(fresh.retries, 1);
     }
 }
@@ -2364,34 +2395,93 @@ fn recovered_budget_rearms_a_lost_limit_park() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);
     write_recovered_window(&runtime);
-    let mut snapshot = SidebarSnapshot::build_with_agents(
-        runtime.workspace_id.clone(),
-        vec![parked_agent(
+    let resume = |now: i64| {
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            vec![parked_agent(
+                1_000,
+                5_990,
+                TurnErrorClass::PausedRateLimit,
+                "You've hit your usage limit",
+            )],
+            ts(now),
+        );
+        snapshot.now = ts(now);
+        snapshot.agent_panes = vec![live_pane()].into();
+        resume_parked(
+            |_| false,
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &ResumeConfig {
+                auto_continue: true,
+                auto_continue_max_retries: 3,
+                ..ResumeConfig::default()
+            },
+            &[],
+        );
+        read_park(&path)
+    };
+    // Claude resumes itself at the reset, so the due-now re-arm also waits out its grace.
+    assert_eq!(resume(6_000), Some(rate_record(6_000, 1_000, None, 0)));
+    assert_eq!(resume(6_299), Some(rate_record(6_000, 1_000, None, 0)));
+    assert_eq!(
+        resume(6_300),
+        Some(rate_record(6_000, 1_000, Some(6_300), 1))
+    );
+}
+
+#[test]
+fn a_self_resuming_agents_limit_fallback_waits_out_its_grace() {
+    let budget = |deadline| ParkRecord {
+        kind: ParkKind::Budget {
+            deadline: ts(deadline),
+        },
+        ..rate_record(0, 1_000, None, 0)
+    };
+    let fired = |kind: &str, record: &ParkRecord, now: i64| {
+        let (_dir, runtime) = temp_runtime();
+        let mut agent = parked_agent(
             1_000,
-            5_990,
+            4_990,
             TurnErrorClass::PausedRateLimit,
             "You've hit your usage limit",
-        )],
-        ts(6_000),
-    );
-    snapshot.now = ts(6_000);
-    snapshot.agent_panes = vec![live_pane()].into();
-    resume_parked(
-        |_| false,
-        &snapshot,
-        &runtime,
-        &crate::agents::RoomLoginSet::native(),
-        &ResumeConfig {
-            auto_continue: true,
-            auto_continue_max_retries: 3,
-            ..ResumeConfig::default()
-        },
-        &[],
-    );
-    assert_eq!(
-        read_park(&path),
-        Some(rate_record(6_000, 1_000, Some(6_000), 1))
-    );
+        );
+        agent.kind = AgentKind::new_unchecked(kind);
+        let path = park_record_path(&runtime, &agent.kind, &agent.agent_id);
+        write_park(&path, record);
+        let mut pane = live_pane();
+        pane.kind = agent.kind.clone();
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], ts(now));
+        snapshot.agent_panes = vec![pane].into();
+        fire_if_due(
+            &snapshot.agents[0],
+            &path,
+            FireContext {
+                snapshot: &snapshot,
+                runtime: &runtime,
+                now: ts(now),
+                text: "continue",
+                config: &ResumeConfig::default(),
+                resume_messages: &[],
+            },
+        );
+        read_park(&path).and_then(|record| record.last_nudge_at) == Some(ts(now))
+    };
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (kind, record, due_at) in [
+        ("claude", rate_record(5_000, 1_000, None, 0), 5_300),
+        ("codex", rate_record(5_000, 1_000, None, 0), 5_000),
+        ("claude", budget(5_000), 5_000),
+    ] {
+        for now in [5_000, 5_299, 5_300] {
+            actual.push((kind, record.kind.reason(), now, fired(kind, &record, now)));
+            expected.push((kind, record.kind.reason(), now, now >= due_at));
+        }
+    }
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -2635,7 +2725,7 @@ fn phantom_spawns_never_exhaust_a_park() {
         ..ResumeConfig::default()
     };
 
-    assert!(nudge_due(&record, 0, ts(6_000), &config));
+    assert!(nudge_due(&record, 0, ts(6_000), &config, Duration::ZERO));
     assert!(exhausted_parks(|_| false, &snapshot.agents, &runtime, &config, &[]).is_empty());
 }
 
@@ -2797,7 +2887,8 @@ fn terminal_resume_outcomes_exhaust_park_through_store_projection() {
                 &record,
                 evidenced_attempts(&messages, &agent, &record),
                 ts(6_100),
-                &config.resume
+                &config.resume,
+                Duration::ZERO
             ),
             attempt != 3,
             "nudge due after {attempt} terminal attempts"

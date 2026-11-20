@@ -396,7 +396,7 @@ upward-dependencies = ["address"]
 # AgentState::team_instance is the one reading of a seat's team cohort for every record (+1).
 # PriorTurn and AgentState::prior_turn_for_next carry the turn a limit-refused prompt opened
 # over from the fold to the cache clock's read (+2).
-# LaunchCapability::disable_native_auto_continue_args leaves the usage-limit resume to RimZ (+1).
+# LaunchCapability::enable_native_auto_continue_args hands the usage-limit resume to the provider first.
 # ProviderCapacity::window_spent is the subscription-only spent-window test the cache ping reads (+1).
 # ProviderCapacity::login_window_spent rereads it from the shared cache for the ping helper (+1).
 # ProviderCapacity::compaction_blocked and login_compaction_blocked let usable paid extra usage carry
@@ -432,7 +432,9 @@ upward-dependencies = ["address"]
 # account with its source read instant (+3).
 # ProviderRecord::see_live_credentials marks the credentials a room's live sessions run on, each
 # expiring unless a room sees it again (+1).
-surface-budget = 1308
+# LaunchCapability::native_auto_continue_grace, usage_limit_fallback_grace and its re-export from
+# agents are the one answer to how long auto-continue waits for a provider's own resume (+3).
+surface-budget = 1311
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

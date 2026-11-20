@@ -28,7 +28,7 @@ fn every_action(args: Vec<String>) -> [(&'static str, ExecAction); 4] {
 }
 
 #[test]
-fn rimz_auto_continue_turns_claudes_off_and_keeps_every_other_setting() {
+fn rimz_auto_continue_enables_claudes_and_keeps_every_other_setting() {
     let project = tempfile::tempdir().unwrap();
     let machine = machine(true);
     let mut actual = Vec::new();
@@ -59,7 +59,7 @@ fn rimz_auto_continue_turns_claudes_off_and_keeps_every_other_setting() {
                     original.to_string()
                 );
                 actual.push((action, explicit, file, merged[KEY].as_bool()));
-                expected.push((action, explicit, file, Some(explicit.unwrap_or(false))));
+                expected.push((action, explicit, file, Some(explicit.unwrap_or(true))));
             }
         }
     }
@@ -75,7 +75,7 @@ fn claudes_auto_continue_is_left_alone_when_rimz_does_not_resume() {
             let plan = compile_seat(project.path(), &request, &machine(on), None);
             (label, native_auto_continue(&plan))
         });
-    assert_eq!(actual, [("rimz off", None), ("rimz on", Some(false))]);
+    assert_eq!(actual, [("rimz off", None), ("rimz on", Some(true))]);
     for kind in ["codex", "pi"] {
         let request = request(kind, action_with_args("launch", Vec::new()));
         assert_eq!(

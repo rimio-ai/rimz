@@ -143,6 +143,7 @@ pub use pricing::PriceBook;
 use pricing::TokenSplit;
 pub(crate) use registry::{
     ResumeProbe, resumed_session_id_for_root, resumed_session_id_from_cmdline,
+    usage_limit_fallback_grace,
 };
 pub use registry::{
     Runtime, SoftCompactSkip, all_definitions, compact_command, compact_reminder,
