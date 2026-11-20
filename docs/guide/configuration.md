@@ -854,6 +854,8 @@ rimz packs customize crew:coder --type agents
 
 RimZ writes `agents/coder.md` under your agents home, with the shipped description, `agent: crew:coder`, and an empty body. Add the fields you want to replace; any prompt you add follows the shipped craft. In a terminal it opens your configured editor, otherwise it prints the path to edit. Existing files are never replaced. Subagents work the same way in their own tree.
 
+To pin profiles to a model without an editor, name each one and set the field: `rimz packs customize crew:brainstormer crew:writer --set model=fable` writes both overrides with `model: fable`, which replaces an inherited `tier:`. RimZ has no machine-config table from profiles to models; the `[tiers]` table routes only profiles that keep `tier:`.
+
 Use `rimz packs diff crew:coder --type agents` to inspect your layer, and `rimz agents validate` to check it. To return to the shipped item, run `rimz packs reset crew:coder --type agents`; it removes your override without asking. Teams, traits, kind bases, skills, and workflows require `customize --copy`, which copies their shipped bytes rather than inheriting. A skill or workflow includes its whole directory. The [packs reference](../reference/cli/packs.md#customize-an-item) covers refusals and editor selection.
 
 #### Moving a home crew into a pack
