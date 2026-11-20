@@ -1,47 +1,76 @@
 // RimZ's Claude Code mod. `rimz hooks install` writes this folder and lists it
 // in the account's settings `env.CLAUDE_CODE_PLUGIN_DIRS`. It only observes:
-// every hook awaits `next(e)` first and returns exactly what it resolved, and a
+// every hook lets `next(e)` finish first and returns exactly what it gave, and a
 // report that fails, throws or outlasts its time is dropped, so the mod never
 // changes or breaks a session. RimZ's settings hooks stay the lifecycle truth.
 import type { Register } from 'claude-code'
 
 // Bumped by hand when this folder's files change; `rimz` reads it from each
 // report, and an install rewrites only files whose content differs.
-const MOD_VERSION = '1.1.0'
+const MOD_VERSION = '1.2.0'
 const REPORT_TIMEOUT_MS = 2000
 
 // One envelope on the stdin of `rimz mod feed --source claude`, argv and no
 // shell. Every field but `v`, `event` and `session_id` is optional to the feed.
 // `usage` is `$.session.usage()` as Claude answered it, read at each report so
-// the readings move with every model request; `reason` is `turn.complete`'s.
+// the readings move with every model request; `reason` is `turn.complete`'s;
+// `step` is a main-loop `turn.step`'s `result.usage`, its split and model.
+const envelope = async ($: any, event: string, agentId?: string, reason?: string, step?: unknown) => {
+  const info = await $.session.info().catch(() => undefined)
+  const version = await $.session.version().catch(() => undefined)
+  const agents = await Promise.resolve()
+    .then(() => $.agent.list())
+    .catch(() => undefined)
+  const usage = await Promise.resolve()
+    .then(() => $.session.usage())
+    .catch(() => undefined)
+  return {
+    v: MOD_VERSION,
+    event,
+    session_id: await $.session.id(),
+    transcript_path: info?.transcriptPath,
+    claude_version: version?.version,
+    agent_id: agentId,
+    agents,
+    usage,
+    reason,
+    step,
+  }
+}
+
+const feed = async ($: any): Promise<string[]> => [
+  (await $.env.get('RIMZ_BIN')) || 'rimz', 'mod', 'feed', '--source', 'claude',
+]
+
 const report = async ($: any, event: string, agentId?: string, reason?: string): Promise<void> => {
   try {
-    const info = await $.session.info().catch(() => undefined)
-    const version = await $.session.version().catch(() => undefined)
-    const agents = await Promise.resolve()
-      .then(() => $.agent.list())
-      .catch(() => undefined)
-    const usage = await Promise.resolve()
-      .then(() => $.session.usage())
-      .catch(() => undefined)
-    const envelope = {
-      v: MOD_VERSION,
-      event,
-      session_id: await $.session.id(),
-      transcript_path: info?.transcriptPath,
-      claude_version: version?.version,
-      agent_id: agentId,
-      agents,
-      usage,
-      reason,
-    }
-    const rimz = (await $.env.get('RIMZ_BIN')) || 'rimz'
-    await $.process.run([rimz, 'mod', 'feed', '--source', 'claude'], {
-      stdin: JSON.stringify(envelope),
-      timeoutMs: REPORT_TIMEOUT_MS,
-    })
+    const stdin = JSON.stringify(await envelope($, event, agentId, reason))
+    await $.process.run(await feed($), { stdin, timeoutMs: REPORT_TIMEOUT_MS })
   } catch {
     // Reporting is best effort: the session never sees a failed report.
+  }
+}
+
+// A step's report reads its envelope in the hook, then starts `rimz` and
+// leaves it running beside the session, so the next request never waits on it.
+// `$.process.spawn`'s child lives as long as its loop, which outlasts the
+// hook's return, so the loop drains it to its end.
+const reportStep = async ($: any, step: unknown): Promise<void> => {
+  try {
+    const input = JSON.stringify(await envelope($, 'turn.step', undefined, undefined, step))
+    void drain($.process.spawn({ argv: await feed($), input }))
+  } catch {
+    // Reporting is best effort: the session never sees a failed report.
+  }
+}
+
+const drain = async (child: AsyncIterable<unknown>): Promise<void> => {
+  try {
+    for await (const _piece of child) {
+      // The feed writes nothing worth reading.
+    }
+  } catch {
+    // A child that cannot start is a dropped report.
   }
 }
 
@@ -73,6 +102,15 @@ export const register: Register = on => {
     const result = await next(e)
     const reason = typeof e?.reason === 'string' ? e.reason : undefined
     await report($, 'turn.complete', childOf(e), reason)
+    return result
+  })
+  // Every model request, main loop only, once it answered with usage: the
+  // stream passes through untouched and the result returns as it came.
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    if (childOf(e) === undefined && result?.usage) {
+      await reportStep($, result.usage)
+    }
     return result
   })
 }
