@@ -89,7 +89,7 @@ pub enum ConfigEditErr {
     },
     #[error("config key `{key}` is unset")]
     UnsetKey { key: String },
-    #[error("unknown config key `{key}`")]
+    #[error("{}", unknown_key_message(key))]
     UnknownKey { key: String },
     #[error("{0}")]
     InvalidKey(String),
@@ -99,6 +99,13 @@ pub enum ConfigEditErr {
     DocumentShape { segment: String },
     #[error("cannot unset `{key}`: {message}")]
     UnsetInvalid { key: String, message: String },
+}
+
+fn unknown_key_message(key: &str) -> String {
+    match super::retired_redeem_fix(key) {
+        Some(fix) => format!("config key `{key}` is retired; {fix}"),
+        None => format!("unknown config key `{key}`"),
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -443,10 +443,10 @@ impl std::fmt::Display for UnknownConfigKey {
                 self.path.display()
             );
         }
-        if let Some(new) = retired_redeem_key(&self.key) {
+        if let Some(fix) = retired_redeem_fix(&self.key) {
             return write!(
                 formatter,
-                "config key `{}` in {} is retired and has no effect; set `{new}` under `[harness.auto_redeem]`, or under a provider's subtable such as `[harness.auto_redeem.codex]`; run `rimz setup` to remove it",
+                "config key `{}` in {} is retired and has no effect; {fix}; run `rimz setup` to remove it",
                 self.key,
                 self.path.display()
             );
@@ -460,14 +460,18 @@ impl std::fmt::Display for UnknownConfigKey {
     }
 }
 
-/// The `[harness.auto_redeem]` key that replaced a removed `[resume]` redeem key.
-fn retired_redeem_key(key: &str) -> Option<&'static str> {
-    match key {
-        "resume.auto_redeem" => Some("level"),
-        "resume.auto_redeem_min_gain" => Some("min_gain"),
-        "resume.spend_order" => Some("spend_order"),
-        _ => None,
-    }
+/// Where a removed `[resume]` redeem key now lives, for the load warning and the
+/// `rimz config` refusal.
+fn retired_redeem_fix(key: &str) -> Option<String> {
+    let new = match key {
+        "resume.auto_redeem" => "level",
+        "resume.auto_redeem_min_gain" => "min_gain",
+        "resume.spend_order" => "spend_order",
+        _ => return None,
+    };
+    Some(format!(
+        "set `{new}` under `[harness.auto_redeem]`, or under a provider's subtable such as `[harness.auto_redeem.codex]`"
+    ))
 }
 
 /// The defining layer and its own qualified pack parent, independent of the source path.

@@ -160,6 +160,7 @@ These keys follow the general rule, and `set` checks their format:
 | --- | --- |
 | `agents.profiles.*`, `agents.teams.*`, `subagents.profiles.*` | `edit <path>`, naming the Markdown definition file (`agents/<name>.md`, `teams/<name>.md`, or `subagents/<name>.md` under the definitions root); edit that file and run `rimz agents validate`. |
 | A key RimZ does not know | `` unknown config key `KEY` `` |
+| A retired `[resume]` redeem key (`resume.auto_redeem`, `resume.auto_redeem_min_gain`, `resume.spend_order`), for `get` and `unset` too | `` config key `KEY` is retired; set `NEW` under `[harness.auto_redeem]`, or under a provider's subtable such as `[harness.auto_redeem.codex]` `` |
 | A whole table, such as `theme.display`, `accounts.use`, or `loop.tasks.<name>`, and any key under `keys.bind` | `` unknown config key `KEY` ``. Set one field inside the table, or edit it in the file. |
 | `notifications.handler` and its fields | `` config key `KEY` is an array of tables; edit <path to config.toml> `` |
 | A key with an empty segment | `config keys use non-empty dotted segments` |

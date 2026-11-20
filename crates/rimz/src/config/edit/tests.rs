@@ -3761,6 +3761,31 @@ fn unset_refuses_what_set_refuses_and_named_accounts() {
         editor.unset("theme.nope"),
         Err(ConfigEditErr::UnknownKey { key }) if key == "theme.nope"
     ));
+    assert_eq!(
+        editor.set("theme.nope", "1").unwrap_err().to_string(),
+        "unknown config key `theme.nope`"
+    );
+    for (key, leaf) in [
+        ("resume.auto_redeem", "level"),
+        ("resume.auto_redeem_min_gain", "min_gain"),
+        ("resume.spend_order", "spend_order"),
+    ] {
+        for error in [
+            editor.set(key, "true").expect_err(key),
+            editor.get(Some(key)).expect_err(key),
+            editor.unset(key).expect_err(key),
+        ] {
+            assert!(
+                matches!(&error, ConfigEditErr::UnknownKey { key: refused } if refused == key),
+                "{key}: {error:?}"
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains(&format!("set `{leaf}` under `[harness.auto_redeem]`")),
+                "{key}: {message}"
+            );
+        }
+    }
     assert!(matches!(
         editor.unset("theme..scheme"),
         Err(ConfigEditErr::InvalidKey(_))
