@@ -130,7 +130,10 @@ pub enum LifecycleSignal {
     /// Its provider turn id is remembered as closed, so a later tool carrying
     /// the same id is trailing output from the canceled turn rather than work.
     /// Like a turn end, a report for the superseded turn is dropped, and so is
-    /// a cancel for a turn that already reported its verdict.
+    /// a cancel for a turn that already reported its verdict. Claude and Kiro
+    /// never emit it: they report a user interrupt only as an `Interrupted`
+    /// turn settle in the context sidecar, so a rule keyed on this signal also
+    /// reads that settle.
     TurnInterrupted {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,

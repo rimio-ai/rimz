@@ -186,6 +186,9 @@ pub(super) fn admit_parsed(
     ))
 }
 
+/// Every validation rule over an admitted definition, as one report. A test of a refusal
+/// asserts the report's whole error list, not only that an error sits at the path, so a second
+/// rule firing on the same input fails it.
 pub(super) fn validate_spec(
     dir: &Path,
     name: &str,

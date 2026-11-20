@@ -1599,6 +1599,11 @@ enum LifecycleFold {
     NewlyTerminal,
 }
 
+/// A park that stands in for a complete-then-reopen takes only what the reopen branch writes
+/// that the parked turn still needs: a message park's unpark takes the deadline rearm and
+/// nothing else. A new park cause rules on each reopen write (the rearm, `report_to`,
+/// `follow_ups`, `follow_up`, and the cleared `opened_by`, `limit_hold`, and
+/// `interrupted_at`).
 fn fold_lifecycle(
     record: &mut RunRecord,
     kind: &str,

@@ -75,6 +75,14 @@ pub struct HostingErr {
 impl HostingRead {
     /// The agent `(kind, launch)`: its current occupant among the launch's holder rows, and
     /// that row's pane.
+    ///
+    /// One launch can be live in two panes after a revival, and the answer is the occupant,
+    /// which need not be the session the caller resolved: a caller that acts on a session it
+    /// resolved itself compares `AgentHosting::holder` with that session and refuses when they
+    /// differ. Its test stages two live rows of one launch in two listed panes and acts on the
+    /// non-occupant, as
+    /// `message::pane_acts::answer_refuses_when_another_session_of_the_launch_holds_the_pane`
+    /// does.
     pub fn agent_hosting(&self, kind: &AgentKind, launch: &AgentSessionId) -> AgentHosting<'_> {
         let holder = crate::address::launch_row(&self.audit, kind, launch);
         AgentHosting {

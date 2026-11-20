@@ -1,4 +1,9 @@
 //! Fold-free parked provider supervision and same-PID image handoff.
+//!
+//! The parked wrapper's memory budget is measured only by the live
+//! `backend::tmux::agent_lifecycle::parked_wrapper_holds_under_8_mib` test, which
+//! runs under `cargo xtask test -P live`, not `gate`: a change to code the park runs
+//! runs it.
 
 use super::*;
 use rimz::harness::drainer_outage::{LeaseRefresh, Tracker, Transition};

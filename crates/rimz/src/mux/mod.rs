@@ -759,7 +759,8 @@ pub struct SplitPaneOptions {
     pub cwd: Option<String>,
     pub command: Option<Vec<String>>,
     /// Pane display title, not a short tab label, kept while
-    /// foreground children churn.
+    /// foreground children churn. See [`PaneCmd::name`] for the tests that
+    /// read it.
     pub title: Option<crate::pane::PaneTitle>,
     /// Close the pane when its command exits on either backend, regardless of
     /// user retention. On tmux the printed pane is pinned to `remain-on-exit off`;
@@ -940,7 +941,11 @@ pub struct HostPane {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaneCmd {
     pub argv: Vec<String>,
-    /// Pane display title, independent of the tab's short label.
+    /// Pane display title, independent of the tab's short label. Tests find
+    /// panes by this value: `common::room::bind_child_panes` matches the
+    /// `--name` the trace shim records, and `backend::tmux::title` reads
+    /// `@rimz_title` back, so a change to what it carries greps
+    /// `crates/rimz/tests/integration` for `"--name"` and `@rimz_title`.
     pub name: Option<crate::pane::PaneTitle>,
 }
 

@@ -650,6 +650,10 @@ fn detaches(spec: &Definition, attempt: &LiveAttempt) -> bool {
         )
 }
 
+/// Settle a published agent ending outside `engine::advance`'s loop, repeating each step that
+/// loop runs after a result: the definition reread after the off-lock stop, `fit::misfit` on
+/// the reread definition, and the woken-wait reconciliation that clears `recheck_at` and
+/// evaluates again. A new settler outside that loop carries the same three.
 pub(super) fn finish(
     state: &StatePaths,
     paths: &WorkflowPaths,

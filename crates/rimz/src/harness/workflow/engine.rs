@@ -1219,7 +1219,11 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
 }
 
 /// Run a command step's child, then settle its result against the definition read after the
-/// child exits, or the one it started under when that read fails.
+/// child exits, or the one it started under when that read fails. A rule about how a hosted
+/// attempt settles binds every settler, not only this reap and relock: another advance through
+/// `Transition::bound`, and `cancel`. Its test holds the host at the
+/// `RIMZ_TEST_WORKFLOW_RESULT_GATE` rendezvous and runs a second advance between the reap and
+/// the relock, as `tests/integration/workflow/commands.rs::exited_command` does.
 fn command_step(
     state: &StatePaths,
     paths: &WorkflowPaths,
@@ -1439,6 +1443,10 @@ fn message_step(
     Ok(t.record.state == RunState::Active)
 }
 
+/// Publish the next attempt under the lock, or the wait or failure that holds it. Every read
+/// before a launch (a window, the budget) takes the start groups resolved once through
+/// `AttemptHost::start_groups`, and a new read takes them too rather than resolving the launch
+/// again; only a resumed session resolves again, on the room's current account.
 fn prepare(
     state: &StatePaths,
     paths: &WorkflowPaths,

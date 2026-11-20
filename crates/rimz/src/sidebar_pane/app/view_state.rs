@@ -49,6 +49,8 @@ pub(super) struct ReadContext<'a> {
 }
 
 pub(super) struct SelectionFold<'a> {
+    /// The previously presented snapshot. On a view's first fetch it has no rows,
+    /// so a rule that compares with it states and tests what it does on that fetch.
     pub(super) previous: &'a SidebarSnapshot,
     pub(super) selected: Option<PaneId>,
     pub(super) focused: Option<PaneId>,
@@ -734,7 +736,8 @@ impl ViewContext {
     /// birth window or gone, and reveal once the newborn card the view's derived focus sits
     /// on. A card that takes over another card's pane under a new id (a provider registration
     /// adopting its launch row) is no birth: it takes over the departed card's newborn record,
-    /// unchanged, and its birth hold.
+    /// unchanged, and its birth hold. A rule keyed on a row being new is tested for a process
+    /// row (a new shell pane, or an agent exiting to its shell), an agent row, and an adopted id.
     fn note_births(
         &self,
         ui: &mut ViewState,

@@ -63,7 +63,9 @@ pub(super) enum Ended {
 }
 
 /// Spawn the launch child in its own process group, so a terminal's interrupt to a `loop fire`
-/// by hand does not reach it.
+/// by hand does not reach it. The child acts in the task's room but keeps the task's checkout,
+/// so it removes the room pin (`ENV_PROJECT_ROOT`, `ENV_WORKSPACE_ID`) and sets
+/// `ENV_WORKTREE_PATH` rather than passing `--root`, as the task's stops do.
 pub(super) fn spawn(request: &Request<'_>) -> Result<Spawned> {
     let dir = crate::disk::paths::loop_launch_logs_dir();
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;

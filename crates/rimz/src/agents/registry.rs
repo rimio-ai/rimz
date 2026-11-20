@@ -88,6 +88,9 @@ pub fn definition_by_kind(kind: &str) -> Result<&'static AgentDefinition> {
 }
 
 /// [`definition_by_kind`] for callers that treat an unknown kind as absence.
+/// Matches kinds and aliases only, never a named launch variant or a profile
+/// name; a caller that can receive a runtime name resolves it with
+/// [`find_runtime`].
 pub fn find_definition(kind: &str) -> Option<&'static AgentDefinition> {
     all_definitions().find(|definition| {
         definition.spec().kind == kind || definition.spec().aliases.contains(&kind)

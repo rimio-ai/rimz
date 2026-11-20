@@ -1,4 +1,9 @@
 //! Live-pane payload construction, exclusive paced writes, and the durable Sent-before-submit barrier.
+//!
+//! The bytes a delivery pastes into a real agent pane are proven only by the live
+//! `journey::deep::tmux_steer_delivers_text_and_enter_to_real_agent_pane` and
+//! `journey::deep::tmux_steer_without_enter_suppresses_submit_in_real_agent_pane` tests, which run
+//! under `cargo xtask test -P live`, not `gate`: a change to those bytes runs them.
 
 use std::thread::sleep;
 use std::time::{Duration, Instant};

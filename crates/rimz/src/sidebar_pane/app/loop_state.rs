@@ -307,6 +307,10 @@ pub(super) struct PaneState {
     painted_selection: Option<String>,
 }
 
+/// Resolves a raw `Wakeup::Press` into its `KeyAction` here, after the work
+/// `LoopState::apply_input` does ahead of the views lock, so that work matches
+/// `Wakeup::Press` as well as the resolved `Wakeup::Key`. A loop test of a
+/// key's effect sends `Wakeup::Press`, as the attach wire delivers it.
 pub(super) fn handle_wakeup(
     wakeup: Wakeup,
     view: &mut ViewState,
@@ -871,7 +875,9 @@ impl LoopState {
     /// Whether an attached client's focus currently lands in this sidebar's tab,
     /// for paint, timing and hidden skipping. Unknown own-view state reads as
     /// watched so uncertainty never suppresses motion; images instead need the
-    /// host's permit (`image_permit`), which unknown state never earns.
+    /// host's permit (`image_permit`), which unknown state never earns. A rule
+    /// keyed on this is tested both inside the `optimistic_watch_until` window
+    /// and on observed state alone, on tmux and Zellij.
     fn watched(&self) -> bool {
         // Input and corroborated resize keep a painting view warm between samples.
         if self

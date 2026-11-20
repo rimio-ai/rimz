@@ -300,6 +300,9 @@ pub enum LimitFailureCause {
     ContinueFailed,
 }
 
+/// A supervised run's durable record. No snapshot covers the whole key set: each
+/// field is pinned by its own round trip, so a new field brings a round-trip and
+/// default-when-absent test in `store/run/tests.rs`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: RunId,

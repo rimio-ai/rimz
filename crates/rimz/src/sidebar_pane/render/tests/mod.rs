@@ -664,7 +664,9 @@ fn group_lines_at_width(
 }
 
 /// The group's hyperlink regions as the renderer hands them to the painter:
-/// `(line, columns, url)` per link, in the block's own line coordinates.
+/// `(line, columns, url)` per link, in the block's own line coordinates. Assert
+/// an admitted hyperlink through these regions, where the renderer decides its
+/// columns: `paint_hyperlinks` wraps exactly the cells they name in OSC 8.
 fn group_hyperlinks_at_width(
     snapshot: &SidebarSnapshot,
     theme: &Theme,

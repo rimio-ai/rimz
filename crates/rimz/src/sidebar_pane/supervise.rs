@@ -36,6 +36,8 @@ const INSTANCE_ENV: &str = "RIMZ_SIDEBAR_INSTANCE_ID";
 const BASELINE_ENV: &str = "RIMZ_SIDEBAR_BASELINE_PANE";
 #[cfg(feature = "testkit")]
 const TEST_REAP_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_REAP_POLL_MS";
+/// Testkit hook: names a file the supervisor writes the pid of a stray child it spawns to,
+/// for the stray-reaping test.
 #[cfg(feature = "testkit")]
 const TEST_STRAY_PID_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_STRAY_PID_FILE";
 #[cfg(feature = "testkit")]
@@ -48,6 +50,8 @@ const TEST_PANE_PROBE_INTERVAL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_INTE
 const TEST_PANE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE";
 #[cfg(feature = "testkit")]
 const TEST_PANE_PROBE_ABSENT_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_ABSENT_FILE";
+/// Testkit log: names a file the pane watchdog appends each logged strike count to, one per
+/// line, so a test synchronizes on counted strikes, never on time.
 #[cfg(feature = "testkit")]
 const TEST_PANE_PROBE_STRIKE_LOG_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_STRIKE_LOG";
 #[cfg(feature = "testkit")]

@@ -1015,6 +1015,9 @@ fn click(globals: &GlobalFlags, pane_id: PaneId, column: u16, row: u16) -> Resul
     .with_context(|| format!("sending click to sidebar {pane_id}"))
 }
 
+/// Takes the passive read when the room host has published a pane frame and runs the
+/// producer only otherwise, so a value stamped at publication (the stall list) is stamped
+/// on both branches.
 fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {
     let snapshot_command = SnapshotCommand {
         workspace_id: command.workspace_id,

@@ -1356,6 +1356,10 @@ pub fn launch_rows<'a, 'key>(
 /// - One launch can be live in several panes (an exact-id resume of a
 ///   cleared conversation); a caller that needs the row on a given pane
 ///   filters by pane first.
+/// - A lookup by an earlier launch id (`prior_launch_ids`) returns the row
+///   that resumed it, so a caller acting on that row for a record stamped with
+///   the earlier launch first checks the record's own match on it
+///   (`RunRecord::matches_agent`).
 pub fn launch_row<'a>(
     agents: impl IntoIterator<Item = &'a AgentState> + Clone,
     kind: &AgentKind,

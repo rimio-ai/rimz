@@ -2995,6 +2995,10 @@ impl CheckSkipOutcome {
     }
 }
 
+/// The fields that keep two loop run records in separate rows: records equal on every field
+/// here fold into one block in [`collapsed_run_rows`]. A field `LoopRunRecord` gains that the
+/// view prints joins this key, or two runs that differ only there collapse; when that field
+/// alone should keep LAST RUN visible, it also joins `write_last_run`'s summary-only condition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RunRowKey<'a> {
     mode: Option<LoopRunMode>,

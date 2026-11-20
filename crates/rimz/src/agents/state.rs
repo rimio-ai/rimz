@@ -442,6 +442,9 @@ pub enum AgentStatus {
     Waiting,
     Idle,
     Success,
+    /// Set both for an errored turn on a live session and for a launch that
+    /// failed (`AgentLaunchState::Failed`), so a predicate meant for only one
+    /// of them reads more than the status.
     Failed,
     /// Parked because this agent stopped mid-turn on a provider limit.
     /// Attention-class but non-actionable: there is nothing to do until the
@@ -1256,6 +1259,12 @@ impl<T: serde::de::DeserializeOwned + PartialEq> TuneOverride<T> {
     }
 }
 
+/// One agent session's folded row. The store's lifecycle writers
+/// (`append_agent_lifecycle_with_threshold`, `append_adoption`) create rows, and
+/// the read side synthesizes rows for panes and sessions RimZ did not launch
+/// (`idle_agent_row`, `pane_agent_from_sessionless`, `empty_local_agent`,
+/// `ResumeCandidate::from_observation`): a field made mandatory is stamped on
+/// every one of these paths.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]

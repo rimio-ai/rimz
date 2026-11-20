@@ -43,6 +43,9 @@ pub struct LaunchedBy {
 }
 
 /// Launch settings preserved verbatim, independent of provider observations.
+/// A new field is set in `resume::resolve_posture_with_role` as well as in
+/// `plan::finalize_agent_cell`: restart, fork, and resume reach the store through
+/// the posture resolver, which writes this record without finalizing the cell.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchRecord {
     pub model: Option<String>,

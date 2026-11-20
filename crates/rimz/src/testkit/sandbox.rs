@@ -346,7 +346,10 @@ fn reap_sandbox_processes(_spec: &SandboxSpec) {
     // relies on Linux `/proc/<pid>/environ`.
 }
 
-/// Marker-carrying processes currently owned by this sandbox.
+/// Marker-carrying processes currently owned by this sandbox. The other reaper,
+/// `xtask::sandbox::sandbox_processes`, finds processes by the same
+/// `/proc/<pid>/environ` match, so a race fix here checks that one's tests for
+/// the same read.
 #[cfg(target_os = "linux")]
 pub fn sandbox_processes(spec: &SandboxSpec) -> Vec<u32> {
     let Ok(entries) = std::fs::read_dir("/proc") else {

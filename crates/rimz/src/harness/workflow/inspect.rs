@@ -59,6 +59,9 @@ impl Hop {
 
 /// Fold consecutive matching evaluations, retaining the first decision's timestamp.
 /// Wait summaries and the engine's duplicate route evidence add no routing decisions.
+/// A test of this or any other journal reader takes its journal from engine transitions, or
+/// copies one the engine wrote: a hand-written journal can omit a row the engine always writes
+/// and pass on a sequence that never occurs.
 pub fn hops(spec: &Definition, journal: &[JournalEntry], held: Option<&HeldSession>) -> Vec<Hop> {
     let mut hops: Vec<Hop> = Vec::new();
     let mut previous_evaluation = false;
@@ -323,6 +326,10 @@ fn hop_kind(
 }
 
 /// The routed target of a check or engine decision, shared by trail and full history.
+/// The evaluation's origin decides the hop: a `Check` answer other than `invalid` projects to
+/// its route, while any other evaluation projects to none unless the entry after it is a
+/// `Route` that repeats it (same node, seq, and outcome). Run a run shape's journal tail
+/// through this and `hop_kind` before predicting what a reader shows.
 pub fn evaluation_target(
     spec: &Definition,
     entry: &JournalEntry,

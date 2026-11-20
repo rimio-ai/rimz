@@ -963,6 +963,10 @@ impl MachineConfig {
     }
 
     /// Failures for one unloaded definition name, including each source path.
+    /// A loader drops a definition that fails to load, so its name is absent
+    /// from the loaded tables yet not undefined: a path that reports a missing
+    /// team or profile asks this first and calls the name undefined only on
+    /// `None`.
     pub fn definition_failure_for(&self, name: &str) -> Option<String> {
         let paths = self.notices.failed_definitions.get(name)?;
         Some(

@@ -1358,6 +1358,10 @@ fn incident_key(record: &rimz::diag::record::DiagEnvelope) -> (String, bool) {
     )
 }
 
+/// An Investigate verdict raises a warn or alarm incident in the room whose diagnostic log
+/// holds the record, since doctor reads only that workspace's recent records. A read pointed
+/// at other rooms (a per-room snapshot in a machine-wide list) that emits such a record
+/// therefore raises a false health warning in each of those rooms, on every doctor run.
 fn classify_diagnostic(
     event: &rimz::diag::record::DiagEvent,
     severity: rimz::diag::record::DiagSeverity,
