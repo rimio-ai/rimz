@@ -228,7 +228,7 @@ The table's keys are defaults for every provider. A subtable named for a provide
 
 `spend_order` chooses which paid-for capacity comes next after the subscription: `credits_first` (default) uses available paid credit before a banked reset; `resets_first` prefers a reset when the redemption rules allow it, then paid credit. Expiry rescue runs under either order.
 
-The `[resume]` keys `auto_redeem`, `auto_redeem_min_gain`, and `spend_order` have no effect: room entry warns about each and names the key under `[harness.auto_redeem]` that replaces it.
+The `[resume]` keys `auto_redeem`, `auto_redeem_min_gain`, and `spend_order` have no effect: room entry warns about each, and `rimz config set` refuses each, naming the key under `[harness.auto_redeem]` that replaces it.
 
 ### Dollar budgets
 
