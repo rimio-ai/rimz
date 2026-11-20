@@ -245,11 +245,60 @@ pub fn create(
     manual: bool,
     args: StartArgs,
 ) -> Result<(RunRecord, Advance)> {
-    let roots = ScopeRoots {
+    let roots = canonical(roots)?;
+    let start = run_start(&source)?;
+    // A run already holding the scope wins before the definition or the
+    // prompt is read, so an edit to either mid-run reads as a skip.
+    start.refuse_existing(state, &roots, args.once)?;
+    let prompt = prompt().map_err(WorkflowErr::Refused)?;
+    let id = args.id.clone().unwrap_or_default();
+    let paths = state.workflow(&id);
+    // A deployed run reads its directory live, so nothing is copied; an inline run's generated
+    // text exists nowhere else, so its own root keeps it.
+    let sealed = match source {
+        DefinitionSource::Deployed { .. } => Ok(start),
+        DefinitionSource::Inline { definition, .. } => {
+            workflow::seal_definition(&paths.definition, &definition.text, &definition.assets)
+                .map_err(WorkflowErr::from)
+                .and_then(|()| Ok(paths.definition.canonicalize()?))
+                .map(|spec_dir| RunStart { spec_dir, ..start })
+        }
+    };
+    let published = sealed.and_then(|start| publish(state, id, start, roots, prompt, manual, args));
+    if published.is_err() {
+        // Nothing was published, so the run's root has no record to keep it.
+        let _ = std::fs::remove_dir_all(&paths.home);
+    }
+    let record = published?;
+    let advance = spawn(&record)?;
+    Ok((record, advance))
+}
+
+/// Refuses a start whose scope a live run already holds, as `create` would, before anything
+/// is created or read beyond the run records. A checkout that does not exist yet has no run
+/// holding it.
+pub fn refuse_overlap(
+    state: &StatePaths,
+    source: &DefinitionSource<'_>,
+    roots: ScopeRoots,
+    once: bool,
+) -> Result<()> {
+    if !roots.checkout.exists() {
+        return Ok(());
+    }
+    run_start(source)?.refuse_existing(state, &canonical(roots)?, once)
+}
+
+fn canonical(roots: ScopeRoots) -> Result<ScopeRoots> {
+    Ok(ScopeRoots {
         checkout: roots.checkout.canonicalize()?,
         project: roots.project.canonicalize()?,
-    };
-    let start = match &source {
+    })
+}
+
+/// The identity a run from `source` starts with.
+fn run_start(source: &DefinitionSource<'_>) -> Result<RunStart> {
+    Ok(match source {
         DefinitionSource::Deployed {
             dir,
             task,
@@ -287,44 +336,7 @@ pub fn create(
             fire: fire.clone(),
             fire_facts: fire_facts.clone(),
         },
-    };
-    // A run already holding the scope wins before the definition or the
-    // prompt is read, so an edit to either mid-run reads as a skip.
-    refuse_existing(
-        state,
-        start.origin,
-        &start.name,
-        start
-            .loop_fire
-            .as_ref()
-            .filter(|_| start.task.is_some())
-            .map(crate::ids::FireId::task)
-            .as_ref(),
-        &roots,
-        args.once,
-    )?;
-    let prompt = prompt().map_err(WorkflowErr::Refused)?;
-    let id = args.id.clone().unwrap_or_default();
-    let paths = state.workflow(&id);
-    // A deployed run reads its directory live, so nothing is copied; an inline run's generated
-    // text exists nowhere else, so its own root keeps it.
-    let sealed = match source {
-        DefinitionSource::Deployed { .. } => Ok(start),
-        DefinitionSource::Inline { definition, .. } => {
-            workflow::seal_definition(&paths.definition, &definition.text, &definition.assets)
-                .map_err(WorkflowErr::from)
-                .and_then(|()| Ok(paths.definition.canonicalize()?))
-                .map(|spec_dir| RunStart { spec_dir, ..start })
-        }
-    };
-    let published = sealed.and_then(|start| publish(state, id, start, roots, prompt, manual, args));
-    if published.is_err() {
-        // Nothing was published, so the run's root has no record to keep it.
-        let _ = std::fs::remove_dir_all(&paths.home);
-    }
-    let record = published?;
-    let advance = spawn(&record)?;
-    Ok((record, advance))
+    })
 }
 
 /// A run's identity before its record exists.
@@ -336,6 +348,23 @@ struct RunStart {
     spec_dir: std::path::PathBuf,
     fire: Option<RunFire>,
     fire_facts: Option<serde_json::Value>,
+}
+
+impl RunStart {
+    fn refuse_existing(&self, state: &StatePaths, roots: &ScopeRoots, once: bool) -> Result<()> {
+        refuse_existing(
+            state,
+            self.origin,
+            &self.name,
+            self.loop_fire
+                .as_ref()
+                .filter(|_| self.task.is_some())
+                .map(crate::ids::FireId::task)
+                .as_ref(),
+            roots,
+            once,
+        )
+    }
 }
 
 /// Validate the definition at `start.spec_dir` and publish the run's record.
@@ -1740,6 +1769,17 @@ fn prepare(
             _ => AttemptKind::Script,
         }
     };
+    // A trust wait belongs to the agent or judge launch that rechecks it (`agent::launch`); a
+    // node an edit or a move left launching neither ends it here.
+    if agent_step.is_none()
+        && kind != AttemptKind::Judge
+        && t.record
+            .wait
+            .as_ref()
+            .is_some_and(|wait| wait.outcome == "trust")
+    {
+        t.close_wait();
+    }
     let mut digests = BTreeMap::new();
     let prompt = if let Some(step) = agent_step {
         Some(agent::compose(&t.record, paths, step, &mut digests))
@@ -1764,7 +1804,14 @@ fn prepare(
         return Ok(Decision::Again);
     }
     if step.is_some() {
-        t.close_wait();
+        // A trust wait stays open through the agent launch that rechecks it (`agent::launch`).
+        if t.record
+            .wait
+            .as_ref()
+            .is_none_or(|wait| wait.outcome != "trust")
+        {
+            t.close_wait();
+        }
         seen.clear();
         t.charge_visit();
         t.record.entered_at = t.now;

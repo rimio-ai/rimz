@@ -142,6 +142,8 @@ fn project(
     } else if let Some(wait) = &record.wait {
         match wait.outcome.as_str() {
             "capacity" => "held".into(),
+            // The problems and their fixes are `workflow show`'s; the strip names the wait.
+            "trust" => "needs trust".into(),
             "hold" if wait.unknown.is_some() => "unknown".into(),
             "hold" => wait
                 .detail
@@ -336,6 +338,7 @@ mod tests {
             ("hold", "holding checks"),
             ("retry", "retry: checks"),
             ("budget", "budget checks"),
+            ("trust", "needs trust"),
         ] {
             record.wait = Some(
                 serde_json::from_value(json!({

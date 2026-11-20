@@ -40,6 +40,13 @@ fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
     (env, dir)
 }
 
+/// Installs claude's hooks and trusts the project, which every start with a claude node
+/// needs past its trust read.
+fn ready_claude(env: &Env) {
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(env, &env.project_root);
+}
+
 const HEADER: &str = "[workflow]\nscope = 'worktree'\nstart = 'pr'\n";
 const WAIT: &str = "[script.pr]\nrun = 'sh checks/pr.sh'\non = { pending = '@wait', done = '@done' }\ntimeout = '1h'\n";
 const PENDING: &str = "printf '%s\\n' '{\"outcome\":\"pending\",\"reason\":\"CI pending\",\"recheck_at\":\"2099-01-01T00:00:00Z\"}'\n";
@@ -56,6 +63,7 @@ fn new_runs_read_their_deployed_definition_at_the_current_record_version() {
     .map(|step| {
         let spec = format!("{HEADER}{WAIT}{step}");
         let (env, dir) = fixture(&spec, PENDING);
+        ready_claude(&env);
         let id = start(&env);
         let value = until(&env, &id, |value| value["record"]["wait"].is_object());
         let paths = env
@@ -2186,6 +2194,7 @@ fn human_show_lists_each_capped_steps_visits_with_the_grant() {
         "{HEADER}{WAIT}[agent.build]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n[agent.plain]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n"
     );
     let (env, _) = fixture(&spec, PENDING);
+    ready_claude(&env);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     let mut record = value["record"].clone();

@@ -1360,7 +1360,23 @@ fn check_cell(
         cwd,
         (!isolation.is_scoped()).then_some(runtime),
     )?;
-    if let Some(notice) = trust::preflight_hooks(
+    let folder_hint = workspace
+        .cwd_project_root
+        .as_deref()
+        .filter(|_| prepared.is_none() && cell.launch.checkout.is_none());
+    if matches!(unattended, Some(trust::Unattended::Workflow)) {
+        // A workflow judges hooks and a saved-untrusted folder by the read its start shares.
+        let problems = trust::workflow_problems(
+            trust::TrustRecipe::Layout,
+            adapter,
+            &login,
+            Some((cwd, folder_hint)),
+            hook_fix,
+        );
+        if !problems.is_empty() {
+            return Err(trust::TrustRefusal(problems).into());
+        }
+    } else if let Some(notice) = trust::preflight_hooks(
         login.health(&crate::agents::ambient_env()),
         || unattended,
         hook_fix,
@@ -1382,14 +1398,7 @@ fn check_cell(
         && let Some(notice) = trust::preflight(
             cell.kind.as_str(),
             cwd,
-            adapter.folder_trust(
-                cwd,
-                workspace
-                    .cwd_project_root
-                    .as_deref()
-                    .filter(|_| prepared.is_none() && cell.launch.checkout.is_none()),
-                &login.env(&crate::agents::ambient_env()),
-            ),
+            adapter.folder_trust(cwd, folder_hint, &login.env(&crate::agents::ambient_env())),
             unattended,
         )?
     {

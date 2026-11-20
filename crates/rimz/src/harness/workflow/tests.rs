@@ -24,6 +24,8 @@ pub(in crate::harness) struct FakeHost {
     pub(in crate::harness) budget_reads: Cell<usize>,
     /// The reason the launcher's own gate refuses every launch it prepares.
     pub(super) launch_budget: RefCell<Option<String>>,
+    /// The trust problems the launcher refuses every launch it prepares on.
+    pub(super) launch_trust: RefCell<Option<String>>,
     /// Report the injected failure as one that started nothing.
     unstarted: Cell<bool>,
     /// Fail the launch with a host error after it opened, giving the engine no verdict.
@@ -128,6 +130,7 @@ impl FakeHost {
             budget_error: Cell::new(false),
             budget_reads: Cell::new(0),
             launch_budget: RefCell::new(None),
+            launch_trust: RefCell::new(None),
         }
     }
 
@@ -195,6 +198,12 @@ impl AttemptHost for FakeHost {
                 check();
             }
             return Ok(Err(NotLaunched::Budget(reason.clone())));
+        }
+        if let Some(problems) = &*self.launch_trust.borrow() {
+            if let Some(check) = &*self.on_launch.borrow() {
+                check();
+            }
+            return Ok(Err(NotLaunched::Trust(problems.clone())));
         }
         self.launched.borrow_mut().push(step);
         if let Some(check) = &*self.on_launch.borrow() {
@@ -1400,6 +1409,7 @@ fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
     }
     assert_eq!(actual, vec![true; 9]);
     assert!(super::spec::reserved("capacity"));
+    assert!(super::spec::reserved("trust"));
 }
 
 /// `text` with its `build` agent rewritten as a command step.

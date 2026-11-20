@@ -25,6 +25,7 @@ mod rest;
 mod restart;
 mod stops;
 mod subscribe;
+mod trust;
 
 pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     let dir = tempfile::tempdir().unwrap();

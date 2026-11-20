@@ -362,6 +362,16 @@ impl workflow::AttemptHost for Host<'_> {
             Ok(Ok(LaunchOutcome::Declined | LaunchOutcome::Existing)) => {
                 (AttemptOutcome::Died, "workflow launch aborted".into())
             }
+            // A trust problem the user clears in place waits for the fix; any other ends the
+            // attempt.
+            Err(ref error)
+                if let Some(refusal) = error
+                    .chain()
+                    .find_map(|cause| cause.downcast_ref::<launcher::trust::TrustRefusal>())
+                    && refusal.clearable() =>
+            {
+                return Ok(Err(workflow::NotLaunched::Trust(refusal.detail())));
+            }
             Err(error) => (
                 AttemptOutcome::Died,
                 if resume.is_some() {

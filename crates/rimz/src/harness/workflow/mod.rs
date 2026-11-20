@@ -27,8 +27,8 @@ pub(crate) use engine::hears_lifecycle;
 pub(crate) use engine::join_report;
 pub use engine::{
     Advance, DefinitionSource, InlineDefinition, StartArgs, Starting, TaskStart, WorkflowErr,
-    advance, budget_refusal, cancel, create, launch_groups, restart, resume, starting, submit,
-    wake, wake_run,
+    advance, budget_refusal, cancel, create, launch_groups, refuse_overlap, restart, resume,
+    starting, submit, wake, wake_run,
 };
 pub(crate) use engine::{reassign_task, unacted_task_runs};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
@@ -419,6 +419,10 @@ pub enum NotLaunched {
     /// The launcher's budget gate refused the launch for this reason; the node waits as it
     /// would on the first read of the gate, with no attempt counted.
     Budget(String),
+    /// The launcher's trust read refused the launch on problems the user clears in place
+    /// (hooks, folder trust), each with its fix; the node waits on `trust` with no attempt
+    /// counted.
+    Trust(String),
 }
 
 impl From<LaunchFailure> for NotLaunched {

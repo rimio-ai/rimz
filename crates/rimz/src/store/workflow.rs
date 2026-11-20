@@ -935,7 +935,8 @@ impl RunRecord {
     }
 
     /// Whether the run waits on a person: parked, an agent asking, held on an error no wait
-    /// recovers from, or a capacity hold that needs a fix. `workflow list` puts such a run under
+    /// recovers from, a capacity hold that needs a fix, or a launch refused on trust (hooks or
+    /// folder trust the user clears). `workflow list` puts such a run under
     /// NEEDS YOU, `workflow wait` returns on it, and a run that starts to fires
     /// `workflow.waiting`.
     pub fn needs_you(&self) -> bool {
@@ -943,8 +944,9 @@ impl RunRecord {
             || self.calls_you()
             || self.wait.as_ref().is_some_and(|wait| {
                 self.state == RunState::Active
-                    && wait.outcome == "capacity"
-                    && wait.hold.is_some_and(crate::ids::HoldKind::needs_fix)
+                    && (wait.outcome == "trust"
+                        || wait.outcome == "capacity"
+                            && wait.hold.is_some_and(crate::ids::HoldKind::needs_fix))
             })
     }
 

@@ -336,7 +336,29 @@ fn prepare(
         launch_login(request, caller, &agent_cell.kind)
     };
     let login = requested_login.resolve(&agent_cell.kind, &logins, &machine_config.accounts)?;
-    login.preflight(&crate::agents::ambient_env())?;
+    let hook_fix = || {
+        crate::config::definitions::hook_trust_fix(
+            &agent_cell.kind,
+            agent_cell.launch.profile.as_deref(),
+            None,
+        )
+    };
+    if request.workflow.is_some() {
+        // A workflow reads the leader's hooks before its checkout exists, so a launch that waits
+        // on them makes no checkout.
+        let problems = trust::workflow_problems(
+            trust::TrustRecipe::Supervised,
+            adapter,
+            &login,
+            None,
+            hook_fix,
+        );
+        if !problems.is_empty() {
+            return Err(trust::TrustRefusal(problems).into());
+        }
+    } else {
+        login.preflight(&crate::agents::ambient_env())?;
+    }
     if let Some(session) = resume {
         let previous =
             crate::store::snapshot::find_agent(&projection.agents, &agent_cell.kind, session)
@@ -446,7 +468,7 @@ fn prepare(
         launch.repo_root = workspace.at_launch_dir(&launch.cwd)?.cwd_project_root;
     }
     let home_fix = if request.workflow.is_some() {
-        "start the workflow from a project directory"
+        trust::WORKFLOW_HOME_FIX
     } else if request.loop_fire.is_some() {
         "re-add the loop task from a project directory"
     } else if request.subagent {
@@ -555,7 +577,21 @@ fn prepare(
     )?;
     // Judge the agent's hooks in the account home it will run under before
     // probing the program or touching the multiplexer.
-    preflight_agent(adapter, &launch, &login, home_fix)?;
+    if request.workflow.is_some() {
+        let problems = trust::workflow_problems(
+            trust::TrustRecipe::Supervised,
+            adapter,
+            &login,
+            Some((&launch.cwd, launch.repo_root.as_deref())),
+            hook_fix,
+        );
+        if !problems.is_empty() {
+            checkout::discard_created_tree(&launch, &machine_config.agents.worktree.hooks);
+            return Err(trust::TrustRefusal(problems).into());
+        }
+    } else {
+        preflight_agent(adapter, &launch, &login, home_fix)?;
+    }
     preflight_program(adapter, &process, &launch.cwd)?;
     if !request.subagent {
         super::lsp_admission::admit(&launch.cwd, &machine_config, interaction)?;

@@ -496,11 +496,28 @@ pub(super) fn launch(
             outcome: AttemptOutcome::Died,
             reason: "the checkout was taken during the launch".into(),
         }),
-        Err(NotLaunched::Budget(reason)) => Err(LaunchFailure {
+        Err(NotLaunched::Trust(problems)) if unstaged => {
+            // The user clears a trust problem in place: the node waits on it with no attempt
+            // counted, and a recheck merges into the wait so its first stamp stays.
+            t.withdraw_attempt();
+            t.step_wait("trust", Some(problems));
+            persist(&mut t, &guard)?;
+            return Ok(false);
+        }
+        Err(NotLaunched::Budget(reason) | NotLaunched::Trust(reason)) => Err(LaunchFailure {
             outcome: AttemptOutcome::Died,
             reason,
         }),
     };
+    // A trust wait stays open through the launch that rechecks it, and that launch's
+    // outcome ends it.
+    if t.record
+        .wait
+        .as_ref()
+        .is_some_and(|wait| wait.outcome == "trust")
+    {
+        t.close_wait();
+    }
     if record.restart.is_some() && t.record.restart == record.restart {
         t.record.restart = None;
     }

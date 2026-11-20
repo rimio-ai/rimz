@@ -58,6 +58,8 @@ pub(super) fn interrupt(t: &mut Transition<'_>, reason: &str) {
         .verdict
         .clone();
     t.abandon_check("canceled");
+    // A judge's trust wait ends with its check, before the record publishes the stop.
+    t.close_wait();
     let attempt = t
         .record
         .held
