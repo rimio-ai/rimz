@@ -65,7 +65,11 @@ pub fn owed_wake(
                 return Ok(Some(OwedWake::Team));
             }
         }
-        if owes_workflow_report(store, launcher)? {
+        if crate::store::workflow::live(store.paths())?
+            .iter()
+            .filter_map(|run| run.class.header())
+            .any(|header| owes_report_to(&header, launcher))
+        {
             return Ok(Some(OwedWake::Workflow));
         }
     }
@@ -85,23 +89,18 @@ pub fn owed_wake(
     Ok(view.message_in_flight(agent).then_some(OwedWake::Message))
 }
 
-/// Whether a run `agent` started without `--detach` has not yet sent it its report: a run
-/// still going, or one finished with its report owed, whatever version wrote its record.
-fn owes_workflow_report(
-    store: &Store,
-    agent: &crate::agents::AgentState,
-) -> Result<bool, StoreErr> {
-    use crate::store::workflow::ReportMark;
-    Ok(crate::store::workflow::live(store.paths())?
-        .iter()
-        .filter_map(|run| run.class.header())
-        .any(|header| {
-            header.report == Some(ReportMark::Owed)
-                && header
-                    .starter
-                    .as_ref()
-                    .is_some_and(|starter| starter.is_agent(agent))
-        }))
+/// Whether `header` is a run `agent` started without `--detach` that has not yet sent it its
+/// report: a run still going, or one finished with its report owed, whatever version wrote its
+/// record. The workflow term's debt.
+pub(super) fn owes_report_to(
+    header: &crate::store::workflow::RunHeader,
+    agent: &AgentState,
+) -> bool {
+    header.report == Some(crate::store::workflow::ReportMark::Owed)
+        && header
+            .starter
+            .as_ref()
+            .is_some_and(|starter| starter.is_agent(agent))
 }
 
 /// The launched members whose run is open or owes its report: the fleet term's debt.

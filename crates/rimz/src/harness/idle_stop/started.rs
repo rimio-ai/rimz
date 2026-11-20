@@ -12,7 +12,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde::Serialize;
 
-use super::super::owed::{owing_members, owing_teams};
+use super::super::owed::{owes_report_to, owing_members, owing_teams};
 use super::super::schedule::catalog::TaskCatalog;
 use super::super::schedule::pending::SessionWaits;
 use super::super::schedule::{
@@ -28,6 +28,7 @@ use crate::store::StoreErr;
 use crate::store::run::RunRecord;
 use crate::store::runtime::AuditRows;
 use crate::store::snapshot::SidebarSnapshot;
+use crate::store::workflow::RunHeader;
 
 /// What joins the agents of a row's path.
 const PATH_SEPARATOR: &str = " › ";
@@ -177,6 +178,22 @@ fn agent_key(row: &AgentState) -> String {
 
 fn team_key(instance: &TeamInstanceId) -> String {
     format!("team {instance}")
+}
+
+fn workflow_key(id: &str) -> String {
+    format!("workflow {id}")
+}
+
+/// The room's live workflow runs whose record this RimZ reads, each with its id.
+fn live_runs(store: &Store) -> Result<Vec<(String, RunHeader)>, StoreErr> {
+    Ok(crate::store::workflow::live(store.paths())?
+        .into_iter()
+        .filter_map(|run| {
+            let header = run.class.header()?.into_owned();
+            let id = run.paths.home.file_name()?.to_string_lossy().into_owned();
+            Some((id, header))
+        })
+        .collect())
 }
 
 /// A booking or launch link that names `agent`, by launch id.
@@ -373,7 +390,7 @@ impl<'a> List<'a> {
             self.natives();
         }
         let runs = crate::harness::run::listing(store.paths())?;
-        self.owed(&runs)?;
+        self.owed(store, &runs)?;
         let messages = store.list_messages()?;
         let (conversation, system): (Vec<_>, Vec<_>) = messages
             .iter()
@@ -564,7 +581,7 @@ impl<'a> List<'a> {
     }
 
     /// The launched members and teams the owed wake's fleet and team terms hold on.
-    fn owed(&mut self, runs: &[RunRecord]) -> Result<(), StoreErr> {
+    fn owed(&mut self, store: &Store, runs: &[RunRecord]) -> Result<(), StoreErr> {
         let audit = self.audit;
         let Some(launcher) = audit.find(self.agent.kind.as_str(), &self.agent.agent_id) else {
             return Ok(());
@@ -582,7 +599,55 @@ impl<'a> List<'a> {
                 board_status(&run.worktree_path).unwrap_or_else(|| run.status.as_str().to_owned());
             self.push_team(Group::Holding, &team.instance, status);
         }
+        for (id, header) in live_runs(store)? {
+            if owes_report_to(&header, launcher) {
+                self.push_workflow(Group::Holding, &id, &header);
+            }
+        }
         Ok(())
+    }
+
+    /// A workflow run the agent started, cancelable while it has not ended.
+    fn push_workflow(&mut self, group: Group, id: &str, header: &RunHeader) {
+        if !self.seen.insert(workflow_key(id)) {
+            return;
+        }
+        let ended = header.state.is_some_and(|state| state.is_terminal());
+        let status = header.state.map_or("unknown", |state| state.as_str());
+        let row = StartedRow {
+            kind: RowKind::Workflow,
+            name: id.to_owned(),
+            status: status.to_owned(),
+            tone: AgentStatus::Running,
+            phase: TurnPhase::Idle,
+            provider: None,
+            since: header.created_at,
+            due: None,
+            detail: header
+                .workflow
+                .iter()
+                .cloned()
+                .chain(ended.then(|| "report owed".to_owned()))
+                .collect(),
+            command: (!ended).then(|| format!("{} workflow cancel {id}", self.seat.rimz)),
+        };
+        self.group(group).push(row);
+    }
+
+    /// Live runs the agent started that owe it nothing, started with `--detach`.
+    fn detached_runs(&mut self, store: &Store) {
+        let Ok(runs) = live_runs(store) else {
+            return;
+        };
+        for (id, header) in runs {
+            let started = header
+                .starter
+                .as_ref()
+                .is_some_and(|starter| starter.is_agent(self.agent));
+            if started && header.state.is_some_and(|state| !state.is_terminal()) {
+                self.push_workflow(Group::Outliving, &id, &header);
+            }
+        }
     }
 
     fn cohort_status(&self, instance: &TeamInstanceId) -> String {
@@ -632,6 +697,7 @@ impl<'a> List<'a> {
             }
         }
         self.booked_tasks(store);
+        self.detached_runs(store);
         self.booked_launches();
     }
 
@@ -685,12 +751,17 @@ impl<'a> List<'a> {
         let mut runs: Vec<_> = crate::store::workflow::live_runs(store.paths())
             .unwrap_or_default()
             .into_iter()
-            .filter(|run| !run.state.is_terminal())
+            .filter(|run| {
+                !run.state.is_terminal() && !self.seen.contains(&workflow_key(run.id.as_str()))
+            })
             .filter_map(|run| {
                 let path = self.booking_path(run.fire.as_ref()?.booked_by())?;
                 Some((run, path))
             })
             .collect();
+        for (run, _) in &runs {
+            self.seen.insert(workflow_key(run.id.as_str()));
+        }
         let zone = MachineConfig::load_lenient().time_zone();
         let now = self.now.to_zoned(zone);
         for (name, task) in catalog.visible() {
