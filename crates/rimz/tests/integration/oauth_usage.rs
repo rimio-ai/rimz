@@ -1518,8 +1518,10 @@ fn claude_redeem_usage() -> Value {
         "five_hour": {"utilization": 42, "resets_at": "2100-01-01T00:00:00Z"},
         "seven_day": {"utilization": 7, "resets_at": "2100-01-02T00:00:00Z"},
         "cedar_ember": {"eligible": true, "next_grant_id": "selected", "grants": [
-            {"id": "other", "resets_left": 1, "usable_now": true, "paused": true},
-            {"id": "selected", "resets_left": 1, "usable_now": true, "ends_at": "2100-02-01T00:00:00Z"}
+            {"id": "other", "resets_left": 1, "usable_now": true, "paused": true,
+             "label": "Paused reset", "clears": ["five_hour", "seven_day"]},
+            {"id": "selected", "resets_left": 1, "usable_now": true, "ends_at": "2100-02-01T00:00:00Z",
+             "label": "Ordinary reset", "clears": ["five_hour", "seven_day"]}
         ]}
     })
 }
@@ -1631,9 +1633,11 @@ fn claude_redeem_command(
     if !flag.is_empty() {
         command.arg(flag);
     }
+    // The preview prints local times: pin the zone its date assertions read.
     command
         .env("RIMZ_CLAUDE_OAUTH_USAGE_URL", usage_url)
         .env("PATH", path_with_front(&env.home_root.join("bin")))
+        .env("TZ", "America/New_York")
         .bounded_output()
         .unwrap()
 }
@@ -1646,39 +1650,71 @@ fn claude_redeem_stamp(env: &Env, name: &str) -> std::path::PathBuf {
 
 #[test]
 fn claude_redeem_dry_run_has_two_reads_a_forecast_and_no_durable_attempt() {
-    let env = Env::new();
-    let (url, server) = claude_redeem_fixture(
-        &env,
-        claude_redeem_usage(),
-        200,
-        200,
-        "reset",
-        2,
-        Default::default(),
-    );
-    let output = claude_redeem_command(&env, &url, "", "--dry-run");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout
-            .lines()
-            .any(|line| line.split_whitespace().take(2).eq(["credits:", "2;"]))
-            && stdout.contains("reset stays at"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("holding, if the longest window ran dry now"),
-        "Claude, served at `gain`, forecasts as Codex does: {stdout}"
-    );
-    assert!(!claude_redeem_stamp(&env, "default").exists());
-    assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
-    let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 2, "{requests:?}");
-    assert!(requests.iter().all(|request| request.starts_with("GET ")));
+    let mut fable = claude_redeem_usage();
+    fable["cedar_ember"]["grants"][1]["label"] = "Fable reset".into();
+    fable["cedar_ember"]["grants"][1]["clears"] = serde_json::json!(["five_hour"]);
+    let refills = "refills now, reset stays at";
+    for (usage, level, label, weekly, forecast) in [
+        (
+            claude_redeem_usage(),
+            "paced",
+            "Ordinary reset",
+            refills,
+            "armed",
+        ),
+        (
+            claude_redeem_usage(),
+            "rescue",
+            "Ordinary reset",
+            refills,
+            "off",
+        ),
+        (
+            fable,
+            "paced",
+            "Fable reset",
+            "not refilled by this grant",
+            "holding",
+        ),
+    ] {
+        let env = Env::new();
+        let (url, server) =
+            claude_redeem_fixture(&env, usage, 200, 200, "reset", 2, Default::default());
+        let config = env.rimz_home().join("config.toml");
+        let text = std::fs::read_to_string(&config).unwrap();
+        std::fs::write(&config, text.replace("\"paced\"", &format!("{level:?}"))).unwrap();
+        let output = claude_redeem_command(&env, &url, "", "--dry-run");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let row = |label: &str| {
+            stdout
+                .lines()
+                .find(|line| line.trim_start().starts_with(label))
+                .unwrap_or_default()
+        };
+        assert!(
+            row("credits:").split_whitespace().nth(1) == Some("2;")
+                && row("spends:").contains(&format!("{label}; expires in "))
+                && row("spends:").contains("2100-01-31")
+                && row("redeem 5h:").contains("refills now, reset stays at")
+                && row("redeem 7d:").contains(weekly),
+            "{stdout}"
+        );
+        assert!(
+            row("auto-redeem forecast:")
+                .ends_with(&format!(" {forecast}, if the longest window ran dry now")),
+            "Claude's forecast follows its level as Codex's does: {stdout}"
+        );
+        assert!(!claude_redeem_stamp(&env, "default").exists());
+        assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2, "{requests:?}");
+        assert!(requests.iter().all(|request| request.starts_with("GET ")));
+    }
 }
 
 #[test]
@@ -1714,8 +1750,15 @@ fn claude_redeem_results_persist_once_and_refresh_only_a_reset() {
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
+        let spent = if result == "reset" {
+            " (spent Ordinary reset)"
+        } else {
+            ""
+        };
         assert!(
-            stdout.contains(&format!("claude@default: {outcome}")),
+            stdout
+                .lines()
+                .any(|line| line == format!("claude@default: {outcome}{spent}")),
             "{stdout}"
         );
         let stamp = read_json(claude_redeem_stamp(&env, "default"));
