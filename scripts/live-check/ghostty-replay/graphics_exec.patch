@@ -1,0 +1,21 @@
+--- a/src/terminal/kitty/graphics_exec.zig
++++ b/src/terminal/kitty/graphics_exec.zig
+@@ -12,6 +12,10 @@ const Image = image.Image;
+ const ImageStorage = @import("graphics_storage.zig").ImageStorage;
+
+ const log = std.log.scoped(.kitty_gfx);
++var rimz_replay_result: []const u8 = "OK (no response)";
++test "petchunks-replay" {
++    try @import("petchunks_replay.zig").run(&rimz_replay_result);
++}
+
+ /// Execute a Kitty graphics command against the given terminal. This
+ /// will never fail, but the response may indicate an error and the
+@@ -74,6 +78,7 @@ pub fn execute(
+         => .{ .message = "ERROR: unimplemented action" },
+     };
+
++    rimz_replay_result = if (resp_) |resp| resp.message else "OK (no response)";
+     // Handle the quiet settings
+     if (resp_) |resp| {
+         if (!resp.ok()) {

@@ -1,0 +1,36 @@
+#!/bin/bash
+# A fake gh that answers the sidebar host's pull request probe with no network.
+#
+# Copy it into a scratch directory and put that directory first on the PATH of
+# cargo xtask sandbox room. It answers for PR #91 on the room's probe branch against main,
+# at the worktree's HEAD, with passing CI, for a repository named
+# github.com/rimz-live-check/probe. It reads the PR's mergeable state (CONFLICTING,
+# MERGEABLE, or UNKNOWN) from the file mode beside it on each call, logs every call to
+# gh.calls beside it, and refuses every other command with exit 97.
+set -eu
+shim_dir=$(dirname "$0")
+printf '%s %s\n' "$(date +%s.%N)" "$*" >> "$shim_dir/gh.calls"
+if [ "$#" -eq 2 ] && [ "$1 $2" = 'auth status' ]; then
+    exit 0
+fi
+if [ "$#" -ne 4 ] || [ "$1 $2 $3" != 'api graphql -f' ]; then
+    printf 'gh shim refused: %s\n' "$*" >&2
+    exit 97
+fi
+case "$4" in
+    'query=query { repository(owner: "rimz-live-check", name: "probe") {'*) ;;
+    *) printf 'gh shim refused query: %s\n' "$4" >&2; exit 97 ;;
+esac
+shim_head=$(git rev-parse HEAD)
+jq -nc --arg query "$4" --arg head "$shim_head" --rawfile mode "$shim_dir/mode" '
+  ($mode | rtrimstr("\n")) as $mode |
+  [ $query | capture("pr(?<i>[0-9]+): pullRequests\\(first: 10, headRefName: \"(?<branch>[^\"]+)\""; "g") ] as $branches |
+  [ $query | capture("sha(?<i>[0-9]+): object\\(oid: \"(?<oid>[^\"]+)\""; "g") ] as $oids |
+  {data: {repository:
+    (reduce $branches[] as $b
+      ({id:"local-only",open:{nodes:[{number:91,headRefName:"probe",baseRefName:"main",isCrossRepository:false}]}};
+       .["pr"+$b.i] = {nodes:(if $b.branch == "probe" then [{number:91,state:"OPEN",createdAt:"2026-01-01T00:00:00Z",isCrossRepository:false,statusCheckRollup:{state:"SUCCESS",commit:{oid:$head}},mergeCommit:null}] else [] end)} |
+       .["facts"+$b.i] = {nodes:(if $b.branch == "probe" then [{number:91,headRefOid:$head,mergeable:$mode,isCrossRepository:false,isDraft:false,reviewDecision:null,baseRef:{name:"main",compare:{behindBy:0}},mergeQueueEntry:null,autoMergeRequest:null,timelineItems:{nodes:[]}}] else [] end)} |
+       .["ref"+$b.i] = {target:{oid:$head,statusCheckRollup:{state:"SUCCESS"}}}) |
+     reduce $oids[] as $s (. ; .["sha"+$s.i] = {oid:$s.oid,statusCheckRollup:{state:"SUCCESS"}}))
+  }}'
