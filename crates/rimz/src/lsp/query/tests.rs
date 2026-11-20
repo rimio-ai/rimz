@@ -1279,7 +1279,7 @@ fn lookup_outcomes_render_qualified_reusable_candidates() {
         symbols: symbols.clone(),
     };
     insta::assert_snapshot!(render_outcome(root, &missing, false).unwrap(), @"
-    not found: launch_git::read; 2 other symbols named read:
+    not found: launch_git::read; 2 other symbols named read; rerun with one of these names or a position
     function Container::read  /outside/lib.rs:2:3
     function harness::launch_env::read  src/harness/launch_env.rs:2:3
     ");
@@ -1396,7 +1396,7 @@ fn not_found_candidates_collapse_re_exports_to_their_definition() {
         symbols,
     };
     insta::assert_snapshot!(render_outcome(Path::new("/checkout"), &missing, false).unwrap(), @"
-    not found: wrong::Store; 1 other symbol named Store:
+    not found: wrong::Store; 1 other symbol named Store; rerun with one of these names or a position
     struct store::Store  src/store/mod.rs:2:3
     ");
 }
