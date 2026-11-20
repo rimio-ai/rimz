@@ -1060,6 +1060,32 @@ fn a_runs_step_timeout_and_cancel_leave_its_children_running() {
 }
 
 #[test]
+fn a_runs_step_cancel_leaves_a_started_run_whose_record_cannot_be_read_out_of_its_receipt() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    deploy(&env, "child");
+    let gate = deploy_fan(&env, TWO_CHILDREN);
+    commit_project(&env);
+    let parent = started(run(&env, "fan", &[], &[]));
+    until(&env, &parent, |value| value["record"]["wait"].is_object());
+    let ids = children(&open_gate(&env, &parent, &gate));
+    // A directory at the record's path fails its read for every uid, root included.
+    let record = run_home(&env, &ids[0]).record;
+    fs::remove_file(&record).unwrap();
+    fs::create_dir(&record).unwrap();
+    let receipt = success(command(&env, &["workflow", "cancel", &parent]));
+    let left = receipt
+        .lines()
+        .filter(|line| line.contains("left running"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        left,
+        [format!("its started runs were left running: {}", ids[1])],
+        "{receipt}"
+    );
+}
+
+#[test]
 fn validate_warns_about_runs_entries_a_start_would_refuse_and_a_workflow_that_starts_itself() {
     let env = Env::new();
     let whole = env.rimz_home().join("workflows/whole");
