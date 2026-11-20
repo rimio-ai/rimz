@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use rimz::mcp::catalog::INSTRUCTIONS;
+
 use crate::common::Env;
 
 const REPLY_DEADLINE: Duration = Duration::from_secs(60);
@@ -23,6 +25,19 @@ const ALL_TOOLS: [&str; 9] = [
     "notes_add",
     "notes_list",
 ];
+
+/// The LOAD cell of `tool`'s row in the Tools table of `explain --mcps`,
+/// read only between the table's header and its total line, since the
+/// tool text printed after it names every tool too.
+fn tool_load(out: &str, tool: &str) -> String {
+    out.lines()
+        .skip_while(|line| !line.trim_start().starts_with("CAPABILITY"))
+        .take_while(|line| !line.trim_start().starts_with("total:"))
+        .find(|line| line.split_whitespace().nth(1) == Some(tool))
+        .and_then(|line| line.split_whitespace().last())
+        .unwrap_or_else(|| panic!("no {tool} row in {out}"))
+        .to_owned()
+}
 
 /// A spawned server, leading its own process group as a provider starts one.
 struct McpServer {
@@ -457,7 +472,7 @@ fn only_serves_the_named_capability() {
             .collect::<Vec<_>>(),
         [json!("lsp")]
     );
-    server.start_call(2, "wait", json!({"in": "5m"}));
+    server.start_call(2, "wait", json!({"trigger": "in", "value": "5m"}));
     let wait = server.reply(&json!(2));
     assert!(wait["error"]["code"].is_i64(), "{wait}");
     server.start_call(3, "no_such_tool", json!({}));
@@ -506,10 +521,11 @@ fn notes_add_keeps_the_body_bytes_and_the_server_keeps_parsing() {
         }),
     );
     assert!(!is_error, "{text}");
-    assert!(
-        text.contains("--meta author dropped: RimZ writes that header key itself"),
-        "the one-shot's stderr is in the result: {text}"
-    );
+    let label = text.find("\nstderr:\n").unwrap_or_else(|| panic!("{text}"));
+    let warning = text
+        .find("--meta author dropped: RimZ writes that header key itself")
+        .unwrap_or_else(|| panic!("the one-shot's stderr is in the result: {text}"));
+    assert!(label < warning, "stderr follows its label: {text}");
     let path = std::path::PathBuf::from(text.lines().next().expect("the note's path"));
     let note = std::fs::read_to_string(&path).expect("read note");
     assert!(note.ends_with(&format!("\n---\n{body}")), "{note}");
@@ -532,8 +548,24 @@ fn notes_add_keeps_the_body_bytes_and_the_server_keeps_parsing() {
     assert!(!text.contains("Usage:"), "{text}");
     assert!(!text.contains("unexpected argument"), "{text}");
     assert!(is_error, "{text}");
-    assert!(text.contains("no language server"), "{text}");
+    let label = text
+        .lines()
+        .position(|line| line == "stderr:")
+        .unwrap_or_else(|| panic!("{text}"));
+    let reason = text
+        .lines()
+        .position(|line| line.contains("no language server"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(label < reason, "stderr follows its label: {text}");
     assert_eq!(text.lines().last(), Some("exit code 3"), "{text}");
+
+    let (text, is_error) = server.call(6, "wait", json!({"trigger": "pid", "value": "one"}));
+    assert!(is_error, "{text}");
+    let usage = text
+        .find("stderr:\nerror: invalid value 'one' for '--pid <PID>'")
+        .unwrap_or_else(|| panic!("the CLI's usage error under stderr: {text}"));
+    assert!(!text[..usage].contains("invalid arguments"), "{text}");
+    assert_eq!(text.lines().last(), Some("exit code 2"), "{text}");
 
     let (_, lines) = server.close();
     assert_protocol_lines(&lines);
@@ -548,7 +580,11 @@ fn a_call_as_an_agent_resolves_its_home_room_and_caller() {
     crate::common::wait::register_calling_agent(&env);
     let mut server = serve_as_agent(&env);
     server.initialize();
-    let (text, is_error) = server.call(1, "wait", json!({"in": "1h", "label": "via mcp"}));
+    let (text, is_error) = server.call(
+        1,
+        "wait",
+        json!({"trigger": "in", "value": "1h", "label": "via mcp"}),
+    );
     assert!(!is_error, "{text}");
     let (text, is_error) = server.call(2, "wait_list", json!({}));
     assert!(!is_error, "{text}");
@@ -632,13 +668,6 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         );
         String::from_utf8(output.stdout).unwrap()
     };
-    let tool_load = |out: &str, tool: &str| -> String {
-        out.lines()
-            .find(|line| line.split_whitespace().nth(1) == Some(tool))
-            .and_then(|line| line.split_whitespace().last())
-            .unwrap_or_else(|| panic!("no {tool} row in {out}"))
-            .to_owned()
-    };
 
     let out = explain("cmark");
     assert!(!out.contains("Plan"), "{out}");
@@ -663,6 +692,23 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert!(out.contains(r#""--always","rimz-lsp""#), "{out}");
     assert!(out.contains("claude mcp list"), "{out}");
     assert!(out.contains("/context"), "{out}");
+    let mut server = serve(&env, &[]);
+    let instructions = server.initialize()["result"]["instructions"].clone();
+    let instructions = instructions.as_str().expect("instructions");
+    assert!(out.contains(instructions), "{out}");
+    let served = server.request(1, "tools/list", json!({}));
+    for tool in served["result"]["tools"].as_array().expect("tools") {
+        let name = tool["name"].as_str().expect("tool name");
+        let schema = serde_json::to_string_pretty(&tool["inputSchema"]).unwrap();
+        assert!(out.contains(&format!("\n## {name}\n")), "{out}");
+        assert!(out.contains(tool["description"].as_str().unwrap()), "{out}");
+        assert!(out.contains(&format!("```json\n{schema}\n```")), "{out}");
+    }
+    server.close();
+    assert!(
+        out.contains("rimz cannot see the tools of your own MCP servers"),
+        "{out}"
+    );
 
     let out = explain("cflip");
     assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
@@ -675,6 +721,10 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
     assert!(!out.contains("CAPABILITY"), "{out}");
+    assert!(
+        !out.contains("## lsp") && !out.contains(INSTRUCTIONS),
+        "{out}"
+    );
     assert!(out.contains("only github (allowedMcpServers)"), "{out}");
 
     let out = explain("xmark");
@@ -701,6 +751,10 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
     assert!(!out.contains("CAPABILITY"), "{out}");
+    assert!(
+        !out.contains("## lsp") && !out.contains(INSTRUCTIONS),
+        "{out}"
+    );
 
     std::fs::write(&config, "[agents]\nrimz-mcp-server = false\n").unwrap();
     let out = explain("cmark");
@@ -709,6 +763,10 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
     assert!(!out.contains("CAPABILITY"), "{out}");
+    assert!(
+        !out.contains("## lsp") && !out.contains(INSTRUCTIONS),
+        "{out}"
+    );
 }
 
 /// A profile's own Codex overrides sit in the argv beside RimZ's, and
@@ -754,13 +812,6 @@ fn explain_mcps_reads_a_profiles_own_codex_overrides_as_codex_applies_them() {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap()
-    };
-    let tool_load = |out: &str, tool: &str| -> String {
-        out.lines()
-            .find(|line| line.split_whitespace().nth(1) == Some(tool))
-            .and_then(|line| line.split_whitespace().last())
-            .unwrap_or_else(|| panic!("no {tool} row in {out}"))
-            .to_owned()
     };
 
     let out = explain("xlast");
@@ -836,7 +887,11 @@ fn a_call_under_the_codex_entrys_env_vars_resolves_the_same_agent() {
     command.env_clear().envs(kept);
     let mut server = McpServer::spawn(command);
     server.initialize();
-    let (text, is_error) = server.call(1, "wait", json!({"in": "1h", "label": "cleared"}));
+    let (text, is_error) = server.call(
+        1,
+        "wait",
+        json!({"trigger": "in", "value": "1h", "label": "cleared"}),
+    );
     assert!(!is_error, "{text}");
     let (text, is_error) = server.call(2, "wait_list", json!({}));
     assert!(!is_error, "{text}");
@@ -927,7 +982,11 @@ fn a_wait_armed_through_the_server_fires_after_its_group_is_terminated() {
     crate::common::wait::register_calling_agent(&env);
     let mut server = serve_as_agent(&env);
     server.initialize();
-    let (text, is_error) = server.call(1, "wait", json!({"run": "sleep 1; printf fired"}));
+    let (text, is_error) = server.call(
+        1,
+        "wait",
+        json!({"trigger": "run", "value": "sleep 1; printf fired"}),
+    );
     assert!(!is_error, "{text}");
     nix::sys::signal::killpg(
         nix::unistd::Pid::from_raw(server.pid() as i32),

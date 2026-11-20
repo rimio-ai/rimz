@@ -50,7 +50,7 @@ const TERMINAL_NOTE: &str = "\
 rimz mcp serve is the MCP server RimZ hands to every Claude and Codex launch.
 The provider starts it over stdio, so there is nothing to serve here.
 To see its tools and their sizes: rimz mcp tools
-To see the arguments one launch passes it: rimz agents explain <profile> --mcps";
+To see what one launch passes it and the text of each tool: rimz agents explain <profile> --mcps";
 
 pub fn run(args: McpArgs) -> Result<()> {
     match args.command {

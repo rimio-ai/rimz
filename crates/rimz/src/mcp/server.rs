@@ -10,14 +10,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde_json::{Value, json};
 
-use super::catalog::{Capability, Invocation, LoadMode, SERVER_NAME, Tool, tools_for, tools_list};
+use super::catalog::{
+    Capability, INSTRUCTIONS, Invocation, LoadMode, SERVER_NAME, Tool, tools_for, tools_list,
+};
 
 const PROTOCOL_VERSIONS: [&str; 2] = ["2025-06-18", "2025-11-25"];
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
-
-const INSTRUCTIONS: &str = "Each tool runs one `rimz` command as this agent, in its room, and \
-                            returns that command's output; a command that fails returns an error \
-                            result carrying its exit code.";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -227,8 +225,8 @@ fn run_one_shot(id: &Value, seq: u64, invocation: Invocation, calls: &Calls) {
         std::thread::spawn(move || drop(pipe.write_all(&body)));
     }
     let stderr = std::thread::spawn(move || read_all(stderr));
-    let mut text = read_all(stdout);
-    text.push_str(&stderr.join().unwrap_or_default());
+    let stdout = read_all(stdout);
+    let mut text = result_text(stdout, &stderr.join().unwrap_or_default());
     let Some(status) = calls.finish(seq) else {
         return;
     };
@@ -251,6 +249,16 @@ fn read_all(pipe: Option<impl Read>) -> String {
         let _ = pipe.read_to_end(&mut bytes);
     }
     String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// A one-shot's stdout, then its stderr under a `stderr:` line when it
+/// wrote any.
+fn result_text(mut stdout: String, stderr: &str) -> String {
+    if !stderr.is_empty() {
+        append_line(&mut stdout, "stderr:\n");
+        stdout.push_str(stderr);
+    }
+    stdout
 }
 
 fn exit_line(status: ExitStatus) -> String {
@@ -400,6 +408,17 @@ fn send(message: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stderr_follows_stdout_under_its_label() {
+        assert_eq!(
+            result_text("out\n".into(), "warn\n"),
+            "out\nstderr:\nwarn\n"
+        );
+        assert_eq!(result_text("out".into(), "warn"), "out\nstderr:\nwarn");
+        assert_eq!(result_text(String::new(), "err\n"), "stderr:\nerr\n");
+        assert_eq!(result_text("out\n".into(), ""), "out\n");
+    }
 
     #[test]
     fn the_parent_fills_only_names_the_server_lacks_and_unreadable_falls_back() {
