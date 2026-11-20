@@ -10,7 +10,9 @@ use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::common::{Env, ScrubSessionEnvExt, trace_lines, write_path_shim, zellij_trace_shim};
+use crate::common::{
+    DeliveryRendezvous, Env, ScrubSessionEnvExt, trace_lines, write_path_shim, zellij_trace_shim,
+};
 
 fn closed_path(env: &Env) -> PathBuf {
     env.runtime_paths().lanes_dir.join("closed-cards.json")
@@ -323,14 +325,19 @@ fn launched(env: &Env, agent: &str, epoch: u32, pane: &str) {
     seed(env, agent, |observation| {
         observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, pane));
     });
-    let row = env
+    launch_event(env, agent, epoch, AgentLaunchState::Bound, Some(pane));
+}
+
+/// The launch event of session `agent` of launch `launch-card` at `epoch`, in `state`, carrying
+/// the owner its row has.
+fn launch_event(env: &Env, agent: &str, epoch: u32, state: AgentLaunchState, pane: Option<&str>) {
+    let owner = env
         .store()
         .audit_rows()
         .unwrap()
         .iter()
         .find(|row| row.agent_id == agent)
-        .cloned()
-        .unwrap();
+        .and_then(|row| row.runtime_owner.clone());
     env.store()
         .append_event(&EventEnvelope::agent_launched(
             env.workspace_id.clone(),
@@ -346,10 +353,10 @@ fn launched(env: &Env, agent: &str, epoch: u32, pane: &str) {
                     epoch: Some(epoch),
                     ..Default::default()
                 },
-                state: AgentLaunchState::Bound,
+                state,
                 run_id: None,
-                pane_id: Some(PaneId::from_parts(MuxName::Zellij, pane)),
-                runtime_owner: row.runtime_owner,
+                pane_id: pane.map(|pane| PaneId::from_parts(MuxName::Zellij, pane)),
+                runtime_owner: owner,
                 worktree_path: Some(env.project_root.display().to_string()),
                 worktree_branch: None,
                 prompt: None,
@@ -393,6 +400,162 @@ fn close_of_a_replaced_session_stops_and_records_the_holder() {
     let entries = read_closed(&env);
     assert_eq!(entries.as_array().unwrap().len(), 1, "{entries}");
     assert_eq!(entries[0]["agent_id"], "sess-new");
+}
+
+/// Close the card of `sess-old` while `bind` binds its swap's replacement after the card's
+/// read and before the stop's swap cancel, with a reservation staged first when `reserved`.
+fn close_racing_a_bind(env: &Env, reserved: bool, bind: impl Fn(&Env) + Sync) -> Output {
+    env.record(&env.project_root);
+    launched(env, "sess-old", 0, "terminal_7");
+    if reserved {
+        launch_event(env, "launch_swap", 1, AgentLaunchState::Starting, None);
+    }
+    let cancel = DeliveryRendezvous::new(env, "stop-swap-cancel");
+    let mut command = command(env, &["close"]);
+    command.env("RIMZ_TEST_STOP_BEFORE_SWAP_CANCEL", &cancel.path);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut held = cancel.arrive();
+            bind(env);
+            held.write_all(&[0]).unwrap();
+        });
+        close_card(env, "sess-old", command)
+    })
+}
+
+/// A reservation that binds after the card's read holds the agent once its cancel is
+/// refused: the stop reads again, closes the holder's pane, and records nothing, since a
+/// provisional session offers no resume.
+#[test]
+fn close_of_a_card_whose_reservation_binds_mid_stop_closes_the_holder() {
+    let env = Env::new();
+    let output = close_racing_a_bind(&env, true, |env| {
+        launched(env, "launch_swap", 1, "terminal_8");
+    });
+    assert_exit(&output, 0);
+    let closes = closes(&env);
+    assert_eq!(closes.len(), 1, "{closes:?}");
+    assert!(closes[0].ends_with("terminal_8"), "{closes:?}");
+    assert!(!closed_path(&env).exists(), "{}", read_closed(&env));
+}
+
+/// A replacement that bound and took its session id after the card's read holds the agent:
+/// the stop reads again, closes the holder's pane, and records the holder.
+#[test]
+fn close_of_a_card_whose_replacement_binds_mid_stop_closes_and_records_the_holder() {
+    let env = Env::new();
+    let output = close_racing_a_bind(&env, false, |env| {
+        launched(env, "sess-new", 1, "terminal_8");
+    });
+    assert_exit(&output, 0);
+    let closes = closes(&env);
+    assert_eq!(closes.len(), 1, "{closes:?}");
+    assert!(closes[0].ends_with("terminal_8"), "{closes:?}");
+    let entries = read_closed(&env);
+    assert_eq!(entries.as_array().unwrap().len(), 1, "{entries}");
+    assert_eq!(entries[0]["agent_id"], "sess-new");
+}
+
+/// Lines of the multiplexer trace before the first pane close that list panes: each hosting
+/// read lists the session's panes once.
+fn listings_before_close(env: &Env) -> usize {
+    trace_lines(&env.home_root.join("mux.log"))
+        .iter()
+        .take_while(|line| !line.contains("close-pane"))
+        .filter(|line| line.contains("list-panes"))
+        .count()
+}
+
+/// A plain card close (no swap, no run, nothing hibernating) closes on the card's own read.
+#[test]
+fn close_of_a_plain_card_closes_on_the_card_read_alone() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "plain", |_| {});
+    let output = close_card(&env, "plain", command(&env, &["close"]));
+    assert_exit(&output, 0);
+    assert!(!closes(&env).is_empty());
+    assert_eq!(
+        listings_before_close(&env),
+        1,
+        "{:?}",
+        trace_lines(&env.home_root.join("mux.log"))
+    );
+}
+
+/// A stop that thawed the card's pane reads again before it closes it.
+#[test]
+fn close_of_a_thawed_card_reads_again_before_the_close() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "frozen", |_| {});
+    let uid = nix::unistd::Uid::current().as_raw();
+    rimz::store::hibernate::record(
+        env.store().paths(),
+        rimz::store::hibernate::Entry {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "frozen".into(),
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_7"),
+            scope: PathBuf::from(format!(
+                "/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/app.slice/\
+                 rimz-agent-sidebar-cards-absent.scope"
+            )),
+            provider_pid: 1,
+            frozen_at: jiff::Timestamp::now(),
+            reclaimed_bytes: 0,
+            anon_at_freeze: 0,
+            step: 0,
+            wake_error: None,
+        },
+    )
+    .unwrap();
+    let output = close_card(&env, "frozen", command(&env, &["close"]));
+    assert_exit(&output, 0);
+    assert!(
+        rimz::store::hibernate::read(env.store().paths()).is_empty(),
+        "the pane was not thawed"
+    );
+    assert!(!closes(&env).is_empty());
+    assert_eq!(
+        listings_before_close(&env),
+        2,
+        "{:?}",
+        trace_lines(&env.home_root.join("mux.log"))
+    );
+}
+
+/// A stop that cancelled the card's run reads again before it closes the pane.
+#[test]
+fn close_of_a_card_with_a_live_run_reads_again_after_the_cancel() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed(&env, "running", |_| {});
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("running".into());
+    run.status = rimz::store::run::RunStatus::Running;
+    run.keep = true;
+    rimz::harness::run::create(env.store().paths(), &run).unwrap();
+    let _ = close_card(&env, "running", command(&env, &["close"]));
+    assert!(
+        rimz::harness::run::load(env.store().paths(), &run.run_id)
+            .unwrap()
+            .status
+            .is_terminal(),
+        "the run was not cancelled"
+    );
+    assert!(!closes(&env).is_empty());
+    assert_eq!(
+        listings_before_close(&env),
+        2,
+        "{:?}",
+        trace_lines(&env.home_root.join("mux.log"))
+    );
 }
 
 /// A stored session the lookup ties to no pane goes to the agent stop, whose verdict is

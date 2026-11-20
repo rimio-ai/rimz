@@ -110,9 +110,11 @@ pub(super) fn close_tab(globals: &GlobalFlags, session: Option<String>) -> Resul
 }
 
 /// Close `targets` through one hosting read: raw panes and agents no pane hosts close
-/// their pane, and every hosted agent stops in one batch, children before parents. Each
+/// their pane, and every hosted agent stops in one batch, children before parents, acting
+/// on that read unless a pane closed here sat between it and the stop. Each
 /// stopped root that offers a resume enters the closed-card list, in `targets` order.
 fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, targets: Vec<CardTarget>) -> Result<()> {
+    let snapshot = ctx.cached_snapshot()?;
     let read = match read_hosting(&ctx.workspace, &ctx.store, globals.mux) {
         Ok(mut read) => {
             render::room::print_notices(read.take_notices())?;
@@ -124,6 +126,7 @@ fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, targets: Vec<CardTarge
         }
     };
     let mut agents = Vec::new();
+    let mut closed_pane = false;
     for target in targets {
         let (kind, agent_id, pane) = match target {
             CardTarget::Agent {
@@ -133,24 +136,37 @@ fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, targets: Vec<CardTarge
             } => (kind, agent_id, pane),
             CardTarget::Pane(pane) => {
                 rimz::mux::backend_for(pane.mux()).close_pane(session, &pane)?;
+                closed_pane = true;
                 continue;
             }
         };
         match read.agent_hosting_of_session(&kind, &agent_id).holder {
             Some(agent) if agents.contains(&agent) => {}
             Some(agent) => agents.push(agent),
-            None => rimz::mux::backend_for(pane.mux()).close_pane(session, &pane)?,
+            None => {
+                rimz::mux::backend_for(pane.mux()).close_pane(session, &pane)?;
+                closed_pane = true;
+            }
         }
     }
     if agents.is_empty() {
         return Ok(());
     }
-    let snapshot = ctx.cached_snapshot()?;
-    let stops = agents_cmd::stop_resolved(ctx, globals, &snapshot, &agents)?;
+    let owned = agents.into_iter().cloned().collect::<Vec<_>>();
+    let agents = owned.iter().collect::<Vec<_>>();
+    let terms = agents_cmd::StopTerms {
+        read: (!closed_pane).then_some(read),
+        ..Default::default()
+    };
+    // Without `still_due` every stop goes ahead.
+    let stops = agents_cmd::stop_resolved_with(ctx, globals, &snapshot, &agents, terms)?
+        .unwrap_or_default();
     let mut entries = read_closed(ctx);
     let recorded = entries.len();
     let mut failures = Vec::new();
     for (agent, stop) in agents.into_iter().zip(stops) {
+        // A swap that bound during the stop leaves its holder the session stopped.
+        let agent = &stop.root().unwrap_or(agent).clone();
         if let Err(err) = stop.into_result(agent.agent_id.as_str()) {
             failures.push(format!("{err:#}"));
             continue;
