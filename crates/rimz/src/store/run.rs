@@ -1019,8 +1019,11 @@ impl OpenRunsCache {
                 terminal.files.insert(name.clone(), stamp);
                 continue;
             }
-            let bytes = match fs::read(&path) {
-                Ok(bytes) => bytes,
+            // The path may be renamed over since the stat: the remembered stamp
+            // comes from the handle the bytes are read from, so it names the
+            // decoded inode.
+            let (stamp, bytes) = match read_stamped(&path) {
+                Ok(read) => read,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(source) => return Err(RunStoreErr::Io { path, source }),
             };
@@ -1053,6 +1056,16 @@ impl OpenRunsCache {
         self.open = Some(open.clone());
         Ok(open)
     }
+}
+
+fn read_stamped(path: &Path) -> io::Result<(FileStamp, Vec<u8>)> {
+    use std::io::Read as _;
+
+    let mut file = fs::File::open(path)?;
+    let stamp = FileStamp::from_metadata(&file.metadata()?);
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok((stamp, bytes))
 }
 
 fn directory_stamp(runs_dir: &Path) -> Result<Option<FileStamp>> {
