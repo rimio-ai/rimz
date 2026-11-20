@@ -824,10 +824,19 @@ fn settle_after_exit(
         );
     }
     let abrupt = child_exit_abrupt || cleanup_signal_received();
-    let (deliberate, ended_session) =
-        stamp_own_end_if_deliberate(invocation, request, abrupt, || {
-            session_accepts_agent_close(globals, session_name)
-        });
+    // A failed resume's follow-up is archived before the end stamp, so no sweep can read the
+    // receiver ended while the follow-up is still open and archive it to be resumed again.
+    let (deliberate, ended_session) = stamp_own_end_if_deliberate(
+        invocation,
+        request,
+        abrupt,
+        || session_accepts_agent_close(globals, session_name),
+        |ended| {
+            if let Some(follow_up) = &request.follow_up_message {
+                archive_failed_resume(invocation, ended, follow_up, &status);
+            }
+        },
+    );
     // The end stamp above is a durable end no hook will ever report, and a
     // failed replacement can end an agent whose old session ended first: either
     // settles what the agent was owed here rather than waiting for gc. A
@@ -960,18 +969,20 @@ struct EndedSession {
 }
 
 /// Whether this exit closes the agent deliberately, and the session it then
-/// stamped ended. A request that records no end stamps nothing.
+/// stamped ended, after running `before_end` on that session. A request that
+/// records no end stamps nothing and runs nothing.
 fn stamp_own_end_if_deliberate(
     invocation: &ExecInvocationContext<'_>,
     request: &rimz::harness::launch::ExecRequest,
     abrupt: bool,
     session_accepts_close: impl FnOnce() -> bool,
+    before_end: impl FnOnce(&EndedSession),
 ) -> (bool, Option<EndedSession>) {
     let deliberate = close_is_deliberate(abrupt, session_accepts_close, || {
         own_agent_pending_recovery(invocation, request)
     });
     let ended_session = (deliberate && should_record_end_trace(request))
-        .then(|| record_own_agent_end_trace(invocation, request))
+        .then(|| record_own_agent_end_trace(invocation, request, before_end))
         .flatten();
     (deliberate, ended_session)
 }
@@ -1822,6 +1833,36 @@ fn mark_launch_failed_if_provisional(
     true
 }
 
+/// Archive what a resume opened for `follow_up` was owed when its provider exits with
+/// `status` before taking it, ahead of the end stamp, so no sweep reads the receiver ended
+/// first and archives it with the ended-receiver reason, which tells the sender to resume the
+/// same child again.
+fn archive_failed_resume(
+    invocation: &ExecInvocationContext<'_>,
+    ended: &EndedSession,
+    follow_up: &rimz::ids::MessageId,
+    status: &std::process::ExitStatus,
+) {
+    let Ok(store) = invocation.store() else {
+        return;
+    };
+    let what = status.code().map_or_else(
+        || "was killed before it took the follow-up".to_owned(),
+        |code| format!("exited with code {code} before it took the follow-up"),
+    );
+    if let Err(err) = rimz::message::deliver::archive_failed_resume(
+        &store,
+        &invocation.workspace.session_name,
+        &ended.kind,
+        &ended.agent_id,
+        ended.name.as_deref(),
+        follow_up,
+        &what,
+    ) {
+        tracing::warn!(error = %err, "could not archive the failed resume's messages");
+    }
+}
+
 /// Retire the deliveries of every ended session whose agent ended, and archive
 /// the queue's debt to the agent `(kind, agent_id)` belongs to once it has
 /// ended. A session its agent outlives keeps the agent's waits and messages.
@@ -1851,12 +1892,16 @@ fn settle_ended_agent(
     }
 }
 
+/// Stamp this wrapper's session ended, running `before_end` on it first, while no reader can
+/// see the end yet.
 fn record_own_agent_end_trace(
     invocation: &ExecInvocationContext<'_>,
     request: &rimz::harness::launch::ExecRequest,
+    before_end: impl FnOnce(&EndedSession),
 ) -> Option<EndedSession> {
     match resolve_own_agent_end_trace(invocation, request) {
         Ok(Some(ended)) => {
+            before_end(&ended);
             append_agent_lifecycle_trace(
                 invocation,
                 &request.identity,

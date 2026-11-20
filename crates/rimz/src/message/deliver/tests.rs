@@ -469,6 +469,88 @@ fn ended_receiver_refuses_before_compaction_and_gate_checks() {
 }
 
 #[test]
+fn resume_follow_up_waits_for_the_provider_session_under_every_unforced_policy() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let mut receiver = agent("session", AgentStatus::Idle);
+    receiver.kind = crate::ids::AgentKind::new_unchecked("claude");
+    receiver.resumed_at = Some(now - jiff::SignedDuration::from_secs(3_600));
+    let mut candidate = message(&receiver, 1, "hello");
+    let register_by = now + jiff::SignedDuration::from_secs(60);
+    candidate.register_by = Some(register_by);
+    let live = snapshot(receiver, true, now);
+    let check = explain(&candidate, std::slice::from_ref(&candidate), &live, now);
+    assert_eq!(
+        check.verdict(),
+        DeliveryVerdict::WaitingForRegistration { register_by }
+    );
+    for policy in [
+        DeliveryPolicy::Boundary,
+        DeliveryPolicy::Steer { force: false },
+        DeliveryPolicy::Interrupt { force: false },
+    ] {
+        assert!(matches!(
+            delivery_candidate(
+                std::slice::from_ref(&candidate),
+                &live,
+                &candidate.message_id,
+                policy,
+                now
+            ),
+            Candidacy::Refused(DeliveryVerdict::WaitingForRegistration { .. })
+        ));
+    }
+    assert!(matches!(
+        delivery_candidate(
+            std::slice::from_ref(&candidate),
+            &live,
+            &candidate.message_id,
+            DeliveryPolicy::Steer { force: true },
+            now
+        ),
+        Candidacy::Ready(_)
+    ));
+}
+
+#[test]
+fn resume_follow_up_to_a_kind_whose_resume_reports_no_start_keeps_the_timed_hold() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let mut receiver = agent("session", AgentStatus::Idle);
+    receiver.kind = crate::ids::AgentKind::new_unchecked("cursor");
+    let mut candidate = message(&receiver, 1, "hello");
+    candidate.register_by = Some(now + jiff::SignedDuration::from_secs(60));
+    for (resumed_ago, boundary_waits) in [(0, true), (3_600, false)] {
+        receiver.resumed_at = Some(now - jiff::SignedDuration::from_secs(resumed_ago));
+        let live = snapshot(receiver.clone(), true, now);
+        let check = explain(&candidate, std::slice::from_ref(&candidate), &live, now);
+        let candidacy = |policy| {
+            delivery_candidate(
+                std::slice::from_ref(&candidate),
+                &live,
+                &candidate.message_id,
+                policy,
+                now,
+            )
+        };
+        if boundary_waits {
+            assert_eq!(check.verdict(), DeliveryVerdict::ProviderStarting);
+            assert!(matches!(
+                candidacy(DeliveryPolicy::Boundary),
+                Candidacy::Refused(DeliveryVerdict::ProviderStarting)
+            ));
+        } else {
+            assert!(matches!(
+                candidacy(DeliveryPolicy::Boundary),
+                Candidacy::Ready(_)
+            ));
+        }
+        assert!(matches!(
+            candidacy(DeliveryPolicy::Steer { force: false }),
+            Candidacy::Ready(_)
+        ));
+    }
+}
+
+#[test]
 fn resumed_provider_refuses_delivery_before_resume_recovery() {
     let now = Timestamp::from_second(10_000).unwrap();
     let mut receiver = agent("session", AgentStatus::Idle);

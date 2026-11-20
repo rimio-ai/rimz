@@ -49,7 +49,7 @@ A plugin's spec must outlive the process like a built-in's `static` spec, becaus
 | `plan_label` | `TitleCaseOnly` |
 | `plan_capacities` | none |
 | `tool_rules`, `host_skills` | `Unsupported` |
-| `capabilities.native_ask_ui`, `registers_lazily` | from `[capabilities]` |
+| `capabilities.native_ask_ui`, `registers_lazily`, `reports_start_on_resume` | from `[capabilities]` |
 | `capabilities.direct_account_usage` | true when an account probe is declared |
 | `capabilities.local_session_discovery` | `Unsupported` |
 | `capabilities.transcript_tail_context`, `daemon_hooked_sessions`, `prompt_context`, `hook_context`, `remote_control`, `permission_before_auto_review` | off |

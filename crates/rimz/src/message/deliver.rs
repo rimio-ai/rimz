@@ -797,6 +797,27 @@ pub fn archive_for_ended_agent(
     Ok(true)
 }
 
+/// Archive the follow-ups of a resumed child whose provider exited before it took
+/// `follow_up`, the message its resume was opened for, saying `what` happened, so the
+/// sender is told to launch a fresh child rather than resend into the same failed resume.
+/// Returns how many it archived.
+pub fn archive_failed_resume(
+    store: &Store,
+    session_name: &str,
+    kind: &crate::ids::AgentKind,
+    agent_id: &crate::ids::AgentSessionId,
+    agent_name: Option<&str>,
+    follow_up: &MessageId,
+    what: &str,
+) -> crate::store::Result<usize> {
+    let rows = store.audit_rows()?;
+    let card = rows.find(kind, agent_id).map_or_else(
+        || crate::agents::AgentCardRef::new(kind, agent_id, agent_name),
+        AgentState::card_ref,
+    );
+    store.archive_failed_resume(card, kind.as_str(), follow_up, what, session_name)
+}
+
 /// Tells each agent sender, once per message, that its condition-met record on `head`'s card has
 /// stayed queued past the delay of the class `verdict` puts the receiver in.
 fn notify_long_queued(
@@ -1119,9 +1140,7 @@ impl DeliveryCheck {
         if let Some(hold) = self.typing_hold {
             return DeliveryVerdict::TypingHeld { until: hold.until };
         }
-        if (!self.agent.present || self.agent.ended)
-            && let Some(register_by) = self.register_by
-        {
+        if let Some(register_by) = self.register_by {
             return DeliveryVerdict::WaitingForRegistration { register_by };
         }
         if !self.schedule.ready {
@@ -1448,8 +1467,9 @@ fn evaluate_delivery<'a>(
             ended: agent.is_some_and(|agent| agent.ended_at.is_some()),
         },
         gate: GateCheck {
-            provider_start_pending: agent
-                .is_some_and(|agent| super::provider_start_pending(agent, now)),
+            provider_start_pending: agent.is_some_and(|agent| {
+                super::provider_start_pending(agent, message.register_by.is_some(), now)
+            }),
             gate: message.gate,
             status,
             compacting,
@@ -1613,7 +1633,7 @@ fn delivery_candidate<'a>(
     {
         return Candidacy::Refused(check.verdict());
     }
-    if check.ask.waiting
+    if (check.ask.waiting || check.register_by.is_some())
         && !matches!(
             policy,
             DeliveryPolicy::Steer { force: true } | DeliveryPolicy::Interrupt { force: true }

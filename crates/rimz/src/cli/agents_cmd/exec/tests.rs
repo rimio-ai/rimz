@@ -1088,7 +1088,7 @@ mod pane_exec {
         };
 
         park(serde_json::json!([["claude", "alpha"]]));
-        let parked = stamp_own_end_if_deliberate(&invocation, &request, true, || true);
+        let parked = stamp_own_end_if_deliberate(&invocation, &request, true, || true, |_| {});
         assert_eq!(
             parked,
             (false, None),
@@ -1097,7 +1097,7 @@ mod pane_exec {
         assert_eq!(ends(), 0, "no end stamp for a parked agent");
 
         park(serde_json::json!([]));
-        let closed = stamp_own_end_if_deliberate(&invocation, &request, true, || true);
+        let closed = stamp_own_end_if_deliberate(&invocation, &request, true, || true, |_| {});
         assert_eq!(
             closed,
             (

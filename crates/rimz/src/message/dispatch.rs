@@ -157,6 +157,7 @@ pub enum ParkReason {
     Resuming {
         register_by: Timestamp,
         attempt: ResumeAttempt,
+        start: ResumeStart,
     },
     Scheduled(Timestamp),
     After(String),
@@ -179,6 +180,34 @@ impl ParkReason {
         match verdict {
             deliver::DeliveryVerdict::NotHosted { blocker } => Self::NotHosted { blocker },
             _ => Self::NoPane,
+        }
+    }
+}
+
+/// When a resumed child's follow-up is typed, by what the receiver's kind reports on resume.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResumeStart {
+    /// The kind reports its provider's session start, so delivery waits for it until
+    /// `register_by`.
+    Reported,
+    /// The kind registers lazily, so the follow-up is typed once the resumed pane is up.
+    Lazy,
+    /// The follow-up is typed one delivery window after the resumed pane is up, or once its
+    /// provider reports sooner.
+    Timed,
+}
+
+impl ResumeStart {
+    fn of(kind: &AgentKind) -> Self {
+        let Some(definition) = crate::agents::spec_by_kind(kind.as_str()) else {
+            return Self::Timed;
+        };
+        if definition.capabilities.reports_start_on_resume {
+            Self::Reported
+        } else if definition.capabilities.registers_lazily {
+            Self::Lazy
+        } else {
+            Self::Timed
         }
     }
 }
@@ -1020,6 +1049,7 @@ impl DispatchState<'_> {
             let reason = message.register_by.map(|register_by| ParkReason::Resuming {
                 register_by,
                 attempt,
+                start: ResumeStart::of(&message.kind),
             });
             return Ok((message, reason));
         }
@@ -1203,7 +1233,7 @@ fn dispatch_decision(
                 reason: Some(reason),
             };
         }
-        if super::provider_start_pending(agent, now) {
+        if super::provider_start_pending(agent, false, now) {
             return DispatchDecision::Parked {
                 reason: Some(ParkReason::ProviderStarting),
             };

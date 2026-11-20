@@ -1696,6 +1696,10 @@ pub struct Capabilities {
     /// an instance can be present without a stamped session. The sidebar binds
     /// such a session to its pane by cwd.
     pub registers_lazily: bool,
+    /// A resume reports the provider's session start (a lifecycle hook under the resumed session
+    /// id) before its first prompt, so a resume follow-up waits for that report instead of a
+    /// timed hold, and fails at its deadline without it.
+    pub reports_start_on_resume: bool,
     /// How the room host reads provider-local session observations, without
     /// executable hooks or RimZ store writes.
     pub local_session_discovery: LocalSessionDiscovery,

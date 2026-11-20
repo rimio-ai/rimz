@@ -2239,6 +2239,17 @@ impl AgentState {
         self.parent_agent_id.is_some() && self.launch_depth.is_some()
     }
 
+    /// Whether the exec wrapper stamped this row resumed and its provider has reported no
+    /// lifecycle since: the stamp stands until the provider's own session start (or any later
+    /// hook). Only a kind whose resume reports that start before its first prompt
+    /// (`reports_start_on_resume`) counts; any other kind may report nothing until a prompt.
+    pub fn resumed_provider_unreported(&self) -> bool {
+        self.ended_at.is_none()
+            && self.resumed_at.is_some()
+            && crate::agents::spec_by_kind(self.kind.as_str())
+                .is_some_and(|definition| definition.capabilities.reports_start_on_resume)
+    }
+
     /// A provider-native, paneless child rather than a full agent session.
     pub fn is_provider_subagent(&self) -> bool {
         self.parent_agent_id.is_some() && self.launch_depth.is_none()

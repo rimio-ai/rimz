@@ -50,6 +50,7 @@ static MUSE_DESCRIPTOR: AgentSpec = AgentSpec {
         permission_before_auto_review: false,
         transcript_tail_context: false,
         registers_lazily: true,
+        reports_start_on_resume: false,
         local_session_discovery: LocalSessionDiscovery::Unsupported,
         daemon_hooked_sessions: false,
         direct_account_usage: false,

@@ -1029,7 +1029,9 @@ impl MessageRecord {
             && self.same_agent_card(card)
     }
 
-    /// Registration waits only against an absent card or an end no later than enqueue.
+    /// Registration waits against an absent card, an end no later than enqueue, or a resumed
+    /// row of a kind that reports its start on resume whose provider has not reported a session
+    /// since the wrapper's resume stamp (`AgentState::resumed_provider_unreported`).
     pub(crate) fn awaiting_registration(&self, agents: &[AgentState]) -> bool {
         self.status == MessageStatus::Queued
             && self.register_by.is_some()
@@ -1040,7 +1042,29 @@ impl MessageRecord {
                     agent
                         .ended_at
                         .is_some_and(|ended_at| ended_at <= self.enqueued_at)
+                        || agent.resumed_provider_unreported()
                 })
+    }
+
+    /// The receiver as the sender addressed it, or its card name when the record kept no address.
+    pub(crate) fn receiver_address(&self) -> String {
+        self.address.clone().unwrap_or_else(|| {
+            format!(
+                "@{}",
+                self.agent_name.as_deref().unwrap_or(self.agent_id.as_str())
+            )
+        })
+    }
+
+    /// Why a resume follow-up fails once its resumed `kind` provider cannot take it: `what`
+    /// happened, then a fresh launch to replace the child, since resending only resumes the same
+    /// session again. The command keeps `<profile>` as a placeholder: a team role, an exact
+    /// allowlist or a renamed profile can make any name the row stored refuse there.
+    pub(crate) fn failed_resume_reason(&self, kind: &str, what: &str) -> String {
+        format!(
+            "{}'s resumed {kind} {what}; launch a fresh child with rimz subagents <profile> <task>",
+            self.receiver_address()
+        )
     }
 
     pub(crate) fn idle_compaction_lapsed(&self, agent: &AgentState) -> bool {

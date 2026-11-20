@@ -740,14 +740,21 @@ fn wait_and_decide(
             super::InputWait::for_agent(agent, now),
         )));
     }
-    if send.kind == DeliveryKind::Boundary {
-        if !super::gate_open_for_agent(head.gate, agent, send.force, now, snapshot, card_status) {
-            let status = super::gate_status(head.gate, agent, now, snapshot, card_status);
-            return Ok(Decided::Stop(Receipt::Deferred(Deferral::Status(status))));
-        }
-        if super::provider_start_pending(agent, now) {
-            return Ok(Decided::Stop(Receipt::Deferred(Deferral::ProviderStarting)));
-        }
+    if send.kind == DeliveryKind::Boundary
+        && !super::gate_open_for_agent(head.gate, agent, send.force, now, snapshot, card_status)
+    {
+        let status = super::gate_status(head.gate, agent, now, snapshot, card_status);
+        return Ok(Decided::Stop(Receipt::Deferred(Deferral::Status(status))));
+    }
+    // A resume follow-up waits for the provider's own session start under every unforced
+    // kind: typing into a provider that has not started one is what kills the resume. Only a
+    // kind whose resume reports that start is held here; another keeps the boundary's timed hold.
+    let follow_up_held =
+        head.register_by.is_some() && !send.force && agent.resumed_provider_unreported();
+    if (send.kind == DeliveryKind::Boundary || follow_up_held)
+        && super::provider_start_pending(agent, head.register_by.is_some(), now)
+    {
+        return Ok(Decided::Stop(Receipt::Deferred(Deferral::ProviderStarting)));
     }
     Ok(Decided::Write { row: fresh, batch })
 }

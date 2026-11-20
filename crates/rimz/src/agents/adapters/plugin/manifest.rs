@@ -58,6 +58,7 @@ pub(super) struct CapabilityManifest {
     pub subagents: bool,
     pub background_tasks: bool,
     pub registers_lazily: bool,
+    pub reports_start_on_resume: bool,
     pub context_usage: bool,
 }
 
