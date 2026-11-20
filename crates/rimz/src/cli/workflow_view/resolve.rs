@@ -484,7 +484,7 @@ fn pick(
     let mut components = Path::new(name).components();
     let definition = matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none()
-        && paths::workflows_dir().join(name).is_dir();
+        && super::definition_dir(Path::new(name)).is_ok_and(|dir| dir.is_some());
     let known = !runs.is_empty() || definition;
     let local_workflow = runs
         .iter()

@@ -77,7 +77,7 @@ fn new_runs_read_their_deployed_definition_at_the_current_record_version() {
             .workflow(&id.parse().unwrap());
         (
             value["record"]["version"].as_u64().unwrap(),
-            value["record"]["spec_dir"] == json!(dir.canonicalize().unwrap()),
+            value["record"]["spec_dir"] == json!(dir),
             paths.home.join("workflow.toml").exists() || paths.definition.exists(),
         )
     })
@@ -1220,6 +1220,57 @@ fn run_dot_resolves_the_current_definition_directory() {
 }
 
 #[test]
+fn run_takes_a_directory_anywhere_by_path_and_a_bare_name_only_as_a_name() {
+    let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let source = tempfile::tempdir().unwrap();
+    let outside = source.path().join("loose");
+    fs::create_dir_all(outside.join("checks")).unwrap();
+    for file in ["workflow.toml", "checks/pr.sh"] {
+        fs::copy(dir.join(file), outside.join(file)).unwrap();
+    }
+    let run_in = |cwd: &Path, target: &str| {
+        env.rimz()
+            .current_dir(cwd)
+            .args([
+                "--root",
+                env.project_root.to_str().unwrap(),
+                "workflow",
+                "run",
+                target,
+            ])
+            .output()
+            .unwrap()
+    };
+    // A bare name is never read from the current directory, and the refusal says how to.
+    let named = run_in(source.path(), "loose");
+    assert_eq!(named.status.code(), Some(1), "{named:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&named.stderr).trim(),
+        format!(
+            "error: loose: no workflow of that name in {} or an installed pack; \
+             to run the directory here, write ./loose",
+            env.rimz_home().join("workflows").display()
+        )
+    );
+    for (cwd, target) in [
+        (env.project_root.as_path(), outside.to_str().unwrap()),
+        (source.path(), "./loose"),
+    ] {
+        let output = run_in(cwd, target);
+        assert!(output.status.success(), "{target}: {output:?}");
+        let receipt = String::from_utf8(output.stdout).unwrap();
+        let id = receipt.lines().next().unwrap();
+        let value = until(&env, id, |v| v["record"]["wait"].is_object());
+        assert_eq!(
+            (&value["record"]["workflow"], &value["record"]["spec_dir"]),
+            (&json!("loose"), &json!(outside)),
+            "{target}"
+        );
+        success(command(&env, &["workflow", "cancel", id]));
+    }
+}
+
+#[test]
 fn signal_wakes_every_run_without_waiting_for_another_script() {
     let spec = format!("{HEADER}{WAIT}wake=['review.ready']\n");
     let (env, first_dir) = fixture(&spec, PENDING);
@@ -2303,15 +2354,6 @@ fn validate_json_shape_errors_and_exit_status() {
     fs::copy(dir.join("workflow.toml"), outside.join("workflow.toml")).unwrap();
     let outside = outside.to_str().unwrap();
     success(command(&env, &["workflow", "validate", outside]));
-    let run = command(&env, &["workflow", "run", outside]);
-    assert_eq!(run.status.code(), Some(1));
-    assert_eq!(
-        String::from_utf8_lossy(&run.stderr).trim(),
-        format!(
-            "error: {outside}: directory must exist inside {}",
-            env.rimz_home().join("workflows").display()
-        )
-    );
     let schema = env.rimz().args(["workflow", "schema"]).output().unwrap();
     assert!(schema.status.success());
     let schema: Value = serde_json::from_slice(&schema.stdout).unwrap();

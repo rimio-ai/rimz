@@ -1114,8 +1114,10 @@ upward-dependencies = [
     "harness::signal",
     "harness::spec",
     "harness::team_prompt",
+    "harness::workflow",
     "store::message",
 ]
+# The pack inventory lists pack workflows through the workflow lookup that runs them.
 # Team definitions check pipeline handles against the built-in consensus text.
 # Isolation and parsed skill policy cross config, harness and sandbox seams.
 # The compaction seat selects the harness brief.
@@ -5916,7 +5918,7 @@ surface-budget = 14
 path = "crates/rimz/src/harness/workflow"
 # The workflow engine decides what a run does and imports nothing from the loop scheduler:
 # `harness::schedule` stays off this list, and the scheduler collects a finished run from its
-# record's typed outcome.
+# record's typed outcome. `packs` resolves the pack tier of workflow names (Deployed).
 allowed-dependencies = [
     "(crate)",
     "address",
@@ -5954,6 +5956,7 @@ allowed-dependencies = [
     "harness::when",
     "harness::when::condition",
     "ids",
+    "packs",
     "proc",
     "store",
     "store::event",
@@ -5978,7 +5981,7 @@ allowed-dependencies = [
 # Starting and starting resolve a start's starter and depth before anything is created (+2).
 # AttemptHost::committed hands the host each committed run edge once the lock is released (+1).
 # join_report lets the loop collection store a started run's ending on its runs step (+1).
-# is_deployed shares the workflows-home containment check with `workflow run` and validate (+1).
+# Deployed resolves a workflow name across the home and installed packs for every reader (+1).
 # refuse_overlap lets a start name the run holding its slot before its trust read (+1).
 # extend and Extension record a `rimz workflow extend` grant and name the step it raised (+2).
 surface-budget = 109
@@ -12166,11 +12169,6 @@ reason = "Workflow definitions, run-owned files, and cross-room discovery share 
 [[verdict]]
 kind = "item"
 key = "disk::paths::workflows_dir_under"
-reason = "Workflow definitions, run-owned files, and cross-room discovery share the classed path boundary."
-
-[[verdict]]
-kind = "item"
-key = "disk::paths::workflows_dir"
 reason = "Workflow definitions, run-owned files, and cross-room discovery share the classed path boundary."
 
 [[verdict]]

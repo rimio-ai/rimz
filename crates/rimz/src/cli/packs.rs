@@ -23,12 +23,13 @@ use rimz::packs::{
 use super::render::{self, palette, status::StateRole};
 use super::usage::{UsageError, shell_command};
 
-const TYPES: [ItemType; 5] = [
+const TYPES: [ItemType; 6] = [
     ItemType::Agents,
     ItemType::Subagents,
     ItemType::Teams,
     ItemType::Traits,
     ItemType::Skills,
+    ItemType::Workflows,
 ];
 
 #[derive(Debug, Default, Args)]
@@ -110,7 +111,7 @@ enum PacksSubcmd {
 struct ItemSelection {
     #[arg(value_name = "PACK:NAME")]
     target: String,
-    /// Item type: agents, subagents, teams, traits, or skills.
+    /// Item type: agents, subagents, teams, traits, skills, or workflows.
     #[arg(long = "type", value_name = "TYPE", value_parser = parse_type)]
     kind: Option<ItemType>,
 }
@@ -119,7 +120,7 @@ struct ItemSelection {
 struct Selection {
     #[arg(value_name = "PACK[:NAME]")]
     target: String,
-    /// Item type: agents, subagents, teams, traits, or skills.
+    /// Item type: agents, subagents, teams, traits, skills, or workflows.
     #[arg(long = "type", value_name = "TYPE", value_parser = parse_type)]
     kind: Option<ItemType>,
 }
@@ -128,7 +129,7 @@ fn parse_type(value: &str) -> std::result::Result<ItemType, String> {
     TYPES
         .into_iter()
         .find(|kind| kind.as_str() == value)
-        .ok_or_else(|| "use agents, subagents, teams, traits, or skills".to_owned())
+        .ok_or_else(|| "use agents, subagents, teams, traits, skills, or workflows".to_owned())
 }
 
 fn editor_command(
@@ -746,13 +747,19 @@ fn customize(
         "Next: {}",
         shell_command(["rimz", "packs", "diff", &key, "--type", item.kind.as_str()])
     )?;
-    if item.kind != ItemType::Skills {
-        writeln!(out, "Next: rimz agents validate")?;
+    match item.kind {
+        ItemType::Skills => {}
+        ItemType::Workflows => writeln!(
+            out,
+            "Next: {}",
+            shell_command(["rimz", "workflow", "validate", &item.name])
+        )?,
+        _ => writeln!(out, "Next: rimz agents validate")?,
     }
-    Ok(if item.kind == ItemType::Skills {
-        path.join("SKILL.md")
-    } else {
-        path
+    Ok(match item.kind {
+        ItemType::Skills => path.join("SKILL.md"),
+        ItemType::Workflows => paths::workflow_spec_file(&path),
+        _ => path,
     })
 }
 

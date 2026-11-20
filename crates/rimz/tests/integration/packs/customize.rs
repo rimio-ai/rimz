@@ -171,9 +171,14 @@ fn customize_copy_preserves_definition_bytes_and_skill_ancillary_files() {
         source.join("crew/skills/coder/scripts/run.sh"),
         "#!/bin/sh\necho craft\n",
     );
+    write(
+        source.join("crew/workflows/ship/checks/ship.sh"),
+        "#!/bin/sh\necho ship\n",
+    );
     for (target, kind, relative) in [
         ("crew:coder", "agents", "agents/coder.md"),
         ("crew:coder", "skills", "skills/coder/SKILL.md"),
+        ("crew:ship", "workflows", "workflows/ship/workflow.toml"),
     ] {
         env.rimz()
             .args(["packs", "customize", target, "--type", kind, "--copy"])
@@ -192,6 +197,15 @@ fn customize_copy_preserves_definition_bytes_and_skill_ancillary_files() {
     assert_eq!(
         fs::read(env.agents_home().join("skills/coder/scripts/run.sh")).unwrap(),
         b"#!/bin/sh\necho craft\n"
+    );
+    assert_eq!(
+        fs::read(env.agents_home().join("workflows/ship/checks/ship.sh")).unwrap(),
+        b"#!/bin/sh\necho ship\n"
+    );
+    let show = json(&env, &["packs", "show", "crew", "--json"]);
+    assert_eq!(
+        item(&show, "workflows", "ship")["fate"]["path"],
+        env.agents_home().join("workflows/ship").to_str().unwrap()
     );
     let show = json(&env, &["packs", "show", "crew", "--json"]);
     assert_eq!(
@@ -244,6 +258,7 @@ fn copy_only_types_name_the_copy_command_and_failed_parents_refuse_inheritance()
         ("craft", "traits"),
         ("pi", "agents"),
         ("coder", "skills"),
+        ("ship", "workflows"),
     ] {
         let env = Env::new();
         installed(&env);
@@ -445,9 +460,11 @@ fn diff_of_a_copy_prints_only_differing_files_or_one_matching_line() {
     write(source.join("crew/skills/coder/notes.md"), "Notes\n");
     let skill = env.agents_home().join("skills/coder");
     let helper = env.agents_home().join("subagents/helper.md");
+    let ship = env.agents_home().join("workflows/ship");
     for (name, tree, path) in [
         ("coder", "skills", &skill),
         ("helper", "subagents", &helper),
+        ("ship", "workflows", &ship),
     ] {
         let item = format!("crew:{name}");
         env.rimz()
@@ -473,6 +490,19 @@ fn diff_of_a_copy_prints_only_differing_files_or_one_matching_line() {
     assert!(stdout.contains("    -Notes\n    +Edited\n"), "{stdout}");
     assert!(!stdout.contains("SKILL.md"), "{stdout}");
     assert!(!stdout.contains("matches the shipped item"), "{stdout}");
+    write(ship.join("workflow.toml"), "# Edited\n");
+    env.rimz()
+        .args(["packs", "diff", "crew:ship", "--type", "workflows"])
+        .assert()
+        .success()
+        .stdout(contains("+# Edited"));
+    env.rimz()
+        .args(["packs", "reset", "crew:ship", "--type", "workflows"])
+        .assert()
+        .success();
+    assert!(!ship.exists());
+    let show = json(&env, &["packs", "show", "crew", "--json"]);
+    assert_eq!(item(&show, "workflows", "ship")["fate"]["state"], "loads");
 }
 
 #[test]

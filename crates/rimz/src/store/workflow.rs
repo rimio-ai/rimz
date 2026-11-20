@@ -818,8 +818,9 @@ pub struct RunRecord {
     /// that started it. Set at creation; `[agents] max-workflow-depth` bounds it.
     #[serde(default = "first_depth")]
     pub depth: u32,
-    /// A deployed run's definition directory, canonical at the start and read live; an inline
-    /// run has none and reads its own `definition/`, through [`RunRecord::definition_dir`].
+    /// A deployed run's definition directory, absolute at the start with the links it was given
+    /// through kept, and read live; an inline run has none and reads its own `definition/`,
+    /// through [`RunRecord::definition_dir`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_dir: Option<PathBuf>,
     pub prompt: Option<String>,

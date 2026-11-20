@@ -63,33 +63,31 @@ pub fn validate(
         }
     };
     let mut report = validate_spec(dir, name, &spec, definitions, project_root);
-    started_workflows(
-        &mut report,
-        name,
-        &spec,
-        &crate::disk::paths::workflows_dir(),
-    );
+    match super::Deployed::load(&crate::disk::paths::agents_home()) {
+        Ok(deployed) => started_workflows(&mut report, name, &spec, &deployed),
+        Err(error) => report.warnings.push(issue(
+            "workflow",
+            format!(
+                "the deployed workflows could not be read, so runs steps go unchecked: {error}"
+            ),
+        )),
+    }
     report
 }
 
-/// Whether `dir` resolves, links followed, to a directory inside the workflows home other
-/// than the home itself: where a deployed workflow's name must lead.
-pub fn is_deployed(dir: &Path) -> bool {
-    let home = crate::disk::paths::workflows_dir();
-    dir.canonicalize().is_ok_and(|dir| {
-        home.canonicalize()
-            .is_ok_and(|home| dir != home && dir.starts_with(home))
-    })
-}
-
-/// Warn about each workflow a `runs` step lists that its start would refuse: one not deployed
-/// inside `deployed`, or one whose scope is the project, which gets no worktree of its own; and
+/// Warn about each workflow a `runs` step lists that its start would refuse: one no deployed
+/// name leads to, or one whose scope is the project, which gets no worktree of its own; and
 /// about a workflow that reaches itself through `runs` steps. These read other definitions, which
 /// a run reads live at the step, so they never refuse a start: the step itself enforces them.
-fn started_workflows(report: &mut Validation, name: &str, spec: &Definition, deployed: &Path) {
+fn started_workflows(
+    report: &mut Validation,
+    name: &str,
+    spec: &Definition,
+    deployed: &super::Deployed,
+) {
     let load = |workflow: &str| {
-        let dir = deployed.join(workflow);
-        is_deployed(&dir).then(|| super::load(&dir).ok()).flatten()
+        let dir = deployed.find(workflow).ok().flatten()?;
+        super::load(dir).ok()
     };
     for (node, step) in &spec.authored().steps {
         for (index, entry) in step.start.iter().enumerate() {

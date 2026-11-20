@@ -221,7 +221,7 @@ pub(super) struct WorkflowArgs {
 enum Command {
     /// Start a workflow in the current checkout or a RimZ-owned worktree.
     Run {
-        /// Workflow name under `~/.rimz/workflows/`, or a directory inside it.
+        /// Workflow name, from `~/.rimz/workflows/` or an installed pack, or a directory.
         #[arg(value_name = "NAME|DIR")]
         name: PathBuf,
         /// Run in this RimZ-owned worktree instead of the current checkout, created from the
@@ -394,8 +394,8 @@ enum Command {
     },
     /// Validate one workflow directory, or every machine workflow.
     Validate {
-        /// Workflow directory to check. Without it, checks every workflow under
-        /// `~/.rimz/workflows/`.
+        /// Workflow directory to check. Without it, checks every workflow a name resolves to,
+        /// in `~/.rimz/workflows/` and installed packs.
         #[arg(value_name = "DIR")]
         dir: Option<PathBuf>,
         /// Print rows, warnings, and errors as JSON.
@@ -746,13 +746,36 @@ fn start(
         );
     }
     let mut args = args;
+    let deployed = workflow_view::deployed()?;
     // A task's own run starts nothing on a launch path; any other start is placed on one and
-    // bounded before anything is created.
-    if task.is_none() {
-        args.starting = starting_here(&ctx);
+    // bounded before anything is created. A task's run and an agent's start only what is
+    // deployed, read from the claim's own path so no link the caller made is recorded.
+    let dir = if task.is_some() {
+        deployed.claim(&dir).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}: a loop task starts only a workflow in {} or an installed pack",
+                name.display(),
+                deployed.home().display()
+            )
+        })?
+    } else {
+        let agent_without_run;
+        (args.starting, agent_without_run) = starting_here(&ctx);
         args.starting
             .admit(super::machine_config().agents.max_workflow_depth)?;
-    }
+        if !agent_without_run && !agent_started(&args.starting) {
+            dir
+        } else {
+            deployed.claim(&dir).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}: an agent starts only a workflow in {} or an installed pack; run this \
+                     directory from your own shell, or move it there or install its pack",
+                    name.display(),
+                    deployed.home().display()
+                )
+            })?
+        }
+    };
     let env_fire = rimz::harness::loop_task::read_fire_env().map(|fire| fire.fire);
     let fire = task
         .as_ref()
@@ -909,8 +932,10 @@ fn refuse_trust_problems(
 
 /// Who starts a run from this process ([`workflow::starting`]): the run `RIMZ_WORKFLOW_RUN` names,
 /// when this RimZ reads it, the calling agent, when one resolves, and whether a run's command
-/// step or check spawned this process (`RIMZ_WORKFLOW_NODE`).
-fn starting_here(ctx: &super::ctx::Ctx) -> workflow::Starting {
+/// step or check spawned this process (`RIMZ_WORKFLOW_NODE`). Also whether an agent resolves
+/// under a hosted variable with no run to start as: the start owes it nothing, but it is still
+/// the agent's to refuse.
+fn starting_here(ctx: &super::ctx::Ctx) -> (workflow::Starting, bool) {
     let enclosing = std::env::var("RIMZ_WORKFLOW_RUN")
         .ok()
         .and_then(|raw| raw.parse::<WorkflowRunId>().ok())
@@ -924,7 +949,33 @@ fn starting_here(ctx: &super::ctx::Ctx) -> workflow::Starting {
         .as_ref()
         .and_then(|snapshot| rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents).ok());
     let hosted = std::env::var_os("RIMZ_WORKFLOW_NODE").is_some();
-    workflow::starting(enclosing.as_ref(), agent, hosted)
+    let agent_without_run = hosted && enclosing.is_none() && agent.is_some();
+    (
+        workflow::starting(enclosing.as_ref(), agent, hosted),
+        agent_without_run,
+    )
+}
+
+/// Whether an agent stands at the root of `starting`'s launch path: it starts the run itself, or
+/// it started the run whose step or script starts this one, at any depth. A starter run whose
+/// record cannot be read could be an agent's, so it counts as one.
+fn agent_started(starting: &workflow::Starting) -> bool {
+    let mut starter = starting.starter.clone();
+    for _ in 0..=starting.depth {
+        let run = match starter {
+            None => return false,
+            Some(records::RunStarter::Agent { .. }) => return true,
+            Some(records::RunStarter::Run { run, .. }) => run,
+        };
+        starter = match resolve::locate(&run).map(|(_, found)| found.class) {
+            Ok(records::RunClass::Current(record)) => record.starter,
+            Ok(records::RunClass::Stranded { header, .. } | records::RunClass::Ended(header)) => {
+                header.starter
+            }
+            _ => return true,
+        };
+    }
+    true
 }
 
 /// The RimZ-owned worktree `-w <name>` names, created from the configured base when missing,
@@ -1065,13 +1116,24 @@ fn show(
     }
     if let Some(definition) = definition
         .as_ref()
-        .filter(|definition| definition.is_task())
+        .filter(|definition| definition.is_task() || definition.is_path())
     {
         let name = definition.name();
+        let dir = definition.dir().canonicalize().ok();
         let runs = resolve::all()?
             .into_iter()
             .filter(|run| {
-                run.record.task.as_deref() == Some(name) && !run.record.state.is_terminal()
+                let record = &run.record;
+                let of = if definition.is_task() {
+                    record.task.as_deref() == Some(name)
+                } else {
+                    record
+                        .spec_dir
+                        .as_deref()
+                        .and_then(|spec| spec.canonicalize().ok())
+                        == dir
+                };
+                of && !record.state.is_terminal()
             })
             .collect::<Vec<_>>();
         if !json {
@@ -1142,7 +1204,7 @@ pub(super) fn check_loop_launch(
     if *detach {
         bail!("--detach drops the report a task's run owes it; remove --detach");
     }
-    if name.components().count() != 1 {
+    if !name.to_str().is_some_and(definition::one_name) {
         bail!(
             "`{}` is a path; --workflow takes a deployed workflow's name",
             name.display()
@@ -1179,46 +1241,35 @@ fn validation_root(globals: &super::GlobalFlags) -> Option<PathBuf> {
 }
 
 fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> Result<()> {
-    let home = paths::workflows_dir();
     let mut scratch = None;
+    let mut report = Validation::default();
     let dirs = if let Some(dir) = dir {
         let named = dir
             .to_str()
             .map(|raw| definition::Definition::resolve(raw, globals))
             .transpose()?
             .flatten();
-        let dir = named.as_ref().map_or_else(
-            || workflow_view::definition_dir(&dir),
-            |named| named.dir().to_owned(),
-        );
+        let dir = match &named {
+            Some(named) => named.dir().to_owned(),
+            None => workflow_view::definition_dir(&dir)?.unwrap_or(dir),
+        };
         scratch = named;
         vec![dir]
     } else {
         let mut dirs = Vec::new();
-        match std::fs::read_dir(&home) {
-            Ok(entries) => {
-                for entry in entries {
-                    let path = entry
-                        .with_context(|| format!("reading {}", home.display()))?
-                        .path();
-                    // A dot directory is no workflow name.
-                    let hidden = path
-                        .file_name()
-                        .is_some_and(|name| name.to_string_lossy().starts_with('.'));
-                    if path.is_dir() && !hidden {
-                        dirs.push(path);
-                    }
-                }
+        for (name, found) in workflow_view::deployed()?.every() {
+            match found {
+                Ok(dir) => dirs.push(dir.to_owned()),
+                Err(conflict) => report.errors.push(workflow::Issue {
+                    path: "workflow".into(),
+                    message: format!("workflow: {name}: {conflict}"),
+                }),
             }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err).with_context(|| format!("reading {}", home.display())),
         }
-        dirs.sort();
         dirs
     };
     let loaded = workflow_view::definitions();
     let project_root = validation_root(globals);
-    let mut report = Validation::default();
     for dir in dirs {
         let result = workflow::validate(&dir, &loaded, project_root.as_deref());
         report.rows.extend(result.rows);

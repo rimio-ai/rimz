@@ -320,10 +320,6 @@ pub fn workflows_dir_under(home: &Path) -> PathBuf {
     home.join("workflows")
 }
 
-pub fn workflows_dir() -> PathBuf {
-    workflows_dir_under(&rimz_home())
-}
-
 pub fn workflow_spec_file(dir: &Path) -> PathBuf {
     dir.join("workflow.toml")
 }
@@ -2172,7 +2168,7 @@ fn xdg_home(key: &str, under_home: &str) -> PathBuf {
 }
 
 /// Per-user agent library root: `$RIMZ_AGENTS_HOME`, else [`rimz_home`].
-/// `RIMZ_AGENTS_HOME` relocates profiles, teams, and skills together.
+/// `RIMZ_AGENTS_HOME` relocates profiles, teams, skills, workflows, and packs together.
 /// Library unit tests ignore that override and always use [`rimz_home`].
 pub fn agents_home() -> PathBuf {
     #[cfg(test)]

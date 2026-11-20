@@ -39,6 +39,7 @@ impl Fixture {
             "---\ndescription: Worker\nagent: claude\nmode: auto\ntools: [Read, Write]\nallowed-tools: [Bash(git *)]\n---\nWork.",
         );
         write(crew.join("traits/craft.md"), "Craft.");
+        write(crew.join("workflows/ship/workflow.toml"), SHIP);
         write(
             skills.join("rimz-packs.toml"),
             "[[pack]]\nname = 'essential'\ndescription = 'Essential'\npath = '.'\n",
@@ -103,6 +104,7 @@ fn git_install_prints_the_review_then_refuses_without_a_terminal_or_yes() {
         "tools:",
         "allowed-tools:",
         "required by crew",
+        "workflows/ship: loads",
     ] {
         assert!(stdout.contains(text), "missing {text:?}: {stdout}");
     }

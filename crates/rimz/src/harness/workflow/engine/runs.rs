@@ -276,11 +276,12 @@ fn start_runs(at: &Attempt<'_>, machine: &MachineConfig) -> Result<Start> {
     };
     let first = pending.len() == runs.runs.len();
     let listed = pending.iter().map(|(_, entry)| *entry).collect::<Vec<_>>();
-    if let Err(reason) = refuse(record, &runs.base, &starting, &listed, first, machine) {
-        return Ok(Start::Refused(reason));
-    }
+    let dirs = match refuse(record, &runs.base, &starting, &listed, first, machine) {
+        Ok(dirs) => dirs,
+        Err(reason) => return Ok(Start::Refused(reason)),
+    };
     let mut accounted = !first;
-    for (run, entry) in pending {
+    for ((run, entry), dir) in pending.into_iter().zip(dirs) {
         if let Some(go_on) = at.recheck(None)? {
             return Ok(Start::Left(go_on));
         }
@@ -315,7 +316,6 @@ fn start_runs(at: &Attempt<'_>, machine: &MachineConfig) -> Result<Start> {
         // `create` publishes under a commit lock of its own, so a cancel or a bound can still
         // land between the recheck above and the publish: the run then starts after the step
         // left the attempt, and its report finds no attempt to join.
-        let dir = crate::disk::paths::workflows_dir().join(&entry.workflow);
         let published = create(
             at.state,
             DefinitionSource::Deployed {
@@ -408,10 +408,11 @@ fn discard(record: &RunRecord, marker: &crate::worktree::WorktreeMarker, machine
     }
 }
 
-/// Why the step starts `entries`, the reserved runs not yet created, checked before any of
-/// them exists: the run's checkout has no commit; the started runs would sit past `[agents]
-/// max-workflow-depth`; or a listed workflow is not deployed inside the workflows home, is not
-/// admitted, or has `scope = "project"`, which gets no worktree of its own. Only a `first`
+/// Each of `entries`, the reserved runs not yet created, with the directory its deployed name
+/// leads to, or why the step starts none of them, checked before any of them exists: the run's
+/// checkout has no commit; the started runs would sit past `[agents] max-workflow-depth`; or a
+/// listed workflow is no deployed name, is not admitted, or has `scope = "project"`, which gets
+/// no worktree of its own. Only a `first`
 /// start, before any run of the attempt exists, refuses a checkout with uncommitted changes,
 /// untracked files included, which the started runs' worktrees would not see: a takeover
 /// finishes cutting runs from the commit its first start already took.
@@ -422,7 +423,7 @@ fn refuse(
     entries: &[&RunEntry],
     first: bool,
     machine: &MachineConfig,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<Vec<std::path::PathBuf>, String> {
     let checkout = &record.scope.path;
     if base.is_empty() {
         return Err(format!(
@@ -437,32 +438,29 @@ fn refuse(
         .admit(machine.agents.max_workflow_depth)
         .map_err(|error| error.to_string())?;
     let definitions = agent_definitions();
-    let deployed = crate::disk::paths::workflows_dir();
+    let deployed = super::super::Deployed::load(&crate::disk::paths::agents_home())
+        .map_err(|error| format!("the deployed workflows could not be read: {error}"))?;
+    let mut dirs = Vec::new();
     for entry in entries {
         let workflow = &entry.workflow;
-        let dir = deployed.join(workflow);
-        let named = matches!(
-            std::path::Path::new(workflow)
-                .components()
-                .collect::<Vec<_>>()[..],
-            [std::path::Component::Normal(_)]
-        );
-        if !named
-            || !super::super::validate::is_deployed(&dir)
-            || !crate::disk::paths::workflow_spec_file(&dir).is_file()
-        {
-            return Err(format!("{workflow} is not a deployed workflow"));
-        }
+        let dir = match deployed.find(workflow) {
+            Ok(Some(dir)) if crate::disk::paths::workflow_spec_file(dir).is_file() => dir,
+            Ok(_) => return Err(format!("{workflow} is not a deployed workflow")),
+            Err(conflict) => {
+                return Err(format!("{workflow} is not a deployed workflow: {conflict}"));
+            }
+        };
         let spec =
-            super::super::validate::admit(&dir, workflow, &definitions, Some(&record.project_root))
+            super::super::validate::admit(dir, workflow, &definitions, Some(&record.project_root))
                 .map_err(|error| format!("{workflow} is not admitted: {error}"))?;
         if spec.scope() == ScopeKind::Project {
             return Err(format!(
                 r#"{workflow} has scope = "project" and gets no worktree of its own"#
             ));
         }
+        dirs.push(dir.to_owned());
     }
-    Ok(())
+    Ok(dirs)
 }
 
 /// Refuse a checkout with uncommitted changes, untracked files included.

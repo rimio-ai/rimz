@@ -131,7 +131,7 @@ impl<'a> PackOverride<'a> {
         let stage = Stage(parent.join(format!(".customize-{}", uuid::Uuid::now_v7())));
         atomic::create_dir_all_mode(&stage.0, 0o700)?;
         let staged = stage.0.join("item");
-        if self.item.kind == ItemType::Skills {
+        if is_tree(self.item.kind) {
             copy_tree(&self.item.path, &staged)?;
         } else {
             let bytes = if copy {
@@ -157,7 +157,7 @@ impl<'a> PackOverride<'a> {
         if self.is_command_override(path) {
             return Ok(OverrideDiff::Command { path: path.clone() });
         }
-        if self.item.kind != ItemType::Skills {
+        if !is_tree(self.item.kind) {
             let custom = read(path)?;
             if let Ok(text) = std::str::from_utf8(&custom)
                 && let Ok((yaml, _)) = frontmatter::split(path, text)
@@ -189,8 +189,7 @@ impl<'a> PackOverride<'a> {
                 changed: changed.into_iter().collect(),
             });
         }
-        // SkillChain records every skill override at <entry>/SKILL.md.
-        let custom_root = path.parent().expect("skill override points to SKILL.md");
+        let custom_root = override_entry(self.item.kind, path);
         let mut shipped = tree_files(&self.item.path, true)?;
         let mut custom = tree_files(custom_root, true)?;
         let paths: BTreeSet<_> = shipped.keys().chain(custom.keys()).cloned().collect();
@@ -218,7 +217,7 @@ impl<'a> PackOverride<'a> {
     }
 
     fn identical_at(&self, path: &Path) -> Result<bool, OverrideErr> {
-        if self.item.kind != ItemType::Skills {
+        if !is_tree(self.item.kind) {
             return Ok(read(&self.item.path)? == read(path)?);
         }
         let compare = || -> Result<bool, OverrideErr> {
@@ -437,6 +436,11 @@ fn reset_identical_entry<'a>(home: &Path, items: &[&'a PackItem]) -> ResetOutcom
             error: error.to_string(),
         },
     }
+}
+
+/// Whether an item of `kind` is a directory, copied, compared, and reset as a whole tree.
+fn is_tree(kind: ItemType) -> bool {
+    matches!(kind, ItemType::Skills | ItemType::Workflows)
 }
 
 fn override_entry(kind: ItemType, path: &Path) -> &Path {
