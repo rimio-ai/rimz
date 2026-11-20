@@ -86,7 +86,8 @@ pub(super) fn cancel(
     if changed {
         writeln!(out, "canceled {address}")?;
         // A cancel stops only the step's waiting: the runs it started go on. A run the step
-        // reserved but never started has no home and is not named.
+        // reserved but never started has no home and is not named, nor is one whose record cannot
+        // be read: the cancel is already committed, so the receipt does not fail on it.
         let mut running = Vec::new();
         for started in run
             .record
@@ -96,8 +97,10 @@ pub(super) fn cancel(
             .flat_map(|started| &started.runs)
             .filter(|started| started.ended.is_none())
         {
-            if let Some(records::RunClass::Current(child)) =
-                records::find(&run.state, &started.id)?.map(|found| found.class)
+            if let Some(records::RunClass::Current(child)) = records::find(&run.state, &started.id)
+                .ok()
+                .flatten()
+                .map(|found| found.class)
                 && !child.state.is_terminal()
             {
                 running.push(started.id.to_string());
