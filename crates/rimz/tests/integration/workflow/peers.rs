@@ -1276,6 +1276,25 @@ fn a_cancel_while_a_runs_step_starts_its_children_stops_the_start_and_names_only
         1,
         "the unstarted child's worktree is removed"
     );
+    let announced: Vec<Value> = env
+        .read_events()
+        .into_iter()
+        .map(|event| serde_json::from_str::<Value>(event.params.get()).unwrap())
+        .filter(|event| event["name"] == "worktree.created")
+        .collect();
+    let started = PathBuf::from(
+        show(&env, &ids[0])["record"]["scope"]["path"]
+            .as_str()
+            .unwrap(),
+    );
+    assert_eq!(
+        announced
+            .iter()
+            .map(|event| event["payload"]["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [started.file_name().unwrap().to_str().unwrap()],
+        "only the started child's worktree is announced: {announced:#?}"
+    );
     let left = receipt
         .lines()
         .filter(|line| line.contains("left running"))
