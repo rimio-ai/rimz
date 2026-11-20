@@ -16,6 +16,38 @@ pub(super) fn parse(value: &str) -> Result<GitSource> {
     {
         return Err(invalid());
     }
+    let shorthand = value.starts_with("github:")
+        || OFFICIAL
+            .iter()
+            .any(|(name, _)| value.split(['/', '@', '#']).next() == Some(*name));
+    // A shorthand names its pack after a `/`; a `#` there is the URL spelling misapplied.
+    if shorthand && let Some((rest, pack)) = value.rsplit_once('#') {
+        let fix = match rest.split_once('@') {
+            Some((location, reference)) => format!("{location}/{pack}@{reference}"),
+            None => format!("{rest}/{pack}"),
+        };
+        return Err(if parse(&fix).is_ok() {
+            PackErr::ShorthandSelector {
+                argument: value.to_owned(),
+                fix,
+            }
+        } else {
+            invalid()
+        });
+    }
+    // Outside the shorthands, the last `#` selects a pack and the ref keeps its place before it.
+    let (value, selector) = match value.rfind('#') {
+        Some(hash) => {
+            let selector = &value[hash + 1..];
+            let pack = selector
+                .parse::<PackName>()
+                .map_err(|_| PackErr::InvalidName {
+                    name: selector.to_owned(),
+                })?;
+            (&value[..hash], Some(pack))
+        }
+        None => (value, None),
+    };
     let after_host = if let Some(scheme) = value.find("://") {
         let authority = scheme + 3;
         value[authority..]
@@ -53,7 +85,7 @@ pub(super) fn parse(value: &str) -> Result<GitSource> {
             parts.get(2).copied(),
         )
     } else if location.contains("://") {
-        (location.to_owned(), None)
+        (location.to_owned(), selector.as_ref().map(PackName::as_str))
     } else if let Some(colon) = separator(location) {
         let host = &location[..colon];
         let path = &location[colon + 1..];
@@ -69,7 +101,7 @@ pub(super) fn parse(value: &str) -> Result<GitSource> {
         return Ok(GitSource {
             source: identity(location).to_owned(),
             url: location.to_owned(),
-            pack: None,
+            pack: selector,
             reference,
         });
     } else {
@@ -146,6 +178,12 @@ impl GitSource {
     }
 
     pub fn spelling(&self) -> String {
+        self.spelling_at(None)
+    }
+
+    /// The reinstall spelling with `reference` placed where the grammar reads it: after the
+    /// source and before a URL's pack selector.
+    pub(super) fn spelling_at(&self, reference: Option<&str>) -> String {
         let mut spelling = self.official().map(str::to_owned).unwrap_or_else(|| {
             url::Url::parse(&self.url)
                 .ok()
@@ -163,10 +201,17 @@ impl GitSource {
                     |url| format!("github:{}", url.path().trim_matches('/')),
                 )
         });
-        if (self.official().is_some() || spelling.starts_with("github:"))
-            && let Some(pack) = &self.pack
-        {
+        let shorthand = self.official().is_some() || spelling.starts_with("github:");
+        if shorthand && let Some(pack) = &self.pack {
             spelling.push('/');
+            spelling.push_str(pack.as_str());
+        }
+        if let Some(reference) = reference {
+            spelling.push('@');
+            spelling.push_str(reference);
+        }
+        if !shorthand && let Some(pack) = &self.pack {
+            spelling.push('#');
             spelling.push_str(pack.as_str());
         }
         spelling

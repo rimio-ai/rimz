@@ -187,13 +187,17 @@ pub struct InstalledSource {
 
 impl InstalledSource {
     pub fn spelling(&self) -> String {
+        self.spelling_at(None)
+    }
+
+    fn spelling_at(&self, reference: Option<&str>) -> String {
         GitSource {
             source: self.source.clone(),
             url: self.url.clone().unwrap_or_else(|| self.source.clone()),
             pack: self.packs.first().map(|pack| pack.name.clone()),
             reference: None,
         }
-        .spelling()
+        .spelling_at(reference)
     }
 }
 
@@ -308,13 +312,7 @@ pub fn inspect_checkouts(agents_home: &Path) -> Result<CheckoutReport> {
         let path = layout::checkout(&root, source)?;
         // layout::checkout rejects missing or malformed recorded commits.
         let commit = source.commit.clone().expect("validated checkout commit");
-        let mut reinstall = source.spelling();
-        if source.pinned
-            && let Some(reference) = &source.reference
-        {
-            reinstall.push('@');
-            reinstall.push_str(reference);
-        }
+        let reinstall = source.spelling_at(source.reference.as_deref().filter(|_| source.pinned));
         let state = client
             .inspect(&path, &commit, &source.source)
             .unwrap_or_else(|error| CheckoutState::Unreadable {
@@ -826,9 +824,11 @@ pub enum PackErr {
         "invalid pack source {argument:?}; use a local path ./path \
          (or '.', '..', '~', '/', '../', '~/'), crew[/pack][@ref], skills[/pack][@ref], \
          github:owner/repo[/pack][@ref], \
-         or a Git URL[@ref]"
+         or a Git URL[@ref][#pack]"
     )]
     NotPath { argument: String },
+    #[error("pack source {argument:?} names its pack after a '/', not a '#'; use {fix}")]
+    ShorthandSelector { argument: String, fix: String },
     #[error("Git source {source_url}: {message}")]
     Git { source_url: String, message: String },
     #[error("pack installation changed while staging; nothing changed; run the command again")]

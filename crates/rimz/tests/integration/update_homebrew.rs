@@ -141,6 +141,36 @@ fn update_holds_widening_packs_without_a_terminal_and_names_the_retry() {
 }
 
 #[test]
+fn update_reports_packs_held_for_another_rimz_version() {
+    if git_missing() {
+        return;
+    }
+    let fixture = HomebrewUpdateFixture::new(false);
+    let repo = fixture.install_pack("following", None);
+    let record_path = fixture.env.agents_home().join("packs/installed.json");
+    let before = fs::read(&record_path).unwrap();
+    let manifest = repo.join("rimz-packs.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(&manifest, format!("{text}rimz = '>=999.0.0'\n")).unwrap();
+    publish(&repo);
+    let output = fixture.run();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Held following: following from ")
+            && stdout.contains("requires RimZ >=999.0.0"),
+        "{output:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(
+            "RimZ itself is updated or current, but pack updates did not complete; retry with `rimz packs update`"
+        ),
+        "{output:?}"
+    );
+    assert_eq!(fs::read(record_path).unwrap(), before);
+}
+
+#[test]
 fn update_runs_pack_updates_after_reload_exits_nonzero() {
     if git_missing() {
         return;

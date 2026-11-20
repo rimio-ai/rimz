@@ -52,7 +52,6 @@ impl Fixture {
             git(repo, &["config", "commit.gpgsign", "false"]);
             git(repo, &["add", "."]);
             git(repo, &["commit", "-m", "fixture"]);
-            git(repo, &["tag", &format!("v{}", env!("CARGO_PKG_VERSION"))]);
         }
         let config = env.home_root.join("gitconfig");
         write(
@@ -119,7 +118,7 @@ fn git_install_prints_the_review_then_refuses_without_a_terminal_or_yes() {
 }
 
 #[test]
-fn yes_installs_matching_official_dependencies_and_lists_full_version_identity() {
+fn yes_installs_official_dependencies_from_the_default_branch_and_lists_full_identity() {
     let fixture = Fixture::new();
     let worker = fixture.env.agents_home().join("agents/worker.md");
     write(
@@ -138,7 +137,7 @@ fn yes_installs_matching_official_dependencies_and_lists_full_version_identity()
     let record = fixture.record();
     assert_eq!(record["sources"].as_array().unwrap().len(), 2, "{record}");
     for source in record["sources"].as_array().unwrap() {
-        assert_eq!(source["ref"], format!("v{}", env!("CARGO_PKG_VERSION")));
+        assert_eq!(source["ref"], "main");
         assert_eq!(source["pinned"], false);
         assert_eq!(source["linked"], false);
         assert!(
@@ -159,7 +158,7 @@ fn yes_installs_matching_official_dependencies_and_lists_full_version_identity()
         .iter()
         .find(|pack| pack["name"] == "crew")
         .unwrap();
-    assert_eq!(crew["ref"], format!("v{}", env!("CARGO_PKG_VERSION")));
+    assert_eq!(crew["ref"], "main");
     assert_eq!(crew["pinned"], false);
     assert_eq!(crew["commit"], fixture.commit);
     let showing = fixture.run(&["packs", "show", "crew", "--json"]);
@@ -171,8 +170,7 @@ fn yes_installs_matching_official_dependencies_and_lists_full_version_identity()
     let human = fixture.run(&["packs", "show", "crew"]);
     let human = String::from_utf8_lossy(&human.stdout);
     assert!(
-        human.contains(&format!("crew@v{}", env!("CARGO_PKG_VERSION")))
-            && human.contains(&fixture.commit[..8]),
+        human.contains("crew@main") && human.contains(&fixture.commit[..8]),
         "{human}"
     );
     symlink(&fixture.crew, fixture.crew.with_extension("git")).unwrap();
@@ -192,10 +190,13 @@ fn yes_installs_matching_official_dependencies_and_lists_full_version_identity()
 }
 
 #[test]
-fn pinned_official_dependencies_use_the_same_ref_and_missing_tags_name_the_escape() {
+fn pinned_official_dependencies_use_the_same_ref_and_missing_refs_fail() {
     let fixture = Fixture::new();
-    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
-    let output = fixture.run(&["packs", "install", &format!("crew@{version}"), "--yes"]);
+    let skills = fixture.crew.parent().unwrap().join("rimz-skills");
+    for repo in [&fixture.crew, &skills] {
+        git(repo, &["tag", "v1"]);
+    }
+    let output = fixture.run(&["packs", "install", "crew@v1", "--yes"]);
     assert!(output.status.success(), "{output:?}");
     let record = fixture.record();
     assert!(
@@ -203,18 +204,17 @@ fn pinned_official_dependencies_use_the_same_ref_and_missing_tags_name_the_escap
             .as_array()
             .unwrap()
             .iter()
-            .all(|source| source["pinned"] == true && source["ref"] == version),
+            .all(|source| source["pinned"] == true && source["ref"] == "v1"),
         "{record}"
     );
     let fixture = Fixture::new();
-    git(&fixture.crew, &["tag", "-d", &version]);
-    let output = fixture.run(&["packs", "install", "crew", "--yes"]);
+    let output = fixture.run(&["packs", "install", "crew@absent", "--yes"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(
-        stderr.contains(&version)
-            && stderr.contains("https://github.com/rimio-ai/rimz-crew")
-            && stderr.contains("rimz packs install crew@main"),
+        stderr.contains(
+            "Git source https://github.com/rimio-ai/rimz-crew: ref \"absent\" was not found"
+        ) && !stderr.contains("missing tag"),
         "{stderr}"
     );
 }
@@ -235,21 +235,13 @@ fn official_commit_pins_leave_dependencies_on_their_own_following_rule() {
     let record = fixture.record();
     assert_eq!(record["sources"][0]["ref"], fixture.commit);
     assert_eq!(record["sources"][0]["pinned"], true);
-    assert_eq!(
-        record["sources"][1]["ref"],
-        format!("v{}", env!("CARGO_PKG_VERSION"))
-    );
+    assert_eq!(record["sources"][1]["ref"], "main");
     assert_eq!(record["sources"][1]["pinned"], false);
 }
 
 #[test]
 fn official_branch_pins_share_the_branch_and_pin_with_dependencies() {
     let fixture = Fixture::new();
-    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
-    let skills = fixture.crew.parent().unwrap().join("rimz-skills");
-    for repo in [&fixture.crew, &skills] {
-        git(repo, &["tag", "-d", &version]);
-    }
     let output = fixture.run(&["packs", "install", "crew@main", "--yes"]);
     assert!(output.status.success(), "{output:?}");
     for source in fixture.record()["sources"].as_array().unwrap() {
@@ -259,7 +251,7 @@ fn official_branch_pins_share_the_branch_and_pin_with_dependencies() {
 }
 
 #[test]
-fn an_unpinned_installed_parent_shares_its_older_named_ref() {
+fn an_unpinned_installed_parents_new_dependency_follows_its_own_default_branch() {
     let fixture = Fixture::new();
     let skills = fixture.crew.parent().unwrap().join("rimz-skills");
     write(
@@ -272,6 +264,7 @@ fn an_unpinned_installed_parent_shares_its_older_named_ref() {
     for repo in [&fixture.crew, &skills] {
         git(repo, &["tag", "older"]);
     }
+    git(&skills, &["commit", "--allow-empty", "-m", "newer"]);
     let output = fixture.run(&["packs", "install", "crew/crew@older", "--yes"]);
     assert!(output.status.success(), "{output:?}");
     let mut record = fixture.record();
@@ -302,8 +295,12 @@ fn an_unpinned_installed_parent_shares_its_older_named_ref() {
         .iter()
         .find(|source| source["source"] == "https://github.com/rimio-ai/rimz-skills")
         .unwrap();
-    assert_eq!(required["ref"], "older");
+    assert_eq!(required["ref"], "main");
     assert_eq!(required["pinned"], false);
+    assert_eq!(
+        required["commit"],
+        git_stdout(&skills, &["rev-parse", "main"])
+    );
 }
 
 #[test]
@@ -526,10 +523,6 @@ fn the_review_names_exclusions_overrides_conflicts_and_failed_items() {
     write(fixture.crew.join("rimz-packs.toml"), &manifest);
     git(&fixture.crew, &["add", "."]);
     git(&fixture.crew, &["commit", "-m", "review fates"]);
-    git(
-        &fixture.crew,
-        &["tag", "-f", &format!("v{}", env!("CARGO_PKG_VERSION"))],
-    );
     let before = fixture.record();
     let output = fixture.run(&["packs", "install", "crew"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -543,4 +536,144 @@ fn the_review_names_exclusions_overrides_conflicts_and_failed_items() {
         assert!(stdout.contains(fate), "missing {fate}: {stdout}");
     }
     assert_eq!(fixture.record(), before);
+}
+
+#[test]
+fn a_root_pack_and_provider_packs_beneath_it_install_by_selector() {
+    let fixture = Fixture::new();
+    write(
+        fixture.crew.join("rimz-packs.toml"),
+        "[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\ndefault = true\n\
+         [[pack]]\nname = 'crew-codex'\ndescription = 'Codex'\npath = 'providers/codex'\n",
+    );
+    write(
+        fixture.crew.join("providers/codex/agents/codex.md"),
+        "---\ndescription: Base\n---\nBase.",
+    );
+    write(
+        fixture.crew.join("providers/codex/agents/coder.md"),
+        "---\ndescription: Coder\nagent: codex\nmode: ask\n---\nCode.",
+    );
+    git(&fixture.crew, &["add", "."]);
+    git(&fixture.crew, &["commit", "-m", "providers"]);
+    let output = fixture.run(&["packs", "install", "crew", "--yes"]);
+    assert!(output.status.success(), "{output:?}");
+    let items = |pack: &str| {
+        let output = fixture.run(&["packs", "show", pack, "--json"]);
+        assert!(output.status.success(), "{output:?}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut names: Vec<_> = value["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                format!(
+                    "{}/{}",
+                    item["type"].as_str().unwrap(),
+                    item["name"].as_str().unwrap()
+                )
+            })
+            .collect();
+        names.sort();
+        names
+    };
+    // The root pack reads nothing under providers/.
+    assert!(
+        items("crew")
+            .iter()
+            .all(|item| !item.contains("coder") && item != "agents/codex"),
+        "{:?}",
+        items("crew")
+    );
+    let output = fixture.run(&["packs", "install", "crew/crew-codex", "--yes"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(items("crew-codex"), ["agents/coder", "agents/codex"]);
+
+    let fixture = Fixture::new();
+    let url = url::Url::from_directory_path(&fixture.crew).unwrap();
+    let url = url.as_str().trim_end_matches('/');
+    write(
+        fixture.crew.join("rimz-packs.toml"),
+        "[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\ndefault = true\n\
+         [[pack]]\nname = 'acme-codex'\ndescription = 'Codex'\npath = 'providers/codex'\n",
+    );
+    write(
+        fixture.crew.join("providers/codex/agents/codex.md"),
+        "---\ndescription: Base\n---\nBase.",
+    );
+    git(&fixture.crew, &["add", "."]);
+    git(&fixture.crew, &["commit", "-m", "providers"]);
+    let output = fixture.run(&[
+        "packs",
+        "install",
+        &format!("{url}@main#acme-codex"),
+        "--yes",
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let record = fixture.record();
+    assert_eq!(record["sources"][0]["source"], url);
+    assert_eq!(record["sources"][0]["ref"], "main");
+    assert_eq!(record["sources"][0]["packs"][0]["name"], "acme-codex");
+    assert_eq!(record["sources"][0]["packs"].as_array().unwrap().len(), 1);
+}
+
+fn require_rimz(repo: &Path, range: &str) -> String {
+    let path = repo.join("rimz-packs.toml");
+    let manifest = fs::read_to_string(&path).unwrap();
+    write(
+        &path,
+        &manifest.replacen(
+            "path = '.'\n",
+            &format!("path = '.'\nrimz = '{range}'\n"),
+            1,
+        ),
+    );
+    git(repo, &["commit", "-am", "require another rimz"]);
+    git_stdout(repo, &["rev-parse", "HEAD"])
+}
+
+#[test]
+fn installs_that_need_another_rimz_install_nothing_and_name_the_range() {
+    for (argument, incompatible) in [
+        ("crew", "rimz-skills"),
+        ("crew@main", "rimz-crew"),
+        ("crew", "rimz-crew"),
+    ] {
+        let fixture = Fixture::new();
+        let repo = fixture.crew.parent().unwrap().join(incompatible);
+        let commit = require_rimz(&repo, ">=999.0.0");
+        let output = fixture.run(&["packs", "install", argument, "--yes"]);
+        assert_eq!(output.status.code(), Some(1), "{argument}: {output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let pack = if incompatible == "rimz-crew" {
+            "crew"
+        } else {
+            "essential"
+        };
+        let source = if incompatible == "rimz-crew" {
+            "crew"
+        } else {
+            "skills"
+        };
+        assert!(
+            stdout.contains("Install held; nothing changed.")
+                && stdout.contains(&format!(
+                    "{pack} from {source} at {} requires RimZ >=999.0.0, but this is RimZ {}",
+                    &commit[..8],
+                    env!("CARGO_PKG_VERSION")
+                ))
+                && stdout.contains("rimz update")
+                && stderr.contains("install held"),
+            "{argument}: {stdout}\n{stderr}"
+        );
+        assert!(
+            !fixture
+                .env
+                .agents_home()
+                .join("packs/installed.json")
+                .exists(),
+            "{argument}"
+        );
+    }
 }

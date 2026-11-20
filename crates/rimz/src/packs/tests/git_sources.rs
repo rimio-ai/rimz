@@ -86,6 +86,30 @@ fn source_spellings_parse_identity_selection_and_refs() {
             Some("v1"),
         ),
         ("example.test:o/r", "example.test:o/r", None, None),
+        (
+            "https://example.test/o/r#one",
+            "https://example.test/o/r",
+            Some("one"),
+            None,
+        ),
+        (
+            "https://example.test/o/r.git@release/v1#one",
+            "https://example.test/o/r",
+            Some("one"),
+            Some("release/v1"),
+        ),
+        (
+            "git@example.test:o/r#one",
+            "git@example.test:o/r",
+            Some("one"),
+            None,
+        ),
+        (
+            "git@example.test:o/r.git@v1#one",
+            "git@example.test:o/r",
+            Some("one"),
+            Some("v1"),
+        ),
     ];
     let actual: Vec<_> = cases
         .iter()
@@ -124,6 +148,25 @@ fn source_spellings_parse_identity_selection_and_refs() {
         identities,
         vec![Some("https://github.com/rimio-ai/rimz-crew".to_owned()); 3]
     );
+    let refusals = [
+        ("crew#codex", "crew/codex"),
+        ("skills#x", "skills/x"),
+        ("crew@main#x", "crew/x@main"),
+        ("github:o/r@v1#p", "github:o/r/p@v1"),
+    ];
+    for (text, fix) in refusals {
+        let error = text
+            .parse::<InstallSource>()
+            .err()
+            .map(|error| error.to_string());
+        assert_eq!(
+            error,
+            Some(format!(
+                "pack source {text:?} names its pack after a '/', not a '#'; use {fix}"
+            )),
+            "{text}"
+        );
+    }
 }
 
 #[test]
@@ -158,6 +201,25 @@ fn malformed_sources_name_the_accepted_forms() {
 }
 
 #[test]
+fn url_selectors_must_be_pack_names_after_the_ref() {
+    for (text, selector) in [
+        ("https://example.test/o/r#bad!name", "bad!name"),
+        ("https://example.test/o/r#one@v1", "one@v1"),
+        ("git@example.test:o/r#", ""),
+    ] {
+        let error = text.parse::<InstallSource>().unwrap_err().to_string();
+        assert!(
+            error.starts_with(&format!("invalid pack name {selector:?}")),
+            "{text}: {error}"
+        );
+    }
+    let InstallSource::Git(source) = "https://example.test/o/r#one".parse().unwrap() else {
+        panic!("expected Git source");
+    };
+    assert_eq!(source.url, "https://example.test/o/r");
+}
+
+#[test]
 fn source_transport_keeps_the_given_url() {
     for text in [
         "file:///tmp/source.git",
@@ -187,11 +249,17 @@ fn reinstall_spellings_preserve_the_normalized_identity() {
         "https://github.com/o/r.git/",
         "https://example.test/double.git.git/",
         "git@example.test:double.git.git",
+        "https://example.test/o/r#one",
+        "git@example.test:o/r#one",
     ] {
         let source = crate::packs::source::parse(text).unwrap();
         let spelling = source.spelling();
         let reparsed = crate::packs::source::parse(&spelling).unwrap();
-        assert_eq!(reparsed.source, source.source, "{text} became {spelling}");
+        assert_eq!(
+            (reparsed.source, reparsed.pack),
+            (source.source, source.pack),
+            "{text} became {spelling}"
+        );
     }
 }
 
@@ -271,10 +339,10 @@ fn git_checkout_is_exact_and_does_not_inherit_the_callers_repository() {
 }
 
 #[test]
-fn missing_official_tag_names_the_source_tag_and_default_branch_command() {
+fn official_sources_follow_the_default_branch_without_a_version_tag() {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
-    repository(&repo);
+    let (_, head) = repository(&repo);
     let config = temp.path().join("gitconfig");
     write(
         &config,
@@ -288,45 +356,26 @@ fn missing_official_tag_names_the_source_tag_and_default_branch_command() {
         "GIT_CONFIG_GLOBAL".to_owned(),
         config.to_str().unwrap().to_owned(),
     );
-    let result = client.resolve(
-        temp.path(),
-        &spec("https://github.com/rimio-ai/rimz-crew".to_owned(), None),
-    );
-    let error = result
-        .err()
-        .map(|error| error.to_string())
-        .unwrap_or_default();
-    assert!(
-        error.contains(&format!("v{}", env!("CARGO_PKG_VERSION")))
-            && error.contains("https://github.com/rimio-ai/rimz-crew")
-            && error.contains("rimz packs install crew@main"),
-        "{error}"
-    );
-    git(&repo, &["branch", "-m", "topic;echo-injected"]);
-    let error = client
-        .resolve(
-            temp.path(),
-            &spec("https://github.com/rimio-ai/rimz-crew".to_owned(), None),
-        )
-        .unwrap_err()
-        .to_string();
-    let command = error
-        .split_once("use `")
-        .and_then(|(_, rest)| rest.split_once('`'))
-        .map(|(command, _)| command)
-        .unwrap_or_default();
-    let output = Command::new("sh")
-        .args([
-            "-c",
-            &format!("rimz() {{ printf '%s\\n' \"$@\"; }}; {command}"),
-        ])
-        .output()
-        .unwrap();
+    let official = |reference: Option<&str>| {
+        client
+            .resolve(
+                temp.path(),
+                &spec(
+                    "https://github.com/rimio-ai/rimz-crew".to_owned(),
+                    reference,
+                ),
+            )
+            .map(|revision| (revision.reference, revision.commit))
+            .map_err(|error| error.to_string())
+    };
+    assert_eq!(official(None), Ok(("main".to_owned(), head)));
     assert_eq!(
-        output.stdout, b"packs\ninstall\ncrew@topic;echo-injected\n",
-        "the suggested command must preserve the branch as one argument: {output:?}"
+        official(Some("absent")),
+        Err(
+            "Git source https://github.com/rimio-ai/rimz-crew: ref \"absent\" was not found"
+                .to_owned()
+        )
     );
-    assert!(output.status.success(), "{output:?}");
 }
 
 #[test]
@@ -391,6 +440,16 @@ fn reinstall_spellings_are_short_and_leave_the_ref_separate() {
             "https://user@example.test/o/r",
         ),
         ("git@example.test:o/r", None, "git@example.test:o/r"),
+        (
+            "https://user@example.test/o/r",
+            Some("one"),
+            "https://user@example.test/o/r#one",
+        ),
+        (
+            "git@example.test:o/r",
+            Some("one"),
+            "git@example.test:o/r#one",
+        ),
     ];
     let actual: Vec<_> = cases
         .iter()

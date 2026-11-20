@@ -360,7 +360,11 @@ impl Transaction {
             pack: None,
             reference: None,
         };
-        if existing.is_none() && origin.official().is_some() && source.official().is_some() {
+        if existing.is_none()
+            && parent.pinned
+            && origin.official().is_some()
+            && source.official().is_some()
+        {
             source.reference = parent
                 .reference
                 .clone()
@@ -421,6 +425,56 @@ impl Transaction {
             }
         }
         changes
+    }
+
+    /// One line per pack this transaction would install or move onto a commit whose manifest
+    /// `rimz` range excludes the running binary, naming the source, commit, and range. The
+    /// caller publishes nothing while any remain; a pack left at its installed commit only
+    /// warns at load.
+    pub fn incompatible(&self) -> Vec<String> {
+        // Cargo validates the package version as SemVer.
+        let version = semver::Version::parse(RUNNING_VERSION).expect("valid Cargo package version");
+        let mut found = Vec::new();
+        for source in &self.after.sources {
+            let Some(staged) = self.staged.get(&source.source) else {
+                continue;
+            };
+            for installed in &source.packs {
+                let unmoved = self.before.sources.iter().any(|old| {
+                    old.source == source.source
+                        && old.commit == source.commit
+                        && old.packs.iter().any(|pack| pack.name == installed.name)
+                });
+                let Some(pack) = staged
+                    .manifest
+                    .packs
+                    .iter()
+                    .find(|pack| pack.name == installed.name)
+                    .filter(|_| !unmoved)
+                else {
+                    continue;
+                };
+                if let (Some(range), Some(requirement)) = (&pack.rimz, &pack.rimz_requirement)
+                    && !requirement.matches(&version)
+                {
+                    let spelling = GitSource {
+                        source: source.source.clone(),
+                        url: source.url.clone().unwrap_or_else(|| source.source.clone()),
+                        pack: None,
+                        reference: None,
+                    }
+                    .spelling();
+                    let commit = source.commit.as_deref().unwrap_or_default();
+                    found.push(format!(
+                        "{} from {spelling} at {} requires RimZ {range}, but this is RimZ \
+                         {RUNNING_VERSION}",
+                        pack.name,
+                        commit.get(..8).unwrap_or(commit),
+                    ));
+                }
+            }
+        }
+        found
     }
 
     pub fn up_to_date(&self) -> bool {

@@ -54,7 +54,7 @@ enum PacksSubcmd {
     List(ListArgs),
     /// Install Git packs with a review, or link a local checkout for live edits.
     Install {
-        /// crew, skills, github:owner/repo, a Git URL, or an explicit local path.
+        /// crew, skills, github:owner/repo, a Git URL[#pack], or an explicit local path.
         #[arg(value_name = "SOURCE")]
         source: InstallSource,
         /// Skip the Git install question (required without a terminal).
@@ -317,6 +317,20 @@ fn install_git(
     out: &mut impl Write,
 ) -> Result<Option<Vec<PackName>>> {
     let transaction = Transaction::stage(home, source)?;
+    let incompatible = transaction.incompatible();
+    if !incompatible.is_empty() {
+        let mut stdout = render::out();
+        writeln!(stdout, "Install held; nothing changed.")?;
+        for pack in &incompatible {
+            writeln!(stdout, "{pack}.")?;
+        }
+        writeln!(
+            stdout,
+            "Move RimZ into that range with `rimz update` or `rimz update --version <tag>`, \
+             then retry."
+        )?;
+        bail!("install held: a pack needs another RimZ version; nothing changed");
+    }
     let machine = super::machine_config();
     let env = rimz::agents::ambient_env();
     let check = skill_check(&env, machine.agents.isolation);
@@ -455,6 +469,19 @@ fn update_source(
         retired.push(transaction.commit()?);
         writeln!(out, "Already up to date: {names}.")?;
         return Ok(());
+    }
+    let incompatible = transaction.incompatible();
+    if !incompatible.is_empty() {
+        let mut stdout = render::out();
+        for pack in &incompatible {
+            writeln!(stdout, "Held {names}: {pack}.")?;
+        }
+        writeln!(
+            stdout,
+            "Move RimZ into that range with `rimz update` or `rimz update --version <tag>`, \
+             which updates packs after itself."
+        )?;
+        bail!("update held: a pack needs another RimZ version");
     }
     let machine = super::machine_config();
     let env = rimz::agents::ambient_env();
