@@ -153,6 +153,12 @@ Each edge also carries fireability and, when it can never fire, a typed reason (
 
 `crates/rimz/src/harness/workflow/script/condition.rs::case_marks` projects the latest answer's readings through `WhenExpr::truth`, stopping at the winner or the first unread case, so later cases are not marked. A holding wait's `case` selects the held winner. The adjacent `unread_reasons` recovers per-term unread reasons from the answer's stored prose, using its null-reading keys as delimiters so commas and parentheses inside a reason survive. It adds no stored field.
 
+### Adding a step kind
+
+A new step kind is read against every match that groups the acting kinds, which `rg -n 'Kind::Agent\(_\) \| Kind::Message' crates/rimz/src` lists. Its key spellings come from the kind tables in `crates/rimz/src/harness/workflow/spec/kinds.rs`, which rename fields to kebab case (`prompt-file`, not `prompt`).
+
+A step that creates worktrees is read against every other creator (`rg -n -l 'emit_worktree_created|require_readable_core' crates/rimz/src`) for the readable-core check and the `worktree.created` signal. A step that works off the commit lock names its reread under the lock, and the test that holds it in the gap, before it is built. Its proofs include the human `workflow validate` table and the history detail line, which the `--json` tests bypass.
+
 ### Failure causes
 
 A failure is one of eight causes, raised at a node. `crates/rimz/src/harness/workflow/spec.rs::Cause` is the closed set, and `Cause::raised_by` is the one table of which kind raises which. Every other reader (edge compile, validation, the schema test) derives from it.
