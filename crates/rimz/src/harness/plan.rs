@@ -377,6 +377,7 @@ pub struct ResumeLaunchPosture {
     pub mcps: Option<Vec<crate::config::McpName>>,
     pub no_skill_tool: bool,
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
+    pub tools: Option<Vec<String>>,
     pub mode: Option<PermissionMode>,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -404,6 +405,7 @@ impl ResumeLaunchPosture {
             mcps: self.mcps,
             no_skill_tool: self.no_skill_tool,
             allowed_tools: self.allowed_tools,
+            tools: self.tools,
             launch: crate::agents::LaunchParams {
                 profile,
                 tier: self.tier,
@@ -442,6 +444,7 @@ impl ResumeLaunchPosture {
             mcps: self.mcps.clone(),
             no_skill_tool: self.no_skill_tool,
             allowed_tools: self.allowed_tools.clone(),
+            tools: self.tools.clone(),
             isolation_default: self.isolation_default,
             reminder_section,
             ..crate::harness::launch::ExecRequest::bare_launch(kind, Vec::new())
@@ -467,6 +470,7 @@ impl From<&AgentCell> for ResumeLaunchPosture {
             mcps: cell.mcps.clone(),
             no_skill_tool: cell.no_skill_tool,
             allowed_tools: cell.allowed_tools.clone(),
+            tools: cell.tools.clone(),
             isolation_default: cell.isolation_default,
             mode: cell.launch.mode,
             model: cell.launch.model.clone(),

@@ -39,6 +39,7 @@ pub(in crate::backend::zellij) fn zellij_agent_exec_command(
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,

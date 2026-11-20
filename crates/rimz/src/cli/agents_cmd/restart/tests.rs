@@ -436,6 +436,7 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
             mcps: None,
             no_skill_tool: posture.launch.no_skill_tool,
             allowed_tools: posture.launch.allowed_tools.clone(),
+            tools: posture.launch.tools.clone(),
             provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

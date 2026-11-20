@@ -494,6 +494,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -2998,6 +2999,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: Some(
             "run_0123456789abcdef0123456789abcdef"

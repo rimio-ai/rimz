@@ -1340,6 +1340,7 @@ pub(super) fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell 
         mcps: posture.launch.mcps.clone(),
         no_skill_tool: posture.launch.no_skill_tool,
         allowed_tools: posture.launch.allowed_tools.clone(),
+        tools: posture.launch.tools.clone(),
         isolation_default: posture.launch.isolation_default,
         launch: rimz::agents::LaunchParams {
             automation: agent.automation.clone(),

@@ -8352,6 +8352,7 @@ fn assert_parent_follow_up_case(
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
+        tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: Some(run.run_id.clone()),
         worktree_path: None,

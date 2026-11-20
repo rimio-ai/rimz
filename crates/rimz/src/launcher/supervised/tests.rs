@@ -60,6 +60,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
         mcps: None,
         no_skill_tool: false,
         allowed_tools: Some(allowed_tools.to_vec()),
+        tools: None,
         launch: LaunchParams::default(),
     };
     let mut cell = cell;
@@ -134,6 +135,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             mcps: None,
             no_skill_tool: false,
             allowed_tools: Some(allowed_tools.to_vec()),
+            tools: None,
             provider_account: rimz::harness::launch::ProviderAccountState::Pending { binding },
             run_id: Some(run_id),
             worktree_path: Some(worktree.to_path_buf()),

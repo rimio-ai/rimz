@@ -1572,6 +1572,7 @@ impl Fixture {
             mcps: None,
             no_skill_tool: false,
             allowed_tools: None,
+            tools: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
             // Closing the pane on exit keeps the wrapper supervising rather than exec'ing.
