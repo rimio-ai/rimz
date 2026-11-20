@@ -91,6 +91,8 @@ Write capability text as product language: it prints verbatim to users, so keep 
 
 A coverage change runs two pins the adapter filters miss: `cargo xtask test -E 'binary(integration) & test(coverage::)'` checks the capability matrices in both `README.md` and `agent-support.md` against the descriptors, and `cargo xtask test 'cli::coverage'` pins each agent's partial and absent wiring cells by lowercase kind name.
 
+A change to an adapter's `ContextCapability::context_cost` also runs `cargo xtask test 'cli::statusline'`: its tests drive `attach_context_cost` through a real adapter's payload (Copilot today), which adapter filters miss.
+
 A change to an adapter's install version gate or hook set also runs `cargo xtask test -E 'binary(integration) & test(hooks::)'`.
 
 A lifecycle signal declared derived may keep a native mapping in the conformance corpus only when its `via` names every corpus event that produces it. An absent signal must have no producing sample; a native signal needs a producing sample for its declared event (`crates/rimz/src/agents/conformance.rs::assert_lifecycle_hook_honest`).
