@@ -48,6 +48,78 @@ pub struct AgentContextRecord {
     /// advance the accumulator.
     #[serde(default, skip_serializing_if = "LocallyPricedCostState::is_empty")]
     locally_priced_cost: LocallyPricedCostState,
+    /// The readings a mod report has carried for this session. From then on a
+    /// statusline push leaves each as stored, whether it carries one or not.
+    #[serde(default, skip_serializing_if = "ModReadings::is_empty")]
+    mod_readings: ModReadings,
+}
+
+/// Each reading the mod owns once a report carried it: the model (id and
+/// display name), the provider version, the token split, and the
+/// current-window count.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct ModReadings {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    model: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    version: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    split: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    tokens: bool,
+}
+
+impl ModReadings {
+    fn carried_by(context: &AgentContext) -> Self {
+        let tokens = context.tokens.as_ref();
+        Self {
+            model: context.model_id.is_some(),
+            version: context.agent_version.is_some(),
+            split: tokens.is_some_and(|tokens| tokens.current_usage.is_some()),
+            tokens: tokens.is_some_and(|tokens| tokens.current_context_tokens.is_some()),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            model: self.model || other.model,
+            version: self.version || other.version,
+            split: self.split || other.split,
+            tokens: self.tokens || other.tokens,
+        }
+    }
+
+    /// Put each owned reading of `stored` over what `incoming` carries.
+    fn keep(self, stored: &AgentContext, incoming: &mut AgentContext) {
+        if self.model {
+            incoming.model_id.clone_from(&stored.model_id);
+            incoming
+                .model_display_name
+                .clone_from(&stored.model_display_name);
+        }
+        if self.version {
+            incoming.agent_version.clone_from(&stored.agent_version);
+        }
+        let stored_tokens = stored.tokens.as_ref();
+        let split = stored_tokens.and_then(|tokens| tokens.current_usage.clone());
+        let count = stored_tokens.and_then(|tokens| tokens.current_context_tokens);
+        if (self.split && split.is_some()) || (self.tokens && count.is_some()) {
+            incoming.tokens.get_or_insert_with(AgentTokenUsage::default);
+        }
+        let Some(tokens) = incoming.tokens.as_mut() else {
+            return;
+        };
+        if self.split {
+            tokens.current_usage = split;
+        }
+        if self.tokens {
+            tokens.current_context_tokens = count;
+        }
+    }
 }
 
 /// Inputs used by the last local model-limits read, kept off the snapshot.
@@ -93,6 +165,7 @@ impl AgentContextRecord {
             model_context_limits_key: None,
             spend_fold: None,
             locally_priced_cost: LocallyPricedCostState::default(),
+            mod_readings: ModReadings::default(),
         }
     }
 
@@ -104,6 +177,7 @@ impl AgentContextRecord {
         owner_started_at: Option<Timestamp>,
     ) -> bool {
         let mut context = context;
+        self.mod_readings.keep(&self.context, &mut context);
         self.stamp_incoming_windows(&mut context, owner_started_at);
         context.account = self.stamped_account(context.account, context.observed_at);
         let observed_cost = context.cost.is_some();
@@ -145,6 +219,7 @@ impl AgentContextRecord {
         next.transcript_path.clone_from(&self.transcript_path);
         next.spend_fold.clone_from(&self.spend_fold);
         next.locally_priced_cost = locally_priced_cost;
+        next.mod_readings = self.mod_readings;
         *self = next;
         true
     }
@@ -194,11 +269,15 @@ impl AgentContextRecord {
     }
 
     /// Merge a mod reading through the sparse observed merge: what it carries
-    /// replaces, what it omits stands (the statusline's split, model, effort),
-    /// cost only rises, and its windows are dated as a statusline push dates
-    /// them. A resting-turn marker lands only when its transcript stamp is
-    /// newer than the stored one of its kind, so a scan of a stale tail never
-    /// moves a marker backwards.
+    /// replaces, what it omits stands (the statusline's effort, and its split
+    /// and model until the mod carries them), cost only rises, and its windows
+    /// are dated as a statusline push dates them. Each of the model, version,
+    /// split and count it carries is marked the mod's (see [`ModReadings`]),
+    /// and a model it carries retires the statusline's display name. A reading
+    /// with a window and no count follows a compaction and retires the stored
+    /// count and split. A resting-turn marker lands only when its transcript
+    /// stamp is newer than the stored one of its kind, so a scan of a stale
+    /// tail never moves a marker backwards.
     pub(crate) fn merge_mod_reading(
         &mut self,
         kind: &str,
@@ -214,8 +293,22 @@ impl AgentContextRecord {
         if context.turn_error.as_ref().map(|error| error.at) <= stored_error {
             context.turn_error = None;
         }
+        let carried = ModReadings::carried_by(&context);
+        let marks = self.mod_readings.union(carried);
+        let mut changed = marks != self.mod_readings;
+        self.mod_readings = marks;
+        if carried.model {
+            changed |= self.context.model_display_name.take().is_some();
+        }
+        let compacted = context.tokens.as_ref().is_some_and(|tokens| {
+            tokens.context_window_size.is_some() && tokens.current_context_tokens.is_none()
+        });
+        if compacted && let Some(stored) = self.context.tokens.as_mut() {
+            changed |= stored.current_context_tokens.take().is_some();
+            changed |= stored.current_usage.take().is_some();
+        }
         let observed_at = context.observed_at;
-        self.merge_observed(kind, context, observed_at)
+        self.merge_observed(kind, context, observed_at) || changed
     }
 
     /// Stamp an incoming account with the instant its source read it. A re-read

@@ -4934,8 +4934,19 @@ fn mod_feed_merges_the_readings_and_the_turn_scan_into_the_session_sidecar() {
             .success()
     );
     let died = root_context(&env, "sess");
-    assert!(died.turn_error.is_some(), "the scan's turn death");
-    assert_eq!(died.turn_error, root_context(&env, "line").turn_error);
+    let marker = died.turn_error.expect("the scan's turn death");
+    assert_eq!(
+        marker.model.as_deref(),
+        Some("claude-opus-5-5"),
+        "stamped with the model the tail gave the mod"
+    );
+    assert_eq!(
+        Some(rimz::agents::AgentTurnError {
+            model: None,
+            ..marker
+        }),
+        root_context(&env, "line").turn_error
+    );
     assert_eq!(died.settle, Some(settle), "the interruption stays");
 }
 

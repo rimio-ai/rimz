@@ -819,8 +819,9 @@ pub struct ModReport {
     pub mod_version: String,
     pub provider_version: Option<String>,
     pub subagents: Vec<SubagentObservation>,
-    /// The session's sparse reading: context, rate windows and cost from the
-    /// mod, fast mode and any resting-turn marker from the transcript it names.
+    /// The session's sparse reading: context, rate windows, cost, version and a
+    /// step's model and split from the mod; fast mode, any resting-turn marker
+    /// and a model and split the mod lacks from the transcript it names.
     pub context: AgentContext,
     /// The report's usage carried a context window.
     pub readings: bool,

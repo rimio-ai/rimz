@@ -82,7 +82,7 @@ const hooks = new Map();
 register((event, hook) => hooks.set(event, hook));
 assert.deepEqual(
   [...hooks.keys()],
-  ["session.start", "agent.spawn", "tool.call", "turn.complete"],
+  ["session.start", "agent.spawn", "tool.call", "turn.complete", "turn.step"],
 );
 const sessionStart = hooks.get("session.start");
 
@@ -97,8 +97,11 @@ const makeHost = ({
   bin,
   agentList = () => [{ id: "a1", name: "explore" }],
   usage = async () => USAGE,
+  spawned = new Promise(() => {}),
+  spawnFails = false,
 }) => {
   const runs = [];
+  const spawns = [];
   // Every host call the mod makes, in order: a hook that has not yet resolved
   // `next` must have made none.
   const calls = [];
@@ -130,9 +133,20 @@ const makeHost = ({
           child.stdin.end(stdin);
         });
       }),
+      // A child that ends once `spawned` settles: its loop is the child's life.
+      spawn: logged("process.spawn", (request) => {
+        spawns.push({ ...request, drained: false });
+        const entry = spawns[spawns.length - 1];
+        return (async function* () {
+          if (spawnFails) throw new Error("cannot start");
+          await spawned;
+          entry.drained = true;
+          return { code: 0, signal: null };
+        })();
+      }),
     },
   };
-  return { $, runs, calls };
+  return { $, runs, calls, spawns };
 };
 
 const order = [];
@@ -162,7 +176,7 @@ const captured = () =>
   const [args, payload] = line.split("\t");
   assert.equal(args, "mod feed --source claude");
   assert.deepEqual(JSON.parse(payload), {
-    v: "1.1.0",
+    v: "1.2.0",
     event: "session.start",
     session_id: "sess-1",
     transcript_path: "/t/sess-1.jsonl",
@@ -249,6 +263,72 @@ for (const [event, input, resolved, agentId, reason] of [
     const kept = await hook(failing.$, input, async () => resolved);
     assert.equal(kept, resolved, `${label} with ${bin}`);
     assert.equal(failing.runs.length, 1, `${label} with ${bin}`);
+  }
+}
+
+// A step streams through untouched and returns next's own result before its
+// report's child ends: the report runs beside the session, never in its path.
+{
+  const step = hooks.get("turn.step");
+  const STEP = {
+    input_tokens: 3, output_tokens: 9, cache_read_input_tokens: 20000,
+    cache_creation_input_tokens: 100, model: "claude-opus-5-5",
+  };
+  const drive = async (host, input, usage) => {
+    const resolved = { text: "answer", usage };
+    const gen = step(host.$, input, async function* (e) {
+      assert.equal(e, input);
+      yield "piece-1";
+      yield "piece-2";
+      return resolved;
+    });
+    const pieces = [];
+    let item;
+    while (!(item = await gen.next()).done) pieces.push(item.value);
+    assert.deepEqual(pieces, ["piece-1", "piece-2"], "the stream passes through");
+    assert.equal(item.value, resolved, "the hook returns next's own result");
+  };
+  let release;
+  const host = makeHost({
+    bin: path.join(dir, "rimz-capture"),
+    spawned: new Promise((resolve) => (release = resolve)),
+  });
+  await drive(host, { model: "claude-opus-5-5" }, STEP);
+  assert.equal(host.spawns.length, 1, "one report per main-loop step, started before the hook returns");
+  const readsBeforeReturn = host.calls.length;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(host.calls.length, readsBeforeReturn, "no host call after the hook returned");
+  assert.equal(host.runs.length, 0, "a step never awaits process.run");
+  assert.equal(host.spawns[0].drained, false, "the hook returned while the child runs");
+  assert.deepEqual(host.spawns[0].argv, [path.join(dir, "rimz-capture"), "mod", "feed", "--source", "claude"]);
+  const envelope = JSON.parse(host.spawns[0].input);
+  assert.equal(envelope.v, "1.2.0");
+  assert.equal(envelope.event, "turn.step");
+  assert.deepEqual(envelope.step, STEP);
+  assert.deepEqual(envelope.usage, USAGE);
+  assert.equal(envelope.claude_version, "2.1.326");
+  assert.equal("agent_id" in envelope, false);
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(host.spawns[0].drained, true, "the report drains its child to its end");
+
+  // A child's step and a step without usage report nothing.
+  for (const [input, usage] of [[{ agentId: "a1" }, STEP], [{}, null]]) {
+    const quiet = makeHost({ bin: path.join(dir, "rimz-capture") });
+    await drive(quiet, input, usage);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(quiet.spawns.length, 0, JSON.stringify(input));
+  }
+
+  // A child that cannot start and a throwing read never reach the session.
+  for (const options of [
+    { spawnFails: true },
+    { usage: () => { throw new Error("usage unavailable"); }, spawned: Promise.resolve() },
+  ]) {
+    const failing = makeHost({ bin: path.join(dir, "rimz-capture"), ...options });
+    await drive(failing, {}, STEP);
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(failing.spawns.length, 1);
   }
 }
 

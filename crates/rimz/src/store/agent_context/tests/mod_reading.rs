@@ -132,13 +132,13 @@ fn a_mod_reading_sets_its_fields_and_keeps_the_statusline_rest() {
     let context = read_one(&runtime, "claude", "s").unwrap().context;
     assert_eq!(
         (
-            context.tokens,
+            context.tokens.map(|tokens| tokens.current_context_tokens),
             context.fast,
             context.settle,
             context.turn_error
         ),
-        (None, None, None, None),
-        "a later statusline push still lands whole"
+        (Some(Some(38_328)), None, None, None),
+        "a later statusline push lands whole but for the count the mod reported"
     );
 }
 
@@ -223,4 +223,267 @@ fn a_mod_scan_never_moves_a_marker_backwards() {
     first.settle = Some(interrupted(5));
     merge_mod_reading(&empty, "claude", "s", first, None).unwrap();
     assert_eq!(markers(&empty), (Some(at(5)), None));
+}
+
+fn split(input: u64, cache_read: u64) -> AgentCurrentUsage {
+    AgentCurrentUsage {
+        input_tokens: Some(input),
+        output_tokens: Some(9),
+        cache_creation_input_tokens: Some(100),
+        cache_read_input_tokens: Some(cache_read),
+    }
+}
+
+/// What `rimz mod feed` hands the merge for one main-loop `turn.step`.
+fn step_reading(observed_at: Timestamp, split: AgentCurrentUsage) -> AgentContext {
+    let input_side = split.input_tokens.unwrap()
+        + split.cache_creation_input_tokens.unwrap()
+        + split.cache_read_input_tokens.unwrap();
+    let mut context = reading(observed_at, input_side, 0.0);
+    context.model_id = Some("claude-opus-5-5".into());
+    context.agent_version = Some("2.1.329".into());
+    context.tokens.as_mut().unwrap().current_usage = Some(split);
+    context
+}
+
+/// A Claude statusline push carrying every reading the mod can own.
+fn statusline_push(observed_at: Timestamp, split: AgentCurrentUsage) -> AgentContext {
+    let mut pushed = ctx(observed_at);
+    pushed.session_name = Some("named".into());
+    pushed.model_display_name = Some("Opus 4.8".into());
+    pushed.agent_version = Some("2.1.300".into());
+    pushed.effort = Some("high".into());
+    pushed.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(200_000),
+        current_usage: Some(split),
+        ..AgentTokenUsage::default()
+    });
+    pushed
+}
+
+/// The four readings a mod report can own: model id and display name,
+/// version, split, and count.
+type ModOwned = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<AgentCurrentUsage>,
+    Option<u64>,
+);
+
+fn mod_readings(context: &AgentContext) -> ModOwned {
+    let tokens = context.tokens.as_ref();
+    (
+        context.model_id.clone(),
+        context.model_display_name.clone(),
+        context.agent_version.clone(),
+        tokens.and_then(|tokens| tokens.current_usage.clone()),
+        tokens.and_then(|tokens| tokens.current_context_tokens),
+    )
+}
+
+#[test]
+fn the_mod_wins_each_reading_it_carried_over_the_statusline() {
+    let (_dir, runtime) = runtime();
+    write(
+        &runtime,
+        "claude",
+        "s",
+        &statusline_push(at(0), split(1, 1_000)),
+        None,
+    )
+    .unwrap();
+    merge_mod_reading(
+        &runtime,
+        "claude",
+        "s",
+        step_reading(at(10), split(3, 20_000)),
+        None,
+    )
+    .unwrap();
+    let after_step = read_one(&runtime, "claude", "s").unwrap().context;
+    assert_eq!(
+        mod_readings(&after_step),
+        (
+            Some("claude-opus-5-5".into()),
+            None,
+            Some("2.1.329".into()),
+            Some(split(3, 20_000)),
+            Some(20_103)
+        ),
+        "the mod's model retires the statusline's display name"
+    );
+
+    let mut renamed = statusline_push(at(20), split(5, 30_000));
+    renamed.session_name = Some("renamed".into());
+    write(&runtime, "claude", "s", &renamed, None).unwrap();
+    let context = read_one(&runtime, "claude", "s").unwrap().context;
+    assert_eq!(mod_readings(&context), mod_readings(&after_step));
+    assert_eq!(context.session_name.as_deref(), Some("renamed"));
+    assert_eq!(context.effort.as_deref(), Some("high"));
+    assert_eq!(
+        context.tokens.as_ref().unwrap().context_window_size,
+        Some(200_000)
+    );
+
+    let mut sparse = AgentContext::new("claude", at(30));
+    sparse.session_name = Some("again".into());
+    write(&runtime, "claude", "s", &sparse, None).unwrap();
+    let context = read_one(&runtime, "claude", "s").unwrap().context;
+    assert_eq!(
+        mod_readings(&context),
+        mod_readings(&after_step),
+        "a push that omits a mod reading leaves it"
+    );
+    assert_eq!(context.session_name.as_deref(), Some("again"));
+}
+
+#[test]
+fn a_reading_the_mod_never_carried_stays_with_the_statusline() {
+    let (_dir, runtime) = runtime();
+    write(
+        &runtime,
+        "claude",
+        "s",
+        &statusline_push(at(0), split(1, 1_000)),
+        None,
+    )
+    .unwrap();
+    merge_mod_reading(&runtime, "claude", "s", reading(at(10), 38_328, 0.0), None).unwrap();
+    let mut moved = statusline_push(at(20), split(5, 30_000));
+    moved.model_id = Some("claude-opus-4-9".into());
+    moved.agent_version = Some("2.1.330".into());
+    write(&runtime, "claude", "s", &moved, None).unwrap();
+    let context = read_one(&runtime, "claude", "s").unwrap().context;
+    assert_eq!(
+        mod_readings(&context),
+        (
+            Some("claude-opus-4-9".into()),
+            Some("Opus 4.8".into()),
+            Some("2.1.330".into()),
+            Some(split(5, 30_000)),
+            Some(38_328)
+        ),
+        "a count-only mod keeps its count and leaves the rest to the push"
+    );
+}
+
+#[test]
+fn a_mod_report_after_a_compaction_retires_the_count_and_split() {
+    let (_dir, runtime) = runtime();
+    write(
+        &runtime,
+        "claude",
+        "s",
+        &statusline_push(at(0), split(1, 1_000)),
+        None,
+    )
+    .unwrap();
+    merge_mod_reading(
+        &runtime,
+        "claude",
+        "s",
+        step_reading(at(10), split(3, 20_000)),
+        None,
+    )
+    .unwrap();
+    let current = |runtime: &RuntimePaths| {
+        let context = read_one(runtime, "claude", "s").unwrap().context;
+        let readings = mod_readings(&context);
+        (readings.3, readings.4)
+    };
+
+    merge_mod_reading(
+        &runtime,
+        "claude",
+        "s",
+        AgentContext::new("claude", at(15)),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        current(&runtime),
+        (Some(split(3, 20_000)), Some(20_103)),
+        "a report whose usage read failed clears nothing"
+    );
+
+    let mut compacted = reading(at(20), 0, 0.0);
+    compacted.tokens.as_mut().unwrap().current_context_tokens = None;
+    merge_mod_reading(&runtime, "claude", "s", compacted, None).unwrap();
+    assert_eq!(current(&runtime), (None, None));
+
+    write(
+        &runtime,
+        "claude",
+        "s",
+        &statusline_push(at(30), split(3, 20_000)),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        current(&runtime),
+        (None, None),
+        "the statusline does not bring back the retired split"
+    );
+}
+
+#[test]
+fn the_marks_survive_a_local_refresh_and_an_unmarked_record_loads() {
+    use crate::agents::{FieldPatch, LocalContextPatch, LocalContextRefresh};
+
+    let (_dir, runtime) = runtime();
+    merge_mod_reading(
+        &runtime,
+        "claude",
+        "s",
+        step_reading(at(10), split(3, 20_000)),
+        None,
+    )
+    .unwrap();
+    let refresh = LocalContextRefresh {
+        model_context_limits_key: None,
+        context: LocalContextPatch::default(),
+        transcript_path: None,
+        transcript_stat: None,
+        spend_fold: FieldPatch::Keep,
+    };
+    let spec = crate::agents::spec_by_kind("claude").unwrap();
+    merge_local_context(&runtime, spec, "s", refresh, at(15)).unwrap();
+    write(
+        &runtime,
+        "claude",
+        "s",
+        &statusline_push(at(20), split(1, 1_000)),
+        None,
+    )
+    .unwrap();
+    let record = read_one(&runtime, "claude", "s").unwrap();
+    assert_eq!(
+        record.context.model_id.as_deref(),
+        Some("claude-opus-5-5"),
+        "the local refresh and the whole push keep the marks"
+    );
+
+    let mut older = serde_json::to_value(&record).unwrap();
+    let fields = older.as_object_mut().unwrap();
+    assert!(fields.remove("mod_readings").is_some());
+    let older: AgentContextRecord = serde_json::from_value(older).unwrap();
+    crate::store::agent_context::fixture::write_record(&runtime, &older).unwrap();
+    write(
+        &runtime,
+        "claude",
+        "s",
+        &statusline_push(at(30), split(1, 1_000)),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        read_one(&runtime, "claude", "s")
+            .unwrap()
+            .context
+            .model_id
+            .as_deref(),
+        Some("claude-opus-4-8"),
+        "a record written before the marks loads with none"
+    );
 }
