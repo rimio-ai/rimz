@@ -1,3 +1,9 @@
+//! These fixtures run no scheduler tick, so a run that waits `capacity` behind another start in
+//! its scope is rechecked only by the test. A test with two runs in one scope advances the
+//! waiting run in a loop until its wait changes, never once: under gate load a single
+//! `workflow advance` can land while the first run's admission ticket is still in flight, and
+//! the second run then stays at `capacity` until the test times out.
+
 use crate::common::Env;
 use serde_json::{Value, json};
 use std::fs;
