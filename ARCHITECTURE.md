@@ -34,7 +34,7 @@ terminal emulator
       elected user-scoped spending service and walker threads (disposable warm cache)
     shells, scripts, agents, CI helpers
                 │
-                │  host room socket              (typed wakeup events of record)
+                │  host room socket              (the wakeup channel of record)
                 │  hook stdin/stdout             (the decision channel)
                 ▼
 rimz CLI and hook subprocesses
@@ -59,10 +59,9 @@ Each entry is one process, helper, or shared record beside the one-shot CLI.
 - **Sidebar host.** The sidebar's only painter is one detached `rimz sidebar host` per mux session. Each tab's sidebar pane runs a `rimz sidebar serve` supervisor that holds the pane's terminal and hands the host its output. The host is started by the first pane that finds none, exits ten seconds after its last pane detaches, and is replaced on reload ([state.md](./docs/internals/sidebar/state.md#the-room-host-and-its-attachments), [renderer contract](./crates/rimz/src/sidebar_pane/AGENTS.md)).
 - **Terminal-input record.** On Linux, the sidebar host, message delivery, and the pane writer share a locked room-runtime terminal-input record ([messaging](./docs/internals/harness/messaging.md#four-modes-on-one-timing-axis)).
 - **rimzd view.** The [rimzd view](./docs/internals/rimzd.md) holds the loop panel, Codex broker, content-slot supervisors, and a hidden `rimz daemon host` wrapper around Claude remote control. Each follows verified build changes in the room record and execs in place, keeping its pid and pane.
-- **Parked recovery.** An attended recovery into a clientless Zellij room uses a bounded detached `rimz recover-parked` helper: it waits for attach, then settles the user's decision through the same room recovery path. Its output goes to the room's state log. [Resume and rebirth](./docs/internals/harness/fleet.md#resume-and-rebirth) owns the consent, locking, and failure rules.
 - **Language-server brokers.** Optional [shared language servers](./docs/internals/lsp.md) each have a hidden `rimz lsp serve` broker per checkout/server key with an on-demand stdio server, held by process leases from agent wrappers and attached editors. Brokers write their own runtime entries, cost history, and diagnostics, never agent store state.
-- **MCP server.** Each Claude or Codex agent's provider starts its own stateless `rimz mcp serve`, a stdio [MCP server](./docs/internals/mcp.md), unless `[agents] rimz-mcp-server = false` or the profile's `mcps` list names no RimZ capability. Each tool call runs one `rimz` one-shot as that agent.
-- **Loops and signals.** The optional loop timer is an OS-owned one-minute trigger for a one-off `rimz loop tick`, not a resident RimZ process, and it yields roots with a live sidebar host. A signal fires its listening tasks in place, in whichever process observes the event, and a `rimz wait --run` watcher is a detached subprocess ([loops.md](./docs/internals/harness/loops.md#the-signal-vocabulary)). Retaining tasks keep busy triggers in a per-room durable backlog ([the backlog protocol](./docs/internals/harness/loops.md#waiting-trigger-backlog)).
+- **MCP server.** Each Claude or Codex agent's provider starts its own stateless `rimz mcp serve`, a stdio [MCP server](./docs/internals/mcp.md), unless `[agents] rimz-mcp-server = false` or the profile's `mcps` list names no RimZ capability ([launch registration](./docs/reference/cli/mcp.md#launch-registration)). Each tool call runs one `rimz` one-shot as that agent.
+- **Loops and signals.** The optional loop timer is an OS-owned one-minute trigger for a one-off `rimz loop tick`, not a resident RimZ process, and it yields roots with a live sidebar ([the external tick](./docs/internals/harness/loops.md#the-external-tick)). A signal fires its listening tasks in place, in whichever process observes the event ([the signal vocabulary](./docs/internals/harness/loops.md#the-signal-vocabulary)), and a `rimz wait --run` watcher is a detached subprocess ([watched commands](./docs/internals/harness/loops.md#watched-commands)). Retaining tasks keep busy triggers in a per-room durable backlog ([the backlog protocol](./docs/internals/harness/loops.md#waiting-trigger-backlog)).
 - **Browser access.** A RimZ gate binds the configured writable port, authenticates, and forwards to ttyd on a private loopback port; a second no-auth, input-blocked ttyd serves only rooms that `rimz web share` allowlists. A hidden `rimz web exec` shim validates each connection's session, so ttyd owns transport but no session authority ([web.md](./docs/internals/web.md)).
 - **Spending service.** Private service and walker threads run inside whichever host-eligible long-lived RimZ process wins the lifetime lock; one-shot inspection commands connect or fall back directly. `spending.json` and the provider/workspace publications remain truth, and process exit discards the service, so this warm cache introduces no RimZ daemon. A publishing walk requests a detached `stats --rebuild --unattended` helper while saved spend days have pending usage ([spending.md](./docs/internals/agents/spending.md#closed-day-spend-lines)).
 
@@ -93,7 +92,8 @@ State is tiers of plain files, scoped by what each one outlives. [`disk/paths.rs
 workspace store         ~/.rimz/ws/<basename>-<hex>/
   one room's durable truth: the framed event log and the records beside it,
   plus the producer caches that survive a reboot
-  log/, records/, audit/, cache/, owned/, tmp/, team-notes/, locks/ group files by lifetime;
+  log/, records/, audit/, cache/, owned/, tmp/, shared/, team-notes/, automation-notes/,
+  out/, locks/ group files by lifetime;
   every room flock lives in locks/, never cleared by reset or teardown
   room.lock: exclusive birth/reset claim, shared pane-supervisor lifetime holds
   workspace.json (layout: 2) and rimz remain room identity at the root
@@ -108,7 +108,8 @@ empty agent directories ~/.rimz/empty/<workspace-dir>/<candidate-handle>/
 
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/  (or /tmp/rimz-<uid>/…)
   sock/, live/, lanes/ group disposable coordination by lifetime;
-  reset and teardown clear all three; lanes have no age sweep
+  reset and teardown clear all three; lanes have no age sweep;
+  snapshots/ holds rebuildable store checkpoints
 
 shared runtime          $XDG_RUNTIME_DIR/rimz/shared/
   the account-global election locks and the spending service's versioned socket
@@ -131,7 +132,7 @@ note store              ~/.rimz/notes/<kind>/<YYYYMMDD>/<slug>.md
   moves, or renames one, and `rimz uninstall` keeps the tree
 ```
 
-One rule sorts a new file into a tier: **persistent tiers hold what must survive a reboot, runtime tiers hold what is meaningless without the process that wrote it.** A lock, a socket, or a cache that only speeds the next read is runtime and dies with the session; a durable record, or a cache the dashboard needs to open warm, is persistent.
+One rule sorts a new file into a tier: **persistent tiers hold what must survive a reboot, runtime tiers hold what is meaningless without the process that wrote it.** A socket, or a cache that only speeds the next read, is runtime and dies with the session; a durable record, or a cache the dashboard needs to open warm, is persistent.
 
 Provider caches rebuild at the cost of a cold dashboard and one full spending walk, but that same tree also holds what does not rebuild: account budget choices and park state, and auto-redeem stamps and rate memos. `accounts/` holds provider logins that nothing can regenerate and no RimZ command removes: a shared account's credentials beside links into the provider's own home, or a standalone account's credentials, settings, and transcripts. Its `.history/` store shares role, effort, and closed-day spend records across homes and survives cache deletion.
 
@@ -147,14 +148,14 @@ Add a crate only when ownership, target type, or dependency profile demands it. 
 
 The top-level `theme` module is renderer-neutral presentation policy: it resolves schemes, semantic tones, provider identity, resolved glyph vocabulary and setup probes, and shared human value formats. The CLI and native sidebar convert its `Tone` values only at their renderer edges, so the runtime ships one interface language without coupling the core to `anstyle` or ratatui ([theme.md](./docs/internals/theme.md)).
 
-`build.rs` embeds the checked-in data artifacts at compile time, network-free:
+`build.rs` embeds the data artifacts at compile time, network-free:
 
 - The generated fresh-install token-pricing seed for the shared immutable SQLite price table. [`agents/pricing/source.rs`](./crates/rimz/src/agents/pricing/source.rs) projects it through the hidden `rimz pricing-refresh` helper, and `cargo xtask pricing-refresh` delegates to it ([spending.md → Token pricing](./docs/internals/agents/spending.md#token-pricing)).
 - The Alacritty theme catalog (`cargo xtask theme-refresh`).
 - The presence-plugin wasm.
 
-Hidden helper subcommands are machinery for other processes, not for humans. They are marked `#[command(hide = true)]` in [`cli/mod.rs`](./crates/rimz/src/cli/mod.rs), and their protocols live in the owning internals docs.
+Hidden helper subcommands are machinery for other processes, not for humans. They are marked `#[command(hide = true)]` where [`cli/`](./crates/rimz/src/cli/mod.rs) declares them, and their protocols live in the owning internals docs.
 
 ## Tests
 
-Integration tests live under each crate's `tests/`. `crates/rimz` collects its suites into a single `tests/integration/` binary with a shared `common/` harness; layout and conventions are in the [suite contract](./crates/rimz/tests/integration/AGENTS.md). The test tiers are defined in [rust-conventions.md → Tests](./docs/contributing/rust-conventions.md#tests), and the grep-style architectural invariants (decision-channel integrity, sidebar/store separation, the trust hash, pane-primitive use, and more) run through `cargo xtask invariants`.
+Integration tests live under each crate's `tests/`. `crates/rimz` collects its suites into a single `tests/integration/` binary with a shared `common/` harness; layout and conventions are in the [suite contract](./crates/rimz/tests/integration/AGENTS.md). The test tiers are defined in [rust-conventions.md → Tests](./docs/contributing/rust-conventions.md#tests), and the grep-style architectural invariants (decision-channel integrity, sidebar/store separation, pane-primitive use, and more) run through `cargo xtask invariants`.
