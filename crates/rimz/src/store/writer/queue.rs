@@ -1478,8 +1478,39 @@ impl Store {
             } else {
                 Vec::new()
             };
+            // A resume follow-up whose provider never started a session fails at its deadline, and
+            // so does every record queued behind it on that card, which the same silent provider
+            // would otherwise be typed into once the follow-up stopped holding the lane.
+            let failed_resumes: Vec<(MessageRecord, String, String)> = queue
+                .live()
+                .iter()
+                .filter_map(|message| {
+                    let register_by = message.register_by.filter(|deadline| now >= *deadline)?;
+                    let unstarted = agents.iter().find(|agent| {
+                        message.same_agent_card(agent) && agent.resumed_provider_unreported()
+                    })?;
+                    message.awaiting_registration(&agents).then(|| {
+                        (
+                            message.clone(),
+                            unstarted.kind.as_str().to_owned(),
+                            format!("did not start a session by {register_by}"),
+                        )
+                    })
+                })
+                .collect();
             let mut report = ReconcileReport::default();
             let updated = queue.apply_all(session_name, now, |message| {
+                if message.status == MessageStatus::Queued
+                    && let Some((_, kind, what)) = failed_resumes
+                        .iter()
+                        .find(|(follow_up, ..)| message.same_card(follow_up.card_ref()))
+                {
+                    report.expired += 1;
+                    return MessageUpdate::Finalize {
+                        status: MessageStatus::Expired,
+                        reason: Some(message.failed_resume_reason(kind, what)),
+                    };
+                }
                 if message.soft_compact == Some(SoftCompactStep::WrapUp)
                     && message.status.is_open()
                 {
@@ -1514,13 +1545,11 @@ impl Store {
                     && let Some(register_by) = message.register_by.filter(|deadline| now >= *deadline)
                 {
                     report.expired += 1;
-                    let address = message.address.clone().unwrap_or_else(|| {
-                        format!("@{}", message.agent_name.as_deref().unwrap_or(message.agent_id.as_str()))
-                    });
                     return MessageUpdate::Finalize {
                         status: MessageStatus::Expired,
                         reason: Some(format!(
-                            "expired: {address} did not register by {register_by}"
+                            "expired: {} did not register by {register_by}",
+                            message.receiver_address()
                         )),
                     };
                 }
@@ -1903,6 +1932,46 @@ impl Store {
                         && enqueued_through.is_none_or(|end| message.enqueued_at <= end)
                 });
             Ok(archived)
+        })?;
+        Ok(archived.len())
+    }
+
+    /// Archive what a resumed child was owed once its provider exited, unless the provider took
+    /// `follow_up` first: every queued, claimed or sent record on `card`, each with the
+    /// failed-resume reason for its `kind` saying `what` happened. The commit decides on the
+    /// follow-up's status, so one an acknowledgement settled before it archives nothing.
+    #[must_use = "durability barrier; check the result"]
+    pub fn archive_failed_resume(
+        &self,
+        card: AgentCardRef<'_>,
+        kind: &str,
+        follow_up: &MessageId,
+        what: &str,
+        session_name: &str,
+    ) -> Result<usize> {
+        let archived = self.commit_queue(|queue| {
+            let pending = |message: &MessageRecord| {
+                matches!(
+                    message.status,
+                    MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
+                )
+            };
+            if !queue
+                .live()
+                .iter()
+                .any(|message| &message.message_id == follow_up && pending(message))
+            {
+                return Ok(Vec::new());
+            }
+            Ok(queue.apply_all(session_name, Timestamp::now(), |message| {
+                if !pending(message) || !message.same_card(card) {
+                    return MessageUpdate::Keep;
+                }
+                MessageUpdate::Finalize {
+                    status: MessageStatus::Archived,
+                    reason: Some(message.failed_resume_reason(kind, what)),
+                }
+            }))
         })?;
         Ok(archived.len())
     }

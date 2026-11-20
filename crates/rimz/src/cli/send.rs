@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use rimz::message::dispatch::{DispatchOutcome, ParkReason};
+use rimz::message::dispatch::{DispatchOutcome, ParkReason, ResumeStart};
 use rimz::message::{DeliveryKind, InterruptConfirmation};
 use rimz::store::message::AutoCompact;
 #[cfg(test)]
@@ -224,9 +224,25 @@ pub(crate) fn render_dispatch_outcome(
             Some(ParkReason::ProviderStarting) => format!(
                 "queued for {label} ({message_id}) — {label} is resuming; delivers when its provider registers; send now: rimz message steer {message_id}"
             ),
-            Some(ParkReason::Resuming { register_by, .. }) => format!(
-                "queued for {label} ({message_id}) — {label} is resuming; delivers when {label} registers; fails if {label} has not registered by {register_by}"
+            Some(ParkReason::Resuming {
+                register_by,
+                start: ResumeStart::Reported,
+                ..
+            }) => format!(
+                "queued for {label} ({message_id}) — {label} is resuming; delivers once its provider starts a session; fails if none has started by {register_by}"
             ),
+            Some(ParkReason::Resuming {
+                register_by, start, ..
+            }) => {
+                let delivers = if *start == ResumeStart::Timed {
+                    "delivers one delivery window after its pane comes up"
+                } else {
+                    "delivers once its pane comes up"
+                };
+                format!(
+                    "queued for {label} ({message_id}) — {label} is resuming; {delivers}; fails if it has not come up by {register_by}"
+                )
+            }
         }),
         DispatchOutcome::CompactionPending { label, message_id } => Some(format!(
             "compacting {label}; queued {message_id} (delivers when compaction completes)"
@@ -639,24 +655,41 @@ mod tests {
     #[test]
     fn resumed_child_receipt_names_registration_deadline_in_every_send_mode() {
         let register_by = "2026-01-01T00:02:00Z".parse().unwrap();
-        let outcome = DispatchOutcome::Queued {
+        let outcome = |start| DispatchOutcome::Queued {
             label: "@otter".to_owned(),
             message_id: "msg_0123456789abcdef".parse().unwrap(),
             reason: Some(ParkReason::Resuming {
                 register_by,
                 attempt: rimz::store::writer::ResumeAttempt::Started,
+                start,
             }),
         };
+        let receipt = |cause: &str| {
+            format!("queued for @otter (msg_0123456789abcdef) — @otter is resuming; {cause}")
+        };
+        let pane_deadline = "fails if it has not come up by 2026-01-01T00:02:00Z";
         for kind in [
             DeliveryKind::Boundary,
             DeliveryKind::Steer,
             DeliveryKind::Interrupt,
         ] {
             assert_eq!(
-                render_dispatch_outcome(kind, &outcome).as_deref(),
-                Some(
-                    "queued for @otter (msg_0123456789abcdef) — @otter is resuming; delivers when @otter registers; fails if @otter has not registered by 2026-01-01T00:02:00Z"
-                )
+                render_dispatch_outcome(kind, &outcome(ResumeStart::Reported)),
+                Some(receipt(
+                    "delivers once its provider starts a session; fails if none has started by 2026-01-01T00:02:00Z"
+                ))
+            );
+            assert_eq!(
+                render_dispatch_outcome(kind, &outcome(ResumeStart::Lazy)),
+                Some(receipt(&format!(
+                    "delivers once its pane comes up; {pane_deadline}"
+                )))
+            );
+            assert_eq!(
+                render_dispatch_outcome(kind, &outcome(ResumeStart::Timed)),
+                Some(receipt(&format!(
+                    "delivers one delivery window after its pane comes up; {pane_deadline}"
+                )))
             );
         }
     }

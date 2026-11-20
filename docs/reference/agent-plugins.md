@@ -140,6 +140,7 @@ color-rgb = [175, 135, 255]
 native-ask-ui = true
 subagents = false
 registers-lazily = false
+reports-start-on-resume = false
 context-usage = true
 
 [tools]
@@ -201,6 +202,7 @@ Every key defaults to `false`.
 | `native-ask-ui` | The agent shows its own permission, plan, and question prompts. RimZ records `awaiting_input` as a waiting agent only when this is `true`. When `false`, those events change nothing. |
 | `subagents` | The agent runs child agents. The subagent coverage claim needs this plus `subagent_start` and `subagent_end` in `emits`. |
 | `registers-lazily` | The agent can be running before its first `session_start` arrives, so RimZ binds a late session to its pane by working directory. |
+| `reports-start-on-resume` | A resume fires `session_start` under the resumed session id before the first prompt. A message to a resumed subagent then waits for that event instead of one delivery window, and fails at its deadline without it. Leave it `false` unless the agent does this. |
 | `context-usage` | Claims a context gauge in coverage. Emitting `context` claims it too. |
 | `background-tasks` | Accepted and has no effect. |
 

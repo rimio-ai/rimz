@@ -1356,6 +1356,52 @@ fn reconcile_registration_deadline_is_card_aware() {
 }
 
 #[test]
+fn reconcile_expires_a_live_resumed_follow_up_only_when_its_kind_reports_a_start_on_resume() {
+    for (kind, expires) in [("claude", true), ("cursor", false)] {
+        let q = Queue::new();
+        let now = Timestamp::now();
+        let receiver = crate::testkit::agent_state(kind, "sess-1", now);
+        let mut record = MessageRecord::new(
+            q.workspace_id.clone(),
+            &receiver,
+            "next".to_owned(),
+            DeliveryGate::Done,
+        );
+        record.message_id = message_id(1);
+        record.enqueued_at = now - Duration::from_secs(120);
+        record.register_by = Some(now - Duration::from_secs(1));
+        let mut observation = AgentLifecycleObservation::new(
+            Some(receiver.agent_id.clone()),
+            LifecycleSignal::Registered,
+        );
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
+        let mut event = EventEnvelope::agent_lifecycle(
+            q.workspace_id.clone(),
+            "session",
+            kind,
+            "rimz.agent-resumed",
+            &observation,
+        );
+        event.timestamp = now - Duration::from_secs(60);
+        q.append_event(&event).unwrap();
+        assert!(
+            q.snapshot()
+                .unwrap()
+                .agents
+                .iter()
+                .any(|agent| record.same_agent_card(agent) && agent.resumed_at.is_some()),
+            "{kind}: the resumed row must be live"
+        );
+        q.queue_message(&record, "session").unwrap();
+        let report = q.reconcile_stale_messages("session", now, 3).unwrap();
+        assert_eq!(report.expired, usize::from(expires), "{kind}");
+        if !expires {
+            assert_eq!(q.live()[0].status, MessageStatus::Queued, "{kind}");
+        }
+    }
+}
+
+#[test]
 fn reconcile_expires_only_past_window_automatic_queued_commands() {
     let q = Queue::new();
     let now = Timestamp::now();

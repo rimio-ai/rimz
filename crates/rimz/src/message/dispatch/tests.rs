@@ -974,3 +974,11 @@ fn conditions_record_the_watched_agents_launch() {
     assert_eq!(when[0].launch_id, watched.launch_id);
     assert_eq!(after[0].launch_id, watched.launch_id);
 }
+
+#[test]
+fn resume_start_follows_what_the_kind_reports_on_resume() {
+    let start = |kind| ResumeStart::of(&AgentKind::new_unchecked(kind));
+    assert_eq!(start("claude"), ResumeStart::Reported);
+    assert_eq!(start("codex"), ResumeStart::Lazy);
+    assert_eq!(start("cursor"), ResumeStart::Timed);
+}

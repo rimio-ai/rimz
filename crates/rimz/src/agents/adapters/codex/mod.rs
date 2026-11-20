@@ -212,6 +212,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         // The sidebar binds an instance to its pane by cwd before a session
         // binds and renders a wired-but-unprompted pane as an idle agent.
         registers_lazily: true,
+        reports_start_on_resume: false,
         local_session_discovery: LocalSessionDiscovery::PerPane,
         daemon_hooked_sessions: true,
         direct_account_usage: true,

@@ -157,6 +157,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         // recovered by cwd, and a pane with no session, such as the login
         // screen before SessionStart, is idle-synthesized like any wired agent.
         registers_lazily: false,
+        reports_start_on_resume: true,
         local_session_discovery: LocalSessionDiscovery::PerPane,
         daemon_hooked_sessions: false,
         direct_account_usage: true,

@@ -80,6 +80,7 @@ The launch block is data, so one registry entry is enough to render `rimz agents
 | `permission_before_auto_review` | permission hooks precede an automatic reviewer. Codex alone declares it. Recorded Auto launches hide permission attention for 60 seconds without releasing pane input, unless the rollout proves the asking Code Mode cell finished and closes the ask ([waiting and asks](./model.md#waiting-and-asks)) |
 | `transcript_tail_context` | a local transcript tail is a live context source, refreshable on a producer tick |
 | `registers_lazily` | a session can exist before its pane stamp does, so binding goes through the [recovery ladder](./instances.md#binding-a-session), and a stamp whose pane is absent from the frame may still pair by cwd |
+| `reports_start_on_resume` | a resume fires the provider's start hook under the resumed session id before its first prompt, so a resume follow-up waits for that report instead of one delivery window, and fails at its deadline without it ([messaging.md](../harness/messaging.md#ended-receivers)). Claude, Amp, Grok, Kimi and Pi declare it |
 | `local_session_discovery` | `Unsupported` reads no provider-local sessions, `FullScan` scans admitted workspaces, and `PerPane` reads only sessions live panes can bind. Observations may supply identity alone or lifecycle |
 | `daemon_hooked_sessions` | hooks fire from a per-user daemon that outlives any one conversation |
 | `direct_account_usage` | an authoritative identity-bearing account-usage probe exists ([providers.md](./providers.md#refresh-cadences)) |

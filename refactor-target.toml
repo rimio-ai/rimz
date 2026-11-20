@@ -434,7 +434,9 @@ upward-dependencies = ["address"]
 # expiring unless a room sees it again (+1).
 # LaunchCapability::native_auto_continue_grace, usage_limit_fallback_grace and its re-export from
 # agents are the one answer to how long auto-continue waits for a provider's own resume (+3).
-surface-budget = 1311
+# AgentState::resumed_provider_unreported shares the unstarted-resume reading with delivery and
+# reconciliation (+1).
+surface-budget = 1312
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -4629,7 +4631,9 @@ path = "crates/rimz/src/store"
 # A run's owed agent starter is read for the occupancy that leaves it out (+1).
 # StartedRuns, StartedRun and JoinedEnding carry a runs step's children and the endings their
 # reports store on the starting run (+3).
-surface-budget = 682
+# MessageRecord::failed_resume_reason and receiver_address give the deadline and the wrapper
+# exit one failed-resume reason (+2).
+surface-budget = 684
 
 [[verdict]]
 kind = "item"
@@ -7354,6 +7358,11 @@ reason = "Transient stop evidence shared by live dispatch, queued delivery and C
 
 [[verdict]]
 kind = "item"
+key = "message::deliver::archive_failed_resume"
+reason = "The exec wrapper archives a resumed child's follow-ups with the failed-resume reason when its provider exits before taking them."
+
+[[verdict]]
+kind = "item"
 key = "message::deliver::archive_for_ended_agent"
 reason = "The lifecycle reactor and the exec wrapper archive an ended agent's queue debt through one agent-ended gate."
 
@@ -7441,6 +7450,11 @@ reason = "Pass 13: DeliverErr::Send payload."
 kind = "item"
 key = "message::dispatch::DispatchRequest"
 reason = "Pass 13, 27c: per-send facts (enter, force, auto_compact, allow_fanout, mux, automated) live on the request; DispatchMode holds timing only (9000c0f24, 3128b2029)."
+
+[[verdict]]
+kind = "item"
+key = "message::dispatch::ResumeStart"
+reason = "A resumed child's receipt promises the provider-start wait and its deadline only for a kind that reports that start; dispatch decides the kind's answer and the CLI words it."
 
 [[verdict]]
 kind = "item"

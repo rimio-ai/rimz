@@ -285,12 +285,18 @@ pub fn parse_when_duration(raw: &str) -> Result<u64, String> {
     Ok(duration.as_secs())
 }
 
-fn provider_start_pending(agent: &AgentState, now: Timestamp) -> bool {
-    agent.resumed_at.is_some_and(|resumed_at| {
-        now < resumed_at + MessageBody::Prompt.delivery_window()
-            && !crate::agents::spec_by_kind(agent.kind.as_str())
-                .is_some_and(|definition| definition.capabilities.registers_lazily)
-    })
+/// Whether boundary delivery to `agent` waits for its resumed provider to report a session. A
+/// resume follow-up (`awaits_resume`, a record carrying `register_by`) to a kind whose resume
+/// reports its start waits until the provider reports, which the reconciler bounds at that
+/// deadline; any other record, and any record to another non-lazy kind, waits one delivery
+/// window from the resume stamp.
+fn provider_start_pending(agent: &AgentState, awaits_resume: bool, now: Timestamp) -> bool {
+    (awaits_resume && agent.resumed_provider_unreported())
+        || agent.resumed_at.is_some_and(|resumed_at| {
+            now < resumed_at + MessageBody::Prompt.delivery_window()
+                && !crate::agents::spec_by_kind(agent.kind.as_str())
+                    .is_some_and(|definition| definition.capabilities.registers_lazily)
+        })
 }
 
 fn gate_open_for_agent(

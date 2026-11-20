@@ -756,7 +756,7 @@ pub(super) fn render_verdict(
             )
         }
         deliver::DeliveryVerdict::WaitingForRegistration { register_by } => format!(
-            "waiting for {target} to register after its resume; fails if not registered by {register_by} (UTC)"
+            "waiting for {target}'s resumed provider to start a session; fails if none has started by {register_by} (UTC)"
         ),
         deliver::DeliveryVerdict::Scheduled { not_before } => not_before
             .as_ref()

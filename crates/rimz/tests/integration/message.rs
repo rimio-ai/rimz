@@ -2473,7 +2473,7 @@ fn assert_sweep_registration_wait(ends_again: bool) {
     );
     let shown = String::from_utf8_lossy(&shown.stdout);
     assert!(
-        shown.contains("waiting for @otter#main to register after its resume"),
+        shown.contains("waiting for @otter#main's resumed provider to start a session"),
         "{shown}"
     );
     assert!(shown.contains(&deadline.to_string()), "{shown}");
@@ -7651,6 +7651,59 @@ enum ResumeFollowUpCase {
     SplitFailed,
     AfterSelf,
     LimitRefused,
+    /// The resumed provider reports no session, stays silent, and exits 1 once its
+    /// pane is typed into, as Claude did in each recorded failed resume.
+    SilentResumeDiesOnPaste,
+    /// The resumed provider reports no session and exits 1 on its own before anything is
+    /// typed into its pane.
+    SilentResumeDiesAlone,
+    /// A `--steer` follow-up whose resumed provider reports its session only after more than
+    /// one delivery window.
+    StartsLate,
+}
+
+impl ResumeFollowUpCase {
+    const fn silent_resume(self) -> bool {
+        matches!(
+            self,
+            Self::SilentResumeDiesOnPaste | Self::SilentResumeDiesAlone
+        )
+    }
+
+    /// The launch profile the child row carries: the silent resumes run a profile whose name
+    /// differs from its kind, so the fresh launch their failure names must be the profile's.
+    const fn profile(self) -> Option<&'static str> {
+        match self {
+            Self::TeamRole => Some("reviewer"),
+            Self::SilentResumeDiesOnPaste | Self::SilentResumeDiesAlone => Some("implementer"),
+            _ => None,
+        }
+    }
+
+    const fn short_window(self) -> bool {
+        self.silent_resume() || matches!(self, Self::StartsLate)
+    }
+}
+
+/// How long a silent resume's delivery window lasts in these tests, and so how long the
+/// provider-start hold of the unchanged tree waits before it types.
+const SILENT_RESUME_WINDOW: Duration = Duration::from_millis(1500);
+/// The silent resume's registration deadline, which the send receipt promises.
+const SILENT_RESUME_REGISTER_LIMIT: Duration = Duration::from_secs(8);
+
+#[test]
+fn parent_message_to_a_resume_that_never_starts_is_never_typed_and_fails_at_the_deadline() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::SilentResumeDiesOnPaste);
+}
+
+#[test]
+fn parent_message_to_a_resume_that_exits_before_it_starts_fails_at_the_exit() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::SilentResumeDiesAlone);
+}
+
+#[test]
+fn parent_steer_to_a_late_starting_resume_waits_for_its_session_start() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::StartsLate);
 }
 
 #[test]
@@ -7714,6 +7767,15 @@ fn assert_parent_follow_up_case(
             "reviewer",
             "description: Review\nagent: claude\ntools: [Read]\nallowed-tools: [Read]",
             "Review the changes.",
+        );
+    }
+    if case.silent_resume() {
+        crate::common::write_definition(
+            &env,
+            "subagents",
+            "implementer",
+            "description: Implement\nagent: claude\ntools: [Read]\nallowed-tools: [Read]",
+            "Implement the task.",
         );
     }
     let store = env.store();
@@ -7875,7 +7937,7 @@ fn assert_parent_follow_up_case(
                     parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
                     launch_depth: Some(1),
                     isolation: Some(rimz::config::Isolation::Host),
-                    profile: (case == ResumeFollowUpCase::TeamRole).then(|| "reviewer".into()),
+                    profile: case.profile().map(str::to_owned),
                     role: (case == ResumeFollowUpCase::TeamRole).then(|| "reviewer".into()),
                     ..LaunchParams::default()
                 },
@@ -7937,7 +7999,9 @@ fn assert_parent_follow_up_case(
     // The resume opens the child's pane through the shim, which a staged listing would hide.
     send_command
         .env_remove("RIMZ_TEST_ZELLIJ_LIST_PANES")
-        .args(["--mux", "zellij", "message", &target, "follow up"])
+        .args(["--mux", "zellij", "message"])
+        .args((case == ResumeFollowUpCase::StartsLate).then_some("--steer"))
+        .args([target.as_str(), "follow up"])
         .env("PATH", path_with_front(&shim))
         .env(
             "SHELL",
@@ -7959,6 +8023,12 @@ fn assert_parent_follow_up_case(
     }
     if case == ResumeFollowUpCase::SplitFailed {
         send_command.env("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB", "1");
+    }
+    if case.silent_resume() {
+        send_command.env(
+            "RIMZ_MESSAGE_REGISTER_TIMEOUT_MS",
+            SILENT_RESUME_REGISTER_LIMIT.as_millis().to_string(),
+        );
     }
     if case == ResumeFollowUpCase::AfterSelf {
         send_command.args(["--after", &target]);
@@ -8061,8 +8131,7 @@ fn assert_parent_follow_up_case(
         let receipt = String::from_utf8_lossy(&output.stdout);
         assert!(
             receipt.contains("is resuming")
-                && receipt.contains("delivers when")
-                && receipt.contains("registers")
+                && receipt.contains("delivers once its provider starts a session")
                 && receipt.contains("fails if"),
             "{receipt}"
         );
@@ -8287,7 +8356,7 @@ fn assert_parent_follow_up_case(
         reminder_section: None,
         identity: ExecIdentity::default(),
     };
-    request.identity.name = Some(child_name);
+    request.identity.name = Some(child_name.clone());
     request.identity.name_explicit = true;
     request.identity.launch_id = Some(launch_id.to_string());
     request.identity.params = LaunchParams {
@@ -8303,6 +8372,10 @@ fn assert_parent_follow_up_case(
         parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
         launch_depth: Some(1),
         isolation: Some(rimz::config::Isolation::Host),
+        profile: case
+            .profile()
+            .filter(|_| case.silent_resume())
+            .map(str::to_owned),
         ..LaunchParams::default()
     };
     let mut wrapper = traced_rimz(&env, &trace)
@@ -8319,9 +8392,22 @@ fn assert_parent_follow_up_case(
         .args(exec_args(&env, &request))
         .args(["--mux", "zellij"])
         .env("SHELL", "/definitely/not/a/shell")
-        .env("PATH", path_with_front(&shim))
+        .env(
+            "PATH",
+            path_with_front(&if case.silent_resume() {
+                silent_resume_shim(&env, &trace, case)
+            } else {
+                shim.clone()
+            }),
+        )
         .env("ZELLIJ_PANE_ID", "3")
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        .envs(case.short_window().then(|| {
+            (
+                "RIMZ_MESSAGE_DELIVERY_WINDOW_MS",
+                SILENT_RESUME_WINDOW.as_millis().to_string(),
+            )
+        }))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -8357,7 +8443,7 @@ fn assert_parent_follow_up_case(
     );
     assert!(
         String::from_utf8_lossy(&shown.stdout)
-            .contains("is resuming; delivers when its provider registers"),
+            .contains("'s resumed provider to start a session; fails if none has started by"),
         "{}",
         String::from_utf8_lossy(&shown.stdout)
     );
@@ -8370,6 +8456,48 @@ fn assert_parent_follow_up_case(
         ("RIMZ_ZELLIJ_BIN", zellij.to_str().unwrap()),
         ("RIMZ_TEST_ZELLIJ_LOG", trace.to_str().unwrap()),
     ];
+    if case.silent_resume() {
+        // A second message on the card waits behind the follow-up with no deadline of its own.
+        let mut second = message.clone();
+        second.message_id = MessageId::new();
+        second.text = "second follow up".into();
+        second.register_by = None;
+        store.queue_message(&second, "rimz-test").unwrap();
+        assert_silent_resume_outcome(
+            &env,
+            &trace,
+            &panes,
+            [&message.message_id, &second.message_id],
+            &child_name,
+            case,
+            wrapper,
+        );
+        return;
+    }
+    if case == ResumeFollowUpCase::StartsLate {
+        // Sweep past two delivery windows from the resume while the provider stays silent.
+        let until = Instant::now() + SILENT_RESUME_WINDOW * 2 + Duration::from_millis(500);
+        while Instant::now() < until {
+            let _ = traced_rimz(&env, &trace)
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .env(
+                    "RIMZ_MESSAGE_DELIVERY_WINDOW_MS",
+                    SILENT_RESUME_WINDOW.as_millis().to_string(),
+                )
+                .args(["message", "sweep"])
+                .output()
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        let typed = trace_lines(&trace)
+            .into_iter()
+            .filter(|line| line.contains(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t")))
+            .collect::<Vec<_>>();
+        assert!(
+            typed.is_empty(),
+            "a follow-up must wait for the resumed provider's own session start: {typed:?}"
+        );
+    }
     let registered = env.run_installed_hook_in_pane("claude", &json!({"hook_event_name":"SessionStart", "session_id":"child", "source":"resume", "cwd":cwd}).to_string(), &hook_env);
     assert!(registered.status.success());
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -8429,6 +8557,153 @@ fn assert_parent_follow_up_case(
     );
     wrapper.kill().unwrap();
     wrapper.wait().unwrap();
+}
+
+/// A resumed `claude` stand-in that answers `--version`, reports no session, and exits 1:
+/// once anything is pasted into its pane, read from the trace the pane writes go to, or for
+/// `SilentResumeDiesAlone` once the test writes [`silent_resume_exit_marker`].
+#[cfg(unix)]
+fn silent_resume_shim(env: &Env, trace: &Path, case: ResumeFollowUpCase) -> PathBuf {
+    let dir = env.home_root.join("silent-resume-bin");
+    let exit_when = if case == ResumeFollowUpCase::SilentResumeDiesAlone {
+        format!("[ -e '{}' ]", silent_resume_exit_marker(env).display())
+    } else {
+        format!("grep -q -F -e \"$pat\" '{}' 2>/dev/null", trace.display())
+    };
+    crate::common::write_path_shim(
+        &dir,
+        "claude",
+        &format!(
+            "[ \"$1\" = --version ] && exit 1\npat=$(printf '\\taction\\twrite\\t--pane-id\\t{TRACE_PANE}\\t')\nwhile :; do\n  {exit_when} && exit 1\n  sleep 0.05\ndone",
+        ),
+    );
+    dir
+}
+
+#[cfg(unix)]
+fn silent_resume_exit_marker(env: &Env) -> PathBuf {
+    env.home_root.join("silent-resume-exit")
+}
+
+/// Sweep a silent resume's follow-up until it settles, the way the room's host sweep would,
+/// then assert that it was never typed into the pane, that it failed with a reason that names
+/// what happened and a fresh launch, that the parent was told so, and that the supervisor let
+/// the pane go.
+#[cfg(unix)]
+fn assert_silent_resume_outcome(
+    env: &Env,
+    trace: &Path,
+    panes: &Path,
+    message_ids: [&MessageId; 2],
+    child_name: &str,
+    case: ResumeFollowUpCase,
+    mut wrapper: std::process::Child,
+) {
+    if case == ResumeFollowUpCase::SilentResumeDiesAlone {
+        std::fs::write(silent_resume_exit_marker(env), "").unwrap();
+    }
+    let read = |message_id: &MessageId| {
+        env.store()
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .chain(env.store().list_message_history().unwrap())
+            .find(|record| &record.message_id == message_id)
+            .unwrap()
+    };
+    let deadline = Instant::now() + SILENT_RESUME_REGISTER_LIMIT + Duration::from_secs(20);
+    let settled = loop {
+        let records = message_ids.map(read);
+        if records.iter().all(|record| record.status.is_terminal()) || Instant::now() >= deadline {
+            break records;
+        }
+        let _ = traced_rimz(env, trace)
+            .env("RIMZ_TEST_PANE_LIST", panes)
+            .env(
+                "RIMZ_MESSAGE_DELIVERY_WINDOW_MS",
+                SILENT_RESUME_WINDOW.as_millis().to_string(),
+            )
+            .args(["message", "sweep"])
+            .output()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+    };
+    let shown = traced_rimz(env, trace)
+        .env("RIMZ_TEST_PANE_LIST", panes)
+        .args(["message", "show", message_ids[0].as_str()])
+        .output()
+        .unwrap();
+    let shown = String::from_utf8_lossy(&shown.stdout).into_owned();
+    let typed = trace_lines(trace)
+        .into_iter()
+        .filter(|line| line.contains(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t")))
+        .collect::<Vec<_>>();
+    let wrapper_exit = {
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = wrapper.try_wait().unwrap() {
+                break Some(status);
+            }
+            if Instant::now() >= until {
+                let _ = wrapper.kill();
+                let _ = wrapper.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let events = env
+        .read_events()
+        .into_iter()
+        .map(|e| format!("{} {} {}", e.timestamp, e.method, e.params_value()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let context = format!(
+        "events:\n{events}\nrecords: {settled:?}\nwrapper exit: {wrapper_exit:?}\ntyped: {typed:?}\nmessage show:\n{shown}"
+    );
+    assert!(
+        typed.is_empty(),
+        "nothing may be typed into a resumed provider that never started:\n{context}"
+    );
+    let (status, what) = if case == ResumeFollowUpCase::SilentResumeDiesAlone {
+        (
+            MessageStatus::Archived,
+            "exited with code 1 before it took the follow-up".to_owned(),
+        )
+    } else {
+        (
+            MessageStatus::Expired,
+            format!(
+                "did not start a session by {}",
+                settled[0].register_by.unwrap()
+            ),
+        )
+    };
+    let reason = format!(
+        "@{child_name}#main's resumed claude {what}; launch a fresh child with rimz subagents <profile> <task>"
+    );
+    let notices = env.store().list_messages().unwrap();
+    for record in &settled {
+        assert_eq!(record.status, status, "{context}");
+        assert_eq!(
+            record.last_error.as_deref(),
+            Some(reason.as_str()),
+            "{context}"
+        );
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.agent_id.as_str() == "parent"
+                    && notice.text.contains(record.message_id.as_str())
+                    && notice.text.contains(&format!("Reason: {reason}\n"))),
+            "the parent must be told why {} failed:\n{context}",
+            record.message_id
+        );
+    }
+    assert!(
+        wrapper_exit.is_some(),
+        "the supervisor must release the held pane:\n{context}"
+    );
 }
 
 #[test]
