@@ -50,10 +50,3 @@ Each of these is decided in one place. Call it; a second copy drifts.
 
 - Fail-fast, settled: a named exception to the root rule. Hibernation is enrichment on every platform, on by default and skipped where Linux, swap, a cgroup freezer, or a systemd user manager is unavailable. `rimz doctor` says why hibernation is skipped, and an explicit `[agents.hibernate] enabled = true` warns once at `rimz start` on Linux for a missing capability.
 
-## Before a harness change
-
-Before a change of one of these kinds, read the [change checklists](../../../../docs/contributing/change-checklists.md) section named beside it and do what it asks. No gate catches a skipped one.
-
-- A workflow field's meaning or default, a definition validation rule, how an attempt launches or settles, a stop the engine owes, a reader or render rule over the journal, a rule derived from `record.input`, a wait on a run another process started, or a test that builds a journal or an attempt by hand: [Workflow engine](../../../../docs/contributing/change-checklists.md#workflow-engine).
-- A refusal in launch planning, a path that reports a missing team or profile name, a new `LaunchRecord` field, the keys the process compiler stamps or clears, a child moved onto another spawn path, when a budget park fires or clears, a run's reopen turned into a park, or a unit test that writes loop state: [Harness launches and runs](../../../../docs/contributing/change-checklists.md#harness-launches-and-runs).
-- A `rimz` child spawned to act on an object of another room (a loop task's launch, a stop forwarded to a task's agents): [Rooms other than the caller's](../../../../docs/contributing/change-checklists.md#rooms-other-than-the-callers).

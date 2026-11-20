@@ -2,7 +2,7 @@
 
 Local contract for `crates/rimz/src/sidebar_pane/`: the pane-resident supervisor and the room host that paints for it. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). Behaviour lives in [state.md](../../../../docs/internals/sidebar/state.md) (the host and its attachments, the attach wire, the fetch cycle, hidden attachments, client views, the paint clock), [sidebar.md](../../../../docs/internals/sidebar/sidebar.md) (cards, frame composition, the serve loop), [docs/interface/sidebar.md](../../../../docs/interface/sidebar.md) (the on-screen spec), [theme.md](../../../../docs/internals/theme.md), and [pets.md](../../../../docs/internals/sidebar/pets.md): read the matching section before changing one.
 
-Before a change of one of these kinds, read [Sidebar](../../../../docs/contributing/change-checklists.md#sidebar) and do what it asks: what a frame draws; what a click or key does; the order of groups or rows; a rule keyed on watched-ness, on a published record field, on the previously presented snapshot, or on a row being new; `Views::route` or reconciliation; anything that skips or defers hidden folds or paints; a new `Component` variant; a loop, render, or supervisor test. Before handing off any renderer change, follow the [sidebar live check](../../../../docs/contributing/sidebar-live-check.md).
+Before handing off any renderer change, follow the [sidebar live check](../../../../docs/contributing/sidebar-live-check.md).
 
 ## Invariants
 
@@ -27,6 +27,7 @@ Before a change of one of these kinds, read [Sidebar](../../../../docs/contribut
 - Paint, frame timing, and hidden skipping follow `LoopState::watched`, which counts resolved membership and focus or input optimism. Pixel slots and kitty graphics follow the host's image permit instead.
 - On tmux a tab switch puts focus on the destination window's active pane, which can be that tab's own sidebar. A rule keyed on focus leaving the sidebar therefore also handles a view arriving at another sidebar pane.
 - A view's `animation_phase` can move backwards: raising `refresh_ms` lowers it, and co-viewers stamp one shared view from clock reads taken before the views lock, so a pane can stamp one phase behind. A lifetime is counted in driver-clock milliseconds (`frame_ms`), never by subtracting phases. A rule that orders two cyclic phases handles both cases, as `ViewState::advance_head_step` does.
+- A change that skips or defers folds lists every per-fold state it stops advancing (spend rolls, width-control stamps, read receipts) and every per-backend emitter it changes.
 - Pane projections share agent-scaled collections, the group vector, and rows. Take mutable access to a shared collection only after a read proves a change is needed.
 - Client views sit under one mutex, and a pane pass reads the published record through `ViewAccess::record` in [`app/loop_state/shared.rs`](./app/loop_state/shared.rs). Reading the views handle directly takes the record mutex on every call and escapes the `ViewsRecord` pass counter the hidden-pass tests bound. Terminal output, mux calls, asset loads, and read-mark I/O never hold the views lock, and the locked path re-reads routing and the latest fold after unlocked preparation.
 - A pane pass that requests a frame because a published record field moved requests it on the pass that first sees the new value, never on every pass while its own state lags: paint can be held back, and a repeated request re-arms an immediate frame for the whole hold.
@@ -37,6 +38,7 @@ Before a change of one of these kinds, read [Sidebar](../../../../docs/contribut
 - A new mark, line, or chip gets its own `Component` variant even when an existing one already resolves to the tone it wants: borrowing another role's token lets that role's retune recolor the new element.
 - Measure the painted width of text the renderer did not format itself (a product name, a theme override, an account label) with `text_width` in [`render/layout.rs`](./render/layout.rs), never `chars().count()`: wide or zero-width characters misplace every cell and click target after them.
 - A line reads its width tier from `RowCtx::tier`, measured on `content_width` (pane width minus 2), and never recomputes `Tier::for_width` from the pane width, so every line in a frame degrades at the same column.
+- A render change updates the frames drawn from the moved `.snap` files in [docs/interface/sidebar.md](../../../../docs/interface/sidebar.md), the [docs/guide/sidebar.md](../../../../docs/guide/sidebar.md) sentence that lists the changed line's elements in on-screen order, and, for what a click or key does, that input's row in the interface page's input table.
 - On a card's identity line, a token (a badge, a mark) yields width before the handle does: the handle draws exactly as on a plain card, and the token drops when it does not fit beside it.
 
 ## Tests
@@ -44,3 +46,6 @@ Before a change of one of these kinds, read [Sidebar](../../../../docs/contribut
 - `LoopState` test rigs share views by default, as every attachment does in production. A test runs without views only when that path is its subject.
 - Render tests golden a full screen through the `assert_snapshot` helper in [`render/tests/`](./render/tests/mod.rs), never `insta` directly: the helper scrubs live durations and ages, so a frame never fails on elapsed time.
 - Reducer, selection, and ordering tests stay pure and in-module.
+- Before a render change, list every frame `rg -l '<glyph or text>' --glob '*.snap'` returns, with the glyph's Unicode and Nerd Font forms (`GLYPH_CATALOG` in `theme/glyphs.rs`) both in the pattern, and narrow the list by reading each card, since width tiers move elements between lines. Preset cards and the `app::play` filmstrip escape that grep, and `insta` stops at a test's first failing frame, so once the change builds, run `INSTA_FORCE_PASS=1 INSTA_UPDATE=new cargo xtask test 'sidebar::scenario'` and the same over `'sidebar_pane'`, review each `.snap.new`, then `cargo insta accept`.
+- A line that admits elements by width is tested at each element's exact drop width and one column either side.
+- A change to the order of groups or rows also runs `cargo xtask test -P journey` and `cargo xtask test -P live`: journey tests drive keys over the rendered order and `journey::deep` drives scroll and focus over it.

@@ -2,7 +2,7 @@
 
 Local contract for `crates/rimz/src/sidebar/`, the view-model the renderer draws. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). Behaviour lives in [sidebar.md](../../../../docs/internals/sidebar/sidebar.md) (presence, ranking, reload) and [state.md](../../../../docs/internals/sidebar/state.md) (fetch cycle, lanes, events, fusion, focus intent, cadences): read the matching section before changing one.
 
-Before writing a rule keyed on a pane's tenant or row shape, a liveness test over `snapshot.agents`, or a value stamped at publication, read [Sidebar](../../../../docs/contributing/change-checklists.md#sidebar) and do what it asks. A change to `enrich::enrich_core` or a step it calls times `enrich_cached`, base against head, before hand-off: [Timing comparisons](../../../../docs/contributing/running-gates.md#timing-comparisons).
+A change to `enrich::enrich_core` or a step it calls times `enrich_cached`, base against head, before hand-off: [Timing comparisons](../../../../docs/contributing/running-gates.md#timing-comparisons).
 
 ## Invariants
 
@@ -20,6 +20,7 @@ Before writing a rule keyed on a pane's tenant or row shape, a liveness test ove
 ## Truth and latency
 
 - Pulled truth, the store rollup plus the producer's pane frame, decides what is true. Events are latency: they overlay pulled truth in [`fuse.rs`](./fuse.rs) until the next pull supersedes them, and a missed one costs time, never correctness. Which events overlay, how they supersede, and when they expire are this module's policy, not the wire's.
+- A rule keyed on a pane's tenant or row shape covers each row a pane can show between its shell row and its bound card (the pulled process row, launch plumbing, a `CommandChanged` overlay rebuilt from the event's command alone, Zellij's unbound agent row keyed by pane id), with a test for each, as `store/snapshot/panes/tests.rs::tenant_rows_between_shell_and_card_follow_the_verdict` does for the stamped binder.
 - A pending focus intent outranks both while its anchor holds. This module only reads and folds the anchor; requests, applies, and clears go through [`mux::focus_anchor`](../mux/focus_anchor.rs).
 - One host owns the room's data plane. Heartbeat records in [`wakeup::heartbeat`](../wakeup/heartbeat.rs) are launch and wakeup hints, never ownership votes.
 - [`timing.rs`](./timing.rs) holds the cadences and TTLs the lanes and the renderer share. A bound that defines one module's own behaviour lives with that module.

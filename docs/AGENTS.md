@@ -32,13 +32,13 @@ Each fact has one owning page; every other page links to it with a half-line of 
 - A new page is invisible until its index lists it: [docs/README.md](./README.md) for anything a user reads, the tree's own README for `reference/`, `internals/`, and `externals/`, and the [documentation map](#documentation-map) below. A page inside a subsystem folder (an `internals/agents/` adapter page) is listed in its tree's README, not in that map, which names only the folder.
 - A change that deletes or moves a page retargets each [CHANGELOG.md](../CHANGELOG.md) link to it (`rg -n -F '<page>.md' CHANGELOG.md`), the one edit a pull request makes there.
 
-## Before a doc change
+## Sentences about the code
 
-Before writing one of these, read the [change checklists](./contributing/change-checklists.md) section named beside it and do what it asks. No gate catches a skipped one.
-
-- A `console` block written, or one cell of an existing block changed: [Console blocks](./contributing/change-checklists.md#console-blocks).
-- A sentence that restates a code condition, lists the commands that trigger a behaviour, describes a path through several functions, groups several mechanisms under one property, states a process command line, gives a figure RimZ prints on more than one surface, cites a measurement or the cause of a measured change, or is rewritten to widen or narrow a list; a recipe spread over several `sh` blocks; or a procedure written or rewritten: [Doc sentences](./contributing/change-checklists.md#doc-sentences).
-- A page that gains a new kind of content, a behaviour whose trigger moves, or a scan over Markdown: [Stale wording sweep](./contributing/change-checklists.md#stale-wording-sweep).
+- A sentence that restates the code is checked against each source it covers: a condition against its source line with every `&&` and `||` kept, the commands that trigger a behaviour against `rimz lsp callers` followed up to every CLI `run`, a path through several functions against each function `rimz lsp callees` lists from the entry, and a set it quantifies (`every`, `only`, `most`) member by member.
+- A procedure written or rewritten runs once end to end, on the setup it names, before hand-off. A recipe spread over several `sh` blocks names each file by the path an earlier block created.
+- A measurement names the trunk commit it was built on and the branch commit's subject, never a branch hash. A cause given for a measured change cites the figure from the same run that rules out the other readings, or is written as a hypothesis.
+- A `console` block is captured from a copy of the built binary (the tmpfs hides `target/debug/`) under a scratch home: `bwrap --dev-bind / / --tmpfs /home --bind "$TMPDIR/<dir>" /home/me --setenv HOME /home/me --setenv RIMZ_HOME /home/me/.rimz --chdir /tmp -- "$TMPDIR/rimz" <args>`. Output that needs a room or agents is captured in a held sandbox room ([Sandbox rooms](./contributing/probes.md#sandbox-rooms)). Where it cannot be captured, it is recomputed from the renderer's doc comments (`render::Table`, `render::KeyVals`, `render::roster::Roster`), or, for an error, derived from the format string plus the `error: ` prefix `render::write_report` adds, and the change says it was derived. A change to one cell regrounds the whole block.
+- A sweep for words a change made false greps stems, not phrases, and the verbs a removed mechanism is described by. A set that gains or loses a member is found by two existing members joined by `.*` in both orders and by the old count beside the set's noun; a renumbered list moves every citation by number (`check 13`); a page that gains a new kind of content updates its one-line summary on each page that links to it. Scan Markdown with `rg -o '.{0,80}PATTERN.{0,80}'`, never `cut -c`: a paragraph is one line.
 
 ## Documentation map
 
@@ -56,11 +56,10 @@ Before writing one of these, read the [change checklists](./contributing/change-
 
 **Contributing**: `docs/contributing/`
 - [rust-conventions.md](./contributing/rust-conventions.md): Rust shape, test taxonomy, toolchain, quality gates, CI, and release packaging.
-- [change-checklists.md](./contributing/change-checklists.md): what a change of a given kind lists, greps, and pins before hand-off, doc sentences and console blocks included.
 - [running-gates.md](./contributing/running-gates.md): the gates and the test runner in practice.
 - [probes.md](./contributing/probes.md): hand-built probes and live checks.
 - [integration-tests.md](./contributing/integration-tests.md): what a test in the integration suite needs by kind, and how a flake there is stressed, forced, and traced.
-- [cli-scenes.md](./contributing/cli-scenes.md): the scene grammar `rimz agents` and `rimz teams` share, and the rules every human history list keeps.
+- [cli-scenes.md](./contributing/cli-scenes.md): the scene grammar `rimz agents` and `rimz teams` share, the rules every human history list keeps, and what a change to rendered output checks.
 - [agent-adapters.md](./contributing/agent-adapters.md): the built-in adapter integration playbook, and what a change to a shipped adapter also runs.
 - [model-upgrades.md](./contributing/model-upgrades.md): what a new provider model needs.
 - [dependabot-loop.md](./contributing/dependabot-loop.md): the worktree-isolated dependency repair loop.
