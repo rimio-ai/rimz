@@ -33,9 +33,10 @@ Behaviour lives in [adapter.md](../../../../docs/internals/agents/adapter.md) (t
 
 ## Before a change
 
-Before a change of one of these kinds, read the [agent-adapters.md](../../../../docs/contributing/agent-adapters.md#changing-an-existing-adapter) section named beside it and do what it asks. No gate catches a skipped one.
+Before a change of one of these kinds, read the section named beside it and do what it asks. No gate catches a skipped one.
 
 - A provider's launch argv or `--settings` JSON, an adapter's permission arguments, `process_names` or `bin_names`, `ROUTINE_RIMZ_PREFIXES`, or a new `rimz` verb an agent runs from its own pane in a flow RimZ drives: [Launch surface and routine verbs](../../../../docs/contributing/agent-adapters.md#launch-surface-and-routine-verbs).
 - A refresh that writes the context sidecar on another hook or passes an unchanged-stat gate, an input or a store or sidecar read added on the hook path, what `local_conversation_present` answers, or an `Ignored` edge in `lifecycle::step`: [Context refresh and the hook path](../../../../docs/contributing/agent-adapters.md#context-refresh-and-the-hook-path).
 - A declared coverage or lifecycle-hook verdict, a preset, an install version gate or hook set, or a conformance failure: [Coverage and conformance](../../../../docs/contributing/agent-adapters.md#coverage-and-conformance).
 - A spending session key split, a rule that identifies a transcript by file name, a spend parser that counts a new source, or the order of price lookup candidates: [Spend and pricing](../../../../docs/contributing/agent-adapters.md#spend-and-pricing).
+- The room spend slice (`aggregate_scoped_rollups` in [`spending/aggregate.rs`](./spending/aggregate.rs) and what it calls) or the spending walker's memo build (`SpendingWalker::ensure_memo`): [Timing comparisons](../../../../docs/contributing/running-gates.md#timing-comparisons).

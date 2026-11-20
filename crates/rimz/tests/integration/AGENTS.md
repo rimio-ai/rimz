@@ -44,3 +44,5 @@ Before writing or debugging one of these, read the section of [integration-tests
 - A race to prove, or a hold or probe to place in its window: [Forcing a race](../../../../docs/contributing/integration-tests.md#forcing-a-race).
 - A CI-only failure or a nextest `FLAKY` result: [Reading CI evidence](../../../../docs/contributing/integration-tests.md#reading-ci-evidence).
 - A slow or idle command, or a rebirth that resumed no agent: [Tracing a slow or idle command](../../../../docs/contributing/integration-tests.md#tracing-a-slow-or-idle-command).
+
+A test of a workflow, a launch or run, a CLI flag or verb, human rendering, or sidebar behaviour also follows the change checklists section for its subject: [Workflow engine](../../../../docs/contributing/change-checklists.md#workflow-engine), [Harness launches and runs](../../../../docs/contributing/change-checklists.md#harness-launches-and-runs), [CLI commands and flags](../../../../docs/contributing/change-checklists.md#cli-commands-and-flags), [Rendered output](../../../../docs/contributing/change-checklists.md#rendered-output), or [Sidebar](../../../../docs/contributing/change-checklists.md#sidebar).

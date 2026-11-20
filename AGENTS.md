@@ -4,11 +4,9 @@
 
 ## How to read this contract
 
-An **invariant** is a product promise, an architectural boundary that a `cargo xtask invariants` grep enforces, or a durability rule. Each section says which of its statements are invariants. Change one deliberately, in its own commit, with the doc and the gate moving together.
+An **invariant** is a product promise, an architectural boundary that a `cargo xtask invariants` grep enforces, or a durability rule, and each one is marked. Change one deliberately, in its own commit, with the doc and the gate moving together. Everything else is a default: depart from it when the work argues otherwise, and say why in the PR or hand-off. When this file and the code disagree, follow the code, then fix the file in the same change.
 
-**Everything else is a default.** Depart from it when the work argues otherwise, and say why in the PR or hand-off. A default that keeps losing is a bug in this file, so fix the file. When this file and the code disagree, follow the code, then fix the file in the same change.
-
-This file is in every agent's window on every turn, so it holds only what work of every kind needs. A rule for one kind of change, or a lesson from one piece of work, goes in the contributing page that owns that kind, as a bullet in the section whose trigger it shares. [Before a change](#before-a-change) routes to it: add the trigger to that section's line there when the line does not already name it.
+Every `AGENTS.md` is in its reader's window on every turn, so each holds only what all work under its directory needs, and this root only what work of every kind needs. A trap tied to one function or type goes in that item's doc comment, where whoever edits it reads it. A rule for changes inside one tree goes in that tree's `AGENTS.md`. A rule for one kind of change goes in the contributing page that owns that kind, as a bullet in the section whose trigger it shares, and the `AGENTS.md` of the tree where such a change is made routes to that section.
 
 ## Product invariants
 
@@ -20,7 +18,7 @@ Every bullet here is an invariant, a promise the product is built on. A change t
 - **One interface language.** Every human-facing surface resolves color through the [shared theme core](./docs/internals/theme.md); invariants enforce the renderer boundaries.
 - **Hook stdout is the decision channel.** Logs go to stderr or RimZ state logs; hook helper children get fresh stdio.
 - **Cross-backend parity.** Zellij and tmux are first-class; core behaviour never depends on a backend-only feature.
-- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives, and `message` routes human text through the same send path. Pane reads stay in five places: rendering, explicit `pane capture` calls, explicit `rimz agents show --capture` calls, a failed supervised run's tail capture before cleanup, and Codex turn-death confirmation. `cargo xtask invariants` admits each of the last three only behind its `rimz-invariant` marker comment.
+- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives, and `message` routes human text through the same send path. Pane reads stay in five places, which `cargo xtask invariants` admits: rendering, explicit `pane capture` calls, explicit `rimz agents show --capture` calls, a failed supervised run's tail capture before cleanup, and Codex turn-death confirmation.
 - **Transcript origin is explicit.** RimZ-introduced text never renders as the user merely because it lacks a header ([contract and remaining launch gap](./docs/internals/harness/transcript.md#writing-entries)). `rimz pane send` is the boundary: the raw keystroke primitive carries no record by design, and its caller is the author.
 - **Sidebar is read-only on the store.** Store-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
@@ -32,14 +30,14 @@ The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/
 
 - `unwrap`, `expect`, and panics belong in tests, build scripts, and provably impossible states, with a comment naming why the state is impossible.
 - Unsafe code is denied outside two `#[expect(unsafe_code, reason = "...")]` sites: the jemalloc configuration in `crates/rimz/src/main.rs` and the bench-only counting allocator in `crates/rimz/benches/fleet.rs`. A third site is a design decision.
-- Prove an event or timing fix at the consumer's decision point. That the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time.
 - rustfmt leaves comments, macro calls it cannot parse, and expressions it cannot fit as written, and no gate catches them: wrap each by hand to the width of the code around it, at most 100 columns ([rust-conventions.md](./docs/contributing/rust-conventions.md#quality-gates)). A harness rule against hard-wrapping prose covers messages and Markdown, not source comments.
 - A refactor you noticed on the way becomes a note unless it blocks you.
 - Python helpers run under `uv`.
-- `AGENTS.md` and `CLAUDE.md` are one file per directory, joined by symlink. Edit `AGENTS.md`: tools refuse to write through the `CLAUDE.md` link.
+- `AGENTS.md` and `CLAUDE.md` are one file per directory, joined by symlink. Edit `AGENTS.md`, since tools refuse to write through the `CLAUDE.md` link, and give a new `AGENTS.md` its `CLAUDE.md` link.
 - Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes. A new `disk/` module also gets a row in the Disk module table of `docs/internals/store.md`.
 - Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request: it is written as a standalone change once the work merges.
 - `examples/` is sample configuration for users to copy. Do not read it unless the user asks, and do not treat it as authority on behaviour.
+- A change to any Markdown file follows [docs/AGENTS.md](./docs/AGENTS.md).
 
 Two invariants sit underneath the house style:
 
@@ -48,38 +46,13 @@ Two invariants sit underneath the house style:
 
 ## Before a change
 
-Before a change of one of these kinds, read the section named beside it and do what it asks; when a change matches several lines, read each. Each section lists what such a change enumerates, greps, pins with a test, or runs, and no gate catches a skipped one.
+These hold for a change anywhere in the tree, and no gate catches a skipped one. Each names the [change checklists](./docs/contributing/change-checklists.md) section that holds its cases: read that section when your change is one of them.
 
-[Change checklists](./docs/contributing/change-checklists.md):
-
-- A stamp, clock, deadline, wake, polled state, or cached answer, or an event's power to set or clear a state: [Events and time](./docs/contributing/change-checklists.md#events-and-time).
-- A default that a stored document's parser or a launch reads, a stored record's shape or fields, or what a shared parser refuses: [Defaults and stored records](./docs/contributing/change-checklists.md#defaults-and-stored-records).
-- A deleted filter or guard, a predicate over a status, enum value, or count, a rule keyed on a lifecycle signal, a reading that gains a state, a lookup a new class of name reaches, or readers pointed at a wider table: [Lookups, guards, and predicates](./docs/contributing/change-checklists.md#lookups-guards-and-predicates).
-- A field made mandatory on an agent row, a match that decides whether two rows are the same agent, or a caller of `address::launch_row`, `address::launch_occupants`, or the hosting lookup: [Agent rows and launch identity](./docs/contributing/change-checklists.md#agent-rows-and-launch-identity).
-- A config key a user can type as a bare number, or a config command that accepts a table key: [Config keys](./docs/contributing/change-checklists.md#config-keys).
-- A `rimz` child spawned to act on another room's object, or a read pointed at rooms beyond the caller's: [Rooms other than the caller's](./docs/contributing/change-checklists.md#rooms-other-than-the-callers).
-- A workflow under `.github/workflows/` or `.gitea/workflows/`, or a claim about which CI jobs build a platform: [CI workflows](./docs/contributing/change-checklists.md#ci-workflows).
-- A documented rule, a renamed or removed identifier, a set that gains a member, a value or line a command prints, a path RimZ reads or writes, a subprocess argv, or a command that starts to refuse: [Stale wording sweep](./docs/contributing/change-checklists.md#stale-wording-sweep).
-- A workflow, a launch or run, a CLI flag or verb, human rendering, or sidebar behaviour, including its tests outside that subtree: [Workflow engine](./docs/contributing/change-checklists.md#workflow-engine), [Harness launches and runs](./docs/contributing/change-checklists.md#harness-launches-and-runs), [CLI commands and flags](./docs/contributing/change-checklists.md#cli-commands-and-flags), [Rendered output](./docs/contributing/change-checklists.md#rendered-output), [Sidebar](./docs/contributing/change-checklists.md#sidebar).
-- A sentence or `console` block in a doc, rustdoc, or help text: [Doc sentences](./docs/contributing/change-checklists.md#doc-sentences), [Console blocks](./docs/contributing/change-checklists.md#console-blocks).
-- When a refusal, error, or warning fires, what it says, or whether a broken setting refuses, warns, or falls back: [Refusals and warnings](./docs/contributing/change-checklists.md#refusals-and-warnings).
-- What a command prints or does to durable state, when a field is set or cleared, a probe or poll path, a testkit counter, a reader bounded by a window relative to now, a shared `Arc`'s owner, a `Cargo.toml` dependency, a config template, a shell snippet another host runs, the code the parked exec wrapper runs, `harness/team_stage.rs`, the bytes a message delivery pastes into a pane, what a launch flag does to a run's pane, or what a workflow run does to its panes: [Tests a change also runs](./docs/contributing/change-checklists.md#tests-a-change-also-runs).
-
-[Running gates and tests](./docs/contributing/running-gates.md):
-
-- A new `pub` or `pub(crate)` item, module, or cross-module import, which fails the pre-commit hook until `refactor-target.toml` admits it, or a plan that routes a call into another module: [The surface ratchet](./docs/contributing/running-gates.md#the-surface-ratchet).
-- A rebase, which runs no hook, or a branch's scope against trunk: [Rebasing](./docs/contributing/running-gates.md#rebasing).
-- Naming one test or module for a run, reading test durations, or where unit tests resolve their roots: [Selecting tests](./docs/contributing/running-gates.md#selecting-tests).
-- What `check` and `lint` hide (`testkit`-only calls, compiler warnings), or a remove-and-compile census: [Compile and lint signals](./docs/contributing/running-gates.md#compile-and-lint-signals).
-- This worktree's built binary, a throwaway probe test, or a `cargo xtask` run from a scratch worktree: [Builds and scratch worktrees](./docs/contributing/running-gates.md#builds-and-scratch-worktrees).
-- A `-P live` run, a failing test you leave unfixed, a failure to compare against trunk, or a test that behaves differently in CI: [Live tests and flakes](./docs/contributing/running-gates.md#live-tests-and-flakes).
-- A gate, or a failing `rimz` command, in a Codex agent's shell: [Codex agent shells](./docs/contributing/running-gates.md#codex-agent-shells).
-- `nix`, `libc`, or platform-gated code: [Cross-target checks](./docs/contributing/running-gates.md#cross-target-checks).
-- A base-versus-head timing, or a change to the snapshot fold, `sidebar::enrich::enrich_core`, the room spend slice, or the spending walker's memo build: [Timing comparisons](./docs/contributing/running-gates.md#timing-comparisons).
-
-[Hand-built probes and live checks](./docs/contributing/probes.md): read the matching section before building a tmux, Zellij, git, sshd, or provider CLI probe by hand, isolating a home, or running a branch binary against real state.
-
-A change to any Markdown file follows [docs/AGENTS.md](./docs/AGENTS.md), which also holds the documentation map.
+- **Rule on every writer and reader.** Before you change a predicate, filter, guard, lookup, or default, or when a field is set or cleared, list every site that writes the value and every site that reads it (`rimz lsp refs`, `rimz lsp callers`), counting the rows other paths synthesize and every launch path a launch default reaches, and rule what each does under the new rule: [Lookups, guards, and predicates](./docs/contributing/change-checklists.md#lookups-guards-and-predicates), [Defaults and stored records](./docs/contributing/change-checklists.md#defaults-and-stored-records).
+- **One agent is one launch id.** A match that decides whether two rows are the same agent compares launch ids, never `(kind, session id)`: [Agent rows and launch identity](./docs/contributing/change-checklists.md#agent-rows-and-launch-identity).
+- **Prove timing at the consumer.** An event or timing fix is proven at the consumer's decision point: that the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time. Work placed between a decision and the action it gates makes the decision stale, so read it again after the work: [Events and time](./docs/contributing/change-checklists.md#events-and-time).
+- **Sweep the sentences you made false.** A changed rule, a renamed identifier, a set that gains a member, a changed output, path, argv, or refusal: before hand-off, grep the old words across `docs/`, every `AGENTS.md`, rustdoc and comments, tests, and the `refactor-target.toml` verdicts, and fix each hit: [Stale wording sweep](./docs/contributing/change-checklists.md#stale-wording-sweep), [Refusals and warnings](./docs/contributing/change-checklists.md#refusals-and-warnings).
+- **Run the tests that name what you changed.** A test outside the modules you edited can pin the old behaviour: grep `crates/rimz/src` and `crates/rimz/tests` for the field, command, or message you changed and run each module that names it. `gate` runs no `live` or `journey` test, so a change to what a pane, a mux command, or a delivered message does also runs the live tests that cover it: [Tests a change also runs](./docs/contributing/change-checklists.md#tests-a-change-also-runs).
 
 ## Testing
 
@@ -94,13 +67,14 @@ The gate stack, the test tiers, and the one-home rule for a module's unit tests 
 - From a room shell, run tests only through `cargo xtask test` or `cargo xtask stress`, never a bare `cargo test`, `cargo nextest run`, or a loop over `target/*/deps/` binaries: the `cli/` unit tests and the integration binary resolve the shell's `RIMZ_HOME`/`HOME`/`XDG_*`.
 - Run no `cargo xtask stress` batch, mass repeat, or parallel copies of a test, on any test in any crate, unless the user asks or allows it: the host is shared. [Live tests and flakes](./docs/contributing/running-gates.md#live-tests-and-flakes) says how to triage a flake without that leave.
 - Escalate past `gate` to the journey (`cargo xtask test -P journey`), live-backend and `journey::deep` (`cargo xtask test -P live`), performance (`cargo xtask perf`), or dependency (`cargo xtask externals`) gates, or to full CI (`cargo xtask ci`), when the change touches those surfaces, their fixtures, or shared infrastructure. A test's profile is set by the filters in `.config/nextest.toml`, not by its directory: get the exact name from `cargo xtask test --list <fragment>` and match it against those filters.
+- A rebase runs no hook: before you rebase, read [Rebasing](./docs/contributing/running-gates.md#rebasing). [running-gates.md](./docs/contributing/running-gates.md) has one section for each other trap of the runner: naming a test, what `check` and `lint` hide, the surface ratchet (also read before a plan routes a call into another module), this worktree's binary and scratch worktrees, live runs and flakes, a gate in a Codex agent's shell, cross-target checks, and timing comparisons.
+- Before building a tmux, Zellij, git, sshd, or provider CLI probe by hand, isolating a home, or running a branch binary against real state, read the matching section of [probes.md](./docs/contributing/probes.md).
 - **Invariant.** `cargo xtask invariants` greps tracked text, Rust and Markdown alike. An `AGENTS.md` inside a guarded subtree is scanned with it: describe a boundary in prose and leave the banned path unwritten. A new untracked file escapes both `invariants` and `gate` until the pre-commit hook rejects it, so stage new files with `git add -N` before running either.
 
 ### Writing tests
 
 - An inline `mod tests` over 500 lines fails the pre-commit invariant; move the whole module to a sibling `tests.rs`, in the same change when an edit leaves it within about 20 lines of the cap.
 - Capture planned behaviour in the owning doc and add the executable test when the implementation can make it pass. An ignored test standing in for a future product target does not land.
-- Before writing or debugging an integration test, read the section of [integration-tests.md](./docs/contributing/integration-tests.md) for what it touches.
 - A change that deletes a test lists the inputs it covered and carries each into a surviving test, or names the dropped input in the hand-off.
 
 ## Code map
@@ -123,6 +97,7 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 - `sidebar_pane/`: native renderer: per-pane supervisor, per-session host, attach wire, pets, ratatui edge.
 - `remote/`: SSH grammar, reconnect policy, link health, `remote.toml`.
 - `diag/`: diagnostic-only JSONL append surfaces.
+- `config/`: machine settings, profile and team definitions, `rimz config` editing, and the config templates.
 
 **Top-level modules** in `crates/rimz/src/`:
 
@@ -132,5 +107,5 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 - `transcript`, `pane` (identity and classification), `pixel_wire` (kitty placeholder encoding), `sock`, `ids`, `trust`, `wakeup` (the sidebar wire).
 - `utils::{time, path, parallel, tokens, env}` (`utils::time` holds the crate's one Unix-millisecond clock), `fs_watch`, `theme`.
 - Daemon view: `daemon_view`, `daemon_content`, `reload`, `remote_control`.
-- `config`, `observability`, `agent_activity`, `lane`, `proc`, `osc`, `build_id`, `child_process`, `tui`, `testkit`.
+- `observability`, `agent_activity`, `lane`, `proc`, `osc`, `build_id`, `child_process`, `tui`, `testkit`.
 - `blocker` (start preconditions; the CLI owns their presentation), `update` and `uninstall` (install lifecycle), `packs/` (pack sources; definition and skill readers own item scanning), `lsp/` (shared language servers), `mcp/` (the `rimz mcp serve` tool catalog and stdio loop).
