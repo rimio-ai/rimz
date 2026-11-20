@@ -58,6 +58,7 @@ A test that returns early because the host lacks a capability records the skip t
 - Repeat `--name` to batch several tests through one nextest run. Do not launch parallel Cargo processes. xtask runs the matched tests and prints the selection (before the run under `--no-capture`, after it otherwise). It fails after the run if any requested name was unmatched, and before it if none matched.
 - `--list` prints each binary's id (`rimz::integration`) followed by its exact names. The binary's path comes from `cargo xtask test --list <fragment> --message-format json`, or from the `binary:` line of a `cargo xtask stress` `summary.txt`.
 - `--list` builds the test binaries first. Run a cold one under `rimz wait --run`, never as a foreground call: a cold build on a loaded host outlasts the 10-minute tool cap.
+- The first `cargo xtask` build in a fresh worktree outlasts the 10-minute tool cap too, whatever the subcommand (`test`, `check`, `lint`). Give that command a 30-minute timeout, or run it under `rimz wait --run`.
 - During a read-only sweep, run `rimz lsp hover` on the test function. The module path it prints, minus the crate name (`rimz::` or `integration::`), plus `::<fn>`, is the exact name.
 - A file mounted with `#[path = "..."] mod name;` runs under the mounting module's path plus `::name`, never under its file name. A sibling `#[path = "foo_tests.rs"] mod tests;` runs as `loop_cmd::list::tests`. The integration file `loop_list.rs` runs as `loop_schedule::list_tests`, so `test(loop_list::)` matches nothing.
 
