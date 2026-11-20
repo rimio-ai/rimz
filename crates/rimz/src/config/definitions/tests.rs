@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{CommandsConfig, SkillName};
+use crate::config::{CommandsConfig, PromptSource, SkillName};
 
 #[test]
 fn mini_definitions_and_seats_keep_the_variant_and_canonical_base() {
@@ -825,6 +825,42 @@ fn empty_dir_inherits_on_agents_and_subagents_but_not_team_seats() {
             loaded.errors
         );
     }
+}
+
+#[test]
+fn team_seats_take_empty_dir_only_from_the_base_of_the_kind_they_run_on() {
+    let root = fixture();
+    write(
+        root.path(),
+        "agents/claude.md",
+        "---\ndescription: Base\nempty-dir: true\n---\nBase.",
+    );
+    write(
+        root.path(),
+        "agents/codex.md",
+        "---\ndescription: Codex base\ntools: [Bash]\n---\nBase.",
+    );
+    definition(
+        root.path(),
+        "agents/worker.md",
+        "agent: claude\ntools: [Read]",
+        "Work.",
+    );
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        "  - agent: worker\n    role: lead\n    owns: [Plan, Implement]\n    model: astra\n    tools: [Bash]\n  - agent: worker\n    role: judge\n    owns: [Review]\n    model: astra\n    tools: [Bash]",
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    assert_eq!(loaded.agent_profiles.0["worker"].empty_dir, Some(true));
+    assert_eq!(
+        (
+            loaded.agent_profiles.0["probe.lead"].agent.as_str(),
+            loaded.agent_profiles.0["probe.lead"].empty_dir,
+        ),
+        ("codex", None)
+    );
 }
 
 #[test]
@@ -3077,9 +3113,9 @@ fn names_and_kind_bases_are_validated() {
     write(
         root.path(),
         "agents/claude.md",
-        "---\ndescription: Base\nmodel: fable\n---\nBase.",
+        "---\ndescription: Base\ntier: senior\n---\nBase.",
     );
-    error(root.path(), "a kind base takes only");
+    error(root.path(), "a kind base runs on its own kind");
     write(
         root.path(),
         "agents/claude.md",
@@ -3146,6 +3182,9 @@ fn failed_kind_bases_refuse_dependents_in_both_namespaces() {
         for contents in [
             "---\ndescription: Base\n---\n",
             "---\ndescription: [\n---\nBase.",
+            "---\ndescription: Base\ntools: ['1bad']\n---\nBase.",
+            "---\ndescription: Base\nsubagents: [missing]\n---\nBase.",
+            "---\ndescription: Base\nbudget: oops\n---\nBase.",
         ] {
             for namespace in ["agents", "subagents"] {
                 for body in ["", "Craft."] {
@@ -3185,6 +3224,28 @@ fn failed_kind_bases_refuse_dependents_in_both_namespaces() {
         }
     }
     assert_eq!(actual, expected);
+
+    // A bad budget fails the definition that carries it, at load.
+    let root = fixture();
+    let path = root.path().join("agents/spender.md");
+    definition(
+        root.path(),
+        "agents/spender.md",
+        "agent: claude\ntools: [Read]\nbudget: oops",
+        "",
+    );
+    assert_eq!(
+        load_checked(root.path())
+            .errors
+            .into_iter()
+            .find(|error| error.path == path)
+            .map(|error| error.message),
+        Some(
+            "invalid budget `oops`; use a non-negative dollar amount such as `5`, `$4.50`, \
+             or `20/day`"
+                .to_owned()
+        )
+    );
 }
 
 #[test]
@@ -3337,6 +3398,36 @@ fn prompt_taking_kinds_require_their_base_body_or_not() {
     let loaded = clean(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     assert!(loaded.agent_profiles.0.contains_key("runner"));
+    // A base file named by an alias is no base of its kind: it neither satisfies nor fills one.
+    definition(root.path(), "agents/mcode.md", "budget: 5", "MiniMax base.");
+    definition(root.path(), "agents/mm.md", "agent: minimax", "");
+    error(
+        root.path(),
+        &format!(
+            "runs on minimax, whose kind base is missing — create {} with a nonempty body",
+            root.path().join("agents/minimax.md").display(),
+        ),
+    );
+    let mm = root.path().join("agents/mm.md");
+    assert!(
+        !clean_but(root.path(), &mm)
+            .agent_profiles
+            .0
+            .contains_key("mm")
+    );
+    // A base body that renders to nothing is no prompt body either, and fails its dependents.
+    definition(root.path(), "agents/opencode.md", "", "${traits}");
+    error(
+        root.path(),
+        "kind base has no prompt body — write the system prompt every opencode definition",
+    );
+    error(
+        root.path(),
+        &format!(
+            "runs on opencode, whose kind base {} failed to load; fix that file",
+            root.path().join("agents/opencode.md").display()
+        ),
+    );
 }
 
 #[test]
@@ -4630,14 +4721,19 @@ fn hook_trust_fix_keeps_team_members_out_of_solo_resume() {
 }
 
 #[test]
-fn kind_bases_take_launch_tuning_and_refuse_other_keys_by_name() {
+fn kind_bases_take_every_profile_field_and_refuse_by_name() {
     use crate::agents::Toggle::{On, Unset};
 
-    let root = tempfile::tempdir().unwrap();
+    let root = fixture();
     write(
         root.path(),
         "agents/claude.md",
-        "---\ndescription: Base\nfast: on\ncode-mode: unset\neffort: low\nauto-compact: 300k\n---\nBase.",
+        "---\ndescription: Base\nagent: claude\nfast: on\ncode-mode: unset\neffort: low\nauto-compact: 300k\nmodel: opus\ntools: [Bash, Skill]\n---\nBase.",
+    );
+    write(
+        root.path(),
+        "agents/minimax.md",
+        "---\ndescription: Base\nagent: mcode\n---\nBase.",
     );
     let loaded = clean(root.path());
     for profiles in [&loaded.agent_profiles, &loaded.subagent_profiles] {
@@ -4648,38 +4744,86 @@ fn kind_bases_take_launch_tuning_and_refuse_other_keys_by_name() {
                 base.fast,
                 base.code_mode,
                 base.effort.as_deref(),
-                base.auto_compact.as_deref()
+                base.auto_compact.as_deref(),
+                base.model.as_deref(),
+                base.tools.as_ref().map(crate::agents::ToolSet::bases),
             ),
-            (true, Some(On), Some(Unset), Some("low"), Some("300k"))
+            (
+                true,
+                Some(On),
+                Some(Unset),
+                Some("low"),
+                Some("300k"),
+                Some("opus"),
+                Some(["Bash".to_owned(), "Skill".to_owned()].as_slice())
+            )
         );
+        assert!(profiles.0["minimax"].kind_base);
     }
 
+    definition(
+        root.path(),
+        "subagents/broken.md",
+        "agent: pi\neffort: +1",
+        "",
+    );
     let base = root.path().join("agents/claude.md");
     for (fields, message) in [
         (
-            "tools: [Read]\nmodel: fable",
-            format!(
-                "{}: a kind base takes only `description`, `fast`, `code-mode`, `effort`, and \
-                 `auto-compact`, not `model`, `tools`; put those on a profile that names the \
-                 kind with `agent:`",
-                base.display()
-            ),
-        ),
-        (
             "effort: +1",
-            format!(
-                "{}: effort +1 is relative; set an absolute effort or omit it for the chosen \
-                 model's default",
-                base.display()
-            ),
+            "effort +1 is relative; set an absolute effort or omit it for the chosen model's \
+             default"
+                .to_owned(),
         ),
         (
             "auto-compact: 5k",
-            format!(
-                "{}: sets `auto-compact: 5k`; rimz takes a token count from 100k through 1M, \
-                 spelled '200k', '200000', or '1m'",
-                base.display()
-            ),
+            "sets `auto-compact: 5k`; rimz takes a token count from 100k through 1M, spelled \
+             '200k', '200000', or '1m'"
+                .to_owned(),
+        ),
+        (
+            "tier: senior",
+            "sets `tier:`, but a kind base runs on its own kind; name a model in `model:`, or set \
+             the tier on a profile"
+                .to_owned(),
+        ),
+        (
+            "agent: codex",
+            "names `agent: codex`, but a kind base runs on its own kind; `agent:` may name only \
+             claude"
+                .to_owned(),
+        ),
+        (
+            "model: astra",
+            "runs on 'claude' but model 'astra' runs on 'codex'; set a claude model or follow \
+             the codex base"
+                .to_owned(),
+        ),
+        (
+            "tools: ['1bad']",
+            crate::agents::ToolSet::parse(&["1bad".to_owned()])
+                .unwrap_err()
+                .to_string(),
+        ),
+        (
+            "tools: [Agent]\nsubagents: [general]",
+            "sets `subagents:` and lists the Agent tool; the rimz doorway replaces the native \
+             one, so drop whichever this seat does not use"
+                .to_owned(),
+        ),
+        (
+            "subagents: [missing]",
+            "allows unknown subagent profile(s) [\"missing\"]".to_owned(),
+        ),
+        (
+            "subagents: [broken]",
+            "allows subagent 'broken', which failed to load".to_owned(),
+        ),
+        (
+            "keep-warm: {while: 'ci=passed'}",
+            "profile 'claude' keep-warm while `ci=passed`: a solo definition has no board; remove \
+             `while` and use `max` only"
+                .to_owned(),
         ),
     ] {
         write(
@@ -4687,21 +4831,289 @@ fn kind_bases_take_launch_tuning_and_refuse_other_keys_by_name() {
             "agents/claude.md",
             &format!("---\ndescription: Base\n{fields}\n---\nBase."),
         );
-        let loaded = load(
-            root.path(),
-            SkillCheck::Skip,
-            &CommandsConfig::default(),
-            &root.path().join("config.toml"),
-            &crate::config::tiers::TierConfig::default(),
-            Some(272_000),
-        );
+        let loaded = clean_but(root.path(), &root.path().join("subagents/broken.md"));
         assert_eq!(
             loaded
                 .errors
                 .iter()
-                .map(ToString::to_string)
+                .map(|error| (error.path.clone(), error.message.clone()))
                 .collect::<Vec<_>>(),
-            [message]
+            [(base.clone(), DefinitionErr::new(&base, message).message)],
+            "{fields}"
+        );
+        assert!(!loaded.agent_profiles.0.contains_key("claude"), "{fields}");
+        assert!(
+            !loaded.subagent_profiles.0.contains_key("claude"),
+            "{fields}"
         );
     }
+    write(
+        root.path(),
+        "agents/claude.md",
+        "---\ndescription: Base\nnonsense: 1\n---\nBase.",
+    );
+    error(root.path(), "unknown field `nonsense`");
+}
+
+/// Loads with skills unchecked and returns the result once every error but
+/// those of `expected` names another file.
+fn clean_but(root: &Path, expected: &Path) -> LoadedDefinitions {
+    let mut loaded = load(
+        root,
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &root.join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
+    );
+    loaded.errors.retain(|error| error.path != expected);
+    loaded
+}
+
+#[test]
+fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
+    let root = fixture();
+    write(root.path(), "traits/voice.md", "Voice.");
+    write(
+        root.path(),
+        "agents/claude.md",
+        "---\ndescription: Base\nmodel: opus\ntools: [Bash, Skill, AskUserQuestion]\n\
+         allowed-tools: [Read]\nskills: [work]\nmcps: [github]\nisolation: host\nbudget: 5\n\
+         timeout: 30m\nidle-compact: 150k\nkeep-warm: 2h\nmodel-reminder: true\n\
+         subagents: [general]\ntraits: [voice]\n---\nBase.\n\n${traits}",
+    );
+    write(
+        root.path(),
+        "agents/codex.md",
+        "---\ndescription: Codex base\nbudget: 7\ntools: [Bash]\n---\nBase.",
+    );
+    definition(root.path(), "agents/plain.md", "agent: claude", "Plain.");
+    definition(
+        root.path(),
+        "agents/own.md",
+        "agent: claude\nmodel: sonnet\ntools: [Read, Skill]\nbudget: 9\nsubagents: []",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/heir.md",
+        "agent: plain\nmodel: astra",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/delegator.md",
+        "agent: claude\ntools: [Agent, Skill]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/ranked.md",
+        "agent: claude\ntier: principal",
+        "",
+    );
+    definition(root.path(), "subagents/child.md", "agent: claude", "");
+    team_definition(
+        root.path(),
+        &format!("{REFLECT_STAGES}\nconsensus: [reflect]"),
+        "  - agent: plain\n    role: lead\n    owns: [Plan, Implement]\n  - agent: plain\n    role: judge\n    owns: [Review, Reflect]",
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let shape = |profile: &Profile| {
+        let mut value = serde_json::to_value(profile).unwrap();
+        value["tools"] =
+            serde_json::json!(profile.tools.as_ref().map(crate::agents::ToolSet::bases));
+        value["allowed-tools"] = serde_json::json!(profile.allowed_tools.as_ref().map(Vec::len));
+        value["timeout"] = serde_json::json!(profile.timeout.map(|timeout| timeout.as_secs()));
+        let keys = [
+            "model",
+            "tools",
+            "allowed-tools",
+            "skills",
+            "mcps",
+            "isolation",
+            "budget",
+            "timeout",
+            "idle-compact",
+            "keep-warm",
+            "model-reminder",
+            "subagents",
+        ];
+        keys.map(|key| (key, value[key].clone()))
+    };
+    let direct = serde_json::json!({
+        "model": "opus",
+        "tools": ["Bash", "Skill", "AskUserQuestion"],
+        "allowed-tools": 1,
+        "skills": ["work"],
+        "mcps": ["github"],
+        "isolation": "host",
+        "budget": "5",
+        "timeout": null,
+        "idle-compact": "150k",
+        "keep-warm": "2h",
+        "model-reminder": true,
+        "subagents": ["general"],
+    });
+    let mut child = direct.clone();
+    child["timeout"] = serde_json::json!(1800);
+    child["idle-compact"] = serde_json::Value::Null;
+    child["subagents"] = serde_json::Value::Null;
+    let mut own = direct.clone();
+    own["model"] = serde_json::json!("sonnet");
+    own["tools"] = serde_json::json!(["Read", "Skill"]);
+    own["budget"] = serde_json::json!("9");
+    own["subagents"] = serde_json::json!([]);
+    let mut delegator = direct.clone();
+    delegator["tools"] = serde_json::json!(["Agent", "Skill"]);
+    delegator["subagents"] = serde_json::Value::Null;
+    let mut heir = serde_json::json!({});
+    heir["model"] = serde_json::json!("astra");
+    heir["tools"] = serde_json::json!(["Bash"]);
+    heir["budget"] = serde_json::json!("7");
+    let expect = |value: &serde_json::Value| {
+        shape(&agent::empty_profile("")).map(|(key, _)| (key, value[key].clone()))
+    };
+    let agents = &loaded.agent_profiles.0;
+    let subagents = &loaded.subagent_profiles.0;
+    assert_eq!(
+        [
+            shape(&agents["claude"]),
+            shape(&subagents["claude"]),
+            shape(&agents["plain"]),
+            shape(&agents["own"]),
+            shape(&agents["delegator"]),
+            shape(&agents["heir"]),
+            shape(&subagents["child"]),
+        ],
+        [
+            expect(&direct),
+            expect(&child),
+            expect(&direct),
+            expect(&own),
+            expect(&delegator),
+            expect(&heir),
+            expect(&child),
+        ]
+    );
+    assert_eq!(agents["heir"].agent, "codex");
+    assert_eq!(
+        (
+            agents["claude"].description.as_deref(),
+            agents["plain"].description.as_deref()
+        ),
+        (Some("Base"), Some("Probe."))
+    );
+    assert_eq!(
+        agents["claude"].system_prompt_file,
+        Some(piece(
+            root.path().join("agents/claude.md"),
+            "Base.\n\nVoice."
+        ))
+    );
+    assert_eq!(texts(&agents["plain"]), ["Plain."]);
+
+    // Each table's routed renders carry that table's base copy.
+    let render = |profile: &Profile, kind: &str| {
+        profile.definition_renders.as_ref().unwrap().renders[kind].clone()
+    };
+    for (profile, timeout, idle, subagents) in [
+        (&agents["claude"], None, true, true),
+        (&subagents["claude"], Some(1800), false, false),
+        (&subagents["child"], Some(1800), false, false),
+        (&agents["plain"], None, true, true),
+    ] {
+        let rendered = render(profile, "claude");
+        assert_eq!(
+            (
+                rendered.timeout.map(|timeout| timeout.as_secs()),
+                rendered.idle_compact.is_some(),
+                rendered.subagents.is_some(),
+            ),
+            (timeout, idle, subagents)
+        );
+    }
+
+    // A tier definition takes each kind's base in that kind's render, never the base model.
+    let ranked = &agents["ranked"];
+    let (claude, codex) = (render(ranked, "claude"), render(ranked, "codex"));
+    assert_eq!(
+        claude.tools.as_ref().map(crate::agents::ToolSet::bases),
+        Some(
+            [
+                "Bash".to_owned(),
+                "Skill".to_owned(),
+                "AskUserQuestion".to_owned()
+            ]
+            .as_slice()
+        )
+    );
+    assert_eq!(
+        (
+            claude.budget.as_deref(),
+            codex.budget.as_deref(),
+            codex.tools.as_ref().map(crate::agents::ToolSet::bases)
+        ),
+        (Some("5"), Some("7"), Some(["Bash".to_owned()].as_slice()))
+    );
+    assert_ne!(claude.model.as_deref(), Some("opus"));
+    assert_ne!(ranked.model.as_deref(), Some("opus"));
+
+    // Seat edits reach tools and skills the base supplied.
+    let team = &loaded.teams.0["probe"];
+    for binding in &team.roles {
+        let seat = &agents[&binding.profile];
+        assert_eq!(
+            seat.tools.as_ref().unwrap().has("AskUserQuestion"),
+            binding.role == "lead",
+            "{}",
+            binding.role
+        );
+        assert_eq!(
+            seat_skills(&loaded, &binding.profile),
+            Some(vec!["work".to_owned(), "rimz-reflect".to_owned()])
+        );
+    }
+
+    // A definition's own subagents still refuse beside an Agent tool the base supplied.
+    write(
+        root.path(),
+        "agents/claude.md",
+        "---\ndescription: Base\ntools: [Agent]\n---\nBase.",
+    );
+    std::fs::remove_dir_all(root.path().join("teams")).unwrap();
+    for name in ["plain", "own", "heir", "delegator", "ranked"] {
+        std::fs::remove_file(root.path().join(format!("agents/{name}.md"))).unwrap();
+    }
+    std::fs::remove_file(root.path().join("subagents/child.md")).unwrap();
+    definition(
+        root.path(),
+        "agents/writer.md",
+        "agent: claude\nsubagents: [general]",
+        "",
+    );
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &root.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
+    );
+    assert_eq!(
+        loaded
+            .errors
+            .iter()
+            .map(|error| (error.path.clone(), error.message.clone()))
+            .collect::<Vec<_>>(),
+        [(
+            root.path().join("agents/writer.md"),
+            "sets `subagents:` and lists the Agent tool; the rimz doorway replaces the native one, \
+             so drop whichever this seat does not use"
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        )]
+    );
 }

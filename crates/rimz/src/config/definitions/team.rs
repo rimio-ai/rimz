@@ -323,15 +323,6 @@ impl SeatLoader<'_> {
                 DefinitionErr::new(path, format!("team '{name}' role '{handle}' selects unknown agent '{}'; team roles can select definitions from agents only", role.agent))
             })?;
         let original = &loaded.agent_profiles.0[&role.agent];
-        if original.empty_dir == Some(true) {
-            return Err(DefinitionErr::new(
-                path,
-                format!(
-                    "team '{name}' selects definition '{}' with empty-dir; teams share the worktree",
-                    role.agent
-                ),
-            ));
-        }
         let mut fm = role.overlay();
         let mut ancestor = Some(definition);
         while let Some(definition) = ancestor {
@@ -383,21 +374,10 @@ impl SeatLoader<'_> {
             }
         }
         fm.traits = Some(traits);
-        if team.leader.as_deref() != Some(role.role.as_deref().unwrap_or(&role.agent))
-            && let Some(tools) = &mut fm.tools
-        {
-            tools.retain(|tool| {
-                crate::agents::canonical_tool_name(tool.split('(').next().unwrap_or("").trim())
-                    != "AskUserQuestion"
-            });
-        }
-        if reflects
-            && let Some(skills) = &mut fm.skills
-            && !skills.is_empty()
-            && !skills.iter().any(|skill| skill.trim() == "rimz-reflect")
-        {
-            skills.push("rimz-reflect".to_owned());
-        }
+        let edits = agent::SeatEdits {
+            leader: team.leader.as_deref() == Some(role.role.as_deref().unwrap_or(&role.agent)),
+            reflects,
+        };
         // Resolve the overlaid leaf through the standalone checks/defaults, then restore its already-rendered ancestor crafts unchanged.
         let tree = Namespace {
             definitions: BTreeMap::from([(
@@ -414,7 +394,8 @@ impl SeatLoader<'_> {
         };
         let mut seat = LoadedDefinitions::default();
         agent::resolve_namespace(
-            agent::Resolver::new(self.scope, "agents", [&tree, self.subagents], self.children),
+            agent::Resolver::new(self.scope, "agents", [&tree, self.subagents], self.children)
+                .with_seat(edits),
             &mut seat,
         );
         if let Some(error) = seat.errors.into_iter().next() {
@@ -423,6 +404,15 @@ impl SeatLoader<'_> {
         let mut profile = seat.agent_profiles.0.remove(&role.agent).ok_or_else(|| {
             DefinitionErr::new(path, format!("seat '{}' failed to resolve", role.agent))
         })?;
+        if profile.empty_dir == Some(true) {
+            return Err(DefinitionErr::new(
+                path,
+                format!(
+                    "team '{name}' selects definition '{}' with empty-dir; teams share the worktree",
+                    role.agent
+                ),
+            ));
+        }
         let kind = &profile.agent;
         if agents::find_definition(kind)
             .is_some_and(|definition| !definition.spec().launch.takes_system_prompt())

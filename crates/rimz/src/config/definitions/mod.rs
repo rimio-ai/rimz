@@ -23,10 +23,10 @@ use std::rc::Rc;
 
 use super::{
     AgentSpecSources, CommandsConfig, DefinitionOrigin, Profile, ProfileSource, ProfilesConfig,
-    PromptSource, TeamsConfig,
+    TeamsConfig,
 };
 use crate::packs::{ClaimResolution, ItemFate, PackItem, PackName, Problem, ResolvedPacks};
-use frontmatter::{AgentFrontmatter, BaseFrontmatter};
+use frontmatter::AgentFrontmatter;
 
 /// A user-shell launch that can reach a provider's hook-trust prompt.
 pub fn hook_trust_fix(
@@ -149,7 +149,6 @@ impl<'a> SkillCatalog<'a> {
 
 #[derive(Debug, Default)]
 pub struct LoadedDefinitions {
-    pub tools: BTreeMap<String, Vec<String>>,
     pub agent_profiles: ProfilesConfig,
     pub subagent_profiles: ProfilesConfig,
     pub teams: TeamsConfig,
@@ -196,6 +195,14 @@ fn missing_kind_base(home: &Path, kind: &str) -> String {
         "whose kind base is missing — create {} with a nonempty body, the system prompt every \
          {kind} definition starts from",
         home.join("agents").join(format!("{kind}.md")).display()
+    )
+}
+
+/// The refusal for a kind base whose prompt body is empty, raw or rendered.
+fn empty_kind_base(stem: &str) -> String {
+    format!(
+        "kind base has no prompt body — write the system prompt every {stem} definition starts \
+         from below the frontmatter"
     )
 }
 
@@ -345,12 +352,71 @@ pub(super) fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
 #[derive(Clone, Copy)]
 struct LoadScope<'a> {
     home: &'a Path,
-    bases: &'a BTreeSet<String>,
+    /// Each loaded kind base's frontmatter by file stem, as its row is named, which fills what a
+    /// definition on the kind of that name leaves unset.
+    bases: &'a BTreeMap<String, AgentFrontmatter>,
     failed_bases: &'a BTreeMap<String, DefinitionErr>,
     traits: &'a BTreeMap<String, ClaimResolution>,
     skills: &'a SkillCatalog<'a>,
     tiers: &'a super::tiers::TierConfig,
     native_auto_compact: Option<u64>,
+}
+
+/// A kind base that loaded, held back until its `subagents:` names check.
+struct PendingBase<'a> {
+    item: &'a catalog::Item,
+    /// Its names, the file stem first.
+    keys: Vec<String>,
+    /// Its rows in the agents table and in the subagents table.
+    rows: (Profile, Profile),
+}
+
+/// Where an item that failed to load is recorded.
+struct Failed<'a> {
+    tree: &'a mut Namespace,
+    failed_bases: &'a mut BTreeMap<String, DefinitionErr>,
+    loaded: &'a mut LoadedDefinitions,
+}
+
+impl Failed<'_> {
+    fn record(
+        self,
+        item: &catalog::Item,
+        keys: Vec<String>,
+        kind_base: bool,
+        error: DefinitionErr,
+    ) {
+        let (path, name) = (&item.path, &item.name);
+        let error = if item.pack.is_some() && error.cause != DefinitionCause::PackProblem {
+            item.error(error.message)
+        } else {
+            error
+        };
+        if kind_base {
+            self.failed_bases.insert(name.clone(), error.clone());
+        }
+        for key in keys {
+            self.tree.failed.insert(key.clone());
+            if key.contains(':') {
+                self.tree.problems.insert(
+                    key.clone(),
+                    DefinitionErr::new(
+                        path,
+                        format!("follows `{key}`, which failed to load: {error}"),
+                    )
+                    .with_cause(DefinitionCause::DependsOnFailed { name: key }),
+                );
+            }
+        }
+        if item.selected() {
+            self.loaded
+                .failed
+                .entry(name.clone())
+                .or_default()
+                .insert(path.clone());
+            self.loaded.errors.push(error);
+        }
+    }
 }
 
 /// Non-empty, and only ASCII alphanumerics, `_`, and `-`.
@@ -449,7 +515,8 @@ fn load_resolved(
             }
         }
     }
-    let mut bases = BTreeSet::new();
+    let mut bases = BTreeMap::new();
+    let mut pending = Vec::new();
     let mut failed_bases = BTreeMap::new();
     for (name, claim) in &sources.claims["bases"] {
         if let ClaimResolution::Conflict { claims, message } = claim {
@@ -524,21 +591,44 @@ fn load_resolved(
                     .read_text(path)
                     .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
                 let (yaml, body) = frontmatter::split(path, &text)?;
-                if kind_base.is_some() {
-                    let fm: BaseFrontmatter = frontmatter::parse(path, yaml)?;
-                    if !fm.other.is_empty() {
-                        let keys = fm.other.keys().map(|key| format!("`{key}`"));
+                if let Some(definition) = kind_base {
+                    let kind = definition.spec().kind;
+                    let fm: AgentFrontmatter = frontmatter::parse(path, yaml)?;
+                    if fm.tier.is_some() {
+                        return Err(DefinitionErr::new(
+                            path,
+                            "sets `tier:`, but a kind base runs on its own kind; name a model in \
+                             `model:`, or set the tier on a profile",
+                        ));
+                    }
+                    if let Some(agent) = fm.agent.as_deref()
+                        && crate::agents::find_definition(agent)
+                            .is_none_or(|named| named.spec().kind != kind)
+                    {
+                        let own = std::iter::once(kind)
+                            .chain(definition.spec().aliases.iter().copied())
+                            .collect::<Vec<_>>()
+                            .join(" or ");
                         return Err(DefinitionErr::new(
                             path,
                             format!(
-                                "a kind base takes only `description`, `fast`, `code-mode`, \
-                                 `effort`, and `auto-compact`, not {}; put those on a profile \
-                                 that names the kind with `agent:`",
-                                keys.collect::<Vec<_>>().join(", ")
+                                "names `agent: {agent}`, but a kind base runs on its own kind; \
+                                 `agent:` may name only {own}"
                             ),
                         ));
                     }
-                    let description = frontmatter::description(path, fm.description.as_deref())?;
+                    if let Some(tier) = fm
+                        .model
+                        .as_deref()
+                        .and_then(super::tiers::ModelTier::from_model)
+                    {
+                        return Err(DefinitionErr::new(
+                            path,
+                            format!(
+                                "model is a tier; name a model, or set `tier: {tier}` on a profile"
+                            ),
+                        ));
+                    }
                     if let Some(effort) = fm
                         .effort
                         .as_deref()
@@ -552,35 +642,42 @@ fn load_resolved(
                             ),
                         ));
                     }
-                    let auto_compact = fm
-                        .auto_compact
-                        .as_deref()
-                        .map(|value| agent::auto_compact(path, value))
-                        .transpose()?;
                     if body.trim().is_empty() {
-                        return Err(DefinitionErr::new(
-                            path,
-                            format!(
-                                "kind base has no prompt body — write the system prompt every \
-                                 {stem} definition starts from below the frontmatter"
-                            ),
-                        ));
+                        return Err(DefinitionErr::new(path, empty_kind_base(&stem)));
                     }
-                    let mut profile = agent::empty_profile(&stem);
-                    profile.description = Some(description);
-                    profile.kind_base = true;
-                    profile.fast = fm.fast;
-                    profile.code_mode = fm.code_mode;
-                    profile.effort = fm.effort;
-                    profile.auto_compact = auto_compact;
-                    profile.system_prompt_file = Some(PromptSource::Text {
-                        origin: path.clone(),
-                        text: body.trim().to_owned(),
+                    let tree = Namespace {
+                        definitions: BTreeMap::from([(
+                            stem.clone(),
+                            Definition {
+                                path: path.clone(),
+                                pack: item.pack.clone(),
+                                body: body.trim().to_owned(),
+                                frontmatter: fm.clone(),
+                            },
+                        )]),
+                        ..Namespace::default()
+                    };
+                    let own_base = BTreeMap::from([(stem.clone(), fm.clone())]);
+                    let scope = LoadScope {
+                        home: agents_home,
+                        bases: &own_base,
+                        failed_bases: &BTreeMap::new(),
+                        traits: &sources.claims["traits"],
+                        skills: &catalog,
+                        tiers,
+                        native_auto_compact,
+                    };
+                    let row = |namespace: &str| {
+                        agent::Resolver::new(scope, namespace, [&tree, &tree], &BTreeSet::new())
+                            .kind_base(&stem)
+                    };
+                    let rows = (row("agents")?, row("subagents")?);
+                    bases.insert(stem.clone(), fm);
+                    pending.push(PendingBase {
+                        item,
+                        keys: keys.clone(),
+                        rows,
                     });
-                    bases.insert(stem.clone());
-                    let origin = DefinitionOrigin::new(item.pack.as_ref(), None);
-                    loaded.insert("agents", &stem, path, &origin, profile.clone());
-                    loaded.insert("subagents", &stem, path, &origin, profile);
                     return Ok(());
                 }
                 if !is_safe_name(name) {
@@ -624,11 +721,6 @@ fn load_resolved(
                 }
                 let fm: AgentFrontmatter = frontmatter::parse(path, yaml)?;
                 frontmatter::description(path, fm.description.as_deref())?;
-                if item.selected()
-                    && let Some(tools) = &fm.tools
-                {
-                    loaded.tools.insert(name.clone(), tools.clone());
-                }
                 let definition = Definition {
                     path: path.clone(),
                     pack: item.pack.clone(),
@@ -641,37 +733,66 @@ fn load_resolved(
                 Ok(())
             })();
             if let Err(error) = result {
-                let error = if item.pack.is_some() && error.cause != DefinitionCause::PackProblem {
-                    item.error(error.message)
-                } else {
-                    error
+                let failed = Failed {
+                    tree: &mut *tree,
+                    failed_bases: &mut failed_bases,
+                    loaded: &mut loaded,
                 };
-                if kind_base.is_some() {
-                    failed_bases.insert(name.clone(), error.clone());
-                }
-                for key in keys {
-                    tree.failed.insert(key.clone());
-                    if key.contains(':') {
-                        tree.problems.insert(
-                            key.clone(),
-                            DefinitionErr::new(
-                                path,
-                                format!("follows `{key}`, which failed to load: {error}"),
-                            )
-                            .with_cause(DefinitionCause::DependsOnFailed { name: key }),
-                        );
-                    }
-                }
-                if item.selected() {
-                    loaded
-                        .failed
-                        .entry(name.clone())
-                        .or_default()
-                        .insert(path.clone());
-                    loaded.errors.push(error);
-                }
+                failed.record(item, keys, kind_base.is_some(), error);
             }
         }
+    }
+    // A base's `subagents:` names a subagent that loads. A base that names a failed one fails,
+    // which fails its kind's subagents in turn, so this settles before either tree resolves.
+    while pending.iter().any(|base| base.rows.0.subagents.is_some()) {
+        let scope = LoadScope {
+            home: agents_home,
+            bases: &bases,
+            failed_bases: &failed_bases,
+            traits: &sources.claims["traits"],
+            skills: &catalog,
+            tiers,
+            native_auto_compact,
+        };
+        let children: BTreeSet<String> = agent::loadable(agent::Resolver::new(
+            scope,
+            "subagents",
+            [&subagents, &agents],
+            &BTreeSet::new(),
+        ))
+        .into_iter()
+        .chain(pending.iter().map(|base| base.keys[0].clone()))
+        .chain(commands.0.keys().cloned())
+        .collect();
+        let mut refused = Vec::new();
+        for (index, base) in pending.iter_mut().enumerate() {
+            let Some(listed) = &base.rows.0.subagents else {
+                continue;
+            };
+            match agent::subagent_names(&base.item.path, listed, &subagents, &children) {
+                Ok(names) => base.rows.0.subagents = Some(names),
+                Err(error) => refused.push((index, error)),
+            }
+        }
+        if refused.is_empty() {
+            break;
+        }
+        for (index, error) in refused.into_iter().rev() {
+            let base = pending.remove(index);
+            bases.remove(&base.keys[0]);
+            let failed = Failed {
+                tree: &mut agents,
+                failed_bases: &mut failed_bases,
+                loaded: &mut loaded,
+            };
+            failed.record(base.item, base.keys, true, error);
+        }
+    }
+    for base in pending {
+        let origin = DefinitionOrigin::new(base.item.pack.as_ref(), None);
+        let stem = &base.keys[0];
+        loaded.insert("agents", stem, &base.item.path, &origin, base.rows.0);
+        loaded.insert("subagents", stem, &base.item.path, &origin, base.rows.1);
     }
     // Only kind bases have been materialized yet; each family keeps its own base prompt.
     let families: BTreeSet<_> = tiers
@@ -682,23 +803,26 @@ fn load_resolved(
                 .filter(|kind| crate::agents::runs_other_providers_models(kind)),
         )
         .collect();
-    let mut renders = BTreeMap::new();
     let mut exclusions = BTreeMap::new();
-    for kind in families {
-        if let Some(profile) = loaded.agent_profiles.0.get(kind) {
-            renders.insert(kind.to_owned(), profile.clone());
-        } else if let Some(error) = failed_bases.get(kind) {
-            let message = if matches!(error.cause, DefinitionCause::DependsOnFailed { .. }) {
-                error.message.clone()
-            } else {
-                failed_kind_base(&error.path)
-            };
-            exclusions.insert(kind.to_owned(), message);
-        } else {
-            exclusions.insert(kind.to_owned(), missing_kind_base(agents_home, kind));
+    for kind in &families {
+        if loaded.agent_profiles.0.contains_key(*kind) {
+            continue;
         }
+        let message = match failed_bases.get(*kind) {
+            Some(error) if matches!(error.cause, DefinitionCause::DependsOnFailed { .. }) => {
+                error.message.clone()
+            }
+            Some(error) => failed_kind_base(&error.path),
+            None => missing_kind_base(agents_home, kind),
+        };
+        exclusions.insert((*kind).to_owned(), message);
     }
+    // Each table's rows route to that table's copy of each base.
     for profiles in [&mut loaded.agent_profiles, &mut loaded.subagent_profiles] {
+        let renders: BTreeMap<_, _> = families
+            .iter()
+            .filter_map(|kind| Some(((*kind).to_owned(), profiles.0.get(*kind)?.clone())))
+            .collect();
         for profile in profiles.0.values_mut() {
             profile.definition_renders = Some(super::tiers::DefinitionRenders {
                 preference: super::tiers::TierPreference {
