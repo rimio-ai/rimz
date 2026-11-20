@@ -1266,7 +1266,7 @@ fn lookup_outcomes_render_qualified_reusable_candidates() {
     };
     assert_eq!(
         render_outcome(root, &missing, false).unwrap(),
-        "not found: nosuch\n"
+        "not found: nosuch; search with find nosuch and rerun with a name or position it lists\n"
     );
     let symbols: Vec<SymbolInformation> = serde_json::from_value(json!([
         {"name": "read", "kind": 12, "location": {"uri": "file:///checkout/src/harness/launch_env.rs", "range": range()}},
@@ -3274,7 +3274,9 @@ fn line_names_absent_from_the_line_show_it() {
         locate_err(&checkout, "lib.rs:2:batch"),
         (
             5,
-            "not found: batch on lib.rs:2, which reads: let other = 1;".to_owned()
+            "not found: batch on lib.rs:2, which reads: let other = 1;\n\
+             rerun with a line that names batch, or with batch alone"
+                .to_owned()
         )
     );
 }
