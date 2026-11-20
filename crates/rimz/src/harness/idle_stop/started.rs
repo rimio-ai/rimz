@@ -634,7 +634,8 @@ impl<'a> List<'a> {
         self.group(group).push(row);
     }
 
-    /// Live runs the agent started that owe it nothing, started with `--detach`.
+    /// Live runs the agent started that are not listed above: those started with `--detach`,
+    /// and for an ended agent, which nothing can hold, every live run it started.
     fn detached_runs(&mut self, store: &Store) {
         let Ok(runs) = live_runs(store) else {
             return;
