@@ -10,7 +10,7 @@ A change to `enrich::enrich_core` or a step it calls times `enrich_cached`, base
 
 - **Read-only on the store.** No store-writer, run-wake, or broker import anywhere under this tree, tests included, nor in `wakeup/` or a harness file this graph reaches. [`store/`](../store/AGENTS.md) owns every write.
 - **Event-log history enters through a `RollupCursor` fold.** A whole-log or offset read is rejected here and in [`sidebar_pane/`](../sidebar_pane/AGENTS.md), so snapshot cost follows the log tail and not its length.
-- **Enrichment is projection only.** [`enrich.rs`](./enrich.rs) and its submodules, the spine that production and published-cache readers both run, spawn no subprocess and write no cache. Subprocess lanes live in [`refresh/`](./refresh/mod.rs).
+- **Enrichment is projection only.** [`enrich.rs`](./enrich.rs) and its submodules spawn no subprocess and write no cache. Subprocess lanes live in [`refresh/`](./refresh/mod.rs).
 - **The fold order is fixed.** The project root, worktree roots, root class, agent and subagent context, agent activity, and session-liveness folds land before live panes, because pane projection and grouping read them.
 - **The fold takes the room's state paths from its caller.** Enrichment and agent projection resolve no ambient room path, which keeps each tick out of the machine-wide workspace listing.
 - **Only [`produce/`](./produce/mod.rs) writes the published pane frame.** A realtime event never patches it.
@@ -20,12 +20,9 @@ A change to `enrich::enrich_core` or a step it calls times `enrich_cached`, base
 
 - Pulled truth, the store rollup plus the producer's pane frame, decides what is true. Events are latency: they overlay pulled truth in [`fuse.rs`](./fuse.rs) until the next pull supersedes them, and a missed one costs time, never correctness. Which events overlay, how they supersede, and when they expire are this module's policy, not the wire's.
 - A rule keyed on a pane's tenant or row shape covers each row a pane can show between its shell row and its bound card (the pulled process row, launch plumbing, a `CommandChanged` overlay rebuilt from the event's command alone, Zellij's unbound agent row keyed by pane id), with a test for each, as `store/snapshot/panes/tests.rs::tenant_rows_between_shell_and_card_follow_the_verdict` does for the stamped binder.
-- A pending focus intent outranks both while its anchor holds. This module only reads and folds the anchor; requests, applies, and clears go through [`mux::focus_anchor`](../mux/focus_anchor.rs).
-- One host owns the room's data plane. Heartbeat records in [`wakeup::heartbeat`](../wakeup/heartbeat.rs) are launch and wakeup hints, never ownership votes.
-- [`timing.rs`](./timing.rs) holds the cadences and TTLs the lanes and the renderer share.
+- This module only reads and folds the focus anchor; requests, applies, and clears go through [`mux::focus_anchor`](../mux/focus_anchor.rs).
 - A key held to a slower cadence than its lane (a hibernated agent's checks, through `hibernated_check_due` in [`cache.rs`](./cache.rs)) is checked when the lane's gate opens for its own reasons. Its deadline never opens a shared gate, or N keys on staggered stamps open it every pass. A held item skips only its own probes: it stays in every cross-item count of its pass, with its retained values.
-- A record reconciled only on final folds is reconciled inside `engine::reconcile_final_fold` in [`engine.rs`](./engine.rs), the one route the host and testkit playback have to those reconcilers, so a new record is added there. The renderer's host decides when a fold is final; which records reconcile, and in what order, is decided here. Every fold still reads the record, interim folds and published-cache readers included, so when the record orders rows (attention stamps), enrichment derives the value the next reconcile would record, not the stored one.
-- The agent projection published for consumers ([`agent_projection.rs`](./agent_projection.rs)) is disposable: re-validate it before use.
+- A record reconciled only on final folds is reconciled inside `engine::reconcile_final_fold` in [`engine.rs`](./engine.rs), the one route the host and testkit playback have to those reconcilers, so a new record is added there. Every fold still reads the record, interim folds and published-cache readers included, so when the record orders rows (attention stamps), enrichment derives the value the next reconcile would record, not the stored one.
 - On the [`wakeup/`](../wakeup/mod.rs) wire, an optional field that older readers ignore and newer readers default needs no version bump. A change an older reader would reject or misread carries the envelope or heartbeat protocol version with it.
 
 ## Tests

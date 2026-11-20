@@ -27,24 +27,22 @@ Behaviour is documented per topic under `docs/internals/harness/`: [fleet.md](..
 
 Each of these is decided in one place. Call it; a second copy drifts.
 
-- Launch: `launch_plan::compile` reads and decides without writing, and `apply` is the only step that materializes, so `agents explain` renders a plan without applying it. The process compiler resolves the launch shell once. `launch_reminders.rs` owns the one `<\system_reminder>` tag: producers return bodies and never wrap, and no prompt file adds a tag. The reminder carries no sampled git state, which goes stale before the agent reads it; `runtime_env.rs` samples at prompt submit.
+- Launch: `launch_reminders.rs` owns the one `<\system_reminder>` tag: producers return bodies and never wrap, and no prompt file adds a tag.
 - Relaunch: `resume::resolve_posture` is the one posture resolution for restart, fork, and every resume path.
 - Supervised runs: every status transition is a locked read-modify-write in `run.rs` over the `store::run` record. `response_path` and `earlier_response_path` are the one derivation of a response file. A reflex that asks an agent to end its turn registers its remaining work in `owed.rs`, or a supervised run completes at that turn end.
 - Fleet: `fleet.rs` holds the detached and held rules (`FleetRuns`, `owed_team_runs`, `ended_team_runs`), so no consumer filters on `report_to` or `limit_hold` itself.
-- Spend: `spend_ladder.rs` is the one spend step; no reader recombines its inputs.
-- Boards: `board.rs` reads every board byte that is read for writing, and holds the board lock and the atomic publish. A reader that judges a checkout by its board treats a symlinked `.rimz` as owning none.
+- Boards: a reader that judges a checkout by its board treats a symlinked `.rimz` as owning none.
 - Signals: `WatchVerdict::label` is the one wording of a watch outcome, `wait_output_path` the one derivation of a wait's output file, and `From<&Signal> for SignalEventPayload` the one conversion into the store, so no store module reaches up for a harness signal type.
-- Loop tasks: a wait row's target is matched only through `schedule/pending.rs`; `retire_session` is the one removal primitive and `retire_ended_sessions` the one spelling of "durably ended"; the task record is written only through `schedule/task_record_store.rs`; `in_flight_run` is the one lookup of a run lock's holder and one function in `schedule/run_lock.rs` spells its file name; terminal history rows are appended only through `run_log`, and the CLI renders the transition it gets back.
+- Loop tasks: a wait row's target is matched only through `schedule/pending.rs`; `retire_session` is the one removal primitive and `retire_ended_sessions` the one spelling of "durably ended"; `in_flight_run` is the one lookup of a run lock's holder; terminal history rows are appended only through `run_log`, and the CLI renders the transition it gets back.
 - Addresses: handle rendering and address resolution read the addressable peer set; raw root rows are for accounting scans.
 
 ## The hook drainer
 
 `hook_drain.rs` owns the elected drainer [ARCHITECTURE.md](../../../../ARCHITECTURE.md#processes-and-helpers) describes. A change there keeps these:
 
-- A spawn lock elects starters and a lifetime lock admits one drainer. A drain-through caller waits for the socket or a free lifetime lock, whichever comes first, and applies inline when the lock is free. The drainer unlinks its socket before its final drain and releases the lifetime lock last.
+- A spawn lock elects starters and a lifetime lock admits one drainer. The drainer unlinks its socket before its final drain and releases the lifetime lock last.
 - Frames stamped with an earlier boot are dropped with diagnostic evidence before application or recovery. Claimed frames recover by ingress ID: existing lifecycle records are not appended again, keyed repairs can repeat, and signal firing and unkeyed transcript writes are at-most-once, never replayed.
 - Cursor replies stay payload-only in the frontend. Antigravity and prompt-context replies wait up to 1200 ms for the drainer, then return neutral on a miss.
-- On Linux every drainer spawn requests its own helper scope with CPU weight 1000, falling back to the spawner's scope; apply children inherit it.
 
 ## Fail-fast
 

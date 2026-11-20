@@ -16,7 +16,7 @@ Local contract for `crates/rimz/src/cli/`: argv to typed requests, the process e
 
 ## Stores
 
-- Participants open through `open_existing_store`, directly or through `Ctx`, and refuse when the room has no readable workspace record. Identity-only and read-only maintenance commands may tolerate an absent room; none creates its state tree or re-records its identity. Identity resolution through `WorkspaceResolver::resolve_participant` does not depend on whether the room exists.
+- Participants open through `open_existing_store`, directly or through `Ctx`, and refuse when the room has no readable workspace record. Identity-only and read-only maintenance commands may tolerate an absent room; none creates its state tree or re-records its identity.
 - **Invariant.** Only room-choosing commands create stores: `start`, `attach`, `reset`, and `workspace migrate`; the sessions picker and `web` reuse room preparation, and library birth, rebirth, and the launcher's supervised preparation (including a spawning `loop fire`) and checkout creation own their creation. `cargo xtask invariants` (`ensure_room_creators`) rejects a creating store open in any file outside its closed creator list; extending that list is a deliberate decision.
 
 ## Command boundaries
