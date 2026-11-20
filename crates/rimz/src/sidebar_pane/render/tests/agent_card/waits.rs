@@ -318,20 +318,19 @@ fn subagent_wait_uses_the_child_row_without_a_wait_count_or_entry() {
     assert!(!screen.contains("reporting"), "{screen}");
 }
 
-/// The lead of an `agent` entry: the span two before its type word.
-fn lead_of(block: &RenderedBlock, line: usize) -> ratatui::text::Span<'static> {
+/// The lead of an awaited entry: the span two before its profile word `who`.
+fn lead_of(block: &RenderedBlock, line: usize, who: &str) -> ratatui::text::Span<'static> {
     let spans = &block.lines[line].spans;
-    let kind = spans
-        .iter()
-        .position(|span| span.content == "agent")
-        .unwrap();
+    let kind = spans.iter().position(|span| span.content == who).unwrap();
     spans[kind - 2].clone()
 }
 
 /// A card resting on waits for agents it does not list as children names each one in
-/// its waits, before its other waits: a live agent behind its own lead, a click target
-/// and cursor stop for its pane; one with no row, static, with neither; a settled run
-/// still reporting, static, with its pane.
+/// its waits, before its other waits, by profile, named lane and activity text, never by
+/// handle: a live agent behind its own lead, a click target and cursor stop for its pane;
+/// one with no row, the bare word `agent`, static, with neither; a settled run still
+/// reporting, its status in the description's place, static, with its pane; a profile
+/// with no description, alone.
 #[test]
 fn awaited_agents_draw_counted_agent_entries_before_other_waits() {
     use crate::sidebar_pane::render::labels::agent_glyph;
@@ -380,31 +379,48 @@ fn awaited_agents_draw_counted_agent_entries_before_other_waits() {
         .unwrap()
         .awaited = vec![
         SidebarAwaitedAgent {
-            handle: "tidy-iris".into(),
             status: Some(AgentStatus::Running),
             phase: TurnPhase::Acting,
             compacting: false,
             pane: Some(peer.clone()),
             since: Some(fixed_now()),
             settled: None,
+            profile: Some("coder".into()),
+            lane: Some("feat-x".into()),
+            description: Some("store refactor".into()),
         },
         SidebarAwaitedAgent {
-            handle: "@ghost".into(),
             status: None,
             phase: TurnPhase::Idle,
             compacting: false,
             pane: None,
             since: Some(fixed_now()),
             settled: None,
+            profile: None,
+            lane: None,
+            description: None,
         },
         SidebarAwaitedAgent {
-            handle: "earlier".into(),
             status: Some(AgentStatus::Success),
             phase: TurnPhase::Idle,
             compacting: false,
             pane: Some(earlier.clone()),
             since: Some(fixed_now()),
             settled: Some("completed".into()),
+            profile: Some("reviewer".into()),
+            lane: None,
+            description: Some("read the diff".into()),
+        },
+        SidebarAwaitedAgent {
+            status: Some(AgentStatus::Idle),
+            phase: TurnPhase::Idle,
+            compacting: false,
+            pane: None,
+            since: Some(fixed_now()),
+            settled: None,
+            profile: Some("writer".into()),
+            lane: None,
+            description: None,
         },
     ];
     let theme = Theme::fixed(false);
@@ -414,36 +430,66 @@ fn awaited_agents_draw_counted_agent_entries_before_other_waits() {
     let texts = line_texts(&block.lines);
     let screen = texts.join("\n");
     assert!(screen.contains("wakes when @tidy-iris reports"), "{screen}");
-    assert!(screen.contains("waits (4)"), "{screen}");
+    assert!(screen.contains("waits (5)"), "{screen}");
     let at = |needle: &str| {
         texts
             .iter()
             .position(|line| line.contains(needle))
             .unwrap_or_else(|| panic!("{needle:?}:\n{screen}"))
     };
-    let (live, ghost, settled, timer) = (
-        at("agent · tidy-iris"),
-        at("agent · @ghost"),
-        at("agent · earlier · completed, reporting"),
+    let (live, ghost, settled, bare, timer) = (
+        at("coder#feat-x · store refactor"),
+        at(&format!(
+            "{} agent ",
+            theme.glyph(GlyphRole::CardWaitSignal)
+        )),
+        at("reviewer · completed, reporting"),
+        at(" writer "),
         at("timer · in 10m"),
     );
     assert!(
-        live < ghost && ghost < settled && settled < timer,
+        live < ghost && ghost < settled && settled < bare && bare < timer,
         "{screen}"
     );
-    let lead = |line: usize| lead_of(&block, line);
+    for line in [ghost, bare] {
+        assert!(!texts[line].contains(" · "), "{}", texts[line]);
+    }
+    let entries = texts[live..timer].join("\n");
+    for handle in [
+        "tidy-iris",
+        "ghost",
+        "earlier",
+        "quiet-owl",
+        "read the diff",
+    ] {
+        assert!(!entries.contains(handle), "{handle}: {entries}");
+    }
+    let lead = |line: usize, who: &str| lead_of(&block, line, who);
     assert_eq!(
-        lead(live).content,
+        lead(live, "coder").content,
         agent_glyph(&theme, AgentStatus::Running, TurnPhase::Acting, 0)
     );
     let signal = theme.glyph(GlyphRole::CardWaitSignal);
-    for line in [ghost, settled] {
-        assert_eq!(lead(line).content, signal, "{}", texts[line]);
+    for (line, who) in [(ghost, "agent"), (settled, "reviewer")] {
+        assert_eq!(lead(line, who).content, signal, "{}", texts[line]);
         assert_eq!(
-            lead(line).style.fg,
+            lead(line, who).style.fg,
             Some(theme.component(Component::WaitHeader))
         );
     }
+    let spans = &block.lines[live].spans;
+    let who = spans
+        .iter()
+        .position(|span| span.content == "coder")
+        .unwrap();
+    assert_eq!(spans[who + 1].content, "#feat-x");
+    assert_eq!(
+        (spans[who].style.fg, spans[who + 1].style.fg),
+        (
+            Some(theme.component(Component::EntryAgentName)),
+            Some(theme.component(Component::EntryLane))
+        )
+    );
     let target = |line: usize| {
         block
             .interactions
@@ -479,11 +525,15 @@ fn awaited_agents_draw_counted_agent_entries_before_other_waits() {
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
     let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
     assert_eq!(
-        lead_of(&block, live).content,
+        lead_of(&block, live, "coder").content,
         role_glyph(&theme, AnimationRole::Compacting, 0)
     );
 }
 
+/// A card waiting on a team draws one static entry: the muted `team` tag, the team and its
+/// lane as the CLI writes the cohort, and the board's stage behind its current mark. Trunk's
+/// lane and `#external` are no lane; a name that does not parse draws the tag alone; an
+/// unread board reads `stage unknown`.
 #[test]
 fn team_wait_draws_a_static_counted_stage_entry_and_working_description() {
     let mut parent = agent(
@@ -511,10 +561,268 @@ fn team_wait_draws_a_static_counted_stage_entry_and_working_description() {
     assert!(screen.contains("waits (1)"), "{screen}");
     let theme = Theme::fixed(false);
     let lead = theme.glyph(GlyphRole::CardWaitSignal);
+    let current = theme.glyph(GlyphRole::PipelineCurrent);
     assert!(
-        screen.contains(&format!("{lead} team · stage Review")),
+        screen.contains(&format!("{lead} team forge#feat-x · {current} Review")),
         "{screen}"
     );
+    let line = |name: &str, stage: Option<&str>| {
+        let mut snapshot = snapshot.clone();
+        let card = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+        card.pending_waits[0].name = name.to_owned();
+        card.pending_waits[0].trigger = PendingWaitTrigger::Team {
+            stage: stage.map(str::to_owned),
+        };
+        let lines = group_lines_at_width(&snapshot, &theme, 0, 64);
+        lines
+            .into_iter()
+            .find(|line| line.to_string().contains(&format!("{lead} team")))
+            .unwrap_or_else(|| panic!("{name}: no team entry"))
+    };
+    for (name, stage, who) in [
+        (
+            "forge#main",
+            Some("Review"),
+            format!("team forge · {current} Review"),
+        ),
+        (
+            "forge#external",
+            Some("Review"),
+            format!("team forge · {current} Review"),
+        ),
+        (
+            "not a team",
+            Some("Review"),
+            format!("team · {current} Review"),
+        ),
+        (
+            "forge#feat-x",
+            None,
+            "team forge#feat-x · stage unknown".to_owned(),
+        ),
+    ] {
+        let text = line(name, stage).to_string();
+        assert!(text.contains(&format!("{lead} {who} ")), "{name}: {text}");
+    }
+    let spans = line("forge#feat-x", Some("Review")).spans;
+    let tag = spans
+        .iter()
+        .position(|span| span.content == "team")
+        .unwrap();
+    let styles: Vec<_> = spans[tag..tag + 4]
+        .iter()
+        .map(|span| (span.content.to_string(), span.style.fg))
+        .collect();
+    assert_eq!(
+        styles,
+        [
+            (
+                "team".to_owned(),
+                Some(theme.component(Component::EntryTeamTag))
+            ),
+            (" ".to_owned(), None),
+            (
+                "forge".to_owned(),
+                Some(theme.component(Component::EntryTeamName))
+            ),
+            (
+                "#feat-x".to_owned(),
+                Some(theme.component(Component::EntryLane))
+            ),
+        ]
+    );
+    let stage = spans
+        .iter()
+        .find(|span| span.content == current)
+        .expect("the current-stage mark");
+    assert_eq!(stage.style.fg, Some(theme.component(Component::EntryStage)));
+}
+
+/// A team entry's lane clips from its tail before its name does, and its stage and age never
+/// clip: each step at its exact width and one column either side.
+#[test]
+fn a_team_wait_clips_its_lane_then_its_name_and_never_its_stage() {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    parent.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Working,
+        name: "forge#feat-x".into(),
+        trigger: PendingWaitTrigger::Team {
+            stage: Some("Build".into()),
+        },
+        armed_at: Some(fixed_now()),
+    });
+    let snapshot = snapshot_with(vec![parent]);
+    let theme = Theme::fixed(false);
+    let lead = theme.glyph(GlyphRole::CardWaitSignal);
+    let current = theme.glyph(GlyphRole::PipelineCurrent);
+    let entry = |width: usize| {
+        line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))
+            .into_iter()
+            .find(|line| line.contains(&format!("{current} Build")))
+            .unwrap_or_else(|| panic!("{width}: no entry"))
+    };
+    let who = |width: usize| {
+        let line = entry(width);
+        let start = line.find(lead).unwrap() + lead.len() + 1;
+        let end = line.find(&format!(" · {current} Build")).unwrap();
+        line[start..end].to_owned()
+    };
+    // The width where `team forge#feat-x` just fits.
+    let whole = (28..80)
+        .find(|width| who(*width) == "team forge#feat-x")
+        .unwrap();
+    assert_eq!(who(whole + 1), "team forge#feat-x");
+    assert_eq!(who(whole - 1), "team forge#feat…");
+    // `team forge…`: the lane is gone; one column less clips the name.
+    assert_eq!(who(whole - 6), "team forge…");
+    assert_eq!(who(whole - 5), "team forge#…");
+    assert_eq!(who(whole - 7), "team forg…");
+    for width in 28..whole {
+        entry(width);
+    }
+}
+
+/// An entry with a right cluster draws its seam only with the headline's first cell, so
+/// the separator never dangles before the clock.
+#[test]
+fn an_awaited_entry_drops_its_seam_until_a_headline_cell_fits() {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    parent.phase = TurnPhase::Idle;
+    parent.pending_waits = vec![PendingWait {
+        class: crate::agents::PendingWaitClass::Working,
+        name: "@tidy-iris".into(),
+        trigger: PendingWaitTrigger::Subagent {
+            active_at: fixed_now(),
+            target: None,
+            deadline_at: None,
+            settled: None,
+        },
+        armed_at: Some(fixed_now()),
+    }];
+    let mut snapshot = snapshot_with(vec![parent]);
+    snapshot
+        .rows_mut()
+        .next()
+        .unwrap()
+        .as_agent_mut()
+        .unwrap()
+        .awaited = vec![crate::store::snapshot::SidebarAwaitedAgent {
+        status: Some(AgentStatus::Running),
+        phase: TurnPhase::Acting,
+        compacting: false,
+        pane: None,
+        since: Some(fixed_now()),
+        settled: None,
+        profile: Some("coder".into()),
+        lane: Some("store".into()),
+        description: Some("store refactor".into()),
+    }];
+    let theme = Theme::fixed(false);
+    let entry = |width: usize| {
+        line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))
+            .into_iter()
+            .find(|line| line.contains("coder#store"))
+            .unwrap_or_else(|| panic!("{width}: no entry"))
+    };
+    let headed = (28..80)
+        .find(|width| entry(*width).contains("coder#store · s "))
+        .unwrap();
+    assert!(
+        entry(headed + 1).contains("coder#store · st "),
+        "{}",
+        entry(headed + 1)
+    );
+    let bare = entry(headed - 1);
+    assert!(
+        bare.contains("coder#store ") && !bare.contains('·'),
+        "{bare}"
+    );
+    for width in 28..headed {
+        let line = entry(width);
+        assert!(!line.contains('·'), "{width}: {line}");
+    }
+}
+
+/// An awaited agent and a team wait on one card, at a wide and a narrow pane.
+#[test]
+fn awaited_agent_and_team_wait_entries_render_at_46_and_32_columns() {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    parent.phase = TurnPhase::Idle;
+    parent.prompt = Some("hand the design off".into());
+    parent.pending_waits = vec![
+        PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
+            name: "@tidy-iris".into(),
+            trigger: PendingWaitTrigger::Subagent {
+                active_at: fixed_now(),
+                target: None,
+                deadline_at: None,
+                settled: None,
+            },
+            armed_at: Some(fixed_now()),
+        },
+        PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
+            name: "forge#feat-x".into(),
+            trigger: PendingWaitTrigger::Team {
+                stage: Some("Build".into()),
+            },
+            armed_at: Some(fixed_now()),
+        },
+    ];
+    let mut snapshot = snapshot_with(vec![parent]);
+    snapshot
+        .rows_mut()
+        .next()
+        .unwrap()
+        .as_agent_mut()
+        .unwrap()
+        .awaited = vec![crate::store::snapshot::SidebarAwaitedAgent {
+        status: Some(AgentStatus::Running),
+        phase: TurnPhase::Acting,
+        compacting: false,
+        pane: None,
+        since: Some(fixed_now()),
+        settled: None,
+        profile: Some("coder".into()),
+        lane: Some("store".into()),
+        description: Some("store refactor".into()),
+    }];
+    for width in [46, 32] {
+        let screen = snapshot_to_screen_with_alert_and_ui(
+            &snapshot,
+            None,
+            &ViewState {
+                selected_index: Some(0),
+                ..Default::default()
+            },
+            &UiState::default(),
+            width,
+            20,
+        );
+        assert_snapshot(&format!("awaited_and_team_wait_{width}"), screen);
+    }
 }
 
 #[test]

@@ -15,18 +15,18 @@ expression: screen
 ▌  ▣ ╸───────────────────────────  1.0%▐
 ▌  ▤ 0                                 ▐
 ▌  ▷ 7                        2 running▐
-▌    ⣾ lang-typed                      ▐
-▌      @coder                        1h▐
-▌    ? lane-readers                    ▐
-▌      Build · @coder               50m▐
-▌    ▷ lane-readers-docs               ▐
-▌      after lane-readers              ▐
-▌    ▷ lang-docs                       ▐
+▌    ⣾ coder · type the workflow     1h▐
+▌    ? team forge#lane… · ◉ Build   50m▐
+▌    ▷ writer · document the lane reade▐
+▌      after forge#lane-readers        ▐
+▌    ▷ writer · document the language  ▐
 ▌      pr[workflow-languag…: #1640 open▐
-▌    ▷ nightly                         ▐
+▌    ▷ coder                           ▐
 ▌      once at 2026-11-14 03:00        ▐
 ▌    +1 later                          ▐
 ▌    1 more ended                      ▐
+
+
 
 
 

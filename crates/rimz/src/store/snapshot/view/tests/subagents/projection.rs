@@ -1182,3 +1182,24 @@ fn launched_child_stays_while_live_and_retires_at_the_parents_next_turn() {
     assert_eq!(rows[0].sub_agents().len(), 1);
     assert!(rows[0].sub_agents()[0].prior_turn);
 }
+
+/// A child names its lane only when its stored lane carries an explicit name: a named lane,
+/// even its parent's, and never a checkout's own lane.
+#[test]
+fn a_child_names_only_an_explicitly_named_lane() {
+    use crate::ids::{Lane, LaneHome, LaneName};
+    let mut child = child_state("root", "child", AgentStatus::Running, 0);
+    child.launch_depth = Some(1);
+    let lane = |home: LaneHome| Lane::own(home, "/repo/feat-x");
+    for home in [LaneHome::Trunk, LaneHome::Worktree, LaneHome::Foreign] {
+        child.lane = Some(lane(home));
+        let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
+        assert_eq!(projected.lane, None, "{home:?}'s own lane");
+    }
+    child.lane = Some(lane(LaneHome::Trunk).named(LaneName::dashed("docs")));
+    let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
+    assert_eq!(projected.lane.as_deref(), Some("docs"));
+    child.lane = None;
+    let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
+    assert_eq!(projected.lane, None, "a lane-less row");
+}

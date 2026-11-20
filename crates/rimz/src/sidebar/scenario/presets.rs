@@ -2462,6 +2462,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
         phase: spec.phase,
         task: spec.task.map(ToOwned::to_owned),
         profile: None,
+        lane: None,
         model: spec.model.map(ToOwned::to_owned),
         effort: Some("xhigh".to_owned()),
         description: spec.description.map(ToOwned::to_owned),

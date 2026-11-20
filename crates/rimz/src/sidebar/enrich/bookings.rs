@@ -12,7 +12,8 @@ use jiff::Timestamp;
 use crate::agents::{AgentState, AgentStatus};
 use crate::store::snapshot::{
     BookingBand, BookingBlocker, BookingFire, BookingLive, BookingPr, BookingSibling, BookingStage,
-    BookingState, BookingWait, SiblingState, SidebarBooking, SidebarRow, SidebarSnapshot,
+    BookingStarts, BookingState, BookingWait, SiblingState, SidebarBooking, SidebarRow,
+    SidebarSnapshot,
 };
 
 use super::super::refresh::bookings::{BookingFacts, BookingsCache, FireFacts, launched_by};
@@ -263,8 +264,9 @@ fn card_list(
                 None => BookingState::Waiting(BookingWait {
                     blocker: entry.facts.blocking.as_ref().map(|term| BookingBlocker {
                         after: blockers[index].map(|sibling| BookingSibling {
-                            task: entries[sibling].facts.task.clone(),
                             state: entries[sibling].sibling_state(snapshot),
+                            starts: entries[sibling].facts.starts.clone(),
+                            lane: entries[sibling].facts.lane.clone(),
                         }),
                         key: term.key.clone(),
                         reading: term.reading.clone(),
@@ -292,6 +294,8 @@ fn card_list(
                 band,
                 needs_fix: entry.facts.needs_fix.clone(),
                 state,
+                lane: entry.facts.lane.clone(),
+                description: entry.facts.description.clone(),
             };
             (booking, parent(snapshot, rows, &entries, index))
         })
@@ -475,7 +479,7 @@ fn order(built: Vec<(SidebarBooking, Option<usize>)>) -> Vec<SidebarBooking> {
 }
 
 /// What a fire has alive: the lead's status (a team's most urgent member), the focus
-/// pane, and a team's board stage. `None` once nothing is.
+/// pane, a team's board stage, and an agent's card activity text. `None` once nothing is.
 fn live(
     snapshot: &SidebarSnapshot,
     rows: &HashMap<(&str, &str), RowAt>,
@@ -541,14 +545,16 @@ fn live(
         .filter(|_| leader.team_instance().is_some())
         .map(|pipeline| BookingStage {
             stage: pipeline.stage.clone(),
-            owner: pipeline.owner.clone(),
             done: pipeline.done_at.is_some(),
         });
     Some(BookingLive {
         status,
         phase: leader_card.phase,
-        handle: leader_card.handle.clone(),
         stage,
+        description: matches!(facts.starts, BookingStarts::Profile(_))
+            .then(|| leader_card.activity_description())
+            .flatten()
+            .and_then(crate::agents::single_line_description),
         pane,
     })
 }

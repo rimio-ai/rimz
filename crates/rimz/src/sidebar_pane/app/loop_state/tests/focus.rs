@@ -3165,7 +3165,7 @@ fn an_awaited_entry_with_no_card_of_its_own_carries_its_holders_agent() {
     let parent = (row.id.clone(), row.pane.as_ref().unwrap().pane_id.clone());
     row.as_agent_mut().unwrap().awaited = vec![
         serde_json::from_value(serde_json::json!({
-            "handle": "@helper", "pane": awaited, "since": snapshot.now,
+            "profile": "helper", "pane": awaited, "since": snapshot.now,
         }))
         .unwrap(),
     ];

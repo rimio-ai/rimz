@@ -443,6 +443,8 @@ fn an_absent_unreadable_or_other_version_cache_reads_empty() {
         blocking: None,
         unmet: Vec::new(),
         timing: None,
+        lane: None,
+        description: None,
         fire: None,
     };
     let other = BookingsCache {
@@ -1222,6 +1224,8 @@ fn a_consumed_entry_with_a_worktree_stays_until_merged_or_its_checkout_is_gone()
                 blocking: None,
                 unmet: Vec::new(),
                 timing: None,
+                lane: None,
+                description: None,
                 fire: Some(FireFacts {
                     at: past,
                     fire: fire.fire.clone(),
@@ -1289,6 +1293,8 @@ fn a_consumed_entrys_pull_request_reading_gates_only_on_merged() {
             blocking: None,
             unmet: Vec::new(),
             timing: None,
+            lane: None,
+            description: None,
             fire: Some(FireFacts {
                 at: past,
                 fire: fire.fire.clone(),
@@ -1322,6 +1328,8 @@ fn a_merged_reading_is_carried_for_the_same_fire_only() {
         blocking: None,
         unmet: Vec::new(),
         timing: None,
+        lane: None,
+        description: None,
         fire: Some(FireFacts {
             at: "2026-11-13T10:00:00Z".parse().unwrap(),
             fire: fire.clone(),
@@ -1362,6 +1370,8 @@ fn fired_unfinished_bookings_demand_their_branch() {
         blocking: None,
         unmet: Vec::new(),
         timing: None,
+        lane: None,
+        description: None,
         fire: Some(FireFacts {
             at: "2026-11-13T10:00:00Z".parse().unwrap(),
             fire: FireId::new(&TaskId::new()),
@@ -1441,4 +1451,247 @@ fn a_rows_tree_booking_ends_once_its_tree_is_gone() {
     let mut gone: Vec<_> = gone.iter().map(|fire| names[fire]).collect();
     gone.sort();
     assert_eq!(gone, ["no-agent", "tree-removed"]);
+}
+
+/// An entry's text is its task's label, else its launch tail's `--description` in either
+/// spelling before any `--`, single-lined, blank reading as none; a team names the lane its
+/// target types, trunk's own lane and `external` none.
+#[test]
+fn facts_read_the_label_or_launch_description_and_a_teams_typed_lane() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, runtime) = room(dir.path());
+    let task = |name: &str, entry: TaskEntry| {
+        (
+            name.to_owned(),
+            LoadedTask::new(name, entry, TaskSource::Config),
+        )
+    };
+    let tasks = BTreeMap::from([
+        task(
+            "labelled",
+            TaskEntry {
+                label: Some("the label".to_owned()),
+                ..launching(
+                    &["rimz", "agents", "coder", "--description", "the tail"],
+                    &root,
+                )
+            },
+        ),
+        task(
+            "spaced",
+            launching(
+                &["rimz", "agents", "coder", "--description", "spaced text"],
+                &root,
+            ),
+        ),
+        task(
+            "joined",
+            launching(
+                &["rimz", "agents", "coder", "--description=joined text", "go"],
+                &root,
+            ),
+        ),
+        task("bare", launching(&["rimz", "agents", "coder", "go"], &root)),
+        task(
+            "passthrough",
+            launching(
+                &["rimz", "agents", "coder", "go", "--", "--description=x"],
+                &root,
+            ),
+        ),
+        task(
+            "blank",
+            TaskEntry {
+                label: Some("   ".to_owned()),
+                ..launching(&["rimz", "agents", "coder", "go"], &root)
+            },
+        ),
+        task(
+            "multiline",
+            TaskEntry {
+                label: Some("two\n  lines".to_owned()),
+                ..launching(&["rimz", "agents", "coder", "go"], &root)
+            },
+        ),
+        task(
+            "lane",
+            launching(&["rimz", "teams", "forge#feat-x", "go"], &root),
+        ),
+        task(
+            "trunk",
+            launching(&["rimz", "teams", "forge#main", "go"], &root),
+        ),
+        task(
+            "external",
+            launching(&["rimz", "teams", "forge#external", "go"], &root),
+        ),
+        task(
+            "laneless",
+            launching(&["rimz", "teams", "forge", "go"], &root),
+        ),
+    ]);
+    let readings = tasks.keys().map(|name| (name.clone(), reading())).collect();
+    let facts = collect(
+        &tasks,
+        &readings,
+        &TeamsConfig::default(),
+        &records(&runtime),
+        &root,
+    );
+    let read: BTreeMap<&str, (Option<&str>, Option<&str>)> = facts
+        .iter()
+        .map(|facts| {
+            (
+                facts.task.as_str(),
+                (facts.lane.as_deref(), facts.description.as_deref()),
+            )
+        })
+        .collect();
+    assert_eq!(read["labelled"], (None, Some("the label")));
+    assert_eq!(read["spaced"], (None, Some("spaced text")));
+    assert_eq!(read["joined"], (None, Some("joined text")));
+    assert_eq!(read["bare"], (None, None));
+    assert_eq!(read["passthrough"], (None, None), "the provider's own tail");
+    assert_eq!(read["blank"], (None, None));
+    assert_eq!(read["multiline"], (None, Some("two lines")));
+    assert_eq!(read["lane"].0, Some("feat-x"));
+    assert_eq!(read["trunk"].0, None);
+    assert_eq!(read["external"].0, None);
+    assert_eq!(read["laneless"].0, None);
+}
+
+/// A fired agent names the named lane its rows run in, never a checkout's own lane; once its
+/// one-shot is consumed, the text read before the fire and the lane its rows had carry over.
+#[test]
+fn a_fired_agent_names_its_rows_named_lane_and_keeps_its_text_past_consumption() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, runtime) = room(dir.path());
+    let entry = TaskEntry {
+        label: Some("type the language".to_owned()),
+        when: None,
+        fire_at: Some("2026-11-13T10:00:00Z".parse().unwrap()),
+        ..booked(&root)
+    };
+    let tasks = BTreeMap::from([(
+        "typed".to_owned(),
+        LoadedTask::new("typed", entry, TaskSource::Instance),
+    )]);
+    let unfired = collect(
+        &tasks,
+        &BTreeMap::from([("typed".to_owned(), reading())]),
+        &TeamsConfig::default(),
+        &records(&runtime),
+        &root,
+    );
+    assert_eq!(unfired[0].description.as_deref(), Some("type the language"));
+    assert_eq!(
+        unfired[0].lane, None,
+        "an agent names no lane before it fires"
+    );
+    let prior = BookingsCache {
+        version: BOOKINGS_CACHE_VERSION,
+        bookings: unfired,
+    };
+    let now: Timestamp = "2026-11-13T10:30:00Z".parse().unwrap();
+    let fire = mark(
+        "2026-11-13T10:00:00Z".parse().unwrap(),
+        Some(LaunchKind::Agent),
+        "coder",
+    );
+    let lane = |name: Option<&str>| {
+        let own = crate::ids::Lane::own(crate::ids::LaneHome::Trunk, root.to_string_lossy());
+        Some(match name {
+            Some(name) => own.named(crate::ids::LaneName::dashed(name)),
+            None => own,
+        })
+    };
+    let consumed_with = |rows: &[AgentState], prior: &BookingsCache| {
+        let records = RoomRecords {
+            rows,
+            ..records(&runtime)
+        };
+        consumed(
+            &ledger([("typed", fire.clone())]),
+            &TeamsConfig::default(),
+            &records,
+            prior,
+            &root,
+            now,
+            3_600,
+        )
+        .0
+    };
+    let own = AgentState {
+        lane: lane(None),
+        ..stamped("lead", &fire.fire)
+    };
+    let fired = consumed_with(&[own], &prior);
+    assert_eq!(fired[0].description.as_deref(), Some("type the language"));
+    assert_eq!(fired[0].lane, None, "trunk's own lane is no lane");
+    let named = AgentState {
+        lane: lane(Some("lang")),
+        ..stamped("lead", &fire.fire)
+    };
+    let fired = consumed_with(&[named], &prior);
+    assert_eq!(fired[0].lane.as_deref(), Some("lang"));
+    let seen = BookingsCache {
+        version: BOOKINGS_CACHE_VERSION,
+        bookings: fired,
+    };
+    let gone = consumed_with(&[], &seen);
+    assert_eq!(
+        (gone[0].lane.as_deref(), gone[0].description.as_deref()),
+        (Some("lang"), Some("type the language")),
+        "the same fire keeps both once its rows are gone"
+    );
+}
+
+/// A fired team names the lane its cohort runs in, read from the rows carrying the fire's id,
+/// trunk's none; while no row is registered it names the lane its target types.
+#[test]
+fn a_fired_team_names_its_cohorts_lane_from_its_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, runtime) = room(dir.path());
+    let now: Timestamp = "2026-11-13T10:30:00Z".parse().unwrap();
+    let fire = mark(
+        "2026-11-13T10:00:00Z".parse().unwrap(),
+        Some(LaunchKind::Team),
+        "forge",
+    );
+    let member = |lane: &str| {
+        let own = crate::ids::Lane::own(crate::ids::LaneHome::Trunk, root.to_string_lossy());
+        AgentState {
+            team: Some("forge".to_owned()),
+            lane: Some(match lane {
+                "main" => own,
+                lane => own.named(crate::ids::LaneName::dashed(lane)),
+            }),
+            ..stamped("planner", &fire.fire)
+        }
+    };
+    let lane_with = |rows: &[AgentState]| {
+        let records = RoomRecords {
+            rows,
+            ..records(&runtime)
+        };
+        consumed(
+            &ledger([("docs", fire.clone())]),
+            &TeamsConfig::default(),
+            &records,
+            &BookingsCache::default(),
+            &root,
+            now,
+            3_600,
+        )
+        .0[0]
+            .lane
+            .clone()
+    };
+    assert_eq!(lane_with(&[member("docs")]).as_deref(), Some("docs"));
+    assert_eq!(
+        lane_with(&[member("main")]),
+        None,
+        "trunk's lane is no lane"
+    );
+    assert_eq!(lane_with(&[]), None, "no row: the typed target names none");
 }

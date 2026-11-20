@@ -309,7 +309,9 @@ fn assert_snapshot(name: &str, screen: String) {
     });
 }
 
-fn snapshot_with(mut agents: Vec<AgentState>) -> SidebarSnapshot {
+pub(in crate::sidebar_pane::render) fn snapshot_with(
+    mut agents: Vec<AgentState>,
+) -> SidebarSnapshot {
     let mut panes = Vec::new();
     for (idx, agent) in agents.iter_mut().enumerate() {
         if agent.parent_agent_id.is_some() {
@@ -604,7 +606,7 @@ fn ui_at_phase(phase: u64) -> ViewState {
     }
 }
 
-fn test_row_ctx<'a>(
+pub(in crate::sidebar_pane::render) fn test_row_ctx<'a>(
     snapshot: &'a SidebarSnapshot,
     theme: &'a Theme,
     width: usize,

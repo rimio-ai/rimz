@@ -193,6 +193,7 @@ fn sub_agents(count: usize, text: &str) -> Vec<SidebarSubAgent> {
             phase: crate::agents::TurnPhase::Acting,
             task: Some(text.to_owned()),
             profile: None,
+            lane: None,
             model: Some(text.to_owned()),
             effort: Some(text.to_owned()),
             description: Some(text.to_owned()),

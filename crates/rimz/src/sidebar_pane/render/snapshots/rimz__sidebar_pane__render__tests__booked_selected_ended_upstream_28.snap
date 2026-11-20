@@ -15,20 +15,20 @@ expression: screen
 ▌  ▣ ╸───────────────  1.0%▐
 ▌  ▤ 0                     ▐
 ▌  ▷ 8        1 ⣾ · 2 no PR▐
-▌    ⣾ lang-typed          ▐
-▌      @coder            1h▐
-▌    – lane-readers        ▐
+▌    ⣾ coder · type t    1h▐
+▌    – team forge#lane-read▐
 ▌      ended · no PR     3h▐
-▌    – spike               ▐
+▌    – coder · try the pars▐
 ▌      ended · no PR    30m▐
-▌    ▷ lane-readers-docs   ▐
-▌      lane-reader… · no PR▐
-▌    ▷ lang-docs           ▐
+▌    ▷ writer · document th▐
+▌      forge… ended · no PR▐
+▌    ▷ writer · document th▐
 ▌      pr[work…: #1640 open▐
-▌    ▷ nightly             ▐
+▌    ▷ coder               ▐
 ▌      once at 2026-11-14 …▐
 ▌    +1 later              ▐
 ▌    1 more ended          ▐
+
 
 
  ──────────────────────────

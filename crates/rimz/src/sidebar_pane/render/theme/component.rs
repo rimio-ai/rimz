@@ -135,6 +135,16 @@ pub(crate) enum Component {
     BookingEnded,
     /// The `⚠` segment of the section line and the lead of a booking that needs a fix.
     BookingFix,
+    /// An agent entry's profile word (`coder`, or `agent` with none known).
+    EntryAgentName,
+    /// An entry's `#lane` after its profile or team name.
+    EntryLane,
+    /// The `team` tag leading a team entry.
+    EntryTeamTag,
+    /// A team entry's team name, in the tone of the pipeline line's team badge.
+    EntryTeamName,
+    /// A team entry's current-stage mark; the stage name beside it takes the body tone.
+    EntryStage,
     /// The `⇅ rc` remote-control flag.
     RemoteControl,
     /// The `⇅ rc` remote-control flag when its managed server is down.
@@ -257,6 +267,11 @@ impl Component {
         Component::BookingWaiting,
         Component::BookingEnded,
         Component::BookingFix,
+        Component::EntryAgentName,
+        Component::EntryLane,
+        Component::EntryTeamTag,
+        Component::EntryTeamName,
+        Component::EntryStage,
         Component::RemoteControl,
         Component::RemoteControlDown,
         Component::RemoteControlOff,
@@ -299,9 +314,8 @@ impl Component {
                 palette.accent
             }
             LaneSpine | EntrySpine => palette.selection,
-            WorktreeHeader | BranchDelta | WorkflowState | StallWord | NotTrackedFix => {
-                palette.body
-            }
+            WorktreeHeader | BranchDelta | WorkflowState | StallWord | NotTrackedFix
+            | EntryAgentName => palette.body,
             WorktreePristine | WindowSmall | WorkflowDetour | StallSeparator | BudgetSpent
             | UploadTrack => palette.faint,
             WorktreePrConflict | StallLeadActive | StallFigure | RoomModeMark => palette.caution,
@@ -314,7 +328,7 @@ impl Component {
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge
             | MessageQueued => palette.cool,
             TeamLabel | SubagentHeader | WaitHeader | BookedHeader | ProcIo | CacheWrite
-            | CompactionPoint | WorkflowBadge => palette.meta,
+            | CompactionPoint | WorkflowBadge | EntryTeamName => palette.meta,
             RemoteControlDown | WorktreePrClosed | WorktreeCiFailing => palette.alarm,
             Input => palette.expense,
             CacheExpired => palette.cache_expired,
@@ -323,7 +337,8 @@ impl Component {
             WorktreeQualifier | WorktreeBranchName | WorktreeMerged | InactiveChip
             | WindowMedium | RemoteControlOff | ContextCompacted | WorkflowVisits
             | StallLeadFading | StallFading | StallOverflow | NotTrackedSuffix | NotTrackedTip
-            | NeedsYouFilter | BookingWaiting | BookingEnded => palette.muted,
+            | NeedsYouFilter | BookingWaiting | BookingEnded | EntryLane | EntryTeamTag
+            | EntryStage => palette.muted,
         })
     }
 }

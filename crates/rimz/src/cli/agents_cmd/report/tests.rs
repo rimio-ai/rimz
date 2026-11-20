@@ -669,6 +669,7 @@ fn full_entry_has_a_stable_projection() {
                 phase: TurnPhase::Reasoning,
                 task: None,
                 profile: Some("explorer".to_owned()),
+                lane: None,
                 model: Some("sonnet".to_owned()),
                 effort: Some("high".to_owned()),
                 description: None,

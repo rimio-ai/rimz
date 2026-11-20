@@ -799,6 +799,7 @@ fn displayed_child_attention_and_missing_birth_use_the_snapshot_clock() {
             task: None,
             first_prompt: None,
             profile: None,
+            lane: None,
             model: None,
             fast: false,
             effort: None,

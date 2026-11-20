@@ -486,7 +486,7 @@ Click either line of a launched child's entry to focus its live pane, across tab
 
 With the sidebar focused, `j`/`k` and the arrows walk each card, then its entries with live panes: its subagents, then the agents it waits on, then its booked launches. Other waits, pane-less entries and the `K more finished` line are skipped. `Enter`/`l` focuses a child. Worktree, end, page, screen-edge, digit, needs-you and search motions remain card-level and clear the entry cursor; `m` still marks the parent.
 
-Each entry starts with its live state or wait icon, then a type word and a ` · ` separator before the headline. A subagent's type word wears its own provider's brand color at the soft weight of a calm card's handle, even when it runs on a different provider from its parent; wait type words keep the body tone. Without a headline, the separator disappears too. A subagent's headline uses its description, else task, else first usable prompt, skipping each when it repeats the type. An ordinary headline without a live pane is muted, matching the entry's click back to the parent. A launched child's displayed error label replaces that headline in body-tone italics, for both paused and failed states. Detail sits on an indented second line; model names stay muted. A launched child in fast mode adds a still, bold amber bolt one space after its effort, or after its model when it has no effort, in every state. Without a model, there is no bolt. The model column reserves no bolt cells, so a non-fast sibling has no blank bolt slot and effort columns remain aligned. Compactions follow the bolt and drop before it as the line narrows. The bolt drops whole if it cannot fit before the clock, without shortening the model or effort. Provider-native children never show a bolt.
+Each entry starts with its live state or wait icon, then who or what it names and a ` · ` separator before the headline. An agent, a subagent included, is named by its launch profile, else its kind (an awaited agent with no known profile reads `agent`), then `#lane` when it runs in a named lane (`coder#feat-x`); its handle never shows. A team is named by the muted `team` tag, its name and its `#lane` (`team forge#feat-x`), where trunk's lane and `external` show no lane. A wait of any other kind is named by its type word. A subagent's type word wears its own provider's brand color at the soft weight of a calm card's handle, even when it runs on a different provider from its parent; wait type words keep the body tone. Without a headline, the separator disappears too. A subagent's headline uses its description, else task, else first usable prompt, skipping each when it repeats the type. An ordinary headline without a live pane is muted, matching the entry's click back to the parent. A launched child's displayed error label replaces that headline in body-tone italics, for both paused and failed states. Detail sits on an indented second line; model names stay muted. A launched child in fast mode adds a still, bold amber bolt one space after its effort, or after its model when it has no effort, in every state. Without a model, there is no bolt. The model column reserves no bolt cells, so a non-fast sibling has no blank bolt slot and effort columns remain aligned. Compactions follow the bolt and drop before it as the line narrows. The bolt drops whole if it cannot fit before the clock, without shortening the model or effort. Provider-native children never show a bolt.
 
 | entry | lead | type · headline | right side | second line |
 |-------|------|------|------------|-------------|
@@ -495,7 +495,8 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 | parked subagent | `⏸︎`, or `!` once it can no longer resume | launch profile or kind · limit label in italics, else description, task, or first usable prompt | cost, when known | tokens, model, effort with its optional fast-mode bolt, then `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; plain muted runtime pins right, counting while parked and frozen once failed |
 | stalled subagent | `!` | launch profile or kind · `silent Nm` | cost, when known | tokens, model, effort with its optional fast-mode bolt, then `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; quiet age pins right with a face, in alarm at and past the stall threshold |
 | finished subagent | `✓` or `!` | launch profile or kind · description, else task, else first usable prompt; each skipped if it repeats the type | cost, when known, after frozen runtime when there is no second line | tokens, model, effort with its optional fast-mode bolt, then `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; plain muted runtime pins right, frozen at the child's finish |
-| awaited agent | its live state glyph, animating as a subagent's does, or `▇` while it condenses its context, unless it is waiting, failed, or paused; `⌁` once its run ended and its report is on the way, or when it has no card | `agent · tidy-iris` (the agent's handle, else the wait's name), or `agent · tidy-iris · completed, reporting` once its run ended | time since its run started | never |
+| awaited agent | its live state glyph, animating as a subagent's does, or `▇` while it condenses its context, unless it is waiting, failed, or paused; `⌁` once its run ended and its report is on the way, or when it has no card | `coder#feat-x · store refactor`: the agent's profile, its named lane, and its card's activity text; `reviewer · completed, reporting` once its run ended; the profile alone without activity text, and `agent` alone when it has no card | time since its run started | never |
+| team | `⌁` | `team forge#feat-x · ◉ Review`: the team's lane clips before its name, and the stage never clips; `stage unknown` when its board is unavailable, and the `team` tag alone when the wait names no team instance | time since armed | never |
 | timer | `◷` | `timer · in 12m`, or `timer · due` once the time passes | time since armed | never |
 | PID | working spinner | `pid · 16776` | time since armed | never |
 | command | working spinner | `command · cargo` (program name) | time since armed | full command, with the program path trimmed |
@@ -521,17 +522,16 @@ A booked launch is a one-off [loop task](../reference/cli/loop.md) that an agent
 
 ```text
 ▌  ▷ booked (8)    1 running · 2 ended, no PR▐
-▌    ⣾ coder · lang-typed                    ▐
-▌      @coder                              1h▐
-▌    – forge · lane-readers                  ▐
+▌    ⣾ coder · type the workflow langua    1h▐
+▌    – team forge#lane-readers               ▐
 ▌      ended 53m ago · no PR               3h▐
-▌    – coder · spike                         ▐
+▌    – coder · try the parser                ▐
 ▌      ended 10m ago · no PR              30m▐
-▌    ▷ writer · lane-readers-docs            ▐
-▌      lane-readers ended · no PR            ▐
-▌    ▷ writer · lang-docs                    ▐
+▌    ▷ writer · document the lane readers    ▐
+▌      forge#lane-readers ended · no PR      ▐
+▌    ▷ writer · document the language        ▐
 ▌      pr[workflow-language]: #1640 open     ▐
-▌    ▷ coder · nightly                       ▐
+▌    ▷ coder                                 ▐
 ▌      once at 2026-11-14 03:00              ▐
 ▌    +1 later                                ▐
 ▌    1 more ended                            ▐
@@ -554,20 +554,20 @@ Entries follow the subagents and waits and use the same layout. A waiting launch
 
 | entry | lead | type · headline | second line |
 |-------|------|-----------------|-------------|
-| needs a fix | `⚠`, warning tone | team or profile · task | the loop's reason |
-| waiting on a sibling launch | `▷` | team or profile · task | `after <sibling>`, `<sibling> starting` while its fire has launched nothing yet, or `<sibling> ended` once it ended, then the blocking term's reading (`#1640 open`, `no PR`) and ` +N` for further unmet terms |
-| waiting on any other term | `▷` | team or profile · task | the term as written, then its reading: `pr[workflow-language]: #1640 open` |
-| waiting on a time | `▷` | team or profile · task | the loop's timing words: `once at 2026-11-14 03:00` |
-| fired, starting | `▷` | team or profile · task | `starting`, until the launched agent's first row or the launch's end |
-| fired, a team running | the team member's state, including its `?` or `!` | team · task | the board stage and its owner: `Build · @coder`, or `stage unknown` |
-| fired, an agent running | the agent's state, including its `?` or `!` | profile · task | `@handle` |
-| fired, nothing alive | `–` | team or profile · task | `ended 53m ago · ` and its branch's pull request reading (`no PR`, `#1630 merged`), or `ended` without an end stamp |
+| needs a fix | `⚠`, warning tone | profile or team · task | the loop's reason |
+| waiting on a sibling launch | `▷` | profile or team · text | `after <sibling>`, `<sibling> starting` while its fire has launched nothing yet, or `<sibling> ended` once it ended, then the blocking term's reading (`#1640 open`, `no PR`) and ` +N` for further unmet terms |
+| waiting on any other term | `▷` | profile or team · text | the term as written, then its reading: `pr[workflow-language]: #1640 open` |
+| waiting on a time | `▷` | profile or team · text | the loop's timing words: `once at 2026-11-14 03:00` |
+| fired, starting | `▷` | profile or team · text | `starting`, until the launched agent's first row or the launch's end |
+| fired, a team running | the team member's state, including its `?` or `!` | `team forge#lane-readers · ◉ Build`: the board stage behind its mark, or `stage unknown`; runtime pinned right | none |
+| fired, an agent running | the agent's state, including its `?` or `!` | `coder#lane · ` the launched card's activity text, else the booking's text; runtime pinned right | none |
+| fired, nothing alive | `–` | profile or team · text | `ended 53m ago · ` and its branch's pull request reading (`no PR`, `#1630 merged`), or `ended` without an end stamp |
 
-A headline stays muted unless the launch needs a fix, has something alive, or ended while a waiting launch depends on it. The type word keeps the body tone. Below 46 columns the entry shows the task alone, `after` drops before a sibling's name, and an ended launch drops its age before its pull request reading. A blocking term whose reading the loop has not made yet shows without one.
+A booking's text is its task's label, else the `--description` its launch passes before any `--`, on one line; with neither, or with blank text, the entry names what it starts alone. A booked agent shows its lane once its fire launched it into a named lane, and a booked team the lane its cohort runs in, else, until a member registers, the lane its target types. Only an entry needing a fix names its task. A sibling is named as its own entry names it, without a team's tag: `after writer`, `forge#lane-readers ended`. A headline stays muted unless the launch needs a fix, has something alive, or ended while a waiting launch depends on it. Who an entry names keeps the body tone. The line keeps one layout at every width: an entry's text clips from its tail before who it names, except a running team's, whose lane clips before its name while its stage and runtime never clip. Below 32 columns `after` drops before a sibling's name; an ended launch drops its age before its pull request reading whenever it does not fit. A blocking term whose reading the loop has not made yet shows without one.
 
 Booked launches list after the waits in the order the loop gives them: needing a fix, fired, next to fire, then `+N later`, which counts launches booked behind the next ones; each lists once the launch ahead of it fires. Of the ended launches nothing waits on, the five that ended most recently stay listed among the fired launches, in the order they fired, and `K more ended` counts the rest. Both count lines are static like `K more finished`: the cursor skips them, and a click on one selects the card.
 
-Click either line of a fired entry with something alive to focus the launched pane, across tabs when needed: the agent's own pane, or the team member the team's focus rule picks (`rimz teams focus`). That selects the launched agent's own card. Every other booked entry focuses the card's own pane. A click never writes, fires, or cancels a booking. `j`/`k` stop on entries with a live pane, as for subagents. A booked launch never counts as a wait: it changes neither `⧖ waits (N)`, the card's displayed status, nor the needs-you counts; a launched team member asking counts on its own card.
+Click a fired entry with something alive to focus the launched pane, across tabs when needed: the agent's own pane, or the team member the team's focus rule picks (`rimz teams focus`). That selects the launched agent's own card. Every other booked entry focuses the card's own pane. A click never writes, fires, or cancels a booking. `j`/`k` stop on entries with a live pane, as for subagents. A booked launch never counts as a wait: it changes neither `⧖ waits (N)`, the card's displayed status, nor the needs-you counts; a launched team member asking counts on its own card.
 
 ### Unread and attention marks
 
@@ -617,7 +617,7 @@ A sleeping card names its first sleeping wait in the description:
 | team | `wakes when forge#feat-x reaches Done` |
 | workflow | `wakes when workflow review ends`, for a run the agent started without `--detach`, until its report is sent |
 
-A subagent wait on a child listed under `⧉` draws no separate entry and does not count in `⧖`, since the child's own entry stands for it. Any other agent the card waits on, a peer launched with `rimz agents` or a child of an earlier turn, counts in `⧖` and draws an `agent` entry with that agent's live state and handle; a click on it focuses that agent's live pane, and an agent with no card in the sidebar draws the entry with the static `⌁` lead and the wait's name. A team wait counts in `⧖` and draws a static `team · stage Review` entry with its elapsed age, or `stage unknown` when its board is unavailable.
+A subagent wait on a child listed under `⧉` draws no separate entry and does not count in `⧖`, since the child's own entry stands for it. Any other agent the card waits on, a peer launched with `rimz agents` or a child of an earlier turn, counts in `⧖` and draws an entry with that agent's live state, profile, named lane and activity text; a click on it focuses that agent's live pane, and an agent with no card in the sidebar draws the entry with the static `⌁` lead and the word `agent`. A team wait counts in `⧖` and draws a static `team forge#feat-x · ◉ Review` entry with its elapsed age, or `stage unknown` when its board is unavailable.
 
 `☾` replaces only an idle or done status, for timers, signals, conditions, and file watches, including a child's sleeping wait. A PID, command, check, unfinished team, working child, or listed background shell instead keeps the card working. After the turn ends, that card shows the `⢄` waiting head and still counts as working in the cockpit. A working-through-wait card names its first working wait. Waiting, failed, and paused (including a launched child's provider park) take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
 
@@ -1253,7 +1253,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click a subagents and waits line | toggle its entries, select the card and focus its own live pane |
 | click either line of a subagent entry | select the parent card and focus the child's live pane, else the parent's pane |
 | click an awaited agent's entry | focus that agent's live pane, selecting its card; when the sidebar does not show that card (a filter, a search, a folded group), select and focus the card that waits on it; without a pane, act as a click on any other wait entry |
-| click either line of a booked launch entry | focus the launched agent's or team's live pane, selecting its card, else select the card and focus its own pane; never writes |
+| click any line of a booked launch entry | focus the launched agent's or team's live pane, selecting its card, else select the card and focus its own pane; never writes |
 | click `+K more`, `− less` | expand or cap the group without moving focus; an unfold survives focus changes |
 | click a member's name or status glyph on a folded inactive group's first receipt line | show its cards and focus that member's live pane, revealing its card |
 | click a folded inactive group's header or any other receipt cell | show its cards and focus the first receipt member's live pane, revealing its card |

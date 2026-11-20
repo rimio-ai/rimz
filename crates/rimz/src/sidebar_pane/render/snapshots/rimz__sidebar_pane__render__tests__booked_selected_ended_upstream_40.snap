@@ -15,20 +15,20 @@ expression: screen
 ▌  ▣ ╸───────────────────────────  1.0%▐
 ▌  ▤ 0                                 ▐
 ▌  ▷ 8       1 running · 2 ended, no PR▐
-▌    ⣾ lang-typed                      ▐
-▌      @coder                        1h▐
-▌    – lane-readers                    ▐
+▌    ⣾ coder · type the workflow     1h▐
+▌    – team forge#lane-readers         ▐
 ▌      ended 53m ago · no PR         3h▐
-▌    – spike                           ▐
+▌    – coder · try the parser          ▐
 ▌      ended 10m ago · no PR        30m▐
-▌    ▷ lane-readers-docs               ▐
-▌      lane-readers ended · no PR      ▐
-▌    ▷ lang-docs                       ▐
+▌    ▷ writer · document the lane reade▐
+▌      forge#lane-readers ended · no PR▐
+▌    ▷ writer · document the language  ▐
 ▌      pr[workflow-languag…: #1640 open▐
-▌    ▷ nightly                         ▐
+▌    ▷ coder                           ▐
 ▌      once at 2026-11-14 03:00        ▐
 ▌    +1 later                          ▐
 ▌    1 more ended                      ▐
+
 
 
  ──────────────────────────────────────

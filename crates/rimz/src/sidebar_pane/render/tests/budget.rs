@@ -38,6 +38,7 @@ pub(super) fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
         phase: crate::agents::TurnPhase::Acting,
         task: None,
         profile: None,
+        lane: None,
         model: Some("claude-opus-4-8".to_owned()),
         effort: Some("high".to_owned()),
         description: Some(format!("scan module {index} for callers")),

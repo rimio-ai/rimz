@@ -92,6 +92,8 @@ fn facts(task: &str, chain: &[&str]) -> BookingFacts {
         blocking: None,
         unmet: Vec::new(),
         timing: None,
+        lane: None,
+        description: None,
         fire: None,
     }
 }
@@ -448,8 +450,9 @@ fn order_bands_siblings_and_adoption() {
             .as_ref()
             .and_then(|blocker| blocker.after.clone()),
         Some(BookingSibling {
-            task: "first".to_owned(),
             state: SiblingState::Running,
+            starts: BookingStarts::Profile("coder".to_owned()),
+            lane: None,
         })
     );
     let BookingState::Waiting(raw) = &list[5].state else {
@@ -757,6 +760,7 @@ fn any_unmet_term_of_a_waiting_sibling_makes_an_entry_depended_on() {
     let mut fold = snapshot(vec![agent("booker")]);
     let ended_on = |task: &str| {
         let mut facts = fired(task, &["booker"], task, ago(100_000));
+        facts.starts = BookingStarts::Profile(task.to_owned());
         facts.branch = Some(task.to_owned());
         facts.worktree = true;
         facts.fire.as_mut().unwrap().ended_at = Some(ago(80_000));
@@ -790,8 +794,8 @@ fn any_unmet_term_of_a_waiting_sibling_makes_an_entry_depended_on() {
         wait.blocker
             .as_ref()
             .and_then(|blocker| blocker.after.as_ref())
-            .map(|sibling| sibling.task.as_str()),
-        Some("b"),
+            .map(|sibling| &sibling.starts),
+        Some(&BookingStarts::Profile("b".to_owned())),
         "`after` still names the blocking term's sibling"
     );
 }
@@ -877,8 +881,9 @@ fn a_sibling_still_starting_is_starting_in_the_after_text() {
             .as_ref()
             .and_then(|blocker| blocker.after.clone()),
         Some(BookingSibling {
-            task: "up".to_owned(),
             state: SiblingState::Starting,
+            starts: BookingStarts::Profile("coder".to_owned()),
+            lane: None,
         })
     );
 }
@@ -922,4 +927,111 @@ fn a_team_focus_tie_picks_the_pane_rimz_teams_focus_picks() {
         "equal scores and no leader role: the CLI's first member, {}",
         expected.agent_id
     );
+}
+
+/// Each entry carries the lane and text its facts name, a sibling the starts and lane its
+/// own entry names, and a running agent (a team seat included) its lead card's activity
+/// text; a running team carries no text.
+#[test]
+fn entries_carry_their_lane_and_text_and_a_running_agent_its_cards_text() {
+    let lead = AgentState {
+        description: Some("type the language".to_owned()),
+        ..leader_of("wf_a", ago(100), "lead")
+    };
+    let member = |id: &str| AgentState {
+        team: Some("forge".to_owned()),
+        role: Some(id.to_owned()),
+        ..leader_of("wf_t", ago(100), id)
+    };
+    let seat = AgentState {
+        team: Some("forge".to_owned()),
+        role: Some("planner".to_owned()),
+        ..leader_of("wf_s", ago(100), "seat")
+    };
+    let mut fold = snapshot(vec![agent("booker"), lead, member("planner"), seat]);
+    for row in Arc::make_mut(&mut Arc::make_mut(&mut fold.worktree_groups)[0].rows) {
+        let text = match row.id.as_str() {
+            "lead" => "type the language",
+            "seat" => "plan the seat",
+            _ => continue,
+        };
+        if let Some(card) = row.as_agent_mut() {
+            card.description = Some(text.to_owned());
+        }
+    }
+    let agent_fire = BookingFacts {
+        description: Some("booked text".to_owned()),
+        lane: Some("lang".to_owned()),
+        branch: Some("lang".to_owned()),
+        ..fired("typed", &["booker"], "wf_a", ago(200))
+    };
+    let team_fire = BookingFacts {
+        starts: BookingStarts::Team("forge".to_owned()),
+        lane: Some("readers".to_owned()),
+        description: Some("team text".to_owned()),
+        ..fired("readers", &["booker"], "wf_t", ago(150))
+    };
+    let seat_fire = BookingFacts {
+        starts: BookingStarts::Profile("forge.planner".to_owned()),
+        ..fired("seat", &["booker"], "wf_s", ago(120))
+    };
+    let after = BookingFacts {
+        description: Some("document it".to_owned()),
+        ..waiting_on("docs", &["booker"], &["pr[lang]"])
+    };
+    attach(
+        &mut fold,
+        &cache(vec![agent_fire, team_fire, seat_fire, after]),
+    );
+    let list = &on_cards(&fold)["booker"];
+    let by_task = |task: &str| list.iter().find(|booking| booking.task == task).unwrap();
+    let typed = by_task("typed");
+    assert_eq!(
+        (typed.lane.as_deref(), typed.description.as_deref()),
+        (Some("lang"), Some("booked text"))
+    );
+    let BookingState::Fired(fire) = &typed.state else {
+        panic!("fired: {typed:?}");
+    };
+    assert_eq!(
+        fire.live
+            .as_ref()
+            .and_then(|live| live.description.as_deref()),
+        Some("type the language")
+    );
+    let readers = by_task("readers");
+    assert_eq!(readers.lane.as_deref(), Some("readers"));
+    let BookingState::Fired(fire) = &readers.state else {
+        panic!("fired: {readers:?}");
+    };
+    assert_eq!(
+        fire.live.as_ref().map(|live| live.description.clone()),
+        Some(None),
+        "a team carries its stage, not a text"
+    );
+    let BookingState::Fired(fire) = &by_task("seat").state else {
+        panic!("fired: seat");
+    };
+    assert_eq!(
+        fire.live
+            .as_ref()
+            .and_then(|live| live.description.as_deref()),
+        Some("plan the seat"),
+        "a booked team seat is an agent: its card's text shows"
+    );
+    let docs = by_task("docs");
+    let BookingState::Waiting(wait) = &docs.state else {
+        panic!("waiting: {docs:?}");
+    };
+    assert_eq!(
+        wait.blocker
+            .as_ref()
+            .and_then(|blocker| blocker.after.clone()),
+        Some(BookingSibling {
+            state: SiblingState::Running,
+            starts: BookingStarts::Profile("coder".to_owned()),
+            lane: Some("lang".to_owned()),
+        })
+    );
+    assert_eq!(docs.description.as_deref(), Some("document it"));
 }

@@ -2924,6 +2924,8 @@ fn a_booking_branch_demand_reads_through_to_merged_and_none() {
             blocking: None,
             unmet: Vec::new(),
             timing: None,
+            lane: None,
+            description: None,
             fire: Some(FireFacts {
                 at: jiff::Timestamp::UNIX_EPOCH,
                 fire: crate::ids::FireId::new(&crate::ids::TaskId::new()),
