@@ -44,11 +44,11 @@ rimz-wait     wait           ~1227
 rimz-wait     wait_list        ~46
 rimz-wait     wait_cancel     ~135
 rimz-control  self_stop       ~283
-rimz-control  self_compact    ~140
+rimz-control  self_compact    ~145
 rimz-control  self_tune       ~251
 rimz-notes    notes_add       ~405
 rimz-notes    notes_list      ~359
-total: ~4050 tokens in 9 tools
+total: ~4055 tokens in 9 tools
 ```
 
 Every command a tool runs is on the [routine list](../agent-support.md) an installed agent runs without asking. The commands themselves are documented on their own pages: [Language servers](./lsp.md), [Wait](./wait.md), [Agents](./agents.md), and [Notes](./notes.md).
