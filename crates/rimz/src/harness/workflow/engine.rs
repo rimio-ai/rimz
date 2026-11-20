@@ -23,6 +23,9 @@ use crate::store::workflow::{
 mod accounting;
 mod fit;
 mod rest;
+mod runs;
+
+pub(crate) use runs::join_report;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowErr {
@@ -446,6 +449,7 @@ fn publish(
         prev_attempt: None,
         terminal_at: None,
         outcome: None,
+        joined: Vec::new(),
         abandoned: Vec::new(),
         launch_retry: false,
         engaged: Some(false),
@@ -1768,6 +1772,7 @@ fn prepare(
         answer: None,
         reminded: false,
         evidence: None,
+        runs: None,
     });
     persist(&mut t, &guard)?;
     write_context(&t.record, paths, spec)?;
@@ -2221,6 +2226,7 @@ pub fn restart(
             judged: None,
             push: None,
             message: None,
+            runs: None,
         });
         t.record.state = RunState::Active;
         t.record.park = None;

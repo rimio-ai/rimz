@@ -3,6 +3,10 @@
 //! report mark set sent either way. The message id is written into the record before the notice
 //! is queued, so a collection that dies between the two queues the same message on its retry and
 //! the queue takes it once.
+//!
+//! A run a `runs` step started reports to that run instead: its ending is written onto the
+//! starting run's record, which the engine wakes with an advance, and its own mark set sent
+//! under the same lock.
 
 use crate::disk::lock::WorkspaceLock;
 use crate::ids::{MessageId, WorkflowRunId};
@@ -19,6 +23,10 @@ pub(super) fn report(
     guard: WorkspaceLock,
 ) -> anyhow::Result<()> {
     let paths = state.workflow(run);
+    if let Some(RunStarter::Run { .. }) = &header.starter {
+        crate::harness::workflow::join_report(state, run, header, &guard)?;
+        return Ok(workflow::mark_header_report_sent(&paths, &guard)?);
+    }
     let message = workflow::stamp_report_message(&paths, &guard)?;
     drop(guard);
     #[cfg(feature = "testkit")]

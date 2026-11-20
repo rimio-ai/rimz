@@ -15,7 +15,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The run record's own shape version, raised when a binary on either side of a change would
 /// misread the other's record; `load` refuses a record of any other version before decoding it.
 /// A change to what a definition means raises nothing: every run reads its definition as it is.
-pub const VERSION: u32 = 17;
+pub const VERSION: u32 = 18;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -321,6 +321,42 @@ pub struct LiveAttempt {
     /// A message step's notice id, minted before the queue so a retry never queues twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<MessageId>,
+    /// A `runs` step's children, reserved before any of them exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs: Option<StartedRuns>,
+}
+
+/// The runs a `runs` step starts: the commit every child's worktree is cut from, resolved once,
+/// and one run per listed workflow in the step's order, each under an id reserved here before
+/// the run exists, so a retried start rejoins its children by id and never starts one twice.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StartedRuns {
+    pub base: String,
+    pub runs: Vec<StartedRun>,
+}
+
+/// One run a `runs` step started, and how it ended once its report stored that here.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StartedRun {
+    pub id: WorkflowRunId,
+    pub workflow: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended: Option<JoinedEnding>,
+}
+
+/// A started run's ending as its report carried it to the run that started it: the parent reads
+/// it here, never from the child's home, which moves once the report is sent.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct JoinedEnding {
+    pub ending: RunEnding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -632,7 +668,8 @@ pub enum RunStarter {
         kind: AgentKind,
         launch: AgentSessionId,
     },
-    /// Another run, from a command, script or check at its node `node`.
+    /// Another run, from its `runs` step `node`, which joins the run through its report, or from
+    /// a command, script or check at `node`, owed no report.
     Run { run: WorkflowRunId, node: String },
 }
 
@@ -826,6 +863,10 @@ pub struct RunRecord {
     /// How the run ended, written with the terminal state; none while the run is live.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<RunOutcome>,
+    /// The runs the last `runs` step the run left had started, with the endings their reports
+    /// stored, for the steps after it; the step's next visit replaces them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joined: Vec<StartedRun>,
     /// Judges whose evaluation an interrupt of their held session abandoned while their agents
     /// ran, owed a stop: the next engine pass stops them off the lock, and a closing run stops
     /// them as it ends.
@@ -980,8 +1021,8 @@ impl RunRecord {
             .filter(|_| self.report == ReportMark::Owed)
     }
 
-    /// A finished run whose loop task or agent starter has not yet heard how it ended: the one
-    /// debt that keeps the run's home live and its paced advance due.
+    /// A finished run whose loop task, agent starter or `runs` step has not yet heard how it
+    /// ended: the one debt that keeps the run's home live and its paced advance due.
     pub fn owes_report(&self) -> bool {
         self.state.is_terminal() && self.report == ReportMark::Owed && self.has_recipient()
     }
@@ -992,7 +1033,7 @@ impl RunRecord {
     }
 
     fn has_recipient(&self) -> bool {
-        self.task.is_some() || matches!(self.starter, Some(RunStarter::Agent { .. }))
+        self.task.is_some() || self.starter.is_some()
     }
 }
 
@@ -1504,7 +1545,7 @@ impl RunHeader {
     pub fn owes_report(&self) -> bool {
         self.is_terminal()
             && self.report == Some(ReportMark::Owed)
-            && (self.task.is_some() || matches!(self.starter, Some(RunStarter::Agent { .. })))
+            && (self.task.is_some() || self.starter.is_some())
     }
 
     /// A finished run whose loop task has not yet heard how it ended.

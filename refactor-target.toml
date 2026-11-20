@@ -4598,7 +4598,9 @@ path = "crates/rimz/src/store"
 # RunRecord::needs_you, calls_you and live_attempts give the workflow list, wait and the
 # workflow.waiting signal one NEEDS YOU reading (+3).
 # A run's owed agent starter is read for the occupancy that leaves it out (+1).
-surface-budget = 679
+# StartedRuns, StartedRun and JoinedEnding carry a runs step's children and the endings their
+# reports store on the starting run (+3).
+surface-budget = 682
 
 [[verdict]]
 kind = "item"
@@ -5931,7 +5933,8 @@ allowed-dependencies = [
 # Limited moves here from store::workflow, an in-memory observation no record stores (+1).
 # Starting and starting resolve a start's starter and depth before anything is created (+2).
 # AttemptHost::committed hands the host each committed run edge once the lock is released (+1).
-surface-budget = 104
+# join_report lets the loop collection store a started run's ending on its runs step (+1).
+surface-budget = 105
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"

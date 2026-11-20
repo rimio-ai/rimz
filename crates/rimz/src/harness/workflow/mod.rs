@@ -24,6 +24,7 @@ mod validate;
 
 pub use definition::{Condition, Definition, Invocation, Kind, Limit, Node, Target};
 pub(crate) use engine::hears_lifecycle;
+pub(crate) use engine::join_report;
 pub use engine::{
     Advance, DefinitionSource, InlineDefinition, StartArgs, Starting, TaskStart, WorkflowErr,
     advance, budget_refusal, cancel, create, launch_groups, restart, resume, starting, submit,
