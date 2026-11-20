@@ -51,7 +51,7 @@ builds            /home/me/.rimz/builds
 | --- | --- |
 | `home` | The RimZ home: `$RIMZ_HOME` when set, else `$HOME/.rimz`, else `rimz-home` under the system temp directory when `HOME` is unset. Every durable row below sits under it except `agents home` when `RIMZ_AGENTS_HOME` moves it. |
 | `config`, `theme`, `loop config`, `remote` | The machine config files: `config.toml`, `theme.toml`, `loop.toml`, and `remote.toml` in `home`. |
-| `agents home` | Where profiles, subagents, teams, traits, the skill library, and installed [packs](./packs.md) resolve. It equals `home` unless `RIMZ_AGENTS_HOME` overrides it. Packs live in its `packs/` child, with no separate row. |
+| `agents home` | Where profiles, subagents, teams, traits, the skill library, [workflows](./workflow.md), and installed [packs](./packs.md) resolve. It equals `home` unless `RIMZ_AGENTS_HOME` overrides it. Packs live in its `packs/` child, with no separate row. |
 | `workspace id` | The room's identity, `ws_<24hex>`, derived from the project root. Flags, JSON fields, and `RIMZ_WORKSPACE_ID` carry this value. |
 | `workspace dir` | The directory name the room's files live under: `<slug>-<hex>`. The slug is the project root's basename with every character other than a letter, digit, or `_` turned into `-`, cut to 20 characters (`root` when nothing is left). The hex is the first 4 hex digits of the id, two more each time another directory already holds that prefix. An existing directory whose `workspace.json` names the id is reused, so the name stays fixed once created. |
 | `project root` | The project the room belongs to, as the [room resolution](../cli.md#which-room-a-command-reaches) chose it. |
