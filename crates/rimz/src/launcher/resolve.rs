@@ -339,8 +339,18 @@ use crate::store::writer::LaunchLogin;
 pub fn supervised_prompt<'a>(
     request: &'a SupervisedRunRequest,
     adapter: &crate::agents::AgentDefinition,
+    cell: &crate::harness::spec::AgentCell,
 ) -> Cow<'a, str> {
-    if request.subagent && adapter.append_system_text_channel().is_none() {
+    // An agent-file channel carries the reminder only for a launch whose prompt sources
+    // plan the file; a resumed conversation keeps what its first launch wrote.
+    let delivered = match adapter.append_system_text_channel() {
+        None => false,
+        Some(crate::agents::capabilities::SystemTextChannel::AgentFile) => {
+            !crate::harness::prompt_compose::SystemPromptSources::from_cell(cell).is_empty()
+        }
+        Some(_) => true,
+    };
+    if request.subagent && !delivered {
         Cow::Owned(format!(
             "{}\n\n{}",
             request.prompt,

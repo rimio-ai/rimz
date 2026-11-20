@@ -1,11 +1,12 @@
 //! Antigravity CLI launch, hook, statusline, local-session, transcript, and account adapter.
 //! The plugin install, the kept `statusLine` keys, and the `agy -p /usage` envelope were
-//! observed on agy 1.5.12.
+//! observed on agy 1.5.12; the launch agent file (`agent_file`) on agy 1.5.13.
 //!
 //! RimZ installs only hooks with documented observer-neutral output. The
 //! policy-changing `PreToolUse` decision channel stays untouched; disjoint
 //! `PostToolUse` matchers recover tool phase after execution instead.
 
+mod agent_file;
 mod install;
 mod payloads;
 mod session;
@@ -195,7 +196,12 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[".local/bin"],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
-        definitions: crate::agents::definition::DefinitionSpec::EMPTY,
+        definitions: crate::agents::definition::DefinitionSpec {
+            tools: crate::agents::definition::DefinitionTools::RequiredFile(
+                agent_file::render_definition_tools,
+            ),
+            ..crate::agents::definition::DefinitionSpec::EMPTY
+        },
         program: Some("agy"),
         fixed_args: &[],
         prompt: super::PromptStyle::Flag("--prompt-interactive"),
@@ -215,6 +221,9 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
             code_mode: super::CodeModeSwitch::Unsupported,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
+            system_prompt_file: Some(super::StaticPresetMatcher::AgentFile(
+                agent_file::AGENT_FLAG,
+            )),
             ..super::PresetMatchers::EMPTY
         },
         ..super::LaunchSpec::EMPTY
@@ -246,8 +255,8 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "child hooks joined to ordered invoke_subagent parent transcript results",
         gap: "the parent-result transcript shape is live-verified rather than a documented stable wire contract",
     },
-    launch_reminders: ConcernCoverage::Unsupported {
-        reason: "no additive system-text launch channel is implemented",
+    launch_reminders: ConcernCoverage::Wired {
+        via: "a fresh launch's agent file in RimZ's agy plugin, selected by --agent",
     },
     background_parking: ConcernCoverage::Wired {
         via: "Stop.fullyIdle parks a clean foreground stop while background work remains",
@@ -486,6 +495,18 @@ impl crate::agents::capabilities::InstallationCapability for AntigravityAdapter 
 }
 
 impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
+    fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
+        Some(SystemTextChannel::AgentFile)
+    }
+
+    fn agent_file(
+        &self,
+        input: &crate::agents::AgentFileInput<'_>,
+    ) -> Option<std::result::Result<crate::agents::AgentFile, crate::agents::AgentFileRefusal>>
+    {
+        Some(agent_file::plan(input))
+    }
+
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         session::resolve_home(None, env.get("HOME").map(std::ffi::OsStr::new))
     }

@@ -195,7 +195,10 @@ fn defaults_for_launch(
 }
 
 pub(crate) fn tools_required(kind: &str) -> bool {
-    matches!(definitions(kind).tools, DefinitionTools::Required(_))
+    matches!(
+        definitions(kind).tools,
+        DefinitionTools::Required(_) | DefinitionTools::RequiredFile(_)
+    )
 }
 
 /// Whether a supplied tools list applies to this kind and excludes `Skill`.
@@ -203,7 +206,9 @@ pub fn skills_lack_skill_tool(kind: &str, tools: Option<&ToolSet>) -> bool {
     tools.is_some_and(|tools| !tools.has("Skill"))
         && matches!(
             definitions(kind).tools,
-            DefinitionTools::Required(_) | DefinitionTools::Optional(_)
+            DefinitionTools::Required(_)
+                | DefinitionTools::Optional(_)
+                | DefinitionTools::RequiredFile(_)
         )
 }
 
@@ -219,6 +224,9 @@ pub(crate) fn render_tool_args(
     match (definitions(kind).tools, tools) {
         (DefinitionTools::Required(render), tools) => render(tools.ok_or(ToolErr::Missing)?, &[]),
         (DefinitionTools::Optional(render), Some(tools)) => Ok(render(tools, &[]).0),
+        (DefinitionTools::RequiredFile(_), tools) => {
+            tools.map(|_| Vec::new()).ok_or(ToolErr::Missing)
+        }
         _ => Ok(Vec::new()),
     }
 }
@@ -251,6 +259,7 @@ pub(crate) fn render_launch_tool_args(
     let (mut argv, notices) = match definitions(kind).tools {
         DefinitionTools::Required(render) => (render(tools, extra)?, Vec::new()),
         DefinitionTools::Optional(render) => render(tools, extra),
+        DefinitionTools::RequiredFile(render) => (Vec::new(), render(tools, extra)),
         DefinitionTools::Unsupported => (Vec::new(), vec![ToolNotice::NotApplied]),
         DefinitionTools::Ignored => (Vec::new(), Vec::new()),
     };

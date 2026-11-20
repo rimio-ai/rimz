@@ -141,7 +141,7 @@ pub enum Cell {
 
 impl Cell {
     #[cfg(test)]
-    pub(super) fn agent(kind: AgentKind) -> Self {
+    pub(crate) fn agent(kind: AgentKind) -> Self {
         Self::Agent(AgentCell {
             notices: Vec::new(),
             empty_dir: None,

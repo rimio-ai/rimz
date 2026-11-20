@@ -56,6 +56,8 @@ pub struct LaunchPlan {
     pub login: ProviderLogin,
     pub prompt: SystemPromptPlan,
     pub reminder_channel: Option<SystemTextChannel>,
+    /// The provider agent file a fresh launch carries its prompt in, published by `apply`.
+    pub agent_file: Option<crate::agents::AgentFile>,
     pub stage: AgentProcessStage,
     pub sandbox: Option<SandboxPlan>,
     pub skill_links: Option<SkillLinkPlan>,
@@ -224,6 +226,13 @@ pub enum LaunchPlanErr {
     AccountLinks(#[from] ShareErr),
     #[error("materializing launch prompt")]
     Materialize(#[source] launch::ExecWireErr),
+    #[error("agent `{kind}` cannot launch: {refusal}")]
+    AgentFile {
+        kind: crate::ids::AgentKind,
+        refusal: crate::agents::AgentFileRefusal,
+    },
+    #[error("writing the launch agent file")]
+    AgentFileWrite(#[source] crate::disk::atomic::AtomicErr),
 }
 
 impl LaunchPlan {
@@ -705,6 +714,19 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         inputs.cwd,
     )?;
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
+    let agent_file_flag = match adapter
+        .spec()
+        .launch
+        .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile)
+    {
+        Some(crate::agents::PresetArgMatcher::AgentFile(flag)) if prompt.composed.is_some() => {
+            // The composed prompt replaces any agent the profile selected, on every action.
+            crate::agents::PresetArgMatcher::AgentFile(flag.clone())
+                .remove_occurrences(request.action.extra_args_mut());
+            Some(flag)
+        }
+        _ => None,
+    };
     let (mut reminders, mut warnings) = reminders(&request, inputs.effective, inputs.commands);
     if let Some(workflow) = &request.identity.params.workflow {
         let record = crate::store::workflow::find(inputs.state, &workflow.run)
@@ -1081,6 +1103,36 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     } else {
         None
     };
+    // Only a fresh launch selects the file: a resumed conversation keeps the prompt it
+    // started with, and RimZ's flag stays out of every argv a resume replays.
+    let agent_file = match (&agent_file_flag, &prompt.composed, &request.action) {
+        (Some(flag), Some(composed), launch::ExecAction::Launch { .. }) => {
+            let process = match &mut stage {
+                AgentProcessStage::Ready(process)
+                | AgentProcessStage::LoginShellReentry { process, .. } => process,
+            };
+            let file = adapter
+                .agent_file(&crate::agents::AgentFileInput {
+                    profile: request.identity.params.profile.as_deref(),
+                    prompt: composed,
+                    reminder: &process.reminder,
+                    tools: request.tools.as_deref(),
+                    native_subagents: !reminders.disable_native_subagents(&request),
+                    env: &env,
+                })
+                .expect("an agent-file prompt matcher comes with its adapter's agent file")
+                .map_err(|refusal| LaunchPlanErr::AgentFile {
+                    kind: request.kind.clone(),
+                    refusal,
+                })?;
+            process
+                .provider_argv
+                .extend([flag.clone(), file.name.clone()]);
+            process.rebuild_argv();
+            Some(file)
+        }
+        _ => None,
+    };
     let sandbox =
         if let (Some(bwrap), AgentProcessStage::Ready(process)) = (inputs.bwrap, &mut stage) {
             let empty_root = inputs.state.empty_dir_root();
@@ -1148,7 +1200,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         cwd: inputs.cwd.to_path_buf(),
         login,
         prompt,
-        reminder_channel: adapter.append_system_text_channel(),
+        reminder_channel: adapter
+            .append_system_text_channel()
+            .filter(|channel| *channel != SystemTextChannel::AgentFile || agent_file.is_some()),
+        agent_file,
         stage,
         sandbox,
         skill_links,
@@ -1212,6 +1267,9 @@ pub fn apply(plan: &LaunchPlan) -> Result<Option<SkillLinkOutcome>, LaunchPlanEr
             .map_err(launch::ExecWireErr::PromptWrite)?;
     }
     prompt_compose::apply_system_prompt(&plan.prompt)?;
+    if let Some(file) = &plan.agent_file {
+        crate::agents::publish_agent_file(file).map_err(LaunchPlanErr::AgentFileWrite)?;
+    }
     refresh_consensus_copy(plan);
     if let AgentProcessStage::LoginShellReentry {
         prompt_artifacts, ..

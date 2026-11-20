@@ -922,7 +922,7 @@ fn supervised_selection_checks_subagent_allowlist() {
 fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
     let request = supervised_request("amp", true);
     let adapter = crate::agents::find_definition("amp").unwrap();
-    let prompt = resolve::supervised_prompt(&request, adapter);
+    let prompt = resolve::supervised_prompt(&request, adapter, &agent_cell("amp"));
     assert_eq!(
         prompt,
         format!(
@@ -932,7 +932,10 @@ fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
     );
 
     let ordinary = supervised_request("amp", false);
-    assert_eq!(resolve::supervised_prompt(&ordinary, adapter), "amp");
+    assert_eq!(
+        resolve::supervised_prompt(&ordinary, adapter, &agent_cell("amp")),
+        "amp"
+    );
 }
 
 #[test]
@@ -941,8 +944,40 @@ fn native_system_text_adapters_keep_subagent_reminder_out_of_user_prompt() {
         let request = supervised_request(kind, true);
         let adapter = crate::agents::find_definition(kind).unwrap();
 
-        assert_eq!(resolve::supervised_prompt(&request, adapter), kind);
+        assert_eq!(
+            resolve::supervised_prompt(&request, adapter, &agent_cell(kind)),
+            kind
+        );
     }
+}
+
+#[test]
+fn agent_file_adapters_keep_subagent_reminder_out_of_user_prompt_only_with_prompt_sources() {
+    let request = supervised_request("agy", true);
+    let adapter = crate::agents::find_definition("antigravity").unwrap();
+    let mut cell = agent_cell("antigravity");
+    assert_eq!(
+        resolve::supervised_prompt(&request, adapter, &cell),
+        format!(
+            "agy\n\n{}",
+            crate::harness::launch_reminders::subagent_reminder()
+        )
+    );
+
+    cell.system_prompt_file = Some(crate::config::PromptSource::Text {
+        origin: "antigravity.md".into(),
+        text: "Base.".to_owned(),
+    });
+    assert_eq!(resolve::supervised_prompt(&request, adapter, &cell), "agy");
+}
+
+fn agent_cell(kind: &str) -> crate::harness::spec::AgentCell {
+    let crate::harness::spec::Cell::Agent(cell) =
+        crate::harness::spec::Cell::agent(AgentKind::new_unchecked(kind))
+    else {
+        unreachable!("Cell::agent builds an agent cell");
+    };
+    cell
 }
 
 fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {

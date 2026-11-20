@@ -404,6 +404,7 @@ impl LaunchSpec {
                 flags: flags.iter().map(|flag| (*flag).to_owned()).collect(),
                 key: key.to_owned(),
             },
+            StaticPresetMatcher::AgentFile(flag) => PresetArgMatcher::AgentFile(flag.to_owned()),
         })
     }
 
@@ -564,7 +565,8 @@ impl LaunchSpec {
                 }
                 PresetArgMatcher::TextFlag(_)
                 | PresetArgMatcher::EnvPathVar(_)
-                | PresetArgMatcher::EnvConfigMember { .. } => {
+                | PresetArgMatcher::EnvConfigMember { .. }
+                | PresetArgMatcher::AgentFile(_) => {
                     return Err(PresetErr::UnsupportedField {
                         agent: agent_kind,
                         field: field_name,
@@ -633,6 +635,9 @@ pub(super) enum DefinitionTools {
     Ignored,
     Required(ToolRenderer<Result<Vec<String>, super::tools::ToolErr>>),
     Optional(ToolRenderer<(Vec<String>, Vec<super::tools::ToolNotice>)>),
+    /// Required, and written into the provider's agent file rather than argv: the
+    /// renderer returns only the notices for names the file cannot carry.
+    RequiredFile(ToolRenderer<Vec<super::tools::ToolNotice>>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -910,6 +915,8 @@ pub enum StaticPresetMatcher {
         flags: &'static [&'static str],
         key: &'static str,
     },
+    /// A provider agent file selected by name through this flag.
+    AgentFile(&'static str),
 }
 
 /// Provider-identity check for a [`bin_names`](AgentSpec::bin_names) entry that

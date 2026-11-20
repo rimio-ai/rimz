@@ -102,10 +102,30 @@ pub(super) fn agent_config_path(
     override_env: &str,
     rel: &Path,
 ) -> Result<PathBuf> {
-    if let Some(raw) = std::env::var_os(override_env).filter(|v| !v.is_empty()) {
+    config_path_from(agent, override_env, rel, |key| std::env::var_os(key))
+}
+
+/// [`agent_config_path`] resolved from a launch env map rather than the process env,
+/// for a file the launched provider reads.
+pub(super) fn agent_config_path_in(
+    agent: &'static str,
+    override_env: &str,
+    rel: &Path,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<PathBuf> {
+    config_path_from(agent, override_env, rel, |key| env.get(key).map(Into::into))
+}
+
+fn config_path_from(
+    agent: &'static str,
+    override_env: &str,
+    rel: &Path,
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<PathBuf> {
+    if let Some(raw) = var(override_env).filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(raw));
     }
-    let home = std::env::var_os("HOME")
+    let home = var("HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| AgentErr::Install {

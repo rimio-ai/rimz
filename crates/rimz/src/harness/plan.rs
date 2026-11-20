@@ -1478,6 +1478,10 @@ pub enum LaunchFinalizeError {
         "{agent} append-system-prompt-files requires a base system-prompt-file; add one to the profile, role, or launch command"
     )]
     MissingSystemPromptBase { agent: &'static str },
+    #[error(
+        "{agent} applies a `tools` list only through the agent file its system prompt rides, and this launch has no system prompt; add the kind base `agents/{agent}.md` or another prompt source, or remove `tools`"
+    )]
+    ToolsNeedAgentFile { agent: &'static str },
     #[error("{reason}")]
     PromptValidation { reason: String },
     #[error("{agent} does not support --max-turns")]
@@ -1498,6 +1502,7 @@ impl LaunchFinalizeError {
             | Self::UnsupportedSystemPrompt { .. }
             | Self::UnsupportedDefinitionPrompt { .. }
             | Self::MissingSystemPromptBase { .. }
+            | Self::ToolsNeedAgentFile { .. }
             | Self::PromptValidation { .. } => &[],
         }
     }
@@ -1921,6 +1926,29 @@ fn validate_system_prompt_support(
     Ok(())
 }
 
+/// A kind whose prompt rides an agent file applies a `tools` list only inside that file, which
+/// a fresh launch writes only from prompt sources. A resume keeps the tools its conversation
+/// started with, so only a fresh cell is checked.
+fn validate_fresh_tools_delivery(cell: &AgentCell) -> std::result::Result<(), LaunchFinalizeError> {
+    let Some(adapter) = crate::agents::find_definition(cell.kind.as_str()) else {
+        return Ok(());
+    };
+    let rides_agent_file = matches!(
+        adapter
+            .spec()
+            .launch
+            .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile),
+        Some(crate::agents::PresetArgMatcher::AgentFile(_))
+    );
+    if cell.tools.is_none() || !rides_agent_file || !SystemPromptSources::from_cell(cell).is_empty()
+    {
+        return Ok(());
+    }
+    Err(LaunchFinalizeError::ToolsNeedAgentFile {
+        agent: adapter.spec().kind,
+    })
+}
+
 fn validate_system_prompt_text(cell: &AgentCell) -> std::result::Result<(), LaunchFinalizeError> {
     let sources = SystemPromptSources::from_cell(cell);
     if sources.is_empty() {
@@ -2196,6 +2224,14 @@ pub fn compile_layout_panes(
     };
     for cell in layout_cells() {
         validate_system_prompt_support(cell, crate::agents::find_definition(cell.kind.as_str()))?;
+    }
+    for (index, cell) in layout.agent_cells().enumerate() {
+        let fresh = params
+            .resume_seeds
+            .is_none_or(|seeds| matches!(seeds.get(index), Some(CohortSeed::Fresh)));
+        if fresh {
+            validate_fresh_tools_delivery(cell)?;
+        }
     }
     for cell in layout_cells() {
         validate_agent_prompt_files(cell)?;

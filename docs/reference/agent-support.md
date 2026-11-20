@@ -420,7 +420,7 @@ On a kind without a switch, each launch warns ``warning: `<profile>` code-mode i
 
 ### Launch-prompt replacement
 
-The profile fields `system-prompt-file` and `append-system-prompt-files` (and the matching `rimz agents` flags) supply the agent's system prompt. RimZ joins the base file and the appended files in order into one prompt, then hands it to the agent. Claude Code, Codex, Pi, OMP, Qwen, OpenCode, and process plugins that declare a flag replace their system prompt with it, and MiniMax appends it to its native prompt. Every other agent takes no RimZ prompt, and a launch that carries one for it refuses.
+The profile fields `system-prompt-file` and `append-system-prompt-files` (and the matching `rimz agents` flags) supply the agent's system prompt. RimZ joins the base file and the appended files in order into one prompt, then hands it to the agent. Claude Code, Codex, Pi, OMP, Qwen, OpenCode, Antigravity, and process plugins that declare a flag replace their system prompt with it, and MiniMax appends it to its native prompt. Every other agent takes no RimZ prompt, and a launch that carries one for it refuses.
 
 | Agent | Replacement | How the agent receives it |
 | --- | :--: | --- |
@@ -432,7 +432,8 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | OpenCode | ✓ | the composed file as `{file:<path>}` in `OPENCODE_CONFIG_CONTENT` `agents.build.system` |
 | Droid | ✗ | Droid only appends. Pass its flag through profile `args` |
 | MiniMax Code | ✗ | appends instead: the composed prompt goes through `--append-system-prompt-file` and launch reminders through `--append-system-prompt`, so MiniMax's native prompt stays. Its replacing `--system-prompt` and `--system-prompt-file` flags require raw `args` ([mapping](../internals/agents/adapter_minimax.md#launch-and-resume)) |
-| Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok, Qoder, Muse | ✗ | no verified replacement flag |
+| Antigravity | ✓ | on a fresh launch, an agent file in RimZ's agy plugin selected by `--agent`, holding the prompt and the launch reminders; a resume keeps the prompt its conversation started with ([mapping](../internals/agents/adapter_antigravity.md#the-agent-file)) |
+| Copilot, Cursor, Amp, Kiro, Kimi, Grok, Qoder, Muse | ✗ | no verified replacement flag |
 | Hermes | ✗ | its only system-text input, `HERMES_EPHEMERAL_SYSTEM_PROMPT`, discards the user's personality and `agent.system_prompt` |
 | Process plugin | declared by bundle | the composed file's path in `[launch].system-prompt-file-flag` |
 
@@ -474,7 +475,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ◐ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ |
 | Pi | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
 | OpenCode | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
-| Antigravity | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ◐ | ✗ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ◐ | ◐ | ✗ |
+| Antigravity | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ◐ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ◐ | ◐ | ✗ |
 | Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Droid | ✓ | ✓ | ◐ | ✓ | ✗ | ◐ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ◐ | ◐ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ | ✗ |

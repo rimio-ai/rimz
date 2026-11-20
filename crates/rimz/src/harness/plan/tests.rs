@@ -2752,6 +2752,104 @@ fn pane_compilation_checks_support_across_layout_before_prompt_files() {
 }
 
 #[test]
+fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/readseat.md"),
+        "---\ndescription: Reader.\nagent: amp\ntools: [Read]\n---\n",
+    )
+    .unwrap();
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(root.path()),
+        root.path(),
+    )
+    .unwrap();
+    let switched = || {
+        let loaded = crate::config::definitions::load(
+            root.path(),
+            crate::config::definitions::SkillCheck::Skip,
+            &Default::default(),
+            &root.path().join("config.toml"),
+            &Default::default(),
+            None,
+        );
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        crate::harness::spec::resolve_spec_with_agent_override(
+            Some("readseat"),
+            &loaded.agent_profiles,
+            &loaded.agent_profiles,
+            &Default::default(),
+            &Default::default(),
+            Some("antigravity"),
+        )
+        .expect("switched profile renders")
+    };
+    let identity = [AgentLaunchIdentity {
+        launch_id: None,
+        kind: AgentKind::new_unchecked("antigravity"),
+        agent_id: AgentSessionId::from("launch_reader"),
+        name: "reader".to_owned(),
+        name_explicit: false,
+        launch: crate::agents::LaunchParams::default(),
+        run_id: None,
+        prompt: None,
+    }];
+    let resumed = [CohortSeed::Resume(Box::new(crate::testkit::agent_state(
+        "antigravity",
+        "conversation",
+        Timestamp::now(),
+    )))];
+    let compile = |layout: &LayoutSpec, seeds: Option<&[CohortSeed]>| {
+        compile_layout_panes(
+            layout,
+            LayoutPaneParams {
+                pick_session: false,
+                runtime: &runtime,
+                cwd: root.path(),
+                cleanup_worktree: false,
+                in_place: false,
+                resume_seeds: seeds,
+                launch_identities: if seeds.is_some() { &[] } else { &identity },
+                agents: &[],
+                reminder_section: None,
+                leader_run: None,
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    };
+
+    let bodyless = switched();
+    let cell = bodyless.agent_cells().next().unwrap();
+    assert_eq!(cell.tools.as_deref(), Some(&["Read".to_owned()][..]));
+    assert_eq!(
+        compile(&bodyless, None),
+        Err("antigravity applies a `tools` list only through the agent file its system prompt rides, and this launch has no system prompt; add the kind base `agents/antigravity.md` or another prompt source, or remove `tools`".to_owned())
+    );
+    assert_eq!(compile(&bodyless, Some(&resumed)), Ok(()));
+
+    let bare = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("antigravity")));
+    assert_eq!(compile(&bare, None), Ok(()));
+
+    std::fs::write(
+        root.path().join("agents/antigravity.md"),
+        "---\ndescription: Base.\n---\nBase.",
+    )
+    .unwrap();
+    let based = switched();
+    assert!(
+        based
+            .agent_cells()
+            .next()
+            .unwrap()
+            .system_prompt_file
+            .is_some()
+    );
+    assert_eq!(compile(&based, None), Ok(()));
+}
+
+#[test]
 fn definition_prompt_refusal_names_first_origin_in_compose_order() {
     use crate::config::PromptSource;
     use crate::harness::team_prompt::{Consensus, TeamPrompt};

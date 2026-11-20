@@ -4437,3 +4437,188 @@ fn exec_preparation_returns_model_warnings_when_compile_fails() {
         prepared.model_warnings
     );
 }
+
+fn compile_with_ambient(
+    project: &Path,
+    request: &ExecRequest,
+    ambient: &BTreeMap<String, String>,
+) -> Result<LaunchPlan, LaunchPlanErr> {
+    let id = crate::WorkspaceId::from_project_root(project);
+    let runtime = RuntimePaths::under(id.clone(), project).unwrap();
+    let state = StatePaths::under(id, project).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    compile(LaunchPlanInputs {
+        request,
+        cwd: project,
+        project_root: project,
+        rimz_bin: Path::new("/bin/rimz"),
+        runtime: &runtime,
+        state: &state,
+        effective: None,
+        machine: &machine,
+        commands: &machine.agents.commands,
+        accounts: &machine.accounts,
+        isolation: Isolation::Host,
+        bwrap: None,
+        agents: Ok(&[]),
+        ambient_env: ambient,
+        agent_shell: None,
+        hibernate: false,
+        recorded_system_prompt_digest: None,
+    })
+}
+
+#[test]
+fn antigravity_fresh_launch_selects_an_agent_file_in_rimz_plugin() {
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let ambient = BTreeMap::from([("HOME".to_owned(), home.path().display().to_string())]);
+    let profile_agent = || vec!["--agent".to_owned(), "mine".to_owned()];
+    let prompted = |action: ExecAction, text: &str| {
+        let mut request = request("antigravity", action);
+        request.system_prompt_file = Some(crate::config::PromptSource::Text {
+            origin: project.path().join("antigravity.md"),
+            text: text.to_owned(),
+        });
+        request
+    };
+    let launch = |text: &str| {
+        prompted(
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: profile_agent(),
+            },
+            text,
+        )
+    };
+    let refusal = |request: &ExecRequest| {
+        compile_with_ambient(project.path(), request, &ambient)
+            .map(|_| ())
+            .unwrap_err()
+            .to_string()
+    };
+
+    let missing = refusal(&launch("Base.\n"));
+    assert!(
+        missing.contains("does not hold it")
+            && missing.ends_with("run `rimz hooks install antigravity`"),
+        "{missing}"
+    );
+    let manifest = home.path().join(".gemini/config/plugins/rimz/plugin.json");
+    std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+    std::fs::write(&manifest, r#"{"name":"rimz","author":"RimZ"}"#).unwrap();
+
+    let plan = compile_with_ambient(project.path(), &launch("Base.\n"), &ambient).unwrap();
+    let file = plan
+        .agent_file
+        .clone()
+        .expect("a fresh launch plans an agent file");
+    let agents = home.path().join(".gemini/config/plugins/rimz/agents");
+    assert_eq!(file.path, agents.join(format!("{}.md", file.name)));
+    assert!(file.name.starts_with("rimz-antigravity-"), "{}", file.name);
+    let process = plan.process();
+    let text = String::from_utf8(file.bytes.clone()).unwrap();
+    assert!(
+        text.starts_with(&format!(
+            "---\nname: {}\ndescription: \"Written by RimZ for an antigravity launch\"\nmainAgent: true\ntools: [",
+            file.name
+        )),
+        "{text}"
+    );
+    assert!(!process.reminder.is_empty());
+    assert!(
+        text.ends_with(&format!("---\nBase.\n\n{}", process.reminder)),
+        "{text}"
+    );
+    let agent_flags = process.provider_argv.iter().filter(|arg| *arg == "--agent");
+    assert_eq!(agent_flags.count(), 1, "{:?}", process.provider_argv);
+    assert!(
+        process
+            .provider_argv
+            .ends_with(&["--agent".to_owned(), file.name.clone()]),
+        "{:?}",
+        process.provider_argv
+    );
+    assert!(!process.provider_argv.contains(&"mine".to_owned()));
+    assert_eq!(plan.reminder_channel, Some(SystemTextChannel::AgentFile));
+    assert!(!file.path.exists(), "compile writes nothing");
+    apply(&plan).unwrap();
+    assert_eq!(std::fs::read(&file.path).unwrap(), file.bytes);
+
+    let again = compile_with_ambient(project.path(), &launch("Base.\n"), &ambient).unwrap();
+    assert_eq!(again.agent_file.unwrap().name, file.name);
+    let changed = compile_with_ambient(project.path(), &launch("Other.\n"), &ambient).unwrap();
+    assert_ne!(changed.agent_file.unwrap().name, file.name);
+
+    for (tools, line) in [
+        (Vec::new(), "tools: []\n"),
+        (
+            vec!["Read".to_owned(), "Bash".to_owned(), "Bogus".to_owned()],
+            "tools: [read_file, run_command]\n",
+        ),
+    ] {
+        let mut request = launch("Base.\n");
+        request.tools = Some(tools);
+        let plan = compile_with_ambient(project.path(), &request, &ambient).unwrap();
+        let bytes = plan.agent_file.unwrap().bytes;
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains(line), "{text}");
+    }
+
+    // A subagent keeps native delegation off, so its file grants no subagent tool; a plain launch
+    // with no catalog keeps them.
+    for (subagent, kept) in [(false, true), (true, false)] {
+        let mut request = launch("Base.\n");
+        request.subagent = subagent;
+        let plan = compile_with_ambient(project.path(), &request, &ambient).unwrap();
+        let text = String::from_utf8(plan.agent_file.unwrap().bytes).unwrap();
+        let tools = text
+            .lines()
+            .find(|line| line.starts_with("tools: "))
+            .unwrap();
+        for name in ["invoke_subagent", "define_subagent", "manage_subagents"] {
+            assert_eq!(tools.contains(name), kept, "subagent={subagent}: {tools}");
+        }
+    }
+
+    // agy has no picker or fork, so a resume is the one relaunch that reaches compile.
+    let resume = ExecAction::Resume {
+        session_id: "session".to_owned(),
+        extra_args: profile_agent(),
+    };
+    let plan =
+        compile_with_ambient(project.path(), &prompted(resume, "Base.\n"), &ambient).unwrap();
+    assert_eq!(plan.agent_file, None);
+    assert!(
+        !plan.process().provider_argv.contains(&"--agent".to_owned()),
+        "{:?}",
+        plan.process().provider_argv
+    );
+    assert_ne!(plan.reminder_channel, Some(SystemTextChannel::AgentFile));
+
+    let bare = request(
+        "antigravity",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: profile_agent(),
+        },
+    );
+    let plan = compile_with_ambient(project.path(), &bare, &ambient).unwrap();
+    assert_eq!(plan.agent_file, None);
+    assert_eq!(plan.process().provider_argv, ["agy", "--agent", "mine"]);
+
+    let config = home.path().join(".gemini/config/config.json");
+    std::fs::write(&config, r#"{"plugins":{"rimz":{"enabled":false}}}"#).unwrap();
+    let disabled = refusal(&launch("Base.\n"));
+    assert!(
+        disabled.ends_with("run `agy plugin enable rimz`"),
+        "{disabled}"
+    );
+    std::fs::remove_file(&config).unwrap();
+    std::fs::write(&manifest, r#"{"name":"rimz","author":"someone else"}"#).unwrap();
+    let foreign = refusal(&launch("Base.\n"));
+    assert!(
+        foreign.ends_with("run `rimz hooks install antigravity`"),
+        "{foreign}"
+    );
+}

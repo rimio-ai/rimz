@@ -9,6 +9,7 @@
 pub mod account;
 pub mod account_links;
 mod adapters;
+mod agent_file;
 pub mod attribution;
 mod background_shell;
 pub mod capabilities;
@@ -79,6 +80,7 @@ pub use account::{
     AccountUsageIdentity, ManagedLaunchState, ProviderAccountBinding, ProviderCapacity,
     RateLimitCacheEntry, RateLimitsCache, WindowSpan,
 };
+pub use agent_file::{AgentFile, AgentFileInput, AgentFileRefusal, publish_agent_file};
 pub use background_shell::{BackgroundShell, BackgroundShellReport};
 pub use capabilities::ManualSkill;
 pub use context::{
@@ -120,7 +122,9 @@ pub use lifecycle::{
     LifecycleSignal, LifecycleSignalKind, LifecycleTransition, SignalSet, ToolEffect, TurnPhase,
 };
 pub use locate::locate_binary;
-use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
+use locate::{
+    agent_config_path, agent_config_path_in, probe_descriptor_version, read_optional_file,
+};
 pub use login::{
     AccountStatus, BirthLoginErr, LoginCatalog, LoginConfigErr, LoginSource, ProviderHomeLogin,
     ProviderLogin, RoomAccounts, RoomLoginErr, RoomLoginSet, ambient_env, machine_login_catalog,
@@ -364,6 +368,10 @@ pub enum PresetArgMatcher {
     EnvConfigMember { var: String, member: String },
     /// A repeatable config override carrying the field as `<flag> <key>=VALUE`.
     ConfigKey { flags: Vec<String>, key: String },
+    /// A provider-owned agent file that carries the prompt, selected by name
+    /// through this flag: `--agent NAME`. No room artifact, argv value, or env
+    /// carries the text itself.
+    AgentFile(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -387,22 +395,8 @@ impl PresetArgMatcher {
         let mut index = 0;
         while index < argv.len() {
             let occurrence = match self {
-                Self::Flag(flags) | Self::TextFlag(flags) => flags.iter().find_map(|flag| {
-                    if argv[index] == *flag {
-                        argv.get(index + 1).map(|value| PresetArgOccurrence {
-                            argv_range: index..index + 2,
-                            value: value.clone(),
-                        })
-                    } else {
-                        argv[index]
-                            .strip_prefix(flag)
-                            .and_then(|suffix| suffix.strip_prefix('='))
-                            .map(|value| PresetArgOccurrence {
-                                argv_range: index..index + 1,
-                                value: value.to_owned(),
-                            })
-                    }
-                }),
+                Self::Flag(flags) | Self::TextFlag(flags) => flag_occurrence(flags, argv, index),
+                Self::AgentFile(flag) => flag_occurrence(std::slice::from_ref(flag), argv, index),
                 Self::ConfigKey { flags, key } => flags.iter().find_map(|flag| {
                     let prefix = format!("{key}=");
                     if argv[index] == *flag {
@@ -437,6 +431,7 @@ impl PresetArgMatcher {
 
     pub(crate) fn display_setting(&self, value: &str) -> String {
         match self {
+            Self::AgentFile(flag) => format!("{flag} {value}"),
             Self::Flag(flags) | Self::TextFlag(flags) => flags
                 .first()
                 .map_or_else(|| value.to_owned(), |flag| format!("{flag} {value}")),
@@ -445,6 +440,26 @@ impl PresetArgMatcher {
             Self::EnvConfigMember { var, member } => format!("{var} {member}={value}"),
         }
     }
+}
+
+/// A named flag at `index`: `--flag VALUE` or `--flag=VALUE`.
+fn flag_occurrence(flags: &[String], argv: &[String], index: usize) -> Option<PresetArgOccurrence> {
+    flags.iter().find_map(|flag| {
+        if argv[index] == *flag {
+            argv.get(index + 1).map(|value| PresetArgOccurrence {
+                argv_range: index..index + 2,
+                value: value.clone(),
+            })
+        } else {
+            argv[index]
+                .strip_prefix(flag)
+                .and_then(|suffix| suffix.strip_prefix('='))
+                .map(|value| PresetArgOccurrence {
+                    argv_range: index..index + 1,
+                    value: value.to_owned(),
+                })
+        }
+    })
 }
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
