@@ -108,10 +108,7 @@ impl Client {
     }
 
     pub(super) fn resolve(&self, cwd: &Path, source: &GitSource) -> Result<Revision> {
-        let requested = source
-            .reference
-            .clone()
-            .or_else(|| source.official().map(|_| format!("v{RUNNING_VERSION}")));
+        let requested = source.reference.clone();
         let tag = requested
             .as_ref()
             .map(|reference| format!("refs/tags/{reference}"));
@@ -157,23 +154,8 @@ impl Client {
         } else {
             refs.get("HEAD").cloned()
         };
-        let commit = commit.ok_or_else(|| {
-            let message = if source.reference.is_none() && source.official().is_some() {
-                let spelling = source.spelling();
-                let branch = default_branch.as_deref().unwrap_or("HEAD");
-                let argument = format!("{spelling}@{branch}");
-                // Git refs and validated source spellings cannot contain NUL.
-                let command = shlex::try_join(["rimz", "packs", "install", &argument])
-                    .expect("Git refs and source spellings carry no NUL byte");
-                format!(
-                    "missing tag {reference}; use `{command}` \
-                     to follow the default branch"
-                )
-            } else {
-                format!("ref {reference:?} was not found")
-            };
-            git_error(&source.url, message)
-        })?;
+        let commit = commit
+            .ok_or_else(|| git_error(&source.url, format!("ref {reference:?} was not found")))?;
         Ok(Revision { reference, commit })
     }
 

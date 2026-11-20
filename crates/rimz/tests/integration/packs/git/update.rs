@@ -3,10 +3,6 @@ use super::*;
 fn publish(repo: &Path) -> String {
     git(repo, &["add", "."]);
     git(repo, &["commit", "-m", "update fixture"]);
-    git(
-        repo,
-        &["tag", "-f", &format!("v{}", env!("CARGO_PKG_VERSION"))],
-    );
     git_stdout(repo, &["rev-parse", "HEAD"])
 }
 
@@ -329,10 +325,8 @@ fn pinned_and_linked_sources_are_skipped_even_with_yes() {
 fn a_failed_source_does_not_stop_later_sources_and_failures_are_reported_last() {
     let fixture = Fixture::new();
     install(&fixture, "crew");
-    git(
-        &fixture.crew,
-        &["tag", "-d", &format!("v{}", env!("CARGO_PKG_VERSION"))],
-    );
+    let moved = fixture.crew.with_extension("moved");
+    fs::rename(&fixture.crew, &moved).unwrap();
     let skills = fixture.crew.parent().unwrap().join("rimz-skills");
     write(skills.join("skills/review/SKILL.md"), "# Revised review");
     let commit = publish(&skills);
@@ -342,9 +336,8 @@ fn a_failed_source_does_not_stop_later_sources_and_failures_are_reported_last() 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("Updated essential"), "{stdout}");
     assert!(
-        stderr.contains("crew")
-            && stderr.contains("v0.")
-            && stderr.contains("rimz packs install crew@main"),
+        stderr.contains("crew: Git source https://github.com/rimio-ai/rimz-crew: fatal:")
+            && !stderr.contains("essential:"),
         "{stderr}"
     );
     let record = fixture.record();
@@ -357,8 +350,7 @@ fn source_failures_survive_a_simultaneous_host_link_cleanup_failure() {
     let fixture = Fixture::new();
     install(&fixture, "crew");
     let before = fixture.record();
-    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
-    git(&fixture.crew, &["tag", "-d", &version]);
+    fs::rename(&fixture.crew, fixture.crew.with_extension("moved")).unwrap();
     write(
         fixture.env.home_root.join(".claude/skills"),
         "not a directory",
@@ -367,7 +359,7 @@ fn source_failures_survive_a_simultaneous_host_link_cleanup_failure() {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains(&format!("missing tag {version}"))
+        stderr.contains("crew: Git source https://github.com/rimio-ai/rimz-crew:")
             && stderr.contains("host skill link cleanup is incomplete")
             && !stderr.contains("pack change committed"),
         "{stderr}"
@@ -568,4 +560,92 @@ fn a_pack_workflow_run_reads_its_definition_through_the_entry_link_across_an_upd
         "{}",
         dir.display()
     );
+}
+
+#[test]
+fn a_pack_newly_selected_at_an_unmoved_commit_is_range_checked() {
+    let fixture = Fixture::new();
+    let skills = fixture.crew.parent().unwrap().join("rimz-skills");
+    let manifest = fs::read_to_string(skills.join("rimz-packs.toml")).unwrap();
+    write(skills.join("extra/traits/extra.md"), "Extra.");
+    write(
+        skills.join("rimz-packs.toml"),
+        &format!(
+            "{manifest}[[pack]]\nname = 'extra'\ndescription = 'Extra'\npath = 'extra'\n\
+             rimz = '>=999.0.0'\n"
+        ),
+    );
+    let skills_commit = publish(&skills);
+    install(&fixture, "crew");
+    let path = fixture.env.agents_home().join("packs/installed.json");
+    let before = fs::read(&path).unwrap();
+    let manifest = fixture.crew.join("rimz-packs.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    write(
+        &manifest,
+        &text.replace("['skills/essential']", "['skills/extra']"),
+    );
+    publish(&fixture.crew);
+    let output = fixture.run(&["packs", "update", "crew", "--yes"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let expected = format!(
+        "extra from skills at {} requires RimZ >=999.0.0, but this is RimZ {}.",
+        &skills_commit[..8],
+        env!("CARGO_PKG_VERSION")
+    );
+    assert!(
+        stdout.contains(&expected) && !stdout.contains("Updated"),
+        "{stdout}"
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn an_update_that_needs_another_rimz_holds_its_source_and_others_carry_on() {
+    let fixture = Fixture::new();
+    install(&fixture, "crew");
+    let path = fixture.env.agents_home().join("packs/installed.json");
+    let before = fs::read(&path).unwrap();
+    let manifest = fixture.crew.join("rimz-packs.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    write(
+        &manifest,
+        &text.replacen("path = '.'\n", "path = '.'\nrimz = '>=999.0.0'\n", 1),
+    );
+    let held = publish(&fixture.crew);
+    let expected = format!(
+        "Held crew: crew from crew at {} requires RimZ >=999.0.0, but this is RimZ {}.",
+        &held[..8],
+        env!("CARGO_PKG_VERSION")
+    );
+    let output = fixture.run(&["packs", "update", "crew", "--yes"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains(&expected) && stdout.contains("rimz update") && !stdout.contains("Updated"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(
+            "Pack updates incomplete:\n  crew: update held: a pack needs another RimZ version"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
+
+    let skills = fixture.crew.parent().unwrap().join("rimz-skills");
+    write(skills.join("skills/review/SKILL.md"), "# Revised review");
+    let moved = publish(&skills);
+    let output = fixture.run(&["packs", "update", "--yes"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&expected) && stdout.contains("Updated essential."),
+        "{stdout}"
+    );
+    let record = fixture.record();
+    assert_eq!(record["sources"][0]["commit"], fixture.commit);
+    assert_eq!(record["sources"][1]["commit"], moved);
 }

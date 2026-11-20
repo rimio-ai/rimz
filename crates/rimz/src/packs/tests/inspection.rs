@@ -179,7 +179,7 @@ fn checkout_inspection_reports_git_changes_without_writing_or_inspecting_links()
                 row.packs == [name("crew")]
                     && row.commit == commit
                     && row.path == checkout
-                    && (case != "read-only" || row.reinstall.ends_with("@main"))
+                    && (case != "read-only" || row.reinstall.ends_with("@main#crew"))
                     && match &row.state {
                         CheckoutState::Clean => matches!(case, "clean" | "ignored" | "read-only"),
                         CheckoutState::Modified { head, changed } => {
