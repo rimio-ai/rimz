@@ -1,56 +1,35 @@
 # Guide writing contract
 
-Local contract for `docs/guide/`, the user guides. Extends [docs/AGENTS.md](../AGENTS.md), which carries the rules every documentation page follows: the reader of each tree, grounding a `console` block, and the mechanics. This file governs new guides and every edit to an existing one.
+Local contract for `docs/guide/`, new guides and edits alike. Extends [docs/AGENTS.md](../AGENTS.md).
 
 ## The reader
 
-Write for one person: a strong developer who found RimZ an hour ago. They run coding agents daily, know their own stack to the bone (git, cron, tmux or Zellij, `claude -p`), and know nothing about RimZ. They have workflows and tooling they trust, so every page must give them a reason to change anything, and they will not read source code to fill a gap a sentence left.
+One person: a strong developer who runs coding agents daily, knows their own stack to the bone (git, cron, tmux or Zellij, `claude -p`), and knows nothing about RimZ. They trust the workflow they have, so every page must give them a reason to change it.
 
-## Open from what the reader already runs
+## How a guide teaches
 
-Start a guide, and each major feature inside it, from the tool the reader uses today: the stock CLI, the cron line, the hand-rolled `while true` loop, the plain `ssh`. Credit what that tool does well, name the gap it leaves, then present the RimZ command as the same contract without the gap. A delta from a known tool teaches faster than a feature list from zero; `scripting.md` opens from `claude -p` and `loops.md` from cron, and new guides keep that pattern.
-
-## Every feature carries its why
-
-Before any flag, state the problem the feature exists to solve and the moment the reader reaches for it. A feature whose why does not survive one paragraph belongs in the reference, not in a guide.
-
-## Show the mechanism
-
-RimZ wraps primitives thin, and a pro adopts only what they can predict. For every command that acts on the reader's machine, state exactly what it does, as steps they could run by hand: the flags it renders, the pane it opens, the file it writes and where. `fleet.md` ("The wrapper stays thin") and `loops.md` ("What a task does on your machine") are the model. Assurance without mechanism ("it's safe", "it just works") earns nothing.
-
-The same transparency is the safety story: a command that changes state documents what changes, where it lands, and the one command that reverses it. Creation and teardown get equal care; the reader's fear lives at the end of the lifecycle, not the start.
-
-## Main workflow first, detail last
-
-A guide reads front to back as the daily path. Field tables, provider matrices, and edge-case caveats sit at the end of the page or one link away; the reader digs for a field when they need it, never on the way in. Provider-specific exceptions get one plain sentence; internals vocabulary (event classes, wire names, module paths) stays in `docs/internals/`.
-
-## One home per fact
-
-Guides teach the stable, dogfooded surface, and the table below says which guide owns what. Mechanics live in `docs/internals/`, flag catalogs in `docs/reference/`, and early or still-shifting surfaces (agent plugins today) stay in the reference until they harden.
+- **Open from what the reader already runs.** Start a guide, and each major feature inside it, from the tool the reader uses today: the stock CLI, the cron line, the hand-rolled `while true` loop, the plain `ssh`. Credit what that tool does well, name the gap it leaves, then present the RimZ command as the same contract without the gap.
+- **Every feature carries its why.** Before any flag, state the problem the feature solves and the moment the reader reaches for it. A feature whose why does not survive one paragraph belongs in the reference.
+- **Show the mechanism.** For every command that acts on the reader's machine, state exactly what it does, as steps they could run by hand: the flags it renders, the pane it opens, the file it writes and where. `fleet.md` ("The wrapper stays thin") and `loops.md` ("What a task does on your machine") are the model. Assurance without mechanism ("it's safe", "it just works") earns nothing.
+- **Teardown gets the care creation gets.** A command that changes state documents what changes, where it lands, and the one command that reverses it.
+- **Main workflow first, detail last.** A guide reads front to back as the daily path. Field tables, provider matrices, and edge-case caveats sit at the end of the page or one link away. A provider-specific exception gets one plain sentence. Internals vocabulary (event classes, wire names, module paths) stays in `docs/internals/`.
 
 ## Who owns what
 
-Each page owns the topics in its row. A fact from another row gets a link, never a second copy.
+Guides teach the stable, dogfooded surface. An early or still-shifting surface (agent plugins today) stays in `docs/reference/` until it hardens. A guide owns the topic its filename names; these rows draw the boundaries a filename does not show.
 
 | Owner | Owns |
 | --- | --- |
-| `installation.md` | Getting RimZ and a multiplexer onto the machine, the version floors, and choosing a truecolor terminal and a Nerd Font. |
-| `setup.md` | One run of `rimz setup`, question by question. |
 | `sidebar.md` | The attention model: the trust story, the zone map, the agent lifecycle, the jump loop, and the ranking. |
 | `docs/interface/sidebar.md` | Every exact drawing: glyph meanings, worktree markers, receipts, budget bars, narrow-pane fallbacks, and the key and mouse tables. |
 | `insight.md` | What every token and dollar figure means, how each is calculated, and the scopes and windows. |
-| `configuration.md` | Every config key and its default, choosing and binding model tiers, the `~/.rimz` layout, and rebirth resume. |
-| `theme.md` | Every `[theme]` key table. |
-| `subagents.md` | Delegation through `rimz subagents` from the user's side: child profiles, the `subagents:` allowlist, watching and stopping children, and choosing between a child, a peer run, and a team. |
-| `loops.md` | Scheduled work from the user's side: clock, signal, and condition tasks, starting agents from a task, who keeps time, reading what a task did, strikes, stopping and removing tasks, what a task does on the machine, `rimz wait` for agents, and the four hands-off reflexes (auto-continue, auto-redeem, idle compaction, smart compaction). The `loop.toml` keys live in `configuration.md`. |
-| `workflows.md` | Workflow runs from the user's side: why a graph instead of a loop task, writing and starting a first workflow, what a run does on the machine, waiting checks, judges, failure routes, cancel and cleanup, starting runs from a loop, project scope, kept notes and history, an author-written reflection step, and the rules for writing nodes with the check answer. The `context.json` field table lives in `docs/reference/cli/workflow.md`. |
-| `lsp.md` | Shared LSP from the user's side: configuring one, what a launch does with it, what agents see, querying it by hand, and how it ends. |
-| `multiplexer.md` | Configuring Zellij and tmux, and what a room asserts on the session. |
-| `troubleshooting.md` | The symptom-to-fix mapping and nothing else. |
+| `configuration.md` | Every config key and its default (the `loop.toml` keys included), choosing and binding model tiers, the `~/.rimz` layout, and rebirth resume. |
+| `theme.md` | Every `[theme]` key table, only because `docs/reference/` has no theming page: create one and the slot table, the display keys, and the glyph roles move there, leaving the guide the workflow. |
+| `loops.md` | Scheduled work, plus `rimz wait` for agents and the four hands-off reflexes (auto-continue, auto-redeem, idle compaction, smart compaction). |
+| `workflows.md` | Workflow runs, except the `context.json` field table, which lives in `docs/reference/cli/workflow.md`. |
+| `troubleshooting.md` | The symptom-to-fix mapping and nothing else. An entry states the cause in a sentence or two, names the command, and links the guide that owns the model. |
 | `security.md` | The threat model and nothing else. |
 | `docs/reference/` | Flag catalogs, field tables, exact output shapes, and per-agent matrices. |
-
-Two rows need a note. `theme.md` holds key tables only because `docs/reference/` has no theming page; create one and the slot table, the display keys, and the glyph roles move there, leaving the guide the workflow. A `troubleshooting.md` entry states the cause in a sentence or two, names the command, and links the guide that owns the model, so the model itself never migrates into the catalogue.
 
 ## One term per concept
 
@@ -82,6 +61,6 @@ A state directory is written `~/.rimz/ws/<workspace-dir>/...`.
 On top of the [documentation mechanics](../AGENTS.md#mechanics):
 
 - Every page opens with unheaded paragraphs under the H1, never a blockquote summary.
-- A bullet list answering "which one" or "who does it" may lead each bullet with a bolded full sentence (`**A new turn does.**`). A bold label and a colon (`**Performance:** improved`) stays banned.
-- Guide filenames are lowercase topic words. Never name a guide `agents.md`: it collides with the `AGENTS.md` contract files on case-insensitive filesystems and with the reference and internals files of that name.
-- A guide that leaves the reader with an obvious next step ends in a `## See also` list, each link carrying the reason to follow it after a colon. Most do; a terminal page like `installation.md` or `security.md` reasonably stops instead.
+- A bullet may lead with a bolded full sentence (`**A new turn does.**`) in a list answering "which one" or "who does it". A bold label and a colon (`**Performance:** improved`) is banned.
+- Never name a guide `agents.md`: it collides with the `AGENTS.md` contract files on case-insensitive filesystems.
+- A guide ends in a `## See also` list, each link carrying the reason to follow it after a colon, unless it is a terminal page like `installation.md` or `security.md`.

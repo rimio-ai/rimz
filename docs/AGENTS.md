@@ -1,6 +1,6 @@
 # Documentation
 
-Local contract for `docs/`, and for the [README.md](../README.md), [DESIGN.md](../DESIGN.md), and [ARCHITECTURE.md](../ARCHITECTURE.md) that head it. Extends the root [AGENTS.md](../AGENTS.md). [guide/AGENTS.md](./guide/AGENTS.md) extends this one with the rules that govern the user guides alone.
+Local contract for `docs/`, and for the [README.md](../README.md), [DESIGN.md](../DESIGN.md), and [ARCHITECTURE.md](../ARCHITECTURE.md) that head it. Extends the root [AGENTS.md](../AGENTS.md). [guide/AGENTS.md](./guide/AGENTS.md) extends this one for the user guides.
 
 ## Who each tree is for
 
@@ -17,50 +17,54 @@ Write for the reader of the tree you are in. A page that serves two of these ser
 
 ## One home per fact
 
-Each fact has one owning page; every other page links to it with a half-line of orientation. When a section accumulates detail another page owns, move the detail and retarget every inbound link. Duplication is where docs rot first: this pass found the same claim wrong in a help string, a reference page, and the README, three places that had each copied it.
-
-## Grounding a `console` block
-
-A `console` block carries output as the command printed it. Never invent one, and never hand-edit a captured one. Two ways to ground it:
-
-**Capture it.** To get output under a home that reads like a reader's, run the built binary inside a nested bubblewrap, which touches nothing on the machine:
-
-```sh
-bwrap --dev-bind / / --tmpfs /home --bind "$TMPDIR/<dir>" /home/me \
-  --setenv HOME /home/me --setenv RIMZ_HOME /home/me/.rimz --chdir /tmp \
-  -- "$TMPDIR/rimz" <args>
-```
-
-`home_relative` then prints `~/...` while the copy-paste lines print `/home/me/...`. Copy the binary out of `target/debug/` first: the tmpfs hides the worktree.
-
-**Recompute it from the renderer.** `cli/render/mod.rs` is the authority. For a `render::Table`, column width is the widest cell including the header, columns join with two spaces, right-aligned columns are the ones named by `.right(&[...])`, a section emits a leading blank line, consecutive cards are separated by a blank line, card detail indents two, and the last column is padded only when it is right-aligned. For a `render::KeyVals`, the value column sits at `indent + longest_key + 2`. For a `render::roster::Roster`, the handle column pads to `handle.len() + 1` before the two-space separator, so `@planner` under a roster holding `@reviewer` carries four spaces, not three. Recompute, never eyeball.
-
-A change that moves one cell of an existing block regrounds the whole block, by capture when the branch binary can run the command. Recomputing only the changed cell keeps every other column's padding as trunk had it, and trunk's block may already be stale.
-
-A block for a command you cannot run may be derived from the error type's format string plus the `error: ` prefix `write_report` adds, as long as you say in the change that it was derived rather than captured.
-
-## Facts that differ by surface
-
-Two figures RimZ prints in more than one place, each correct where it appears. Name the surface you mean.
-
-- `◇` is `↘` plus `↗` in the sidebar (`SpendWindow::add`) and adds `◌` in `rimz stats` (`SpendWindow::display_tokens`).
-- A crossed cap reads `fleet budget: $50.21 of $50.00/day` on an agent card (`agents/state.rs::BudgetPark::label`, two decimals always) and `$50.21 of $50/day` in the cockpit and provider headline (`theme/fmt.rs::dollars_cap`, whole-dollar cents dropped).
+Each fact has one owning page; every other page links to it with a half-line of orientation. When a section accumulates detail another page owns, move the detail and retarget every inbound link.
 
 ## Mechanics
 
+- Each paragraph, bullet, and table row is one line, never hard-wrapped.
 - Prose carries no em or en dashes. Use a period, comma, colon, or parentheses. A `console` block keeps whatever the command printed.
 - A doc states what the product does now. Words relative to a change ("unchanged", "now", "no longer") belong in the PR, not the page.
-- `sh` blocks are copy-runnable, checked against the clap definition that parses them.
-- A prose sentence that tells the reader to pass a flag names a command that takes it: check the flag against that command's clap definition, as for an `sh` block. A restart sentence once offered `--model`, which `rimz agents restart` does not accept.
-- In a recipe spread over several `sh` blocks, every file argument names the path an earlier block created (`"$ROOT/tmp/replay/..."`), never a bare filename that depends on the reader's directory.
+- A `console` block carries output as the command printed it: never invented, never hand-edited.
+- An `sh` block is copy-runnable. Every flag an `sh` block or a prose sentence tells the reader to pass is checked against the clap definition of the command it names.
 - A fact from a subagent's summary is not grounded. Use a subagent to find the function; read the function before writing the sentence.
-- A process command line a doc states (argv0, a script path, a parent and child) comes from a probe or a live `/proc` read of each way the program is launched (a `PATH` lookup through a linked bin entry, a direct path, a launcher), never from a package's file layout or a teammate's finding.
-- A phrase that restates a code condition (which pane takes a path, when a branch fires) is checked against the condition's source line before commit, every `&&` and `||` kept: a gloss that turns an AND into an OR reads as true and is wrong for the case it drops.
-- A moved or reworded heading breaks inbound anchors silently. After changing one, grep the repo for the old anchor and run `cargo xtask docs-links`, which validates file targets and `#anchors` together. `cargo xtask lint` does not cover Markdown.
-- A new page is invisible until its index lists it: [docs/README.md](./README.md) for anything a user reads, the tree's own README for `reference/` and `internals/`, and the root [documentation map](../AGENTS.md#documentation-map). A page inside a subsystem folder (an `internals/agents/` adapter page) is listed in its tree's README, not in the root map, which names only the folder.
-- A page that gains a new kind of content updates its summary line everywhere that links to it (`rg '<page>.md'`), the documentation map included.
-- When a change moves where a behaviour is triggered, search the whole tree for the behaviour's phrase (`rg -i 're-?wake' docs/ crates/`) and update every hit, not only the pages the plan named.
-- A sentence that lists the commands that trigger a behaviour takes them from `rimz lsp callers` on the function that performs it, followed up to every CLI `run` that reaches it: one shared entry (`RoomContext::birth`) can sit under several commands.
-- A doc that cites the code a measurement ran names the trunk commit it was built on (a merge base, which trunk keeps) plus the branch commit's subject, never a branch hash: a rebase renames every branch hash, and a later fix changes the commit's tree.
-- A procedure a change writes or rewrites (relaunch this, attach that, then read this) runs once end to end before hand-off, on the setup it names. A run of its build command, or of its tool on a one-shot command, does not cover it.
-- A sentence that gives the cause of a measured change cites the figure, from the same run, that rules out the other readings. A mechanism that would produce the change, without that figure, is a hypothesis: write it as one, or leave it out.
+- Before adding a sentence to a paragraph, read the whole paragraph against the code it describes, and fix any statement there that the change makes wrong or that is wrong already.
+- A moved or reworded heading breaks inbound anchors silently. After changing one, grep the repo for the old anchor and run `cargo xtask docs-links`, which validates file targets and `#anchors` in every tracked Markdown file. `cargo xtask lint` does not cover Markdown.
+- A new page is invisible until its index lists it: [docs/README.md](./README.md) for anything a user reads, the tree's own README for `reference/`, `internals/`, and `externals/`, and the [documentation map](#documentation-map) below. A page inside a subsystem folder (an `internals/agents/` adapter page) is listed in its tree's README, not in that map, which names only the folder.
+- A change that deletes or moves a page retargets each [CHANGELOG.md](../CHANGELOG.md) link to it (`rg -n -F '<page>.md' CHANGELOG.md`), the one edit a pull request makes there.
+
+## Before a doc change
+
+Before writing one of these, read the [change checklists](./contributing/change-checklists.md) section named beside it and do what it asks. No gate catches a skipped one.
+
+- A `console` block written, or one cell of an existing block changed: [Console blocks](./contributing/change-checklists.md#console-blocks).
+- A sentence that restates a code condition, lists the commands that trigger a behaviour, describes a path through several functions, groups several mechanisms under one property, states a process command line, gives a figure RimZ prints on more than one surface, cites a measurement or the cause of a measured change, or is rewritten to widen or narrow a list; a recipe spread over several `sh` blocks; or a procedure written or rewritten: [Doc sentences](./contributing/change-checklists.md#doc-sentences).
+- A page that gains a new kind of content, a behaviour whose trigger moves, or a scan over Markdown: [Stale wording sweep](./contributing/change-checklists.md#stale-wording-sweep).
+
+## Documentation map
+
+**Root**: [README.md](../README.md) (product entry), [docs/README.md](./README.md) (user documentation index), [DESIGN.md](../DESIGN.md), [ARCHITECTURE.md](../ARCHITECTURE.md), [CHANGELOG.md](../CHANGELOG.md) (one section per git tag, generated from merged history ahead of the tag).
+
+**Guide**: `docs/guide/` teaches the shipped product to people who never open the source; [docs/README.md](./README.md) indexes the pages. Ship a user-visible behaviour change into the guide page that promises it, and get your own working knowledge from `docs/internals/` instead.
+
+**Interface**: [sidebar.md](./interface/sidebar.md), the sidebar on screen: every drawing, rendered frames, and the glyph legend.
+
+**Reference**: `docs/reference/` answers a specific flag or field; [its README](./reference/README.md) indexes the pages by topic, and [cli.md](./reference/cli.md) is the command map over a page per scene under `docs/reference/cli/`.
+
+**Internals**: `docs/internals/` documents each subsystem for people who read the code; [its README](./internals/README.md) indexes the pages by area and by source tree. The three multi-doc subsystems (`agents/`, `harness/`, `sidebar/`) keep a folder; every other subsystem is one flat file.
+
+**Externals**: `docs/externals/`, upstream protocol references pinned to source URLs, indexed by [its README](./externals/README.md): one page per agent adapter under `agent-adapter/` and per mux backend under `mux-adapter/`.
+
+**Contributing**: `docs/contributing/`
+- [rust-conventions.md](./contributing/rust-conventions.md): Rust shape, test taxonomy, toolchain, quality gates, CI, and release packaging.
+- [change-checklists.md](./contributing/change-checklists.md): what a change of a given kind lists, greps, and pins before hand-off, doc sentences and console blocks included.
+- [running-gates.md](./contributing/running-gates.md): the gates and the test runner in practice.
+- [probes.md](./contributing/probes.md): hand-built probes and live checks.
+- [integration-tests.md](./contributing/integration-tests.md): what a test in the integration suite needs by kind, and how a flake there is stressed, forced, and traced.
+- [cli-scenes.md](./contributing/cli-scenes.md): the scene grammar `rimz agents` and `rimz teams` share, and the rules every human history list keeps.
+- [agent-adapters.md](./contributing/agent-adapters.md): the built-in adapter integration playbook, and what a change to a shipped adapter also runs.
+- [model-upgrades.md](./contributing/model-upgrades.md): what a new provider model needs.
+- [dependabot-loop.md](./contributing/dependabot-loop.md): the worktree-isolated dependency repair loop.
+- [atlas.md](./contributing/atlas.md): operating `cargo xtask atlas`, and the `refactor-target.toml` schema.
+- [refactor-program.md](./contributing/refactor-program.md): the whole-repository refactor as rounds of passes; [refactor-ledger.md](./contributing/refactor-ledger.md) is its memory between passes and its current status.
+- [sidebar-screenshots.md](./contributing/sidebar-screenshots.md): scenario playback and PNG capture for sidebar frames.
+- [sidebar-live-check.md](./contributing/sidebar-live-check.md): live sidebar checks in disposable tmux and Zellij rooms, with frame and kitty-graphics captures.

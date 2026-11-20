@@ -1,34 +1,14 @@
 # Diagnostics
 
-Local contract for `crates/rimz/src/diag/` — append-only JSONL evidence. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). Subsystem behaviour — the schema table, the envelope, rate limiting, frame captures, off-box reporting — lives in [docs/internals/diagnostics.md](../../../../docs/internals/diagnostics.md).
+Local contract for `crates/rimz/src/diag/`. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). Behaviour lives in [diagnostics.md](../../../../docs/internals/diagnostics.md). Before adding a kind, a record shape, or a log surface, read its [Rules a change keeps](../../../../docs/internals/diagnostics.md#rules-a-change-keeps).
 
-## Evidence, not input
-
-- **Diagnostics are for a human.** Correctness reads the store, the CAS rules, and the caches. No correctness path reads a diagnostic record back, and nothing here gates product behaviour.
-- **Records are anomaly-first.** A steady-state tick writes nothing. The fetch worker emits one aggregate delivery window per minute, not a record per tick or pane.
-- **Writes are best-effort.** A failed append logs at debug and returns; the calling path continues unchanged.
-- **Only the sink touches disk.** Pure projection layers return diagnostics as data and hand them to `DiagSink`, so a fold stays testable and quiet.
-- Rate limiting lives with the sink: an identity window plus a per-kind ceiling bounds a loop that would otherwise flood the log. Earlier-boot ingress drops aggregate each consecutive run within a read and use both limits.
-- A new kind whose occurrences scale with a queue or a backlog aggregates them into one record per run, with a count, and goes through both limits. Exempting a kind from the limiter is a design decision that states its worst-case record count against the main log's 1 MiB cap (`disk::retention::ROTATING_LOG_MAX_BYTES`), since a flood rotates out the evidence that explains it.
-
-## Wire compatibility
-
-A new key or record shape on a diagnostic JSONL surface gets a new serde tag, never a distinguishing field on an existing variant. Older builds skip a line they cannot decode, but ignore unknown fields and would read that record as the old shape. Builds of different ages can share one home, so preserve existing tags and identities rather than silently changing their meaning.
-
-## Accountability
-
-An internal repair keeps a durable record of what it did — [`focus_repair.rs`](./focus_repair.rs) is the worked example, pairing automatic sidebar focus repair with its own rotating log. User-benefiting automation instead appends an assist record and surfaces in `rimz stats`; the split lives in [loops.md](../../../../docs/internals/harness/loops.md#the-assist-log).
-
-## Layout and boundaries
-
-- [`diag.rs`](../diag.rs) owns the sink, the rate limiter, and frame captures; the audit-class GC owns their retention. It also owns the main diagnostics log name and the frame-capture directory name; `cargo xtask invariants` rejects those two literals anywhere else, so the primary surface stays enumerable from one file.
-- [`record.rs`](./record.rs) owns the schema and its version; the shared [`disk/rotating.rs`](../disk/rotating.rs) helper owns rotating JSONL mechanics, with schema and path left to the caller.
-- Per-surface logs stay in their own file: [`notify.rs`](./notify.rs), [`binding.rs`](./binding.rs), [`focus_repair.rs`](./focus_repair.rs), [`plugin_presence.rs`](./plugin_presence.rs). Each is documented by the subsystem that writes it.
-- [`store/`](../store/AGENTS.md) owns durable truth and never consumes a record from here. `diag` is evidence vocabulary and append mechanics over `disk`, `ids`, and process facts; it sits below `store`, which constructs diagnostics downward and never reads one back. `observability.rs` is the separate opt-in off-box channel behind the `sentry` build feature; keep local-only episodes local.
-- Snapshot projection stays quiet: the invariant rejects `warn!` and `error!` under `store/snapshot/`, so a per-fold diagnostic never floods the off-box channel.
-
-## Tests
-
-Severity mapping, rotation, and rate-limit windows stay in-module beside the file they cover. Fixtures pin time, so a record's envelope is asserted rather than approximated.
-
-A new `DiagEvent` kind also gets a row in the Event taxonomy table and its severity row in the Severity table of `docs/internals/diagnostics.md`; both tables enumerate every kind.
+- **Invariant.** Diagnostics are evidence for a human. No correctness path reads a record back, nothing here gates product behaviour, and `store` constructs diagnostics without ever consuming one.
+- **Invariant.** [`diag.rs`](../diag.rs) alone names the main log file and the frame-capture directory; `cargo xtask invariants` rejects those two literals in any other source file.
+- **Invariant.** `cargo xtask invariants` rejects `warn!` and `error!` under `store/snapshot/`: a projection re-folds per frame, and either would flood the off-box channel.
+- Writes are best-effort: a failed append logs at debug and returns, and the caller continues unchanged.
+- Only `DiagSink` touches disk. A pure projection layer returns its diagnostics as data.
+- Records are anomaly-first: a steady-state tick writes nothing.
+- A new key or record shape gets a new serde tag, never a distinguishing field on an existing variant. Builds of different ages share one home, and an older build ignores unknown fields, so it would read the new shape as the old one.
+- `observability.rs` is the separate opt-in off-box channel behind the `sentry` build feature; keep local-only episodes local.
+- An internal repair's durable record (root: Automation is accountable) follows [`focus_repair.rs`](./focus_repair.rs), which pairs the repair with its own rotating log.
+- Test fixtures pin time, so a test asserts a record's whole envelope, not an approximation.
