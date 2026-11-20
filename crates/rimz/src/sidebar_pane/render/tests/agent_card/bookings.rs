@@ -6,7 +6,9 @@ use crate::config::CardDensityMode;
 use crate::sidebar::test_support::bookings_in_each_state;
 use crate::sidebar_pane::render::layout::text_width;
 use crate::sidebar_pane::render::theme::Component;
-use crate::store::snapshot::{BookingBand, BookingPr, BookingState, SiblingState, SidebarBooking};
+use crate::store::snapshot::{
+    BookingBand, BookingPr, BookingState, BookingWait, SiblingState, SidebarBooking,
+};
 
 /// The fixture's entries named in `tasks`, in the fixture's draw order.
 fn pick(tasks: &[&str]) -> Vec<SidebarBooking> {
@@ -131,28 +133,32 @@ fn booked_cards_render_at_46_40_and_28_columns() {
     }
 }
 
+/// Every entry names what it starts by profile or team and lane, then what it is doing: a
+/// running agent its card's text and its runtime on one line, a running team its stage on
+/// one line, any other entry the booking's own text over its second line. No task name or
+/// handle shows outside the entry needing a fix.
 #[test]
 fn every_booking_state_draws_in_band_order_with_its_count_rows() {
     let snapshot = planner_snapshot(bookings_in_each_state(fixed_now()), 60);
     let theme = Theme::fixed(false);
-    let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 46)).join("\n");
+    let current = theme.glyph(GlyphRole::PipelineCurrent);
+    let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 60)).join("\n");
+    let running_team = format!("team forge#lane-readers · {current} Build");
     let order = [
         "▷ booked (10) · ⚠ broken: invalid",
         "⚠ coder · broken",
         "invalid: unknown term `pr[`",
-        "coder · lang-typed",
-        "@coder",
-        "forge · lane-readers",
-        "Build · @coder",
-        "▷ writer · lane-readers-docs",
-        "after lane-readers",
-        "– coder · spike",
+        "coder · type the workflow language",
+        &running_team,
+        "▷ writer · document the lane readers",
+        "after forge#lane-readers",
+        "– coder · try the parser",
         "ended 10m ago · no PR",
-        "– coder · landed",
+        "– coder · fix the store",
         "ended 5m ago · #1630 merged",
-        "▷ writer · lang-docs",
+        "▷ writer · document the language",
         "pr[workflow-language]: #1640 open",
-        "▷ coder · nightly",
+        "▷ coder ",
         "once at 2026-11-14 03:00",
         "+1 later",
         "1 more ended",
@@ -164,8 +170,37 @@ fn every_booking_state_draws_in_band_order_with_its_count_rows() {
             .unwrap_or_else(|| panic!("{needle:?} after byte {from}:\n{text}"));
         from += at + needle.len();
     }
-    assert!(!text.contains("lang-release"), "{text}");
-    assert!(!text.contains("old-spike"), "{text}");
+    let lines: Vec<&str> = text.lines().collect();
+    let line_of = |needle: &str| lines.iter().position(|line| line.contains(needle)).unwrap();
+    for one_line in ["type the workflow language", running_team.as_str()] {
+        let at = line_of(one_line);
+        assert!(
+            lines[at].trim_end_matches('▐').trim_end().ends_with('m')
+                || lines[at].trim_end_matches('▐').trim_end().ends_with('h'),
+            "the runtime pins on line 1: {}",
+            lines[at]
+        );
+        assert!(
+            lines[at + 1].contains("▷") || lines[at + 1].contains("team forge"),
+            "no second line: {}",
+            lines[at + 1]
+        );
+    }
+    let entries = &text[text.find("⚠ coder · broken").unwrap()..];
+    for name in [
+        "lang-typed",
+        "lane-readers-docs",
+        "spike",
+        "landed",
+        "lang-docs",
+        "nightly",
+        "release the language",
+        "spike the old parser",
+        "type the language",
+        "@",
+    ] {
+        assert!(!entries.contains(name), "{name}: {text}");
+    }
     let runtime = text
         .lines()
         .find(|line| line.contains("ended 10m ago"))
@@ -176,7 +211,7 @@ fn every_booking_state_draws_in_band_order_with_its_count_rows() {
     );
 
     let cost_rolls = CostRolls::default();
-    let ctx = test_row_ctx(&snapshot, &theme, 46, 0, 0, &cost_rolls);
+    let ctx = test_row_ctx(&snapshot, &theme, 60, 0, 0, &cost_rolls);
     let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
     let lines = line_texts(&block.lines);
     let target = |needle: &str| {
@@ -272,7 +307,7 @@ fn the_booked_header_takes_the_section_header_tone_and_unfired_leads_stay_muted(
     let open = group_lines_at_width(&planner_snapshot(healthy_plan(), 60), &theme, 0, 46);
     let unfired = open
         .iter()
-        .find(|line| line.to_string().contains("lang-docs"))
+        .find(|line| line.to_string().contains("document the language"))
         .expect("the unfired entry");
     let lead = unfired
         .spans
@@ -327,7 +362,10 @@ fn the_booked_line_holds_on_every_resting_shape_until_the_plan_finishes() {
     ] {
         for text in shapes(&snapshot) {
             assert!(text.contains("▷ booked (7)"), "{text}");
-            assert!(!text.contains("lang-typed"), "entries stay closed: {text}");
+            assert!(
+                !text.contains("type the workflow"),
+                "entries stay closed: {text}"
+            );
         }
     }
     let finished = planner_snapshot(pick(&["landed"]), 60);
@@ -336,7 +374,7 @@ fn the_booked_line_holds_on_every_resting_shape_until_the_plan_finishes() {
     }
     let open = line_texts(&group_lines_at_width(&finished, &theme, 0, 46)).join("\n");
     assert!(
-        open.contains("▷ booked (1)") && open.contains("landed"),
+        open.contains("▷ booked (1)") && open.contains("fix the store"),
         "{open}"
     );
 }
@@ -441,11 +479,10 @@ fn a_sibling_still_starting_reads_starting_in_the_after_text() {
     };
     let sibling = wait.blocker.as_mut().unwrap().after.as_mut().unwrap();
     sibling.state = SiblingState::Starting;
-    let task = sibling.task.clone();
     let snapshot = planner_snapshot(plan, 60);
     let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 46)).join("\n");
-    assert!(text.contains(&format!("{task} starting")), "{text}");
-    assert!(!text.contains(&format!("after {task}")), "{text}");
+    assert!(text.contains("forge#lane-readers starting"), "{text}");
+    assert!(!text.contains("after forge"), "{text}");
 }
 
 /// A fire whose launch has no row yet and no end stamp reads `starting`, never `ended`.
@@ -461,9 +498,166 @@ fn a_starting_fire_reads_starting_on_its_second_line() {
     fire.starting = true;
     let snapshot = planner_snapshot(plan, 60);
     let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 46)).join("\n");
-    let entry = text.find("coder · spike").expect("the entry is drawn");
+    let entry = text
+        .find("coder · try the parser")
+        .expect("the entry is drawn");
     let second = text[entry..].lines().nth(1).unwrap();
     let second = second.trim_start_matches('▌').trim_start();
     assert!(second.starts_with("starting"), "{text}");
     assert!(!text.contains("ended"), "{text}");
+}
+
+/// A sibling is named the way its own entry names it: an agent by its profile, a team by its
+/// name and lane without the tag; an ended one reads `<who> ended`.
+#[test]
+fn a_sibling_is_named_by_its_own_who_text() {
+    let theme = Theme::fixed(false);
+    let ended = planner_snapshot(plan_with_an_ended_upstream(), 60);
+    let text = line_texts(&group_lines_at_width(&ended, &theme, 0, 60)).join("\n");
+    assert!(text.contains("forge#lane-readers ended · no PR"), "{text}");
+    assert!(text.contains("– team forge#lane-readers"), "{text}");
+    let mut plan = pick(&["lang-docs", "lang-release"]);
+    plan[1].band = BookingBand::Next;
+    let later = planner_snapshot(plan, 60);
+    let text = line_texts(&group_lines_at_width(&later, &theme, 0, 60)).join("\n");
+    assert!(text.contains("after writer"), "{text}");
+}
+
+/// Line 1 of a booking keeps one layout at every width: an agent's text clips from its tail
+/// before its profile does, each step at its exact width and one column either side.
+#[test]
+fn a_booking_line_clips_its_text_before_its_profile_at_every_width() {
+    let theme = Theme::fixed(false);
+    let snapshot = planner_snapshot(pick(&["lang-docs"]), 60);
+    let booked = theme.glyph(GlyphRole::CardBooked);
+    let entry = |width: usize| {
+        line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))
+            .into_iter()
+            .find(|line| line.contains(&format!("{booked} w")))
+            .map(|line| {
+                line.trim_start_matches('▌')
+                    .trim_end_matches('▐')
+                    .trim()
+                    .to_owned()
+            })
+            .unwrap_or_default()
+    };
+    let whole = format!("{booked} writer · document the language");
+    let fits = (20..80).find(|width| entry(*width) == whole).unwrap();
+    assert_eq!(entry(fits + 1), whole);
+    assert_eq!(
+        entry(fits - 1),
+        format!("{booked} writer · document the languag")
+    );
+    // The profile alone: one column less clips the profile, and the seam draws only
+    // with the headline's first cell.
+    let bare = (10..fits)
+        .find(|width| entry(*width) == format!("{booked} writer"))
+        .unwrap();
+    assert_eq!(entry(bare - 1), format!("{booked} write"));
+    let first_cell = format!("{booked} writer · d");
+    let headed = (bare..fits)
+        .find(|width| entry(*width) == first_cell)
+        .unwrap();
+    assert_eq!(entry(headed - 1), format!("{booked} writer"));
+    assert_eq!(entry(headed + 1), format!("{booked} writer · do"));
+    for width in bare..fits {
+        let line = entry(width);
+        assert!(
+            whole.starts_with(&line) && !line.ends_with('·'),
+            "{width}: one layout, clipped from the tail: {line}"
+        );
+    }
+}
+
+/// Only a running team's stage pins the team's who: a team booking with a text headline
+/// keeps its name and lane and clips the text from its tail, as an agent's line does.
+#[test]
+fn an_unfired_team_booking_clips_its_label_and_keeps_its_name() {
+    let theme = Theme::fixed(false);
+    let booked = theme.glyph(GlyphRole::CardBooked);
+    let mut bookings = pick(&["lane-readers"]);
+    bookings[0].band = BookingBand::Next;
+    bookings[0].state = BookingState::Waiting(BookingWait::default());
+    bookings[0].description =
+        Some("read every lane of the workflow language and document each reader".to_owned());
+    let snapshot = planner_snapshot(bookings, 60);
+    for width in [46, 52] {
+        let line = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))
+            .into_iter()
+            .find(|line| line.contains("· read"))
+            .unwrap_or_else(|| panic!("{width}: no entry"));
+        assert!(
+            line.contains(&format!("{booked} team forge#lane-readers · read every")),
+            "{width}: {line}"
+        );
+        assert!(!line.contains('…'), "{width}: {line}");
+    }
+}
+
+/// A sibling's state word stays whole while its long name ellipsizes.
+#[test]
+fn a_long_sibling_name_clips_before_its_state_word() {
+    let theme = Theme::fixed(false);
+    let mut bookings = pick(&["lane-readers-docs"]);
+    let BookingState::Waiting(wait) = &mut bookings[0].state else {
+        panic!("waiting");
+    };
+    let after = wait.blocker.as_mut().unwrap().after.as_mut().unwrap();
+    after.lane = Some("implementation-delegation".to_owned());
+    after.state = SiblingState::Ended;
+    let snapshot = planner_snapshot(bookings, 60);
+    let line = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 40))
+        .into_iter()
+        .find(|line| line.contains("forge#"))
+        .unwrap();
+    assert!(line.contains("… ended"), "{line}");
+}
+
+/// A team entry's lane clips before its name, and a running team's stage and runtime
+/// never clip.
+#[test]
+fn a_running_team_booking_clips_its_lane_and_keeps_its_stage() {
+    let theme = Theme::fixed(false);
+    let current = theme.glyph(GlyphRole::PipelineCurrent);
+    let snapshot = planner_snapshot(pick(&["lane-readers"]), 60);
+    let entry = |width: usize| {
+        line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))
+            .into_iter()
+            .find(|line| line.contains(&format!("{current} Build")))
+            .unwrap_or_else(|| panic!("{width}: no entry"))
+    };
+    let whole = (28..90)
+        .find(|width| entry(*width).contains("team forge#lane-readers · "))
+        .unwrap();
+    assert!(entry(whole + 1).contains("team forge#lane-readers · "));
+    assert!(
+        entry(whole - 1).contains("team forge#lane-reade… · "),
+        "{}",
+        entry(whole - 1)
+    );
+    // `team forge…`: the lane is gone; one column less clips the name.
+    let named = whole - "lane-readers".len();
+    assert!(entry(named).contains("team forge… · "), "{}", entry(named));
+    assert!(
+        entry(named + 1).contains("team forge#… · "),
+        "{}",
+        entry(named + 1)
+    );
+    assert!(
+        entry(named - 1).contains("team forg… · "),
+        "{}",
+        entry(named - 1)
+    );
+    for width in 28..whole {
+        let line = entry(width);
+        assert!(
+            line.contains(&format!("{current} Build")),
+            "{width}: {line}"
+        );
+        assert!(
+            line.trim_end_matches('▐').trim_end().ends_with("50m"),
+            "{width}: {line}"
+        );
+    }
 }

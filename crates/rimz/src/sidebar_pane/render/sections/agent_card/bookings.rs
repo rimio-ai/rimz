@@ -8,8 +8,8 @@
 //! selects the card.
 
 use crate::store::snapshot::{
-    BookingBand, BookingBlocker, BookingFire, BookingPr, BookingStarts, BookingState, SiblingState,
-    SidebarBooking,
+    BookingBand, BookingBlocker, BookingFire, BookingPr, BookingSibling, BookingStarts,
+    BookingState, SiblingState, SidebarBooking,
 };
 
 use super::*;
@@ -260,9 +260,11 @@ fn own_pr_words(pr: BookingPr) -> Option<String> {
     }
 }
 
-/// Two lines per entry, named for what it starts (`forge · lane-readers`, the type
-/// word gone below 46 columns), the second line saying what blocks it, what it
-/// launched, or when it ended.
+/// One entry per booking, named for what it starts (`coder#lane`, `team forge#lane`) and
+/// what it is doing: a running launch on one line with its runtime pinned right, an agent
+/// its card's text and a team its board stage; any other entry the booking's text over a
+/// second line saying what blocks it, that it is starting, or when it ended. An entry
+/// needing a fix names its task.
 pub(super) fn booking_entry_lines(
     ctx: &RowCtx<'_>,
     rows: &[&SidebarBooking],
@@ -310,24 +312,52 @@ fn booking_entry(ctx: &RowCtx<'_>, booking: &SidebarBooking, focused: bool) -> E
         || live.is_some_and(|live| live.pane.is_some())
         || fired.is_some_and(|fire| fire.live.is_none() && fire.depended_on);
     let headline_style = if bright { theme.body() } else { theme.muted() };
-    let starts = match &booking.starts {
-        BookingStarts::Team(name) | BookingStarts::Profile(name) => name.clone(),
+    let lane = booking.lane.as_deref();
+    let who = match &booking.starts {
+        BookingStarts::Team(name) => team_who(theme, Some(name), lane),
+        BookingStarts::Profile(name) => agent_who(
+            theme,
+            Span::styled(
+                name.clone(),
+                theme.styled(Component::EntryAgentName, Modifier::empty()),
+            ),
+            lane,
+        ),
     };
-    let (kind, headline) = if ctx.tier == Tier::L2 {
-        (
-            Span::styled(starts, theme.body()),
-            Some(Span::styled(booking.task.clone(), headline_style)),
-        )
-    } else {
-        (Span::styled(booking.task.clone(), headline_style), None)
+    let text = |text: Option<&str>| {
+        text.map(|text| Span::styled(text.to_owned(), headline_style))
+            .into_iter()
+            .collect::<Vec<_>>()
     };
+    let headline = match (&booking.needs_fix, live, &booking.starts) {
+        (Some(_), _, _) => text(Some(&booking.task)),
+        (None, Some(live), BookingStarts::Team(_)) => match &live.stage {
+            Some(stage) => stage_spans(theme, &stage.stage, stage.done),
+            None => vec![Span::styled("stage unknown", theme.muted())],
+        },
+        (None, Some(live), BookingStarts::Profile(_)) => text(
+            live.description
+                .as_deref()
+                .or(booking.description.as_deref()),
+        ),
+        (None, None, _) => text(booking.description.as_deref()),
+    };
+    let one_line = booking.needs_fix.is_none() && live.is_some();
+    let team = matches!(booking.starts, BookingStarts::Team(_));
     Entry {
         focused,
         lead,
-        kind,
+        who,
         headline,
-        right: Vec::new(),
-        detail: detail_line(ctx, booking, focused),
+        clip_who: team && one_line,
+        right: fired
+            .filter(|_| one_line)
+            .and_then(|fire| runtime(ctx, fire))
+            .into_iter()
+            .collect(),
+        detail: (!one_line)
+            .then(|| detail_line(ctx, booking, focused))
+            .flatten(),
     }
 }
 
@@ -379,40 +409,42 @@ fn detail_text(
                 .as_deref()
                 .map(|timing| (ellipsize(timing, budget), theme.muted()))
         }
-        BookingState::Fired(fire) => Some(fired_text(ctx, booking, fire, budget)),
+        BookingState::Fired(fire) => Some(fired_text(ctx, fire, budget)),
     }
 }
 
 /// `after <sibling> · <reading>`, `<sibling> ended · <reading>`, `<sibling> starting ·
 /// <reading>`, or the raw
-/// `<key>: <reading>`, then ` +N`; the name gives way so the reading never clips.
+/// `<key>: <reading>`, then ` +N`; the name gives way so its state word and the reading never
+/// clip.
 fn blocker_text(ctx: &RowCtx<'_>, blocker: &BookingBlocker, budget: usize) -> (String, Style) {
     let theme = ctx.theme;
     let seam = value_seam(theme);
-    let (name, joiner, style) = match &blocker.after {
-        Some(sibling) if sibling.state == SiblingState::Ended => (
-            format!("{} ended", sibling.task),
-            seam.as_str(),
-            theme.body(),
-        ),
+    let (name, state, joiner, style) = match &blocker.after {
+        Some(sibling) if sibling.state == SiblingState::Ended => {
+            (sibling_who(sibling), " ended", seam.as_str(), theme.body())
+        }
         Some(sibling) if sibling.state == SiblingState::Starting => (
-            format!("{} starting", sibling.task),
+            sibling_who(sibling),
+            " starting",
             seam.as_str(),
             theme.muted(),
         ),
         Some(sibling) if ctx.tier == Tier::L0 => {
-            (sibling.task.clone(), seam.as_str(), theme.muted())
+            (sibling_who(sibling), "", seam.as_str(), theme.muted())
         }
         Some(sibling) => (
-            format!("after {}", sibling.task),
+            format!("after {}", sibling_who(sibling)),
+            "",
             seam.as_str(),
             theme.muted(),
         ),
-        None => (blocker.key.clone(), ": ", theme.muted()),
+        None => (blocker.key.clone(), "", ": ", theme.muted()),
     };
-    let mut tail = blocker_reading(blocker)
-        .map(|reading| format!("{joiner}{reading}"))
-        .unwrap_or_default();
+    let mut tail = state.to_owned();
+    if let Some(reading) = blocker_reading(blocker) {
+        tail.push_str(&format!("{joiner}{reading}"));
+    }
     if blocker.more > 0 {
         tail.push_str(&format!(" +{}", blocker.more));
     }
@@ -420,29 +452,19 @@ fn blocker_text(ctx: &RowCtx<'_>, blocker: &BookingBlocker, budget: usize) -> (S
     (format!("{name}{tail}"), style)
 }
 
-fn fired_text(
-    ctx: &RowCtx<'_>,
-    booking: &SidebarBooking,
-    fire: &BookingFire,
-    budget: usize,
-) -> (String, Style) {
-    let theme = ctx.theme;
-    let handle = |name: &str| format!("@{}", name.trim_start_matches('@'));
-    if let Some(live) = &fire.live {
-        let text = match (&booking.starts, &live.stage) {
-            (_, Some(stage)) => match stage.owner.as_deref() {
-                Some(owner) if ctx.tier != Tier::L0 => {
-                    format!("{}{}{}", stage.stage, value_seam(theme), handle(owner))
-                }
-                _ => stage.stage.clone(),
-            },
-            (BookingStarts::Team(_), None) => "stage unknown".to_owned(),
-            (BookingStarts::Profile(_), None) => {
-                live.handle.as_deref().map(handle).unwrap_or_default()
-            }
-        };
-        return (ellipsize(&text, budget), theme.muted());
+/// A sibling as its own entry names it, without a team's tag: `writer`, `forge#lane`.
+fn sibling_who(sibling: &BookingSibling) -> String {
+    let name = match &sibling.starts {
+        BookingStarts::Team(name) | BookingStarts::Profile(name) => name,
+    };
+    match &sibling.lane {
+        Some(lane) => format!("{name}#{lane}"),
+        None => name.clone(),
     }
+}
+
+fn fired_text(ctx: &RowCtx<'_>, fire: &BookingFire, budget: usize) -> (String, Style) {
+    let theme = ctx.theme;
     if fire.starting {
         return (ellipsize("starting", budget), theme.muted());
     }

@@ -40,7 +40,7 @@ mod template;
 mod waits;
 
 use self::{description::*, gauge::*};
-use entry::{Entry, push_entry};
+use entry::{Entry, agent_who, push_entry, stage_spans, team_who};
 use identity::{identity_line, stale_line};
 use template::{CardSlot, CardStage, template};
 pub(in crate::sidebar_pane::render) use template::{engaged_base_lines, is_fresh};
@@ -645,9 +645,13 @@ fn sub_agent_entry_lines(
             Entry {
                 focused,
                 lead,
-                kind: Span::styled(
-                    sub.name.clone(),
-                    theme.body_brand(theme.provider_brand_tone(sub.kind.as_str())),
+                who: agent_who(
+                    theme,
+                    Span::styled(
+                        sub.name.clone(),
+                        theme.body_brand(theme.provider_brand_tone(sub.kind.as_str())),
+                    ),
+                    sub.lane.as_deref(),
                 ),
                 headline: sub
                     .turn_error_label
@@ -656,7 +660,10 @@ fn sub_agent_entry_lines(
                     .map(|label| Span::styled(label, theme.body().add_modifier(Modifier::ITALIC)))
                     .or_else(|| {
                         detail.map(|detail| Span::styled(detail.to_owned(), headline_style))
-                    }),
+                    })
+                    .into_iter()
+                    .collect(),
+                clip_who: false,
                 right,
                 detail: detail_line,
             },

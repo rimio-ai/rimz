@@ -1,4 +1,4 @@
-//! Type-led wait entries share the subagent layout and pin armed age right. Agents the card awaits outside its subagents list come first, one `agent` entry each: a live one behind its own state lead, a click target and cursor stop for its pane, and a settled run still reporting or an agent with no row behind the static signal lead. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells, with signals last and a pending idle stop after them. Subagent waits draw only through the card's awaited list, so a child with its own entry is not listed twice.
+//! Type-led wait entries share the subagent layout and pin armed age right. Agents the card awaits outside its subagents list come first, one entry each named by profile and named lane, else `agent`: a live one behind its own state lead, a click target and cursor stop for its pane, and a settled run still reporting or an agent with no row behind the static signal lead. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line; a team wait names the team and lane its wait names, then its stage, which never clips. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells, with signals last and a pending idle stop after them. Subagent waits draw only through the card's awaited list, so a child with its own entry is not listed twice.
 
 use jiff::Timestamp;
 
@@ -6,6 +6,7 @@ use crate::agents::{
     BackgroundShell, PendingIdleStop, PendingWait, PendingWaitTrigger, single_line_description,
     usable_description,
 };
+use crate::ids::{LaneName, TeamInstanceId};
 use crate::proc::command::{command_program_basename, program_label};
 use crate::sidebar_pane::render::labels::hour_age_glyph;
 use crate::store::snapshot::SidebarAwaitedAgent;
@@ -26,7 +27,7 @@ pub(super) fn awaited_in_motion(awaited: &SidebarAwaitedAgent) -> bool {
         })
 }
 
-/// One `agent` entry per awaited agent, in the card's order, each line targeting the
+/// One entry per awaited agent, in the card's order, each line targeting the
 /// awaited pane when it has one.
 pub(super) fn awaited_entry_lines(
     ctx: &RowCtx<'_>,
@@ -37,16 +38,24 @@ pub(super) fn awaited_entry_lines(
     let mut lines = Vec::new();
     for agent in awaited {
         let headline = match &agent.settled {
-            Some(status) => format!("{}{}{status}, reporting", agent.handle, value_seam(theme)),
-            None => agent.handle.clone(),
+            Some(status) => Some(format!("{status}, reporting")),
+            None => agent.description.clone(),
         };
         let mut entry = entry(
             ctx,
             theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
             "agent",
-            Some(headline),
+            headline,
             None,
             agent.since,
+        );
+        entry.who = agent_who(
+            theme,
+            Span::styled(
+                agent.profile.clone().unwrap_or_else(|| "agent".to_owned()),
+                theme.styled(Component::EntryAgentName, Modifier::empty()),
+            ),
+            agent.lane.as_deref(),
         );
         if let (Some(status), None) = (agent.status, &agent.settled) {
             entry.lead = if agent.compacting && !status.is_attention() {
@@ -131,14 +140,32 @@ fn wait_entry(ctx: &RowCtx<'_>, wait: &PendingWait) -> Entry {
         | PendingWaitTrigger::Condition { .. } => theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
         _ => role_glyph(theme, AnimationRole::Working, ctx.head_step),
     };
-    entry(
+    let mut entry = entry(
         ctx,
         lead,
         wait.trigger.kind_word(),
         Some(wait.trigger.headline(ctx.now)),
         wait.trigger.detail(),
         wait.armed_at,
-    )
+    );
+    if let PendingWaitTrigger::Team { stage } = &wait.trigger {
+        let team = wait.name.parse::<TeamInstanceId>().ok();
+        let lane = team
+            .as_ref()
+            .and_then(TeamInstanceId::lane)
+            .filter(|lane| **lane != LaneName::trunk());
+        entry.who = team_who(
+            theme,
+            team.as_ref().map(TeamInstanceId::team),
+            lane.map(LaneName::as_str),
+        );
+        entry.headline = match stage {
+            Some(stage) => stage_spans(theme, stage, false),
+            None => vec![Span::styled("stage unknown", theme.muted())],
+        };
+        entry.clip_who = true;
+    }
+    entry
 }
 
 fn shell_entry(ctx: &RowCtx<'_>, shell: &BackgroundShell) -> Entry {
@@ -176,8 +203,12 @@ fn entry(
     Entry {
         focused: false,
         lead: Span::styled(lead, theme.styled(Component::WaitHeader, Modifier::empty())),
-        kind: Span::styled(kind.to_owned(), theme.body()),
-        headline: headline.map(|headline| Span::styled(headline, theme.body())),
+        who: vec![Span::styled(kind.to_owned(), theme.body())],
+        headline: headline
+            .map(|headline| Span::styled(headline, theme.body()))
+            .into_iter()
+            .collect(),
+        clip_who: false,
         right: since
             .map(|at| {
                 let secs = age_secs(at, ctx.now);

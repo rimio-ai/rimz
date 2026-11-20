@@ -520,6 +520,7 @@ fn provider_child_attention_matches_declared_status_count() {
             phase: TurnPhase::Idle,
             task: None,
             profile: None,
+            lane: None,
             model: None,
             effort: None,
             description: None,

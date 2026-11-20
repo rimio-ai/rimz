@@ -640,8 +640,6 @@ pub struct AgentCard {
 /// draws, joined from the fold's rows after aggregation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SidebarAwaitedAgent {
-    /// The awaited card's own handle, or the wait's name when no row answers.
-    pub handle: String,
     /// The awaited row's display status; `None` when no row answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatus>,
@@ -659,6 +657,15 @@ pub struct SidebarAwaitedAgent {
     /// The run's terminal status while it still owes its report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settled: Option<String>,
+    /// The awaited record's launch profile; `None` when no record answers or it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The awaited record's lane when it carries an explicit name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
+    /// The awaited card's activity text alone, never its error or wait sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// How long a card's prompt cache stays warm: the resolved agent lifetime and
@@ -744,6 +751,12 @@ pub struct SidebarBooking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs_fix: Option<String>,
     pub state: BookingState,
+    /// The lane the entry names: a team's as its target types it, a fired agent's named lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
+    /// The booking's own text: its label, else its launch `--description`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// What a booking launches: a configured team, or an agent profile or kind.
@@ -809,8 +822,12 @@ pub struct BookingBlocker {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BookingSibling {
-    pub task: String,
     pub state: SiblingState,
+    /// What the sibling starts and the lane its entry names: the words its own entry is
+    /// drawn with.
+    pub starts: BookingStarts,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -862,12 +879,12 @@ pub struct BookingLive {
     pub status: AgentStatus,
     #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
     pub phase: TurnPhase,
-    /// The lead's display handle, as its own card names it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handle: Option<String>,
     /// A team's board stage, from the pipeline attached to its group.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<BookingStage>,
+    /// An agent lead's activity text, as its own card shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// `None` when the focus row is hidden or has no pane: a click then selects the card.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane: Option<PaneId>,
@@ -876,8 +893,6 @@ pub struct BookingLive {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BookingStage {
     pub stage: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner: Option<String>,
     /// The board reached `Done`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub done: bool,
@@ -1342,6 +1357,9 @@ pub struct SidebarSubAgent {
     /// absent for provider-native children and bare-kind launches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// The child's lane when it carries an explicit name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// A launched child's own fast-mode reading; always false for provider-native children.

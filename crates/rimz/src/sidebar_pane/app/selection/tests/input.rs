@@ -621,8 +621,9 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
     }
 }
 
-/// A fired booking with a live launch focuses that pane from both entry lines, and
-/// every other entry focuses the card's own pane; a click only ever focuses.
+/// A fired booking with a live launch focuses that pane from its entry line, and every
+/// other entry focuses the card's own pane from both of its lines; a click only ever
+/// focuses.
 #[test]
 fn booking_entry_clicks_focus_the_launched_pane_or_the_card() {
     let mut snapshot = clickable_block_snapshot(&workspace());
@@ -662,15 +663,16 @@ fn booking_entry_clicks_focus_the_launched_pane_or_the_card() {
             .position(|line| line.to_string().contains(task))
             .unwrap_or_else(|| panic!("{task} is drawn"))
     };
+    // A running agent's entry is one line; the others draw two.
     let cases = [
-        (line_of("lang-typed"), launched.clone()),
-        (line_of("spike"), parent.clone()),
-        (line_of("lang-docs"), parent.clone()),
+        (line_of("type the workflow language"), 1, launched.clone()),
+        (line_of("try the parser"), 2, parent.clone()),
+        (line_of("document the language"), 2, parent.clone()),
     ];
     pane_ui.interactions = composed.interactions;
     remember_roster(&mut ui, &mut pane_ui, &snapshot);
-    for (first, focus) in cases {
-        for line in [first, first + 1] {
+    for (first, count, focus) in cases {
+        for line in first..first + count {
             for column in [0, 53] {
                 let mut view = ui.clone();
                 assert_eq!(
@@ -783,11 +785,11 @@ fn booking_entry_whose_launched_card_is_filtered_focuses_the_owning_card() {
     let line = composed
         .lines
         .iter()
-        .position(|line| line.to_string().contains("lang-typed"))
+        .position(|line| line.to_string().contains("type the workflow language"))
         .expect("the entry is drawn");
     pane_ui.interactions = composed.interactions;
     remember_roster(&mut ui, &mut pane_ui, &snapshot);
-    for line in [line, line + 1] {
+    {
         let mut view = ui.clone();
         assert_eq!(
             handle_mouse_click(1, line as u16, &mut view, &mut pane_ui, &snapshot),
@@ -818,13 +820,15 @@ fn awaited_entry_whose_agent_card_is_filtered_focuses_the_waiting_card() {
         turn: rows[0].as_agent().unwrap().user_turn_started_at,
     };
     rows[0].as_agent_mut().unwrap().awaited = vec![crate::store::snapshot::SidebarAwaitedAgent {
-        handle: "tidy-iris".to_owned(),
         status: Some(crate::agents::AgentStatus::Idle),
         phase: crate::agents::TurnPhase::Idle,
         compacting: false,
         pane: Some(awaited.clone()),
         since: Some(now),
         settled: Some("completed".to_owned()),
+        profile: Some("coder".to_owned()),
+        lane: None,
+        description: None,
     }];
     let mut own_card = rows[0].clone();
     own_card.id = "awaited-card".into();
@@ -852,7 +856,7 @@ fn awaited_entry_whose_agent_card_is_filtered_focuses_the_waiting_card() {
     let line = composed
         .lines
         .iter()
-        .position(|line| line.to_string().contains("tidy-iris"))
+        .position(|line| line.to_string().contains("coder · completed, reporting"))
         .expect("the entry is drawn");
     pane_ui.interactions = composed.interactions;
     remember_roster(&mut ui, &mut pane_ui, &snapshot);

@@ -1209,6 +1209,10 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
     child.launch_depth = Some(1);
     child.profile = Some("explorer".to_owned());
     child.description = Some("map sidebar".to_owned());
+    child.lane = Some(
+        crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo/main")
+            .named(crate::ids::LaneName::dashed("docs")),
+    );
     child.usage.fresh_input_tokens = Some(12_000);
     let mut child_context = crate::agents::AgentContext::new("codex", fixed_now());
     child_context.cost = Some(crate::agents::AgentCost {
@@ -1241,8 +1245,8 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
     );
 
     assert!(
-        rendered.contains("explorer · map sidebar"),
-        "the child line names its profile:\n{rendered}"
+        rendered.contains("explorer#docs · map sidebar"),
+        "the child line names its profile and named lane:\n{rendered}"
     );
     assert!(
         !rendered.contains("helper"),
@@ -1251,7 +1255,7 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
     assert!(
         rendered
             .lines()
-            .any(|line| line.contains("explorer · map sidebar") && line.contains("$0.42")),
+            .any(|line| line.contains("explorer#docs · map sidebar") && line.contains("$0.42")),
         "the child cost pins on its line:\n{rendered}"
     );
     assert!(

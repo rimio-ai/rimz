@@ -384,6 +384,7 @@ fn card_close_with_a_launched_childs_pane_names_the_child() {
             task: None,
             first_prompt: None,
             profile: None,
+            lane: None,
             model: None,
             fast: false,
             effort: None,

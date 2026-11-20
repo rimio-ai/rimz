@@ -1,12 +1,14 @@
 //! The awaited-agents fold: every `Subagent` wait on a card whose awaited row has no
 //! entry among the card's current children becomes one entry of `AgentCard::awaited`,
-//! carrying the awaited row's handle, display state and pane from this fold's rows.
+//! carrying the awaited row's display state and pane from this fold's rows, and,
+//! when a row answers, its record's profile and named lane and its card's activity text.
 //! Reads only; an awaited agent reaches no status, attention, count or sort.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::agents::{PendingWaitTarget, PendingWaitTrigger, TurnPhase};
+use crate::ids::Lane;
 use crate::store::snapshot::{AgentCard, SidebarAwaitedAgent, SidebarRow, SidebarSnapshot};
 
 use super::bookings::{RowAt, row_index, row_of};
@@ -90,8 +92,13 @@ fn awaited(
             .get(&(target.kind.as_str(), target.agent_id.as_str()))
             .map(|at| row_of(snapshot, *at));
         let awaited_card = row.and_then(SidebarRow::as_agent);
+        let record = row.and_then(|_| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.kind == target.kind && agent.agent_id == target.agent_id)
+        });
         let element = SidebarAwaitedAgent {
-            handle: row.map_or_else(|| wait.name.clone(), |row| row.display_name().to_owned()),
             status: awaited_card.map(|card| card.status),
             phase: awaited_card.map_or(TurnPhase::Idle, |card| card.phase),
             compacting: awaited_card.is_some_and(|card| card.compacting),
@@ -100,6 +107,14 @@ fn awaited(
                 .map(|pane| pane.pane_id.clone()),
             since: wait.armed_at,
             settled: settled.clone(),
+            profile: record.and_then(|agent| agent.profile.clone()),
+            lane: record
+                .and_then(|agent| agent.lane.as_ref())
+                .and_then(Lane::name)
+                .map(ToString::to_string),
+            description: awaited_card
+                .and_then(AgentCard::activity_description)
+                .and_then(crate::agents::single_line_description),
         };
         match awaited.iter_mut().find(|(seen, _)| *seen == target) {
             Some((_, kept)) if element.settled.is_none() => *kept = element,

@@ -15,18 +15,18 @@ expression: screen
 ▌  ▣ ╸───────────────  1.0%▐
 ▌  ▤ 0                     ▐
 ▌  ▷ 7                  2 ⣾▐
-▌    ⣾ lang-typed          ▐
-▌      @coder            1h▐
-▌    ? lane-readers        ▐
-▌      Build            50m▐
-▌    ▷ lane-readers-docs   ▐
-▌      lane-readers        ▐
-▌    ▷ lang-docs           ▐
+▌    ⣾ coder · type t    1h▐
+▌    ? tea… · ◉ Build   50m▐
+▌    ▷ writer · document th▐
+▌      forge#lane-readers  ▐
+▌    ▷ writer · document th▐
 ▌      pr[work…: #1640 open▐
-▌    ▷ nightly             ▐
+▌    ▷ coder               ▐
 ▌      once at 2026-11-14 …▐
 ▌    +1 later              ▐
 ▌    1 more ended          ▐
+
+
 
 
 

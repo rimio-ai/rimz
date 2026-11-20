@@ -27,7 +27,7 @@ use crate::{RuntimePaths, StatePaths};
 #[cfg(test)]
 mod tests;
 
-const BOOKINGS_CACHE_VERSION: u32 = 4;
+const BOOKINGS_CACHE_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::sidebar) struct BookingsCache {
@@ -66,6 +66,13 @@ pub(in crate::sidebar) struct BookingFacts {
     pub timing: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fire: Option<FireFacts>,
+    /// The lane the entry names: a team's typed `#lane` other than trunk's, else the named
+    /// lane of the rows the fire launched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
+    /// The task's label, else its launch tail's `--description`; carried across its fire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,6 +309,19 @@ impl Booked {
         }
     }
 
+    /// The lane the entry names: a team's typed `#lane` other than trunk's and `external`.
+    fn named_lane(&self) -> Option<String> {
+        let typed = crate::ids::TeamInstanceId::new(
+            &self.target,
+            self.lane.as_deref().map(crate::ids::LaneName::dashed),
+        )
+        .ok()?;
+        typed
+            .lane()
+            .filter(|lane| **lane != crate::ids::LaneName::trunk())
+            .and(self.lane.clone())
+    }
+
     /// What it starts: a team when declared one or where its spec names a configured team,
     /// else the profile or spec as typed.
     fn starts(&self, configured_team: bool) -> BookingStarts {
@@ -325,6 +345,28 @@ fn is_booking(task: &LoadedTask) -> bool {
         && entry.wait.is_none()
         && !entry.booked_by.is_empty()
         && booked_launch(task).is_some()
+}
+
+/// The task's label, else the `--description` its launch tail passes before `--` (what follows
+/// is the provider's), each single-lined; blank text reads as none.
+fn booked_description(task: &LoadedTask) -> Option<String> {
+    let single_line = crate::agents::single_line_description;
+    if let Some(label) = task.entry().label.as_deref().and_then(single_line) {
+        return Some(label);
+    }
+    let Ok(TaskAction::Launch(launch)) = task.action() else {
+        return None;
+    };
+    let mut args = launch.args.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = args.next() {
+        if arg == "--description" {
+            return args.next().and_then(|text| single_line(text));
+        }
+        if let Some(text) = arg.strip_prefix("--description=") {
+            return single_line(text);
+        }
+    }
+    None
 }
 
 /// What an agent or team task's fire launches, from its declared kind and target.
@@ -386,6 +428,10 @@ pub(super) fn collect(
                     .ok()
                     .filter(|parsed| !matches!(parsed.trigger, Trigger::Condition { .. }))
                     .map(|parsed| parsed.describe()),
+                lane: fired
+                    .as_ref()
+                    .map_or_else(|| booked.named_lane(), |fired| fired.lane.clone()),
+                description: booked_description(task),
                 fire: fired.map(|fired| fired.facts),
             })
         })
@@ -419,6 +465,9 @@ struct Fired {
     checkout: Option<PathBuf>,
     /// Something the fire launched is alive.
     alive: bool,
+    /// A team's cohort lane from the rows carrying the fire's id (trunk's none), else its typed
+    /// lane while no row is registered; an agent's first such row's named lane.
+    lane: Option<String>,
 }
 
 impl Fired {
@@ -460,12 +509,30 @@ impl Fired {
             team_done: team.and_then(|_| team_done(checkout.as_deref())),
             launches: launches(records.rows, &mark.fire),
         };
+        let lane = if booked.team {
+            rows.iter()
+                .find_map(|agent| agent.team_instance())
+                .map_or_else(
+                    || booked.named_lane(),
+                    |instance| {
+                        instance
+                            .lane()
+                            .filter(|lane| **lane != crate::ids::LaneName::trunk())
+                            .map(ToString::to_string)
+                    },
+                )
+        } else {
+            rows.iter()
+                .find_map(|agent| agent.lane.as_ref()?.name())
+                .map(ToString::to_string)
+        };
         Self {
             facts,
             branch,
             worktree: booked.lane.is_some() || marked.is_some(),
             checkout,
             alive,
+            lane,
         }
     }
 }
@@ -501,6 +568,8 @@ pub(super) fn consumed(
                 blocking: None,
                 unmet: Vec::new(),
                 timing: None,
+                lane: fired.lane,
+                description: None,
                 fire: Some(fired.facts),
             };
             Some((facts, (fired.checkout, fired.alive)))
@@ -602,18 +671,35 @@ fn launches(rows: &[AgentState], fire: &FireId) -> Vec<String> {
 /// Carries what this pass no longer reads from the previous publication of the same fire:
 /// its destination branch once its tree is removed, a `merged` reading once its branch left
 /// the pull request lane's demand, its team's board reading while the board is unreadable,
-/// the launches its rows recorded, and its worktree flag.
+/// the launches its rows recorded, its lane once its rows are gone, its worktree flag, and
+/// its text: the same fire's, else the text of the task's unfired entry (a consumed one-shot's
+/// mark keeps none).
 pub(super) fn carry(prior: &BookingsCache, fresh: &mut [BookingFacts]) {
     for facts in fresh {
         let Some(fire) = facts.fire.as_mut() else {
             continue;
         };
-        let Some((before, before_fire)) = prior.bookings.iter().find_map(|before| {
+        let same_fire = prior.bookings.iter().find_map(|before| {
             let before_fire = before.fire.as_ref()?;
             (before_fire.fire == fire.fire).then_some((before, before_fire))
-        }) else {
+        });
+        if facts.description.is_none() {
+            facts.description = same_fire
+                .map(|(before, _)| before)
+                .or_else(|| {
+                    prior
+                        .bookings
+                        .iter()
+                        .find(|before| before.fire.is_none() && before.task == facts.task)
+                })
+                .and_then(|before| before.description.clone());
+        }
+        let Some((before, before_fire)) = same_fire else {
             continue;
         };
+        if facts.lane.is_none() {
+            facts.lane = before.lane.clone();
+        }
         if facts.branch.is_none() {
             facts.branch = before.branch.clone();
         }

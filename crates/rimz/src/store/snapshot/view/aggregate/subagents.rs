@@ -5,7 +5,7 @@ use tracing::debug;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentSessionUsage, AgentState, AgentStatus, ParkDemotion};
-use crate::ids::PaneId;
+use crate::ids::{Lane, PaneId};
 use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent, SubAgentTokens};
 use crate::utils::time::format_duration_coarse;
 
@@ -347,6 +347,11 @@ fn project_sub_agent(
         task: child.task.clone(),
         first_prompt: child.first_prompt.clone(),
         profile: child.profile.clone(),
+        lane: child
+            .lane
+            .as_ref()
+            .and_then(Lane::name)
+            .map(ToString::to_string),
         model: child.model.clone(),
         fast: child.is_launched_child() && child.fast_mode(),
         effort: child.effort.clone(),

@@ -23,8 +23,17 @@ fn row(agent: &AgentState, pane_at: usize) -> SidebarRow {
     if let Some(card) = row.as_agent_mut() {
         card.handle = agent.role.clone();
         card.phase = agent.phase;
+        card.description = agent.description.clone();
     }
     row
+}
+
+fn lane(name: Option<&str>) -> Option<crate::ids::Lane> {
+    let own = crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/w");
+    Some(match name {
+        Some(name) => own.named(crate::ids::LaneName::dashed(name)),
+        None => own,
+    })
 }
 
 fn child_entry(agent: &AgentState, prior_turn: bool) -> SidebarSubAgent {
@@ -46,6 +55,7 @@ fn child_entry(agent: &AgentState, prior_turn: bool) -> SidebarSubAgent {
         phase: agent.phase,
         task: None,
         profile: None,
+        lane: None,
         model: None,
         effort: None,
         description: None,
@@ -78,7 +88,9 @@ fn wait(name: &str, target: Option<&AgentState>, settled: Option<&str>) -> Pendi
 }
 
 /// A launcher waiting on a nested child it lists, a child of an earlier turn, a peer
-/// with its own card, an agent with no row, and a wait recorded without its target.
+/// with its own card, an agent with no row, and a wait recorded without its target. An
+/// entry with a row carries the record's profile, its lane only when named, and its card's
+/// activity text; one without a row carries none of them.
 #[test]
 fn awaited_agents_are_the_waits_without_a_child_entry() {
     let launcher = root_agent("claude", "launcher", None);
@@ -86,14 +98,22 @@ fn awaited_agents_are_the_waits_without_a_child_entry() {
     let earlier = AgentState {
         status: AgentStatus::Success,
         role: Some("earlier".to_owned()),
+        profile: Some("reviewer".to_owned()),
+        lane: lane(None),
         ..root_agent("claude", "earlier", None)
     };
     let peer = AgentState {
         role: Some("tidy-iris".to_owned()),
         phase: TurnPhase::Acting,
+        profile: Some("coder".to_owned()),
+        lane: lane(Some("feat-x")),
+        description: Some("store refactor".to_owned()),
         ..root_agent("codex", "peer", None)
     };
-    let ghost = root_agent("claude", "ghost", None);
+    let ghost = AgentState {
+        profile: Some("coder".to_owned()),
+        ..root_agent("claude", "ghost", None)
+    };
     let mut launcher_row = row(&launcher, 0);
     if let Some(card) = launcher_row.as_agent_mut() {
         card.sub_agents = vec![child_entry(&child, false), child_entry(&earlier, true)];
@@ -123,31 +143,37 @@ fn awaited_agents_are_the_waits_without_a_child_entry() {
         card.awaited,
         [
             SidebarAwaitedAgent {
-                handle: "earlier".to_owned(),
                 status: Some(AgentStatus::Success),
                 phase: TurnPhase::Idle,
                 compacting: false,
                 pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
                 since,
                 settled: Some("completed".to_owned()),
+                profile: Some("reviewer".to_owned()),
+                lane: None,
+                description: None,
             },
             SidebarAwaitedAgent {
-                handle: "tidy-iris".to_owned(),
                 status: Some(AgentStatus::Running),
                 phase: TurnPhase::Acting,
                 compacting: true,
                 pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_2")),
                 since,
                 settled: None,
+                profile: Some("coder".to_owned()),
+                lane: Some("feat-x".to_owned()),
+                description: Some("store refactor".to_owned()),
             },
             SidebarAwaitedAgent {
-                handle: "@ghost".to_owned(),
                 status: None,
                 phase: TurnPhase::Idle,
                 compacting: false,
                 pane: None,
                 since,
                 settled: None,
+                profile: None,
+                lane: None,
+                description: None,
             },
         ]
     );
@@ -193,13 +219,15 @@ fn a_peer_awaited_through_two_runs_is_one_entry_in_its_live_state() {
     assert_eq!(
         card.awaited,
         [SidebarAwaitedAgent {
-            handle: "tidy-iris".to_owned(),
             status: Some(AgentStatus::Running),
             phase: TurnPhase::Acting,
             compacting: false,
             pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_2")),
             since: Some(now() - SignedDuration::from_secs(600)),
             settled: None,
+            profile: None,
+            lane: None,
+            description: None,
         }]
     );
 }

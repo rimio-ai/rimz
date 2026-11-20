@@ -647,13 +647,15 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         .unwrap();
         agent.sub_agents.clear();
         agent.awaited = vec![crate::store::snapshot::SidebarAwaitedAgent {
-            handle: "tidy-iris".to_owned(),
             status,
             phase: crate::agents::TurnPhase::Acting,
             compacting,
             pane: None,
             since: Some(snapshot.now),
             settled: settled.map(ToOwned::to_owned),
+            profile: None,
+            lane: None,
+            description: None,
         }];
         assert_eq!(
             animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some(),
@@ -1210,6 +1212,7 @@ fn selected_pet_action_follows_the_focused_card() {
         phase: crate::agents::TurnPhase::Reasoning,
         task: None,
         profile: None,
+        lane: None,
         model: None,
         effort: None,
         description: None,

@@ -390,6 +390,7 @@ fn a_childs_ask_holds_its_focused_parent_without_freezing_other_arrivals() {
             task: None,
             first_prompt: None,
             profile: None,
+            lane: None,
             model: None,
             fast: false,
             effort: None,
