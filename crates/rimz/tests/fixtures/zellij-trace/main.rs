@@ -8,6 +8,8 @@
 //! and `$RIMZ_TEST_ZELLIJ_FAIL_NEW_PANE` does the same for `action new-pane`.
 //! With `$RIMZ_TEST_ZELLIJ_LIST_PANES_FILE`, `action close-pane` and `action close-tab` drop the
 //! closed pane, or every pane of the closed tab, from that listing.
+//! `$RIMZ_TEST_ZELLIJ_FAIL_CLOSE_TAB` makes `action close-tab` exit non-zero after logging it, and
+//! `$RIMZ_TEST_ZELLIJ_RUNS_AT_CLOSE_TAB`, a workspace id, logs each of its runs' status first.
 //! `$RIMZ_TEST_ZELLIJ_VERSION` overrides the default 0.44.3 version.
 //! `$RIMZ_TEST_ZELLIJ_TRACE_CONTEXT` prefixes each trace with its pane context; `list-tabs` reflects recorded tab launches.
 
@@ -146,6 +148,21 @@ fn main() {
             serde_json::from_slice(&std::fs::read(&path).expect("read panes")).expect("pane rows");
         panes.retain(|pane| pane["id"].as_u64() != Some(id));
         std::fs::write(path, serde_json::to_vec(&panes).unwrap()).expect("close traced pane");
+    }
+    if has_pair(cli, "action", "close-tab") {
+        if let Ok(id) = env::var("RIMZ_TEST_ZELLIJ_RUNS_AT_CLOSE_TAB") {
+            let paths = rimz::StatePaths::for_workspace(id.parse().unwrap()).unwrap();
+            for run in rimz::harness::run::list(&paths).unwrap() {
+                append_entry(
+                    &mut file,
+                    &format!("run-before-tab-close\t{:?}", run.status),
+                );
+            }
+        }
+        if env::var_os("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_TAB").is_some() {
+            write_stderr("simulated zellij close-tab failure");
+            std::process::exit(1);
+        }
     }
     if has_pair(cli, "action", "close-tab")
         && let Some(path) = env::var_os("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE")
