@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diag::record::{DiagEvent, SidebarHostUnavailableCause};
 use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
+use crate::pane::{SelfCloseVerdict, self_close_verdict};
 use crate::reload::{RecordChange, RecordWatch, record_poll_interval};
 use crate::sidebar_pane::app::{EventForwarder, ForwarderEnd};
 use crate::sidebar_pane::attach::Control;
@@ -707,46 +708,10 @@ fn ladder_probe(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum SelfCloseVerdict {
-    PaneGone,
-    Empty { floating_siblings: usize },
-    Keep { siblings: usize, reason: String },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 enum SelfCloseConfirmation {
     PaneGone,
     Close,
     Keep { siblings: usize, reason: String },
-}
-
-fn self_close_verdict(
-    panes: &[crate::pane::PaneRef],
-    own_pane: &crate::ids::PaneId,
-) -> SelfCloseVerdict {
-    let Some(own) = panes.iter().find(|pane| &pane.pane_id == own_pane) else {
-        return SelfCloseVerdict::PaneGone;
-    };
-    let Some(view_id) = own.view_id.as_deref() else {
-        return SelfCloseVerdict::Keep {
-            siblings: 0,
-            reason: "own view id is unavailable".to_owned(),
-        };
-    };
-    let siblings = panes
-        .iter()
-        .filter(|pane| pane.pane_id != *own_pane && pane.view_id.as_deref() == Some(view_id))
-        .collect::<Vec<_>>();
-    let working_siblings = siblings.iter().filter(|pane| !pane.is_floating).count();
-    if working_siblings > 0 {
-        return SelfCloseVerdict::Keep {
-            siblings: siblings.len(),
-            reason: "authoritative listing still has working siblings".to_owned(),
-        };
-    }
-    SelfCloseVerdict::Empty {
-        floating_siblings: siblings.len(),
-    }
 }
 
 fn confirm_self_close(config: &SupervisorConfig, watchdog: &PaneWatchdog) -> SelfCloseConfirmation {

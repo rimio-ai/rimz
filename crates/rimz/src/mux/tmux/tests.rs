@@ -2159,3 +2159,23 @@ fn sidebar_geometry_probe_parser_requires_five_typed_fields() {
     assert_eq!(parse_tmux_pane_geometry("%3 @1 wide 240 1"), None);
     assert_eq!(parse_tmux_pane_geometry("%3 @1 72 240 0 extra"), None);
 }
+
+/// The tab close kills the window holding the pane, addressed by the pane itself.
+#[cfg(unix)]
+#[test]
+fn tab_of_a_pane_is_closed_by_killing_its_window() {
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+shift 3
+printf '%s\n' "$*" >> "$dir/argv"
+exit 0
+"#,
+    );
+    let mut backend = TmuxBackend::with_socket(temp.path().join("server"));
+    backend.program = Some(shim);
+    let pane = crate::PaneId::from_parts(MuxName::Tmux, "%7");
+    crate::mux::MuxBackend::close_tab_of_pane(&backend, "rimz-test", &pane).unwrap();
+    let log = std::fs::read_to_string(temp.path().join("argv")).unwrap();
+    assert_eq!(log.lines().collect::<Vec<_>>(), ["kill-window -t %7"]);
+}

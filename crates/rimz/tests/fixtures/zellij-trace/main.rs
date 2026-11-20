@@ -6,6 +6,8 @@
 //! `.escape-released` exists (10 s timeout).
 //! `$RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE` makes `action close-pane` exit non-zero after logging it,
 //! and `$RIMZ_TEST_ZELLIJ_FAIL_NEW_PANE` does the same for `action new-pane`.
+//! With `$RIMZ_TEST_ZELLIJ_LIST_PANES_FILE`, `action close-pane` and `action close-tab` drop the
+//! closed pane, or every pane of the closed tab, from that listing.
 //! `$RIMZ_TEST_ZELLIJ_VERSION` overrides the default 0.44.3 version.
 //! `$RIMZ_TEST_ZELLIJ_TRACE_CONTEXT` prefixes each trace with its pane context; `list-tabs` reflects recorded tab launches.
 
@@ -144,6 +146,17 @@ fn main() {
             serde_json::from_slice(&std::fs::read(&path).expect("read panes")).expect("pane rows");
         panes.retain(|pane| pane["id"].as_u64() != Some(id));
         std::fs::write(path, serde_json::to_vec(&panes).unwrap()).expect("close traced pane");
+    }
+    if has_pair(cli, "action", "close-tab")
+        && let Some(path) = env::var_os("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE")
+    {
+        let tab = cli.windows(2).find(|pair| pair[0] == "--tab-id").unwrap()[1]
+            .parse::<u64>()
+            .expect("closed tab id");
+        let mut panes: Vec<serde_json::Value> =
+            serde_json::from_slice(&std::fs::read(&path).expect("read panes")).expect("pane rows");
+        panes.retain(|pane| pane["tab_id"].as_u64() != Some(tab));
+        std::fs::write(path, serde_json::to_vec(&panes).unwrap()).expect("close traced tab");
     }
     if has_pair(cli, "action", "close-pane")
         && let Some(path) = env::var_os("RIMZ_TEST_PANE_LIST").filter(|path| !path.is_empty())

@@ -1558,6 +1558,15 @@ impl MuxBackend for TmuxBackend {
         self.kill_pane(pane)
     }
 
+    fn close_tab_of_pane(&self, _session: &str, pane: &PaneId) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        // A pane id as the window target names the window holding that pane.
+        self.cmd()
+            .args(["kill-window", "-t", pane.raw()])
+            .run()
+            .map(|_| ())
+    }
+
     fn close_view_floating_panes(&self, session: &str, anchor: &PaneId) -> Result<Vec<PaneId>> {
         ensure_pane_backend(anchor, MuxName::Tmux)?;
         let output = self

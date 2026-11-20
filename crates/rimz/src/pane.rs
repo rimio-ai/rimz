@@ -461,6 +461,47 @@ impl PaneRef {
     }
 }
 
+/// A sidebar's self-close verdict over an authoritative listing: `Empty` once no tiled pane
+/// shares its view, with the floating panes there counted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SelfCloseVerdict {
+    PaneGone,
+    Empty { floating_siblings: usize },
+    Keep { siblings: usize, reason: String },
+}
+
+/// The self-close verdict of the sidebar `own_pane` over `panes`. A stop asks the same
+/// question of a tab whose last working pane it closes
+/// (`sidebar::produce::hosting::HostingRead::closing_empties_tab`).
+pub(crate) fn self_close_verdict(
+    panes: &[PaneRef],
+    own_pane: &crate::ids::PaneId,
+) -> SelfCloseVerdict {
+    let Some(own) = panes.iter().find(|pane| &pane.pane_id == own_pane) else {
+        return SelfCloseVerdict::PaneGone;
+    };
+    let Some(view_id) = own.view_id.as_deref() else {
+        return SelfCloseVerdict::Keep {
+            siblings: 0,
+            reason: "own view id is unavailable".to_owned(),
+        };
+    };
+    let siblings = panes
+        .iter()
+        .filter(|pane| pane.pane_id != *own_pane && pane.view_id.as_deref() == Some(view_id))
+        .collect::<Vec<_>>();
+    let working_siblings = siblings.iter().filter(|pane| !pane.is_floating).count();
+    if working_siblings > 0 {
+        return SelfCloseVerdict::Keep {
+            siblings: siblings.len(),
+            reason: "authoritative listing still has working siblings".to_owned(),
+        };
+    }
+    SelfCloseVerdict::Empty {
+        floating_siblings: siblings.len(),
+    }
+}
+
 /// Pick the session's sidebar pane for a caller: the sidebar sharing the first
 /// matching preferred view (in order), else any sidebar in the listing.
 pub fn select_sidebar_pane<'a>(

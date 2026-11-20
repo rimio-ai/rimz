@@ -553,6 +553,10 @@ pub(in crate::cli) struct StopTerms<'a> {
     /// The first read, a hosting read the caller took with no work since, in place of the
     /// stop's own.
     pub(in crate::cli) read: Option<HostingRead>,
+    /// Close the tab with the pane when the read gating the close finds the pane the last
+    /// working pane of its tab and this process runs in no pane of it. Off by default; a
+    /// sidebar card key sets it.
+    pub(in crate::cli) close_tab: bool,
 }
 
 /// [`stop_resolved`] under `terms`; `None` when `still_due` withdrew the stop.
@@ -606,6 +610,7 @@ pub(in crate::cli) fn stop_resolved_with(
         terms.run,
         run_cancelled,
         !run_cancelled,
+        terms.close_tab,
     )
     .map(Some)
 }
@@ -680,12 +685,13 @@ pub(super) fn stop_run_tree(
     };
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::address::addressable_agents(&snapshot);
-    Ok(stop_with_read(ctx, &peers, read, &[&agent], Some(run), true, true)?.remove(0))
+    Ok(stop_with_read(ctx, &peers, read, &[&agent], Some(run), true, true, false)?.remove(0))
 }
 
 /// Stop every tree in `agents` from the first read, `read`; `run_cancelled` says the agent
-/// `run` names counts as one whose run this stop cancelled, and `fresh` that no work sat
-/// between `read` and this call.
+/// `run` names counts as one whose run this stop cancelled, `fresh` that no work sat
+/// between `read` and this call, and `close_tab` is [`StopTerms::close_tab`].
+#[allow(clippy::too_many_arguments)]
 fn stop_with_read(
     ctx: &Ctx,
     peers: &[&AgentState],
@@ -694,12 +700,14 @@ fn stop_with_read(
     run: Option<&RunRecord>,
     run_cancelled: bool,
     fresh: bool,
+    close_tab: bool,
 ) -> Result<Vec<TreeStop>> {
     let mut stopper = Stopper {
         ctx,
         peers,
         read,
         fresh,
+        close_tab,
         run,
         run_cancelled,
         tracker: HashSet::new(),
@@ -799,6 +807,7 @@ struct Stopper<'a> {
     /// No work of this stop (a cancel, a wait, a thaw, a close) sat between `read` and now,
     /// so `read` may gate a close.
     fresh: bool,
+    close_tab: bool,
     run: Option<&'a RunRecord>,
     run_cancelled: bool,
     tracker: HashSet<AgentKey>,
@@ -1011,6 +1020,8 @@ impl Stopper<'_> {
     /// Close whatever pane the current read says hosts the agent, read again first unless
     /// it is fresh, until none does or the owner-exit bound passes after the first close. A
     /// pane still listed is closed again once `RECLOSE_AFTER` has passed since its last close.
+    /// Under `close_tab`, a pane the gating read finds the last working pane of its tab
+    /// closes with its tab.
     fn close(&mut self, ending: &mut Ending) -> std::result::Result<(), String> {
         let mut deadline = Instant::now() + stop_owner_exit_bound();
         let mut last: Option<(PaneId, Instant)> = None;
@@ -1057,8 +1068,16 @@ impl Stopper<'_> {
                 if last.is_none() {
                     deadline = closed_at + stop_owner_exit_bound();
                 }
-                let result =
-                    rimz::mux::backend_for(self.read.mux()).close_pane(&session_name, &pane_id);
+                let backend = rimz::mux::backend_for(self.read.mux());
+                let result = if self.close_tab
+                    && self.read.closing_empties_tab(
+                        &pane_id,
+                        rimz::mux::own_pane_id(self.read.mux()).as_ref(),
+                    ) {
+                    backend.close_tab_of_pane(&session_name, &pane_id)
+                } else {
+                    backend.close_pane(&session_name, &pane_id)
+                };
                 self.fresh = false;
                 ending.closed = true;
                 ending.close_error = result.err().map(|err| format!("{err:#}"));

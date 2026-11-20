@@ -63,6 +63,7 @@ pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> R
         run: None,
         still_due: Some(&still_due),
         read: None,
+        close_tab: false,
     };
     let Some(mut stops) = stop_resolved_with(&ctx, globals, &snapshot, &[agent], terms)? else {
         return Ok(());

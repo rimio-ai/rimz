@@ -225,6 +225,9 @@ impl m::MuxBackend for Backend {
     fn close_pane(&self, _session: &str, _pane: &PaneId) -> m::Result<()> {
         panic!("unexpected close_pane")
     }
+    fn close_tab_of_pane(&self, _session: &str, _pane: &PaneId) -> m::Result<()> {
+        panic!("unexpected close_tab_of_pane")
+    }
     fn version(&self) -> m::Result<String> {
         panic!("unexpected version")
     }

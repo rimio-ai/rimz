@@ -2145,6 +2145,14 @@ impl MuxBackend for ZellijBackend {
         ZellijBackend::close_pane(self, session, pane)
     }
 
+    fn close_tab_of_pane(&self, session: &str, pane: &PaneId) -> Result<()> {
+        let tab = self.tab_id_for_pane(session, pane)?;
+        self.zellij_action(session)
+            .args(["close-tab", "--tab-id", &tab.to_string()])
+            .run()
+            .map(|_| ())
+    }
+
     fn close_view_floating_panes(&self, session: &str, anchor: &PaneId) -> Result<Vec<PaneId>> {
         ensure_pane_backend(anchor, MuxName::Zellij)?;
         let panes = self.topology_panes(session, None, super::super::COMMAND_TIMEOUT)?;

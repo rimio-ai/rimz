@@ -71,7 +71,8 @@ enum SidebarSubcmd {
         #[arg(long)]
         session_name: Option<String>,
     },
-    /// Close the highlighted card's pane, stopping an agent's children first.
+    /// Close the highlighted card's pane, stopping an agent's children first, and with it the tab
+    /// when it is the tab's last working pane and the session has another tab.
     Close {
         /// Close the card that owns this pane instead of the highlighted one.
         #[arg(long)]
