@@ -15,6 +15,24 @@ expression: value
     "kind": "script",
     "node": "pr",
     "run": null,
+    "runs": {
+      "base": "0123abc",
+      "runs": [
+        {
+          "ended": {
+            "branch": "build",
+            "checkout": "/project-worktrees/build",
+            "ending": {
+              "kind": "failed"
+            },
+            "notes": "/notes/build",
+            "reason": "tests failed"
+          },
+          "id": "wf_0190b8172c0070008000000000000004",
+          "workflow": "build"
+        }
+      ]
+    },
     "seq": 1,
     "started_at": "2026-01-01T00:00:00Z"
   },
@@ -25,6 +43,21 @@ expression: value
   "entered_at": "2026-01-01T00:00:00Z",
   "id": "wf_0190b8172c0070008000000000000001",
   "input": null,
+  "joined": [
+    {
+      "ended": {
+        "branch": "build",
+        "checkout": "/project-worktrees/build",
+        "ending": {
+          "kind": "failed"
+        },
+        "notes": "/notes/build",
+        "reason": "tests failed"
+      },
+      "id": "wf_0190b8172c0070008000000000000004",
+      "workflow": "build"
+    }
+  ],
   "key": null,
   "key_visits": {
     "build": [
@@ -82,7 +115,7 @@ expression: value
   "state": "active",
   "task": null,
   "terminal_at": null,
-  "version": 17,
+  "version": 18,
   "visit_grant": 0,
   "visits": {
     "build": 2

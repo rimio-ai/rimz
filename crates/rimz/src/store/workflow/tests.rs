@@ -124,7 +124,7 @@ fn the_pass_awaits_a_finished_run_only_once_it_owes_no_report() {
 }
 
 #[test]
-fn an_agent_starter_owes_its_report_until_sent_and_a_run_starter_owes_none() {
+fn a_starter_owes_its_report_until_sent_and_a_run_starter_only_when_a_runs_step_joins_it() {
     let agent = RunStarter::Agent {
         kind: AgentKind::new_unchecked("claude"),
         launch: AgentSessionId::from("launch-1"),
@@ -158,9 +158,14 @@ fn an_agent_starter_owes_its_report_until_sent_and_a_run_starter_owes_none() {
         node: "build".into(),
     };
     assert_eq!(
-        owes(Some(run), None, ReportMark::Owed),
+        owes(Some(run.clone()), None, ReportMark::Owed),
+        (true, true, false, false),
+        "a runs step joins the run it started, so the run owes it the report"
+    );
+    assert_eq!(
+        owes(Some(run), None, ReportMark::None),
         (false, false, false, true),
-        "a run starter is owed nothing in this version"
+        "a run a command, script or check started is owed nothing"
     );
     assert_eq!(
         owes(None, Some("nightly"), ReportMark::Owed),
@@ -946,6 +951,22 @@ fn durable_record_round_trip_and_json_shape() {
         launch: AgentSessionId::from("launch-1"),
     });
     record.depth = 2;
+    let started = StartedRun {
+        id: WorkflowRunId::parse("wf_0190b8172c0070008000000000000004").unwrap(),
+        workflow: "build".into(),
+        ended: Some(JoinedEnding {
+            ending: RunEnding::Failed,
+            reason: Some("tests failed".into()),
+            checkout: Some("/project-worktrees/build".into()),
+            branch: Some("build".into()),
+            notes: Some("/notes/build".into()),
+        }),
+    };
+    record.attempt.as_mut().unwrap().runs = Some(StartedRuns {
+        base: "0123abc".into(),
+        runs: vec![started.clone()],
+    });
+    record.joined = vec![started];
     let value = serde_json::to_value(record).unwrap();
     insta::assert_json_snapshot!("record", value);
 }

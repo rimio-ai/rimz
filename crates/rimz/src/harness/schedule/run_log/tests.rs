@@ -1453,3 +1453,110 @@ fn a_dead_print_fire_settles_launched_without_waiting_on_its_run() {
         );
     }
 }
+
+/// A run a `runs` step started reports by writing its ending onto the starting run's attempt
+/// and marking its own report sent: a second collection changes nothing, and a parent that has
+/// left the attempt is not changed while the child's debt still settles.
+#[test]
+fn a_started_run_reports_its_ending_onto_the_runs_step_that_started_it_once() {
+    use crate::store::workflow::{self, JoinedEnding};
+    let home = tempfile::tempdir().unwrap();
+    let state = crate::StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    let run = |id: &crate::ids::WorkflowRunId, fields: serde_json::Value| {
+        let mut value = serde_json::json!({
+            "version":workflow::VERSION, "id":id, "workflow":"build", "spec_dir":"/spec",
+            "scope":{"kind":"worktree","path":home.path()}, "project_root":home.path(),
+            "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"fan",
+            "entered_at":"2026-01-01T00:00:00Z", "visits":{"fan":1}, "visit_grant":0,
+            "deadline_fired":false, "next_seq":2
+        });
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let record: workflow::RunRecord = serde_json::from_value(value).unwrap();
+        let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        workflow::initialize(&state, &record, &guard).unwrap();
+        record
+    };
+    let child = |parent: &crate::ids::WorkflowRunId| {
+        run(
+            &crate::ids::WorkflowRunId::new(),
+            serde_json::json!({
+                "state":"failed", "terminal_at":"2026-01-01T00:01:00Z", "loop_report":"owed",
+                "starter":{"by":"run", "run":parent, "node":"fan"},
+                "outcome":{"ending":{"kind":"failed"}, "reason":"tests failed", "acted":true}
+            }),
+        )
+    };
+    let attempt = |runs: &[&crate::ids::WorkflowRunId]| {
+        serde_json::json!({
+            "kind":"workflow", "seq":1, "node":"fan", "visit":1,
+            "started_at":"2026-01-01T00:00:00Z", "host":{"pid":123, "start":"token"},
+            "runs":{"base":"abc123", "runs":runs.iter().map(|id| serde_json::json!({
+                "id":id, "workflow":"build"
+            })).collect::<Vec<_>>()}
+        })
+    };
+    let owes = |id: &crate::ids::WorkflowRunId| {
+        workflow::classify(&state.workflow(id))
+            .unwrap()
+            .header()
+            .is_some_and(|header| header.owes_report())
+    };
+    let parent_id = crate::ids::WorkflowRunId::new();
+    let failed = child(&parent_id);
+    let live = crate::ids::WorkflowRunId::new();
+    run(
+        &parent_id,
+        serde_json::json!({"attempt":attempt(&[&failed.id, &live])}),
+    );
+    let parent = state.workflow(&parent_id);
+    assert!(
+        owes(&failed.id),
+        "a started run owes its report until it is delivered"
+    );
+    try_collect_run(&state, &failed.id).unwrap();
+    let joined = workflow::load(&parent).unwrap();
+    let runs = &joined.attempt.as_ref().unwrap().runs.as_ref().unwrap().runs;
+    assert_eq!(
+        (
+            runs[0].ended.clone(),
+            runs[1].ended.clone(),
+            owes(&failed.id)
+        ),
+        (
+            Some(JoinedEnding {
+                ending: RunEnding::Failed,
+                reason: Some("tests failed".into()),
+                checkout: Some(home.path().into()),
+                branch: None,
+                notes: None,
+            }),
+            None,
+            false
+        )
+    );
+    try_collect_run(&state, &failed.id).unwrap();
+    assert_eq!(
+        workflow::load(&parent).unwrap(),
+        joined,
+        "a second collection changes nothing"
+    );
+
+    let left_id = crate::ids::WorkflowRunId::new();
+    let late = child(&left_id);
+    let left = run(
+        &left_id,
+        serde_json::json!({"node":"after", "attempt":null}),
+    );
+    try_collect_run(&state, &late.id).unwrap();
+    assert_eq!(
+        (
+            workflow::load(&state.workflow(&left_id)).unwrap(),
+            owes(&late.id)
+        ),
+        (left, false),
+        "a parent that left the attempt is not changed, and the late report is still sent"
+    );
+}
