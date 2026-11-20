@@ -114,6 +114,10 @@ pub struct StartArgs {
     pub starting: Starting,
     /// `--detach`: an agent starter is told nothing when the run ends.
     pub detach: bool,
+    /// The id a `runs` step reserved for the run before it existed, in place of a new one.
+    pub id: Option<WorkflowRunId>,
+    /// A `runs` step starts the run, which owes that step its report.
+    pub join: bool,
 }
 
 /// What starts a run and its depth on the launch path, resolved before anything is created.
@@ -300,7 +304,7 @@ pub fn create(
         args.once,
     )?;
     let prompt = prompt().map_err(WorkflowErr::Refused)?;
-    let id = WorkflowRunId::new();
+    let id = args.id.clone().unwrap_or_default();
     let paths = state.workflow(&id);
     // A deployed run reads its directory live, so nothing is copied; an inline run's generated
     // text exists nowhere else, so its own root keeps it.
@@ -405,7 +409,11 @@ fn publish(
                 args.starting.starter,
                 Some(workflow::RunStarter::Agent { .. })
             ) && !args.detach
-        {
+            || args.join
+                && matches!(
+                    args.starting.starter,
+                    Some(workflow::RunStarter::Run { .. })
+                ) {
             workflow::ReportMark::Owed
         } else {
             workflow::ReportMark::None
@@ -762,7 +770,7 @@ fn failure(journal: &[JournalEntry]) -> workflow::RunEnding {
     workflow::RunEnding::Failed
 }
 
-/// Whether the run entered an agent or message step, read against its definition; a
+/// Whether the run entered an agent, message or runs step, read against its definition; a
 /// definition that no longer reads counts any visited step.
 fn acted(paths: &WorkflowPaths, record: &RunRecord) -> bool {
     entered_act(
@@ -777,8 +785,8 @@ fn readable(spec: &Definition) -> Option<&Definition> {
     (spec.steps().next().is_some() || spec.checks().next().is_some()).then_some(spec)
 }
 
-/// Whether the run entered an agent or message step of `spec`; with no definition to read it
-/// by, whether it visited any step.
+/// Whether the run entered an agent, message or runs step of `spec`; with no definition to read
+/// it by, whether it visited any step.
 pub(super) fn entered_act(spec: Option<&Definition>, record: &RunRecord) -> bool {
     let Some(spec) = spec else {
         return !record.visits.is_empty();
@@ -786,7 +794,7 @@ pub(super) fn entered_act(spec: Option<&Definition>, record: &RunRecord) -> bool
     record.visits.keys().any(|step| {
         matches!(
             spec.step_kind(step),
-            Some(Kind::Agent(_) | Kind::Message(_))
+            Some(Kind::Agent(_) | Kind::Message(_) | Kind::Runs(_))
         )
     })
 }
@@ -941,6 +949,7 @@ enum Decision {
     Push(Box<RunRecord>),
     Message(Box<Notice>),
     Admit(Box<(u64, String, throttle::Run)>),
+    Runs(Box<RunRecord>),
 }
 
 #[derive(Default)]
@@ -1127,6 +1136,12 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             }
             Decision::Message(notice) => {
                 if message_step(state, &paths, &spec, *notice, host)? {
+                    continue;
+                }
+                return Ok(());
+            }
+            Decision::Runs(record) => {
+                if runs::start(state, &paths, &spec, &record, &reader, host)? {
                     continue;
                 }
                 return Ok(());
@@ -1477,6 +1492,14 @@ fn prepare(
     {
         return agent::prepare_end(&mut t, host, &guard);
     }
+    // A join whose every ending is stored settles as the join, whatever bound passed since.
+    if t.record
+        .attempt
+        .as_ref()
+        .is_some_and(|attempt| attempt.kind == AttemptKind::Workflow && runs::joined(attempt))
+    {
+        return runs::prepare(state, &mut t, &guard);
+    }
     let orphan = orphaned_notice(&t.record);
     if t.bound()? {
         admission.capacity = None;
@@ -1494,6 +1517,13 @@ fn prepare(
                 Decision::Again
             },
         );
+    }
+    if t.record
+        .attempt
+        .as_ref()
+        .is_some_and(|attempt| attempt.kind == AttemptKind::Workflow)
+    {
+        return runs::prepare(state, &mut t, &guard);
     }
     if let Some(attempt) = &t.record.attempt {
         if crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref()) {
@@ -1685,8 +1715,14 @@ fn prepare(
     let step = spec.step(&t.record.node);
     let step_kind = step.and_then(Node::kind);
     let agent_step = step.filter(|_| matches!(step_kind, Some(Kind::Agent(_))));
+    let started = match step_kind {
+        Some(Kind::Runs(entries)) => Some(entries),
+        _ => None,
+    };
     let kind = if agent_step.is_some() {
         AttemptKind::Agent
+    } else if started.is_some() {
+        AttemptKind::Workflow
     } else if step.is_some() {
         AttemptKind::Script
     } else {
@@ -1730,6 +1766,7 @@ fn prepare(
     if let Some(held) = &mut t.record.held {
         held.attempt.woken = false;
     }
+    let reserved = started.map(|entries| runs::reserve(entries, head_start.clone()));
     t.record.attempt = Some(LiveAttempt {
         kind,
         // A judge lives until it answers, as a session does.
@@ -1772,10 +1809,13 @@ fn prepare(
         answer: None,
         reminded: false,
         evidence: None,
-        runs: None,
+        runs: reserved,
     });
     persist(&mut t, &guard)?;
     write_context(&t.record, paths, spec)?;
+    if kind == AttemptKind::Workflow {
+        return Ok(Decision::Runs(Box::new(t.record)));
+    }
     if let Some(text) = notice {
         return Ok(
             Notice::of(t.record, spec, text).map_or(Decision::Again, |notice| {
@@ -2031,6 +2071,9 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &Definition) -
     let visited = record.visits.iter().filter(|(_, visits)| **visits > 0);
     context["step_visits"] = json!(visited.collect::<BTreeMap<_, _>>());
     context["key_visits"] = json!(record.key_visits);
+    if !record.joined.is_empty() {
+        context["joined"] = json!(record.joined);
+    }
     if step {
         let visits = record.visits_to(&record.node);
         context["visits"] = json!(visits);
@@ -2442,8 +2485,8 @@ fn move_live_attempt(
     t.finish_script(ending, None, None, reason)
 }
 
-/// The task's live runs that have not entered an agent or message step: the runs a removal or
-/// redefinition of the task cancels, since nothing they started outlives them.
+/// The task's live runs that have not entered an agent, message or runs step: the runs a removal
+/// or redefinition of the task cancels, since nothing they started outlives them.
 pub(crate) fn unacted_task_runs(
     state: &StatePaths,
     task: &crate::ids::TaskId,

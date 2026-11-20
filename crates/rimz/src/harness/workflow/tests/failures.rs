@@ -396,6 +396,11 @@ fn every_kind_table_names_exactly_the_causes_its_kind_raises() {
         expected.sort();
         assert_eq!(keys, expected, "{kind}");
     }
+    // A runs step routes on the command step's table.
+    assert_eq!(
+        spec::Cause::raised_by("runs"),
+        spec::Cause::raised_by("command")
+    );
 }
 
 #[test]

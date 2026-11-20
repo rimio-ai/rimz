@@ -124,6 +124,7 @@ impl Cause {
             "agent" => &[Died, Timeout, Visits, Capacity, Deadline],
             "command" => &[Died, Timeout, Visits, Deadline],
             "message" => &[Undelivered, Visits, Deadline],
+            "runs" => &[Died, Timeout, Visits, Deadline],
             "test" => &[Died, Timeout, Deadline],
             "script" => &[Died, Invalid, Timeout, Deadline],
             "judge" => &[Died, Invalid, Timeout, Errored, Deadline],
@@ -161,6 +162,7 @@ pub enum StepTable {
     Agent,
     Command,
     Message,
+    Runs,
 }
 
 impl CheckTable {
@@ -181,6 +183,7 @@ impl StepTable {
             Self::Agent => "agent",
             Self::Command => "command",
             Self::Message => "message",
+            Self::Runs => "runs",
         }
     }
 }
@@ -347,6 +350,27 @@ pub struct Case {
     pub hold: Option<String>,
 }
 
+/// A workflow a `runs` step starts, with the prompt file its run gets after the step's own.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct RunEntry {
+    pub workflow: String,
+    pub prompt_file: Option<String>,
+}
+
+pub(super) fn nonempty_entries<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<RunEntry>, D::Error> {
+    let entries = Vec::<RunEntry>::deserialize(deserializer)?;
+    if entries.is_empty() {
+        return Err(serde::de::Error::custom(
+            "start must list at least one workflow",
+        ));
+    }
+    Ok(entries)
+}
+
 pub(super) fn nonempty_cases<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<Case>, D::Error> {
@@ -459,6 +483,8 @@ pub struct Step {
     /// The agent session a message step delivers to; another session under the address is
     /// undelivered.
     pub session: Option<crate::ids::AgentSessionId>,
+    /// The workflows a `runs` step starts, in order.
+    pub start: Vec<RunEntry>,
 }
 
 /// What an agent step does about agents already in its checkout: wait for them to leave,
@@ -499,6 +525,7 @@ pub enum StepKind<'a> {
     Agent(&'a str),
     Command(Invoke<'a>),
     Message(&'a str),
+    Runs(&'a [RunEntry]),
 }
 
 impl Step {
@@ -549,6 +576,7 @@ impl Step {
                 StepKind::Command(invoke(self.run.as_deref(), self.shell.as_deref())?)
             }
             StepTable::Message => StepKind::Message(self.message.as_deref()?),
+            StepTable::Runs => StepKind::Runs(&self.start),
         })
     }
 }

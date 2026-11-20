@@ -2296,6 +2296,7 @@ fn validate_json_shape_errors_and_exit_status() {
         "agent",
         "command",
         "message",
+        "runs",
         "test",
         "script",
         "judge",

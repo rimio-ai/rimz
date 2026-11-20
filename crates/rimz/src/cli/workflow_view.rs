@@ -45,11 +45,7 @@ pub(super) fn deployed_definition(
     use std::io::Write;
     let dir = definition_dir(name);
     let home = rimz::disk::paths::workflows_dir();
-    let deployed = dir.canonicalize().is_ok_and(|dir| {
-        home.canonicalize()
-            .is_ok_and(|home| dir != home && dir.starts_with(home))
-    });
-    if !deployed {
+    if !rimz::harness::workflow::is_deployed(&dir) {
         anyhow::bail!(
             "{}: directory must exist inside {}",
             name.display(),
@@ -236,7 +232,7 @@ pub(super) fn wait(
                 render::age_short(wait.first, now),
             )
         }
-        "unknown" | "retry" | "window" | "budget" => match wait.detail.as_deref() {
+        "unknown" | "retry" | "window" | "budget" | "runs" => match wait.detail.as_deref() {
             Some(detail) => format!(
                 "{}{}{detail}",
                 wait.outcome,
@@ -545,6 +541,7 @@ mod tests {
             ("budget", "budget pending"),
             ("retry", "retry: pending"),
             ("takeover", "takeover"),
+            ("runs", "runs: pending"),
             ("occupied", "occupied by pending"),
             ("capacity", "held 0s · pending"),
         ];

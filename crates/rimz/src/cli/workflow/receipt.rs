@@ -85,6 +85,31 @@ pub(super) fn cancel(
     let mut out = render::out();
     if changed {
         writeln!(out, "canceled {address}")?;
+        // A cancel stops only the step's waiting: the runs it started go on. A run the step
+        // reserved but never started has no home and is not named.
+        let mut running = Vec::new();
+        for started in run
+            .record
+            .attempt
+            .iter()
+            .flat_map(|attempt| &attempt.runs)
+            .flat_map(|started| &started.runs)
+            .filter(|started| started.ended.is_none())
+        {
+            if let Some(records::RunClass::Current(child)) =
+                records::find(&run.state, &started.id)?.map(|found| found.class)
+                && !child.state.is_terminal()
+            {
+                running.push(started.id.to_string());
+            }
+        }
+        if !running.is_empty() {
+            writeln!(
+                out,
+                "its started runs were left running: {}",
+                running.join(", ")
+            )?;
+        }
     } else {
         let ended = record.as_ref().unwrap_or(&run.record);
         let state = workflow_view::state_word(

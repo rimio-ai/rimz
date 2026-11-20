@@ -403,9 +403,10 @@ fn a_task_cancels_only_its_live_runs_that_have_not_reached_an_agent() {
         ("review", RunState::Active, &["pick", "fix"][..]),
         ("review", RunState::Done, &["pick"][..]),
         ("other", RunState::Active, &["pick"][..]),
+        ("review", RunState::Active, &["pick", "spread"][..]),
     ] {
         let (_home, state, mut record, _) = fixture(
-            "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\ntimeout='365d'\nrun='true'\non.go='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
+            "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\ntimeout='365d'\nrun='true'\non.go='fix'\non.fan='spread'\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n[runs.spread]\nstart=[{workflow='child'}]\nthen='fix'\n",
         );
         record.task = Some(task.into());
         let id = if task == "review" { &review } else { &other };
@@ -423,7 +424,7 @@ fn a_task_cancels_only_its_live_runs_that_have_not_reached_an_agent() {
         }
         selected.push(unacted_task_runs(&state, &review).unwrap() == vec![record.id]);
     }
-    assert_eq!(selected, [true, true, true, false, false, false]);
+    assert_eq!(selected, [true, true, true, false, false, false, false]);
 }
 
 #[test]
@@ -1901,7 +1902,7 @@ fn a_start_past_the_depth_limit_refuses_naming_the_depth_limit_and_key() {
 }
 
 #[test]
-fn only_an_agent_starter_without_detach_is_owed_a_report() {
+fn only_an_agent_starter_without_detach_or_a_runs_step_is_owed_a_report() {
     use crate::store::workflow::{ReportMark, RunStarter};
     let agent = RunStarter::Agent {
         kind: crate::ids::AgentKind::new_unchecked("claude"),
@@ -1912,12 +1913,13 @@ fn only_an_agent_starter_without_detach_is_owed_a_report() {
         node: "pr".into(),
     };
     let cases = [
-        (Some(agent.clone()), false, ReportMark::Owed),
-        (Some(agent), true, ReportMark::None),
-        (Some(from_run), false, ReportMark::None),
-        (None, false, ReportMark::None),
+        (Some(agent.clone()), false, false, ReportMark::Owed),
+        (Some(agent), true, false, ReportMark::None),
+        (Some(from_run.clone()), false, false, ReportMark::None),
+        (Some(from_run), false, true, ReportMark::Owed),
+        (None, false, false, ReportMark::None),
     ];
-    for (starter, detach, mark) in cases {
+    for (starter, detach, join, mark) in cases {
         let (home, state) = bare_room();
         open_room(&state, home.path());
         let dir = home.path().join("nightly");
@@ -1939,6 +1941,7 @@ fn only_an_agent_starter_without_detach_is_owed_a_report() {
                     depth: 2,
                 },
                 detach,
+                join,
                 ..Default::default()
             },
         )
@@ -1947,7 +1950,7 @@ fn only_an_agent_starter_without_detach_is_owed_a_report() {
         assert_eq!(
             (&stored.starter, stored.depth, stored.report),
             (&starter, 2, mark),
-            "detach {detach}"
+            "detach {detach}, join {join}"
         );
     }
 }

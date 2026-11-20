@@ -158,7 +158,7 @@ fn ready_step(env: &Env, dir: &Path) -> String {
     id
 }
 
-fn accept_gate(listener: &UnixListener) -> UnixStream {
+pub(super) fn accept_gate(listener: &UnixListener) -> UnixStream {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Ok((stream, _)) = listener.accept() {

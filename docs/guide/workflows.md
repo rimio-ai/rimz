@@ -2,7 +2,7 @@
 
 A [loop task](./loops.md) runs one command when its trigger fires, and [`rimz agents -p --verify`](./scripting.md#verify-and-retry) re-prompts one agent until a check passes. Those two cover "sweep the PRs every morning" and "fix until the tests pass". They do not cover work in stages that waits on the world between them: keep this PR alive until it merges, launch a fixer each time CI fails, stop after five tries, and hand the failure to someone who can read it. Written as a prompt, that plan lives in one agent's context, and a crashed or compacted agent loses it. Written as a shell `while` loop, it dies with the terminal and cannot wait on a PR for two days.
 
-A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Steps do work: they launch an agent, run a command, or message an agent. Checks decide: they run a test, read the PR, or ask a model, and answer with an outcome that picks the next node. RimZ keeps the run's position in a record on disk, so the run continues from the same node after an agent dies or the machine reboots.
+A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Steps do work: they launch an agent, run a command, message an agent, or start other workflows. Checks decide: they run a test, read the PR, or ask a model, and answer with an outcome that picks the next node. RimZ keeps the run's position in a record on disk, so the run continues from the same node after an agent dies or the machine reboots.
 
 ## Write a workflow
 
@@ -307,6 +307,24 @@ then = "@done"
 
 `message` takes an agent address, `@<handle>` or `@<handle>#<channel>` (a [channel](./messaging.md) narrows the handle), resolved from the run's checkout as [`rimz message`](./messaging.md) resolves it. Each visit queues one message for the agent's next turn boundary. The message opens with a line naming the workflow, the step, and the run, then carries what an agent step's prompt would: the prompt file, the step's sign, the run's `--prompt`, and the line saying what fired a loop task's run. The step follows `then` once the message is queued. When no single living agent matches, the step fails with cause `undelivered`. Like a command step it returns at once, so a cycle through it needs `max-visits` and a waiting check.
 
+## Split work across workflows
+
+A change often splits into parts that do not touch each other: a backend fix and a docs pass, or one migration per service. One workflow per part, each in its own worktree, runs them side by side, and the run that split the work wants to know when they are all done. A runs step starts them and waits:
+
+```toml
+[runs.split]
+start = [
+  { workflow = "fix-backend", prompt-file = "backend.md" },
+  { workflow = "write-docs" },
+]
+prompt-file = "shared.md"
+then = "review"
+```
+
+Each entry names a workflow deployed under `~/.rimz/workflows/`. RimZ cuts one new worktree per entry from the commit the run's checkout is at, and starts each workflow there with the step's prompt file, the entry's, the step's sign, and the run's `--prompt`. So commit first: a checkout with uncommitted changes, untracked files included, fails the step with `died` before anything starts, as does a workflow that is not deployed or that sets `scope = "project"`. The run waits while the started runs work, and `rimz workflow show` lists each with its state and worktree. Once every one has ended, the step follows `then` when all ended done, and fails with `died` naming each one that did not otherwise. The next step's agent is told where each started run ended and how to read it.
+
+A timeout or a cancel ends the waiting and leaves the started runs running; cancel each by its id when you want it stopped.
+
 ## Wait on the outside world
 
 Some checks can only say "not yet". A PR whose CI still runs is one. Route that outcome to `@wait`, and the run stays at the check and asks again later. This workflow keeps one worktree's PR alive until it merges:
@@ -441,7 +459,7 @@ With none set, the run ends as failed. A failure never follows `then`. Each kind
 
 | Cause | Raised when |
 | --- | --- |
-| `died` | An agent fails to start or exits early, or a command or script exits nonzero. |
+| `died` | An agent fails to start or exits early, a command or script exits nonzero, or a run a runs step started did not end done. |
 | `timeout` | The node's `timeout` passed. |
 | `visits` | A step would pass its `max-visits`. Nothing launches. |
 | `errored` | A judge's own turn ended on a provider error that waiting will not clear. |

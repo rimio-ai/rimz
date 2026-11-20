@@ -5934,7 +5934,8 @@ allowed-dependencies = [
 # Starting and starting resolve a start's starter and depth before anything is created (+2).
 # AttemptHost::committed hands the host each committed run edge once the lock is released (+1).
 # join_report lets the loop collection store a started run's ending on its runs step (+1).
-surface-budget = 105
+# is_deployed shares the workflows-home containment check with `workflow run` and validate (+1).
+surface-budget = 106
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"

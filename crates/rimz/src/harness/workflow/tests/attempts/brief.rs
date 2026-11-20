@@ -451,6 +451,48 @@ fn missing_enrichment_never_prevents_a_launch_or_invents_a_sender() {
 }
 
 #[test]
+fn a_step_after_a_runs_step_lists_each_started_run_with_its_show_command() {
+    let (_dir, state, record) = setup(OUTCOME_STEP);
+    let host = FakeHost::new();
+    answer(&state, &record, &host, json!({"outcome":"red"}));
+    let mut live = records::load(&state.workflow(&record.id)).unwrap();
+    let ended = |ending, reason: Option<&str>, branch: Option<&str>| records::JoinedEnding {
+        ending,
+        reason: reason.map(str::to_owned),
+        checkout: None,
+        branch: branch.map(str::to_owned),
+        notes: branch.map(|_| "/notes/child-1".into()),
+    };
+    let (done, failed) = (WorkflowRunId::new(), WorkflowRunId::new());
+    live.joined = vec![
+        records::StartedRun {
+            id: done.clone(),
+            workflow: "child".into(),
+            ended: Some(ended(records::RunEnding::Done, None, Some("rimz/child-1"))),
+        },
+        records::StartedRun {
+            id: failed.clone(),
+            workflow: "other".into(),
+            ended: Some(ended(
+                records::RunEnding::Failed,
+                Some("tests failed"),
+                None,
+            )),
+        },
+    ];
+    let paths = state.workflow(&record.id);
+    let spec: Definition = toml::from_str(OUTCOME_STEP).unwrap();
+    let text = crate::harness::workflow::brief::step(&paths, &spec, &live);
+    let listing = format!(
+        "This run's `runs` step started 2 runs, which have ended; `joined` in `context.json` \
+         holds each one's ending. `{done}` (child) ended done on branch `rimz/child-1`, notes in `/notes/child-1`: \
+         `rimz workflow show {done}`. `{failed}` (other) ended failed: tests failed: \
+         `rimz workflow show {failed}`."
+    );
+    assert!(text.contains(&listing), "{text}");
+}
+
+#[test]
 fn rails_group_multiple_returns_and_never_assert_a_nonexistent_route() {
     for (text, outcomes, expected) in [
         (

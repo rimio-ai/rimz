@@ -29,22 +29,12 @@ pub(super) fn compose(
             record.node
         )));
     }
-    match paths.signs(Some(&record.node)).canonicalize() {
-        Ok(path) => {
-            if !path.starts_with(paths.work.canonicalize()?) {
-                return Err(WorkflowErr::Refused(
-                    "step sign must remain inside workflow work".into(),
-                ));
-            }
-            let sign = std::fs::read_to_string(path)?;
-            digests.insert(
-                format!("signs/{}.md", record.node),
-                script::digest(sign.as_bytes()),
-            );
-            parts.push(sign);
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+    if let Some(sign) = sign(record, paths)? {
+        digests.insert(
+            format!("signs/{}.md", record.node),
+            script::digest(sign.as_bytes()),
+        );
+        parts.push(sign);
     }
     if let Some(prompt) = &record.prompt {
         digests.insert("prompt".into(), script::digest(prompt.as_bytes()));
@@ -59,6 +49,22 @@ pub(super) fn compose(
         parts.push(evidence.to_owned());
     }
     Ok(parts.join("\n\n"))
+}
+
+/// The sign left for the run's current step, which must stay inside the run's work directory.
+pub(super) fn sign(record: &RunRecord, paths: &WorkflowPaths) -> Result<Option<String>> {
+    match paths.signs(Some(&record.node)).canonicalize() {
+        Ok(path) => {
+            if !path.starts_with(paths.work.canonicalize()?) {
+                return Err(WorkflowErr::Refused(
+                    "step sign must remain inside workflow work".into(),
+                ));
+            }
+            Ok(Some(std::fs::read_to_string(path)?))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// A judge's launch prompt: its check's prompt file, which validation requires, and the submit

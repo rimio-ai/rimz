@@ -388,9 +388,8 @@ impl Row {
                 Some(Kind::Judge(agent)) => format!("{agent}, judge"),
                 Some(Kind::Condition(_)) => "condition".into(),
                 Some(Kind::Sleep(sleep)) => format!("sleep {}", sleep.duration().text()),
-                Some(Kind::Command(_) | Kind::Agent(_) | Kind::Message(_)) | None => {
-                    "invalid runner; see workflow validate".into()
-                }
+                Some(Kind::Command(_) | Kind::Agent(_) | Kind::Message(_) | Kind::Runs(_))
+                | None => "invalid runner; see workflow validate".into(),
             };
             row.heading = format!("check  {runner}");
             row.summary = check.summary().map(str::to_owned);
@@ -490,6 +489,14 @@ impl Row {
                     }
                 ),
                 Some(Kind::Message(target)) => target.clone(),
+                Some(Kind::Runs(entries)) => format!(
+                    "starts {}",
+                    entries
+                        .iter()
+                        .map(|entry| entry.workflow.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 Some(
                     Kind::Test(_)
                     | Kind::Script(_)

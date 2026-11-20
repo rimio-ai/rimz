@@ -610,6 +610,75 @@ expression: value
       ],
       "type": "string"
     },
+    "RunEntry": {
+      "additionalProperties": false,
+      "description": "A workflow a `runs` step starts, with the prompt file its run gets after the step's own.",
+      "properties": {
+        "prompt-file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflow": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workflow"
+      ],
+      "type": "object"
+    },
+    "RunsNode": {
+      "additionalProperties": false,
+      "description": "A step that starts each listed workflow as a run of its own and waits for every one to end.",
+      "properties": {
+        "max-visits": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "on": {
+          "$ref": "#/$defs/CommandEdges"
+        },
+        "prompt-file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "items": {
+            "$ref": "#/$defs/RunEntry"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "then": {
+          "type": "string"
+        },
+        "timeout": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "start",
+        "then"
+      ],
+      "type": "object"
+    },
     "ScopeKind": {
       "enum": [
         "worktree",
@@ -891,6 +960,12 @@ expression: value
     "message": {
       "additionalProperties": {
         "$ref": "#/$defs/MessageNode"
+      },
+      "type": "object"
+    },
+    "runs": {
+      "additionalProperties": {
+        "$ref": "#/$defs/RunsNode"
       },
       "type": "object"
     },
