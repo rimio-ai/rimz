@@ -12,6 +12,7 @@ Evidence has two destinations. The default is a set of durable logs on the box, 
 - Only the sink touches disk. Pure projection layers return diagnostics as data, impure callers append them through [`DiagSink`](../../crates/rimz/src/diag.rs), and store reducers and the renderer gate carry no disk-write API.
 - A new key or record shape on any diagnostic JSONL surface gets a new serde tag, never a distinguishing field on an existing variant. Builds of different ages share one home, and an older build skips a tag it cannot decode but ignores unknown fields, so it would read the new shape as the old one.
 - A new `DiagEvent` kind gets a row in the [event taxonomy](#event-taxonomy) and in the [severity table](#severity). Both tables enumerate every kind.
+- A new kind whose occurrences scale with a queue or a backlog aggregates them into one record per run, with a count, and goes through both sink limits ([Volume and retention](#volume-and-retention)). Exempting a kind from the identity limit is a design decision that states its worst-case record count against the main log's 1 MiB cap (`disk::retention::ROTATING_LOG_MAX_BYTES`), since a flood rotates out the evidence that explains it.
 - `crates/rimz/src/diag.rs` alone names the main log file and the frame-capture directory in code. `cargo xtask invariants` rejects those two literals in every other tracked file outside `docs/`, `xtask/`, and Markdown, so the primary surface stays enumerable from one file.
 
 ## Where diagnostics land

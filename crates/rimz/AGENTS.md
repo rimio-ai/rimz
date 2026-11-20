@@ -1,12 +1,9 @@
 # RimZ core
 
-Local contract for `crates/rimz/` — the CLI binary, hook entrypoints, and the runtime/domain library. Extends the root [AGENTS.md](../../AGENTS.md). The module map lives in the root [code map](../../AGENTS.md#code-map), its structural rationale in [ARCHITECTURE.md](../../ARCHITECTURE.md); deeper subtree contracts live in [src/cli/](./src/cli/AGENTS.md), [src/agents/](./src/agents/AGENTS.md), [src/room/](./src/room/AGENTS.md), [src/harness/](./src/harness/AGENTS.md), [src/message/](./src/message/AGENTS.md), [src/store/](./src/store/AGENTS.md), [src/mux/](./src/mux/AGENTS.md), [src/sidebar/](./src/sidebar/AGENTS.md), [src/sidebar_pane/](./src/sidebar_pane/AGENTS.md), [src/remote/](./src/remote/AGENTS.md), [src/diag/](./src/diag/AGENTS.md), [src/sandbox/](./src/sandbox/AGENTS.md), and [tests/integration/](./tests/integration/AGENTS.md).
+Local contract for `crates/rimz/`. Extends the root [AGENTS.md](../../AGENTS.md); each subsystem under `src/` and `tests/integration/` adds its own.
 
-## Crate-wide seams
-
-- `web` never imports `sidebar_pane`: the kitty placeholder encoding both speak is the leaf `pixel_wire` module, and the renderer's one read of `web` is `web::pixel_ttyd_pids`, the ttyd daemons serving the current pixel page.
-- Command handlers (`src/cli/`) parse, call domain modules, and present; domain logic lives in the domain module, never in a handler.
-- **Invariant.** Production child environments are reset only through `child_process::clear_env_preserving_coverage`, keeping the process's LLVM profile path before caller overrides. `cargo xtask invariants` enforces the boundary. The rule says how a reset is done, not that one is required: a `rimz` helper child inherits the process environment, as `child_process::spawn_detached_rimz` does.
-- Domain modules stay free of Zellij, tmux, and agent-specific dependencies — backend knowledge enters through `mux/`, agent knowledge through `agents/`.
-- Run-wake matching uses `(workspace_id, run_id)` — never PID alone.
-- Normalized pane IDs (`zellij:terminal_3`, `tmux:%3`) travel everywhere outside `mux/`; raw IDs stay inside the backend adapters.
+- **Invariant.** Production code resets a child's environment only through `child_process::clear_env_preserving_coverage`; `cargo xtask invariants` rejects a direct reset anywhere else under `src/`. The rule covers how a reset is done, not whether one is needed: a `rimz` helper child inherits the process environment.
+- Domain modules carry no Zellij, tmux, or agent-specific knowledge: backend knowledge enters through `mux/`, agent knowledge through `agents/`.
+- Outside `mux/`, a pane ID is always the normalized form (`zellij:terminal_3`, `tmux:%3`); raw IDs stay inside the backend adapters.
+- A run wake is matched on `(workspace_id, run_id)`, never on a PID alone.
+- `web` never imports `sidebar_pane`: the kitty placeholder encoding both speak is the leaf `pixel_wire` module.

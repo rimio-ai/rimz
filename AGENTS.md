@@ -60,6 +60,8 @@ Before a change of one of these kinds, read the section named beside it and do w
 - A `rimz` child spawned to act on another room's object, or a read pointed at rooms beyond the caller's: [Rooms other than the caller's](./docs/contributing/change-checklists.md#rooms-other-than-the-callers).
 - A workflow under `.github/workflows/` or `.gitea/workflows/`, or a claim about which CI jobs build a platform: [CI workflows](./docs/contributing/change-checklists.md#ci-workflows).
 - A documented rule, a renamed or removed identifier, a set that gains a member, a value or line a command prints, a path RimZ reads or writes, a subprocess argv, or a command that starts to refuse: [Stale wording sweep](./docs/contributing/change-checklists.md#stale-wording-sweep).
+- A workflow, a launch or run, a CLI flag or verb, human rendering, or sidebar behaviour, including its tests outside that subtree: [Workflow engine](./docs/contributing/change-checklists.md#workflow-engine), [Harness launches and runs](./docs/contributing/change-checklists.md#harness-launches-and-runs), [CLI commands and flags](./docs/contributing/change-checklists.md#cli-commands-and-flags), [Rendered output](./docs/contributing/change-checklists.md#rendered-output), [Sidebar](./docs/contributing/change-checklists.md#sidebar).
+- A sentence or `console` block in a doc, rustdoc, or help text: [Doc sentences](./docs/contributing/change-checklists.md#doc-sentences), [Console blocks](./docs/contributing/change-checklists.md#console-blocks).
 - When a refusal, error, or warning fires, what it says, or whether a broken setting refuses, warns, or falls back: [Refusals and warnings](./docs/contributing/change-checklists.md#refusals-and-warnings).
 - What a command prints or does to durable state, when a field is set or cleared, a probe or poll path, a testkit counter, a reader bounded by a window relative to now, a shared `Arc`'s owner, a `Cargo.toml` dependency, a config template, a shell snippet another host runs, the code the parked exec wrapper runs, `harness/team_stage.rs`, the bytes a message delivery pastes into a pane, what a launch flag does to a run's pane, or what a workflow run does to its panes: [Tests a change also runs](./docs/contributing/change-checklists.md#tests-a-change-also-runs).
 
@@ -98,6 +100,7 @@ The gate stack, the test tiers, and the one-home rule for a module's unit tests 
 
 - An inline `mod tests` over 500 lines fails the pre-commit invariant; move the whole module to a sibling `tests.rs`, in the same change when an edit leaves it within about 20 lines of the cap.
 - Capture planned behaviour in the owning doc and add the executable test when the implementation can make it pass. An ignored test standing in for a future product target does not land.
+- Before writing or debugging an integration test, read the section of [integration-tests.md](./docs/contributing/integration-tests.md) for what it touches.
 - A change that deletes a test lists the inputs it covered and carries each into a surviving test, or names the dropped input in the hand-off.
 
 ## Code map

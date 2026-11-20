@@ -1,28 +1,9 @@
 # Remote attach
 
-Local contract for `crates/rimz/src/remote/` — the SSH attach library. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). Subsystem behaviour — attach and aliases, the reconnect supervisor, link health, port forwarding, bandwidth — lives in [docs/internals/remote.md](../../../../docs/internals/remote.md).
+Local contract for `crates/rimz/src/remote/`, the SSH attach library. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). [remote.md](../../../../docs/internals/remote.md) owns subsystem behaviour, the [file map](../../../../docs/internals/remote.md#where-the-code-lives), and the [invariants to preserve](../../../../docs/internals/remote.md#invariants-worth-preserving).
 
-## Pure library, process-free
-
-- This module parses targets, builds argv, classifies exits, and advances state machines from caller-supplied durations. It spawns no child, reads no clock, and writes no terminal.
-- `cli/remote/` owns every process, timer, thread, and terminal write: the supervisor, the outage panel, link stats, tty restore, setup, and list. A new behaviour lands as a pure transition here plus its driver there.
+- This module is pure: it parses targets, builds argv, classifies exits, and advances state machines from the instants and durations its caller supplies. It spawns no child or thread, reads no clock, and writes no terminal. Two kinds of I/O are admitted: `aliases.rs` reads and writes `remote.toml`, and `web.rs` binds loopback listeners to pick free local ports.
+- `cli/remote/` owns every process, timer, thread, and terminal write. A new behaviour lands as a pure transition here, with a unit test, plus its driver there.
 - Every SSH invocation compiles to a [`mux::command::CommandSpec`](../mux/command.rs), so a remote command carries the same deadline and kill discipline as a local one.
-- State machines take durations as arguments and return the next state. That is what makes reconnect backoff, recovery timing, and link health testable without sleeping.
-
-## The two sides
-
-- Local owns the SSH child, reconnect policy, terminal hygiene, the recovery panel, link measurement, and port forwards.
-- Remote owns the room: workspace, session, sidebar, store, and the health gate.
-- Neither side reaches across, and they share no environment beyond the launch-snippet variables. Keep a new signal on the side that can observe it.
-
-## Layout
-
-- [`mod.rs`](./mod.rs) — the `[user@]host:<session-or-path>` grammar, the guarded ssh command, and the autossh-style reconnect policy.
-- [`aliases.rs`](./aliases.rs) — per-machine aliases in `remote.toml`; [`version.rs`](./version.rs) — client/host skew classification.
-- [`link.rs`](./link.rs) — the health JSONL protocol, the tier classifier over `ids::LinkTier`, and terminal-session transitions; [`reachability.rs`](./reachability.rs) — endpoint discovery and reconnect-wait state; [`recovery.rs`](./recovery.rs) — panel timing, checkpoints, and the panel's final row model.
-- [`forward.rs`](./forward.rs) — listener discovery and live ControlMaster forwards; [`setup.rs`](./setup.rs) — argv builders whose I/O belongs to the CLI; [`web.rs`](./web.rs) — browser-tunnel argv plus the one socket exception: `bind_local_relay` and `reserve_forward_port` bind loopback listeners to pick a free local port (the relay keeps its listener; the forward port is probed and released); [`tty.rs`](./tty.rs) — terminal-state hygiene and the supervised-output stream scanner.
-- [`paste.rs`](./paste.rs) — the keyboard-input scanner (Ctrl+V and bracketed pastes) and the Ghostty drop-path codec; [`upload.rs`](./upload.rs) — the upload wire lines and the room's upload lane record.
-
-## Tests
-
-Grammar, classification, and every state transition stay in-module and pure. Attach behaviour that needs a subprocess lives in [`tests/integration/`](../../tests/integration/AGENTS.md), and rendered outage and reconnect flows belong to the journey tier.
+- The local side owns the SSH child and the link; the remote host's `rimz` owns the room. Neither reaches across, and they share no environment beyond the launch-snippet variables. Keep a new signal on the side that can observe it.
+- Grammar, classification, and every state transition are tested in-module with no sleep. Attach behaviour that needs a subprocess lives in [`tests/integration/`](../../tests/integration/AGENTS.md) ([test seams](../../../../docs/internals/remote.md#test-seams)), and rendered outage and reconnect flows belong to the journey tier.

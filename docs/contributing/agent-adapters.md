@@ -1,6 +1,6 @@
 # Integrating a built-in agent adapter
 
-The sequenced playbook for wiring a new coding agent into RimZ as a compiled-in adapter: the order of work, the decision points at each step, and the complete deliverables checklist. Every step points at the leaf that owns its detail — this guide owns the sequence, never the detail. The agent model and adapter boundary live in [model.md](../internals/agents/model.md), the code contract in [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md), and the account and spend half in [providers.md](../internals/agents/providers.md) and [spending.md](../internals/agents/spending.md).
+The sequenced playbook for wiring a new coding agent into RimZ as a compiled-in adapter: the order of work, the decision points at each step, and the complete deliverables checklist. Every step points at the leaf that owns its detail — this guide owns the sequence, never the detail. The agent model and adapter boundary live in [model.md](../internals/agents/model.md), the code contract in [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md), and the account and spend half in [providers.md](../internals/agents/providers.md) and [spending.md](../internals/agents/spending.md). [Changing an existing adapter](#changing-an-existing-adapter) lists what a change to a shipped adapter also runs and checks.
 
 An adapter that follows this sequence gets the state machine, ranking, liveness, attention routing, messaging, supervised runs, and the sidebar row for free: the [`AgentLifecycleObservation`](../../crates/rimz/src/agents/observation.rs) it emits is agent-agnostic by construction, so nothing downstream needs to know the new agent exists.
 
@@ -166,7 +166,7 @@ Conformance, definition validation, and registry uniqueness tests enroll the ada
 ## Step 10 — Ship the documentation
 
 - Write `docs/internals/agents/adapter_<kind>.md` on the per-kind skeleton — *Hooks and lifecycle* (the native event → signal table is its core), *Context and transcript*, *Account and balance*, *Cost* — with [adapter_pi.md](../internals/agents/adapter_pi.md) as the small template and [adapter_claude.md](../internals/agents/adapter_claude.md) showing where marker subsections earn their place.
-- Link it everywhere the existing kinds are linked: the per-kind list in [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md), the per-provider table in [providers.md](../internals/agents/providers.md#per-provider-mapping), and the [internals index](../internals/README.md), which the root [AGENTS.md](../../AGENTS.md) documentation map links.
+- Link it everywhere the existing kinds are linked: the per-provider table in [providers.md](../internals/agents/providers.md#per-provider-mapping), and the [internals index](../internals/README.md), which the root [AGENTS.md](../../AGENTS.md) documentation map links.
 - Update [agent-support.md](../reference/agent-support.md): a row in the six-capability compatibility matrix, a row in the wiring matrix, a per-agent detail section, and removal from *Agents not yet supported*.
 - Update the [README](../../README.md) agent compatibility matrix with the same six marks. The `published_matrices_match_the_declared_capabilities` integration test reads both published tables against `rimz coverage --json`, so a hand-edited cell that drifts from the declaration fails CI.
 - Correct every count the new kind raises. A census by a sibling's name (`rg -i kiro`) cannot reach a sentence that states only a total, so grep the old total word and the sibling count derived from it as well: with seventeen built-ins before the change, `rg -n -i '\b(seventeen|sixteen siblings|fifteen siblings)\b' AGENTS.md README.md docs crates --no-ignore-dot`, then skip the hits that count something else.
@@ -192,7 +192,40 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge
 - [ ] `probe_account` · `spending_sources` + `parse_spend` · positive-cost conformance fixture
 - [ ] The step-9 test set, stdout shapes as inline `insta` goldens
-- [ ] `docs/internals/agents/adapter_<kind>.md` + links in the module contract, the providers table, and the internals index
+- [ ] `docs/internals/agents/adapter_<kind>.md` + links in the providers table and the internals index
 - [ ] Every agent and sibling count raised, found by grepping the old number words as well as a sibling's name
 - [ ] `agent-support.md` detail section and wiring-matrix row · the six-capability row in `agent-support.md` and the README, kept true by the `published_matrices_match_the_declared_capabilities` integration test
 - [ ] `cargo xtask gate` green · `rimz coverage` capability marks honest · `rimz coverage --wiring` mechanism grids honest · `rimz doctor` reporting
+
+## Changing an existing adapter
+
+What a change to a shipped adapter also runs, pins, and checks. The [module contract](../../crates/rimz/src/agents/AGENTS.md#before-a-change) routes each kind of change here.
+
+### Launch surface and routine verbs
+
+- A change to a provider's launch argv or its `--settings` JSON also runs `cargo xtask test -E 'binary(integration) & test(sandbox::)'`: `sandbox::sandbox_skills_under_host_use_provider_switches` pins the rendered Claude settings, and adapter-focused filters miss it.
+- A change to an adapter's permission arguments updates the `Permission modes` table in [agent-support.md](../reference/agent-support.md#permission-modes), which `conformance.rs` pins cell by cell against `LaunchSpec::permission_args`.
+- A change to an adapter's `process_names` or `bin_names` greps each removed name as a quoted literal across `crates/`: fixtures model a provider's pane by its command string (`pane("%1", "<name>", ...)`), and a text search for the kind misses them.
+- A new `rimz` verb that an agent runs from its own pane as part of a flow RimZ drives (a workflow judge's `rimz workflow submit`) joins `ROUTINE_RIMZ_PREFIXES`: otherwise a Codex agent runs it inside its sandbox, where a write under the RimZ home is refused, and a Claude agent in automatic mode asks the user first. A Codex login installed before the entry existed gets the grant at its next hook install, since `CodexManagedIntegration::outdated_files` reports its rules file as outdated against the text the prefix list builds; until then that login's agent runs the verb sandboxed.
+- A change to `ROUTINE_RIMZ_PREFIXES` moves its three pins with it: the bullet list in [agent-support.md](../reference/agent-support.md#permission-modes) (`agents::conformance::routine_rimz_prefixes_match_documented_list`), Claude's settings (`crates/rimz/src/agents/adapters/claude/tests/mod.rs::routine_rimz_settings_union_and_idempotence`), and the Codex rules golden (`crates/rimz/src/agents/adapters/codex/tests/install.rs::install_includes_shared_routine_rules_golden`). An entry that names a command group rather than one verb grants every verb under it, so read the group's clap enum first, hidden verbs and flags included (`rg -n 'hide = true' crates/rimz/src/cli/<command>.rs`): `--help` omits them, and a bare `rimz workflow` entry would also have granted the hidden `rimz workflow advance --wake-signal`, which injects a signal into active runs.
+
+### Context refresh and the hook path
+
+- A change that makes a local or detached refresh write the context sidecar on a hook where it wrote none before also runs `cargo xtask test -E 'binary(integration) & test(/^hooks::/)'`, since tests there wait for the sidecar's first appearance or compare its bytes.
+- A condition that lets a refresh past the unchanged-stat gate in `crates/rimz/src/agents/adapters/codex/transcript.rs::refresh_transcript_context` returns `None` when its read finds nothing new: every `Some` becomes an atomic sidecar publish and a sidebar wake, since `AgentContextRecord::apply_local_refresh` always stamps `observed_at`. Pin it with a test that `observed_at` stays put across two refreshes.
+- Before a plan adds an input to the hook-path context refresh (`crates/rimz/src/cli/hooks/lifecycle/context.rs::merge_agent_context_sidecars`), list the hooks the adapter's `local_context_refresh` accepts and show one where the input can change the result; otherwise leave the input to the tick and watch passes.
+- A change that adds a store or sidecar read on the hook path (`crates/rimz/src/cli/hooks/lifecycle/`) also runs `cargo xtask test -E 'binary(integration) & test(/^performance::work_log::/)'`: those tests pin each hook's row materializations and snapshot assemblies.
+- A change to what `local_conversation_present` answers in any case also runs `cargo xtask test -P journey` and `cargo xtask test -P live`. Their rebirth, restart and resume journeys reach `crates/rimz/src/harness/resume.rs::resume_session_present` and depend, without asserting it, on the conversation that the shared stub in `crates/rimz/tests/integration/common/shim.rs` saves. `gate` runs neither profile.
+- A new `Ignored` edge in `lifecycle::step` is decided in its early-return chain and tested from a `compacting: true` prior. An ignore decided inside `map_status` still runs `step`'s tail, which closes the compaction bracket.
+
+### Coverage and conformance
+
+- A change to a declared coverage or lifecycle-hook verdict, a preset, or an adapter's install version gate or hook set moves the pins that step 9 lists under **Shared pins move with the definition**, and runs the four filters named there as separate calls before the gate.
+- A conformance failure on a new adapter's declared marks is fixed in the marks, never by loosening a shared check; a check that seems wrong goes to review as its own change.
+
+### Spend and pricing
+
+- A change that splits a spending session key into finer keys checks every per-session figure built from the global dedup winners (the live baselines) and every retention rule that keeps only the global winner (compaction). Global dedup credits a row two of the new keys share, such as a Claude fork's copied history, to the winner's key alone. `contested_session_locations` in [`spending/aggregate.rs`](../../crates/rimz/src/agents/spending/aggregate.rs) and `retained_raw_ids` in [`spending/cache.rs`](../../crates/rimz/src/agents/spending/cache.rs) handle that case.
+- A rule that identifies a transcript by its file name first reads each adapter's spending source glob (`rg -n -A3 'SpendingSource::' crates/rimz/src/agents/adapters`): Kimi (`wire.jsonl`), Grok (`updates.jsonl`) and Copilot (`events.jsonl`) give every transcript one fixed name, so the name alone matches unrelated sessions.
+- A spend parser that counts a new source needs the adapter's live cost push to count it too. Both pushes write the incoming total outright: the observed-cost merge (`crates/rimz/src/agents/context/record.rs::merge_observed_cost`), and the local refresh patch (`crates/rimz/src/agents/context.rs::LocalContextPatch::apply`, whose `FieldPatch::Set` on `cost` is how Codex's live card cost lands). So a settled reconcile that raised the row is pulled back by the next envelope or refresh.
+- A change to the order of price lookup candidates tests a name whose earlier candidate answers only by fuzzy match while a later one answers exactly.

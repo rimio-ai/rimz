@@ -280,7 +280,7 @@ Both files hold ratios, so upstream stays the only source of absolute prices. A 
 
 The spending producer owns builds under the runtime spending lock. It reuses the memoized book between walks and re-fetches when the table's `fetched_at_secs` is older than a week. A walk with no transcript files never loads or seeds prices.
 
-A live check of the table build needs transcripts to walk: use the [AGENTS.md bwrap recipe](../../../AGENTS.md#testing) over a copy of `~/.rimz/cache`, not an empty isolated home.
+A live check of the table build needs transcripts to walk: use the [bwrap recipe](../../contributing/probes.md#branch-binaries-against-real-state) over a copy of `~/.rimz/cache`, not an empty isolated home.
 
 - `~/.rimz/cache/providers/pricing.v1.sqlite` carries `PRAGMA user_version = 1`, typed price columns (unsigned values retain their bit pattern in signed SQLite integers), an index on normalized key and raw key, and metadata for `fetched_at_secs` and a unique `build_id`. Another version or missing metadata makes the file unusable. Future versions use another filename, so mixed binaries never rebuild over each other. The old JSON file is neither read, written, nor removed.
 - Each attempt fetches both sources and rebuilds only after both project successfully into a nonempty projection. It carries forward previous rows, then overlays the projection. A partial outage keeps the last complete table.
