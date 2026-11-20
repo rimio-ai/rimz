@@ -3151,7 +3151,9 @@ fn lsp_bare_crowded_name_suggests_qualifying_or_a_file_head() {
             .assert()
             .code(5)
             .stderr("")
-            .stdout(format!("not found: {target}\n"));
+            .stdout(format!(
+                "not found: {target}; search with find method and rerun with a name or position it lists\n"
+            ));
     }
     assert_eq!(
         editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
@@ -3564,13 +3566,16 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         .args(["lsp", "def", "empty.rs::Type::field"])
         .assert()
         .code(5)
-        .stdout("not found: empty.rs::Type::field\n");
+        .stdout("not found: empty.rs::Type::field; search with find field and rerun with a name or position it lists\n");
     for name in ["Type::nosuch", "Wrong::field", "field"] {
         env.rimz()
             .args(["lsp", "def", name])
             .assert()
             .code(5)
-            .stdout(format!("not found: {name}\n"));
+            .stdout(format!(
+                "not found: {name}; search with find {} and rerun with a name or position it lists\n",
+                name.rsplit("::").next().unwrap()
+            ));
     }
     env.rimz().args(["lsp", "def", "TwinType::field"]).assert().code(6).stdout("ambiguous: 2 symbols named TwinType::field; rerun with one of these names or a position\nfield a::TwinType::field  a/lib.rs:2:1\nfield b::TwinType::field  b/lib.rs:2:1\n");
     let outline_requests = || {
@@ -3603,7 +3608,7 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         .args(["lsp", "def", "BroadType::field"])
         .assert()
         .code(5)
-        .stdout("not found: BroadType::field\n");
+        .stdout("not found: BroadType::field; search with find field and rerun with a name or position it lists\n");
     assert_eq!(recovery_requests(), requests_before);
     let definition_requests = || {
         query("requests")["result"]["requests"]
@@ -3661,7 +3666,7 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         .assert()
         .code(5)
         .stderr("")
-        .stdout("not found: nosuch\n");
+        .stdout("not found: nosuch; search with find nosuch and rerun with a name or position it lists\n");
     env.rimz().args(["lsp", "def", "twin"]).assert().code(6).stderr("").stdout("ambiguous: 2 symbols named twin; rerun with one of these names or a position\nfunction a::twin  src/a.rs:1:1\nfunction b::twin  src/b.rs:1:1\n");
     for (name, code, outcome, candidates) in [
         ("nosuch", 5, "not-found", json!([])),

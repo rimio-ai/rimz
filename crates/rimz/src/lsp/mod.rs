@@ -106,7 +106,11 @@ pub enum LspErr {
         line: u32,
         lines: usize,
     },
-    #[error("not found: {name} on {path}:{line}, which reads: {text}", path = path.display())]
+    #[error(
+        "not found: {name} on {path}:{line}, which reads: {text}\n\
+         rerun with a line that names {name}, or with {name} alone",
+        path = path.display()
+    )]
     NameNotOnLine {
         path: std::path::PathBuf,
         line: u32,

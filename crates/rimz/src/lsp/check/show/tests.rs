@@ -542,7 +542,11 @@ fn show_name_outcomes_keep_their_exit_beside_other_blocks() {
     assert_eq!(
         blocks,
         [
-            ("not found: missing\n".into(), 5),
+            (
+                "not found: missing; search with find missing and rerun with a name or position it lists\n"
+                    .into(),
+                5
+            ),
             (
                 "src/lib.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n".into(),
                 0

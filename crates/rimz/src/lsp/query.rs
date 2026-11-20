@@ -1355,8 +1355,17 @@ pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String
     let count = candidates.len() + unresolved;
     let bound = if unresolved == 0 { "" } else { "up to " };
     let missing = matches!(output, Output::NotFound { .. });
+    let listed_symbols = match output {
+        Output::NotFound { listed_symbols, .. } if count == 0 => *listed_symbols,
+        _ => 0,
+    };
+    let crowded = listed_symbols > 0 && name_segments(name).len() == 1;
     let header = if missing {
-        if count == 0 {
+        if count == 0 && !crowded {
+            format!(
+                "not found: {name}; search with find {last} and rerun with a name or position it lists"
+            )
+        } else if count == 0 {
             format!("not found: {name}")
         } else {
             format!(
@@ -1370,16 +1379,12 @@ pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String
         )
     };
     let mut lines = vec![header];
-    if let Output::NotFound { listed_symbols, .. } = output
-        && count == 0
-        && *listed_symbols > 0
-        && name_segments(name).len() == 1
-    {
+    if crowded {
         lines.push(format!(
             "hint: the server listed {listed_symbols} {}, none named exactly {last}; \
              add the item's type or module, or start with its file, \
              to search the files it lives in",
-            if *listed_symbols == 1 {
+            if listed_symbols == 1 {
                 "symbol"
             } else {
                 "symbols"
