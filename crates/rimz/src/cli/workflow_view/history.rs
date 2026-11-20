@@ -693,16 +693,20 @@ impl History<'_> {
                         self.prose(out, text, "    ")?;
                     }
                 }
-                JournalEvent::Resume {
-                    visit_grant,
+                JournalEvent::Resume => writeln!(out, "resume → {}", entry.node)?,
+                JournalEvent::Extend {
+                    step,
+                    visits,
                     deadline,
                 } => {
-                    writeln!(
-                        out,
-                        "resume → {} · visit grant {visit_grant} · deadline {}",
-                        entry.node,
-                        deadline.map_or_else(|| "none".into(), |at| self.clock(at))
-                    )?;
+                    let mut grants = Vec::new();
+                    if let (Some(step), Some(visits)) = (step, visits) {
+                        grants.push(format!("{step} +{visits} visits"));
+                    }
+                    if let Some(at) = deadline {
+                        grants.push(format!("deadline {}", self.clock(*at)));
+                    }
+                    writeln!(out, "extend · {}", grants.join(" · "))?;
                 }
                 JournalEvent::Start { input } => writeln!(
                     out,

@@ -822,7 +822,7 @@ fn fired_run(
         }]},
         "scope": {"kind": "worktree", "path": root},
         "project_root": root, "created_at": ts(1_000), "entered_at": ts(1_000),
-        "state": "active", "node": "command", "visits": {}, "visit_grant": 0,
+        "state": "active", "node": "command", "visits": {},
         "deadline_fired": false, "next_seq": 1,
     }))
     .expect("run");
@@ -896,7 +896,7 @@ fn started_run(
         "spec_dir": "/definitions/review", "prompt": "Review",
         "scope": {"kind": "worktree", "path": "/project"}, "project_root": "/project",
         "created_at": ts(900), "state": state, "node": "pr", "entered_at": ts(900),
-        "visits": {}, "visit_grant": 0, "deadline_fired": false, "next_seq": 1,
+        "visits": {}, "deadline_fired": false, "next_seq": 1,
         "starter": {"by": "agent", "kind": agent.kind.as_str(), "launch": launch},
         "depth": 1, "loop_report": report,
     });

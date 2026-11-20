@@ -1134,7 +1134,7 @@ fn one_fire_keys_its_running_and_report_rows_at_one_checkout() {
             "origin":origin, "task":"sh", "loop_fire":fire, "spec_dir":"/spec",
             "scope":{"kind":"worktree","path":"/tree"}, "project_root":"/project",
             "created_at":"2026-01-01T00:00:00Z", "state":"done", "node":"command",
-            "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
+            "entered_at":"2026-01-01T00:00:00Z", "visits":{},
             "deadline_fired":false, "next_seq":2, "terminal_at":"2026-01-01T00:01:00Z",
             "loop_report":"owed", "fire_facts":fire_facts(&launch)
         }))
@@ -1209,7 +1209,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
             "origin":"inline", "task":"nightly", "loop_fire":FireId::new(&nightly), "spec_dir":"/spec",
             "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
             "created_at":"2026-01-01T00:00:00Z", "state":state, "node":"agent",
-            "entered_at":"2026-01-01T00:00:00Z", "visits":visits, "visit_grant":0,
+            "entered_at":"2026-01-01T00:00:00Z", "visits":visits,
             "deadline_fired":false, "next_seq":2, "terminal_at":"2026-01-01T00:01:00Z",
             "loop_report":"owed"
         }))
@@ -1343,7 +1343,7 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
         "origin":"inline", "task":"nightly", "loop_fire":FireId::new(&nightly), "spec_dir":"/spec",
         "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
         "created_at":"2026-01-01T00:00:00Z", "state":"failed", "node":"@failed",
-        "entered_at":"2026-01-01T00:59:59Z", "visits":{}, "visit_grant":0,
+        "entered_at":"2026-01-01T00:59:59Z", "visits":{},
         "deadline_fired":false, "next_seq":2, "terminal_at":"2026-01-01T00:59:59Z",
         "loop_report":"owed"
     }))
@@ -1397,7 +1397,7 @@ fn only_a_done_run_keeps_its_checkout_held() {
             "origin":"inline", "task":"resident", "loop_fire":mark.fire, "spec_dir":"/spec",
             "scope":{"kind":"worktree","path":checkout}, "project_root":root.path(),
             "created_at":"2026-01-01T00:00:00Z", "state":run_state, "node":"agent",
-            "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
+            "entered_at":"2026-01-01T00:00:00Z", "visits":{},
             "deadline_fired":false, "next_seq":2, "terminal_at":"2026-01-01T00:01:00Z",
             "loop_report":"owed"
         }))
@@ -1467,7 +1467,7 @@ fn a_started_run_reports_its_ending_onto_the_runs_step_that_started_it_once() {
             "version":workflow::VERSION, "id":id, "workflow":"build", "spec_dir":"/spec",
             "scope":{"kind":"worktree","path":home.path()}, "project_root":home.path(),
             "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"fan",
-            "entered_at":"2026-01-01T00:00:00Z", "visits":{"fan":1}, "visit_grant":0,
+            "entered_at":"2026-01-01T00:00:00Z", "visits":{"fan":1},
             "deadline_fired":false, "next_seq":2
         });
         value

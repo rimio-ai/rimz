@@ -508,7 +508,7 @@ fn deadline_offers_plain_resume_as_well_as_rearming() {
         &text,
         &[
             "resume 'review#main'",
-            "resume 'review#main' --extend 'deadline=<when>'",
+            "extend 'review#main' --deadline '<when>'",
             "cancel 'review#main'",
         ],
     );
@@ -544,7 +544,9 @@ fn history_renders_typed_facts_without_json_and_default_trail_is_bounded() {
     step["head_end"] = json!("abcdef123456789");
     step["log"] = json!("/tmp/step.log");
     let mut rows = vec![row, step];
+    // Resume rows a RimZ before `workflow extend` wrote still carry their grant fields.
     rows.extend((0..10).map(|_| json!({"event":"resume", "visit_grant":2,"deadline":AT})));
+    rows.push(json!({"event":"extend", "step":"build", "visits":2,"deadline":AT}));
     rows.extend([
         json!({"event":"route", "outcome":"deadline", "input":{"deadline":AT}}),
         json!({"event":"turn_end", "action":"kept",
@@ -575,9 +577,8 @@ fn history_renders_typed_facts_without_json_and_default_trail_is_bounded() {
             "exit 0 HEAD 12345678 → abcdef12",
             "log: /tmp/step.log",
             "1m",
-            "resume",
-            "visit grant 2",
-            "deadline",
+            "resume → ",
+            "extend · build +2 visits · deadline ",
             "turn_end kept",
             "gate ok → build",
             "wait hold ×3",
@@ -1336,6 +1337,13 @@ fn parked_and_terminal_rails_are_horizontal_and_only_parked_has_a_current_node()
     save(&env, &record);
     let parked = human(&env, &record, false);
     contains(&parked, &["◆ gate\n╰─ ⊘ build ↑"]);
+    commands(
+        &parked,
+        &[
+            "extend 'review#main' build --visits +1  grant build one more visit, then\n  rimz \
+             workflow resume 'review#main'  run build once more",
+        ],
+    );
     assert!(
         parked.find("you can\n").unwrap() < parked.find("◆ gate").unwrap(),
         "{parked}"

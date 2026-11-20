@@ -409,7 +409,7 @@ fn resume_at_moves_an_active_run() {
         [sleep.cooldown]\nsleep='1h'\nthen='@done'\n[sleep.later]\nsleep='1h'\nthen='@done'\n";
     let (_dir, state, record) = setup(text);
     advanced(&state, &record.id, &FakeHost::new());
-    let moved = resume(&state, &record.id, &FakeHost::new(), Some("later"), &[]).unwrap();
+    let moved = resume(&state, &record.id, &FakeHost::new(), Some("later")).unwrap();
     assert_eq!(moved.node, "later");
     assert_eq!(moved.state, RunState::Active);
 }

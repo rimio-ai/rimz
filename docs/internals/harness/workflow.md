@@ -17,7 +17,7 @@ Paths are under `crates/rimz/src/`.
 | `harness/workflow/definition.rs` | The typed `Definition` that `parse` and `load` return: its `Node`s with their `Kind`, `Target`s, edges resolved once at compile, and every parsed value held beside its authored text (`Parsed`). In the sidebar import graph. |
 | `harness/workflow/graph.rs` | The edge compile, the failure chain (`Definition::failure_route`), how a step's ending maps to a cause (`Definition::ending_cause`), fireability and mark text, routing (`Definition::target`), and the graph walk (`Definition::walk`). |
 | `harness/workflow/validate.rs` | `validate` and `validate_spec`: required-field, value, cross-field, graph, and environment checks after the strict load, and the `rimz workflow validate` rows. |
-| `harness/workflow/engine.rs` | Run control: `create`, `advance` with its locked `prepare`, `cancel`, `resume`, `restart`, `wake`, `wake_run`, `reassign_task` (a removed task's release of its live runs), and `persist`. Also the run outcome a terminal write carries (`engine::failure`). |
+| `harness/workflow/engine.rs` | Run control: `create`, `advance` with its locked `prepare`, `cancel`, `resume`, `extend`, `restart`, `wake`, `wake_run`, `reassign_task` (a removed task's release of its live runs), and `persist`. Also the run outcome a terminal write carries (`engine::failure`). |
 | `harness/workflow/engine/agent.rs` | The agent-attempt protocol: `compose`, `launch`, `prepare_end`, which admits the off-lock stop, and `finish`, which settles it. |
 | `harness/workflow/engine/rest.rs` | A session's rest-check moves: holding a session aside at its turn end (`begin`), the held preflight (`prepare`), restoring it, pushing back (`push`), and interrupting it. |
 | `harness/workflow/engine/accounting.rs` | `transition` and `step`: the assist and diagnostic records for each persisted transition. |
@@ -68,7 +68,7 @@ A definition is strict: an unknown field, a field the node's kind does not take,
 3. `WorkflowFile::lower` refuses a name used by two kinds (`SpecErr::DuplicateNode`), then lowers each kind table into a `Check` or a `Step` that records its table word. Validation paths and the `validate` KIND column print that word.
 4. The lowered spec compiles into the `crates/rimz/src/harness/workflow/definition.rs::Definition` that every reader consumes: the engine, the graph, inspection, scripts, the brief, throttle limits, the CLI views, the sidebar seeds, and schedule probe demand.
 
-Compiling never fails. It parses each node's kind, route targets and edges, conditions, durations, windows, budgets, stagger, wake selectors, subscriptions, and the `shlex` split of `run` once, and keeps each beside its authored text, error included. So a view prints what the author wrote. Every `advance` validates the definition again ([Engine reads](#engine-reads)), so a value validation refuses makes a live run wait instead of reaching its use site there. `resume`, `restart`, and the signal helper admit it the same way before they change the run ([Engine reads](#engine-reads)). A node with no single runner has no `Kind`, and a route to a name that is no node is still a node target. Values that read the clock, the filesystem, or live configuration stay at their use: the header deadline's timestamp, slash-word resolution of `run`, prompt and system-prompt files, judge profiles, and launch groups.
+Compiling never fails. It parses each node's kind, route targets and edges, conditions, durations, windows, budgets, stagger, wake selectors, subscriptions, and the `shlex` split of `run` once, and keeps each beside its authored text, error included. So a view prints what the author wrote. Every `advance` validates the definition again ([Engine reads](#engine-reads)), so a value validation refuses makes a live run wait instead of reaching its use site there. `resume`, `extend`, `restart`, and the signal helper admit it the same way before they change the run ([Engine reads](#engine-reads)). A node with no single runner has no `Kind`, and a route to a name that is no node is still a node target. Values that read the clock, the filesystem, or live configuration stay at their use: the header deadline's timestamp, slash-word resolution of `run`, prompt and system-prompt files, judge profiles, and launch groups.
 
 `validate_spec` then applies the required-field, value, and graph rules: an invalid optional value (a zero `max-visits`, an overlong duration, `mode = "plan"`, an unparsable `budget`), a route for an outcome the check cannot answer, and each cross-field rule refuse with the path and the fix. It warns without refusing only on what the definition alone cannot settle:
 
@@ -82,7 +82,7 @@ Workflow `timeout`, `sleep`, `for`, and workflow and step `stagger` use `harness
 
 ### The header
 
-The [reference](../../reference/cli/workflow.md#definition-fields) owns the header fields and their rules. Two facts belong to the engine. The run record stores the instant `run --deadline`, else the header `deadline`, resolved to at start (`RunRecord.deadline` in `crates/rimz/src/store/workflow.rs`), and `resume --extend deadline=` replaces it with the instant its own time resolves to at the resume. An agent step's own `worktree` setting moves that step out of the run's `scope` checkout ([Agent steps](#agent-steps)).
+The [reference](../../reference/cli/workflow.md#definition-fields) owns the header fields and their rules. Two facts belong to the engine. The run record stores the instant `run --deadline`, else the header `deadline`, resolved to at start (`RunRecord.deadline` in `crates/rimz/src/store/workflow.rs`), and `extend --deadline` replaces it with the instant its own time resolves to at the extend. An agent step's own `worktree` setting moves that step out of the run's `scope` checkout ([Agent steps](#agent-steps)).
 
 ### Kinds
 
@@ -120,7 +120,7 @@ The engine rules behind the agent-only fields:
 
 `crates/rimz/src/harness/workflow/definition.rs::Node::launch_overrides` resolves the launch settings, `engine::agent::launch` passes them in `StepLaunch.overrides`, and the CLI host maps them onto the launcher's overrides and cohort request as a fresh launch applies them (`crates/rimz/src/cli/workflow/host.rs::Host::launch`). A `--continue` restart resumes the provider session, and the host drops `account`, `system-prompt-file`, and `worktree` there. The relaunch takes the room's current login for the kind when it shares a history pool with the session's (`crates/rimz/src/harness/resume.rs::relaunch_login`), and otherwise refuses. It runs in the run's scope checkout. `account` also pins every cell's start group for capacity admission, which then skips availability routing. The engine asks the host for those groups (`AttemptHost::start_groups`), and both hosts resolve them through `harness::workflow::launch_groups`.
 
-`max-visits` must be at least 1. It caps the step's entries counted in `RunRecord.visits`, a plain count per step (`crates/rimz/src/harness/workflow/spec.rs::Step::tripped_visit_bound`), increased by the run-wide `visit_grant`. Every step kind counts at admission, before it acts. Only a manual restart clears a count.
+`max-visits` must be at least 1. It caps the step's entries counted in `RunRecord.visits`, a plain count per step (`crates/rimz/src/harness/workflow/spec.rs::Step::tripped_visit_bound`), increased by the step's own grant in `RunRecord.visit_grants`. Every step kind counts at admission, before it acts. Only a manual restart clears a count.
 
 ### Command and message steps
 
@@ -147,7 +147,7 @@ Each edge also carries fireability and, when it can never fire, a typed reason (
 - A `timeout` edge never fires on an agent step without a `timeout`, the one kind where the field is optional.
 - A `visits` edge never fires without `max-visits`.
 - An agent step's `capacity` edge always fires: a start wider than a machine cap raises it on any run, a `--skip-capacity` run included, so the return check (step 7 of [Adding a failure cause](#adding-a-failure-cause)) and inspection follow it whatever the step's `give-up`.
-- An unset header deadline makes a `deadline` edge conditional on a deadline the run gets from `workflow run --deadline` or a later `resume --extend deadline=<when>` (`Fireability::WithDeadline`), not never-firing. The mark reads the definition alone, so `workflow validate` and the definition views print it; a run's own views print no `deadline` edge.
+- An unset header deadline makes a `deadline` edge conditional on a deadline the run gets from `workflow run --deadline` or a later `extend --deadline <when>` (`Fireability::WithDeadline`), not never-firing. The mark reads the definition alone, so `workflow validate` and the definition views print it; a run's own views print no `deadline` edge.
 
 `crates/rimz/src/harness/workflow/graph.rs::Definition::walk` takes reverse postorder from `start`, traversing fireable edges last to first in display order, and lists unreachable nodes alphabetically. A step hangs under its `then` check only when that check occurs earlier in the walk and has a fireable edge to the step. This keeps a forward return, such as a `triage` check routing back to a `ruled` step, standalone. Hanging children follow their parent's edge order.
 
@@ -197,7 +197,7 @@ A new cause touches every place below. The compiler stops you at only some of th
 6. When the cause can fire only with a field set, add its case to `Definition::fireability` with a `NeverReason`, so validation and inspection do not show an edge that never fires.
 7. When a step's cause is raised before the node acts and counts no visit, add it to the `[Cause::Visits, Cause::Capacity]` list in `crates/rimz/src/harness/workflow/validate.rs::returning_failures`. Otherwise a route back to the node repeats the failure without end. A check counts no visits, so a check cause never goes there.
 8. When a loop task should report the run differently from `failed`, extend `engine::failure`, which classifies a failed run's `RunEnding` from the journal, and the mapping from `RunEnding` to a loop result in `crates/rimz/src/harness/schedule/run_log.rs::report_row`.
-9. A new reserved word refuses every definition that already uses it as an author outcome, and a live run of such a definition waits at its next engine read ([Engine reads](#engine-reads)). It raises no version. A new `AttemptOutcome` variant changes the record's shape, so it raises `store::workflow::VERSION` ([The record and its version](#the-record-and-its-version)). The record snapshot `crates/rimz/src/store/workflow/snapshots/rimz__store__workflow__tests__record.snap` and each "version 18" on this page and in the reference change with it. The doc comment on `store::workflow::VERSION` says what a reader of run homes does with a run of another version.
+9. A new reserved word refuses every definition that already uses it as an author outcome, and a live run of such a definition waits at its next engine read ([Engine reads](#engine-reads)). It raises no version. A new `AttemptOutcome` variant changes the record's shape, so it raises `store::workflow::VERSION` ([The record and its version](#the-record-and-its-version)). The record snapshot `crates/rimz/src/store/workflow/snapshots/rimz__store__workflow__tests__record.snap` and each "version 19" on this page and in the reference change with it. The doc comment on `store::workflow::VERSION` says what a reader of run homes does with a run of another version.
 10. Document it: the cause table above, each "eight causes" on this page (the count moves with the set), in the reference, and in the guide, the guide's sample `workflow validate` output when the kind it shows raises the cause, the [failures section of the reference](../../reference/cli/workflow.md#failures), and the guide's [When something fails](../../guide/workflows.md#when-something-fails) when a user meets the cause.
 
 Run the module's tests with `cargo xtask test 'harness::workflow'` and the store's with `cargo xtask test 'store::workflow'`. [gates.md](../../contributing/gates.md) owns the gate stack.
@@ -218,7 +218,7 @@ Validation enforces each of these, and the engine the last. Each row says why th
 | `rest-check` and `subscribe` exist only on a session, and a team runs only in a session without a `rest-check`. | A turn ends at its first clean turn end, so there is nothing to recheck or subscribe for. A team has no single turn end or rest to judge. |
 | One built-in retry exists: a step launch that started nothing runs once more. A judge's launch never evicts, so it never reports one, and a judge launch that fails dies at once. No `retries` field exists. | The retried attempt has not acted on the checkout: an unstarted launch launched no agent. |
 | `give-up` and `--skip-capacity` cover the capacity wait only. | The window and occupancy waits have no bound of their own. A run that must not wait on them without end sets a `deadline`. |
-| The deadline fires once per grant, at the node the run is at. | The handler it routes to (often through `[workflow] on.failed`) must be able to run. Firing again at every later node would fail that handler too. `resume --extend deadline=<when>` re-arms it. |
+| The deadline fires once per grant, at the node the run is at. | The handler it routes to (often through `[workflow] on.failed`) must be able to run. Firing again at every later node would fail that handler too. `extend --deadline <when>` re-arms it. |
 | A condition waits during a `for` hold without a route saying so. | `hold` is reserved, so no check answers it. Only the engine writes it, as the wait's outcome, and the held case's own outcome routes once the hold has run its length. |
 | A run reads its definition live, and every `advance` admits it again ([Engine reads](#engine-reads)). A definition admission refuses leaves the run waiting, and one the run no longer fits ends it failed. No language version exists, and the record version tracks only the record's shape. | An edit reaches in-flight runs at their next step, so a fix to a prompt or a route needs no restart. A language version would rise with every change to what a field means, and each raise strands every unfinished run ([The workflow pass](#the-workflow-pass)). Waiting on a refused definition keeps a half-finished edit from failing the runs that read it. |
 
@@ -228,7 +228,7 @@ Validation enforces each of these, and the engine the last. Each row says why th
 
 1. Compare every nonterminal run against the candidate, unless the candidate is a try (`StartArgs::once`, from `run --once`). A run blocks when it is not a try, when its scope path (`RunRecord.scope.path`) is the path `ScopeRoots::path` gives for that run's own scope kind, and it shares the candidate's origin and name, or its task. A match is the typed `WorkflowErr::Exists`.
 2. Read the prompt. An inline definition is written into the new run's `definition/` here (`seal_definition`, which creates the run's directory). A deployed run copies nothing. No record exists yet.
-3. Read the definition bytes, load them through `spec::parse`, and validate the lowered spec with `validate_spec` against the run's project, as every later advance read, `resume`, `restart`, and the signal wake do.
+3. Read the definition bytes, load them through `spec::parse`, and validate the lowered spec with `validate_spec` against the run's project, as every later advance read, `resume`, `extend`, `restart`, and the signal wake do.
 4. Require the room's workspace record when the graph has an agent step, a message step, or an agent check, or when a loop task starts the run (`WorkflowErr::NoRoom`). `rimz start` creates the room. The library needs the room only in those cases, but `rimz workflow run` opens the room before it calls `create`, so a run a person starts always needs one.
 5. Place the start (`engine::publish`): the node `--at` names (`Definition::node`, reachability ignored; an unknown node refuses with `unknown workflow node <node>`) or the definition's start, the `--input` object as the node's `input` with its `key` as the run's key, and `RunRecord.once` for a try.
 6. Under the workspace lock, repeat step 1, allocate the run's notes folder when it keeps one (`store::notes::allocate`), and write the run home (`store::workflow::initialize`). A start given `--at` or `--input` then journals a `Start` entry at the node, the journal's first entry, with the input when there was one. A failed write fails the start.
@@ -259,18 +259,26 @@ An optional cancel reason travels through `Ending` to settlement and the `Cancel
 
 ### Resume
 
-`resume` (`crates/rimz/src/harness/workflow/engine.rs::resume`) refuses a terminal run, and an active run with neither `--at` nor `--extend`.
+`resume` (`crates/rimz/src/harness/workflow/engine.rs::resume`) refuses a terminal run, and an active run without `--at`. It grants nothing; `extend` does ([Extend](#extend)).
 
 - A parked run re-enters its current node, or `--at <node>`, with a fresh `entered_at` (so a fresh timeout clock), keeping its input, key, and every visit count.
 - `--at` on an active run moves it too (`move_live_attempt`). A live agent attempt stages a `canceled` end with `EndCause::Resume` and a saved route to the destination. A hosted child is killed and its attempt settled. The run journals `Resume` at the destination.
-- While an agent attempt at the current node is already ending and its host is live, `--at` refuses with `the attempt at <node> is settling; retry resume after it finishes`. `--extend` alone is still accepted.
-- `--at` on a try refuses before anything changes, with ``workflow run <id> is a try, which ends at its node and cannot be moved; cancel it with `rimz workflow cancel <id>` ``, since the move would route and so end it. `--extend`, `restart`, and `cancel` work on a try.
-- `--extend visits=+N` adds a run-wide `visit_grant` to every step's `max-visits`. Restarts leave the grant as it is.
-- `--extend deadline=<when>` replaces the deadline and re-arms it.
+- `--at` on a step whose visits reach its `max-visits` plus its grant refuses with `WorkflowErr::SpentVisits` before anything changes, and the CLI prints the `rimz workflow extend <run> <step> --visits +1` command. Without the check the move would end the live attempt and then fail the step with `visits` at once.
+- While an agent attempt at the current node is already ending and its host is live, `--at` refuses with `the attempt at <node> is settling; retry resume after it finishes`.
+- `--at` on a try refuses before anything changes, with ``workflow run <id> is a try, which ends at its node and cannot be moved; cancel it with `rimz workflow cancel <id>` ``, since the move would route and so end it. `extend`, `restart`, and `cancel` work on a try.
 
 A message attempt that resume settles after its host died has its queued notice retired through the caller's `AttemptHost::retire` once the record persists (`engine::orphaned_notice`), as cancel and the deadline do. A live host retires its own notice when it relocks and finds the attempt gone.
 
 `resume` returns the record it persisted before it spawned the detached advance, so a receipt need not reload a record that the advance may already have changed.
+
+### Extend
+
+`extend` (`crates/rimz/src/harness/workflow/engine.rs::extend`) records a grant under the commit lock and nothing else: it enters no node, touches no attempt, and journals one `Extend` row (`step`, `visits`, `deadline`, each absent when not granted). A terminal run refuses. An active run spawns an advance after the persist, so a step that a grant admits again, or a deadline that a new one replaces, is read at once. A parked run keeps the grant for its resume.
+
+- `--visits +N` adds N to `RunRecord.visit_grants` for one step (`RunRecord::visit_grant` reads it, 0 when absent). `granted_step` picks the named step, else the step of the run's held or live session (`RunRecord::session_attempt`), else the run's node, and refuses a node that is no step, a check, and a step without `max-visits`. Restarts and visit resets leave the grants as they are.
+- `--deadline <when>` resolves the time at the extend, replaces `RunRecord.deadline`, and clears `deadline_fired`, so the deadline fires again.
+
+No run parks on a spent cap or a fired deadline: a run parks only on a route to `@user`, which `crates/rimz/src/harness/workflow/spec.rs::reject_reserved_targets` refuses as an authored target, so each takes its failure route. A grant therefore reaches a run that has already failed a step only through a `resume --at` after it.
 
 ### Restart
 
@@ -301,7 +309,7 @@ Every view of a run is a projection of the record and the journal, and never tra
 - The saved readings come from the latest evaluation since node entry and do not re-evaluate the check.
 - `crates/rimz/src/harness/workflow/script.rs::condition_now` previews one condition check or conditional sleep for the `now` line: the first listed check on an agent step, or the current check on a live or parked run. It shares the engine evaluator, sleep expiry and the CI commit fence included, reads the forge cache once, and writes nothing: no child, no record write, no probe refresh. A sleep previewed from an agent step starts at the preview, so it never reads as slept. Preview freshness starts at step or parked-node entry, and held sessions keep their session-entry floor. JSON and history do not call it.
 - `crates/rimz/src/cli/workflow.rs::RoomView::agent` reads the cached-alive roster `agents list` reads and projects the published pane frame over it, so a run's agent peers match the card's. Both views find an attempt's agent through one join, `crates/rimz/src/cli/workflow.rs::attempt_agent`, and use its card handle. Once a hook has bound the attempt's supervised run to a session, the agent is the live row of that session's launch (`address::launch_row`), so a `keep = true` agent whose detach cleared its pin keeps its card. Before that, it is the root pinned to the attempt's run and sequence as its step, the leader's recorded pet name preferred among layout cells. `RoomView::attempt_agents` applies the join to every attempt the journal ended with a supervised run and to the live one, giving `--history` the card handle of each agent still in the room (`crates/rimz/src/cli/workflow_view/history.rs::LiveAgents`) for attempt and signal rows; the fold key and the text `history::saved` writes at a run's ending keep the recorded handle. JSON and the loop views do no enrichment reads.
-- `show`, `cancel`, `resume`, and `restart` select runs through `crates/rimz/src/cli/workflow_view/resolve.rs::select`: caller-room matches win, otherwise several rooms require `--root`. Bare `show` resolves the calling agent and walks launched parents, with a cycle guard, to the first workflow pin (`crates/rimz/src/cli/workflow.rs::calling_run`). Run ids, the hidden `advance` positional included, resolve from any directory through `crates/rimz/src/store/workflow.rs::find_under`, which probes each recorded room's live and finished homes. It skips a room it cannot probe, unless that room holds a home of the id, and then returns the read error.
+- `show`, `cancel`, `resume`, `extend`, and `restart` select runs through `crates/rimz/src/cli/workflow_view/resolve.rs::select`: caller-room matches win, otherwise several rooms require `--root`. Bare `show` resolves the calling agent and walks launched parents, with a cycle guard, to the first workflow pin (`crates/rimz/src/cli/workflow.rs::calling_run`). Run ids, the hidden `advance` positional included, resolve from any directory through `crates/rimz/src/store/workflow.rs::find_under`, which probes each recorded room's live and finished homes. It skips a room it cannot probe, unless that room holds a home of the id, and then returns the read error.
 - `list` reads each run's journal for its rail. An unreadable journal leaves that row's reached history empty without failing the list.
 - `crates/rimz/src/cli/workflow/show.rs::render` prints a live run whose definition admission refuses from its record alone, with the first error and the validate command, and `crates/rimz/src/cli/workflow/list.rs::render` names that refusal on the run's row ahead of a capacity hold. Neither prints other definition warnings.
 
@@ -314,7 +322,7 @@ Every view of a run is a projection of the record and the journal, and never tra
 Each room holds one home per run: `owned/workflows/<run-id>/` while the run is live, and `owned/finished-workflows/<run-id>/` once it has ended and owes neither its loop task, its starting agent nor the `runs` step that started it a report (`RunRecord::owes_report`). Every path in either directory comes from the disk path module (`crates/rimz/src/disk/paths.rs::WorkflowPaths`, `StatePaths::workflow`, `StatePaths::finished_workflow`):
 
 ```text
-record.json        current run, version 18 (reads only 18)
+record.json        current run, version 19 (reads only 19)
 journal.jsonl      append-only evidence: transitions, and a row per check evaluation, so a polling check grows it on every recheck
 definition/        an inline run's generated definition: its text and assets (no deployed run has one)
 history.txt        the history saved as the run leaves the live directory, written before the rename (a failed rename leaves it in the live home)
@@ -388,25 +396,25 @@ Optional fields carry:
 
 Each step's visits serialize as one integer under the step's name. Keys keep integer versus string identity. Unknown `Wait.hold` strings load as absent, and the shared [hold-kind contract](./loops.md#holds-and-their-kinds) covers workflow and condition waits alike.
 
-Runs use version 18 (`store::workflow::VERSION`), the record's own shape version. It rises when a binary on either side of a change would misread the other's record. A change to what a definition means raises nothing, since every run reads its definition as it is at each engine read. `crates/rimz/src/store/workflow.rs::load` reads the version before it decodes the record and refuses any other version with one message naming the run and the version this RimZ reads. A change to what a stored record means raises `VERSION`, so a record an older RimZ wrote refuses rather than being misread. Raising it strands every unfinished run on disk, which the [workflow pass](#the-workflow-pass) ends.
+Runs use version 19 (`store::workflow::VERSION`), the record's own shape version. It rises when a binary on either side of a change would misread the other's record. A change to what a definition means raises nothing, since every run reads its definition as it is at each engine read. `crates/rimz/src/store/workflow.rs::load` reads the version before it decodes the record and refuses any other version with one message naming the run and the version this RimZ reads. A change to what a stored record means raises `VERSION`, so a record an older RimZ wrote refuses rather than being misread. Raising it strands every unfinished run on disk, which the [workflow pass](#the-workflow-pass) ends.
 `crates/rimz/src/store/workflow.rs::classify` reads a home's record as data, `RunClass`:
 
 | Class | Meaning |
 | --- | --- |
 | `Current` | A run this RimZ runs. |
 | `Ended` | A record whose `RunHeader` (the few fields read without decoding the body) says it ended, but whose body this RimZ does not decode. |
-| `Stranded` | A run this RimZ cannot continue, with its `StrandedCause`: an older, missing, or invalid version, or a version-18 body that does not decode. |
+| `Stranded` | A run this RimZ cannot continue, with its `StrandedCause`: an older, missing, or invalid version, or a version-19 body that does not decode. |
 | `Newer` | A newer RimZ's run. Its record is read no further than its version. |
 | `NotObject` | A record that holds no JSON object. |
 | `Recordless` | No record. |
 
-Listings, the throttle's workflow census (`crates/rimz/src/harness/throttle.rs::SystemHost::workflows`), and `crates/rimz/src/store/workflow.rs::unfinished_under` take only current, unfinished runs and skip every other class without a warning. An I/O error reading a record still fails a strict read and the census. A command that names a newer RimZ's run by id refuses and changes nothing. A run this RimZ cannot continue is different: `workflow cancel` and `advance` on it end it as failed the way the workflow pass does (`crates/rimz/src/cli/workflow/reconcile.rs::end_named`), and `resume` and `restart` refuse. `workflow show` of the latter prints its header facts and that reason.
+Listings, the throttle's workflow census (`crates/rimz/src/harness/throttle.rs::SystemHost::workflows`), and `crates/rimz/src/store/workflow.rs::unfinished_under` take only current, unfinished runs and skip every other class without a warning. An I/O error reading a record still fails a strict read and the census. A command that names a newer RimZ's run by id refuses and changes nothing. A run this RimZ cannot continue is different: `workflow cancel` and `advance` on it end it as failed the way the workflow pass does (`crates/rimz/src/cli/workflow/reconcile.rs::end_named`), and `resume`, `extend`, and `restart` refuse. `workflow show` of the latter prints its header facts and that reason.
 
 Engine callbacks that reload a run after off-lock work (`engine::reload`) treat a run that has left the live directory as ended. A late launch stops the agent it started, and a late message step retires its notice unless the moved journal shows it delivered. Neither appends to the moved journal nor recreates the live home.
 
 ### The journal and publication
 
-A journal entry carries its time, node, optional attempt sequence, and one event (`crates/rimz/src/store/workflow.rs::JournalEvent`): hand-placed start, evaluation, attempt, visit reset, restart, turn-end decision, closed wait, explicit route, park, terminal, cancel, resume, signal wake, or forwarded signal. A try's terminal entry carries `tried`, the target of the route it did not take.
+A journal entry carries its time, node, optional attempt sequence, and one event (`crates/rimz/src/store/workflow.rs::JournalEvent`): hand-placed start, evaluation, attempt, visit reset, restart, turn-end decision, closed wait, explicit route, park, terminal, cancel, resume, extend, signal wake, or forwarded signal. A try's terminal entry carries `tried`, the target of the route it did not take.
 
 - An evaluation keeps the routed object and its `origin` (`check` or `engine`, defaulting to `check` when absent). An invalid answer also keeps a stderr tail.
 - Script and judge evaluations keep the digests published with the attempt's child, whichever process ends the attempt. An evaluation whose child never spawned has none.
@@ -431,7 +439,7 @@ Each pass of `advance`'s loop reads the definition again and admits it before it
 
 - A deployed definition that does not read, does not parse, or that admission refuses fails the `advance` without a write. The run waits, the scheduler tick retries it, and the first advance after the file is fixed proceeds.
 - An inline definition that parses but is refused waits the same way. One that no longer parses ends the run failed with `this RimZ cannot read the definition generated at the fire: <error>`, since no later read can parse it either.
-- `restart` and `resume` admit the definition through the same `Reader`, on the record they loaded under the lock and before they build their transition, so a refusal returns the definition's error with nothing interrupted, stopped, killed, or written. Unlike an advance, they also refuse an inline definition that no longer parses and leave it for the next advance to end.
+- `restart`, `resume`, and `extend` admit the definition through the same `Reader`, on the record they loaded under the lock and before they build their transition, so a refusal returns the definition's error with nothing interrupted, stopped, killed, or written. Unlike an advance, they also refuse an inline definition that no longer parses and leave it for the next advance to end.
 - The signal helper admits each run the signal reaches, with agent definitions it loads once per wake, before it clears backoff, journals, forwards, or spawns. A refused run warns and is skipped.
 
 In `prepare`, on the record read under the lock, and when a hosted check or command step settles, `crates/rimz/src/harness/workflow/engine/fit.rs::misfit` asks whether the run still fits the definition. A hosted child's once-a-second timeout read ([Hosted children](#hosted-children)) runs no fit check. The run fits when:
@@ -578,11 +586,11 @@ Every advance checks bounds before routing. An agent observation first updates i
 
 | Bound | Fires when | Detail and reason | Cause |
 | --- | --- | --- | --- |
-| Deadline | Once, when the unfired deadline passes. It stops gating until `--extend deadline` re-arms it. | `{deadline: T}`, `the run's deadline <T> passed` | `deadline`, at the node the run is at |
+| Deadline | Once, when the unfired deadline passes. It stops gating until `extend --deadline` re-arms it. | `{deadline: T}`, `the run's deadline <T> passed` | `deadline`, at the node the run is at |
 | Check timeout | The check's `timeout` after `entered_at`, spanning every evaluation and every other wait at the node. A judge's runs from its attempt's start instead and is never due before its launch, but no hold pauses it. | `{}`, `<C> ran past its timeout <S>`; a judge stopped when it passes adds what it was stopped on ([Judges](#rest-holds-and-endings)) | `timeout` |
 | Step timeout | An agent step's `timeout` after the attempt started, less closed hold time (`asked_ms`). Never due while a hold is open (`held_since`) (`crates/rimz/src/harness/workflow/inspect.rs::timeout_at`). | The attempt's evidence, `the step's timeout passed` | Ends the attempt as `timeout`, which raises `timeout` |
 | Session timeout | The same clock on a session held at its rest check, read from `held.attempt` (`crates/rimz/src/harness/workflow/inspect.rs::session_timeout_at`). Held preflight (`crates/rimz/src/harness/workflow/engine/rest.rs::prepare`) checks it after the deadline and before the check's own timeout, so the session's timeout wins when both are due. | The attempt's evidence, `the step's timeout passed` | Abandons the check and ends the session as `timeout`, which raises `timeout` at the step |
-| Visits | Before launch, the step's visits since the last reset reach `max-visits + visit_grant`. Nothing launches, and no visit or sequence is spent. | `{visits: N, max: M}`, `<S> has used N of M visits`, with the grant included in `max` | `visits`, at the step |
+| Visits | Before launch, the step's visits since the last reset reach `max-visits` plus the step's grant. Nothing launches, and no visit or sequence is spent. | `{visits: N, max: M}`, `<S> has used N of M visits`, with the grant included in `max` | `visits`, at the step |
 
 `rimz workflow restart` starts a step's clock again from the relaunch.
 
@@ -715,8 +723,8 @@ An unreadable required room or stagger record holds a scheduled start as `store`
 
 - It reads the journal through the same `routing_hop` rule as `show`. A `Start` hop at the node says the user started the run there by hand, never that it is the run's first step, and names a given input as `input` in `context.json`.
 - It words the run's origin from what the record froze at the fire (`RunRecord::fire`: the task's name, and a scheduled fire's trigger clause), never from the task catalog or `RunRecord.task`. Editing, renaming, or removing the task mid-run leaves the sentence as it was, old task name included.
-- A resume counts as the sender after a park, even before its agent launches, and an active run's `--extend` does not replace that sender. Unreadable enrichment drops only the arrival sentence.
-- The rail follows `Definition::walk`, groups returning steps beside their check, and draws arrows only for live non-deadline routes. Unreachable nodes stay out even after an explicit resume there. Visit bounds include resume grants.
+- A resume counts as the sender after a park, even before its agent launches, and an `extend` does not replace that sender. Unreadable enrichment drops only the arrival sentence.
+- The rail follows `Definition::walk`, groups returning steps beside their check, and draws arrows only for live non-deadline routes. Unreachable nodes stay out even after an explicit resume there. Visit bounds include each step's grant.
 - The leader's check descriptions follow the step's `rest-check` order, then its `then` check, each once. Conditions keep their cases, scripts and shells show the command plus an optional summary and their execution and path rules, and judges show only a summary. Script and shell descriptions explicitly allow the agent to run the command itself.
 
 `StepLaunch.workflow_note` travels through the leader's supervised request as `ReminderSection::Workflow`, never as a loop section. Companions get no section, and a step's subscriptions are its own `subscribe` wakes. `crates/rimz/src/harness/workflow/engine/agent.rs::step_launch` gives a judge the shorter `brief::judge` section. The notes point models at workflow views, not raw context files. Ordinary agent resume refuses current workflow pins, and rebirth skips them. A workflow restart, `agents restart` of a current step included, recomposes the note for its fresh or resumed leader.
@@ -896,7 +904,7 @@ A fresh judge decline in a task-started run appends a `JudgeDecline` assist (`cr
 
 ## Wakes
 
-A wake only spawns an `advance`, which reads the record again. `run`, `resume`, and `restart` spawn one, and `rimz workflow advance <id>` is the manual form. There is no signal replay: a lost wake delays progress until the next tick.
+A wake only spawns an `advance`, which reads the record again. `run`, `resume`, and `restart` spawn one, as does `extend` on an active run, and `rimz workflow advance <id>` is the manual form. There is no signal replay: a lost wake delays progress until the next tick.
 
 ### The signal helper
 
@@ -981,10 +989,10 @@ The external timer's roots (`crates/rimz/src/cli/loop_timer.rs::task_roots`) inc
 
 | Home | Action |
 | --- | --- |
-| Stranded | `store::workflow::end_stranded` patches the record in place under the lock: `state` `failed`, a first `terminal_at`, `outcome.ending` `failed` with the reason `this RimZ cannot continue the run: <cause>; it reads only record version 18`, `outcome.acted` kept or `false`, `loop_report` owed when the record names a task, and `stranded: true`. Every other member and the version stay. Then, off the lock, its report is made from the header, its agents are released (`harness::run::release_workflow`), and the home moves with a header-only `history.txt`. |
+| Stranded | `store::workflow::end_stranded` patches the record in place under the lock: `state` `failed`, a first `terminal_at`, `outcome.ending` `failed` with the reason `this RimZ cannot continue the run: <cause>; it reads only record version 19`, `outcome.acted` kept or `false`, `loop_report` owed when the record names a task, and `stranded: true`. Every other member and the version stay. Then, off the lock, its report is made from the header, its agents are released (`harness::run::release_workflow`), and the home moves with a header-only `history.txt`. |
 | `NotObject` | Agents released, then the home moves unmodified, with no history. |
 | `Current`, terminal, owing a report | Nothing: its paced advance collects it ([The tick](#the-tick)). |
-| `Ended`: a terminal record that is not version 18, or a version 18 record that does not decode | A report from the header when it owes one, `mark_header_report_sent`, then a header-only `history.txt` and the move. |
+| `Ended`: a terminal record that is not version 19, or a version 19 record that does not decode | A report from the header when it owes one, `mark_header_report_sent`, then a header-only `history.txt` and the move. |
 | `Current`, terminal, owing nothing | The history and the move. |
 | `Current` nonterminal, `Newer` (any state), `Recordless` | Nothing. |
 

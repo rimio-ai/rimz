@@ -755,7 +755,7 @@ mod agent_ref {
                 "scope":{"kind":"worktree","path":fixture.cwd},
                 "created_at":"2026-01-01T00:00:00Z", "state":state,
                 "node":"build", "entered_at":"2026-01-01T00:00:00Z", "deadline_fired":false,
-                "next_seq":8, "visits":{}, "visit_grant":0,
+                "next_seq":8, "visits":{},
                 "attempt":{"kind":"agent", "seq":seq,
                     "node":"build", "started_at":"2026-01-01T00:00:00Z", "host":{"pid":1,"start":null}}
             })).unwrap();

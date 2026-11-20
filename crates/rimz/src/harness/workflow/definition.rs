@@ -534,8 +534,8 @@ impl Node {
         self.step_table()?.session.as_ref()
     }
 
-    /// A step's `max-visits` raised by the run's grant; a check, or a step without a cap, has
-    /// none.
+    /// A step's `max-visits` raised by the run's grant to it; a check, or a step without a cap,
+    /// has none.
     pub fn visit_cap(&self, grant: u64) -> Option<u64> {
         self.step_table()?.visit_cap(grant)
     }

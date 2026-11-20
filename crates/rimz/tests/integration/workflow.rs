@@ -136,13 +136,14 @@ fn runs_another_rimz_wrote_stay_out_of_listings_and_end_only_by_cancel_or_advanc
                 stderr(&shown)
             );
         }
-        let refusing: &[&str] = if version == older {
-            &["resume", "restart"]
+        let extend: &[&str] = &["extend", "--deadline", "2h"];
+        let refusing: &[&[&str]] = if version == older {
+            &[&["resume"], extend, &["restart"]]
         } else {
-            &["cancel", "advance", "resume", "restart"]
+            &[&["cancel"], &["advance"], &["resume"], extend, &["restart"]]
         };
         for verb in refusing {
-            let refused = command(&env, &["workflow", verb, &id]);
+            let refused = command(&env, &[&["workflow"], *verb, &[id.as_str()]].concat());
             let expected = if version == older {
                 format!("this RimZ cannot continue workflow run {id}")
             } else {
@@ -150,7 +151,7 @@ fn runs_another_rimz_wrote_stay_out_of_listings_and_end_only_by_cancel_or_advanc
             };
             assert!(
                 !refused.status.success() && stderr(&refused).contains(&expected),
-                "{verb} {version}: {}",
+                "{verb:?} {version}: {}",
                 stderr(&refused)
             );
             assert!(
@@ -1539,10 +1540,10 @@ fn deadline_routes_once_and_can_be_rearmed() {
         &env,
         &[
             "workflow",
-            "resume",
+            "extend",
             &id,
-            "--extend",
-            "deadline=2001-01-01T00:00:00Z",
+            "--deadline",
+            "2001-01-01T00:00:00Z",
         ],
     );
     let warning = String::from_utf8_lossy(&receipt.stderr).into_owned();
@@ -1553,7 +1554,7 @@ fn deadline_routes_once_and_can_be_rearmed() {
     );
     assert!(
         warning.contains("goes to report at once")
-            && warning.contains("--extend 'deadline=<when>'"),
+            && warning.contains("rimz workflow extend 'review#main' --deadline '<when>'"),
         "{warning}"
     );
     let value = until(&env, &id, |v| {
@@ -1690,10 +1691,10 @@ fn waiting_timeout_and_live_deadline_use_original_clock() {
         &env,
         &[
             "workflow",
-            "resume",
+            "extend",
             &id,
-            "--extend",
-            &format!("deadline={deadline}"),
+            "--deadline",
+            &deadline.to_string(),
         ],
     ));
     let value = settled(&env, &id, "done");
@@ -1855,10 +1856,10 @@ fn stale_host_cannot_overwrite_resumed_context() {
         &env,
         &[
             "workflow",
-            "resume",
+            "extend",
             id,
-            "--extend",
-            "deadline=2000-01-01T00:00:00Z",
+            "--deadline",
+            "2000-01-01T00:00:00Z",
         ],
     ));
     let value = until(&env, id, |v| {
@@ -2019,13 +2020,20 @@ fn starting_commands_refuse_when_the_engine_cannot_open_the_start_lock() {
         fs::read(&paths.record).unwrap(),
         fs::read(&paths.journal).unwrap(),
     );
-    for (verb, action) in [("resume", "resumed"), ("restart", "restarted")] {
-        refused(command(&env, &["workflow", verb, &id]), action);
+    for (verb, action) in [
+        (&["resume"][..], "resumed"),
+        (&["extend", "--deadline", "2h"], "extended"),
+        (&["restart"], "restarted"),
+    ] {
+        refused(
+            command(&env, &[&["workflow"], verb, &[id.as_str()]].concat()),
+            action,
+        );
         let after = (
             fs::read(&paths.record).unwrap(),
             fs::read(&paths.journal).unwrap(),
         );
-        assert!(after == before, "{verb} changed the run");
+        assert!(after == before, "{verb:?} changed the run");
     }
 }
 
@@ -2204,7 +2212,7 @@ fn human_show_lists_each_capped_steps_visits_with_the_grant() {
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     let mut record = value["record"].clone();
-    record["visit_grant"] = json!(3);
+    record["visit_grants"] = json!({"build":3});
     record["visits"] = json!({"build":4, "plain":1});
     let paths = env
         .state_path_for(&env.project_root)
@@ -2212,7 +2220,7 @@ fn human_show_lists_each_capped_steps_visits_with_the_grant() {
     fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
     let text = success(command(&env, &["workflow", "show", &id]));
     assert!(
-        text.contains("visits  build 4 of 8\nvisits  plain 1 of 8\n"),
+        text.contains("visits  build 4 of 8\nvisits  plain 1 of 5\n"),
         "{text}"
     );
     assert_eq!(show(&env, &id)["record"]["visits"], record["visits"]);

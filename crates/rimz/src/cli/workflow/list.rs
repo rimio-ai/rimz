@@ -443,7 +443,7 @@ pub(super) fn render(
             writeln!(
                 out,
                 "  → {}",
-                resolve::run_command(section[0].record, "show", globals, None, &[], &[])
+                resolve::run_command(section[0].record, "show", globals, None, None, &[])
             )?;
             if needs < rows.len() {
                 writeln!(out)?;
@@ -786,7 +786,7 @@ mod tests {
             "spec_dir":"/spec", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":format!("/repo/{lane}")},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
-            "state":"active", "node":"gate", "visits":{}, "visit_grant":0,
+            "state":"active", "node":"gate", "visits":{},
             "deadline_fired":false, "next_seq":1, "task":task, "manual":manual,
             "wait":held.then(|| serde_json::json!({
                 "node":"gate", "outcome":"capacity", "hold":"queue", "detail":"queued",
@@ -993,7 +993,7 @@ mod tests {
             "spec_dir":"/spec", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":"/repo/feature"},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
-            "state":"active", "node":"build", "visits":{}, "visit_grant":0,
+            "state":"active", "node":"build", "visits":{},
             "deadline_fired":false, "next_seq":1,
         }))
         .unwrap();
@@ -1027,7 +1027,7 @@ mod tests {
             "spec_dir":"/spec", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":"/repo/feature"},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
-            "state":"parked", "node":"decision", "visits":{}, "visit_grant":0,
+            "state":"parked", "node":"decision", "visits":{},
             "deadline_fired":false, "next_seq":1,
         }))
         .unwrap();

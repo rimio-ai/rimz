@@ -151,7 +151,7 @@ no active or parked runs of fix-tests
 
 `rimz workflow show fix-tests fix` prints one node in full, with every resolved edge, including the default ones the graph leaves out.
 
-`list` names each run by an address such as `fix-tests#feat-x`: the workflow, then the checkout's directory name, or `main` for the project root. Use that address in place of `$RUN` in `show`, `resume`, `restart`, and `cancel`. The runs that need you come first, under NEEDS YOU: an agent step with a question open, an agent step held on an error that waiting will not clear (a provider error, an unknown error, a lapsed plan), a capacity hold that needs a fix, and a step waiting on reporting hooks or folder trust. A step held on a rate or spend limit, an overload, or a budget park stays in its workflow's group. The limit and the overload clear by themselves. A budget park clears by itself only when its cap's `/day` or `/month` window resets with [auto-continue](./loops.md#keep-the-fleet-moving) on; otherwise it holds the step until you raise the cap or message the agent ([what resumes a parked agent](./budget.md#what-resumes-a-parked-agent)). The other runs group by workflow. The two captures below come from a test room: its checkout is named `probe`, its test was `false`, and other agents held the checkout, so `fix` could not start:
+`list` names each run by an address such as `fix-tests#feat-x`: the workflow, then the checkout's directory name, or `main` for the project root. Use that address in place of `$RUN` in `show`, `resume`, `extend`, `restart`, and `cancel`. The runs that need you come first, under NEEDS YOU: an agent step with a question open, an agent step held on an error that waiting will not clear (a provider error, an unknown error, a lapsed plan), a capacity hold that needs a fix, and a step waiting on reporting hooks or folder trust. A step held on a rate or spend limit, an overload, or a budget park stays in its workflow's group. The limit and the overload clear by themselves. A budget park clears by itself only when its cap's `/day` or `/month` window resets with [auto-continue](./loops.md#keep-the-fleet-moving) on; otherwise it holds the step until you raise the cap or message the agent ([what resumes a parked agent](./budget.md#what-resumes-a-parked-agent)). The other runs group by workflow. The two captures below come from a test room: its checkout is named `probe`, its test was `false`, and other agents held the checkout, so `fix` could not start:
 
 ```console
 $ rimz workflow list
@@ -219,11 +219,11 @@ Each fire hands its command the trigger line, `Rule `run-news` fired here. workf
 - `work/` is the work directory. It holds `context.json`, the logs of each check and command, `signs/`, and a `notes/` link to the run's kept notes.
 - `history.txt` appears when the run ends: the `--history` view, saved.
 
-The run keeps no copy of your definition. It reads `~/.rimz/workflows/<name>/` every time it moves, so an edit there reaches every live run of that workflow at its next step: a changed route is the one taken, and the next prompt, script, or command reads the files as they are then. Agent profiles are read at each launch too. What the run decided at its start stays decided: its scope, its deadline, and its visit grants. The one exception is the small run behind each [loop task](./loops.md) fire, which has no workflow folder: it holds a `definition/` folder, the definition the fire generated, and reads that instead.
+The run keeps no copy of your definition. It reads `~/.rimz/workflows/<name>/` every time it moves, so an edit there reaches every live run of that workflow at its next step: a changed route is the one taken, and the next prompt, script, or command reads the files as they are then. Agent profiles are read at each launch too. An edit cannot change what the run recorded: its scope, its deadline, and its visit grants. Only `rimz workflow extend` changes the deadline and the grants of a live run. The one exception is the small run behind each [loop task](./loops.md) fire, which has no workflow folder: it holds a `definition/` folder, the definition the fire generated, and reads that instead.
 
 An edit can stop a run in two ways. While the definition does not parse or `rimz workflow validate` refuses it, the run waits where it is: `rimz workflow list` and `show` print `waits on its definition:` with the first error, and the run moves on once you fix the file. An edit the run no longer fits, such as removing the step its agent works in or turning that step into another kind, ends the run `failed` with a reason naming the node, and stops its agent. `rimz workflow cancel` works whatever state the definition is in.
 
-Nothing writes to `~/.rimz/workflows/`. No daemon keeps the run. Each move is a short `rimz workflow advance <run-id>` process: it reads the record and the definition, decides the next node, writes the record again, and exits. `run`, `resume`, and `restart` start one, and so do a matching signal and the end of a step's turn. The room's minute check starts one for every run that is due. When an advance dies, the next one picks up from the record. An interrupted check runs again. A command step whose host died fails as `died`, so its action never runs twice by accident.
+Nothing writes to `~/.rimz/workflows/`. No daemon keeps the run. Each move is a short `rimz workflow advance <run-id>` process: it reads the record and the definition, decides the next node, writes the record again, and exits. `run`, `resume`, and `restart` start one, as does `extend` on an active run, and so do a matching signal and the end of a step's turn. The room's minute check starts one for every run that is due. When an advance dies, the next one picks up from the record. An interrupted check runs again. A command step whose host died fails as `died`, so its action never runs twice by accident.
 
 A test or script runs as a child process in the checkout, with no stdin and with `RIMZ_WORKFLOW_DIR` (the work directory), `RIMZ_WORKFLOW_RUN` (the run id), and `RIMZ_WORKFLOW_DEFINITION` (the definition folder) set. Its output goes to a log in `work/`, and the log's path travels with its answer. A condition reads RimZ's own state in the advance and runs no process. A check's `timeout` counts from the moment the run enters it, across every evaluation and wait there. A timeout, the run's deadline, or a cancel stops the check's whole process group.
 
@@ -478,15 +478,16 @@ A question or permission prompt from an agent step's agent keeps the attempt ope
 
 `deadline = "2026-12-01"` under `[workflow]` bounds the whole run, and `rimz workflow run --deadline <WHEN>` sets or replaces it for one run. Either takes a duration counted from the run's start (`8h`), a time of day (`18:00`, `fri 18:00`) at its next occurrence, a date (midnight at its start), a date and time (`2026-12-01 09:00`), or an RFC 3339 instant, read in your [`timezone`](./configuration.md#sidebar-rendering); the [reference](../reference/cli/workflow.md#workflow-times) lists every form. When it passes, RimZ stops a live attempt and fails the current node with cause `deadline`, once. The node that failure routes to runs without a deadline.
 
-A failure handler, or you, sends a run on with `resume`:
+A failure handler, or you, sends a run on with `resume`, and grants it more room with `extend`:
 
 ```sh
-rimz workflow resume "$RUN" --at tests                   # move the run to another node
-rimz workflow resume "$RUN" --at fix --extend visits=+2  # back to fix, with 2 more visits
-rimz workflow resume "$RUN" --extend deadline=2027-01-08 # grant a new deadline
+rimz workflow resume "$RUN" --at tests                 # move the run to another node
+rimz workflow extend "$RUN" fix --visits +2            # give fix 2 more visits
+rimz workflow resume "$RUN" --at fix                   # then send the run back to fix
+rimz workflow extend "$RUN" --deadline 2027-01-08      # grant a new deadline
 ```
 
-`--at` moves the run to that node with a fresh timeout, and stops an attempt live at the current node. Nothing resets a visit count, so a step that spent its visits needs `--extend visits=+N` to run again. It raises every step's `max-visits` by N, for this run only. The definition does not change.
+`--at` moves the run to that node with a fresh timeout, and stops an attempt live at the current node. Only `restart` resets a visit count, and only for the step it restarts, so a step that spent its visits needs `extend --visits +N` before it runs again, and `resume --at` refuses it until then, printing the `extend` command to run. A grant raises that one step's `max-visits` by N, for this run only, and `extend` only records it: it moves nothing, so the `resume` after it sends the run there. The definition does not change.
 
 ### Reflect before a failed ending
 

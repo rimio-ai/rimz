@@ -2442,7 +2442,7 @@ path = "crates/rimz/src/harness"
 # run::release_rung gives back a stop rung the helper's interrupt could not deliver (+1).
 # harness::notes and its NotesErr, AddRequest, Added, ListRequest, Note, Listing, add and list own the home-wide note store behind `rimz notes` (+9).
 # harness::notes::RIMZ_KEYS gives `rimz notes list --filter help` the header keys the filter names.
-# throttle::probe_queue_lock lets workflow run, resume, and restart refuse an unwritable home (+1).
+# throttle::probe_queue_lock lets workflow run, resume, extend, and restart refuse an unwritable home (+1).
 # deadline::stop_claimed lets message delivery withdraw a deadline stop whose run no longer holds the stop rung (+1).
 # schedule::attention moves the loop task verdict out of the CLI for loop list, loop watch, and the sidebar: Attention, Hold with of_wait, Facts, TaskFacts, decide, parked_overrides, run_summary, parked_words, since_wait_armed, fired, capacity_waits, RoomReadings with new and observe, BlockingTerm, TaskReading, ReadContext, and read_room; its inputs run_log::ProcessExit with of and LoopRunRecord::exit_label, TaskActionKind::text, TaskCatalog::load_room_lenient, and the when items below come with it.
 # WhenExpr::closed_pr_term names the closed pull request that raises the loop verdict's pr_closed cause (+1).
@@ -4633,7 +4633,10 @@ path = "crates/rimz/src/store"
 # reports store on the starting run (+3).
 # MessageRecord::failed_resume_reason and receiver_address give the deadline and the wrapper
 # exit one failed-resume reason (+2).
-surface-budget = 684
+# RunRecord::visit_grant reads one step's own grant for every cap reader (+1).
+# RunRecord::moving_to names the step a staged resume move sends the run to, for the extend
+# grant and both receipts (+1).
+surface-budget = 686
 
 [[verdict]]
 kind = "item"
@@ -5959,7 +5962,7 @@ allowed-dependencies = [
 # observe projects an observed agent attempt for the CLI host (+1).
 # Cohort, stop_cohort, detach_cohort and leader pick the agents an attempt's stop, detach, push and forward reach; one fits the slot leader_turn left.
 # AttemptHost::{orphan, leader_session, start_groups}, orphan and launch_groups close the engine's reads around the attempt host (+5).
-# admit and Inadmissible: run start, each advance read, resume, restart, the signal wake and the workflow CLI's waiting report share one admission (+2).
+# admit and Inadmissible: run start, each advance read, resume, extend, restart, the signal wake and the workflow CLI's waiting report share one admission (+2).
 # When carries a workflow time from its spelling to the instant a run resolves it (+1).
 # submit lets a judge's `rimz workflow submit` answer its check through the engine (+1).
 # AttemptHost::budget_refusal and budget_refusal let the engine hold a launch the budget gate would refuse (+2).
@@ -5969,7 +5972,8 @@ allowed-dependencies = [
 # join_report lets the loop collection store a started run's ending on its runs step (+1).
 # is_deployed shares the workflows-home containment check with `workflow run` and validate (+1).
 # refuse_overlap lets a start name the run holding its slot before its trust read (+1).
-surface-budget = 107
+# extend and Extension record a `rimz workflow extend` grant and name the step it raised (+2).
+surface-budget = 109
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
@@ -6091,7 +6095,7 @@ allowed-dependencies = [
     "workspace",
     "worktree",
 ]
-# probe_queue_lock lets workflow run, resume, and restart refuse an unwritable home (+1).
+# probe_queue_lock lets workflow run, resume, extend, and restart refuse an unwritable home (+1).
 # release_stopped frees the machine turn of a launch its workflow stopped before it reported (+1).
 surface-budget = 43
 
@@ -9029,7 +9033,7 @@ reason = "The throttle's start-lock probe opens its queue lock the way every loc
 [[verdict]]
 kind = "item"
 key = "harness::throttle::probe_queue_lock"
-reason = "Workflow run, resume, and restart refuse before changing anything when the detached engine could not open the home-wide start lock."
+reason = "Workflow run, resume, extend, and restart refuse before changing anything when the detached engine could not open the home-wide start lock."
 
 [[verdict]]
 kind = "item"
@@ -12449,7 +12453,7 @@ reason = "The CLI rails and the sidebar strip share one reached rule over workfl
 [[verdict]]
 kind = "item"
 key = "harness::workflow::routing_hop"
-reason = "Workflow park views and launch briefs share the newest parked resume, `resume --at` move, or route into the current node, ignoring active-run extensions."
+reason = "Workflow park views and launch briefs share the newest parked resume, `resume --at` move, or route into the current node, ignoring `extend` grants."
 
 [[verdict]]
 kind = "item"
@@ -12604,7 +12608,7 @@ reason = "The workflow CLI and engine share a strict spec loader, the editor sch
 [[verdict]]
 kind = "item"
 key = "harness::workflow::admit"
-reason = "Run start, each advance's read of a run's definition, resume, restart, the signal wake, and the workflow CLI's report of a waiting run admit the definition through one parse-and-validate step."
+reason = "Run start, each advance's read of a run's definition, resume, extend, restart, the signal wake, and the workflow CLI's report of a waiting run admit the definition through one parse-and-validate step."
 
 [[verdict]]
 kind = "item"
@@ -12619,7 +12623,7 @@ reason = "The workflow CLI and engine share a strict spec loader, the editor sch
 [[verdict]]
 kind = "item"
 key = "harness::workflow::validate::validate_spec"
-reason = "Run admission at the start, at each advance read, and before resume, restart and the signal wake validates the parsed definition it holds, reusing the CLI validator without re-reading the definition."
+reason = "Run admission at the start, at each advance read, and before resume, extend, restart and the signal wake validates the parsed definition it holds, reusing the CLI validator without re-reading the definition."
 
 [[verdict]]
 kind = "item"

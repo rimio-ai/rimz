@@ -118,7 +118,7 @@ fn workflow_parks_do_not_publish_attention_notices() {
             "version":crate::store::workflow::VERSION,"id":id,"workflow":"review","spec_dir":"/definitions/review",
             "scope":{"kind":"worktree","path":"/repo"},"project_root":"/repo","created_at":entered,"state":status,
             "park":{"reason":"asked","text":"Which fix?","at":entered},"node":"triage","entered_at":entered,
-            "visits":{},"visit_grant":0,"deadline_fired":false,"next_seq":1
+            "visits":{},"deadline_fired":false,"next_seq":1
         })).unwrap()).unwrap();
     }
     let projected = serde_json::to_value(fold_cached(snapshot, None, &runtime)).unwrap();

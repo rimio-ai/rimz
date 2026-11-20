@@ -65,7 +65,7 @@ impl Other {
             .header()
             .and_then(|header| header.project_root.clone())
             .filter(|root| here.as_ref() != Some(root));
-        command("show", &[self.id.as_str()], root.as_deref(), None, &[], &[])
+        command("show", &[self.id.as_str()], root.as_deref(), None, &[])
     }
 
     /// A live home this RimZ cannot continue: a stranded run, one an earlier call ended as
@@ -191,7 +191,6 @@ pub(in crate::cli) fn command(
     targets: &[&str],
     root: Option<&Path>,
     at: Option<&str>,
-    extend: &[String],
     flags: &[&str],
 ) -> String {
     let at_args = match at {
@@ -202,8 +201,7 @@ pub(in crate::cli) fn command(
     let flags = flags
         .iter()
         .copied()
-        .chain(at_args.iter().map(String::as_str))
-        .chain(extend.iter().flat_map(|grant| ["--extend", grant.as_str()]));
+        .chain(at_args.iter().map(String::as_str));
     let args = ["workflow", verb].into_iter();
     let command = if targets.iter().any(|target| target.starts_with('-')) {
         shell_command(
@@ -240,10 +238,10 @@ pub(in crate::cli) fn run_command(
     verb: &str,
     globals: &GlobalFlags,
     at: Option<&str>,
-    extend: &[String],
+    step: Option<&str>,
     flags: &[&str],
 ) -> String {
-    RunCommands::new(record, globals).command(verb, at, extend, flags)
+    RunCommands::new(record, globals).command(verb, at, step, flags)
 }
 
 /// Names many runs for copyable commands against one load of every room's runs, and one caller
@@ -295,6 +293,7 @@ impl RunTargets {
                 home,
                 runs,
                 None,
+                None,
                 &[],
             ) {
                 Ok(Picked::Run(index)) => Some(&runs[index].record.id),
@@ -335,7 +334,7 @@ impl<'a> RunCommands<'a> {
         &self,
         verb: &str,
         at: Option<&str>,
-        extend: &[String],
+        step: Option<&str>,
         flags: &[&str],
     ) -> String {
         let target = if verb != "show" && self.record.state.is_terminal() {
@@ -343,7 +342,8 @@ impl<'a> RunCommands<'a> {
         } else {
             &self.target
         };
-        command(verb, &[target], self.root.as_deref(), at, extend, flags)
+        let targets = std::iter::once(target).chain(step).collect::<Vec<_>>();
+        command(verb, &targets, self.root.as_deref(), at, flags)
     }
 }
 
@@ -387,7 +387,8 @@ pub(in crate::cli) fn select(
     verb: &str,
     globals: &GlobalFlags,
     at: Option<&str>,
-    extend: &[String],
+    step: Option<&str>,
+    flags: &[&str],
 ) -> Result<Selection> {
     let target = Target::parse(raw)?;
     if let Target::Id(id) = target {
@@ -419,7 +420,8 @@ pub(in crate::cli) fn select(
         home,
         &runs,
         at,
-        extend,
+        step,
+        flags,
     )?;
     Ok(match picked {
         Picked::Run(index) => {
@@ -462,7 +464,8 @@ fn pick(
     home: impl FnOnce() -> Option<PathBuf>,
     all: &[Located],
     at: Option<&str>,
-    extend: &[String],
+    step: Option<&str>,
+    flags: &[&str],
 ) -> Result<Picked> {
     let root = workspace.map(|workspace| workspace.project_root.as_path());
     let name = match target {
@@ -516,14 +519,11 @@ fn pick(
         let commands = runs
             .iter()
             .map(|run| {
-                command(
-                    verb,
-                    &[&candidate_target(&run.record, &runs)],
-                    Some(&run.record.project_root),
-                    at,
-                    extend,
-                    &[],
-                )
+                let target = candidate_target(&run.record, &runs);
+                let targets = std::iter::once(target.as_str())
+                    .chain(step)
+                    .collect::<Vec<_>>();
+                command(verb, &targets, Some(&run.record.project_root), at, flags)
             })
             .collect::<BTreeSet<_>>();
         bail!(
@@ -574,7 +574,15 @@ fn pick(
                     "  {} {}\n    {}",
                     run.record.id,
                     run.record.scope.path.display(),
-                    command(verb, &[&target], root, at, extend, &[])
+                    command(
+                        verb,
+                        &std::iter::once(target.as_str())
+                            .chain(step)
+                            .collect::<Vec<_>>(),
+                        root,
+                        at,
+                        flags
+                    )
                 )
             })
             .collect::<Vec<_>>()
@@ -628,7 +636,7 @@ mod tests {
             "scope": { "kind": "worktree", "path": format!("{root}/{lane}") },
             "project_root": root, "created_at": at, "state": state, "node": "gate",
             "entered_at": at, "terminal_at": (state != "active").then_some(at),
-            "visits": {}, "visit_grant": 0, "deadline_fired": false, "next_seq": 1,
+            "visits": {}, "deadline_fired": false, "next_seq": 1,
         }))
         .unwrap();
         let state =
@@ -678,6 +686,7 @@ mod tests {
             Some(&workspace("/repo")),
             || Some("/repo".into()),
             &all,
+            None,
             None,
             &[],
         )
@@ -733,6 +742,7 @@ mod tests {
                         || Some("/repo".into()),
                         all,
                         None,
+                        None,
                         &[],
                     )
                     .unwrap();
@@ -743,7 +753,7 @@ mod tests {
                 }
             };
             assert_eq!(selected, located.record.id, "{target}");
-            let command = commands.command("show", None, &[], &[]);
+            let command = commands.command("show", None, None, &[]);
             assert_eq!(command.contains("--root"), root == "/other", "{command}");
             assert!(
                 command.ends_with(&format!("workflow show {}", shell_command([target]))),

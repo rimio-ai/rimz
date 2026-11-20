@@ -171,7 +171,7 @@ fn target(raw: &str, globals: &super::super::GlobalFlags) -> Result<Target> {
         ))
         .into());
     }
-    let id = match resolve::select(raw, "show", globals, None, &[])? {
+    let id = match resolve::select(raw, "show", globals, None, None, &[])? {
         resolve::Selection::Run(run) => run.record.id,
         resolve::Selection::Other(other) => other.id,
         resolve::Selection::Workflow(_) => unreachable!("an address selects one run"),

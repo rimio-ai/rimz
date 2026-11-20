@@ -63,7 +63,7 @@ impl View<'_> {
             let max = self
                 .spec
                 .step(&row.name)
-                .and_then(|step| step.visit_cap(self.record.visit_grant));
+                .and_then(|step| step.visit_cap(self.record.visit_grant(&row.name)));
             let count = self.record.visits.get(&row.name).copied().unwrap_or(count);
             let repeated = if count > 1 {
                 format!(" ×{count}")

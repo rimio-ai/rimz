@@ -482,7 +482,7 @@ fn needs_you_prints_each_of_two_parked_summaries_once_with_park_age() {
                 "reason":"user", "text":"review this 界 ".repeat(8),
                 "at":Timestamp::from_second(880).unwrap(),
             },
-            "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
+            "visits":{}, "deadline_fired":false, "next_seq":1,
         }))
         .unwrap()
     });

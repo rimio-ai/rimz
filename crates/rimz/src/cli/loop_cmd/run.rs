@@ -466,7 +466,7 @@ fn write_launched_run_command(
     writeln!(
         ui::out(),
         "  → {}",
-        crate::cli::workflow_view::resolve::run_command(&run, "show", globals, None, &[], &[])
+        crate::cli::workflow_view::resolve::run_command(&run, "show", globals, None, None, &[])
     )?;
     Ok(())
 }

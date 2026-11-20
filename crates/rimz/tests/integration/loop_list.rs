@@ -55,7 +55,7 @@ fn seed_task_run(
         "task":task, "loop_fire":fire, "spec_dir":"/definitions/review",
         "scope":{"kind":"worktree","path":checkout}, "project_root":env.project_root,
         "created_at":now, "entered_at":now, "state":"active", "node":"agent", "wait":wait,
-        "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
+        "visits":{}, "deadline_fired":false, "next_seq":1,
     }))
     .unwrap();
     rimz::store::workflow::initialize(&paths, &record, &guard).unwrap();
@@ -2163,7 +2163,7 @@ fn seed_room_run_at(
         "created_at":created_at, "entered_at":created_at, "node":"agent", "wait":wait,
         "state":state,
         "park":park.map(|at| json!({"reason":"user","text":"needs a look","at":at})),
-        "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
+        "visits":{}, "deadline_fired":false, "next_seq":1,
     }))
     .unwrap();
     rimz::store::workflow::initialize(&paths, &record, &guard).unwrap();

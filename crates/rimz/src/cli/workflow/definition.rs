@@ -130,7 +130,6 @@ pub(super) fn render(definition: &Definition, globals: &super::super::GlobalFlag
         globals.root.as_deref(),
         None,
         &[],
-        &[],
     );
     if definition.task.is_some() {
         writeln!(
@@ -160,7 +159,7 @@ pub(super) fn load(definition: &Definition) -> Result<workflow::Definition> {
         }
         anyhow::anyhow!(
             "{unavailable}; check with {}",
-            resolve::command("validate", &[&definition.raw], None, None, &[], &[]),
+            resolve::command("validate", &[&definition.raw], None, None, &[]),
         )
     })
 }
@@ -210,7 +209,7 @@ fn header(
         let worktree = spec.scope() == ScopeKind::Worktree;
         let flags: &[&str] = if worktree { &["-w", "<worktree>"] } else { &[] };
         let root = globals.root.as_deref();
-        let command = resolve::command("run", &[name], root, None, &[], flags);
+        let command = resolve::command("run", &[name], root, None, flags);
         let rimz = resolve::rimz_prefix(root);
         let task = format!(
             "{rimz} loop add '<task>' --workflow {}{} --every '<duration>'",

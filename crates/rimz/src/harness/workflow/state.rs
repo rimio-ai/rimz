@@ -797,13 +797,7 @@ impl Transition<'_> {
             )?;
             if ending.cause == EndCause::Resume {
                 // Journaled at the node the run moved to, after the attempt it ended.
-                self.push(
-                    None,
-                    JournalEvent::Resume {
-                        visit_grant: self.record.visit_grant,
-                        deadline: self.record.deadline,
-                    },
-                );
+                self.push(None, JournalEvent::Resume);
             }
             return Ok(());
         }
@@ -926,13 +920,7 @@ impl Transition<'_> {
                 ending.cause == EndCause::Cancel,
             )?;
             if ending.cause == EndCause::Resume {
-                self.push(
-                    None,
-                    JournalEvent::Resume {
-                        visit_grant: self.record.visit_grant,
-                        deadline: self.record.deadline,
-                    },
-                );
+                self.push(None, JournalEvent::Resume);
             }
         } else if ending.cause == EndCause::Cancel {
             self.abandon_check("canceled");

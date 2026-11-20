@@ -177,7 +177,9 @@ fn visit_caps_add_the_grant_and_trip_at_the_cap() {
     );
     record.visits.insert("build".into(), 4);
     assert_eq!(step.tripped_visit_bound(&record), Some((4, 4)));
-    record.visit_grant = 1;
+    record.visit_grants.insert("other".into(), 1);
+    assert_eq!(step.tripped_visit_bound(&record), Some((4, 4)));
+    record.visit_grants.insert("build".into(), 1);
     assert_eq!(step.tripped_visit_bound(&record), None);
     let mut unbounded = step.clone();
     unbounded.max_visits = None;

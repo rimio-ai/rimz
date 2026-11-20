@@ -1688,6 +1688,8 @@ rimz help workflow advance [hidden]
 
 rimz help workflow cancel
 
+rimz help workflow extend
+
 rimz help workflow list
 
 rimz help workflow reconcile [hidden]
@@ -4248,11 +4250,25 @@ rimz workflow cancel
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
+rimz workflow extend
+    <id>  [action=set takes=1..=1 required]
+    <step>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --deadline <WHEN>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --visits <+N>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
 rimz workflow help
 
 rimz workflow help advance [hidden]
 
 rimz workflow help cancel
+
+rimz workflow help extend
 
 rimz workflow help help
 
@@ -4309,7 +4325,6 @@ rimz workflow resume
     <id>  [action=set takes=1..=1 required]
     --at <NODE>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
-    --extend <GRANT>  [action=append takes=1..=1]
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]

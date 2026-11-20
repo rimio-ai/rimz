@@ -52,7 +52,7 @@ fn reached_credits_resume_target_but_not_the_nodes_it_skipped() {
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
     assert_eq!(live.node, "build");
-    resume(&state, &record.id, &FakeHost::new(), Some("finish"), &[]).unwrap();
+    resume(&state, &record.id, &FakeHost::new(), Some("finish")).unwrap();
     let resumed = advance_ok(&state, &record.id, &host);
     assert_eq!(resumed.node, "finish");
     assert_eq!(reached_nodes(&state, &resumed), ["build", "finish"]);

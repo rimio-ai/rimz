@@ -254,7 +254,7 @@ fn resume_at_refuses_a_try_before_it_changes_anything_and_extend_still_works() {
     let record = start(&state, &root, placed(Some("build"), None, true)).unwrap();
     let before = (load(&state, &record), journal(&state, &record));
     let host = FakeHost::new();
-    let error = resume(&state, &record.id, &host, Some("watch"), &[]).unwrap_err();
+    let error = resume(&state, &record.id, &host, Some("watch")).unwrap_err();
     assert_eq!(
         error.to_string(),
         format!(
@@ -265,8 +265,11 @@ fn resume_at_refuses_a_try_before_it_changes_anything_and_extend_still_works() {
     );
     assert!(matches!(error, WorkflowErr::Refused(_)), "{error:?}");
     assert_eq!((load(&state, &record), journal(&state, &record)), before);
-    let extended = resume(&state, &record.id, &host, None, &["visits=+1".into()]).unwrap();
-    assert_eq!((extended.visit_grant, extended.once), (1, true));
+    let extended = extend(&state, &record.id, &host, Some((Some("build"), 1)), None).unwrap();
+    assert_eq!(
+        (extended.record.visit_grant("build"), extended.record.once),
+        (1, true)
+    );
 }
 
 #[test]

@@ -153,7 +153,7 @@ pub(super) fn render(
     writeln!(
         out,
         "all of it: {}",
-        view.command("show", None, &[], &["--history"])
+        view.command("show", None, None, &["--history"])
     )?;
     Ok(())
 }
@@ -225,7 +225,7 @@ fn unreadable(
     writeln!(
         out,
         "or end it: {}",
-        resolve::RunCommands::new(&run.record, globals).command("cancel", None, &[], &[])
+        resolve::RunCommands::new(&run.record, globals).command("cancel", None, None, &[])
     )?;
     Ok(())
 }
@@ -238,7 +238,7 @@ fn waits_on_definition(out: &mut impl Write, dir: &std::path::Path, error: &str)
     writeln!(
         out,
         "check with {}",
-        resolve::command("validate", &[&target], None, None, &[], &[])
+        resolve::command("validate", &[&target], None, None, &[])
     )?;
     Ok(())
 }
@@ -354,8 +354,8 @@ impl View<'_> {
         render::workflow_clock(at, self.now)
     }
 
-    fn command(&self, verb: &str, at: Option<&str>, extend: &[String], flags: &[&str]) -> String {
-        self.commands.command(verb, at, extend, flags)
+    fn command(&self, verb: &str, at: Option<&str>, step: Option<&str>, flags: &[&str]) -> String {
+        self.commands.command(verb, at, step, flags)
     }
 
     fn presentation(&self, agent: Option<&str>) -> Result<Presentation> {
@@ -540,7 +540,7 @@ impl View<'_> {
     fn visit(&self) -> String {
         self.spec
             .step(&self.record.node)
-            .and_then(|step| step.visit_cap(self.record.visit_grant))
+            .and_then(|step| step.visit_cap(self.record.visit_grant(&self.record.node)))
             .map_or_else(String::new, |max| {
                 let used = self.record.visits_to(&self.record.node);
                 format!(" · visit {used} of {max}")
@@ -755,7 +755,7 @@ impl View<'_> {
             let max = self
                 .spec
                 .step(name)
-                .and_then(|step| step.visit_cap(self.record.visit_grant));
+                .and_then(|step| step.visit_cap(self.record.visit_grant(name)));
             let share = self.record.key.as_ref().and_then(|key| {
                 self.record
                     .key_visits

@@ -346,15 +346,17 @@ pub(super) fn detail(
         return wait;
     }
     if let Some(step) = spec.and_then(|spec| spec.step(&record.node)) {
-        return step.visit_cap(record.visit_grant).map_or_else(
-            || "running".into(),
-            |max| {
-                format!(
-                    "running · visit {} of {max}",
-                    record.visits_to(&record.node)
-                )
-            },
-        );
+        return step
+            .visit_cap(record.visit_grant(&record.node))
+            .map_or_else(
+                || "running".into(),
+                |max| {
+                    format!(
+                        "running · visit {} of {max}",
+                        record.visits_to(&record.node)
+                    )
+                },
+            );
     }
     judge(record).map_or_else(|| "checking".into(), |judge| format!("checking in {judge}"))
 }
@@ -435,7 +437,7 @@ mod tests {
             "spec_dir":"/spec", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":"/repo/lane"},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
-            "state":"active", "node":"triage", "visits":{}, "visit_grant":0,
+            "state":"active", "node":"triage", "visits":{},
             "deadline_fired":false, "next_seq":2,
         }))
         .unwrap()

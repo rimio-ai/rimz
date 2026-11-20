@@ -270,10 +270,10 @@ fn shell_deadline_interrupts_the_group_and_uses_the_workflow_edge() {
         &env,
         &[
             "workflow",
-            "resume",
+            "extend",
             &id,
-            "--extend",
-            &format!("deadline={deadline}"),
+            "--deadline",
+            &deadline.to_string(),
         ],
     ));
     let value = settled(&env, &id, "failed");

@@ -9,7 +9,7 @@ fn a_run_whose_home_moved_after_it_was_located_shows_as_its_id_finds_it() {
         "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
         "spec_dir":dir.path(),"project_root":dir.path(),
         "scope":{"kind":"worktree","path":dir.path()},"state":"done","node":"@done",
-        "created_at":now,"entered_at":now,"terminal_at":now,"visits":{},"visit_grant":0,
+        "created_at":now,"entered_at":now,"terminal_at":now,"visits":{},
         "deadline_fired":false,"next_seq":1,
     }))
     .unwrap();
@@ -57,7 +57,7 @@ fn now_line_uses_the_open_case_hold_instead_of_restarting_it() {
         "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
         "spec_dir":dir.path(),"project_root":dir.path(),
         "scope":{"kind":"worktree","path":dir.path()},"state":"parked","node":"gate",
-        "created_at":now,"entered_at":now,"visits":{},"visit_grant":0,
+        "created_at":now,"entered_at":now,"visits":{},
         "deadline_fired":false,"next_seq":1,
         "wait":{"node":"gate","outcome":"hold","case":0,
             "first":now-jiff::SignedDuration::from_mins(1),"last":now,"count":1},
@@ -105,7 +105,7 @@ fn a_hold_under_unknown_reads_unknown_without_a_forecast_until_true_again() {
         "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
         "spec_dir":dir.path(),"project_root":dir.path(),
         "scope":{"kind":"worktree","path":dir.path()},"state":"active","node":"gate",
-        "created_at":first,"entered_at":first,"visits":{},"visit_grant":0,
+        "created_at":first,"entered_at":first,"visits":{},
         "deadline_fired":false,"next_seq":1,
         "wait":{"node":"gate","outcome":"hold","case":0,"detail":"ready",
             "unknown":"team.stage (no board)","first":first,"last":now,"count":2},
@@ -159,7 +159,7 @@ fn now_line_reads_a_sleep_a_step_enters_next_instead_of_reporting_it_slept() {
         "spec_dir":dir.path(),"project_root":dir.path(),
         "scope":{"kind":"worktree","path":dir.path()},"state":"active","node":"build",
         "created_at":now,"entered_at":now-jiff::SignedDuration::from_mins(10),"visits":{},
-        "visit_grant":0,"deadline_fired":false,"next_seq":1,
+        "deadline_fired":false,"next_seq":1,
     }))
     .unwrap();
     let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='p.md'\nlifecycle='turn'\nthen='nap'\n[sleep.nap]\nsleep='5m'\nwhen=['team.stage=Done']\nthen='@done'\n").unwrap();
@@ -211,7 +211,7 @@ fn output_of(definition: &str, with_you: bool) -> (String, String) {
         "scope":{"kind":"worktree","path":"/repo/lane"},
         "created_at":Timestamp::UNIX_EPOCH,"entered_at":Timestamp::UNIX_EPOCH,
         "state":"active","node":"gate","visits":{"build":1},
-        "visit_grant":0,"deadline_fired":false,"next_seq":3,
+        "deadline_fired":false,"next_seq":3,
         "wait":{"node":"gate","outcome":"pending","first":Timestamp::UNIX_EPOCH,
             "last":Timestamp::UNIX_EPOCH,"count":2},
         "held":with_you.then(|| serde_json::json!({"entered_at":Timestamp::UNIX_EPOCH,
@@ -299,7 +299,7 @@ fn an_asking_or_held_judge_names_its_pane_and_its_running_timeout() {
             "workflow":"review",
             "project_root":"/repo","scope":{"kind":"worktree","path":"/repo"},
             "created_at":Timestamp::UNIX_EPOCH,"entered_at":Timestamp::UNIX_EPOCH,
-            "state":state,"node":"pr","visits":{},"visit_grant":0,
+            "state":state,"node":"pr","visits":{},
             "deadline_fired":false,"next_seq":2,"attempt":attempt,
         }))
         .unwrap();
@@ -372,7 +372,7 @@ fn a_rest_check_judges_ask_or_hold_names_the_judge_not_the_session() {
             "workflow":"review",
             "project_root":"/repo","scope":{"kind":"worktree","path":"/repo"},
             "created_at":Timestamp::UNIX_EPOCH,"entered_at":Timestamp::UNIX_EPOCH,
-            "state":"active","node":"review","visits":{},"visit_grant":0,
+            "state":"active","node":"review","visits":{},
             "deadline_fired":false,"next_seq":3,"attempt":judge,
             "held":{"attempt":session, "entered_at":Timestamp::UNIX_EPOCH},
         }))

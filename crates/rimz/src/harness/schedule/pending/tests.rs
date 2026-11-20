@@ -913,7 +913,7 @@ fn a_run_an_agent_started_shows_on_its_card_until_its_report_is_sent() {
             "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
             "created_at":"1970-01-01T00:00:00Z", "state":state, "park":null, "node":"pr",
             "entered_at":"1970-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
-            "wait":null, "visits":{}, "key_visits":{}, "visit_grant":0, "deadline":null,
+            "wait":null, "visits":{}, "key_visits":{}, "deadline":null,
             "deadline_fired":false, "next_seq":1, "attempt":null, "prev_attempt":null,
             "terminal_at":null, "starter":{"by":"agent", "kind":"claude", "launch":launch},
             "depth":1, "loop_report":report,

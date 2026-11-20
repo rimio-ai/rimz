@@ -45,7 +45,7 @@ fn record() -> RunRecord {
         "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "park":null, "node":"pr",
         "entered_at":"2026-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
-        "wait":null, "visits":{}, "visit_grant":0, "deadline":null,
+        "wait":null, "visits":{}, "deadline":null,
         "deadline_fired":false, "next_seq":2,
         "attempt":{"kind":"script","seq":1,"node":"pr","started_at":"2026-01-01T00:00:00Z","host":{"pid":123,"start":"token"}},
         "prev_attempt":null, "terminal_at":null

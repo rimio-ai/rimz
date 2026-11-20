@@ -29,7 +29,7 @@ fn pending(room: &Room, task: Option<&str>) -> records::RunRecord {
         "scope":{"kind":"worktree", "path":room.env.project_root},
         "project_root":room.env.project_root, "created_at":now, "state":"active",
         "node":"build", "entered_at":now, "input":{"outcome":"go", "key":7},
-        "key":7, "next_seq":1, "visits":{}, "visit_grant":0, "deadline_fired":false
+        "key":7, "next_seq":1, "visits":{}, "deadline_fired":false
     }))
     .unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();

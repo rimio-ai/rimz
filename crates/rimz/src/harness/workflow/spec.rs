@@ -535,7 +535,7 @@ impl Step {
         self.lifecycle.unwrap_or(StepLifecycle::Turn)
     }
 
-    /// The step's `max-visits` raised by the run's grant; none when the step sets no cap.
+    /// The step's `max-visits` raised by the run's grant to it; none when the step sets no cap.
     pub fn visit_cap(&self, grant: u64) -> Option<u64> {
         Some(self.max_visits?.saturating_add(grant))
     }
@@ -543,7 +543,7 @@ impl Step {
     /// The visits used and the cap, when the record's current step has spent its cap.
     pub fn tripped_visit_bound(&self, record: &RunRecord) -> Option<(u64, u64)> {
         let used = record.visits_to(&record.node);
-        self.visit_cap(record.visit_grant)
+        self.visit_cap(record.visit_grant(&record.node))
             .filter(|max| used >= *max)
             .map(|max| (used, max))
     }
@@ -748,7 +748,7 @@ pub(super) fn resolve_words(dir: &Path, words: &[String]) -> Result<Vec<OsString
 }
 
 /// A workflow time, checked without a clock: what `[workflow].deadline`, `workflow run
-/// --deadline` and `--give-up`, and `resume --extend deadline=` take.
+/// --deadline` and `--give-up`, and `extend --deadline` take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct When(Form);
 

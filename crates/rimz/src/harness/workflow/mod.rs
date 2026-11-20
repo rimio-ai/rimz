@@ -26,9 +26,9 @@ pub use definition::{Condition, Definition, Invocation, Kind, Limit, Node, Targe
 pub(crate) use engine::hears_lifecycle;
 pub(crate) use engine::join_report;
 pub use engine::{
-    Advance, DefinitionSource, InlineDefinition, StartArgs, Starting, TaskStart, WorkflowErr,
-    advance, budget_refusal, cancel, create, launch_groups, refuse_overlap, restart, resume,
-    starting, submit, wake, wake_run,
+    Advance, DefinitionSource, Extension, InlineDefinition, StartArgs, Starting, TaskStart,
+    WorkflowErr, advance, budget_refusal, cancel, create, extend, launch_groups, refuse_overlap,
+    restart, resume, starting, submit, wake, wake_run,
 };
 pub(crate) use engine::{reassign_task, unacted_task_runs};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};

@@ -52,7 +52,7 @@ fn automation_notes_follow_workflow_cells_descendants_and_replayed_records() {
         "project_root":project.path(),"notes":relative,
         "scope":{"kind":"worktree","path":project.path()},"state":"active","node":"build",
         "created_at":stamp,"entered_at":stamp,"deadline_fired":false,
-        "next_seq":1,"visits":{},"visit_grant":0,
+        "next_seq":1,"visits":{},
     }))
     .unwrap();
     let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();

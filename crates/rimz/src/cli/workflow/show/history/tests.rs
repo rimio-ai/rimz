@@ -389,7 +389,7 @@ fn waiting_record(first: i64, last: i64, count: u64) -> RunRecord {
         "spec_dir":"/spec",
         "scope":{"kind":"worktree", "path":"/checkout"}, "project_root":"/checkout",
         "created_at":at(0), "state":"active", "node":"build", "entered_at":at(0),
-        "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":4,
+        "visits":{}, "deadline_fired":false, "next_seq":4,
         "wait":{"node":"pr", "outcome":"pending", "first":at(first), "last":at(last),
                 "count":count}
     }))

@@ -53,7 +53,7 @@ fn a_pending_restarts_session_resumes_only_at_its_own_step() {
             &host,
         )
         .unwrap();
-        resume(&state, &record.id, &FakeHost::new(), Some(target), &[]).unwrap();
+        resume(&state, &record.id, &FakeHost::new(), Some(target)).unwrap();
         let relaunched = advance_ok(&state, &record.id, &host);
         let launches = host.launched.borrow();
         actual.push((
@@ -223,22 +223,23 @@ fn restart_unparks_cap_and_asked_steps_without_extending_bounds() {
             text: None,
         });
         record.visits.insert("build".into(), 7);
+        record.visit_grants.insert("build".into(), 2);
         update(&state, &record);
         let host = FakeHost::new();
         restart(&state, &record.id, None, &host).unwrap();
         let live = advance_ok(&state, &record.id, &host);
         actual.push((
             live.state,
-            live.node,
             live.visits["build"],
-            live.visit_grant,
+            live.visit_grant("build"),
+            live.node,
             host.launched.borrow().len(),
             host.stops.get(),
         ));
     }
     assert_eq!(
         actual,
-        vec![(RunState::Active, "build".into(), 1, 0, 1, 0); 2]
+        vec![(RunState::Active, 1, 2, "build".into(), 1, 0); 2]
     );
 }
 

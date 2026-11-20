@@ -258,7 +258,7 @@ fn a_cancel_or_resume_at_while_the_notice_is_queued_retires_it() {
             let (state, run, ender) = (state.clone(), record.id.clone(), ender.clone());
             move || {
                 if resumed {
-                    resume(&state, &run, &*ender, Some("other"), &[]).unwrap();
+                    resume(&state, &run, &*ender, Some("other")).unwrap();
                 } else {
                     assert!(cancel(&state, &run, &*ender, None).unwrap());
                 }
@@ -302,7 +302,7 @@ fn a_cancel_deadline_or_resume_at_after_the_host_died_retires_its_queued_notice(
             "deadline" => advance(&state, &record.id, &ender).map(drop).unwrap(),
             "cancel" => assert!(cancel(&state, &record.id, &ender, None).unwrap()),
             _ => {
-                let moved = resume(&state, &record.id, &ender, Some("other"), &[]).unwrap();
+                let moved = resume(&state, &record.id, &ender, Some("other")).unwrap();
                 assert_eq!(moved.node, "other");
                 let next = FakeHost::new();
                 advance(&state, &record.id, &next).unwrap();

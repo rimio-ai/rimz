@@ -1099,7 +1099,7 @@ fn a_fire_mark_names_its_run_and_its_booker() {
             "origin":"inline", "task":name,
             "scope":{"kind":"worktree","path":root}, "project_root":root,
             "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"command",
-            "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
+            "entered_at":"2026-01-01T00:00:00Z", "visits":{},
             "deadline_fired":false, "next_seq":1, "loop_report":"owed"
         }))
         .unwrap();
@@ -1390,7 +1390,7 @@ fn a_placed_workflow_task_sees_a_hand_started_run_in_its_worktree() {
             "scope":{"kind":"worktree","path":scope},
             "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"check",
             "entered_at":"2026-01-01T00:00:00Z", "deadline_fired":false,
-            "next_seq":1, "visits":{}, "visit_grant":0, "once":once
+            "next_seq":1, "visits":{}, "once":once
         }))
         .unwrap();
         let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();

@@ -26,7 +26,7 @@ fn history_run(state: &StatePaths, journal: &str) -> RunRecord {
         "project_root":"/repo",
         "scope":{"kind":"worktree", "path":"/repo/lane"},
         "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
-        "state":"active", "node":"finish", "visits":{}, "visit_grant":0,
+        "state":"active", "node":"finish", "visits":{},
         "deadline_fired":false, "next_seq":1
     }))
     .unwrap()
@@ -180,7 +180,7 @@ fn live_run(
         "project_root":root,
         "scope":{"kind":"worktree", "path":checkout},
         "created_at":now, "entered_at":now, "state":"active",
-        "node":"watch", "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1
+        "node":"watch", "visits":{}, "deadline_fired":false, "next_seq":1
     });
     (id, record)
 }

@@ -147,7 +147,7 @@ fn every_origin_and_the_stored_skip_wait_at_a_budget_refusal() {
             if origin == "restart" {
                 restart(&state, &record.id, None, &host).unwrap();
             } else {
-                resume(&state, &record.id, &host, Some("other"), &[]).unwrap();
+                resume(&state, &record.id, &host, Some("other")).unwrap();
             }
         }
         let launches = host.launched.borrow().len();
