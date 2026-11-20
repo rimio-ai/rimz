@@ -344,7 +344,7 @@ An agent that launches a peer with `rimz agents` and a prompt is owed that peer'
 | Function | Does |
 | --- | --- |
 | `create_peer_prompt` | prepares a pending run under the workspace lock, stamping `report_to` on a record it creates. A reused open run is returned unchanged, so the receipt describes the record rather than the flag. A team seat's launch prompt goes to `harness/run/team.rs` instead |
-| `open_peer_run` | finds a nonterminal run by kind and stable launch id |
+| `open_peer_run` | finds a nonterminal run by the peer's stable launch id |
 | `record_run_delivery` | runs inside the [acknowledgment callback](./messaging.md#confirmation-and-retry) and enrolls a launcher's message into the peer's open turn, or [stamps a subagent's follow-up](#a-follow-up-reopens-the-run) |
 | `fail_peer_run` | settles an open run and wakes its waiter |
 
