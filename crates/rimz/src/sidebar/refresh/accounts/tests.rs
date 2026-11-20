@@ -3309,22 +3309,10 @@ fn a_keyring_switch_keeps_the_switching_sessions_own_windows() {
     keyring_agy(&runtime);
     live_merge(
         &runtime,
-        live_session("antigravity", Some(agy_id("a")), 2_000),
+        live_session("antigravity", Some(agy_id("a")), 1_000),
     );
     // B's first windows carry its process start, before its status line.
-    let mut session = with_windows(live_session("antigravity", Some(agy_id("b")), 3_000));
-    let window_at = Timestamp::from_millisecond(1_500).unwrap();
-    for window in &mut session
-        .context
-        .as_mut()
-        .unwrap()
-        .rate_limits
-        .as_mut()
-        .unwrap()
-        .windows
-    {
-        window.observed_at = Some(window_at);
-    }
+    let session = windows_observed_at(live_session("antigravity", Some(agy_id("b")), 3_000), 1_500);
     live_merge(&runtime, session);
     assert_eq!(
         stored_account(&runtime, "antigravity")
@@ -3333,11 +3321,60 @@ fn a_keyring_switch_keeps_the_switching_sessions_own_windows() {
         Some("b")
     );
     let floors = super::super::rate_limits::identity_floors(&runtime);
-    assert!(
-        floors
-            .get(&key("antigravity"))
-            .is_none_or(|floor| *floor <= window_at)
+    assert_eq!(
+        floors.get(&key("antigravity")),
+        Some(&Timestamp::from_millisecond(1_500).unwrap())
     );
+}
+
+#[test]
+fn a_live_switch_back_floors_the_replaced_accounts_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = shared_runtime(&dir);
+    keyring_agy(&runtime);
+    live_merge(
+        &runtime,
+        live_session("antigravity", Some(agy_id("a")), 1_000),
+    );
+    // A pane on B, started at 2000, switches the record to B at 2500.
+    live_merge(
+        &runtime,
+        windows_observed_at(live_session("antigravity", Some(agy_id("b")), 2_500), 2_000),
+    );
+    // A pane on A that has run since 1500 switches back: B's windows since
+    // 2500 must not pass as A's.
+    live_merge(
+        &runtime,
+        windows_observed_at(live_session("antigravity", Some(agy_id("a")), 4_000), 1_500),
+    );
+    assert_eq!(
+        stored_account(&runtime, "antigravity")
+            .account_id
+            .as_deref(),
+        Some("a")
+    );
+    let floors = super::super::rate_limits::identity_floors(&runtime);
+    assert_eq!(
+        floors.get(&key("antigravity")),
+        Some(&Timestamp::from_millisecond(4_000).unwrap())
+    );
+}
+
+fn windows_observed_at(state: AgentState, observed_ms: i64) -> AgentState {
+    let mut state = with_windows(state);
+    let observed_at = Timestamp::from_millisecond(observed_ms).unwrap();
+    for window in &mut state
+        .context
+        .as_mut()
+        .unwrap()
+        .rate_limits
+        .as_mut()
+        .unwrap()
+        .windows
+    {
+        window.observed_at = Some(observed_at);
+    }
+    state
 }
 
 #[test]
