@@ -18,6 +18,8 @@ type AgentKey = (AgentKind, AgentSessionId);
 #[derive(Debug, Default)]
 pub(in crate::cli) struct TreeStop {
     root_stopped: bool,
+    /// The session the stop stopped for the root: its holder when a swap replaced it.
+    root: Option<AgentState>,
     child_receipts: Vec<String>,
     failures: Vec<String>,
     /// Each row this tree closed or stopped, under the key it was asked for and the key
@@ -30,6 +32,11 @@ impl TreeStop {
     /// its unknown process has a recorded end, or its never-bound launch is cancelled.
     pub(in crate::cli) fn root_stopped(&self) -> bool {
         self.root_stopped
+    }
+
+    /// The session stopped for the root, once [`TreeStop::root_stopped`].
+    pub(in crate::cli) fn root(&self) -> Option<&AgentState> {
+        self.root.as_ref()
     }
 
     fn report_children(&self, out: &mut impl Write) -> Result<()> {
@@ -513,8 +520,10 @@ pub(super) fn stop_run(store: &rimz::Store, agent: &AgentState) -> Result<Option
 }
 
 /// Stop every tree in `agents`, children before parents, through the point-of-use lookup:
-/// the only pane a stop closes is one a read this stop took says hosts the agent, and each
-/// close is followed by a new read. After the last close it waits once, up to the shared
+/// the only pane a stop closes is one a read this stop took says hosts the agent, read again
+/// before the close whenever the stop did work since that read (cancelled a swap or a run,
+/// waited on a departure, thawed the pane, or closed a pane), and each close is followed by
+/// a new read. After the last close it waits once, up to the shared
 /// owner-exit bound, then sends one start-token-checked SIGTERM to each agent whose pane it
 /// closed, or whose run it cancelled, and whose process outlived the wait with no pane
 /// hosting it, and waits once more; it never sends SIGKILL.
@@ -541,6 +550,9 @@ pub(in crate::cli) struct StopTerms<'a> {
     pub(in crate::cli) run: Option<&'a RunRecord>,
     /// Re-checked after the first read: `false` stops nothing and returns `None`.
     pub(in crate::cli) still_due: Option<&'a dyn Fn() -> bool>,
+    /// The first read, a hosting read the caller took with no work since, in place of the
+    /// stop's own.
+    pub(in crate::cli) read: Option<HostingRead>,
 }
 
 /// [`stop_resolved`] under `terms`; `None` when `still_due` withdrew the stop.
@@ -552,7 +564,10 @@ pub(in crate::cli) fn stop_resolved_with(
     terms: StopTerms<'_>,
 ) -> Result<Option<Vec<TreeStop>>> {
     let peers = rimz::address::addressable_agents(snapshot);
-    let read = match read_hosting(&ctx.workspace, &ctx.store, globals.mux) {
+    let read = terms
+        .read
+        .map_or_else(|| read_hosting(&ctx.workspace, &ctx.store, globals.mux), Ok);
+    let read = match read {
         Ok(mut read) => {
             render::room::print_notices(read.take_notices())?;
             read
@@ -583,7 +598,16 @@ pub(in crate::cli) fn stop_resolved_with(
         }
         None => false,
     };
-    stop_with_read(ctx, &peers, read, agents, terms.run, run_cancelled).map(Some)
+    stop_with_read(
+        ctx,
+        &peers,
+        read,
+        agents,
+        terms.run,
+        run_cancelled,
+        !run_cancelled,
+    )
+    .map(Some)
 }
 
 /// Stop the agent the supervised `run` names, settling the run. The run is cancelled first,
@@ -656,11 +680,12 @@ pub(super) fn stop_run_tree(
     };
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::address::addressable_agents(&snapshot);
-    Ok(stop_with_read(ctx, &peers, read, &[&agent], Some(run), true)?.remove(0))
+    Ok(stop_with_read(ctx, &peers, read, &[&agent], Some(run), true, true)?.remove(0))
 }
 
 /// Stop every tree in `agents` from the first read, `read`; `run_cancelled` says the agent
-/// `run` names counts as one whose run this stop cancelled.
+/// `run` names counts as one whose run this stop cancelled, and `fresh` that no work sat
+/// between `read` and this call.
 fn stop_with_read(
     ctx: &Ctx,
     peers: &[&AgentState],
@@ -668,11 +693,13 @@ fn stop_with_read(
     agents: &[&AgentState],
     run: Option<&RunRecord>,
     run_cancelled: bool,
+    fresh: bool,
 ) -> Result<Vec<TreeStop>> {
     let mut stopper = Stopper {
         ctx,
         peers,
         read,
+        fresh,
         run,
         run_cancelled,
         tracker: HashSet::new(),
@@ -769,6 +796,9 @@ struct Stopper<'a> {
     peers: &'a [&'a AgentState],
     /// Every read after the first lists this read's backend.
     read: HostingRead,
+    /// No work of this stop (a cancel, a wait, a thaw, a close) sat between `read` and now,
+    /// so `read` may gate a close.
+    fresh: bool,
     run: Option<&'a RunRecord>,
     run_cancelled: bool,
     tracker: HashSet<AgentKey>,
@@ -836,13 +866,22 @@ impl Stopper<'_> {
             .worktree_path
             .as_deref()
             .map_or(workspace.worktree_root.as_path(), Path::new);
+        #[cfg(feature = "testkit")]
+        rimz::testkit::rendezvous("RIMZ_TEST_STOP_BEFORE_SWAP_CANCEL");
         let rows = store.audit_rows().map_err(|err| format!("{err:#}"))?;
+        // A replacement the store shows holding the agent may have bound after the read.
+        if !closes_asked(rows.iter(), agent) {
+            self.fresh = false;
+        }
         let mut cancelled_self = false;
         for member in
             rimz::agents::state::launch_members(rows.iter(), &agent.kind, agent.launch_key())
                 .into_iter()
                 .filter(|member| member.agent_id.is_provisional() && member.epoch > 0)
         {
+            // Any swap leaves the read stale, its cancel refused or not: a refusal means the
+            // replacement bound, perhaps after the read, and holds the agent now.
+            self.fresh = false;
             if store
                 .cancel_unbound_swap(member, &workspace.session_name, cwd)
                 .map_err(|err| format!("{err:#}"))?
@@ -855,9 +894,9 @@ impl Stopper<'_> {
             ending.decide(Ok(()));
             return Ok(());
         }
-        // Read after the cancellation: a replacement that bound first holds the
-        // agent now, and it is what the stop closes.
-        self.refresh()?;
+        // Read after any swap: a replacement that bound first holds the agent now, and it
+        // is what the stop closes.
+        self.refresh_stale()?;
         let target = if closes_asked(self.read.agents(), agent) {
             agent.clone()
         } else {
@@ -884,6 +923,7 @@ impl Stopper<'_> {
                     Some(run) => {
                         supervised::cancel_supervised_run(store, run)
                             .map_err(|err| format!("{err:#}"))?;
+                        self.fresh = false;
                         true
                     }
                     None => false,
@@ -938,6 +978,7 @@ impl Stopper<'_> {
             Ok(mut read) => {
                 let _ = render::room::print_notices(read.take_notices());
                 self.read = read;
+                self.fresh = true;
                 Ok(())
             }
             Err(mut err) => {
@@ -945,6 +986,14 @@ impl Stopper<'_> {
                 Err(err.to_string())
             }
         }
+    }
+
+    /// Read again unless the current read is fresh.
+    fn refresh_stale(&mut self) -> std::result::Result<(), String> {
+        if self.fresh {
+            return Ok(());
+        }
+        self.refresh()
     }
 
     /// A pane whose run this stop cancelled gets the backstop grace to leave on its own; a
@@ -955,12 +1004,13 @@ impl Stopper<'_> {
             std::thread::sleep(CLOSE_POLL);
             self.refresh()?;
         }
+        self.fresh = false;
         Ok(())
     }
 
-    /// Close whatever pane each new read says hosts the agent, until none does or the
-    /// owner-exit bound passes after the first close. A pane still listed is closed again
-    /// once `RECLOSE_AFTER` has passed since its last close.
+    /// Close whatever pane the current read says hosts the agent, read again first unless
+    /// it is fresh, until none does or the owner-exit bound passes after the first close. A
+    /// pane still listed is closed again once `RECLOSE_AFTER` has passed since its last close.
     fn close(&mut self, ending: &mut Ending) -> std::result::Result<(), String> {
         let mut deadline = Instant::now() + stop_owner_exit_bound();
         let mut last: Option<(PaneId, Instant)> = None;
@@ -987,9 +1037,14 @@ impl Stopper<'_> {
                 .as_ref()
                 .is_none_or(|(closed, at)| closed != &pane_id || now >= *at + RECLOSE_AFTER)
             {
-                rimz::harness::hibernate::wake_pane(&self.ctx.store, &pane_id)
+                let woken = rimz::harness::hibernate::wake_pane(&self.ctx.store, &pane_id)
                     .map_err(|err| format!("{err:#}"))?;
-                self.refresh()?;
+                if matches!(woken, rimz::harness::hibernate::Woken::Thawed { .. }) {
+                    self.fresh = false;
+                }
+                if !self.fresh {
+                    self.refresh()?;
+                }
                 if self.hosting(ending)
                     != (Hosting::Pane {
                         pane_id: pane_id.clone(),
@@ -1004,6 +1059,7 @@ impl Stopper<'_> {
                 }
                 let result =
                     rimz::mux::backend_for(self.read.mux()).close_pane(&session_name, &pane_id);
+                self.fresh = false;
                 ending.closed = true;
                 ending.close_error = result.err().map(|err| format!("{err:#}"));
                 last = Some((pane_id, closed_at));
@@ -1194,7 +1250,10 @@ impl Stopper<'_> {
                 (Some(parent), Ok(())) => stop
                     .child_receipts
                     .push(format!("stopped {} (subagent of {parent})", ending.label)),
-                (None, Ok(())) => stop.root_stopped = true,
+                (None, Ok(())) => {
+                    stop.root_stopped = true;
+                    stop.root = Some(ending.session.clone());
+                }
                 (_, Err(reason)) => stop.failures.push(format!("{}: {reason}", ending.label)),
             }
             if ending.left_run {
@@ -1250,12 +1309,15 @@ impl Stopper<'_> {
     }
 }
 
-/// Whether a stop closes `agent` itself, judged over the rows read after its swap
+/// Whether a stop closes `agent` itself, judged over the rows of a read taken after any swap
 /// cancellation: unless a swap replaced it meanwhile (the replacement bound before the
 /// cancellation could land, so the cancellation was refused) or it is a starting
 /// reservation with no pane. Otherwise it closes the agent's holder.
-fn closes_asked(rows: &[AgentState], agent: &AgentState) -> bool {
-    let members = rimz::agents::state::launch_members(rows.iter(), &agent.kind, agent.launch_key());
+fn closes_asked<'a>(
+    rows: impl IntoIterator<Item = &'a AgentState> + Clone,
+    agent: &AgentState,
+) -> bool {
+    let members = rimz::agents::state::launch_members(rows, &agent.kind, agent.launch_key());
     let holders = rimz::agents::state::LaunchHolders::new(members.iter().copied());
     let replaced = members.iter().any(|member| {
         member.kind == agent.kind && member.agent_id == agent.agent_id && holders.replaced(member)

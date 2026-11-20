@@ -617,6 +617,7 @@ impl workflow::AttemptHost for Host<'_> {
             let terms = agents_cmd::StopTerms {
                 run: Some(&run),
                 still_due: None,
+                read: None,
             };
             let stops = agents_cmd::stop_resolved_with(
                 &ctx,
