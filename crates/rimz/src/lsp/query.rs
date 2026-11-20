@@ -1343,6 +1343,9 @@ fn add_target(root: &Path, item: &mut Value, uri: &str, range: &str) -> Result<(
     Ok(())
 }
 
+/// Render a not-found or ambiguous name lookup. The query verbs and `show` both print this
+/// text, so a next step in it names only target forms both accept: a symbol name or a
+/// position.
 pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String> {
     if json {
         return Ok(format!(
