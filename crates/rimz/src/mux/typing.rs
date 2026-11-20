@@ -1,4 +1,9 @@
 //! Per-pane terminal-input timing and non-typing exclusions shared by sends and sidebar pens.
+//!
+//! tmux and Zellij forward outer-terminal focus reports to a pane that enabled `?1004`, with no
+//! pane change. A rule that reads a pane's terminal input (tty atime, bytes read) as human typing
+//! is probed, on both backends, against focus-out/in and against a popup or floating pane opened
+//! over the pane.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;

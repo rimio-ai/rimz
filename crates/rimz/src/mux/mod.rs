@@ -461,6 +461,11 @@ impl ClientPresence {
     }
 }
 
+/// The routing sample of who views which pane, not the list of clients that receive pane output:
+/// tmux leaves every `ignore-size` client out of `clients` and the presence figures. The read-only
+/// share draws output and is listed only in `ClientPresence::unrouted_clients`; the room's control
+/// client draws nothing and is listed nowhere. A rule about who receives what a pane writes reads
+/// both sets.
 #[derive(Clone, Debug, Default)]
 pub struct ClientView {
     pub clients: Vec<ClientPaneView>,
