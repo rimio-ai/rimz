@@ -18,7 +18,7 @@ Evidence comes from these sources. Binary observations and live captures carry v
 | Release notes | `CHANGELOG.md` at the tag, which `agy changelog` prints verbatim | "1.1.28 changelog" |
 | Released 1.3.3 binary | [`agy_cli_linux_x64.tar.gz`](https://github.com/google-antigravity/antigravity-cli/releases/download/1.3.3/agy_cli_linux_x64.tar.gz), `--version`, `--help`, and subcommand help in an isolated home, plus embedded hook-schema strings | "1.3.3 help", "1.3.3 binary" |
 | Installed 1.2.2 binary | `agy --help` and subcommand help. The hook contract the binary embeds for its own `/hooks` answer. Embedded agent instructions, Go struct tags, and protobuf message names in the binary's strings | "1.2.2 help", "embedded hook doc", "1.2.2 binary" |
-| Live captures | a historical 1.2.2 credential-file observation, a stock 1.1.2 session (hook payloads, transcripts, subagents), a 1.1.1 SQLite schema probe, a first-run 1.2.2 session in an untrusted workspace (hook payloads and statusline only, no completed tool step), and a 1.5.13 custom-agent probe in a scratch home | "1.1.2 capture", "1.1.1 probe", "1.2.2 capture", "1.5.13 capture" |
+| Live captures | a historical 1.2.2 credential-file observation, a stock 1.1.2 session (hook payloads, transcripts, subagents), a 1.1.1 SQLite schema probe, a first-run 1.2.2 session in an untrusted workspace (hook payloads and statusline only, no completed tool step), a 1.5.13 custom-agent probe in a scratch home, and a 1.5.14 permission, sandbox, and added-directory probe in a scratch home | "1.1.2 capture", "1.1.1 probe", "1.2.2 capture", "1.5.13 capture", "1.5.14 capture" |
 | Third-party source | CodexBar commit [`b41715f`](https://github.com/steipete/CodexBar/tree/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8) for the private local service | cited by path |
 
 Where two tiers disagree, the claim follows the wire and [Documentation drift](#documentation-drift) records the disagreement.
@@ -74,7 +74,7 @@ curl -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.
 
 | Flag | Meaning (1.3.3 help) |
 | --- | --- |
-| `--add-dir <path>` | add a workspace directory. Repeatable, default empty list |
+| `--add-dir <path>` | add a workspace directory. Repeatable, default empty list. 1.5.14 capture: with a trusted primary cwd, the added directory's `AGENTS.md`, `.agents/rules` (`trigger: always_on`), and `.agents/skills` descriptions reach the model, and its `.agents/hooks.json` handler runs, with no trust prompt for the directory, which stays out of `trustedWorkspaces` |
 | `--agent <name>` | custom agent for the session (`agy agents` lists them) |
 | `-c`, `--continue` | continue the most recent conversation. See [Resume](#resume) |
 | `--conversation <id>` | resume a conversation by ID |
@@ -128,7 +128,9 @@ The [execution modes](https://antigravity.google/docs/cli/modes/) page defines t
 
 Tool permission rules and `--dangerously-skip-permissions` govern `run_command` in every mode. The 1.3.2 changelog says that flag no longer auto-approves implementation plans in `/plan` mode. `artifactReviewPolicy` controls artifact approval ([1.3.2 changelog](https://github.com/google-antigravity/antigravity-cli/blob/800852ea61796e9fe53077a2f945e74daacb4be6/CHANGELOG.md#132)).
 
-`--sandbox` enables terminal containment for the session. The persistent `toolPermission: proceed-in-sandbox` policy auto-runs sandboxed commands and asks for unsandboxed ones. It has no launch flag. `/config` marks settings overridden by launch flags ([settings](https://antigravity.google/docs/settings?tab=cli)).
+`--sandbox` enables terminal containment for the session. The persistent `toolPermission: proceed-in-sandbox` policy auto-runs sandboxed commands and asks for unsandboxed ones. It has no flag of its own; `--settings` can carry it. `/config` marks settings overridden by launch flags ([settings](https://antigravity.google/docs/settings?tab=cli)).
+
+1.5.14 capture: under `--sandbox` and the default `toolPermission`, a command saw an `--add-dir` directory readable and writable and an unadded sibling as absent (`No such file or directory`), with no prompt. With `proceed-in-sandbox` and `--mode accept-edits`, commands ran unprompted but contained: `curl` could not resolve a host and a write outside the workspace failed, while a native `write_file` outside the workspace and an MCP call still asked. With `--dangerously-skip-permissions` beside `--sandbox`, with or without `proceed-in-sandbox`, a command wrote outside the workspace and a native write outside it ran without a dialog: the skip flag wins over the sandbox.
 
 ## Conversations
 
@@ -619,6 +621,18 @@ A permission resource is `action(target)` ([permissions](https://antigravity.goo
 | `command` | word-by-word prefix, or `regex:<pattern>` | Ask |
 | `unsandboxed` | command prefix or `regex:` pattern allowed to run outside the sandbox | Ask, deprecated, see below |
 | `mcp` | `server/tool` or `server/*` | Ask |
+
+1.5.14 capture, under `--settings` in the TUI:
+
+- `--settings` given twice keeps only the last object, even when the two set different keys, so every override belongs in one object.
+- An allow rule removes the prompt: under `--mode accept-edits`, `command(echo)` ran `echo hi` unprompted while `uname -s` asked. The default mode already auto-runs commands it judges safe.
+- `command(P)` matches P word by word with any trailing arguments (`command(git status)` covers `git status --short` and not `git log -1`), and `command(*)` matches every command. A compound line or a pipe asks for the whole line unless every part is covered. None of `command(git *)`, `command(git status:*)`, `command(git status *)` matched `git status`.
+- A `read_file` or `write_file` target that names a directory, absolute or workspace-relative, covers its descendants. `/**` and `/*.md` match only path components with those literal names, `~/` does not expand, and `//abs` does not match `/abs`. `read_file(*)`, `write_file(*)`, and `mcp(*)` each remove the prompt for the whole action, and `write_file(*)` also admits a native read.
+- A file allow rule also opens its path to the terminal sandbox: a sandboxed command read and wrote a directory named only by `read_file` and `write_file` rules, while an uncovered sibling stayed absent, and with `write_file(*)` it wrote outside the workspace. File rules do not approve a shell command.
+- A rule holds on `--conversation` resume only when `--settings` passes it again.
+- A `--settings` `permissions.allow` replaces the account's saved global allow list (`~/.gemini/antigravity-cli/settings.json`) for that session, while the saved global deny list stays listed and in force. A project-scope deny rule (`~/.gemini/config/projects/<project>.json`) also stays in force, though `-p /permissions` does not list it. A `--settings` without a `permissions` key leaves both saved lists alone.
+- A permission rule matches an inline agent-file MCP server by its raw name: `mcp(<name>/*)` removed the prompt for a server the agent file named `<name>`, with no plugin or agent prefix.
+- `read_url` was not exercised: the probing model reported no fetch tool and made no call.
 
 Denying `read_file` on a path also denies `write_file` there. The system temp directory is readable and writable by default (1.1.6, 1.1.9). `always-proceed` also auto-approves MCP calls and page reads (1.1.21). A pattern approved at a prompt holds for the rest of the conversation (1.1.9).
 

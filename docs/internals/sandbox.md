@@ -50,7 +50,9 @@ Codex's Linux command sandbox gives each call its own PID namespace using bubble
 
 Claude's one merged `--settings` grants `sandbox.filesystem.allowWrite` for the room roots at every level, and adds routine `sandbox.excludedCommands` when `allow-routine-rimz` is on. Scoped launches add `enableWeakerNestedSandbox: true`. Sandbox launches add `enabled: true` and nothing else, so the user's other sandbox settings stay intact.
 
-RimZ owns this flag mapping and nothing past it. It adds no dependency check, no `failIfUnavailable`, and no warning about a permission mode, so the provider's own behaviour applies when its sandbox cannot start. A provider with no sandbox switch gets a launch warning and no flag.
+Antigravity's `configure_room_permissions` appends `--sandbox` under `sandbox` only, unless the argv already carries it, and grants no room roots. Its Yolo vector keeps `--dangerously-skip-permissions`, which agy lets override the sandbox, so `LaunchCapability::native_sandbox_overridden` finds that flag in the compiled argv and the launch warns that sandbox isolation is not in effect ([adapter](./agents/adapter_antigravity.md#permission-rules-sandbox-and-added-dirs)).
+
+RimZ owns this flag mapping and nothing past it. It adds no dependency check and no `failIfUnavailable`, and warns about a permission mode only where an adapter reports that the mode's flags override its sandbox, so the provider's own behaviour applies when its sandbox cannot start. A provider with no sandbox switch gets a launch warning and no flag.
 
 Muse alone implements `LaunchCapability::disable_native_sandbox_args`: it adds `--disable-sandbox` under scoped isolation, because its confinement check cannot reliably nest. Every other adapter keeps the no-op default. Cursor's `--sandbox disabled` comes only from its Yolo mode.
 

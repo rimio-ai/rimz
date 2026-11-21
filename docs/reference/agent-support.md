@@ -96,6 +96,7 @@ These are the gaps you will notice, per agent in matrix order, beyond what the m
 
 - `agy` is an alias of `antigravity`: `agent: agy` and the kind base `agents/agy.md` work as their `antigravity` spellings do.
 - Permission prompts and questions stay in Antigravity's UI, because RimZ installs no permission hook. An open prompt raises Waiting and routes you to the pane.
+- `--add-dir` opens each directory as an agy workspace: agy loads its `AGENTS.md`, `.agents/rules`, and `.agents/skills` and runs its `.agents/hooks.json`, without a trust prompt for it. The launch warns.
 - Context, tokens, plan, and the Gemini 5h and weekly quota windows are live from the wrapped statusline. The card's dollar figure is the session's total at list price, set when each turn ends, so no figure shows before the first turn ends. It counts toward room spend and per-agent and room [budget caps](./cli/budget.md), never account caps.
 - History replays every past session and prices its tokens at list price in `rimz stats`. A model the price book has no exact entry for shows tokens without dollars.
 - Tool activity comes from the `PostToolUse` hook on file-edit tools only.
@@ -319,7 +320,7 @@ On host and scoped isolation, Codex keeps your sandbox and network choices. For 
 
 An explicit sandbox or session config selector takes precedence over `--profile`. Otherwise RimZ reads trusted project `.codex/config.toml` layers over `$CODEX_HOME/<name>.config.toml` over base config. It does not read system config layers or managed requirements. A profile that needs full access can pass `--sandbox danger-full-access` in its args.
 
-Under `agents.isolation = "sandbox"`, Codex receives `--sandbox workspace-write` only when the selection above finds no sandbox mode in its arguments or config. Any selected mode, including full access, a permission profile, or Yolo, stays as selected, and the room-root grant follows the resulting selection. Claude's merged settings add `sandbox.enabled: true`. Every other provider warns and launches without a sandbox flag ([security guide](../guide/security.md#provider-sandbox-isolation)).
+Under `agents.isolation = "sandbox"`, Codex receives `--sandbox workspace-write` only when the selection above finds no sandbox mode in its arguments or config. Any selected mode, including full access, a permission profile, or Yolo, stays as selected, and the room-root grant follows the resulting selection. Claude's merged settings add `sandbox.enabled: true`. Antigravity receives `--sandbox`; its Yolo `--dangerously-skip-permissions` overrides that sandbox, so a Yolo launch keeps the flag and warns that sandbox isolation is not in effect. Every other provider warns and launches without a sandbox flag ([security guide](../guide/security.md#provider-sandbox-isolation)).
 
 Codex Ask uses the human reviewer, and Auto uses Guardian. Yolo still bypasses both sandbox and approval checks. Codex validates the user's permissions at startup.
 
@@ -349,7 +350,7 @@ Claude's settings also union the agent-visible scratch and shared directories in
 
 Claude's same `--settings` adds exact `Skill(<name>)` rules for every profile-listed skill, independent of the routine switch, and for installed `rimz-*` skills when the switch is on. Names are directory names, not frontmatter names. Names containing `*` receive no rule. Routine names come from the provider, library, and pack chain with owned links skipped. Profile-listed names receive rules independently of discovery and stay first, and additions are deduplicated.
 
-Markdown definitions can also supply [`allowed-tools`](definitions.md#tools-to-provider-arguments) permission rules. Claude merges them into the same `permissions.allow`, in all isolation levels and independently of the routine switch. Other kinds warn in `agents validate` and at launch and do not apply the list. Claude auto mode drops some broad rules, and the definition reference describes that limit.
+Markdown definitions can also supply [`allowed-tools`](definitions.md#tools-to-provider-arguments) permission rules. Claude merges them into the same `permissions.allow`, in all isolation levels and independently of the routine switch. Antigravity merges their [translation](definitions.md#tools-to-provider-arguments) into `permissions.allow` of its one `--settings` and warns for each rule it cannot translate. Other kinds warn in `agents validate` and at launch and do not apply the list. Claude auto mode drops some broad rules, and the definition reference describes that limit.
 
 Codex's managed `rules/rimz.rules` carries a first-line marker, and `rimz hooks install` rewrites it. Existing installs get a rules-file preview at the next `rimz start` consent. Matching commands run unsandboxed, without Guardian or a permission hook. The rules have these limits:
 
