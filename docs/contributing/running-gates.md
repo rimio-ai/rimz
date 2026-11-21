@@ -233,6 +233,8 @@ The benches are `#[divan::bench]` functions in `crates/rimz/benches/hotpath.rs`.
 
 When one round shows a difference on a host whose load average is above its core count, run three more rounds on the same copied binaries before you read it. One round showed `rollup_fold_unchanged` 1.9x slower, and the next three showed nothing.
 
+A measurement written into a doc names the trunk commit it was built on and the branch commit's subject, never a branch hash. A cause it gives for a measured change cites the figure from the same run that rules out the other readings, or is written as a hypothesis.
+
 ### Comparing two trees
 
 A base and head comparison on one target directory rebuilds RimZ at each switch of tree, over five minutes a time.
