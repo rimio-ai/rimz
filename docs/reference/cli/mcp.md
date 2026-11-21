@@ -21,14 +21,14 @@ Each tool call but `guide`'s runs one `rimz` command as the agent that started t
 | Capability | Tool | Arguments | Command |
 | --- | --- | --- | --- |
 | `rimz-lsp` | `lsp` | `verb` (`def`, `hover`, `refs`, `callers`, `callees`, `impl`, `symbols`, `find`, `show`, `check`), `targets[]`; optional `all`, `no_tests`, `external`, `limit`, `full`, `fix`, `hints`, `server` (ignored by `check`), `cwd` | `rimz lsp <verb> [flags] -- <targets>` |
-| `rimz-wait` | `wait` | `trigger` (`run`, `check`, `file`, `pid`, `when`, `in`, `at`) and its `value`, a string; optional `grep`, `every`, `on` (`fail`, `success`, `any`), `label`, `check_in`, `cwd` | `rimz wait --<trigger>=<value> ...` |
+| `rimz-wait` | `wait` | `trigger` (`run`, `check`, `file`, `pid`, `when`, `in`, `at`) and its `value`, a string; optional `grep`, `every`, `on` (`fail`, `success`), `label`, `check_in`, `cwd` | `rimz wait --<trigger>=<value> ...` |
 | `rimz-wait` | `wait_list` | none | `rimz wait list` |
 | `rimz-wait` | `wait_cancel` | `name`, or `all` | `rimz wait cancel -- <name>`, or `rimz wait cancel --all` |
 | `rimz-control` | `self_stop` | optional `when_idle` (a duration, or `off`) | `rimz agents stop --when-idle[=<value>] -- @me` |
 | `rimz-control` | `self_compact` | optional `instruction`, `no_continue` | `rimz agents compact [--no-continue] -- @me [instruction]` |
 | `rimz-control` | `self_tune` | optional `setting` (`keep-warm`, `idle-compact`, `smart-compact`), optional `value` (only with `setting`) | `rimz agents tune -- @me [setting] [value]` |
-| `rimz-notes` | `notes_add` | `kind`, `title`, and `body` or `file`, not both; optional `fence`, `meta{}` (keys without `=`), `cwd` | `rimz notes add [flags] -- <kind> <title>`, with `body` on stdin |
-| `rimz-notes` | `notes_list` | optional `filter[]`, `limit` | `rimz notes list [flags]` |
+| `rimz-notes` | `notes_add` | `kind`, `title`, and `body` or `file`, not both; optional `fence`, `meta{}` (keys without `=`) | `rimz notes add [flags] -- <kind> <title>`, with `body` on stdin |
+| `rimz-notes` | `notes_list` | optional `filter[]` | `rimz notes list [flags]` |
 | - | `guide` | `name`, `<capability>/<guide>` | None: the server answers from the guide files it read at its start |
 
 ## List the tools
@@ -42,17 +42,17 @@ rimz mcp tools [--only <capability>]... [--json]
 ```console
 $ rimz mcp tools
 CAPABILITY    TOOL          TOKENS
-rimz-lsp      lsp            ~1204
-rimz-wait     wait            ~864
-rimz-wait     wait_list        ~46
+rimz-lsp      lsp            ~1234
+rimz-wait     wait           ~1042
+rimz-wait     wait_list        ~47
 rimz-wait     wait_cancel     ~135
-rimz-control  self_stop       ~283
-rimz-control  self_compact    ~145
-rimz-control  self_tune       ~251
-rimz-notes    notes_add       ~405
-rimz-notes    notes_list      ~359
--             guide           ~109
-total: ~3801 tokens in 10 tools
+rimz-control  self_stop       ~305
+rimz-control  self_compact    ~146
+rimz-control  self_tune       ~255
+rimz-notes    notes_add       ~394
+rimz-notes    notes_list      ~337
+-             guide           ~120
+total: ~4015 tokens in 10 tools
 ```
 
 Every command a tool runs is on the [routine list](../agent-support.md) an installed agent runs without asking. The commands themselves are documented on their own pages: [Language servers](./lsp.md), [Wait](./wait.md), [Agents](./agents.md), and [Notes](./notes.md).
@@ -85,7 +85,7 @@ A launch that hands the server over carries the warnings of the capabilities it 
 ## Calls
 
 - Each call but `guide`'s runs `rimz --color=never` with the command's words, flag values joined as `--flag=value`, and every positional after `--`, so no argument an agent passes is read as a flag. The command never gets `--root` or `--json`.
-- `cwd` sets the command's working directory; without it the command runs in the server's directory, the directory the agent launched in. For `notes_add`, an agent's room pin names the note's project ahead of `cwd`.
+- `cwd`, on `lsp` and `wait`, sets the command's working directory; without it the command runs in the server's directory, the directory the agent launched in.
 - The command's stdin is empty, except for `notes_add`, whose `body` reaches it byte for byte.
 - The result's text is the command's stdout, then, when the command wrote to stderr, a line `stderr:` and its stderr. A command that exits nonzero returns an error result whose last line is `exit code <N>`, since the [LSP exit codes](./lsp.md#exit-codes) carry meaning.
 - The server checks the shape of the arguments (their types, required fields, and enum values), so a `wait` without its `trigger` or its `value` never runs (without a trigger, the command would read the call as a listing). It also refuses three combinations the command would misread: a `self_tune` `value` without a `setting`, a `notes_add` with both `body` and `file`, and a `notes_add` `meta` key containing `=`. Such arguments return an error result starting `invalid arguments:` without running anything. Which flag fits which verb or trigger, and what a `value` must hold (a `pid` value that is not a number, say), are the command's own rules, and its usage error comes back as the error result.

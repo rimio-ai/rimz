@@ -748,8 +748,8 @@ fn notes_add_keeps_the_body_bytes_and_the_server_keeps_parsing() {
     assert!(is_error, "{text}");
     let (text, is_error) = server.call(
         4,
-        "notes_add",
-        json!({"kind": "log", "title": "x", "body": "y", "cwd": "/no/such/dir"}),
+        "lsp",
+        json!({"verb": "find", "targets": ["x"], "cwd": "/no/such/dir"}),
     );
     assert!(is_error, "{text}");
     assert_eq!(notes_written(&env), [path]);

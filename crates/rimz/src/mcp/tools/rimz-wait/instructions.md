@@ -1,1 +1,1 @@
-Use `wait` over a sleep, poll, or background command.
+Use `wait` where you would background, sleep, or poll.

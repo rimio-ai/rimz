@@ -1,1 +1,1 @@
-List the waits you have armed, each with the name `wait_cancel` takes.
+Show what is armed for you, each wait under the name `wait_cancel` takes.
