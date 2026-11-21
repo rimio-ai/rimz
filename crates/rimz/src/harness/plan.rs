@@ -1486,9 +1486,12 @@ pub enum LaunchFinalizeError {
     )]
     MissingSystemPromptBase { agent: &'static str },
     #[error(
-        "{agent} applies a `tools` list only through the agent file its system prompt rides, and this launch has no system prompt; add the kind base `agents/{agent}.md` or another prompt source, or remove `tools`"
+        "{agent} applies a `{field}` list only through the agent file its system prompt rides, and this launch has no system prompt; add the kind base `agents/{agent}.md` or another prompt source, or remove `{field}`"
     )]
-    ToolsNeedAgentFile { agent: &'static str },
+    ListNeedsAgentFile {
+        agent: &'static str,
+        field: &'static str,
+    },
     #[error("{reason}")]
     PromptValidation { reason: String },
     #[error("{agent} does not support --max-turns")]
@@ -1509,7 +1512,7 @@ impl LaunchFinalizeError {
             | Self::UnsupportedSystemPrompt { .. }
             | Self::UnsupportedDefinitionPrompt { .. }
             | Self::MissingSystemPromptBase { .. }
-            | Self::ToolsNeedAgentFile { .. }
+            | Self::ListNeedsAgentFile { .. }
             | Self::PromptValidation { .. } => &[],
         }
     }
@@ -2002,10 +2005,12 @@ fn validate_system_prompt_support(
     Ok(())
 }
 
-/// A kind whose prompt rides an agent file applies a `tools` list only inside that file, which
-/// a fresh launch writes only from prompt sources. A resume keeps the tools its conversation
-/// started with, so only a fresh cell is checked.
-fn validate_fresh_tools_delivery(cell: &AgentCell) -> std::result::Result<(), LaunchFinalizeError> {
+/// A kind whose prompt rides an agent file applies a `tools` list and a limiting `mcps` list
+/// only inside that file, which a fresh launch writes only from prompt sources. A resume keeps
+/// the tools and servers its conversation started with, so only a fresh cell is checked.
+fn validate_fresh_agent_file_lists(
+    cell: &AgentCell,
+) -> std::result::Result<(), LaunchFinalizeError> {
     let Some(adapter) = crate::agents::find_definition(cell.kind.as_str()) else {
         return Ok(());
     };
@@ -2016,12 +2021,19 @@ fn validate_fresh_tools_delivery(cell: &AgentCell) -> std::result::Result<(), La
             .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile),
         Some(crate::agents::PresetArgMatcher::AgentFile(_))
     );
-    if cell.tools.is_none() || !rides_agent_file || !SystemPromptSources::from_cell(cell).is_empty()
-    {
+    if !rides_agent_file || !SystemPromptSources::from_cell(cell).is_empty() {
         return Ok(());
     }
-    Err(LaunchFinalizeError::ToolsNeedAgentFile {
+    let field = if cell.tools.is_some() {
+        "tools"
+    } else if crate::config::mcps_limit(cell.mcps.as_deref()) {
+        "mcps"
+    } else {
+        return Ok(());
+    };
+    Err(LaunchFinalizeError::ListNeedsAgentFile {
         agent: adapter.spec().kind,
+        field,
     })
 }
 
@@ -2306,7 +2318,7 @@ pub fn compile_layout_panes(
             .resume_seeds
             .is_none_or(|seeds| matches!(seeds.get(index), Some(CohortSeed::Fresh)));
         if fresh {
-            validate_fresh_tools_delivery(cell)?;
+            validate_fresh_agent_file_lists(cell)?;
         }
     }
     for cell in layout_cells() {
