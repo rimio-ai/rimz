@@ -776,6 +776,24 @@ fn a_kind_without_mcp_servers_takes_a_bare_star_silently() {
 /// A launch that registers a capability's tools hides the rimz skill of the
 /// same name from the model, on Claude and Codex, with a profile list and
 /// without one; a launch that registers nothing hides nothing.
+/// Antigravity binds an inline server's tools only from the second TUI turn, so serving a
+/// capability hides no skill there: the skill is the agent's way in on the first turn.
+#[test]
+fn antigravity_serves_its_capabilities_and_hides_no_skill() {
+    let room = Room::new();
+    let mut request = launch("antigravity", None, &[]);
+    request.system_prompt_file = Some(crate::config::PromptSource::Text {
+        origin: room.project.path().join("antigravity.md"),
+        text: "Base.\n".to_owned(),
+    });
+    let plan = room.compile(&switches(true, true), &request);
+    assert_eq!(
+        plan.mcp_capabilities,
+        crate::mcp::catalog::Capability::ALL.to_vec()
+    );
+    assert_eq!(plan.hidden_skills, Vec::<&str>::new());
+}
+
 #[test]
 fn a_registered_capability_hides_its_skill_from_the_host_view() {
     let room = Room::new();

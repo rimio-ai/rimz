@@ -587,6 +587,12 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         true
     }
 
+    /// agy 1.5.13 binds an inline server's tools only from the second turn of a fresh or
+    /// resumed TUI conversation, so the matching skills stay callable.
+    fn mcp_tools_on_first_turn(&self) -> bool {
+        false
+    }
+
     /// The global root agy's own built-in skills name. agy also reads
     /// `~/.gemini/antigravity-cli/skills`, a plugin's `skills/`, and the workspace
     /// `.agents/skills`, which the scoped view leaves native.

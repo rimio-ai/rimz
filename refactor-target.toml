@@ -443,7 +443,9 @@ upward-dependencies = ["address"]
 # launch's own arguments switch RimZ's MCP server off (+1).
 # keeps_model decides whether an agent: kind keeps a model whose id routes elsewhere (+1).
 # pinned_definition_defaults keeps a cataloged name's effort over a pin to an unlisted id (+1).
-surface-budget = 1320
+# LaunchCapability::mcp_tools_on_first_turn: an adapter whose served tools arrive after the
+# first turn keeps the matching rimz skills (+1).
+surface-budget = 1321
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
