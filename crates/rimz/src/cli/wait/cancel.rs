@@ -1,9 +1,8 @@
 use std::io::Write;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
-use rimz::harness::schedule::catalog::TaskCatalog;
-use rimz::harness::schedule::signal::stop_watcher;
+use rimz::harness::schedule::wait::CancelTarget;
 
 use super::*;
 
@@ -16,39 +15,19 @@ pub(super) fn run(
     let ctx = Ctx::open(globals)?;
     let caller = caller(&ctx)?;
     let snapshot = ctx.resolution_snapshot()?;
-    let agent = caller_agent(&snapshot, caller.as_ref(), Some("canceled"))?.context(
-        "canceling a wait requires an agent RimZ can identify; run this command from an agent pane",
-    )?;
-    let pending = list::pending_rows(&ctx, Some(agent), &snapshot)?;
-    let names = if all {
-        pending
-            .into_iter()
-            .filter(list::WakeRow::is_self)
-            .map(|row| row.name)
-            .collect::<Vec<_>>()
-    } else {
-        let name = name.expect("clap requires a name or --all").to_string();
-        if !pending.iter().any(|row| row.name == name) {
-            bail!("no pending wait named `{name}`; see `rimz wait list`");
-        }
-        vec![name]
+    let agent = wait::canceling_agent(&snapshot, caller.as_ref())?;
+    // clap requires exactly one of a name and --all.
+    let target = match (all, name) {
+        (false, Some(name)) => CancelTarget::Name(name),
+        _ => CancelTarget::AllWaits,
     };
-    let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
-    for name in &names {
-        catalog
-            .remove(name)
-            .map_err(|error| home_write_hint(error, Some("canceled")))?;
-        stop_watcher(ctx.runtime(), name)?;
-    }
-    let pending = list::pending_rows(&ctx, Some(agent), &snapshot)?;
+    let canceled = wait::cancel(&room(&ctx, &snapshot), agent, target)?;
     if json {
-        return super::super::render::json(
-            &serde_json::json!({ "canceled": names, "pending": pending }),
-        );
+        return super::super::render::json(&canceled);
     }
     let mut out = super::super::render::out();
-    if !names.is_empty() {
-        writeln!(out, "canceled {}", names.join(", "))?;
+    if !canceled.canceled.is_empty() {
+        writeln!(out, "canceled {}", canceled.canceled.join(", "))?;
     }
-    list::write_rows(&mut out, &ctx, Some(agent), &snapshot, pending)
+    list::write_rows(&mut out, &ctx, Some(agent), &snapshot, canceled.pending)
 }

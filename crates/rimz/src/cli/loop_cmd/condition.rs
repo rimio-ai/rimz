@@ -1,7 +1,7 @@
 //! Condition admission and room-aware presentation.
 
 use super::*;
-use crate::cli::wake_view::{ConditionReading, RoomSource, read_condition, reset_minute};
+use crate::cli::wake_view::{ConditionReading, read_condition, reset_minute};
 use jiff::tz::TimeZone;
 use rimz::harness::when::{self, CiSource, WhenExpr, WhenTerm};
 
@@ -17,7 +17,7 @@ pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
 /// `expr` read for `entry` in its own room.
 fn read(entry: &TaskEntry, expr: &WhenExpr, fired_at: Option<Timestamp>) -> ConditionReading {
     read_condition(
-        &RoomSource::read(&entry.resolved_root()),
+        &crate::cli::wake_view::room_source(&entry.resolved_root()),
         entry,
         expr,
         fired_at,
@@ -29,7 +29,7 @@ pub(super) fn reading(entry: &TaskEntry, expr: &WhenExpr) -> ConditionReading {
 }
 
 pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
-    let room = RoomSource::read(&entry.resolved_root());
+    let room = crate::cli::wake_view::room_source(&entry.resolved_root());
     let reading = read_condition(&room, entry, expr, None);
     let scope = entry.run_dir();
     let checked_at = if expr.reads_forge() {

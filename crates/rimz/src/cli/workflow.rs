@@ -719,8 +719,8 @@ fn refuse_unwritable_home(action: &str) -> Result<()> {
 
 fn unwritable_home(error: rimz::disk::lock::LockErr, action: &str) -> anyhow::Error {
     let error = anyhow::Error::from(error);
-    if super::home_write::is_read_only(&error) {
-        return super::home_write::hint(error, "rimz workflow", Some(action));
+    if rimz::harness::home_write::is_read_only(&error) {
+        return rimz::harness::home_write::hint(error, "rimz workflow", Some(action));
     }
     error.context(format!(
         "nothing was {action}: the detached workflow engine needs this lock"

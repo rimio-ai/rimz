@@ -14,6 +14,7 @@ pub mod drainer_outage;
 mod duration;
 pub mod fleet;
 pub mod hibernate;
+pub mod home_write;
 pub mod hook_drain;
 pub mod idle_compact;
 pub mod idle_stop;

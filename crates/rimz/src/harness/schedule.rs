@@ -50,6 +50,7 @@ mod task_record_store;
 pub mod team;
 #[cfg(test)]
 pub(crate) mod test_homes;
+pub mod wait;
 pub mod window;
 
 pub use fire::last_stamps;

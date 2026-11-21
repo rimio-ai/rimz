@@ -25,6 +25,8 @@ use jiff::Timestamp;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
+use rimz::theme::fmt::home_relative_to;
+
 pub(super) fn tui_color(tone: rimz::theme::Tone) -> ratatui::style::Color {
     match tone {
         rimz::theme::Tone::Indexed(index) => ratatui::style::Color::Indexed(index),
@@ -651,8 +653,7 @@ pub(crate) fn pane_frame(w: &mut impl Write, title: &str, text: &str) -> std::io
 /// read at a glance. Leaves any path outside `$HOME` (or when `$HOME` is unset)
 /// untouched.
 pub(crate) fn home_relative(path: &str) -> String {
-    let home = std::env::var_os("HOME");
-    home_relative_to(home.as_ref().and_then(|home| home.to_str()), path)
+    rimz::theme::fmt::home_relative(path)
 }
 
 /// Render a path a command holds as a [`Path`]: `..` folded away, then the home
@@ -782,8 +783,7 @@ pub(crate) fn refill_in(at: Timestamp, now: Timestamp, tz: &jiff::tz::TimeZone) 
 }
 
 pub(crate) fn age_short(ts: Timestamp, now: Timestamp) -> String {
-    let age = now.duration_since(ts);
-    age_label(age.as_secs().max(0) as u64)
+    rimz::theme::fmt::age_short(ts, now)
 }
 
 /// A burst inside one second has no span worth naming; reporting it as
@@ -1038,25 +1038,7 @@ pub(crate) fn terminal_rows(fallback: usize) -> usize {
 }
 
 pub(crate) fn rel_until(ts: Timestamp, now: Timestamp) -> String {
-    let until = ts.duration_since(now);
-    if until.is_negative() || until.is_zero() {
-        return "due".to_owned();
-    }
-    let secs = until.as_secs().max(0) as u64;
-    if secs < 60 {
-        format!("in {secs}s")
-    } else if secs < 3_600 {
-        format!("in {}m", secs / 60)
-    } else if secs < 86_400 {
-        let (hours, minutes) = (secs / 3_600, secs % 3_600 / 60);
-        if minutes == 0 {
-            format!("in {hours}h")
-        } else {
-            format!("in {hours}h {minutes}m")
-        }
-    } else {
-        format!("in {}d", secs / 86_400)
-    }
+    rimz::theme::fmt::rel_until(ts, now)
 }
 
 pub(crate) fn until_label(ts: Timestamp, now: Timestamp) -> String {
@@ -1065,22 +1047,6 @@ pub(crate) fn until_label(ts: Timestamp, now: Timestamp) -> String {
         return "due".to_owned();
     }
     age_label(until.as_secs().max(0) as u64)
-}
-
-fn home_relative_to(home: Option<&str>, path: &str) -> String {
-    let Some(home) = home.filter(|home| !home.is_empty()) else {
-        return path.to_owned();
-    };
-    if path == home {
-        return "~".to_owned();
-    }
-    match path
-        .strip_prefix(home)
-        .and_then(|rest| rest.strip_prefix('/'))
-    {
-        Some(rest) => format!("~/{rest}"),
-        None => path.to_owned(),
-    }
 }
 
 /// One column's horizontal alignment within an auto-fit [`Table`].

@@ -146,6 +146,59 @@ pub fn age_label(secs: u64) -> String {
     }
 }
 
+/// The age of `ts` at `now` in its largest whole unit, as [`age_label`] words it.
+pub fn age_short(ts: Timestamp, now: Timestamp) -> String {
+    age_label(now.duration_since(ts).as_secs().max(0) as u64)
+}
+
+/// How long until `ts`: `in 42s`, `in 5m`, `in 3h 10m`, `in 2d`, or `due` once it has passed.
+pub fn rel_until(ts: Timestamp, now: Timestamp) -> String {
+    let until = ts.duration_since(now);
+    if until.is_negative() || until.is_zero() {
+        return "due".to_owned();
+    }
+    let secs = until.as_secs().max(0) as u64;
+    if secs < 60 {
+        format!("in {secs}s")
+    } else if secs < 3_600 {
+        format!("in {}m", secs / 60)
+    } else if secs < 86_400 {
+        let (hours, minutes) = (secs / 3_600, secs % 3_600 / 60);
+        if minutes == 0 {
+            format!("in {hours}h")
+        } else {
+            format!("in {hours}h {minutes}m")
+        }
+    } else {
+        format!("in {}d", secs / 86_400)
+    }
+}
+
+/// Render an absolute path relative to `$HOME` as `~`/`~/rest`, so cwd columns
+/// read at a glance. Leaves any path outside `$HOME` (or when `$HOME` is unset)
+/// untouched.
+pub fn home_relative(path: &str) -> String {
+    let home = std::env::var_os("HOME");
+    home_relative_to(home.as_ref().and_then(|home| home.to_str()), path)
+}
+
+/// [`home_relative`] against a home the caller supplies.
+pub fn home_relative_to(home: Option<&str>, path: &str) -> String {
+    let Some(home) = home.filter(|home| !home.is_empty()) else {
+        return path.to_owned();
+    };
+    if path == home {
+        return "~".to_owned();
+    }
+    match path
+        .strip_prefix(home)
+        .and_then(|rest| rest.strip_prefix('/'))
+    {
+        Some(rest) => format!("~/{rest}"),
+        None => path.to_owned(),
+    }
+}
+
 /// A diagnostic collapsed onto one line: trimmed lines, blanks dropped, joined by `; `.
 pub fn one_line(message: &str) -> String {
     message
