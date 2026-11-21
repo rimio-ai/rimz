@@ -146,7 +146,7 @@ Smart and idle compaction append the configured summary brief after `/compact `.
 
 ### Settings merge
 
-Claude honours only the last `--settings` on its command line, so every RimZ addition merges into one settings document. [`merge_settings`](../../../crates/rimz/src/agents/adapters/claude/mod.rs) reads the profile's last `--settings` value (inline JSON, or a file path resolved against the cwd, both parsed as JSONC), applies one step's change, removes every `--settings` occurrence, and appends one. Arrays it extends gain only new entries, and profile entries stay first. The process compiler in `crates/rimz/src/harness/launch.rs` runs the steps in this order:
+Claude honours only the last `--settings` on its command line, so every RimZ addition merges into one settings document. [`merge_settings`](../../../crates/rimz/src/agents/launch_settings.rs), shared with Antigravity, reads the profile's last `--settings` value (inline JSON, or a file path resolved against the cwd, both parsed as JSONC), applies one step's change, removes every `--settings` occurrence, and appends one. Arrays it extends gain only new entries, and profile entries stay first. The process compiler in `crates/rimz/src/harness/launch.rs` runs the steps in this order:
 
 1. Host skill list. `skillOverrides` marks each unlisted skill directory `user-invocable-only` ([host mode](../sandbox.md#host-mode)).
 2. Listed skill permissions. Each name in the profile's `skills` list adds an exact `Skill(<directory name>)` rule to `permissions.allow`. A name containing `*` gets no rule, and an empty set leaves argv untouched.
