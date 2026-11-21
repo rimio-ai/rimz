@@ -531,9 +531,9 @@ impl LspVerb {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct LspArgs {
-    /// The query; the description says what each verb does.
+    /// The query.
     verb: LspVerb,
-    /// Every target of the question; the description gives their forms.
+    /// Every target of the question.
     targets: Vec<String>,
     /// Show every location in scope.
     #[serde(default)]
@@ -583,7 +583,6 @@ impl ToolArgs for LspArgs {
 enum WaitOn {
     Fail,
     Success,
-    Any,
 }
 
 impl std::fmt::Display for WaitOn {
@@ -591,7 +590,6 @@ impl std::fmt::Display for WaitOn {
         f.write_str(match self {
             Self::Fail => "fail",
             Self::Success => "success",
-            Self::Any => "any",
         })
     }
 }
@@ -633,7 +631,7 @@ struct WaitArgs {
     grep: Option<String>,
     /// `check` only: the sleep between runs (default `1s`).
     every: Option<String>,
-    /// `run`: wake only on this outcome. `check`: `fail` polls until it fails.
+    /// `run`: wake only on this outcome, not either. `check`: `fail` polls until it fails.
     on: Option<WaitOn>,
     /// What you will do on waking, 1 to 60 characters.
     label: Option<String>,
@@ -797,9 +795,6 @@ struct NotesAddArgs {
     /// Header keys of your own; RimZ's own keys win.
     #[serde(default)]
     meta: BTreeMap<String, String>,
-    /// The directory to run in, which names the note's project unless you run in a room, whose
-    /// project wins; defaults to where the session started.
-    cwd: Option<PathBuf>,
 }
 
 impl ToolArgs for NotesAddArgs {
@@ -825,7 +820,7 @@ impl ToolArgs for NotesAddArgs {
             )
             .positional(self.kind)
             .positional(self.title)
-            .invocation(self.cwd);
+            .invocation(None);
         invocation.stdin = self.body.map(String::into_bytes);
         invocation
     }
@@ -837,15 +832,12 @@ struct NotesListArgs {
     /// Keep notes matching every `field=value` term; `help` lists the fields.
     #[serde(default)]
     filter: Vec<String>,
-    /// Show the newest N matches; 0 shows every match.
-    limit: Option<u32>,
 }
 
 impl ToolArgs for NotesListArgs {
     fn invocation(self) -> Invocation {
         Argv::new("notes list")
             .values("filter", self.filter)
-            .value("limit", self.limit)
             .invocation(None)
     }
 }

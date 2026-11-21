@@ -138,23 +138,19 @@ fn values_join_their_flags_and_positionals_follow_the_terminator() {
         ["agents", "tune", "--", "@me", "idle-compact", "120k"]
     );
     assert_eq!(
-        args(
-            "notes_list",
-            json!({"filter": ["kind=handoff"], "limit": 0})
-        ),
-        ["notes", "list", "--filter=kind=handoff", "--limit=0"]
+        args("notes_list", json!({"filter": ["kind=handoff", "age<2d"]})),
+        ["notes", "list", "--filter=kind=handoff", "--filter=age<2d"]
     );
 }
 
 #[test]
-fn a_notes_body_travels_on_stdin_and_cwd_is_kept() {
+fn a_notes_body_travels_on_stdin() {
     let invocation = tool("notes_add")
         .invocation(json!({
             "kind": "handoff",
             "title": "--force",
             "body": "say \"hi\"\n$(rm -rf /)\n",
             "meta": {"ticket": "42"},
-            "cwd": "/src/repo",
         }))
         .expect("arguments fit");
     assert_eq!(
@@ -170,7 +166,7 @@ fn a_notes_body_travels_on_stdin_and_cwd_is_kept() {
             ]
             .map(String::from)
             .to_vec(),
-            cwd: Some(PathBuf::from("/src/repo")),
+            cwd: None,
             stdin: Some(b"say \"hi\"\n$(rm -rf /)\n".to_vec()),
         }
     );
@@ -190,7 +186,13 @@ fn arguments_outside_the_schema_shape_are_refused() {
         ("wait_list", json!({"all": true})),
         ("self_tune", json!({"setting": "budget"})),
         ("notes_add", json!({"kind": "log", "title": 7})),
-        ("notes_list", json!([])),
+        ("notes_list", json!("kind=handoff")),
+        ("wait", json!({"trigger": "run", "value": "x", "on": "any"})),
+        (
+            "notes_add",
+            json!({"kind": "k", "title": "t", "cwd": "/src"}),
+        ),
+        ("notes_list", json!({"limit": 5})),
     ] {
         assert!(
             tool(name).invocation(arguments.clone()).is_err(),
@@ -222,7 +224,7 @@ fn schemas_are_inline_objects_without_null_types() {
     let wait = tool("wait").listing(&Wording::built_in());
     assert_eq!(
         wait["inputSchema"]["properties"]["on"]["enum"],
-        json!(["fail", "success", "any"])
+        json!(["fail", "success"])
     );
     assert_eq!(
         wait["inputSchema"]["properties"]["trigger"]["enum"],
@@ -313,7 +315,7 @@ fn a_wait_needs_one_trigger_and_its_value() {
         (json!({"trigger": "in"}), "value"),
         (json!({"label": "x"}), "trigger"),
         (
-            json!({"every": "1m", "grep": "x", "on": "any", "check_in": "5m"}),
+            json!({"every": "1m", "grep": "x", "on": "fail", "check_in": "5m"}),
             "trigger",
         ),
         (json!({"when": ["pr=merged"]}), "when"),
@@ -383,9 +385,4 @@ fn ambiguous_tune_and_note_arguments_are_refused() {
         args("self_tune", json!({"setting": "keep-warm"})),
         ["agents", "tune", "--", "@me", "keep-warm"]
     );
-    let cwd = tool("notes_add").listing(&Wording::built_in())["inputSchema"]["properties"]["cwd"]["description"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert!(cwd.contains("room"), "{cwd}");
 }
