@@ -80,6 +80,7 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
         posture.launch.skills.is_some(),
         adapter.manual_skill(),
     )?;
+    posture.launch.validate_fresh_agent_file_lists(&kind)?;
     rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), &cwd)?;
     let logins = rimz::agents::room_accounts(
         &store.paths().workspace_record,

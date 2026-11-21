@@ -424,6 +424,15 @@ impl ResumeLaunchPosture {
         }
     }
 
+    /// The layout's check of the lists only an agent file carries, for a fresh launch of this
+    /// posture that no layout carries: a molt, or a restart whose conversation cannot resume.
+    pub fn validate_fresh_agent_file_lists(
+        &self,
+        kind: &AgentKind,
+    ) -> std::result::Result<(), LaunchFinalizeError> {
+        validate_fresh_agent_file_lists(&self.clone().into_cell(kind.clone(), None))
+    }
+
     /// Apply the posture's arguments and prompt/skill defaults to a launch action.
     pub fn exec_request(
         &self,

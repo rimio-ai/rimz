@@ -2482,7 +2482,8 @@ path = "crates/rimz/src/harness"
 # A loop task's launch (TaskLaunch with argv, as_str, launches), its launch child's ProcessMark and FireMark::launching, the settle pass (settle_open_fires, has_open_fires, and open_fire_roots for the external tick), workflow::TaskStart for `workflow run --loop-fire-json`, and check_run::drop_room_identity shared by the launch child, counted from the ratchet (+12).
 # The shutdown checklist's read crosses to the CLI: `idle_stop::started` with `Seat`, `Started` and `Started::is_empty`, `StartedRow`, `RowKind` and `RowKind::as_str`, `started`, and `SessionWaits::of`, the catalog waits it shares with `decide` (+9).
 # The hook drainer's applier seam crosses to the CLI's apply child: `FrameApplier` and its `apply`, `FrameClaim` with `recover_from`, and `register_applier` (+5).
-surface-budget = 1280
+# A molt and a fresh restart run the layout's agent-file list check on their posture (+1).
+surface-budget = 1281
 
 [[verdict]]
 kind = "item"
