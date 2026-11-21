@@ -211,7 +211,7 @@ impl LaunchAgents {
                             !profiles.0.contains_key(name) && profiles.0.contains_key(*base)
                         })
                         .unwrap_or(name);
-                    vec![(scope, name.to_owned(), name.to_owned())]
+                    vec![(scope, profiles.key(name).to_owned(), name.to_owned())]
                 }
             })
             .unwrap_or_default();

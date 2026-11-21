@@ -61,10 +61,14 @@ impl Item {
     }
 }
 
+/// Whether `path` is the base of kind `name`: an `agents/` file named by the kind or one of
+/// its aliases, which claims the canonical kind.
 pub(super) fn kind_base(kind: ItemType, path: &Path, name: &str) -> bool {
     kind == ItemType::Agents
-        && path.file_stem().is_some_and(|stem| stem == name)
-        && crate::agents::find_definition(name).is_some()
+        && path
+            .file_stem()
+            .and_then(|stem| crate::agents::find_definition(&stem.to_string_lossy()))
+            .is_some_and(|definition| definition.spec().kind == name)
 }
 
 pub(super) struct Catalog {
@@ -121,10 +125,12 @@ impl Catalog {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned();
-                    let name = if kind == ItemType::Traits
-                        || (kind == ItemType::Agents
-                            && crate::agents::find_definition(&stem).is_some())
-                    {
+                    let base = crate::agents::find_definition(&stem)
+                        .filter(|_| kind == ItemType::Agents)
+                        .map(|definition| definition.spec().kind);
+                    let name = if let Some(base) = base {
+                        base.to_owned()
+                    } else if kind == ItemType::Traits {
                         stem
                     } else {
                         #[derive(serde::Deserialize)]

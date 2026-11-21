@@ -191,9 +191,20 @@ pub enum DefinitionCause {
 /// message has to say what a kind base is, where to write it, and that an
 /// empty body is refused in turn.
 fn missing_kind_base(home: &Path, kind: &str) -> String {
+    let shipped = std::iter::once(kind)
+        .chain(
+            crate::agents::find_definition(kind)
+                .map(|definition| definition.spec().aliases)
+                .unwrap_or_default()
+                .iter()
+                .copied(),
+        )
+        .map(|name| format!("agents/{name}.md"))
+        .collect::<Vec<_>>()
+        .join(" or ");
     format!(
         "whose kind base is missing — create {} with a nonempty body, the system prompt every \
-         {kind} definition starts from, or install a provider pack that ships agents/{kind}.md",
+         {kind} definition starts from, or install a provider pack that ships {shipped}",
         home.join("agents").join(format!("{kind}.md")).display()
     )
 }
@@ -365,7 +376,7 @@ struct LoadScope<'a> {
 /// A kind base that loaded, held back until its `subagents:` names check.
 struct PendingBase<'a> {
     item: &'a catalog::Item,
-    /// Its names, the file stem first.
+    /// Its names, the canonical kind first.
     keys: Vec<String>,
     /// Its rows in the agents table and in the subagents table.
     rows: (Profile, Profile),
@@ -516,7 +527,7 @@ fn load_resolved(
         }
     }
     let mut bases = BTreeMap::new();
-    let mut pending = Vec::new();
+    let mut pending: Vec<PendingBase<'_>> = Vec::new();
     let mut failed_bases = BTreeMap::new();
     for (name, claim) in &sources.claims["bases"] {
         if let ClaimResolution::Conflict { claims, message } = claim {
@@ -528,6 +539,7 @@ fn load_resolved(
         }
     }
     let mut names: BTreeMap<String, PathBuf> = BTreeMap::new();
+    let mut base_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
     for (namespace, tree) in [("agents", &mut agents), ("subagents", &mut subagents)] {
         for item in sources
             .items
@@ -535,13 +547,9 @@ fn load_resolved(
             .filter(|item| item.kind.as_str() == namespace)
         {
             let path = &item.path;
-            let stem = path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
             let name = &item.name;
-            let kind_base = crate::agents::find_definition(&stem).filter(|_| namespace == "agents");
+            let kind_base = crate::agents::find_definition(name)
+                .filter(|_| catalog::kind_base(item.kind, path, name));
             if kind_base.is_some() && !item.selected() {
                 continue;
             }
@@ -575,13 +583,32 @@ fn load_resolved(
                 .chain(qualified)
                 .collect();
             let result = (|| {
+                if kind_base.is_some()
+                    && let Some(previous) = base_paths.insert(name.clone(), path.clone())
+                {
+                    bases.remove(name);
+                    pending.retain(|base| base.keys[0] != *name);
+                    loaded
+                        .failed
+                        .entry(name.clone())
+                        .or_default()
+                        .insert(previous.clone());
+                    return Err(DefinitionErr::new(
+                        path,
+                        format!(
+                            "kind base for {name} is declared by both {} and {}; keep one",
+                            previous.display(),
+                            path.display()
+                        ),
+                    ));
+                }
                 if let Some(definition) = kind_base
                     && !definition.spec().launch.takes_system_prompt()
                 {
                     return Err(DefinitionErr::new(
                         path,
                         format!(
-                            "{stem} takes no system prompt, so this kind base can never reach a \
+                            "{name} takes no system prompt, so this kind base can never reach a \
                              launch; delete {}",
                             path.display()
                         ),
@@ -643,11 +670,11 @@ fn load_resolved(
                         ));
                     }
                     if body.trim().is_empty() {
-                        return Err(DefinitionErr::new(path, empty_kind_base(&stem)));
+                        return Err(DefinitionErr::new(path, empty_kind_base(name)));
                     }
                     let tree = Namespace {
                         definitions: BTreeMap::from([(
-                            stem.clone(),
+                            name.clone(),
                             Definition {
                                 path: path.clone(),
                                 pack: item.pack.clone(),
@@ -657,7 +684,7 @@ fn load_resolved(
                         )]),
                         ..Namespace::default()
                     };
-                    let own_base = BTreeMap::from([(stem.clone(), fm.clone())]);
+                    let own_base = BTreeMap::from([(name.clone(), fm.clone())]);
                     let scope = LoadScope {
                         home: agents_home,
                         bases: &own_base,
@@ -669,10 +696,10 @@ fn load_resolved(
                     };
                     let row = |namespace: &str| {
                         agent::Resolver::new(scope, namespace, [&tree, &tree], &BTreeSet::new())
-                            .kind_base(&stem)
+                            .kind_base(name)
                     };
                     let rows = (row("agents")?, row("subagents")?);
-                    bases.insert(stem.clone(), fm);
+                    bases.insert(name.clone(), fm);
                     pending.push(PendingBase {
                         item,
                         keys: keys.clone(),
@@ -790,9 +817,9 @@ fn load_resolved(
     }
     for base in pending {
         let origin = DefinitionOrigin::new(base.item.pack.as_ref(), None);
-        let stem = &base.keys[0];
-        loaded.insert("agents", stem, &base.item.path, &origin, base.rows.0);
-        loaded.insert("subagents", stem, &base.item.path, &origin, base.rows.1);
+        let name = &base.keys[0];
+        loaded.insert("agents", name, &base.item.path, &origin, base.rows.0);
+        loaded.insert("subagents", name, &base.item.path, &origin, base.rows.1);
     }
     // Only kind bases have been materialized yet; each family keeps its own base prompt.
     let families: BTreeSet<_> = tiers

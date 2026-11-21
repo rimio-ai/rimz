@@ -82,7 +82,11 @@ pub fn catalog(
         });
     }
     if let Some(allowed) = allowed {
-        specs.retain(|spec| allowed.contains(&spec.name));
+        specs.retain(|spec| {
+            allowed
+                .iter()
+                .any(|name| subagent_profiles.key(name) == spec.name)
+        });
     }
     if specs.is_empty() {
         return SubagentCatalog::Disabled;
@@ -148,7 +152,10 @@ pub fn check_allowed(
     };
     for requested in [Some(profile), agent_override].into_iter().flatten() {
         let requested = requested.trim();
-        if allowed.iter().any(|candidate| candidate == requested) {
+        if allowed
+            .iter()
+            .any(|candidate| profiles.key(candidate) == profiles.key(requested))
+        {
             continue;
         }
         return Err(LayoutErr::SubagentProfileNotAllowed {
@@ -252,6 +259,33 @@ mod tests {
         assert!(check_allowed(&agent, &profiles, "opencode", None).is_err());
         let (agent, profiles) = caller(Some(vec!["opencode"]));
         assert!(check_allowed(&agent, &profiles, "opencode-mini", None).is_err());
+    }
+
+    #[test]
+    fn alias_allowlists_name_their_kinds_base() {
+        let children: ProfilesConfig =
+            toml::from_str("[minimax]\nagent = 'minimax'\n[antigravity]\nagent = 'antigravity'")
+                .unwrap();
+        for (alias, kind) in [("mcode", "minimax"), ("agy", "antigravity")] {
+            for (allowed, requested) in [(alias, kind), (kind, alias)] {
+                let (agent, profiles) = caller(Some(vec![allowed]));
+                let listed = catalog(
+                    Some("planner"),
+                    &profiles,
+                    &children,
+                    &CommandsConfig::default(),
+                );
+                assert!(
+                    matches!(&listed, SubagentCatalog::Available(specs)
+                        if specs.len() == 1 && specs[0].name == kind),
+                    "{allowed}: {listed:?}"
+                );
+                assert!(
+                    check_allowed(&agent, &profiles, requested, None).is_ok(),
+                    "{allowed}"
+                );
+            }
+        }
     }
 
     #[test]

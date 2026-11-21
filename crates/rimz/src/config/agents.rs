@@ -405,6 +405,17 @@ pub enum LaunchPlacement {
 pub struct ProfilesConfig(pub BTreeMap<String, Profile>);
 
 impl ProfilesConfig {
+    /// The row a launch word or an `agent:` value names: the word itself, or for an alias with
+    /// no row of its own (`agy`, `mcode`), its kind, which keys the kind's base.
+    pub(crate) fn key<'a>(&self, word: &'a str) -> &'a str {
+        if self.0.contains_key(word) {
+            return word;
+        }
+        crate::agents::find_runtime(word)
+            .filter(|runtime| runtime.variant.is_none())
+            .map_or(word, |runtime| runtime.kind())
+    }
+
     /// The nearest profile maximum, else `fallback`; explicit `off` stops inheritance.
     pub fn keep_warm(&self, name: Option<&str>, fallback: super::KeepWarm) -> super::KeepWarm {
         name.and_then(|name| {
