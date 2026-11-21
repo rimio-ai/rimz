@@ -3954,6 +3954,11 @@ kind = "item"
 key = "store::ingress::write_cursor_cache"
 reason = "The drainer publishes boot-safe claims, applications, skips and drops atomically without fsync; durable unknown-boot cursor writes remain separate."
 
+[[verdict]]
+kind = "item"
+key = "store::ingress::drain_lag"
+reason = "Both sidebar fold paths date the oldest unapplied hook frame without the ingress lock, reading one frame."
+
 [[module]]
 path = "crates/rimz/src/reload.rs"
 # RecordWatch/RecordChange and their cadence move from the sidebar; RoomBuildFollower and exec_current_args serve every rimzd process (+12).
@@ -4659,7 +4664,8 @@ path = "crates/rimz/src/store"
 # RunRecord::moving_to names the step a staged resume move sends the run to, for the extend
 # grant and both receipts (+1).
 # The open-runs listing serves harness::run's open team and peer run lookups (+1).
-surface-budget = 687
+# ingress::drain_lag and HookDrainLag carry the oldest unapplied hook frame to the sidebar fold (+2).
+surface-budget = 689
 
 [[verdict]]
 kind = "item"
@@ -4805,6 +4811,11 @@ reason = "Both sidebar fold paths carry the earliest runtime outage and its orde
 kind = "item"
 key = "store::snapshot::view::HookDrainerOutageAgent"
 reason = "The snapshot owns the renderer's outage identity without importing harness records into store."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::HookDrainLag"
+reason = "Both sidebar fold paths carry the oldest unapplied hook frame's feed time and the cursor's frame count."
 
 [[verdict]]
 kind = "item"

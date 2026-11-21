@@ -76,6 +76,17 @@ pub struct HookDrainerOutage {
     pub agents: Vec<HookDrainerOutageAgent>,
 }
 
+/// The oldest unapplied hook ingress frame, once it is old enough to show.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookDrainLag {
+    /// When that frame was fed.
+    pub since: Timestamp,
+    /// The drain cursor's running frame count, absent when an older drainer
+    /// wrote the cursor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_frames: Option<u64>,
+}
+
 /// One agent whose wrapper cannot reach the hook drainer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookDrainerOutageAgent {
@@ -137,7 +148,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 109;
+pub const SNAPSHOT_VERSION: u32 = 110;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -208,6 +219,9 @@ pub struct SidebarSnapshot {
     /// Active hook-drainer outage and the affected agents in start order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook_drainer_outage: Option<HookDrainerOutage>,
+    /// The hook drainer's lag behind ingress, past the sidebar's threshold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_drain_lag: Option<HookDrainLag>,
     /// The single instant every time-window verdict in this projection reads —
     /// the compaction head, the stall escalation, rate-limit resets, and
     /// subagent retention all agree on one clock, captured once at
@@ -481,6 +495,7 @@ impl SidebarSnapshot {
             presence: None,
             truth_degraded: None,
             hook_drainer_outage: None,
+            hook_drain_lag: None,
             now,
             worktree_groups: Vec::new().into(),
             agents: Arc::new(agents),

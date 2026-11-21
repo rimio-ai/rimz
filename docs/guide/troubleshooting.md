@@ -329,6 +329,10 @@ Run `rimz doctor` for the outage and reconnect error. The incident stays Investi
 
 Reconnect attempts never print into the agent's pane. A gap closed under 10 seconds leaves only a Contained diagnostic, detailed under `rimz doctor --audit`, and no sidebar alert. Doctor also retains outages that start and finish while a sidebar view is hidden, or whose lingering notice is lost when the host restarts.
 
+### The "hook drain behind" alert
+
+`⚠ hook drain 3m behind, 20fps` means hook updates reach the room but wait to be applied: the oldest waiting update arrived 3 minutes ago, and the drainer applies about 20 per second. Cards show what the last applied update said, so a card can read a stale or wrong status until the drainer catches up. A burst of tool calls, such as thousands of file reads in a few minutes, is the usual cause, and the line clears by itself once the oldest waiting update is under 30 seconds old. `0fps` means the drainer is making no progress: run `rimz doctor`, which reports the worst lag and the pending backlog. `Esc` does not dismiss this line, and an active "hook drainer unreachable" alert takes its place.
+
 ### Colors, glyphs, or pets don't render
 
 Two upgrades need terminal support beyond color:

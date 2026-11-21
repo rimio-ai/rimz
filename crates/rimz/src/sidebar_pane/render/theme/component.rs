@@ -191,6 +191,8 @@ pub(crate) enum Component {
     Typing,
     /// Starts needing a fix, above the footer.
     ThrottleNotice,
+    /// The hook drainer's lag behind ingress, below the footer.
+    HookDrainLag,
     /// The stall glyph and word while any resource is active.
     StallLeadActive,
     /// The stall glyph and word once every resource is fading.
@@ -292,6 +294,7 @@ impl Component {
         Component::MessageQueued,
         Component::Typing,
         Component::ThrottleNotice,
+        Component::HookDrainLag,
         Component::StallLeadActive,
         Component::StallLeadFading,
         Component::StallWord,
@@ -329,7 +332,9 @@ impl Component {
             | MessageQueued => palette.cool,
             TeamLabel | SubagentHeader | WaitHeader | BookedHeader | ProcIo | CacheWrite
             | CompactionPoint | WorkflowBadge | EntryTeamName => palette.meta,
-            RemoteControlDown | WorktreePrClosed | WorktreeCiFailing => palette.alarm,
+            RemoteControlDown | WorktreePrClosed | WorktreeCiFailing | HookDrainLag => {
+                palette.alarm
+            }
             Input => palette.expense,
             CacheExpired => palette.cache_expired,
             BudgetExhausted => palette.budget_exhausted,

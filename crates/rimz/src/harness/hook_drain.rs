@@ -1049,6 +1049,7 @@ impl Drainer {
                     cursor.claimed = end;
                     cursor.applied_event_id = None;
                     cursor.claimed_event_id = None;
+                    cursor.applied_frames = Some(expected.applied_frames.unwrap_or(0) + 1);
                     ingress::write_cursor_cache(store.paths(), &cursor, &lock)?;
                     expected = cursor;
                     self.applied = end;
@@ -1096,6 +1097,7 @@ impl Drainer {
                     cursor.claimed = end;
                     cursor.applied_event_id = Some(last_ingress.clone());
                     cursor.claimed_event_id = Some(last_ingress);
+                    cursor.applied_frames = Some(expected.applied_frames.unwrap_or(0) + dropped);
                     ingress::write_cursor_cache(store.paths(), &cursor, &lock)?;
                     expected = cursor;
                     self.applied = end;
@@ -1201,6 +1203,7 @@ impl Drainer {
                 let mut cursor = expected.clone();
                 cursor.applied = end;
                 cursor.applied_event_id = Some(frame.event_id.clone());
+                cursor.applied_frames = Some(expected.applied_frames.unwrap_or(0) + 1);
                 write_cursor(store.paths(), &cursor, &lock)?;
                 expected = cursor;
                 self.applied = end;
@@ -1468,6 +1471,43 @@ mod tests {
     }
 
     #[test]
+    fn applied_frame_count_advances_per_frame_and_resets_on_truncation() {
+        register_processor(|_, _, _, _, _| Ok(HookReply::Silent));
+        let (_dir, store, pending) = fixture(1);
+        {
+            let mut log = fs::OpenOptions::new()
+                .append(true)
+                .open(&store.paths().hook_ingress_log)
+                .unwrap();
+            log.write_all(b"3 deadbeef abc\n").unwrap();
+            let lock =
+                crate::disk::lock::SharedAppendLock::acquire(&store.paths().hook_ingress_lock)
+                    .unwrap();
+            let mut after_skip = pending[0].0.clone();
+            after_skip.event_id = EventId::new();
+            ingress::append(store.paths(), &after_skip, &lock).unwrap();
+        }
+        let lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+        let mut counts = Vec::new();
+        Drainer::new(&store)
+            .drain(&store, &lifetime, None, None, |_| {
+                counts.push(ingress::read_cursor(store.paths())?.applied_frames);
+                Ok(false)
+            })
+            .unwrap();
+        assert_eq!(
+            counts,
+            (1..=6).map(Some).collect::<Vec<_>>(),
+            "applied and skipped frames each advance the count"
+        );
+        assert_eq!(
+            ingress::read_cursor(store.paths()).unwrap().applied_frames,
+            Some(0),
+            "truncation resets the count to zero"
+        );
+    }
+
+    #[test]
     fn crash_redo_is_only_the_in_flight_frame() {
         static CALLS: std::sync::Mutex<Vec<(Option<LogExtent>, LogExtent)>> =
             std::sync::Mutex::new(Vec::new());
@@ -1520,11 +1560,13 @@ mod tests {
         });
         for claimed in [false, true] {
             let (_dir, store, pending) = pending_boot_fixture(Some("other-boot"), 4);
+            let earlier_count = claimed.then_some(7);
             if claimed {
                 let lock = WorkspaceLock::acquire(&store.paths().workspace_lock).unwrap();
                 let cursor = ingress::HookDrainCursor {
                     claimed: pending[0].1,
                     claimed_event_id: Some(pending[0].0.event_id.clone()),
+                    applied_frames: earlier_count,
                     ..Default::default()
                 };
                 ingress::write_cursor(store.paths(), &cursor, &lock).unwrap();
@@ -1548,6 +1590,11 @@ mod tests {
                     assert_eq!((cursor.applied, cursor.claimed), (*end, *end));
                     assert_eq!(cursor.applied_event_id.as_ref(), Some(&frame.event_id));
                     assert_eq!(cursor.claimed_event_id.as_ref(), Some(&frame.event_id));
+                    assert_eq!(
+                        cursor.applied_frames,
+                        Some(earlier_count.unwrap_or(0) + pending.len() as u64),
+                        "a drop run advances the count by every frame it drops"
+                    );
                     responses += 1;
                     Ok(false)
                 })

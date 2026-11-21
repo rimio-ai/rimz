@@ -1126,6 +1126,14 @@ When several agents are affected, it names the earliest one's card: `coder and 2
 
 An active `Sidebar degraded` alert hides the hook-drainer line. Pressing `Esc` clears that alert and any recovered drainer alert. After refresh recovery both alert lines can show, with the hook-drainer line directly above the refresh alert. Short reconnects never raise a sidebar alert. `rimz doctor` retains the outage evidence even after dismissal; see [troubleshooting](../guide/troubleshooting.md#the-hook-drainer-unreachable-alert).
 
+When the hook drainer falls behind, the same line says how far: the age of the oldest hook update not yet applied, once it is older than 30 seconds, then the drainer's speed in whole frames per second:
+
+```
+ ⚠ hook drain 3m behind, 20fps
+```
+
+The speed appears once the sidebar has two readings at least 5 seconds apart, and a drainer that makes no progress reads `0fps`. Without two readings, or behind a drainer too old to count its frames, the line reads `⚠ hook drain 3m behind`. It goes as soon as the oldest pending update is under 30 seconds old, with no recovery notice, and `Esc` does not dismiss it. An active hook-drainer unreachable alert takes the line instead, since it names the cause, and the lag line in turn hides a recovered drainer notice. An active `Sidebar degraded` alert hides it too. See [troubleshooting](../guide/troubleshooting.md#the-hook-drain-behind-alert).
+
 ### The help overlay
 
 `?` opens the overlay over the bottom right of the cards. Any key the sidebar reads closes it and is consumed, and so does focus leaving the sidebar. While typing a search, `?` enters a character instead. The overlay lists the keys you configured under `[keys.sidebar]`, so it differs from this frame after a rebind.

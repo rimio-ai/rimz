@@ -92,18 +92,63 @@ impl FrameTime {
     }
 }
 
+/// The hook drainer's whole frames per second, derived from the cursor's frame
+/// count on successive committed folds and read at the snapshot clock.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::sidebar_pane) struct DrainRate {
+    pub(in crate::sidebar_pane) sample: Option<(u64, Timestamp)>,
+    pub(in crate::sidebar_pane) fps: Option<u64>,
+}
+
+impl DrainRate {
+    /// The shortest stretch between two samples the rate is taken over.
+    const WINDOW: jiff::SignedDuration = jiff::SignedDuration::from_secs(5);
+
+    /// Fold one committed lag fact at its snapshot clock. A lost lag or count,
+    /// or a count lower than the last sample (a truncation reset it), starts
+    /// the rate over.
+    pub(in crate::sidebar_pane) fn observe(
+        &mut self,
+        lag: Option<&crate::store::snapshot::HookDrainLag>,
+        now: Timestamp,
+    ) {
+        let Some(count) = lag.and_then(|lag| lag.applied_frames) else {
+            *self = Self::default();
+            return;
+        };
+        let Some((earlier, at)) = self.sample.filter(|(earlier, _)| *earlier <= count) else {
+            *self = Self {
+                sample: Some((count, now)),
+                fps: None,
+            };
+            return;
+        };
+        let elapsed = now.duration_since(at);
+        if elapsed < Self::WINDOW {
+            return;
+        }
+        let fps = (count - earlier) as f64 / elapsed.as_secs_f64();
+        self.sample = Some((count, now));
+        self.fps = Some(fps.round() as u64);
+    }
+}
+
 /// Client presentation state, independent of a pane's render resources and hit geometry.
 #[derive(Clone, Debug, Default)]
 pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) layout_sequence: u64,
     pub(in crate::sidebar_pane) layout_key: Option<LayoutKey>,
     pub(in crate::sidebar_pane) hook_drainer_alert: Option<Alert>,
+    pub(in crate::sidebar_pane) hook_drain_rate: DrainRate,
     pub(in crate::sidebar_pane) selected_index: Option<usize>,
     pub(in crate::sidebar_pane) entry_cursor: Option<EntryCursor>,
     /// Last agreed working-pane focus, finer-grained than the owning card baseline.
     pub(in crate::sidebar_pane) entry_focus: Option<PaneId>,
     /// Driver-clock phase for cyclic sampling only.
     /// Frame-sequence heads read `head_step` instead, so late paints never skip frames.
+    /// It can move backwards: raising `refresh_ms` lowers it, and co-viewers stamp one shared
+    /// view from clock reads taken before the views lock, so a pane can stamp one phase behind.
+    /// Code that orders two cyclic phases handles both cases, as `advance_head_step` does.
     pub(in crate::sidebar_pane) animation_phase: u64,
     /// Frame-sequence step, advanced only by routed composition, once per new phase.
     /// The first composition holds at zero; co-viewer paints in one phase share a step.

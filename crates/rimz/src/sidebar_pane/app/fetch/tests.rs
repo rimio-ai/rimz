@@ -442,6 +442,27 @@ fn hook_drainer_outages_are_content_not_a_clock_only_change() {
 }
 
 #[test]
+fn hook_drain_lag_is_content_not_a_clock_only_change() {
+    let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
+    let mut value = serde_json::to_value(&left).unwrap();
+    value["hook_drain_lag"] = serde_json::json!({
+        "since": jiff::Timestamp::from_millisecond(100).unwrap(),
+        "applied_frames": 4
+    });
+    let right = serde_json::from_value(value.clone()).unwrap();
+    assert!(
+        !same_snapshot_content(&left, &right),
+        "a new lag must reach the renderer as content"
+    );
+    value["hook_drain_lag"]["applied_frames"] = serde_json::json!(5);
+    let moved = serde_json::from_value(value).unwrap();
+    assert!(
+        !same_snapshot_content(&right, &moved),
+        "a moved frame count must reach the rate as content"
+    );
+}
+
+#[test]
 fn upload_progress_is_content_not_a_clock_only_change() {
     let mut left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
     left.upload = Some(crate::store::snapshot::SidebarUpload::Running {

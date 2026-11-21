@@ -2928,7 +2928,26 @@ impl PaneState {
         self.dirty = true;
     }
 
+    /// Reduce one delivery, then feed the drain rate from the committed
+    /// snapshot. The rate is fed here, after both the clock-only and the
+    /// content path, because a hung drainer's folds are all clock-only: the
+    /// rate must read 0 on them rather than keep the last one.
     fn reduce_snapshot(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        update: FetchUpdate,
+        seed: bool,
+    ) -> bool {
+        let rejected = self.reduce_delivery(v, prepared, update, seed);
+        v.state.hook_drain_rate.observe(
+            v.context.current.hook_drain_lag.as_ref(),
+            v.context.current.now,
+        );
+        rejected
+    }
+
+    fn reduce_delivery(
         &mut self,
         v: &mut ViewBorrow<'_>,
         prepared: &FoldPreparation,
