@@ -3008,12 +3008,23 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
         "---\ndescription: Reader.\nagent: amp\ntools: [Read]\n---\n",
     )
     .unwrap();
+    for (name, mcps) in [
+        ("limited", "mcps: []\n"),
+        ("everything", "mcps: ['*']\n"),
+        ("both", "tools: [Read]\nmcps: [rimz-lsp]\n"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Seat.\nagent: amp\n{mcps}---\n"),
+        )
+        .unwrap();
+    }
     let runtime = RuntimePaths::under(
         crate::WorkspaceId::from_project_root(root.path()),
         root.path(),
     )
     .unwrap();
-    let switched = || {
+    let switched = |profile: &str| {
         let loaded = crate::config::definitions::load(
             root.path(),
             crate::config::definitions::SkillCheck::Skip,
@@ -3024,7 +3035,7 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
         );
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
         crate::harness::spec::resolve_spec_with_agent_override(
-            Some("readseat"),
+            Some(profile),
             &loaded.agent_profiles,
             &loaded.agent_profiles,
             &Default::default(),
@@ -3068,7 +3079,7 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
         .map_err(|error| error.to_string())
     };
 
-    let bodyless = switched();
+    let bodyless = switched("readseat");
     let cell = bodyless.agent_cells().next().unwrap();
     assert_eq!(cell.tools.as_deref(), Some(&["Read".to_owned()][..]));
     assert_eq!(
@@ -3080,12 +3091,25 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
     let bare = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("antigravity")));
     assert_eq!(compile(&bare, None), Ok(()));
 
+    let limited = switched("limited");
+    assert_eq!(
+        compile(&limited, None),
+        Err("antigravity applies a `mcps` list only through the agent file its system prompt rides, and this launch has no system prompt; add the kind base `agents/antigravity.md` or another prompt source, or remove `mcps`".to_owned())
+    );
+    assert_eq!(compile(&limited, Some(&resumed)), Ok(()));
+    assert_eq!(compile(&switched("everything"), None), Ok(()));
+    assert!(
+        compile(&switched("both"), None)
+            .unwrap_err()
+            .ends_with("or remove `tools`")
+    );
+
     std::fs::write(
         root.path().join("agents/antigravity.md"),
         "---\ndescription: Base.\n---\nBase.",
     )
     .unwrap();
-    let based = switched();
+    let based = switched("readseat");
     assert!(
         based
             .agent_cells()
@@ -3095,6 +3119,7 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
             .is_some()
     );
     assert_eq!(compile(&based, None), Ok(()));
+    assert_eq!(compile(&switched("limited"), None), Ok(()));
 }
 
 #[test]
