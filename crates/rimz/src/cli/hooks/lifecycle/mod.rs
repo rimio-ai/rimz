@@ -160,8 +160,8 @@ pub(super) fn handle_lifecycle_frame(
     let replaced = recorded
         .as_ref()
         .is_some_and(|recorded| recorded.receipt.replaced);
-    // The role index is read whole on each write, and this runs in a fresh child per frame, so
-    // only a session new to this room or one (re)registering reaches it.
+    // The role index is read whole on each write, so only a session new to this room or one
+    // (re)registering reaches it.
     let new_sessions = released
         .iter()
         .chain(recorded.iter())

@@ -373,7 +373,7 @@ Each line carries `kind`, native `session`, `role` (`agent` or `subagent`), `pro
 
 ### Writing a row
 
-The lifecycle funnel writes a row for a primary, derived, or replayed observation with a native id, side conversations excluded, when the observation creates the session's row in the room or registers the session (a fresh start or a resume). Every other frame skips the index. Each hook frame applies in a fresh `rimz hooks apply` child with a cold parse memo, and `session_roles::record` reads every segment of the current and previous UTC year to preserve provenance, so writing on every frame would reread those files each time.
+The lifecycle funnel writes a row for a primary, derived, or replayed observation with a native id, side conversations excluded, when the observation creates the session's row in the room or registers the session (a fresh start or a resume). Every other frame skips the index. `session_roles::record` reads every segment of the current and previous UTC year to preserve provenance, so writing on every frame would reread those files each time.
 
 - A pane whose run resolves to `subagent = true` supplies the subagent role, with its environment profile, else the provider kind, as the profile. Only this case reads the room snapshot to resolve an owner: the pane's `RIMZ_AGENT_ID` finds its row through `AgentState::answers_to`, then `AgentState::parent_is` finds its parent. The parent's team and role identify a team owner, with role falling back to profile, then the parent's kind. A solo owner's profile falls back to the parent's kind. Missing rows or links leave the owner absent. A snapshot read failure debug-logs and still writes the role ownerless.
 - Every other observed session is an agent.

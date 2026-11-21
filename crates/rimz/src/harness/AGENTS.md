@@ -41,6 +41,7 @@ Each of these is decided in one place. Call it; a second copy drifts.
 `hook_drain.rs` owns the elected drainer [ARCHITECTURE.md](../../../../ARCHITECTURE.md#processes-and-helpers) describes. A change there keeps these:
 
 - A spawn lock elects starters and a lifetime lock admits one drainer. The drainer unlinks its socket before its final drain and releases the lifetime lock last.
+- An apply child only applies frames whose captured environment and cwd equal the ones it was spawned with, and no apply child outlives the drain call that started it.
 - Frames stamped with an earlier boot are dropped with diagnostic evidence before application or recovery. Claimed frames recover by ingress ID: existing lifecycle records are not appended again, keyed repairs can repeat, and signal firing and unkeyed transcript writes are at-most-once, never replayed.
 - Cursor replies stay payload-only in the frontend. Antigravity and prompt-context replies wait up to 1200 ms for the drainer, then return neutral on a miss.
 

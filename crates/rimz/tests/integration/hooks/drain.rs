@@ -3860,3 +3860,357 @@ fn an_inflight_apply_child_keeps_the_election_locked_after_drainer_death() {
         1
     );
 }
+
+fn lifecycle_count(env: &Env, id: &EventId) -> usize {
+    derived(env, id)
+        .iter()
+        .filter(|event| matches!(event.kind(), EventKind::AgentLifecycle(_)))
+        .count()
+}
+
+/// A drainer that stops at `failpoint` for every frame, with the listener its rendezvous reach.
+fn barrier_drainer(
+    env: &Env,
+    failpoint: &str,
+    extra: &[(&str, &str)],
+) -> (std::process::Child, std::os::unix::net::UnixListener) {
+    let barrier = env.store().runtime_paths().sock_dir.join("run-test.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&barrier).unwrap();
+    let drainer = drain_command(env)
+        .env(failpoint, &barrier)
+        .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "100")
+        .envs(extra.iter().copied())
+        .stderr(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(env.store().paths().hook_drainer_log())
+                .unwrap(),
+        )
+        .spawn()
+        .unwrap();
+    (drainer, listener)
+}
+
+/// Releases each later rendezvous on `listener` until `drainer` exits.
+fn release_until_exit(
+    env: &Env,
+    drainer: &mut std::process::Child,
+    listener: &std::os::unix::net::UnixListener,
+) {
+    listener.set_nonblocking(true).unwrap();
+    let started = Instant::now();
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                let _ = stream.write_all(&[1]);
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("{error}"),
+        }
+        if let Some(status) = drainer.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            return;
+        }
+        assert!(
+            started.elapsed() < READINESS_HANG_GUARD,
+            "drainer did not exit; log: {:?}",
+            std::fs::read_to_string(env.store().paths().hook_drainer_log())
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_later_frame_of_a_run_sees_a_run_created_after_its_child_started() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+        Some("drain-session".into()),
+        LifecycleSignal::Registered,
+    );
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    observation.runtime_owner = Some(rimz::store::runtime::process_owner(
+        rimz::RuntimeOwnerKind::Agent,
+        "drain-session",
+        env.agent_owner_pid(),
+    ));
+    for signal in [
+        LifecycleSignal::Registered,
+        LifecycleSignal::TurnStarted { turn_id: None },
+    ] {
+        observation.signal = signal;
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name: "fixture",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "finish".into(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("drain-session".into());
+    run.status = rimz::store::run::RunStatus::Running;
+    let mut frame = stop_frame(&env);
+    frame
+        .env
+        .insert("RIMZ_RUN_ID".into(), run.run_id.to_string());
+    let (first, _) = append_frame(&env, frame.clone());
+    frame.event_id = EventId::new();
+    let (second, _) = append_frame(&env, frame);
+    let (mut drainer, listener) = barrier_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY", &[]);
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "first frame");
+    let child = rimz::proc::children(drainer.id());
+    assert_eq!(child.len(), 1, "the run's child waits for its next frame");
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    release.write_all(&[1]).unwrap();
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "second frame");
+    assert_eq!(
+        rimz::proc::children(drainer.id()),
+        child,
+        "one child applies both frames"
+    );
+    release.write_all(&[1]).unwrap();
+    release_until_exit(&env, &mut drainer, &listener);
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &run.run_id)
+            .unwrap()
+            .status,
+        rimz::store::run::RunStatus::Completed,
+        "the second frame must see the run committed after its child started"
+    );
+    assert_eq!(lifecycle_count(&env, &first.event_id), 1);
+    assert_eq!(lifecycle_count(&env, &second.event_id), 1);
+}
+
+#[test]
+fn a_hung_second_frame_of_a_run_is_killed_and_the_next_frame_applied() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let frames: Vec<_> = (0..3).map(|_| append_stop(&env).0).collect();
+    let (mut drainer, listener) = barrier_drainer(
+        &env,
+        "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY",
+        &[("RIMZ_TEST_HOOK_APPLY_TIMEOUT_MS", "1000")],
+    );
+    // The drainer holds here after the first frame, outside any apply window.
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "first frame");
+    let child = rimz::proc::children(drainer.id());
+    assert_eq!(child.len(), 1, "the run's child waits for its next frame");
+    signal(child[0], nix::sys::signal::Signal::SIGSTOP);
+    release.write_all(&[1]).unwrap();
+    release_until_exit(&env, &mut drainer, &listener);
+    assert!(
+        !rimz::proc::process_is_live(child[0], None),
+        "hung child must be reaped"
+    );
+    let log = std::fs::read_to_string(store.paths().hook_drainer_log()).unwrap();
+    assert!(
+        log.contains("hook ingress apply failed") && log.contains("timed out"),
+        "{log}"
+    );
+    assert_eq!(lifecycle_count(&env, &frames[0].event_id), 1);
+    assert!(derived(&env, &frames[1].event_id).is_empty(), "{log}");
+    assert_eq!(lifecycle_count(&env, &frames[2].event_id), 1, "{log}");
+}
+
+fn signal(pid: u32, signal: nix::sys::signal::Signal) {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), signal).unwrap();
+}
+
+/// A Cursor `sessionStart` frame of the Stop frames' environment, whose apply replies `{}`.
+fn append_cursor_start(env: &Env) -> (HookIngress, u64) {
+    let mut frame = stop_frame(env);
+    frame.source = AgentKind::new_unchecked("cursor");
+    frame.event = Some("sessionStart".into());
+    append_frame(env, frame)
+}
+
+/// Asks the drainer for the reply to `frame` once it has applied through `through`.
+fn request_reply(
+    store: &rimz::Store,
+    drainer: &mut std::process::Child,
+    frame: &HookIngress,
+    through: u64,
+) -> std::os::unix::net::UnixStream {
+    let mut request = drainer_connection(store, Some(drainer));
+    request
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    writeln!(
+        request,
+        "{}",
+        json!({"through": through, "reply_for": frame.event_id})
+    )
+    .unwrap();
+    request
+}
+
+fn read_receipt(request: std::os::unix::net::UnixStream) -> Value {
+    use std::io::BufRead as _;
+
+    let mut line = String::new();
+    std::io::BufReader::new(request)
+        .read_line(&mut line)
+        .unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+#[test]
+fn a_run_child_killed_between_frames_costs_no_frame() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let first = append_stop(&env).0;
+    let (replying, through) = append_cursor_start(&env);
+    let last = append_stop(&env).0;
+    let (mut drainer, listener) = barrier_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY", &[]);
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "first frame");
+    let child = rimz::proc::children(drainer.id());
+    assert_eq!(child.len(), 1, "the run's child waits for its next frame");
+    let request = request_reply(&store, &mut drainer, &replying, through);
+    signal(child[0], nix::sys::signal::Signal::SIGKILL);
+    release.write_all(&[1]).unwrap();
+    release_until_exit(&env, &mut drainer, &listener);
+    let log = std::fs::read_to_string(store.paths().hook_drainer_log()).unwrap();
+    for frame in [&first, &replying, &last] {
+        assert_eq!(lifecycle_count(&env, &frame.event_id), 1, "{log}");
+    }
+    assert!(!log.contains("hook ingress apply failed"), "{log}");
+    assert_eq!(
+        read_receipt(request)["reply"],
+        json!({}),
+        "the retried frame's reply is served: {log}"
+    );
+}
+
+#[test]
+fn a_run_child_killed_after_its_append_is_replayed_once() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let first = append_stop(&env).0;
+    let (replying, through) = append_cursor_start(&env);
+    let last = append_stop(&env).0;
+    let (mut drainer, listener) =
+        barrier_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_LOCKED_APPLY", &[]);
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "first frame");
+    let child = rimz::proc::children(drainer.id());
+    assert_eq!(child.len(), 1, "{child:?}");
+    let request = request_reply(&store, &mut drainer, &replying, through);
+    release.write_all(&[1]).unwrap();
+    let release = apply_barrier(&store, Some(&mut drainer), &listener, "second frame");
+    assert_eq!(
+        rimz::proc::children(drainer.id()),
+        child,
+        "one child applies both frames"
+    );
+    assert_eq!(lifecycle_count(&env, &replying.event_id), 1);
+    signal(child[0], nix::sys::signal::Signal::SIGKILL);
+    drop(release);
+    release_until_exit(&env, &mut drainer, &listener);
+    let log = std::fs::read_to_string(store.paths().hook_drainer_log()).unwrap();
+    for frame in [&first, &replying, &last] {
+        assert_eq!(lifecycle_count(&env, &frame.event_id), 1, "{log}");
+    }
+    assert!(
+        !log.contains("hook ingress apply failed"),
+        "the replay finishes the killed frame: {log}"
+    );
+    assert_eq!(
+        read_receipt(request)["reply"],
+        json!({}),
+        "the replayed frame's reply is served: {log}"
+    );
+}
+
+#[test]
+fn a_stream_apply_error_reaches_the_drainer_log_and_the_retry_applies_the_frame() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut frame = stop_frame(&env);
+    frame
+        .env
+        .insert("RIMZ_TEST_HOOK_APPLY_STREAM_FAIL".into(), "1".into());
+    let (frame, _) = append_frame(&env, frame);
+    let (mut drainer, listener) = barrier_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY", &[]);
+    release_until_exit(&env, &mut drainer, &listener);
+    let log = std::fs::read_to_string(store.paths().hook_drainer_log()).unwrap();
+    assert!(
+        log.contains(&format!(
+            "hook apply stream failpoint refused frame {}",
+            frame.event_id
+        )),
+        "the stream child's own error must reach the log: {log}"
+    );
+    assert!(!log.contains("hook ingress apply failed"), "{log}");
+    assert_eq!(lifecycle_count(&env, &frame.event_id), 1, "{log}");
+}
+
+#[test]
+fn a_run_child_is_not_reused_once_its_cwd_is_recreated() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let cwd = env.project_root.join("recreated");
+    std::fs::create_dir(&cwd).unwrap();
+    let frames: Vec<_> = (0..2)
+        .map(|_| {
+            let mut frame = stop_frame(&env);
+            frame.cwd = cwd.clone();
+            append_frame(&env, frame).0
+        })
+        .collect();
+    let (mut drainer, listener) = barrier_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY", &[]);
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "first frame");
+    let child = rimz::proc::children(drainer.id());
+    assert_eq!(child.len(), 1, "the run's child waits for its next frame");
+    std::fs::remove_dir(&cwd).unwrap();
+    std::fs::create_dir(&cwd).unwrap();
+    release.write_all(&[1]).unwrap();
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "second frame");
+    let second = rimz::proc::children(drainer.id());
+    assert!(
+        second.len() == 1 && second != child,
+        "a recreated cwd is another directory: {child:?} then {second:?}"
+    );
+    release.write_all(&[1]).unwrap();
+    release_until_exit(&env, &mut drainer, &listener);
+    for frame in &frames {
+        assert_eq!(lifecycle_count(&env, &frame.event_id), 1);
+    }
+}
+
+#[test]
+fn an_idle_run_child_exits_and_frees_the_election_after_drainer_death() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    append_stop(&env);
+    append_stop(&env);
+    let (mut drainer, listener) = barrier_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY", &[]);
+    let release = apply_barrier(&store, Some(&mut drainer), &listener, "first frame");
+    let child = rimz::proc::children(drainer.id());
+    assert_eq!(child.len(), 1, "the run's child waits for its next frame");
+    drainer.kill().unwrap();
+    drainer.wait().unwrap();
+    drop(release);
+    wait_for_readiness(&store, None, "the idle child kept the election", || {
+        WorkspaceLock::try_acquire(&store.runtime_paths().hook_drainer_lock())
+            .unwrap()
+            .filter(|_| !rimz::proc::process_is_live(child[0], None))
+    });
+}

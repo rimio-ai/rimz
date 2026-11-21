@@ -34,13 +34,23 @@ fn command(env: &Env, index: usize) -> Command {
     command
 }
 
-fn apply(env: &Env, index: usize, mut payload: Value, log: Option<&Path>) -> u32 {
-    payload["cwd"] = json!(env.project_root);
-    payload["session_id"] = json!(format!("work-{index}"));
+fn apply(env: &Env, index: usize, payload: Value, log: Option<&Path>) -> u32 {
     let mut command = command(env, index);
     if let Some(log) = log {
         command.env("RIMZ_TEST_WORK_LOG", log);
     }
+    let frame = ingress(env, index, payload, &command);
+    let child = env.spawn_payload(command, &serde_json::to_string(&frame).unwrap());
+    let pid = child.id();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    pid
+}
+
+/// The frame a hook captured from `command`'s environment.
+fn ingress(env: &Env, index: usize, mut payload: Value, command: &Command) -> HookIngress {
+    payload["cwd"] = json!(env.project_root);
+    payload["session_id"] = json!(format!("work-{index}"));
     let captured: BTreeMap<_, _> = command
         .get_envs()
         .filter_map(|(key, value)| {
@@ -52,7 +62,7 @@ fn apply(env: &Env, index: usize, mut payload: Value, log: Option<&Path>) -> u32
             })
         })
         .collect();
-    let frame = HookIngress {
+    HookIngress {
         boot_id: rimz::proc::boot_id(),
         schema_version: "1".into(),
         event_id: EventId::new(),
@@ -63,12 +73,129 @@ fn apply(env: &Env, index: usize, mut payload: Value, log: Option<&Path>) -> u32
         cwd: env.project_root.clone(),
         hook_pid: std::process::id(),
         env: captured,
-    };
-    let child = env.spawn_payload(command, &serde_json::to_string(&frame).unwrap());
-    let pid = child.id();
-    let output = child.wait_with_output().unwrap();
+    }
+}
+
+/// Queue one Stop per session index, drain them inline, and return the frames and the
+/// `hooks apply` rows. Holding the spawn lock keeps a spawned drainer out, so the frames drain in
+/// the `--once` process, which has reaped its apply children when it returns.
+fn drain_queued(
+    env: &Env,
+    sessions: &[usize],
+    log: &Path,
+    drain_env: &[(&str, &str)],
+) -> (Vec<HookIngress>, Vec<Value>) {
+    let frames: Vec<_> = sessions
+        .iter()
+        .map(|&index| {
+            let mut command = command(env, index);
+            command.env("RIMZ_TEST_WORK_LOG", log);
+            let payload = json!({"hook_event_name": "Stop", "last_assistant_message": "done"});
+            crate::common::append_frame(env, ingress(env, index, payload, &command)).0
+        })
+        .collect();
+    let store = env.store();
+    let _spawning =
+        rimz::disk::lock::WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_spawn_lock())
+            .unwrap();
+    let output = env
+        .rimz()
+        .args(["hooks", "drain", "--project-root"])
+        .arg(&env.project_root)
+        .arg("--once")
+        .env("RIMZ_TEST_HOOK_DRAIN_TIMING", "1")
+        .envs(drain_env.iter().copied())
+        .output()
+        .unwrap();
     assert!(output.status.success(), "{output:?}");
-    pid
+    let timings: Vec<_> = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|record| record.get("hook_drain_timing").cloned())
+        .collect();
+    assert_eq!(timings.len(), frames.len(), "{timings:?}");
+    assert!(
+        timings.iter().all(|timing| timing["applied"] == true),
+        "{timings:?}"
+    );
+    let events = env.read_events();
+    for frame in &frames {
+        let derived = events
+            .iter()
+            .filter(|event| event.ingress.as_ref() == Some(&frame.event_id))
+            .filter(|event| {
+                matches!(
+                    event.kind(),
+                    rimz::store::event::EventKind::AgentLifecycle(_)
+                )
+            })
+            .count();
+        assert_eq!(derived, 1, "{events:?}");
+    }
+    let rows: Vec<_> = records(log)
+        .into_iter()
+        .filter(|row| row["command"] == "hooks apply")
+        .collect();
+    for row in &rows {
+        let pid = row["pid"].as_u64().unwrap() as u32;
+        assert!(
+            !rimz::proc::process_is_live(pid, None),
+            "no apply child outlives the drain: {row}"
+        );
+    }
+    (frames, rows)
+}
+
+#[test]
+fn consecutive_equal_environment_frames_share_one_apply_child() {
+    let env = fixture();
+    let log = env.home_root.join("run-work.jsonl");
+    let rollup_bytes = std::fs::metadata(env.store().paths().rollup_cache().unwrap())
+        .unwrap()
+        .len();
+    let (_, rows) = drain_queued(&env, &[0, 0, 0], &log, &[]);
+    assert_eq!(rows.len(), 1, "one run, one apply child: {rows:?}");
+    assert_eq!(
+        rows[0]["rollup_bytes_parsed"].as_u64().unwrap() / rollup_bytes,
+        1,
+        "later frames reuse the child's held fold: {}",
+        rows[0]
+    );
+}
+
+#[test]
+fn an_apply_child_never_applies_another_environments_frame() {
+    let env = fixture();
+    let log = env.home_root.join("run-work.jsonl");
+    let sessions = [0, 0, 1, 0];
+    let (frames, rows) = drain_queued(&env, &sessions, &log, &[]);
+    assert_eq!(rows.len(), 3, "A A | B | A: {rows:?}");
+    let events = env.read_events();
+    for (frame, index) in frames.iter().zip(sessions) {
+        let lifecycle = events
+            .iter()
+            .find(|event| event.ingress.as_ref() == Some(&frame.event_id))
+            .map(|event| serde_json::to_value(event).unwrap())
+            .unwrap();
+        assert_eq!(
+            lifecycle["params"]["pane_id"],
+            format!("tmux:%{}", index + 1),
+            "each frame applies under its own environment: {lifecycle}"
+        );
+    }
+}
+
+#[test]
+fn the_run_cap_ends_an_apply_child() {
+    let env = fixture();
+    let log = env.home_root.join("run-work.jsonl");
+    let (_, rows) = drain_queued(
+        &env,
+        &[0, 0, 0],
+        &log,
+        &[("RIMZ_TEST_HOOK_APPLY_RUN_CAP", "2")],
+    );
+    assert_eq!(rows.len(), 2, "cap + 1 frames: {rows:?}");
 }
 
 fn fixture() -> Env {

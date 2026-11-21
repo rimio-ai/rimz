@@ -3098,3 +3098,24 @@ impl rimz::agents::capabilities::ContextCapability for PiAdoptionTestAdapter {}
 impl rimz::agents::capabilities::AccountCapability for PiAdoptionTestAdapter {}
 impl rimz::agents::capabilities::SpendingCapability for PiAdoptionTestAdapter {}
 impl rimz::agents::capabilities::RuntimeControlCapability for PiAdoptionTestAdapter {}
+
+#[test]
+fn a_stream_reply_line_answers_only_its_own_frame() {
+    use super::{Exchange, reply_line};
+    use rimz::agents::HookReply;
+
+    assert_eq!(
+        reply_line(br#"{"ingress":"a"}"#, "a"),
+        Exchange::Reply(HookReply::Silent)
+    );
+    assert_eq!(
+        reply_line(br#"{"ingress":"a","reply":null}"#, "a"),
+        Exchange::Reply(HookReply::Json(serde_json::Value::Null))
+    );
+    assert_eq!(
+        reply_line(br#"{"ingress":"a","reply":{"x":1},"extra":2}"#, "a"),
+        Exchange::Reply(HookReply::Json(serde_json::json!({"x": 1})))
+    );
+    assert_eq!(reply_line(br#"{"ingress":"b"}"#, "a"), Exchange::Garbled);
+    assert_eq!(reply_line(b"not json", "a"), Exchange::Garbled);
+}
