@@ -389,11 +389,13 @@ mod tests {
                 "{kind}"
             );
         }
+        record.kind = AgentKind::new_unchecked("antigravity");
+        assert!(stop_interrupts(&record));
+        assert!(stop_due_by_pane(&record, deadline));
         for kind in [
             "amp",
             "opencode",
             "pi",
-            "antigravity",
             "kimi",
             "kiro",
             "qoder",

@@ -97,22 +97,37 @@ The catalog holds four native events, with `PostToolUse` split by three disjoint
 
 | RimZ event | Native event and matcher | Signal | Reply |
 | --- | --- | --- | --- |
-| `PreInvocation` | `PreInvocation` | `TurnStarted` when `invocationNum` is `0`, otherwise routing only | `{}` |
+| `PreInvocation` | `PreInvocation` | when `invocationNum` is `0`, `Compacting` for a bare `/compact` and `TurnStarted` otherwise; routing only for a later invocation | `{}` |
 | `PostToolUse:edit` | `PostToolUse`, `write_to_file`, `replace_file_content`, `multi_replace_file_content` | `ToolUsed`, mutating and editing | `{}` |
 | `PostToolUse:mutating` | `PostToolUse`, `run_command` | `ToolUsed`, mutating | `{}` |
 | `PostToolUse:observed` | `PostToolUse`, the remaining known tools (`view_file` through `browser_.*`) | `ToolUsed` | `{}` |
 | `PostInvocation` | `PostInvocation` | routing only | `{}` |
-| `Stop` | `Stop` | `TurnEnded` | `{"decision":""}` |
+| `Stop` | `Stop` | `CompactionEnded` for a bare `/compact`, `TurnEnded` otherwise | `{"decision":""}` |
 
 Hook stdout is Antigravity's decision channel, and every wired event must answer with JSON. `{}` is the documented no-op, and `{"decision":""}` is a `Stop` decision other than `continue`, so the stop proceeds ([reference](../../externals/agent-adapter/antigravity-reference.md#events)). Any other event name, such as a hand-fed `PreToolUse` or `SessionStart`, gets no output and records nothing. For every Antigravity event the feed waits up to 1.2 s for the drainer to apply the frame and prints the drainer's reply ([adapter.md](./adapter.md#the-feed)). That early return also skips the deadline rung a `PostToolUse` could otherwise carry.
 
-Every payload carries the conversation id (`conversationId`, or `conversation_id`), `workspacePaths`, `transcriptPath`, and `modelName`. A payload without a nonblank id records nothing. The first nonblank workspace path becomes the worktree path, and `modelName` becomes the launch model hint. Three decoding rules in `mod.rs::decode_lifecycle_fields` are easy to break:
+Every payload carries the conversation id (`conversationId`, or `conversation_id`), `workspacePaths`, `transcriptPath`, and `modelName`. A payload without a nonblank id records nothing. The first nonblank workspace path becomes the worktree path, and `modelName` becomes the launch model hint. Four decoding rules in `mod.rs::decode_lifecycle_fields` are easy to break:
 
 - Only `invocationNum: 0` opens a turn. Later invocations of the same execution follow tool calls and must not reopen it, and a payload without `invocationNum` opens nothing.
 - A failed tool (a nonempty `error`) keeps its `ToolUsed` progress and tool name but clears the mutating and editing flags. The tool name is the trimmed `toolCall.name`. A release that omits `toolCall` sends unnamed progress.
-- `Stop` needs `fullyIdle`, which upstream marks required. A `Stop` without it records no lifecycle event and no final message. `terminationReason` `error` or `max_steps_exceeded`, or a nonempty `error`, ends the turn errored. A clean `Stop` with `fullyIdle: false` parks the turn on background work ([model.md](./model.md#turn-endings-and-parked-turns)).
+- An execution whose `lastUserInput`, trimmed, is exactly `/compact` is a compaction, not a turn ([Compaction](#compaction)). Any other input, `/compact <message>` included, and a payload without `lastUserInput` decode by the other rules.
+- A turn's `Stop` needs `fullyIdle`, which upstream marks required. A turn's `Stop` without it records no lifecycle event and no final message. `terminationReason` `error` or `max_steps_exceeded`, or a nonempty `error`, ends the turn errored. A clean `Stop` with `fullyIdle: false` parks the turn on background work ([model.md](./model.md#turn-endings-and-parked-turns)).
 
 A supervised run (`rimz agents antigravity -p`) completes from the `Stop` hook. Its final message is the newest completed assistant text in the hook's transcript ([Transcript](#transcript)).
+
+### Compaction
+
+The compact command is a bare `/compact`, and Antigravity takes no compaction instruction: `/compact <message>` compacts and then answers the message as an ordinary turn, so RimZ refuses an instruction. agy 1.5.13 brackets a bare `/compact` with a `PreInvocation` (`invocationNum: 0`) and a `Stop` (`terminationReason: "TERMINAL_CUSTOM_HOOK"`), both carrying `lastUserInput: "/compact"`. The opener decodes to `Compacting`, which acknowledges a sent compact command, and reads no prompt. The closer decodes to `CompactionEnded` with `auto: Some(false)`, failed when the `Stop` reads as failed by the turn rule, whether or not it carries `fullyIdle`. It sets no final message, since the newest assistant row predates the compaction.
+
+Two cases leave the bracket without a closer. An Escape during the compaction fires only the opener, so the compacting head stays until the next lifecycle signal. A `/compact` in a conversation with nothing to compact fires no hook, so a sent command times out unconfirmed. A user's own `/compact <message>` stays a turn, though agy compacts before it answers.
+
+The transcript is append-only across a compaction: a `USER_INPUT` row for `/compact`, then a `SYSTEM` / `CHECKPOINT` row with the summarizing call's tokens. History drops a user row whose request is exactly `/compact`, so a sent command never shows as the user's words. The statusline keeps its pre-compaction context reading until the next turn ends, and RimZ's compacted-at guards (the command's recorded token count and the compacted-awaiting-prompt mark) keep idle compaction and compact-first from firing again on it. agy compacts on its own near the context limit by its docs, but no hook for that was observed, so `auto-compact` stays unsupported.
+
+### Interrupt
+
+The interrupt key is Escape. agy fires no hook for it, so no event confirms the stop, and a user's own Escape leaves the row Running until the next turn or a manual compaction. Escape also moves a message queued behind the running turn back into the composer, so the descriptor sets `interrupt_returns_queued_text` and the interrupt presses Enter 500 ms after the key to submit it ([the interrupt key](../harness/messaging.md#the-interrupt-key)). With no hook context, a supervised child's deadline stop goes out from the host at the deadline as that interrupt.
+
+A stale Running row would make that interrupt cancel the turn its own text opened: the pre-write row reads Running, the paste starts a turn on the resting agy, and the Escape three seconds later cancels it. The same happens when the running turn ends during the delay and agy starts the queued text. agy opens no turn for text queued behind a running one until it dequeues it (no invocation-0 `PreInvocation`, probes P9 and P10), so after the delay `crates/rimz/src/message/send.rs::send_batch_to_live_pane` reads the row again and, when its `turn_started_at` is newer than the one on the row the write decided on, presses neither Escape nor Enter and reports the key unsent (`InterruptConfirmation::NotSent`). Residual: nothing proves the paste's `PreInvocation` is applied before that read. The feed waits up to 1.2 s for the drainer inside the 3 s delay, but under load a later apply leaves the old behavior, and the key cancels the paste's turn.
 
 ## Sessions
 
@@ -154,9 +169,9 @@ Four readers use the transcript:
 
 | Reader | Path source | Read | Rule |
 | --- | --- | --- | --- |
-| history (`session.rs::messages`) | `session_transcript`, validated | the lines the shared transcript reader supplies | `DONE` visible records with content, user text normalized as above |
+| history (`session.rs::messages`) | `session_transcript`, validated | the lines the shared transcript reader supplies | `DONE` visible records with content, user text normalized as above, less a user request that is exactly `/compact` |
 | first prompt (`session.rs::latest_prompt`) | hook `transcriptPath`, validated | 64 KiB tail | on `TurnStarted` only. The latest completed visible user prompt. Other hooks read no prompt |
-| final message (`session.rs::last_assistant_message`) | hook `transcriptPath`, not validated | 64 KiB tail, then whole file | on every decoded `Stop`. The newest `DONE` planner text after the last turn start. When the tail holds neither a turn start nor an answer, it reads the whole file without a bound, and a file without a turn start counts as one turn |
+| final message (`session.rs::last_assistant_message`) | hook `transcriptPath`, not validated | 64 KiB tail, then whole file | on every `Stop` that decodes to `TurnEnded`. The newest `DONE` planner text after the last turn start. When the tail holds neither a turn start nor an answer, it reads the whole file without a bound, and a file without a turn start counts as one turn |
 | subagent join | parent row's path, or rebuilt from the parent id | 64 KiB tail | [Subagents](#subagents) |
 
 A turn with no answer returns no final text, never the previous turn's reply. A torn final record stays out of every tail until it completes. Once a hook records the prompt, a later discovery tail with no visible user record supplies no newer prompt, so the card keeps its launch description or hook prompt through a long turn.
@@ -281,7 +296,7 @@ The `/usage` windows are `Authoritative` and the statusline's are `BestEffort`, 
 
 ## Cost
 
-`spend.rs` reads `brain/<conversation>/.system_generated/logs/transcript_full.jsonl` under the login's provider home (`config_home`). `transcript.jsonl` repeats the same rows and is never a source. Each row carrying `input_tokens` (a completed `MODEL` / `PLANNER_RESPONSE`) becomes one entry: message id `<conversation>:<step_index>`, thread id the conversation, time from `created_at`. `input_tokens` excludes cache reads and `output_tokens` already counts thinking, so `input_tokens`, `cache_read_tokens`, and `output_tokens` are disjoint inputs to `Pricing::cost_of`. The model is the row's slug with its effort suffix (`-low`, `-medium`, `-high`, `-xhigh`, `-max`) removed. Pricing tries the raw slug, then that base name, with `PriceBook::exact_price` only, so a related model never lends its rates ([spending.md](./spending.md#resolving-a-model)). A model neither prices keeps its tokens without dollars and is recorded unknown under its base name. Rows name no working directory, so Antigravity spend carries no workspace attribution.
+`spend.rs` reads `brain/<conversation>/.system_generated/logs/transcript_full.jsonl` under the login's provider home (`config_home`). `transcript.jsonl` repeats the same rows and is never a source. Each row carrying `input_tokens` (a completed `MODEL` / `PLANNER_RESPONSE`, or a compaction's `SYSTEM` / `CHECKPOINT`) becomes one entry: message id `<conversation>:<step_index>`, thread id the conversation, time from `created_at`. `input_tokens` excludes cache reads and `output_tokens` already counts thinking, so `input_tokens`, `cache_read_tokens`, and `output_tokens` are disjoint inputs to `Pricing::cost_of`. The model is the row's slug with its effort suffix (`-low`, `-medium`, `-high`, `-xhigh`, `-max`) removed. Pricing tries the raw slug, then that base name, with `PriceBook::exact_price` only, so a related model never lends its rates ([spending.md](./spending.md#resolving-a-model)). A model neither prices keeps its tokens without dollars and is recorded unknown under its base name. A `CHECKPOINT` row names no model, so its tokens count at $0 and record no unknown model. Rows name no working directory, so Antigravity spend carries no workspace attribution.
 
 The dollars are a list-price estimate: Antigravity quota is measured by work, and a plan bills no tokens. That is why `account_spend` is partial, which keeps Antigravity out of account-day caps.
 
@@ -296,7 +311,7 @@ The statusline carries no dollars into RimZ. At each turn end the hook path sets
 - The reverse pass closes children on a returned result, which may arrive before an asynchronous child finishes ([The reverse pass](#the-reverse-pass)).
 - The `Stop` final-message read takes the hook's `transcriptPath` without path validation, and its fallback reads the whole file.
 - No billed ledger. Machine-readable credits, API keys or BYOK, and account-day dollar caps are unsupported. Spend is a list-price estimate from the transcripts, and carries no workspace.
-- Permission wait detail, durable asks, artifact-review waits, structured answers, and compaction are unsupported. The user answers native prompts in the Antigravity pane.
+- Permission wait detail, durable asks, artifact-review waits, and structured answers are unsupported. The user answers native prompts in the Antigravity pane.
 - Remote control is unsupported. Upstream offers a daemon (`agy remote-control`) and session-scoped connections (`--remote-control`, `/remote-control`), and RimZ wires neither ([reference](../../externals/agent-adapter/antigravity-reference.md#remote-control-mcp-plugins-and-custom-agents)).
 - Tool statistics are partial. Names come only from live `PostToolUse.toolCall`, on releases that send it and for tools the three matchers cover. MCP tools and transcript history are not counted.
 - Registration is derived. `SessionStart` stays unwired until a live capture shows its behaviour on resume, `/clear`, and child conversations.

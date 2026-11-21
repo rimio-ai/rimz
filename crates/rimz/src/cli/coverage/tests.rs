@@ -269,9 +269,9 @@ fn coverage_pins_agent_matrix() {
     );
 
     let antigravity = agent_cells(&matrix, "antigravity");
-    assert_eq!(count(&antigravity, MatrixCellState::Ok), 6);
+    assert_eq!(count(&antigravity, MatrixCellState::Ok), 7);
     assert_eq!(count(&antigravity, MatrixCellState::Partial), 8);
-    assert_eq!(count(&antigravity, MatrixCellState::Absent), 5);
+    assert_eq!(count(&antigravity, MatrixCellState::Absent), 4);
     assert_eq!(
         agent_labels(&matrix, "antigravity", MatrixCellState::Partial),
         [
@@ -280,7 +280,7 @@ fn coverage_pins_agent_matrix() {
     );
     assert_eq!(
         agent_labels(&matrix, "antigravity", MatrixCellState::Absent),
-        ["plan", "answer", "compact", "bgsh", "remote"]
+        ["plan", "answer", "bgsh", "remote"]
     );
 
     let minimax = agent_cells(&matrix, "minimax");

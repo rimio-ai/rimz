@@ -98,6 +98,7 @@ These are the gaps you will notice, per agent in matrix order, beyond what the m
 - Context, tokens, plan, and the Gemini 5h and weekly quota windows are live from the wrapped statusline. The card's dollar figure is the session's total at list price, set when each turn ends, so no figure shows before the first turn ends. It counts toward room spend and per-agent and room [budget caps](./cli/budget.md), never account caps.
 - History replays every past session and prices its tokens at list price in `rimz stats`. A model the price book has no exact entry for shows tokens without dollars.
 - Tool activity comes from the `PostToolUse` hook on file-edit tools only.
+- A bare `/compact` compacts and is confirmed by its own hooks. It takes no instruction, and `rimz agents history` leaves the command out.
 - Children come from the parent's `invoke_subagent` transcript records, which the CLI writes late, so a fan-out often appears as the parent's turn ends. A worktree, `branch`, or `share` child stays a root card while its validated siblings nest.
 - Every error stop is terminal: a supervised run does not survive a provider limit, and [auto-continue](../guide/loops.md#auto-continue) never arms.
 - Yolo does not approve implementation plans (since 1.3.2). Only the user's `artifactReviewPolicy` setting lifts plan review, and RimZ does not change it.
@@ -451,6 +452,7 @@ OpenCode's project instructions and RimZ's launch reminder still follow the repl
 | --- | :--: | --- |
 | Claude Code | Esc | Supported, without stop confirmation |
 | Codex | Esc | Supported. The Interrupt hook confirms the stop, otherwise RimZ warns |
+| Antigravity | Esc | Supported, without stop confirmation. Escape returns the typed text to the composer, so RimZ presses Enter half a second later to send it |
 | Every other agent and process plugins | none | `--interrupt` refused. Use `--steer` or park |
 
 ### Auto-compaction window
@@ -475,7 +477,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ◐ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ |
 | Pi | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
 | OpenCode | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
-| Antigravity | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ◐ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ◐ | ◐ | ✗ |
+| Antigravity | ✓ | ◐ | ✗ | ◐ | ✗ | ✓ | ◐ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ◐ | ◐ | ✗ |
 | Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Droid | ✓ | ✓ | ◐ | ✓ | ✗ | ◐ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ◐ | ◐ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ | ✗ |
@@ -526,7 +528,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Codex | `SessionStart` | `UserPromptSubmit` | `Stop` / `Interrupt` | `PostToolUse` | `PermissionRequest`, or `Stop` + rollout `Plan` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | ◐ derived | ◐ derived |
 | Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | `tool_call`, or `ui_prompt_start` (Pi 0.84.4+) | `subagent_started` | `subagent_stopped` | `session_before_compact` | `session_compact`, or `session_compact_failed` | `session_shutdown` | ◐ derived |
 | OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask`, or `session_idle` + plan turn | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | `session_ended` | ◐ derived |
-| Antigravity | ◐ first `PreInvocation` + local discovery | `PreInvocation` | `Stop` | `PostToolUse` (file-edit tools) | ◐ statusline permission marker + transcript question | ◐ child `PreInvocation` + parent transcript | ◐ child `Stop` + parent transcript | ✗ | ✗ | ◐ derived | ◐ derived |
+| Antigravity | ◐ first `PreInvocation` + local discovery | `PreInvocation` | `Stop` | `PostToolUse` (file-edit tools) | ◐ statusline permission marker + transcript question | ◐ child `PreInvocation` + parent transcript | ◐ child `Stop` + parent transcript | `PreInvocation` (bare `/compact`) | `Stop` (bare `/compact`) | ◐ derived | ◐ derived |
 | Copilot | `sessionStart` | `userPromptSubmitted` | `agentStop` | `postToolUse` | `permissionRequest` | ◐ child `userPromptSubmitted` + parent transcript | ◐ child `agentStop` + parent transcript | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `Notification` | ✗ | ✗ | `PreCompact` | ◐ derived | `SessionEnd` | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ◐ local pending `AskQuestion` or plan proposal | ◐ chat-store child | ◐ child transcript | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |

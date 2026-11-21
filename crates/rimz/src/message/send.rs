@@ -255,6 +255,7 @@ pub(super) fn send_batch_to_live_pane(
     // Decide on the row read after the write's waits: a resting agent gets a
     // plain send, since the key would cancel the very turn this paste starts.
     // Queued records can retain a provisional launch id; the row carries the live card's session.
+    let decided_turn_started_at = row.as_ref().and_then(|agent| agent.turn_started_at);
     let Some(agent_id) = row
         .filter(|agent| {
             matches!(
@@ -275,13 +276,34 @@ pub(super) fn send_batch_to_live_pane(
     let follower = crate::agents::spec_by_kind(head.kind.as_str())
         .is_some_and(|spec| spec.launch.confirm_interrupt)
         .then(|| EventFollower::open(store.paths().clone(), false));
-    if let Some(cause) = interrupt_withheld(workspace, store, target, bound, &agent_id) {
+    let returns_queued_text = crate::agents::spec_by_kind(head.kind.as_str())
+        .is_some_and(|spec| spec.launch.interrupt_returns_queued_text);
+    let withheld = interrupt_withheld(workspace, store, target, bound, &agent_id).or_else(|| {
+        // Such a kind queues text pasted behind a running turn and opens no turn for it
+        // until the running one ends (agy: no invocation-0 PreInvocation until it dequeues,
+        // probes P9 and P10). A turn start newer than the one the paste decided on is
+        // therefore the paste's own turn, opened from a rest the row missed or after the
+        // running turn ended during the delay, and the key would cancel it.
+        let opened_own_turn = returns_queued_text
+            && row_under_lock(store, head)
+                .ok()
+                .flatten()
+                .is_some_and(|row| row.turn_started_at > decided_turn_started_at);
+        opened_own_turn.then_some(
+            "the message opened a new turn during the interrupt delay, and the key would cancel it",
+        )
+    });
+    if let Some(cause) = withheld {
         return Ok(Receipt::Sent {
             compacted,
             interrupt: InterruptConfirmation::NotSent { cause },
         });
     }
     writer.press(key)?;
+    if returns_queued_text {
+        sleep(INTERRUPT_RESUBMIT_DELAY);
+        writer.press(NamedKey::Enter)?;
+    }
     drop(writer);
     let window = super::interrupt_confirmation_window_from_env();
     let interrupt = match follower {
@@ -297,6 +319,11 @@ pub(super) fn send_batch_to_live_pane(
         interrupt,
     })
 }
+
+/// How long after its interrupt key a kind whose key returns queued text to the composer
+/// waits before the Enter that submits it: agy submitted it once at 100 ms and at 500 ms,
+/// and nothing when both keys went together (probe link 5, P9).
+const INTERRUPT_RESUBMIT_DELAY: Duration = Duration::from_millis(500);
 
 fn confirm_interrupt(
     mut follower: EventFollower,

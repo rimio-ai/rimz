@@ -188,15 +188,16 @@ pub enum LifecycleSignal {
         native_key: Option<String>,
     },
     /// The agent began compacting its context window (Claude `PreCompact`,
-    /// Codex `PreCompact`). A transient head over the status it interrupts. It
-    /// resolves one status it would otherwise carry: compaction runs only after
-    /// the native prompt releases the pane, so it clears a waiting row and the
-    /// ask behind it.
+    /// Codex `PreCompact`, Antigravity `PreInvocation` for a bare `/compact`).
+    /// A transient head over the status it interrupts. It resolves one status
+    /// it would otherwise carry: compaction runs only after the native prompt
+    /// releases the pane, so it clears a waiting row and the ask behind it.
     Compacting,
     /// Context compaction finished or failed
     /// (Claude/Codex `PostCompact`, Claude/Codex `SessionStart` with
-    /// `source = "compact"`, Pi `session_compact`/`session_compact_failed`). The
-    /// transient compacting head lifts here when one is open. When the provider
+    /// `source = "compact"`, Pi `session_compact`/`session_compact_failed`,
+    /// Antigravity `Stop` for a bare `/compact`). The transient compacting
+    /// head lifts here when one is open. When the provider
     /// reports the trigger, automatic compaction resumes the turn it
     /// interrupted (a resting row stays resting) and manual `/compact` rests
     /// to idle. A provider with no trigger bit

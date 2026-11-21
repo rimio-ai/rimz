@@ -394,7 +394,6 @@ fn soft_compact_participation_pins_every_builtin_skip_and_reason() {
         skipped,
         [
             ("amp", "no compact command".into()),
-            ("antigravity", "no compact command".into()),
             ("hermes", "no compaction signal".into()),
             ("kiro", "no compaction signal".into()),
             ("minimax", "no live context reading".into()),
