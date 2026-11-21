@@ -1107,6 +1107,17 @@ impl AgentDefinition {
         self.core.spec()
     }
 
+    /// Whether the kind's system prompt rides an agent file, which also carries the launch's
+    /// `tools` and `mcps` lists, so a launch with no prompt sources applies neither list.
+    pub fn rides_agent_file(&self) -> bool {
+        matches!(
+            self.spec()
+                .launch
+                .preset_arg_matcher(PresetField::SystemPromptFile),
+            Some(PresetArgMatcher::AgentFile(_))
+        )
+    }
+
     /// Start of the verified `RIMZ_AGENT_PID` owner, bounding the age of a
     /// statusline's first windows after an in-process session switch.
     /// Missing, mismatched or unreadable owners supply no floor.

@@ -2014,14 +2014,7 @@ fn validate_fresh_agent_file_lists(
     let Some(adapter) = crate::agents::find_definition(cell.kind.as_str()) else {
         return Ok(());
     };
-    let rides_agent_file = matches!(
-        adapter
-            .spec()
-            .launch
-            .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile),
-        Some(crate::agents::PresetArgMatcher::AgentFile(_))
-    );
-    if !rides_agent_file || !SystemPromptSources::from_cell(cell).is_empty() {
+    if !adapter.rides_agent_file() || !SystemPromptSources::from_cell(cell).is_empty() {
         return Ok(());
     }
     let field = if cell.tools.is_some() {
