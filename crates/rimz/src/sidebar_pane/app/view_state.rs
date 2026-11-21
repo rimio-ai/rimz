@@ -421,6 +421,9 @@ impl ViewContext {
         (snapshot, sent_at_ms)
     }
 
+    /// A clock-only delivery never reaches this, so view state that must advance with time
+    /// while content stands still is fed from `PaneState::reduce_snapshot`, which every
+    /// delivery passes.
     pub(super) fn commit_fetch(
         &mut self,
         update: FetchUpdate,

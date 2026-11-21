@@ -278,6 +278,8 @@ Replay compares before it applies. `Cursor::replay` projects the fold through th
 
 Clock-only permission is read live at replay and is blocked by any of: a failure, a gate episode, an active overlay, a freeze, a read dwell, an empty-tab confirmation, a pending focus repair, an input obligation, or a changed set of focused row panes. Client membership can change outside projected snapshot content. Both replay sites compare it with the view's captured holds before allowing reuse, so focus entry and release still reconcile without a selection change. Completion is independent of content reuse. A rejected final requests nothing, and the gate asks again once its deadline is due.
 
+A change that skips or defers folds lists every per-fold state it stops advancing (spend rolls, width-control stamps, read receipts) and every per-backend emitter it changes.
+
 Each shared view has its own cursor and baseline. A pane that reduces with no routed view uses its own Scratch scope, with a separate cursor and baseline. Seeds do not prime the Scratch baseline, and a shared drain clears it, so the next Scratch reduction is full once. Local input invalidates the Scratch baseline, and identity-free nudges do not.
 
 Before publication, the worker compares shared collections once against the preceding fold and reuses equal Arcs. Replay checks their identity before small metadata, and pane-local exclusions or older baselines fall back to structural equality. Shared views project and compare under the views lock, and the worker never compares a consumer's baseline. A co-viewer whose view is current does not reduce again.
