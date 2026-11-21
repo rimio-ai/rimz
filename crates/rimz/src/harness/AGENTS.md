@@ -6,14 +6,10 @@ Behaviour is documented per topic under `docs/internals/harness/`: [fleet.md](..
 
 ## Boundaries
 
-- CLI handlers keep argument parsing, presentation, and cross-command orchestration. Harness modules own domain rules, durable records, helper argv shape, and side-effect boundaries.
+- Harness modules own domain rules, durable records, helper argv shape, and side-effect boundaries, and leave argument parsing and presentation to the CLI handler.
 - Harness delivery rides `message`; it never reimplements queues, gates, retries, or transcript audit.
-- `harness` never reaches `sidebar`: a helper that refreshes provider usage returns it, and its CLI entry publishes through `sidebar::refresh`.
+- `harness` never reaches `sidebar`: a helper returns what the sidebar needs, and its CLI entry publishes it through `sidebar::refresh`.
 - **Invariant.** `plan` never imports `resume` (`cargo xtask invariants`), and `harness::workflow` imports nothing from `harness::schedule` (its `[[module]]` entry in `refactor-target.toml`).
-
-## Before a change
-
-- A new launch-time check, refusal, or stamp holds on every path in [Every path that builds a launch layout](../../../../docs/internals/harness/fleet.md#every-path-that-builds-a-launch-layout), molt and a fresh restart included, which compile no layout.
 
 ## The sidebar import graph
 
@@ -40,3 +36,6 @@ Each of these is decided in one place. Call it; a second copy drifts.
 
 - Fail-fast, settled: a named exception to the root rule. Hibernation is enrichment on every platform, on by default and skipped where Linux, swap, a cgroup freezer, or a systemd user manager is unavailable. `rimz doctor` says why hibernation is skipped, and an explicit `[agents.hibernate] enabled = true` warns once at `rimz start` on Linux for a missing capability.
 
+## Before a change
+
+- A new launch-time check, refusal, or stamp holds on every path in [Every path that builds a launch layout](../../../../docs/internals/harness/fleet.md#every-path-that-builds-a-launch-layout).
