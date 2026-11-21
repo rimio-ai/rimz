@@ -1922,7 +1922,10 @@ fn hung_apply_is_killed_and_the_next_frame_is_applied() {
     assert_eq!(derived(&env, &next.event_id).len(), 1);
     assert_eq!(
         ingress::read_cursor(store.paths()).unwrap(),
-        HookDrainCursor::default()
+        HookDrainCursor {
+            applied_frames: Some(0),
+            ..HookDrainCursor::default()
+        }
     );
     assert_eq!(
         std::fs::metadata(&store.paths().hook_ingress_log)
@@ -2719,7 +2722,10 @@ fn drained_log_is_truncated_and_cursor_reset() {
     );
     assert_eq!(
         ingress::read_cursor(store.paths()).unwrap(),
-        HookDrainCursor::default()
+        HookDrainCursor {
+            applied_frames: Some(0),
+            ..HookDrainCursor::default()
+        }
     );
     use std::os::unix::fs::PermissionsExt as _;
     let socket = store.runtime_paths().hook_drainer_socket_path();
@@ -3008,7 +3014,10 @@ fn stop_appends_one_frame_and_the_drainer_derives_the_lifecycle_event() {
     assert!(end > 0);
     assert_eq!(
         ingress::read_cursor(store.paths()).unwrap(),
-        HookDrainCursor::default()
+        HookDrainCursor {
+            applied_frames: Some(0),
+            ..HookDrainCursor::default()
+        }
     );
 }
 

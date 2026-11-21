@@ -97,7 +97,7 @@ pub struct HookDrainCursor {
     pub log_extent_at_claim: LogExtent,
     /// Frames the applied offset has moved past since the log was last
     /// truncated, applied, skipped and dropped alike. An older drainer drops
-    /// it, and a reset clears it.
+    /// it, a truncation resets it to zero, and a reset clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub applied_frames: Option<u64>,
 }
@@ -324,7 +324,14 @@ pub fn truncate_drained(paths: &StatePaths, lock: &WorkspaceLock) -> Result<bool
         return Ok(false);
     }
     atomic::truncate_file(&paths.hook_ingress_log, 0)?;
-    write_cursor_cache(paths, &HookDrainCursor::default(), lock)?;
+    // Only the counting drainer truncates, so a drained log restarts the count
+    // at zero, and a backlog that builds next reads a rate of 0 frames per
+    // second rather than no rate.
+    let reset = HookDrainCursor {
+        applied_frames: Some(0),
+        ..HookDrainCursor::default()
+    };
+    write_cursor_cache(paths, &reset, lock)?;
     Ok(true)
 }
 
