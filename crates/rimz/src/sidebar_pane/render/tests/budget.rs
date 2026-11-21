@@ -211,6 +211,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         presence: None,
         truth_degraded: None,
         hook_drainer_outage: None,
+        hook_drain_lag: None,
         now,
         worktree_groups: (0..groups)
             .map(|group| SidebarWorktreeGroup {

@@ -38,6 +38,7 @@ pub(super) fn snapshot(state: Preset) -> SidebarSnapshot {
         presence: None,
         truth_degraded: None,
         hook_drainer_outage: None,
+        hook_drain_lag: None,
         now,
         worktree_groups: Vec::new().into(),
         agents: Default::default(),

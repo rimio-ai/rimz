@@ -99,6 +99,76 @@ fn hook_drainer_outages_are_projected_on_producer_and_consumer_folds() {
 }
 
 #[test]
+fn hook_drain_lag_is_projected_on_both_folds_past_the_threshold() {
+    use crate::store::ingress::{self, HookDrainCursor, HookIngress};
+
+    let (_dir, runtime, snapshot) = runtime();
+    let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
+    state.ensure_dirs().unwrap();
+    std::fs::create_dir_all(state.hook_drain_cursor.parent().unwrap()).unwrap();
+    let fed = |ago: i64| HookIngress {
+        boot_id: None,
+        schema_version: "1".into(),
+        event_id: crate::ids::EventId::new(),
+        ts: snapshot.now - SignedDuration::from_secs(ago),
+        source: crate::ids::AgentKind::new_unchecked("claude"),
+        event: None,
+        payload: "{}".into(),
+        cwd: "/tmp/project".into(),
+        hook_pid: 1,
+        env: BTreeMap::new(),
+    };
+    let append = |frame: &HookIngress| {
+        let lock = crate::disk::lock::SharedAppendLock::acquire(&state.hook_ingress_lock).unwrap();
+        ingress::append(&state, frame, &lock).unwrap()
+    };
+    let cursor = |end: u64, frame: &HookIngress| {
+        let cursor = HookDrainCursor {
+            applied: end,
+            claimed: end,
+            applied_event_id: Some(frame.event_id.clone()),
+            claimed_event_id: Some(frame.event_id.clone()),
+            applied_frames: Some(12),
+            ..HookDrainCursor::default()
+        };
+        std::fs::write(
+            &state.hook_drain_cursor,
+            serde_json::to_vec(&cursor).unwrap(),
+        )
+        .unwrap();
+    };
+    let projected = |opts| {
+        serde_json::to_value(fold(snapshot.clone(), None, &runtime, opts))
+            .unwrap()
+            .get("hook_drain_lag")
+            .cloned()
+    };
+    for opts in [cached_opts(), producing_opts()] {
+        assert_eq!(projected(opts), None, "an empty tail has no lag");
+    }
+    let applied = fed(600);
+    let applied_end = append(&applied);
+    let oldest = fed(60);
+    let oldest_end = append(&oldest);
+    cursor(applied_end, &applied);
+    for opts in [cached_opts(), producing_opts()] {
+        assert_eq!(
+            projected(opts),
+            Some(serde_json::json!({"since": oldest.ts, "applied_frames": 12})),
+            "both fold paths must date the oldest unapplied frame"
+        );
+    }
+    cursor(oldest_end, &oldest);
+    for opts in [cached_opts(), producing_opts()] {
+        assert_eq!(projected(opts), None, "a drained tail has no lag");
+    }
+    append(&fed(5));
+    for opts in [cached_opts(), producing_opts()] {
+        assert_eq!(projected(opts), None, "a fresh head is under the threshold");
+    }
+}
+
+#[test]
 fn workflow_parks_do_not_publish_attention_notices() {
     let (_dir, runtime, snapshot) = runtime();
     let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();

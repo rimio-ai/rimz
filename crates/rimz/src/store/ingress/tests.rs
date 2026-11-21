@@ -417,3 +417,120 @@ fn reset_removes_ingress_and_cursor_in_both_modes() {
         assert!(!paths.hook_drain_cursor.exists());
     }
 }
+
+fn fed_at(at: &str) -> HookIngress {
+    HookIngress {
+        ts: at.parse().unwrap(),
+        ..frame()
+    }
+}
+
+fn cursor_at(end: u64, frame: &HookIngress, applied_frames: Option<u64>) -> HookDrainCursor {
+    HookDrainCursor {
+        applied: end,
+        claimed: end,
+        applied_event_id: Some(frame.event_id.clone()),
+        claimed_event_id: Some(frame.event_id.clone()),
+        applied_frames,
+        ..HookDrainCursor::default()
+    }
+}
+
+#[test]
+fn drain_lag_dates_the_oldest_unapplied_frame_and_carries_the_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    assert_eq!(drain_lag(&paths).unwrap(), None, "an empty tail has no lag");
+    let applied = fed_at("2026-01-01T00:00:00Z");
+    let oldest = fed_at("2026-01-01T00:01:00Z");
+    let newest = fed_at("2026-01-01T00:02:00Z");
+    let applied_end = seed(&paths, &applied);
+    seed(&paths, &oldest);
+    let end = seed(&paths, &newest);
+    let lag = |since: &HookIngress, applied_frames| {
+        Some(HookDrainLag {
+            since: since.ts,
+            applied_frames,
+        })
+    };
+    assert_eq!(
+        drain_lag(&paths).unwrap(),
+        lag(&applied, None),
+        "an absent cursor starts at the first frame"
+    );
+    let lock = WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
+    for count in [Some(7), None] {
+        write_cursor(&paths, &cursor_at(applied_end, &applied, count), &lock).unwrap();
+        assert_eq!(drain_lag(&paths).unwrap(), lag(&oldest, count));
+    }
+    write_cursor(&paths, &cursor_at(end, &newest, Some(9)), &lock).unwrap();
+    assert_eq!(
+        drain_lag(&paths).unwrap(),
+        None,
+        "a drained tail has no lag"
+    );
+}
+
+#[test]
+fn drain_lag_reads_undatable_heads_as_no_lag() {
+    for raw in [&b"40 0000"[..], b"3 deadbeef abc\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(dir.path());
+        fs::create_dir_all(paths.hook_ingress_log.parent().unwrap()).unwrap();
+        fs::write(&paths.hook_ingress_log, raw).unwrap();
+        assert_eq!(drain_lag(&paths).unwrap(), None, "{raw:?}");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    let end = seed(&paths, &frame());
+    let lock = WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
+    seed(&paths, &frame());
+    write_cursor(&paths, &cursor_at(end, &frame(), Some(1)), &lock).unwrap();
+    assert_eq!(
+        drain_lag(&paths).unwrap(),
+        None,
+        "a cursor that read_cursor resets cannot date the backlog"
+    );
+}
+
+#[test]
+fn drain_lag_reads_one_frame_whatever_the_backlog() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    let head = fed_at("2026-01-01T00:03:00Z");
+    let head_end = seed(&paths, &head);
+    for _ in 0..16 {
+        let mut frame = frame();
+        frame.payload = "backlog ".repeat(8_192);
+        seed(&paths, &frame);
+    }
+    let log_dir = paths.hook_ingress_log.parent().unwrap();
+    let before = crate::store::event_log::testkit::bytes_read_under(log_dir);
+    assert_eq!(
+        drain_lag(&paths).unwrap().map(|lag| lag.since),
+        Some(head.ts)
+    );
+    let read = crate::store::event_log::testkit::bytes_read_under(log_dir) - before;
+    assert!(
+        read <= head_end,
+        "read {read} bytes for a {head_end}-byte head"
+    );
+}
+
+#[test]
+fn cursor_frame_count_is_optional_on_the_wire() {
+    let legacy = serde_json::to_value(HookDrainCursor::default()).unwrap();
+    assert!(legacy.get("applied_frames").is_none(), "{legacy}");
+    let decoded: HookDrainCursor = serde_json::from_value(legacy).unwrap();
+    assert_eq!(decoded.applied_frames, None);
+    let counted = HookDrainCursor {
+        applied_frames: Some(3),
+        ..HookDrainCursor::default()
+    };
+    let wire = serde_json::to_value(&counted).unwrap();
+    assert_eq!(wire["applied_frames"], 3);
+    assert_eq!(
+        serde_json::from_value::<HookDrainCursor>(wire).unwrap(),
+        counted
+    );
+}

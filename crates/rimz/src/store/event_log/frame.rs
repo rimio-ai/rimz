@@ -124,6 +124,27 @@ pub(in crate::store) fn read_row_ending_at(
     }
 }
 
+/// Read the terminated row starting at `start`, and no further than its newline.
+pub(in crate::store) fn read_row_starting_at(path: &Path, start: u64) -> Result<Option<Vec<u8>>> {
+    let mut row = Vec::new();
+    let result = (|| -> io::Result<_> {
+        let mut file = File::open(path)?;
+        file.seek(SeekFrom::Start(start))?;
+        BufReader::new(file).read_until(b'\n', &mut row)
+    })();
+    testkit::count_bytes_read(row.len() as u64);
+    testkit::count_path_bytes_read(path, row.len() as u64);
+    match result {
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(EventLogErr::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+        Ok(_) if row.pop() == Some(b'\n') => Ok(Some(row)),
+        Ok(_) => Ok(None),
+    }
+}
+
 /// Decode one raw row into its event: unterminated and non-UTF-8 rows read as
 /// torn, terminated ones go through the frame decoder.
 pub(super) fn decode_row(at: u64, terminated: bool, bytes: &[u8]) -> Result<EventEnvelope> {

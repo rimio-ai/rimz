@@ -56,6 +56,80 @@ fn hook_drainer_alert_dismissal_and_search_do_not_change_refresh_health() {
     assert!(rig.view().ui().hook_drainer_alert.is_none());
 }
 
+#[test]
+fn hook_drain_rate_follows_committed_counts_on_both_delivery_paths() {
+    use crate::store::snapshot::HookDrainLag;
+
+    let mut rig = Rig::new();
+    let base = agent_snapshot(&rig.ws);
+    let start = base.now;
+    let mut fold = |applied_frames: Option<u64>, lagging: bool, at: i64| {
+        let mut fetched = base.clone();
+        fetched.now = start + jiff::SignedDuration::from_secs(at);
+        fetched.hook_drain_lag = lagging.then(|| HookDrainLag {
+            since: start - jiff::SignedDuration::from_secs(60),
+            applied_frames,
+        });
+        let applied = rig.state.pane.content_applications;
+        rig.fold(fetched, SnapshotSource::Produced);
+        let clock_only = rig.state.pane.content_applications == applied;
+        (rig.view().ui().hook_drain_rate.fps, clock_only)
+    };
+    let observed = [
+        fold(Some(100), true, 0),
+        fold(Some(110), true, 2),
+        fold(Some(200), true, 5),
+        fold(Some(200), true, 10),
+        fold(Some(50), true, 15),
+        fold(Some(150), true, 20),
+        fold(None, true, 25),
+        fold(Some(10), true, 30),
+        fold(Some(60), false, 35),
+        fold(Some(60), true, 40),
+    ];
+    assert_eq!(
+        observed,
+        [
+            (None, false),
+            (None, false),
+            (Some(20), false),
+            (Some(0), true),
+            (None, false),
+            (Some(20), false),
+            (None, false),
+            (None, false),
+            (None, false),
+            (None, false),
+        ],
+        "one sample has no rate, a hung drainer's unchanged fold reads 0, and a lower or \
+         lost count or lag starts the rate over"
+    );
+}
+
+#[test]
+fn hook_drain_lag_survives_esc() {
+    use crate::store::snapshot::HookDrainLag;
+
+    let mut rig = Rig::new();
+    let mut fetched = agent_snapshot(&rig.ws);
+    for (applied_frames, after) in [(0, 0), (100, 5)] {
+        fetched.now += jiff::SignedDuration::from_secs(after);
+        fetched.hook_drain_lag = Some(HookDrainLag {
+            since: fetched.now - jiff::SignedDuration::from_secs(60),
+            applied_frames: Some(applied_frames),
+        });
+        rig.fold(fetched.clone(), SnapshotSource::Cached);
+    }
+    assert_eq!(rig.view().ui().hook_drain_rate.fps, Some(20));
+    rig.input(KeyAction::Cancel);
+    assert_eq!(
+        rig.view().ui().hook_drain_rate.fps,
+        Some(20),
+        "Esc does not dismiss the lag line"
+    );
+    assert!(rig.view().ctx().current.hook_drain_lag.is_some());
+}
+
 /// Paint the next frame now, whatever the frame clock says.
 fn paint_due(rig: &mut Rig) {
     rig.state.pane.next_frame = rig.state.pane.clock.now();

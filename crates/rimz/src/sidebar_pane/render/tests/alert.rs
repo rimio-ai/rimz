@@ -143,6 +143,84 @@ fn render_hook_drainer_alert_coexists_with_lingering_but_not_active_refresh_aler
     assert!(!screen.contains("hook drainer unreachable"), "{screen}");
 }
 
+fn drain_lag_snapshot() -> SidebarSnapshot {
+    let mut snapshot = drainer_snapshot();
+    snapshot.hook_drainer_outage = None;
+    snapshot.hook_drain_lag = Some(crate::store::snapshot::HookDrainLag {
+        since: fixed_now() - Duration::from_secs(180),
+        applied_frames: Some(400),
+    });
+    snapshot
+}
+
+fn drain_lag_screen(snapshot: &SidebarSnapshot, view: &ViewState, alert: Option<&Alert>) -> String {
+    snapshot_to_screen_with_alert_and_ui(snapshot, alert, view, &UiState::default(), 80, 24)
+}
+
+#[test]
+fn render_hook_drain_lag_shows_its_age_and_rate() {
+    let snapshot = drain_lag_snapshot();
+    use super::super::theme::Component;
+    use super::super::ui_state::DrainRate;
+
+    let with_rate = |fps| ViewState {
+        hook_drain_rate: DrainRate { sample: None, fps },
+        ..selected_ui()
+    };
+    let screen = drain_lag_screen(&snapshot, &with_rate(Some(20)), None);
+    assert!(screen.contains("⚠ hook drain 3m behind, 20fps"), "{screen}");
+    assert!(
+        screen.contains("Claude") && screen.contains("? for help"),
+        "{screen}"
+    );
+    assert_snapshot("hook_drain_lag", screen);
+    let screen = drain_lag_screen(&snapshot, &with_rate(Some(0)), None);
+    assert!(screen.contains("⚠ hook drain 3m behind, 0fps"), "{screen}");
+    let screen = drain_lag_screen(&snapshot, &with_rate(None), None);
+    assert!(screen.contains("⚠ hook drain 3m behind"), "{screen}");
+    assert!(!screen.contains("fps"), "{screen}");
+    let theme = Theme::fixed(false);
+    let line =
+        &super::super::chrome::hook_drainer_alert_lines(&theme, &snapshot, &with_rate(Some(20)))[0];
+    assert_eq!(
+        line.style.fg,
+        theme.styled(Component::HookDrainLag, Modifier::BOLD).fg
+    );
+}
+
+#[test]
+fn render_hook_drain_lag_shares_the_drainer_line() {
+    let mut snapshot = drain_lag_snapshot();
+    let recovered = ViewState {
+        hook_drainer_alert: Some(Alert {
+            reason: "hook drainer unreachable".into(),
+            since: fixed_now() - Duration::from_secs(160),
+            recovered_at: Some(fixed_now() - Duration::from_secs(120)),
+        }),
+        ..selected_ui()
+    };
+    let screen = drain_lag_screen(&snapshot, &recovered, None);
+    assert!(screen.contains("hook drain 3m behind"), "{screen}");
+    assert!(
+        !screen.contains("last alert"),
+        "the lag line hides a recovered outage notice: {screen}"
+    );
+    let refresh = Alert::active("snapshot failed", fixed_now());
+    let screen = drain_lag_screen(&snapshot, &recovered, Some(&refresh));
+    assert!(screen.contains("Sidebar degraded"), "{screen}");
+    assert!(!screen.contains("hook drain"), "{screen}");
+    snapshot.hook_drainer_outage = drainer_snapshot().hook_drainer_outage;
+    let screen = drain_lag_screen(&snapshot, &recovered, None);
+    assert!(
+        screen.contains("hook drainer unreachable for 40s"),
+        "{screen}"
+    );
+    assert!(
+        !screen.contains("behind"),
+        "an active outage wins over the lag line: {screen}"
+    );
+}
+
 #[test]
 fn throttle_notices_keep_the_cause_count_and_fix_in_bottom_chrome() {
     let mut value = serde_json::to_value(snapshot_with(Vec::new())).unwrap();

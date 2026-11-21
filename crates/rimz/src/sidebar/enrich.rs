@@ -51,6 +51,10 @@ mod tests;
 
 type AgentReadChecks = HashMap<(AgentKind, AgentSessionId), Instant>;
 
+/// How old the oldest unapplied hook frame grows before the sidebar says the
+/// drain is behind. A single apply slower than this shows the line too.
+const HOOK_DRAIN_LAG_THRESHOLD: jiff::SignedDuration = jiff::SignedDuration::from_secs(30);
+
 #[derive(Default)]
 struct EnrichmentChecks {
     root: PathBuf,
@@ -843,6 +847,11 @@ fn enrich_core(
             })
             .collect(),
     });
+    // An unreadable cursor or ingress tail reads as no lag rather than failing the fold.
+    snapshot.hook_drain_lag = crate::store::ingress::drain_lag(state)
+        .ok()
+        .flatten()
+        .filter(|lag| snapshot.now.duration_since(lag.since) > HOOK_DRAIN_LAG_THRESHOLD);
     snapshot.skipped_settings = crate::workspace::record::read_optional(&state.workspace_record)
         .ok()
         .flatten()

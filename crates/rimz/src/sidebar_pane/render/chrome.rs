@@ -225,7 +225,7 @@ fn room_mode_label(mode: RoomMode) -> &'static str {
 pub(super) fn hook_drainer_alert_lines(
     theme: &Theme,
     snapshot: &SidebarSnapshot,
-    alert: Option<&Alert>,
+    view: &ViewState,
 ) -> Vec<Line<'static>> {
     if let Some(outage) = &snapshot.hook_drainer_outage {
         let Some(agent) = outage.agents.first() else {
@@ -247,7 +247,21 @@ pub(super) fn hook_drainer_alert_lines(
             theme.alarm(Modifier::BOLD),
         )];
     }
-    let Some(alert) = alert else {
+    if let Some(lag) = &snapshot.hook_drain_lag {
+        let rate = view
+            .hook_drain_rate
+            .fps
+            .map_or_else(String::new, |fps| format!(", {fps}fps"));
+        return vec![Line::styled(
+            format!(
+                "{} hook drain {} behind{rate}",
+                theme.glyph(GlyphRole::ChromeAlert),
+                age_short(lag.since, snapshot.now)
+            ),
+            theme.styled(Component::HookDrainLag, Modifier::BOLD),
+        )];
+    }
+    let Some(alert) = &view.hook_drainer_alert else {
         return Vec::new();
     };
     let Some(recovered_at) = alert.recovered_at else {
