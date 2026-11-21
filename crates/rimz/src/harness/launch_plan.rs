@@ -1155,6 +1155,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 .provider_argv
                 .extend([flag.clone(), file.name.clone()]);
             process.rebuild_argv();
+            for warning in &file.warnings {
+                warnings.push(LaunchPlanWarning::LaunchEnv(warning.clone()));
+            }
+            process.mcp_warnings.extend(file.warnings.iter().cloned());
             Some(file)
         }
         _ => None,

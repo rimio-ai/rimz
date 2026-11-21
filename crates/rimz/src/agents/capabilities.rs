@@ -56,6 +56,41 @@ pub struct McpLaunch<'a> {
     pub login_env: &'a BTreeMap<String, String>,
 }
 
+impl McpLaunch<'_> {
+    /// `--always <capability>` or `--deferred <capability>` for each capability the list
+    /// marks, the `rimz mcp serve` flags that set its tools' load mode.
+    pub(super) fn capability_mark_args(&self) -> Vec<String> {
+        self.mcps
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|entry| Some((entry.capability()?, entry.mode()?)))
+            .flat_map(|(capability, mode)| {
+                [format!("--{}", mode.name()), capability.name().to_owned()]
+            })
+            .collect()
+    }
+
+    /// One warning for each mark the launch cannot apply: a mark on one of the user's
+    /// servers, for `user_server_reason`, and any other mark while RimZ's server is off.
+    pub(super) fn unapplied_marks(&self, user_server_reason: &str) -> Vec<String> {
+        self.mcps
+            .unwrap_or_default()
+            .iter()
+            .filter(|entry| entry.mode().is_some())
+            .filter_map(|entry| {
+                let reason = if entry.user_server().is_some() {
+                    user_server_reason
+                } else if self.server.is_none() {
+                    "RimZ's MCP server is off for this launch"
+                } else {
+                    return None;
+                };
+                Some(format!("the mcps entry `{entry}` is not applied: {reason}"))
+            })
+            .collect()
+    }
+}
+
 /// One `rimz mcp serve` entry.
 pub struct McpServer {
     pub command: PathBuf,

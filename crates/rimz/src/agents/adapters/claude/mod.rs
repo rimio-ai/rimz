@@ -945,20 +945,9 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         let grant = launch.server.as_ref().is_some_and(|server| server.grant);
         let limits = crate::config::mcps_limit(launch.mcps);
         let entries = launch.mcps.unwrap_or_default();
-        let warnings = entries
-            .iter()
-            .filter(|entry| entry.mode().is_some())
-            .filter_map(|entry| {
-                let reason = if entry.user_server().is_some() {
-                    "Claude takes a load mode only for RimZ's server and its capabilities"
-                } else if launch.server.is_none() {
-                    "RimZ's MCP server is off for this launch"
-                } else {
-                    return None;
-                };
-                Some(format!("the mcps entry `{entry}` is not applied: {reason}"))
-            })
-            .collect();
+        let warnings = launch.unapplied_marks(
+            "Claude takes a load mode only for RimZ's server and its capabilities",
+        );
         if grant || limits {
             *artifact = merge_settings(
                 cwd,
@@ -999,11 +988,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         }
         if let Some(server) = &launch.server {
             let mut args = server.args.clone();
-            for entry in entries {
-                if let (Some(capability), Some(mode)) = (entry.capability(), entry.mode()) {
-                    args.extend([format!("--{}", mode.name()), capability.name().to_owned()]);
-                }
-            }
+            args.extend(launch.capability_mark_args());
             let mut entry = serde_json::json!({
                 "type": "stdio",
                 "command": server.command,

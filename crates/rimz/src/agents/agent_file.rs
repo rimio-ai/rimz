@@ -32,6 +32,8 @@ pub struct AgentFile {
     pub path: PathBuf,
     pub name: String,
     pub bytes: Vec<u8>,
+    /// Each mark of the launch's `mcps` list the file cannot apply, as a warning line.
+    pub warnings: Vec<String>,
 }
 
 /// Why the provider could not read a planned agent file, and the command that fixes it.
@@ -112,6 +114,7 @@ mod tests {
             path: plugin.join("agents/rimz-new-111111111111.md"),
             name: "rimz-new-111111111111".to_owned(),
             bytes: b"---\nname: rimz-new-111111111111\n---\nBody.\n".to_vec(),
+            warnings: Vec::new(),
         };
         publish_agent_file(&file).unwrap();
         let written = real.join("agents/rimz-new-111111111111.md");
@@ -132,6 +135,7 @@ mod tests {
             path: root.path().join("plugin/agents/rimz-a-000000000000.md"),
             name: "rimz-a-000000000000".to_owned(),
             bytes: b"x".to_vec(),
+            warnings: Vec::new(),
         };
         publish_agent_file(&file).unwrap();
         assert_eq!(std::fs::read(&file.path).unwrap(), b"x");

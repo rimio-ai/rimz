@@ -305,8 +305,8 @@ fn marked_capabilities_carry_their_load_mode_in_the_listing() {
             .collect::<Vec<_>>()
     };
     assert!(meta(&[]).iter().all(|(_, meta)| meta.is_none()));
-    let always = Some(json!({"anthropic/alwaysLoad": true}));
-    let deferred = Some(json!({"anthropic/alwaysLoad": false}));
+    let always = Some(json!({"anthropic/alwaysLoad": true, "antigravity/alwaysLoad": true}));
+    let deferred = Some(json!({"anthropic/alwaysLoad": false, "antigravity/alwaysLoad": false}));
     let only = [
         "--only",
         "rimz-lsp",
@@ -819,7 +819,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     };
     let env = Env::new();
     for (name, mcps) in [
-        ("glimit", "\nmcps: [rimz-lsp, github, notion]"),
+        ("glimit", "\nmcps: [rimz-lsp:always, github:always, notion]"),
         ("gopen", ""),
     ] {
         crate::common::write_definition(
@@ -837,7 +837,11 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
         out.contains("only github, notion (inheritMcp: false)"),
         "{out}"
     );
-    assert_eq!(tool_load(&out, "lsp"), "default", "{out}");
+    assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
+    assert!(
+        out.contains("\nNot applied\n  the mcps entry `github:always` is not applied: Antigravity takes a load mode only for RimZ's capabilities\n"),
+        "{out}"
+    );
     assert!(out.contains("\n  inheritMcp: false\n"), "{out}");
     assert!(
         out.contains(r#"{"name": "github"}, {"name": "notion"}]"#),
