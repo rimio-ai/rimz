@@ -143,7 +143,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
     tool_rules: crate::agents::skills::ToolRules::Unsupported,
     host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "antigravity",
-    aliases: &[],
+    aliases: &["agy"],
     display_name: "Antigravity",
     brand: Brand {
         emblem: None,

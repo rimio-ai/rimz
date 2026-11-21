@@ -2700,6 +2700,56 @@ fn mapped_permission_cells_accept_empty_vectors_without_widening_other_kinds() {
 }
 
 #[test]
+fn alias_words_read_their_kinds_base_as_the_kind_spelling_does() {
+    let pairs = [("agy", "antigravity"), ("mcode", "minimax")];
+    let profiles = profiles(pairs.iter().flat_map(|&(alias, kind)| {
+        [
+            (
+                kind,
+                Profile {
+                    kind_base: true,
+                    ..profile(kind)
+                },
+            ),
+            (
+                if alias == "agy" {
+                    "worker-agy"
+                } else {
+                    "worker-mcode"
+                },
+                profile(alias),
+            ),
+        ]
+    }));
+    let cell = |raw: &str| {
+        parse_layout_spec(raw, &profiles, &no_commands())
+            .ok()
+            .and_then(|spec| spec.agent_cells().next().cloned())
+            .map(|cell| {
+                (
+                    cell.kind.to_string(),
+                    cell.launch.profile,
+                    cell.launch.mode,
+                    cell.args,
+                )
+            })
+    };
+    for (alias, kind) in pairs {
+        for suffix in ["", "-yolo", "-fast", "-yolo-fast"] {
+            let launched = cell(&format!("{alias}{suffix}"));
+            assert_eq!(
+                launched,
+                cell(&format!("{kind}{suffix}")),
+                "{alias}{suffix}"
+            );
+        }
+        assert_eq!(cell(alias).and_then(|cell| cell.1).as_deref(), Some(kind));
+        let chained = resolve_profile(&format!("worker-{alias}"), &profiles).unwrap();
+        assert_eq!(chained.layers, [format!("worker-{alias}"), kind.to_owned()]);
+    }
+}
+
+#[test]
 fn fast_suffix_cells_stamp_fast_on_their_base() {
     let fast_args = |kind: &str| {
         crate::agents::find_definition(kind)

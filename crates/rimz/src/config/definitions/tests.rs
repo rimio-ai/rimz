@@ -3330,6 +3330,85 @@ fn antigravity_definitions_take_a_base_a_craft_body_tools_and_team_seats() {
 }
 
 #[test]
+fn alias_named_kind_bases_are_claimed_and_read_under_the_canonical_kind() {
+    let home = tempfile::tempdir().unwrap();
+    let agy = home.path().join("agents/agy.md");
+    definition(
+        home.path(),
+        "agents/agy.md",
+        "agent: agy\ntools: [Read]",
+        "Agy base.",
+    );
+    definition(home.path(), "agents/one.md", "agent: agy", "");
+    definition(home.path(), "agents/two.md", "agent: antigravity", "");
+    let loaded = clean(home.path());
+    for profiles in [&loaded.agent_profiles, &loaded.subagent_profiles] {
+        assert!(profiles.0["antigravity"].kind_base);
+        assert_eq!(profiles.0["antigravity"].agent, "antigravity");
+        assert!(!profiles.0.contains_key("agy"));
+    }
+    for name in ["one", "two"] {
+        assert_eq!(loaded.agent_profiles.0[name].agent, "antigravity");
+    }
+    for launched in ["agy", "antigravity", "one"] {
+        let resolved =
+            crate::harness::spec::resolve_profile(launched, &loaded.agent_profiles).unwrap();
+        assert!(
+            resolved.layers.iter().any(|layer| layer == "antigravity"),
+            "{launched}: {:?}",
+            resolved.layers
+        );
+    }
+
+    definition(home.path(), "agents/antigravity.md", "", "Second base.");
+    error(
+        home.path(),
+        &format!(
+            "kind base for antigravity is declared by both {} and {}",
+            agy.display(),
+            home.path().join("agents/antigravity.md").display()
+        ),
+    );
+    error(home.path(), "runs on antigravity, whose kind base");
+    std::fs::remove_file(home.path().join("agents/antigravity.md")).unwrap();
+
+    let crew = linked_pack(home.path(), "crew");
+    definition(crew.path(), "agents/antigravity.md", "", "Pack base.");
+    let loaded = clean(home.path());
+    let shipped = loaded
+        .pack_items
+        .iter()
+        .find(|item| item.path.ends_with("agents/antigravity.md"))
+        .unwrap();
+    assert_eq!(
+        (shipped.name.as_str(), &shipped.fate),
+        ("antigravity", &ItemFate::Overridden { path: agy.clone() })
+    );
+
+    std::fs::remove_file(&agy).unwrap();
+    let other = linked_pack(home.path(), "other");
+    definition(other.path(), "agents/agy.md", "", "Other base.");
+    error(home.path(), "pack conflict for `antigravity`");
+    error(home.path(), "agents/antigravity.md), other (");
+    error(home.path(), "agents/agy.md); exclude conflicting copies");
+    std::fs::remove_file(other.path().join("agents/agy.md")).unwrap();
+    std::fs::remove_file(crew.path().join("agents/antigravity.md")).unwrap();
+
+    definition(home.path(), "agents/agy.md", "tools: [Read]", "");
+    error(
+        home.path(),
+        "kind base has no prompt body — write the system prompt every antigravity definition",
+    );
+    error(
+        home.path(),
+        &format!(
+            "runs on antigravity, whose kind base {} failed to load; fix that file",
+            agy.display()
+        ),
+    );
+}
+
+#[test]
 fn crafts_on_non_prompt_kinds_refuse_the_body_not_a_missing_base() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
@@ -3441,23 +3520,24 @@ fn prompt_taking_kinds_require_their_base_body_or_not() {
     let loaded = clean(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     assert!(loaded.agent_profiles.0.contains_key("runner"));
-    // A base file named by an alias is no base of its kind: it neither satisfies nor fills one.
-    definition(root.path(), "agents/mcode.md", "budget: 5", "MiniMax base.");
+    // The missing-base fix names every file name the kind's base may take.
     definition(root.path(), "agents/mm.md", "agent: minimax", "");
     error(
         root.path(),
         &format!(
-            "runs on minimax, whose kind base is missing — create {} with a nonempty body",
+            "runs on minimax, whose kind base is missing — create {} with a nonempty body, the \
+             system prompt every minimax definition starts from, or install a provider pack \
+             that ships agents/minimax.md or agents/mcode.md",
             root.path().join("agents/minimax.md").display(),
         ),
     );
-    let mm = root.path().join("agents/mm.md");
-    assert!(
-        !clean_but(root.path(), &mm)
-            .agent_profiles
-            .0
-            .contains_key("mm")
-    );
+    // A base file named by an alias is its kind's base: it satisfies and fills one.
+    definition(root.path(), "agents/mcode.md", "budget: 5", "MiniMax base.");
+    let loaded = clean(root.path());
+    assert!(loaded.agent_profiles.0["minimax"].kind_base);
+    assert_eq!(loaded.agent_profiles.0["mm"].budget.as_deref(), Some("5"));
+    std::fs::remove_file(root.path().join("agents/mcode.md")).unwrap();
+    std::fs::remove_file(root.path().join("agents/mm.md")).unwrap();
     // A base body that renders to nothing is no prompt body either, and fails its dependents.
     definition(root.path(), "agents/opencode.md", "", "${traits}");
     error(

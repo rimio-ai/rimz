@@ -1424,7 +1424,7 @@ pub fn resolve_role(binding: &RoleBinding, profiles: &ProfilesConfig) -> Result<
 
 /// Resolve `name` through profile inheritance to a canonical kind and launch variant.
 pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<ResolvedProfile> {
-    let mut cur = name.to_owned();
+    let mut cur = profiles.key(name).to_owned();
     let mut seen = Vec::<String>::new();
     let mut layers = Vec::<&Profile>::new();
     let terminal = loop {
@@ -1446,7 +1446,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
         };
         seen.push(cur.clone());
         layers.push(profile);
-        let next = profile.agent.as_str();
+        let next = profiles.key(&profile.agent);
         if next == cur
             && let Some(runtime) = crate::agents::find_runtime(next)
         {
@@ -1767,9 +1767,9 @@ fn parse_cell(
     if let Some(command) = commands.0.get(raw) {
         return command_cell(raw, command);
     }
-    if profiles.0.contains_key(raw) {
+    if profiles.0.contains_key(profiles.key(raw)) {
         return Ok(Cell::Agent(profile_cell_with_base_override(
-            raw,
+            profiles.key(raw),
             profiles,
             base_override,
             None,
@@ -2030,6 +2030,7 @@ fn virtual_base(
     if crate::agents::find_definition(kind_name).is_none() {
         return Ok((None, None));
     }
+    let kind_name = profiles.key(kind_name);
     if profiles.0.contains_key(kind_name) {
         let resolved = resolve_profile(kind_name, profiles)?;
         return Ok((
@@ -2059,7 +2060,7 @@ fn fast_suffix_cell(
     profiles: &ProfilesConfig,
     base_override: Option<&ResolvedProfile>,
 ) -> Result<Option<Cell>> {
-    let Some(base) = fast_suffix_base(raw) else {
+    let Some(base) = fast_suffix_base(raw).map(|base| profiles.key(base)) else {
         return Ok(None);
     };
     let (mut resolved, profile_name, mode) = if profiles.0.contains_key(base) {
