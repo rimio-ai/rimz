@@ -1110,6 +1110,45 @@ fn unlisted_servers(
     disabled
 }
 
+/// The override that switches RimZ's server off, when the one the arguments
+/// pass last on its `enabled` is false, given as `-c <kv>`, `--config <kv>`,
+/// or `--config=<kv>`. Codex applies overrides in argv order, and a table
+/// value replaces what earlier overrides set under its key.
+fn rimz_switched_off(args: &[String]) -> Option<(&str, &str)> {
+    let server = format!("mcp_servers.{}", crate::mcp::catalog::SERVER_NAME);
+    let mut switch = None;
+    for (index, arg) in args.iter().enumerate() {
+        let argument = match (arg.as_str(), args.get(index + 1)) {
+            ("-c" | "--config", Some(value)) => (arg.as_str(), value.as_str()),
+            _ => match arg.strip_prefix("--config=") {
+                Some(value) => ("--config", value),
+                None => continue,
+            },
+        };
+        let Some((key, value)) = argument.1.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let Ok(table) = toml::from_str::<toml::Table>(&format!("value = {value}")) else {
+            continue;
+        };
+        let value = &table["value"];
+        let enabled = if key == "mcp_servers" {
+            value
+                .get(crate::mcp::catalog::SERVER_NAME)
+                .and_then(|entry| entry.get("enabled"))
+        } else if key == server {
+            value.get("enabled")
+        } else if key == format!("{server}.enabled") {
+            Some(value)
+        } else {
+            continue;
+        };
+        switch = (enabled.and_then(toml::Value::as_bool) == Some(false)).then_some(argument);
+    }
+    switch
+}
+
 /// Codex's `omit_tools_from` for a load mode: always keeps a server's tools
 /// out of deferral, deferred restores Codex's default.
 fn omit_tools_from(mode: crate::mcp::catalog::LoadMode) -> toml_edit::Array {
@@ -1383,6 +1422,10 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
             }
         }
         Ok(warnings)
+    }
+
+    fn rimz_server_switched_off<'a>(&self, extra_args: &'a [String]) -> Option<(&'a str, &'a str)> {
+        rimz_switched_off(extra_args)
     }
 
     fn has_native_sandbox(&self) -> bool {

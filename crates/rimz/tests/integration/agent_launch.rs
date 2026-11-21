@@ -6256,6 +6256,12 @@ fn explain_prints_the_plan_without_side_effects() {
       "skills": {
         "applied": false,
         "callable": [],
+        "hidden": [
+          "rimz-lsp",
+          "rimz-wait",
+          "rimz-control",
+          "rimz-notes"
+        ],
         "host": {
           "Applied": {
             "effect": "user-only",
@@ -6929,6 +6935,7 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
             stderr.contains("showing bare"),
             report["profile"]["chain"].clone(),
             report["skills"]["callable"].clone(),
+            report["skills"]["hidden"].clone(),
             reminder.contains("You are a subagent"),
             reminder.contains("- `researcher`: Research"),
             reminder.contains("### Team"),
@@ -6936,7 +6943,8 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
         (
             false,
             serde_json::json!(["researcher", "claude"]),
-            serde_json::json!(["rimz-wait"]),
+            serde_json::json!([]),
+            serde_json::json!(["rimz-lsp", "rimz-wait", "rimz-control", "rimz-notes"]),
             true,
             false,
             false,

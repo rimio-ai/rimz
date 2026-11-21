@@ -14,7 +14,7 @@ rimz mcp serve [--only <capability>]... [--always <capability>]... [--deferred <
 
 ## Tools
 
-Each tool call runs one `rimz` command as the agent that started the server, in that agent's home and room, and returns the command's output. A capability shares its name with the skill that teaches the same commands, and its tools' descriptions carry that skill's usage knowledge for the options the tools expose: the `lsp` target forms and result cap, the `wait` triggers and `when` grammar, the `notes_list` filter fields, and when to book a stop. The server's `instructions` say when to reach for each group of tools and how a call runs. `rimz agents explain <profile> --mcps` prints all of that text as one launch is served it.
+Each tool call runs one `rimz` command as the agent that started the server, in that agent's home and room, and returns the command's output. A capability shares its name with the skill that teaches the same commands, a launch that serves the capability withholds that skill from the model ([configuration](../../guide/configuration.md#rimz-tools-over-mcp)), and its tools' descriptions carry that skill's usage knowledge for the options the tools expose: the `lsp` target forms and result cap, the `wait` triggers and `when` grammar, the `notes_list` filter fields, and when to book a stop. The server's `instructions` say when to reach for each group of tools and how a call runs. `rimz agents explain <profile> --mcps` prints all of that text as one launch is served it.
 
 | Capability | Tool | Arguments | Command |
 | --- | --- | --- | --- |

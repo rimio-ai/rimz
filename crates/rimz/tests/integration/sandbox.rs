@@ -1108,7 +1108,7 @@ fn ssh_config_plan(env: &Env, source: &Path) -> SandboxPlan {
             kind: "claude",
             home: None,
             manual: ManualSkill::Frontmatter,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     })
@@ -1738,7 +1738,7 @@ fn sandbox_guarded_entries_follow_protected_identity_binds() {
             kind: "codex",
             home: Some(skills),
             manual: ManualSkill::OpenAiPolicy,
-            withheld: None,
+            withheld: &[],
             callable: Some(&[]),
         },
     };
@@ -1835,7 +1835,7 @@ fn vanishing_entries_plan(env: &Env) -> SandboxPlan {
             kind: "codex",
             home: None,
             manual: ManualSkill::OpenAiPolicy,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     })
@@ -2035,7 +2035,7 @@ fn sandbox_guard_restores_replaced_entries_in_a_running_view() {
             kind: "codex",
             home: None,
             manual: ManualSkill::OpenAiPolicy,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     })
@@ -2298,7 +2298,7 @@ fn sandbox_guard_restores_a_replaced_entry_while_the_view_is_stopped() {
             kind: "codex",
             home: None,
             manual: ManualSkill::OpenAiPolicy,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     })
@@ -2668,7 +2668,7 @@ fn scoped_protects_startup_git_and_project_configuration_in_linked_checkouts() {
             kind: "codex",
             home: Some(skills.clone()),
             manual: ManualSkill::OpenAiPolicy,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     };
@@ -2755,7 +2755,7 @@ fn scoped_protection_keeps_provider_homes_writable() {
             kind: "codex",
             home: None,
             manual: ManualSkill::Unsupported,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     };
@@ -2882,7 +2882,7 @@ fn scoped_protects_separate_git_directory() {
             kind: "codex",
             home: None,
             manual: ManualSkill::Unsupported,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     })
@@ -2921,7 +2921,7 @@ fn sandbox_unconfigured_skills_without_library_add_no_mounts() {
                 kind: "codex",
                 home: Some(root.clone()),
                 manual: ManualSkill::OpenAiPolicy,
-                withheld: None,
+                withheld: &[],
                 callable: None,
             },
         )
@@ -2949,7 +2949,7 @@ fn sandbox_listed_library_marker_errors_keep_the_read_failure() {
             kind: "codex",
             home: Some(env.home_root.join(".agents/skills")),
             manual: ManualSkill::OpenAiPolicy,
-            withheld: None,
+            withheld: &[],
             callable: Some(&listed),
         },
     );
@@ -2991,7 +2991,7 @@ fn sandbox_unconfigured_unreadable_skills_keep_native_launch_behavior() {
                     kind: "codex",
                     home: Some(root.clone()),
                     manual: ManualSkill::OpenAiPolicy,
-                    withheld: None,
+                    withheld: &[],
                     callable,
                 },
             );
@@ -3076,7 +3076,7 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
             kind: "claude",
             home: Some(root.clone()),
             manual: ManualSkill::Frontmatter,
-            withheld: None,
+            withheld: &[],
             callable: Some(&["listed".parse().unwrap()]),
         },
     })
@@ -3161,7 +3161,7 @@ fn sandbox_unreadable_unlisted_skill_is_omitted_with_warning() {
             kind: "claude",
             home: Some(root.clone()),
             manual: ManualSkill::Frontmatter,
-            withheld: None,
+            withheld: &[],
             callable: Some(&[]),
         },
     )
@@ -3206,7 +3206,7 @@ fn sandbox_skills_state_failure_still_refuses() {
                 kind: "claude",
                 home: Some(root),
                 manual: ManualSkill::Frontmatter,
-                withheld: None,
+                withheld: &[],
                 callable: Some(&[]),
             },
         )
@@ -3311,7 +3311,7 @@ fn sandbox_merges_rimz_library_and_provider_root_wins() {
                 kind: "claude",
                 home: Some(root.clone()),
                 manual: ManualSkill::Frontmatter,
-                withheld: None,
+                withheld: &[],
                 callable: None,
             },
         )
@@ -3376,7 +3376,7 @@ fn sandbox_matching_owned_pack_links_need_no_view_but_stale_links_do() {
                 kind: "claude",
                 home: Some(root.clone()),
                 manual: ManualSkill::Frontmatter,
-                withheld: None,
+                withheld: &[],
                 callable: None,
             },
         )
@@ -3475,7 +3475,7 @@ fn scoped_child_skill_view_withholds_only_delegation_without_a_profile_list() {
                 home,
                 manual,
                 callable: None,
-                withheld: Some("rimz-subagents"),
+                withheld: &["rimz-subagents"],
             },
         );
         assert!(
@@ -3483,6 +3483,94 @@ fn scoped_child_skill_view_withholds_only_delegation_without_a_profile_list() {
             "an unconfigured child keeps native discovery when withholding is unsupported"
         );
     }
+}
+
+/// A scoped launch that registers a capability's tools marks the rimz skill
+/// of the same name user-only, on Claude and Codex, with a profile list and
+/// without one; a launch that registers none of them marks nothing.
+#[test]
+fn scoped_view_hides_each_skill_whose_mcp_tools_the_launch_registers() {
+    let env = Env::new();
+    let state = env.store();
+    let runtime_root = tempfile::tempdir().unwrap();
+    let runtime = rimz::disk::paths::RuntimePaths::under(
+        rimz::WorkspaceId::from_project_root(&env.project_root),
+        runtime_root.path(),
+    )
+    .unwrap();
+    let machine = rimz::config::MachineConfig::default();
+    let vars = environment(&env);
+    let names = ["commit", "rimz-lsp", "rimz-wait"];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (kind, root) in [("claude", ".claude/skills"), ("codex", ".agents/skills")] {
+        let root = env.home_root.join(root);
+        for name in names {
+            std::fs::create_dir_all(root.join(name)).unwrap();
+            std::fs::write(
+                root.join(name).join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: {name}\n---\n{name}\n"),
+            )
+            .unwrap();
+        }
+        let root = root.canonicalize().unwrap();
+        for (listed, mcps, off, hidden) in [
+            (false, None, false, &["rimz-lsp", "rimz-wait"][..]),
+            (true, None, false, &["rimz-lsp", "rimz-wait"][..]),
+            (true, Some(&["rimz-lsp"][..]), false, &["rimz-lsp"][..]),
+            (false, Some(&[][..]), false, &[][..]),
+            (false, None, true, &[][..]),
+        ] {
+            if off && kind != "codex" {
+                continue;
+            }
+            let args = if off {
+                vec!["-c".to_owned(), "mcp_servers.rimz.enabled=false".to_owned()]
+            } else {
+                Vec::new()
+            };
+            let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), args);
+            request.skills = listed.then(|| names.map(|name| name.parse().unwrap()).to_vec());
+            request.mcps = mcps.map(|mcps| mcps.iter().map(|name| name.parse().unwrap()).collect());
+            let plan =
+                rimz::harness::launch_plan::compile(rimz::harness::launch_plan::LaunchPlanInputs {
+                    request: &request,
+                    cwd: &env.project_root,
+                    project_root: &env.project_root,
+                    rimz_bin: Path::new("/bin/rimz"),
+                    runtime: &runtime,
+                    state: state.paths(),
+                    effective: None,
+                    machine: &machine,
+                    commands: &machine.agents.commands,
+                    accounts: &machine.accounts,
+                    isolation: Isolation::Scoped,
+                    bwrap: Some(Path::new("/usr/bin/bwrap")),
+                    agents: Ok(&[]),
+                    ambient_env: &vars,
+                    agent_shell: None,
+                    hibernate: false,
+                    recorded_system_prompt_digest: None,
+                })
+                .unwrap();
+            let argv = &plan.process().argv;
+            let marked: Vec<_> = names
+                .into_iter()
+                .filter(|name| {
+                    let target = root.join(name);
+                    argv.windows(3).any(|args| {
+                        args[0] == "--ro-bind"
+                            && Path::new(&args[2]) == target
+                            && Path::new(&args[1]) != target
+                    })
+                })
+                .collect();
+            let case = format!("{kind} listed={listed} {mcps:?} off={off}");
+            actual.push((case.clone(), marked));
+            expected.push((case, hidden.to_vec()));
+        }
+    }
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -3501,7 +3589,7 @@ fn sandbox_empty_skill_list_makes_every_skill_manual() {
             kind: "claude",
             home: Some(root.clone()),
             manual: ManualSkill::Frontmatter,
-            withheld: None,
+            withheld: &[],
             callable: Some(&[]),
         },
     )
@@ -3554,7 +3642,7 @@ fn sandbox_manual_copies_are_content_addressed() {
                 kind: "claude",
                 home: Some(root.clone()),
                 manual: ManualSkill::Frontmatter,
-                withheld: None,
+                withheld: &[],
                 callable: Some(&[]),
             },
         )
@@ -3649,7 +3737,7 @@ fn sandbox_codex_manual_writes_openai_policy() {
             kind: "codex",
             home: Some(root.clone()),
             manual: ManualSkill::OpenAiPolicy,
-            withheld: None,
+            withheld: &[],
             callable: Some(&["callable".parse().unwrap()]),
         },
     )
@@ -3699,7 +3787,7 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
                     kind: "amp",
                     home: Some(root.clone()),
                     manual: ManualSkill::Unsupported,
-                    withheld: None,
+                    withheld: &[],
                     callable: Some(list),
                 },
             )
@@ -3717,7 +3805,7 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
             kind: "plugin",
             home: None,
             manual: ManualSkill::Unsupported,
-            withheld: None,
+            withheld: &[],
             callable: Some(&[]),
         },
     )
@@ -3761,7 +3849,7 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
             kind: "codex",
             home: Some(root.clone()),
             manual: ManualSkill::OpenAiPolicy,
-            withheld: None,
+            withheld: &[],
             callable: Some(&callable),
         },
     };
@@ -3854,7 +3942,7 @@ fn sandbox_symlinked_manual_skills_resolve_shared_modules() {
                 kind: "claude",
                 home: Some(root.clone()),
                 manual: ManualSkill::Frontmatter,
-                withheld: None,
+                withheld: &[],
                 callable: Some(&[]),
             },
         )
@@ -3935,7 +4023,7 @@ fn sandbox_skill_aliases_require_matching_invocation_policies() {
                 kind: "codex",
                 home: Some(root.clone()),
                 manual: ManualSkill::OpenAiPolicy,
-                withheld: None,
+                withheld: &[],
                 callable: Some(&callable),
             },
         );
@@ -3993,7 +4081,7 @@ fn sandbox_non_skill_entries_are_never_materialized() {
                 kind: "codex",
                 home: Some(root.clone()),
                 manual: ManualSkill::OpenAiPolicy,
-                withheld: None,
+                withheld: &[],
                 callable: Some(&callable),
             },
         )
@@ -4039,7 +4127,7 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
             kind: "codex",
             home: Some(env.home_root.join(".agents/skills")),
             manual: ManualSkill::OpenAiPolicy,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     };
@@ -5273,7 +5361,7 @@ fn sandbox_preserves_host_library_link_without_duplicate_bind() {
             kind: "codex",
             home: Some(root.clone()),
             manual: ManualSkill::OpenAiPolicy,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     )
@@ -5294,7 +5382,7 @@ fn sandbox_preserves_host_library_link_without_duplicate_bind() {
             kind: "codex",
             home: Some(root.clone()),
             manual: ManualSkill::OpenAiPolicy,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     )
@@ -5343,7 +5431,7 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
             kind: "claude",
             home: Some(root.clone()),
             manual: ManualSkill::Frontmatter,
-            withheld: None,
+            withheld: &[],
             callable: Some(&["visible".parse().unwrap()]),
         },
     })

@@ -88,6 +88,43 @@ fn host_skills_replace_cli_config_and_use_frontmatter_names() {
     "#);
 }
 
+/// Codex applies its `-c` overrides in argv order, and a table value
+/// replaces what earlier overrides set under its key.
+#[test]
+fn rimz_switched_off_takes_the_last_word_on_enabled() {
+    type Argument = (&'static str, &'static str);
+    let off = ["-c", "mcp_servers.rimz.enabled=false"];
+    let cases: [(&[&str], Option<Argument>); 8] = [
+        (&[], None),
+        (&off, Some((off[0], off[1]))),
+        (
+            &[off[0], off[1], "-c", "mcp_servers.rimz.command=\"rimz\""],
+            Some((off[0], off[1])),
+        ),
+        (
+            &[off[0], off[1], "-c", "mcp_servers.rimz.enabled=true"],
+            None,
+        ),
+        (
+            &[off[0], off[1], "-c", "mcp_servers={notion={enabled=false}}"],
+            None,
+        ),
+        (
+            &["--config", "mcp_servers.rimz={enabled=false}"],
+            Some(("--config", "mcp_servers.rimz={enabled=false}")),
+        ),
+        (
+            &["--config=mcp_servers={rimz={enabled=false}}"],
+            Some(("--config", "mcp_servers={rimz={enabled=false}}")),
+        ),
+        (&["-c", "mcp_servers.notion.enabled=false"], None),
+    ];
+    for (arguments, expected) in cases {
+        let args: Vec<String> = arguments.iter().map(|arg| (*arg).to_owned()).collect();
+        assert_eq!(rimz_switched_off(&args), expected, "{arguments:?}");
+    }
+}
+
 #[test]
 fn host_skills_refuse_conflicting_provider_keys() {
     let root = tempfile::tempdir().unwrap();
@@ -97,7 +134,7 @@ fn host_skills_refuse_conflicting_provider_keys() {
         std::fs::write(path.join("SKILL.md"), "---\nname: shared-name\n---\n").unwrap();
     }
     let result = CODEX_DESCRIPTOR.host_skills.apply(
-        (Some(&["listed".parse().unwrap()]), None),
+        (Some(&["listed".parse().unwrap()]), &[]),
         Some(root.path()),
         None,
         (root.path(), root.path()),

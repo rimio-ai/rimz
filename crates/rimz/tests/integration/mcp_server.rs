@@ -710,6 +710,15 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
 
+    for skill in ["rimz-lsp", "rimz-wait", "rimz-control", "rimz-notes"] {
+        assert!(
+            out.contains(&format!(
+                "\n  {skill}: the launch serves its MCP tools, so the model is not offered the skill\n"
+            )),
+            "{out}"
+        );
+    }
+
     let out = explain("cflip");
     assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
     assert_eq!(tool_load(&out, "wait"), "always", "{out}");
@@ -726,6 +735,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
     assert!(out.contains("only github (allowedMcpServers)"), "{out}");
+    assert!(!out.contains("Hidden skills"), "{out}");
 
     let out = explain("xmark");
     assert!(
@@ -763,6 +773,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
     assert!(!out.contains("CAPABILITY"), "{out}");
+    assert!(!out.contains("Hidden skills"), "{out}");
     assert!(
         !out.contains("## lsp") && !out.contains(INSTRUCTIONS),
         "{out}"
@@ -854,6 +865,31 @@ fn explain_mcps_reads_a_profiles_own_codex_overrides_as_codex_applies_them() {
             "{out}"
         );
         assert!(out.contains("mcp_servers.rimz.command="), "{out}");
+        assert!(!out.contains("Hidden skills"), "{out}");
+        let json = env
+            .rimz()
+            .args(["agents", "explain", profile, "--json"])
+            .env(
+                "SHELL",
+                crate::common::write_fake_login_shell(&env, "mcps-overrides-json-sh", &[]),
+            )
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    crate::common::write_failing_agent_shim(&env, "codex", 0).display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&json.stdout)
+            .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&json.stderr)));
+        assert_eq!(
+            report["skills"]["hidden"],
+            serde_json::json!([]),
+            "{profile}"
+        );
     }
 }
 

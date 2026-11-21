@@ -3596,7 +3596,7 @@ fn sandbox_apply_preserves_the_mount_plans_tmp_checkout_and_provider_home() {
             kind: "codex",
             home: None,
             manual: rimz::agents::ManualSkill::Frontmatter,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     })
@@ -3752,7 +3752,7 @@ fn sandbox_hook_nudges_the_host_and_maps_provider_paths_once() {
             kind: "codex",
             home: None,
             manual: rimz::agents::ManualSkill::Frontmatter,
-            withheld: None,
+            withheld: &[],
             callable: None,
         },
     })
