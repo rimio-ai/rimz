@@ -112,7 +112,7 @@ impl Default for HookDrainCursor {
     }
 }
 
-/// Append a raw hook frame while the caller shares `paths.hook_ingress_lock`, returning the log length after it (possibly including concurrent appends).
+/// Append a hook frame while the caller shares `paths.hook_ingress_lock`, returning the log length after it (possibly including concurrent appends).
 #[must_use = "durability barrier; check the result"]
 pub fn append(
     paths: &StatePaths,

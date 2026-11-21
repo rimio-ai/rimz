@@ -2,7 +2,7 @@
 
 > The store is `crates/rimz/src/store/`, and this page maps it: the files on disk, the event log, hook ingress, the write and read paths, session death, and the maintenance that keeps it all bounded. The sidebar's runtime caches and how a renderer consumes the store are [state.md](./sidebar/state.md). What these mechanisms cost is [performance.md](./performance.md), and the product commitments behind them are [DESIGN.md](../../DESIGN.md).
 
-Every durable fact RimZ knows about a room lives in one directory of flat files, with no database or permanent daemon. Short-lived CLI writers and an elected, idle-exiting hook drainer serialize store mutations with `locks/workspace.lock`. Hooks stage their raw payloads under a separate lock, so a hook never waits on a fold, and the drainer later applies them ([Hook ingress](#hook-ingress)). Readers, every sidebar renderer included, fold the event log back into state without taking a lock.
+Every durable fact RimZ knows about a room lives in one directory of flat files, with no database or permanent daemon. Short-lived CLI writers and an elected, idle-exiting hook drainer serialize store mutations with `locks/workspace.lock`. Hooks stage their payloads under a separate lock, so a hook never waits on a fold, and the drainer later applies them ([Hook ingress](#hook-ingress)). Readers, every sidebar renderer included, fold the event log back into state without taking a lock.
 
 ## Truth and cache
 
@@ -36,7 +36,7 @@ Four boundaries decide where new code goes:
 | [`writer.rs`](../../crates/rimz/src/store/writer.rs) | Public mutation intents and outcomes, the `commit` and `commit_boundary` primitives, and the off-lock tail. `writer/` splits the implementation into `debounce`, `lifecycle`, `publish`, `queue`, `reap`, and `reset`. |
 | [`event.rs`](../../crates/rimz/src/store/event.rs) | `EventEnvelope`, the typed `EventKind` decode, `EVENT_SCHEMA_VERSION`, and the persisted signal vocabulary. |
 | [`event_log.rs`](../../crates/rimz/src/store/event_log.rs) | The framed append log: `frame.rs` codec, `recovery.rs` repair, `rotation.rs` archive publication and retention. |
-| [`ingress.rs`](../../crates/rimz/src/store/ingress.rs) | Raw hook frames over the event log's frame codec, the boot-aware drain cursor, repair, and locked truncate-and-reset ([Hook ingress](#hook-ingress)). |
+| [`ingress.rs`](../../crates/rimz/src/store/ingress.rs) | Hook frames over the event log's frame codec, the boot-aware drain cursor, repair, and locked truncate-and-reset ([Hook ingress](#hook-ingress)). |
 | [`follow.rs`](../../crates/rimz/src/store/follow.rs) | The read-only lifecycle and signal follower over the event log. |
 | [`snapshot/`](../../crates/rimz/src/store/snapshot/mod.rs) | The canonical snapshot schema and read side: `fold.rs` resumable rollup and carryover, `project.rs` lifecycle reducer, `assemble.rs` read entry points, then pane binding and the view-model projection ([sidebar.md](./sidebar/sidebar.md#where-the-code-lives)). |
 | [`runtime.rs`](../../crates/rimz/src/store/runtime.rs) | The runtime-versus-audit read scope. |
@@ -107,7 +107,7 @@ The directory is named by a `WorkspaceDirName`, never by the id. The name is `<b
 
 ```text
 log/events.log.jsonl                          framed event log
-log/hook-ingress.log.jsonl                    pending raw hook frames
+log/hook-ingress.log.jsonl                    pending hook frames
 log/hook-drainer.log                          drainer diagnostics
 log/wait-watch.log                            wait watcher diagnostics
 log/archive/events.<uuidv7>.jsonl             rotated logs
@@ -384,7 +384,9 @@ Staging folds against a fresh read of the durable carryover, using the ordinary 
 
 ## Hook ingress
 
-`log/hook-ingress.log.jsonl` is durable pending work, not input to the snapshot fold. A hook appends its raw payload there and returns, and the elected drainer applies the frames to the event log and the durable records later. The drainer's process model (election, apply children, deadlines) is [adapter.md](./agents/adapter.md). This section owns the file, its cursor, and their durability.
+`log/hook-ingress.log.jsonl` is durable pending work, not input to the snapshot fold. A hook appends its payload there and returns, and the elected drainer applies the frames to the event log and the durable records later. The drainer's process model (election, apply children, deadlines) is [adapter.md](./agents/adapter.md). This section owns the file, its cursor, and their durability.
+
+A frame's payload is the hook's stdin byte for byte, except a Claude or Codex `PostToolUse` whose `tool_response` holds output RimZ does not read. The adapter's keep rule (`read_tool_response` in `crates/rimz/src/agents/adapters/claude/payloads.rs` and in `crates/rimz/src/agents/adapters/codex/payloads.rs`) keeps a Claude `AskUserQuestion` and a Codex `request_user_input` or `request_user_input_async` response whole, keeps only `backgroundTaskId` of a Claude `Bash` response, and replaces every other present response with the empty object, so a reader that needs only a response's presence (Claude's `ExitPlanMode` approval) still finds one. The feed queues that payload re-serialized, with sorted keys, and computes the hook's reply from the payload as received. The decode applies the same rule, so a reader gets the same value from a cut frame and from a whole one an older feed wrote. The cut output is gone after the feed on every path, the inline sandbox apply and a redo or replay included: a reader that needs more of a tool's output widens the keep rule first, and it sees that output only in frames fed by a binary carrying the wider rule.
 
 Appenders share `locks/hook-ingress.lock` through `crates/rimz/src/disk/lock.rs::SharedAppendLock`, blocking in the kernel rather than polling. Each encoded frame goes to an `O_APPEND` file as one buffer, over the event log's frame codec. The ingress lock is independent of the workspace lock, so neither lifecycle folds nor other appenders delay a hook's lock acquisition.
 
