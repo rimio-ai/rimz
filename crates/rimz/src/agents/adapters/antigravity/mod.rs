@@ -581,6 +581,19 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         session::resolve_home(None, env.get("HOME").map(std::ffi::OsStr::new))
     }
 
+    /// The global root agy's own built-in skills name. agy also reads
+    /// `~/.gemini/antigravity-cli/skills`, a plugin's `skills/`, and the workspace
+    /// `.agents/skills`, which the scoped view leaves native.
+    fn skills_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        env.get("HOME")
+            .filter(|home| !home.is_empty())
+            .map(|home| Path::new(home).join(".gemini/config/skills"))
+    }
+
+    fn manual_skill(&self) -> ManualSkill {
+        ManualSkill::Frontmatter
+    }
+
     fn probe_version(&self) -> Option<String> {
         None
     }

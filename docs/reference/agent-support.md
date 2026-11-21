@@ -216,7 +216,7 @@ Each built-in agent resolves a config home. RimZ reads provider settings from it
 | Codex | `~/.codex` | `CODEX_HOME` | `~/.agents/skills` | accepted | `-c skills.config` |
 | Pi | `~/.pi/agent` | `PI_CODING_AGENT_DIR` | `~/.agents/skills` | accepted | none |
 | OpenCode | `~/.config/opencode` | `XDG_CONFIG_HOME` + `/opencode` | `~/.agents/skills` | refused | none |
-| Antigravity | `~/.gemini/antigravity-cli` | none | `~/.agents/skills` | refused | none |
+| Antigravity | `~/.gemini/antigravity-cli` | none | `~/.gemini/config/skills` | accepted | none |
 | Copilot | `~/.copilot` | `COPILOT_HOME` | `~/.agents/skills` | accepted | none |
 | Droid | `~/.factory` | none | `~/.agents/skills` | accepted | none |
 | Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR`, else `XDG_CONFIG_HOME/cursor` | `~/.agents/skills` | accepted | none |
@@ -236,7 +236,7 @@ Host launches link [RimZ library and pack skills](../guide/configuration.md#skil
 
 A named provider account sets the adapter's home override to a separate directory when a room launches it. MiniMax uses `MINIMAX_DATA_DIR`, which relocates configuration, credentials, sessions, and plugins together. An explicit data-directory variable also disables MiniMax's Git auto-configuration. See [provider accounts](../guide/accounts.md).
 
-Under `agents.isolation = "scoped"` (Linux), RimZ binds each agent's config home from the launch environment and merges the same library and pack skill chain into the agent's skill root. The scoped view does not hide the rest of the host or move credentials. Project skills and Codex's `$CODEX_HOME/skills` stay outside the merged view.
+Under `agents.isolation = "scoped"` (Linux), RimZ binds each agent's config home from the launch environment and merges the same library and pack skill chain into the agent's skill root. The scoped view does not hide the rest of the host or move credentials. Project skills and Codex's `$CODEX_HOME/skills` stay outside the merged view. Antigravity also reads `~/.gemini/antigravity-cli/skills`, its plugins' `skills/`, and the workspace `.agents/skills`, which stay outside it too; on a duplicate name the `~/.gemini/antigravity-cli/skills` copy wins, and a skill kept only in `~/.agents/skills` never reaches Antigravity.
 
 A profile `skills` list keeps the listed skills model-callable and makes the rest user-only. A `rimz-*` skill whose [MCP tools](./cli/mcp.md) the launch serves is withheld the same way, listed or not. Under scoped isolation, an agent marked refused in the table fails the launch when a list is set. On host isolation, Claude makes unlisted skills user-only, Codex hides them (explicit invocation included), and other providers warn and run unrestricted. Invalid names are parse errors. Markdown lists deduplicate names, and project TOML lists reject duplicates. The profile rules are in [configuration: skills](../guide/configuration.md#skills), and mount order and markers in [sandbox internals](../internals/sandbox.md#profile-skill-views).
 

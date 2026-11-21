@@ -336,8 +336,8 @@ fn builtin_skills_homes_follow_config_homes() {
         ("opencode", Some(".agents/skills"), ManualSkill::Unsupported),
         (
             "antigravity",
-            Some(".agents/skills"),
-            ManualSkill::Unsupported,
+            Some(".gemini/config/skills"),
+            ManualSkill::Frontmatter,
         ),
         ("cursor", Some(".agents/skills"), ManualSkill::Frontmatter),
         ("droid", Some(".agents/skills"), ManualSkill::Frontmatter),

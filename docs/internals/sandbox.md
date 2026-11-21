@@ -330,13 +330,14 @@ Each scoped launch overlays at most one user skill root, declared by the adapter
 | Kiro | `KIRO_HOME` (default `$HOME/.kiro`), plus `/skills` | `Unsupported` |
 | Hermes | `HERMES_HOME` (default `$HOME/.hermes`), plus `/skills` | `Unsupported` |
 | Muse | `$XDG_CONFIG_HOME/muse/skills` (default `$HOME/.config/muse/skills`) | `Unsupported` |
-| Antigravity, Amp, OpenCode, Grok | `$HOME/.agents/skills` | `Unsupported` |
+| Antigravity | `$HOME/.gemini/config/skills` | `Frontmatter` |
+| Amp, OpenCode, Grok | `$HOME/.agents/skills` | `Unsupported` |
 | MiniMax | None | `Unsupported` |
 | Plugins | None | `Unsupported` |
 
 A provider marked `Unsupported`, or without a root, refuses every configured list under scoped isolation, whatever skills are installed. `Frontmatter` writes `disable-model-invocation: true` into `SKILL.md` frontmatter. `OpenAiPolicy` writes `policy.allow_implicit_invocation: false` into `agents/openai.yaml`.
 
-The RimZ skill library at `agents_home()/skills` (by default `~/.rimz/skills/`) and installed pack skills merge below the provider's own entries. `RIMZ_HOME` relocates the home; `RIMZ_AGENTS_HOME` overrides it for the definition trees, library, and `packs/` together. Host-mode links into the library or packs are RimZ-owned and skipped as provider claims, so a stale link cannot revive an excluded skill or outrank a new library override. The planner retains an owned link only when it matches the current winner. Project-chain skills and Codex's `$CODEX_HOME/skills` are outside the view and keep their native behaviour. The chain and exclusions are documented in [configuration](../guide/configuration.md#skills) and [packs](../reference/cli/packs.md).
+The RimZ skill library at `agents_home()/skills` (by default `~/.rimz/skills/`) and installed pack skills merge below the provider's own entries. `RIMZ_HOME` relocates the home; `RIMZ_AGENTS_HOME` overrides it for the definition trees, library, and `packs/` together. Host-mode links into the library or packs are RimZ-owned and skipped as provider claims, so a stale link cannot revive an excluded skill or outrank a new library override. The planner retains an owned link only when it matches the current winner. Project-chain skills, Codex's `$CODEX_HOME/skills`, and Antigravity's `~/.gemini/antigravity-cli/skills`, plugin `skills/`, and workspace `.agents/skills` roots are outside the view and keep their native behaviour ([adapter_antigravity.md](./agents/adapter_antigravity.md#skills)). The chain and exclusions are documented in [configuration](../guide/configuration.md#skills) and [packs](../reference/cli/packs.md).
 
 Definition validation (`crates/rimz/src/config/definitions/agent.rs::skill_policy`) resolves each listed skill through the same provider/library/pack chain and checks the marker on the winning copy. It shares `agents::skills` discovery, not `sandbox::skills::plan`, since `config` sits below `sandbox`. A named account's login home is checked when that account launches.
 
