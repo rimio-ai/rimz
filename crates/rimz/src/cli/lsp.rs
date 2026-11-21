@@ -6,7 +6,7 @@ use clap::{Args, Subcommand};
 use rimz::lsp::{
     admission::Headroom,
     attach::{self, Outcome, Target},
-    check,
+    check, invoke,
     query::{self, QueryErr, Verb},
     registry, usage,
 };
@@ -205,36 +205,18 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             server,
         } => {
             let context = query_context(globals)?;
-            context.validate_server(server.as_deref())?;
-            let folder = query_folder(
-                &context.root,
-                std::env::current_dir().and_then(std::fs::canonicalize),
-            );
-            let blocks = match check::show(
-                &anchors,
-                full,
-                &context.root,
-                &folder,
-                &context.entries,
-                &context.servers,
-                server.as_deref(),
-                context.usage.as_ref(),
-            ) {
-                Ok(blocks) => blocks,
+            context
+                .validate_server(server.as_deref())
+                .map_err(usage_error)?;
+            let (text, code) = match invoke::show(&context, &anchors, full, server.as_deref()) {
+                Ok(shown) => shown,
                 Err(error) => {
                     writeln!(render::err(), "{error}")?;
                     std::process::exit(2);
                 }
             };
             let mut out = render::out();
-            let mut code = 0;
-            for (index, (text, exit)) in blocks.iter().enumerate() {
-                if index > 0 {
-                    writeln!(out)?;
-                }
-                write!(out, "{text}")?;
-                code = query_exit(code, *exit);
-            }
+            write!(out, "{text}")?;
             out.flush()?;
             if code != 0 {
                 std::process::exit(code);
@@ -253,56 +235,16 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                 (true, true) => check::Mode::FixHints,
             };
             let context = query_context(globals)?;
-            let reports = match check::run(
-                &files,
-                &context.root,
-                &context.entries,
-                &context.servers,
-                mode,
-                context.usage.as_ref(),
-            ) {
-                Ok(reports) => reports,
-                Err(error) => return query_error(error),
-            };
             let mut out = render::out();
-            let multiple = files.len() > 1;
-            let mut code = 0;
-            let mut values = Vec::new();
-            for (file, result) in files.iter().zip(reports) {
-                match result {
-                    Ok(report) => {
-                        code = query_exit(code, report.exit_code());
-                        if multiple && json {
-                            let mut value = serde_json::to_value(&report)?;
-                            value["exit"] = report.exit_code().into();
-                            values.push(value);
-                        } else {
-                            write!(out, "{}", report.render(json)?)?;
-                        }
-                    }
-                    Err(error) => {
-                        if !multiple {
-                            return query_error(error);
-                        }
-                        code = query_exit(code, error.exit_code());
-                        if json {
-                            values.push(serde_json::json!({
-                                "notes": file.display().to_string(),
-                                "exit": error.exit_code(),
-                                "error": error.to_string(),
-                            }));
-                        } else {
-                            writeln!(out, "{}  error  {error}", file.display())?;
-                        }
-                    }
-                }
-            }
-            if multiple && json {
-                writeln!(out, "{}", serde_json::to_string_pretty(&values)?)?;
+            let answered = invoke::check(&context, &files, json, mode, |text| {
+                Ok(write!(out, "{text}")?)
+            })?;
+            if let Some(error) = answered.error {
+                return query_error(error);
             }
             out.flush()?;
-            if code != 0 {
-                std::process::exit(code);
+            if answered.code != 0 {
+                std::process::exit(answered.code);
             }
             return Ok(());
         }
@@ -326,258 +268,38 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
         Command::Find(args) => (Verb::Find, args.query),
     };
     let context = query_context(globals)?;
-    context.validate_server(args.server.as_deref())?;
-    let kind: String = serde_json::from_value(serde_json::to_value(verb)?)?;
-    let root = &context.root;
-    let folder = query_folder(
-        root,
-        std::env::current_dir().and_then(std::fs::canonicalize),
-    );
-    let multiple = args.targets.len() > 1;
-    let mut failures = QueryFailures::default();
-    let mut code = 0;
-    let mut single_error = None;
-    let mut values = Vec::new();
+    context
+        .validate_server(args.server.as_deref())
+        .map_err(usage_error)?;
     let mut out = render::out();
-    for (index, target) in args.targets.iter().enumerate() {
-        let result = (|| {
-            let target = match query::Target::locate(verb, target, root, &folder) {
-                Ok(target) => target,
-                Err(rimz::lsp::LspErr::MissingColumn { path, line, .. }) => {
-                    let path = query::typed_path(root, &folder, &path)?;
-                    let outline = query::select(
-                        root,
-                        context.entries.clone(),
-                        &context.servers,
-                        args.server.as_deref(),
-                        Some(&path),
-                    )
-                    .ok()
-                    .and_then(|entry| {
-                        failures
-                            .execute(&entry.server, || {
-                                query::execute(
-                                    &entry,
-                                    Verb::Symbols,
-                                    &query::Target::File(path.clone()),
-                                )
-                            })
-                            .ok()
-                    })
-                    .and_then(|output| match output {
-                        query::Output::Answer { result, .. } => Some(result),
-                        _ => None,
-                    });
-                    return Err(query::missing_column(root, &path, line, outline));
-                }
-                Err(error) => return Err(error.into()),
-            };
-            let entry = query::select(
-                root,
-                context.entries.clone(),
-                &context.servers,
-                args.server.as_deref(),
-                target.path(),
-            )?;
-            let output = failures.execute(&entry.server, || query::execute(&entry, verb, &target));
-            if let Some(usage) = &context.usage {
-                usage.record(&entry, &kind, &output);
-            }
-            Ok::<_, QueryErr>((entry, output?))
-        })();
-        let text = match result {
-            Err(error) => {
-                if !multiple {
-                    single_error = Some(error);
-                    break;
-                }
-                code = query_exit(code, error.exit_code());
-                if args.json {
-                    values.push(serde_json::json!({
-                        "target": target, "outcome": "error", "exit": error.exit_code(),
-                        "error": error.to_string(),
-                    }));
-                    continue;
-                }
-                format!("error: {error}\n")
-            }
-            Ok((entry, output)) => {
-                code = query_exit(code, output.exit_code());
-                let output = match output {
-                    query::Output::Answer {
-                        result,
-                        document_uri,
-                    } if args.json => query::Output::Answer {
-                        result: query::json_targets(verb, root, document_uri.as_deref(), result)?,
-                        document_uri,
-                    },
-                    output => output,
-                };
-                if multiple && args.json {
-                    let mut value = query::outcome_json(root, &output)?;
-                    value["target"] = target.clone().into();
-                    value["exit"] = output.exit_code().into();
-                    values.push(value);
-                    continue;
-                }
-                let dirty = query::dirty_documents(&entry);
-                match output {
-                    query::Output::Answer { result, .. } if args.json => {
-                        format!("{}\n", serde_json::to_string_pretty(&result)?)
-                    }
-                    query::Output::Answer {
-                        result,
-                        document_uri,
-                    } => query::render(
-                        verb,
-                        root,
-                        document_uri.as_deref(),
-                        result,
-                        options,
-                        &dirty,
-                        |path| {
-                            query::classification_outline(&entry, path).map_err(|error| match error
-                            {
-                                QueryErr::Failed(error) => error,
-                                error => rimz::lsp::LspErr::Protocol(error.to_string()),
-                            })
-                        },
-                    )?,
-                    output => query::render_outcome(root, &output, args.json)?,
-                }
-            }
-        };
-        if multiple {
-            render::finish(writeln!(
-                out,
-                "{}==> {target} <==",
-                if index == 0 { "" } else { "\n" }
-            ))?;
-        }
-        render::finish(out.write_all(text.as_bytes()).and_then(|()| out.flush()))?;
-    }
-    if let Some(error) = single_error {
+    let answered = invoke::query(
+        &context,
+        verb,
+        &args.targets,
+        args.server.as_deref(),
+        args.json,
+        options,
+        |text| render::finish(out.write_all(text.as_bytes()).and_then(|()| out.flush())),
+    )?;
+    if let Some(error) = answered.error {
         return query_error(error);
     }
-    if multiple && args.json {
-        let text = format!("{}\n", serde_json::to_string_pretty(&values)?);
-        render::finish(out.write_all(text.as_bytes()).and_then(|()| out.flush()))?;
-    }
-    if code != 0 {
-        std::process::exit(code);
+    if answered.code != 0 {
+        std::process::exit(answered.code);
     }
     Ok(())
 }
 
-struct QueryContext {
-    root: PathBuf,
-    entries: Vec<registry::Entry>,
-    servers: std::collections::BTreeMap<String, rimz::config::LspServerConfig>,
-    usage: Option<usage::Log>,
+fn usage_error(error: invoke::UnknownServer) -> anyhow::Error {
+    super::usage::UsageError::new(error.to_string()).into()
 }
 
-impl QueryContext {
-    fn validate_server(&self, server: Option<&str>) -> Result<()> {
-        let Some(server) = server else {
-            return Ok(());
-        };
-        validate_server_name(
-            server,
-            self.servers.keys().map(String::as_str),
-            self.entries.iter().filter(|entry| entry.root == self.root),
-        )
-    }
-}
-
-fn validate_server_name<'a>(
-    server: &str,
-    configured: impl Iterator<Item = &'a str>,
-    registered: impl Iterator<Item = &'a registry::Entry>,
-) -> Result<()> {
-    let names: std::collections::BTreeSet<_> = configured
-        .chain(registered.map(|entry| entry.server.as_str()))
-        .collect();
-    if names.contains(server) {
-        return Ok(());
-    }
-    let configured = if names.is_empty() {
-        "none configured".to_owned()
-    } else {
-        names.into_iter().collect::<Vec<_>>().join(", ")
+fn query_context(globals: &GlobalFlags) -> Result<invoke::QueryContext> {
+    let pinned_room = match globals.root {
+        None => super::pinned_room_root(),
+        Some(_) => None,
     };
-    Err(super::usage::UsageError::new(format!(
-        "no language server named {server}; configured: {configured}"
-    ))
-    .into())
-}
-
-fn query_exit(current: i32, next: i32) -> i32 {
-    [3, 4, 1, 7, 6, 5, 0]
-        .into_iter()
-        .find(|code| *code == current || *code == next)
-        .unwrap_or(0)
-}
-
-#[derive(Default)]
-struct QueryFailures(std::collections::BTreeMap<String, QueryErr>);
-
-impl QueryFailures {
-    fn execute(
-        &mut self,
-        server: &str,
-        request: impl FnOnce() -> std::result::Result<query::Output, QueryErr>,
-    ) -> std::result::Result<query::Output, QueryErr> {
-        if let Some(error) = self.0.get(server).and_then(QueryErr::server_error) {
-            return Err(error);
-        }
-        let result = request();
-        if let Err(error) = &result
-            && let Some(error) = error.server_error()
-        {
-            self.0.insert(server.to_owned(), error);
-        }
-        result
-    }
-}
-
-fn query_folder(root: &Path, cwd: std::io::Result<PathBuf>) -> PathBuf {
-    cwd.ok()
-        .and_then(|cwd| cwd.strip_prefix(root).ok().map(Path::to_owned))
-        .unwrap_or_default()
-}
-
-fn query_context(globals: &GlobalFlags) -> Result<QueryContext> {
-    let mut entries = registry::read_entries()?;
-    let cwd = std::fs::canonicalize(
-        globals
-            .root
-            .clone()
-            .map_or_else(std::env::current_dir, Ok)?,
-    )?;
-    let workspace = rimz::workspace::WorkspaceResolver::resolve(&cwd, globals.root.clone())?;
-    let root = registry::enclosing_checkout(&cwd, &entries)
-        .unwrap_or(&workspace.worktree_root)
-        .to_owned();
-    let machine = rimz::config::MachineConfig::load()?;
-    let config = rimz::config::effective::load(&machine, workspace.launch_repo_root())?;
-    let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
-    if rimz::lsp::admission::revive(&rimz::lsp::admission::AdmissionRequest {
-        root: &root,
-        project: workspace.launch_repo_root(),
-        servers: &config.lsp_servers,
-        untrusted_servers: &[],
-        policy: &machine.lsp,
-        runtime: &runtime,
-    })? {
-        entries = registry::read_entries()?;
-    }
-    Ok(QueryContext {
-        root,
-        entries,
-        servers: config.lsp_servers,
-        // The participant ladder departs from `resolve` only to follow a verified pane pin.
-        usage: room_usage(globals, || Ok(workspace.project_root.clone())),
-    })
+    invoke::QueryContext::open(Path::new("."), globals.root.clone(), pinned_room)
 }
 
 /// The usage log of the participant room, the one `list` reads. A verified pane pin names it
@@ -671,7 +393,6 @@ fn query_error(error: QueryErr) -> Result<()> {
     writeln!(render::err(), "{error}")?;
     std::process::exit(code)
 }
-
 #[derive(serde::Serialize)]
 struct EntryWithQueries<'a> {
     #[serde(flatten)]
@@ -1220,7 +941,7 @@ fn checkout_entries(
         && let Ok(config) = rimz::config::effective::load(&machine, workspace.launch_repo_root())
     {
         let registered = registry::read_entries()?;
-        validate_server_name(
+        invoke::validate_server_name(
             server,
             config
                 .lsp_servers
@@ -1228,7 +949,8 @@ fn checkout_entries(
                 .map(String::as_str)
                 .chain(config.untrusted_lsp_servers.iter().map(String::as_str)),
             registered.iter(),
-        )?;
+        )
+        .map_err(usage_error)?;
     }
     let root = registry::enclosing_checkout(&cwd, &entries)
         .unwrap_or(&cwd)

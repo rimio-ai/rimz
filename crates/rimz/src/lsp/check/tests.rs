@@ -222,12 +222,14 @@ fn fix_leaves_the_notes_alone_when_judging_fails() {
     let stale = "`a.rs::Type ~4-5`";
     let source = format!("{stale} `gone.txt:1`");
     std::fs::write(&notes, &source).unwrap();
-    let error = check_file(&notes, &mut context(), Mode::Fix).err().unwrap();
+    let error = check_file(&notes, std::path::Path::new("."), &mut context(), Mode::Fix)
+        .err()
+        .unwrap();
     assert_eq!(error.exit_code(), 1);
     assert_eq!(std::fs::read_to_string(&notes).unwrap(), source);
 
     std::fs::write(&notes, stale).unwrap();
-    let report = check_file(&notes, &mut context(), Mode::Fix).unwrap();
+    let report = check_file(&notes, std::path::Path::new("."), &mut context(), Mode::Fix).unwrap();
     assert_eq!(report.fixes.map(|fixes| fixes.len()), Some(1));
     assert_eq!(
         std::fs::read_to_string(&notes).unwrap(),
@@ -265,12 +267,12 @@ fn fix_reports_inside_hints_without_rewriting_them() {
     let source = "`a.rs::Type::method` (~15)\n`a.rs::Type::method ~4-5`\n";
     let expected = "`a.rs::Type::method` (~15)\n`a.rs::Type::method ~11-16`\n";
     std::fs::write(&notes, source).unwrap();
-    let fixed = check_file(&notes, &mut context, Mode::Fix).unwrap();
+    let fixed = check_file(&notes, std::path::Path::new("."), &mut context, Mode::Fix).unwrap();
     assert_eq!(std::fs::read_to_string(&notes).unwrap(), expected);
     assert_eq!(fixed.exit_code(), 7);
     assert_eq!(fixed.fixes.as_ref().unwrap().len(), 1);
     assert_eq!(fixed.fixes.as_ref().unwrap()[0].line, 2);
-    let checked = check_file(&notes, &mut context, Mode::Check).unwrap();
+    let checked = check_file(&notes, std::path::Path::new("."), &mut context, Mode::Check).unwrap();
     assert_eq!(checked.exit_code(), 7);
     assert_eq!(
         serde_json::to_value(&fixed.anchors).unwrap(),
@@ -281,7 +283,7 @@ fn fix_reports_inside_hints_without_rewriting_them() {
         "line-inside"
     );
     for mode in [Mode::Fix, Mode::FixHints] {
-        let again = check_file(&notes, &mut context, mode).unwrap();
+        let again = check_file(&notes, std::path::Path::new("."), &mut context, mode).unwrap();
         assert_eq!(again.exit_code(), 7);
         assert!(again.fixes.unwrap().is_empty());
         assert_eq!(std::fs::read_to_string(&notes).unwrap(), expected);
@@ -1181,6 +1183,7 @@ fn external_only_report_needs_no_server_or_checkout_path() {
     std::fs::write(&notes, format!("`{text}`")).unwrap();
     let report = run(
         &[notes],
+        Path::new("."),
         root.path(),
         &[],
         &BTreeMap::new(),
@@ -1237,6 +1240,7 @@ fn exact_ignored_paths_resolve_without_joining_suffix_matches() {
     .unwrap();
     let report = run(
         &[notes],
+        Path::new("."),
         root.path(),
         &[],
         &BTreeMap::new(),

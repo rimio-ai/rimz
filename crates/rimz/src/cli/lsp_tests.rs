@@ -3,19 +3,6 @@ use registry::{State, StopReason};
 use render::status::{self, StateRole};
 
 #[test]
-fn query_folder_uses_only_a_canonical_folder_inside_the_resolved_checkout() {
-    let root = Path::new("/checkout");
-    let actual = [
-        Ok(PathBuf::from("/checkout/src")),
-        Ok(PathBuf::from("/checkout")),
-        Ok(PathBuf::from("/other-checkout/src")),
-        Err(std::io::Error::other("deleted cwd")),
-    ]
-    .map(|cwd| query_folder(root, cwd));
-    assert_eq!(actual, ["src", "", "", ""].map(PathBuf::from));
-}
-
-#[test]
 fn checkout_labels_use_room_identity_and_linked_metadata_only() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
@@ -80,39 +67,11 @@ fn checkout_labels_use_room_identity_and_linked_metadata_only() {
 }
 
 #[test]
-fn query_server_names_include_config_and_checkout_rows_only() {
-    let config = serde_json::from_value(
-        serde_json::json!({"command":["stub"],"extensions":["rs"],"root-markers":[]}),
-    )
-    .unwrap();
-    let mut context = QueryContext {
-        root: "/checkout".into(),
-        entries: vec![
-            entry("/checkout", "registered", State::Ready),
-            entry("/elsewhere", "elsewhere", State::Ready),
-        ],
-        servers: std::collections::BTreeMap::from([("configured".into(), config)]),
-        usage: None,
-    };
-    let error = context.validate_server(Some("nope")).unwrap_err();
+fn an_unknown_server_is_a_usage_error() {
+    let error = invoke::validate_server_name("nope", std::iter::empty(), std::iter::empty())
+        .map_err(usage_error)
+        .unwrap_err();
     assert!(error.is::<super::super::usage::UsageError>());
-    assert_eq!(
-        error.to_string(),
-        "no language server named nope; configured: configured, registered"
-    );
-    assert!(context.validate_server(None).is_ok());
-    assert!(context.validate_server(Some("configured")).is_ok());
-    assert!(context.validate_server(Some("registered")).is_ok());
-    assert!(context.validate_server(Some("elsewhere")).is_err());
-    context.servers.clear();
-    context.entries.clear();
-    assert_eq!(
-        context
-            .validate_server(Some("nope"))
-            .unwrap_err()
-            .to_string(),
-        "no language server named nope; configured: none configured"
-    );
 }
 
 #[test]
@@ -202,67 +161,6 @@ fn no_tests_is_refs_and_callers_only_and_conflicts_with_json() {
         let error = crate::cli::Cli::try_parse_from(["rimz", "lsp", verb, "work", "--no-tests"])
             .unwrap_err();
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
-    }
-}
-
-#[test]
-fn query_exit_uses_severity_not_argument_order() {
-    let codes = [0, 5, 6, 7, 1, 4, 3];
-    for (rank, code) in codes.iter().enumerate() {
-        for other in &codes[..=rank] {
-            assert_eq!(query_exit(*code, *other), *code);
-            assert_eq!(query_exit(*other, *code), *code);
-        }
-    }
-}
-
-#[test]
-fn query_failures_reuse_server_conditions_only() {
-    for code in [1, 3, 4, 8, 9, 10] {
-        let mut failures = QueryFailures::default();
-        let mut requests = 0;
-        for _ in 0..3 {
-            let result = failures.execute("rust", || {
-                requests += 1;
-                Err(match code {
-                    3 => QueryErr::Unavailable {
-                        root: "/repo".into(),
-                        reason: query::UnavailableReason::NotRunning,
-                    },
-                    4 => QueryErr::Indexing {
-                        server: "rust".into(),
-                        seconds: 30,
-                    },
-                    8 => QueryErr::MemoryShort {
-                        root: "/repo".into(),
-                        server: "rust".into(),
-                        shortfall: None,
-                    },
-                    9 => QueryErr::MemoryPressure {
-                        root: "/repo".into(),
-                        server: "rust".into(),
-                    },
-                    10 => QueryErr::Unanswered {
-                        server: "rust".into(),
-                        seconds: 60,
-                    },
-                    _ => rimz::lsp::LspErr::Protocol("bad request".into()).into(),
-                })
-            });
-            assert_eq!(
-                result.err().unwrap().exit_code(),
-                if code >= 8 { 4 } else { code }
-            );
-        }
-        assert_eq!(requests, if code == 1 { 3 } else { 1 });
-        assert!(
-            failures
-                .execute("python", || Ok(query::Output::Answer {
-                    result: serde_json::Value::Null,
-                    document_uri: None
-                }))
-                .is_ok()
-        );
     }
 }
 
