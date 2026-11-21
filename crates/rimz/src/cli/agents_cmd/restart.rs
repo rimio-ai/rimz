@@ -252,6 +252,12 @@ pub(in crate::cli) fn restart_resolved(
         .as_ref()
         .and_then(|restart| restart.account.as_ref());
     let (action, fresh_reason) = relaunch_plan(agent, &cwd)?;
+    // The replacement launches with the posture's prompt sources, which `restart_cell` drops.
+    if fresh_reason.is_some() {
+        posture
+            .launch
+            .validate_fresh_agent_file_lists(&agent.kind)?;
+    }
     let login = match flag_account {
         Some(account) => flag_login(
             agent,

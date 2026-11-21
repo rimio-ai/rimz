@@ -147,7 +147,7 @@ fn restart_closes_the_replaced_pane_only_once_the_agent_left_it() {
 /// before it reserves the swap and opens nothing.
 #[test]
 fn molt_of_a_caller_hosted_nowhere_refuses_before_reserving_the_swap() {
-    let (env, output) = molt_over(&[2], false);
+    let (env, output) = molt_over(&[2], false, LaunchParams::default(), &[], |_| {});
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{output:?}");
     assert!(
@@ -162,7 +162,7 @@ fn molt_of_a_caller_hosted_nowhere_refuses_before_reserving_the_swap() {
 /// holds in the launch's pane refuses before it reserves the swap and opens nothing.
 #[test]
 fn molt_of_a_caller_whose_launch_another_session_holds_refuses() {
-    let (env, output) = molt_over(&[1, 2], true);
+    let (env, output) = molt_over(&[1, 2], true, LaunchParams::default(), &[], |_| {});
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{output:?}");
     assert!(
@@ -179,8 +179,15 @@ fn molt_of_a_caller_whose_launch_another_session_holds_refuses() {
 }
 
 /// `@planner`'s own `agents molt` over a room listing the zellij panes `ids`, with a revived
-/// second session of its launch in `terminal_2` when `revived`.
-fn molt_over(ids: &[u64], revived: bool) -> (Env, std::process::Output) {
+/// second session of its launch in `terminal_2` when `revived`, `@planner` launched with
+/// `launch`, `extra` after its note, and `prepare` run on the room before it.
+fn molt_over(
+    ids: &[u64],
+    revived: bool,
+    launch: LaunchParams,
+    extra: &[&str],
+    prepare: impl FnOnce(&Env),
+) -> (Env, std::process::Output) {
     let env = Env::new();
     env.install_agent_hooks("claude");
     env.record(&env.project_root);
@@ -190,10 +197,11 @@ fn molt_over(ids: &[u64], revived: bool) -> (Env, std::process::Output) {
     )
     .unwrap();
     crate::common::trust_claude_project(&env, &env.project_root);
-    register_paned_planner(&env, LaunchParams::default(), None);
+    register_paned_planner(&env, launch, None);
     if revived {
         register_revived_planner(&env, "terminal_2");
     }
+    prepare(&env);
     let workspace = env.resolve_workspace(&env.project_root);
     let shim = write_env_dump_shim(&env, "claude");
     let shell = write_fake_login_shell(&env, "molt-shell", &[]);
@@ -211,6 +219,7 @@ fn molt_over(ids: &[u64], revived: bool) -> (Env, std::process::Output) {
     }
     let output = molt
         .args(["--mux", "zellij", "agents", "molt", "continue the work"])
+        .args(extra)
         .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
         .env("PATH", path_with_front(&shim))
         .env("SHELL", &shell)
@@ -279,4 +288,142 @@ fn restart_of_a_session_whose_launch_another_session_holds_refuses() {
     assert!(!log.contains("new-pane"), "{log}");
     assert!(!log.contains("close-pane"), "{log}");
     assert!(!replacement_recorded(&env));
+}
+
+/// The refusal a fresh Antigravity launch with no system prompt gives a limiting `mcps` list,
+/// which only the agent file the prompt rides could apply.
+const AGY_MCPS_REFUSAL: &str = "error: antigravity applies a `mcps` list only through the agent \
+     file its system prompt rides, and this launch has no system prompt; add the kind base \
+     `agents/antigravity.md` or another prompt source, or remove `mcps`";
+
+/// Installs Antigravity's hooks and writes the Amp profile `seat` with `mcps: []`, which
+/// carries no prompt onto Antigravity, and Antigravity's kind base, a prompt source there, when
+/// `prompted`.
+fn write_seat(env: &Env, prompted: bool) {
+    env.install_agent_hooks("antigravity");
+    crate::common::write_definition(
+        env,
+        "agents",
+        "seat",
+        "description: Seat.\nagent: amp\nmcps: []",
+        "",
+    );
+    if prompted {
+        crate::common::write_kind_base(env, "antigravity");
+    }
+}
+
+fn seat_launch() -> LaunchParams {
+    LaunchParams {
+        profile: Some("seat".to_owned()),
+        ..LaunchParams::default()
+    }
+}
+
+/// A molt of the `seat` agent onto Antigravity, whose `mcps: []` then needs an agent file, is
+/// refused before it reserves the swap or opens a pane; with the kind base as its prompt it is
+/// not refused on that rule.
+#[test]
+fn molt_onto_antigravity_without_a_prompt_refuses_a_limiting_mcps_list() {
+    let molt = |prompted: bool| {
+        molt_over(
+            &[1],
+            false,
+            seat_launch(),
+            &["--agent", "antigravity"],
+            |env| {
+                write_seat(env, prompted);
+            },
+        )
+    };
+    let (env, output) = molt(false);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(stderr.contains(AGY_MCPS_REFUSAL), "{stderr}");
+    let log = mux_log(&env);
+    assert!(!log.contains("new-pane"), "{log}");
+    assert!(!replacement_recorded(&env));
+
+    let (env, output) = molt(true);
+    assert!(output.status.success(), "{output:?}");
+    assert!(replacement_recorded(&env));
+}
+
+/// `agents restart @planner --no-continue` of an Antigravity seat molted from the profile
+/// `seat`, its conversation present when `resumed`, in a room listing its pane alone.
+fn agy_seat_restart(env: &Env, resumed: bool) -> std::process::Output {
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    let transcript = env.home_root.join("planner.jsonl");
+    if resumed {
+        std::fs::write(&transcript, "{}\n").unwrap();
+    }
+    let launch = LaunchParams {
+        record: Some(Box::new(rimz::agents::LaunchRecord {
+            agent: Some("antigravity".into()),
+            ..Default::default()
+        })),
+        ..seat_launch()
+    };
+    crate::common::wait::register_seat(env, "antigravity", launch, "terminal_1", &transcript);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let panes = listing(&[1]).replace("claude", "agy");
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_str(&panes).unwrap(),
+    );
+    let shim = write_env_dump_shim(env, "agy");
+    let shell = write_fake_login_shell(env, "swap-shell", &[]);
+    env.rimz()
+        .args([
+            "--mux",
+            "zellij",
+            "agents",
+            "restart",
+            "@planner",
+            "--no-continue",
+        ])
+        .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&shim))
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", &panes)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .bounded_output()
+        .unwrap()
+}
+
+/// A restart of an Antigravity seat with no prompt and a limiting `mcps` list whose conversation
+/// is gone launches fresh, so it is refused before it reserves the swap or opens a pane; the same
+/// seat whose conversation resumes keeps the servers it started with and is not refused.
+#[test]
+fn fresh_restart_of_antigravity_without_a_prompt_refuses_a_limiting_mcps_list() {
+    let env = Env::new();
+    write_seat(&env, false);
+    let output = agy_seat_restart(&env, false);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(stderr.contains(AGY_MCPS_REFUSAL), "{stderr}");
+    let log = mux_log(&env);
+    assert!(!log.contains("new-pane"), "{log}");
+    assert!(!replacement_recorded(&env));
+
+    let env = Env::new();
+    write_seat(&env, false);
+    let output = agy_seat_restart(&env, true);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("(resumed session provider-session)"),
+        "{output:?}"
+    );
 }

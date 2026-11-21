@@ -162,6 +162,67 @@ pub fn register_agent_with_owner(
         .expect("register target");
 }
 
+/// Seeds `@planner`'s Bound launch of `kind` in the project root, then its registration in the
+/// zellij pane `pane` with `transcript`: a seat of a kind `register_agent` does not seed.
+pub fn register_seat(
+    env: &Env,
+    kind: &str,
+    launch: LaunchParams,
+    pane: &str,
+    transcript: &std::path::Path,
+) {
+    let workspace = env.resolve_workspace(&env.project_root);
+    let launch = LaunchParams {
+        lane: Some(rimz::worktree::own_lane(
+            &env.project_root,
+            &env.project_root,
+        )),
+        ..launch
+    };
+    env.store()
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked(kind),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: AgentSessionId::from("provider-session"),
+                launch_id: Some(AgentSessionId::from("launch-session")),
+                agent_name: "planner".to_owned(),
+                agent_name_explicit: true,
+                launch: launch.clone(),
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: Some("planner".to_owned()),
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed launched seat");
+    let mut observation = AgentLifecycleObservation::new(
+        Some("provider-session".into()),
+        LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some("planner".to_owned());
+    observation.launch_id = Some("launch-session".into());
+    observation.launch = launch;
+    observation.pane_id =
+        Some(rimz::ids::PaneId::parse(&format!("zellij:{pane}")).expect("pane id"));
+    observation.transcript_path = Some(transcript.display().to_string());
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            &workspace.session_name,
+            kind,
+            "SessionStart",
+            &observation,
+        ))
+        .expect("register seat");
+}
+
 /// A lane built through its wire form, since the lane builders are crate-private.
 pub fn lane(home: &str, path: &std::path::Path, name: Option<&str>) -> rimz::ids::Lane {
     let mut wire = serde_json::json!({ "home": home, "path": path.display().to_string() });
