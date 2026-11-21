@@ -521,6 +521,7 @@ pub(super) fn refresh_heavy_lanes(
     steps.step("bookings", || {
         bookings::refresh_bookings_for(
             base,
+            store.as_ref(),
             state_paths,
             runtime,
             config,
