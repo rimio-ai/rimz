@@ -255,6 +255,9 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
     snapshot
 }
 
+/// Stamps each row's `last_activity` with the wall clock, so two calls never compare equal. A
+/// `LoopState` rig delivers a fold clock-only only when its content equals the last accepted
+/// fold's, so a test that needs a clock-only delivery clones every fold from one base snapshot.
 pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
     snapshot.panes_produced_at_ms = Some(1);

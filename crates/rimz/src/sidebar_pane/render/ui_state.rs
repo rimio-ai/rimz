@@ -146,6 +146,9 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) entry_focus: Option<PaneId>,
     /// Driver-clock phase for cyclic sampling only.
     /// Frame-sequence heads read `head_step` instead, so late paints never skip frames.
+    /// It can move backwards: raising `refresh_ms` lowers it, and co-viewers stamp one shared
+    /// view from clock reads taken before the views lock, so a pane can stamp one phase behind.
+    /// Code that orders two cyclic phases handles both cases, as `advance_head_step` does.
     pub(in crate::sidebar_pane) animation_phase: u64,
     /// Frame-sequence step, advanced only by routed composition, once per new phase.
     /// The first composition holds at zero; co-viewer paints in one phase share a step.
