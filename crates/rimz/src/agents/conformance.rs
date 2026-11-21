@@ -861,6 +861,37 @@ system-prompt-file-flag = "--system-prompt-file"
     "#);
 }
 
+/// `launch_plan::compile` expects an agent file from every adapter whose system prompt
+/// rides one. A process plugin's `system-prompt-file-flag` renders a plain flag matcher
+/// (`render_preset_characterization`) and its adapter renders no agent file.
+#[test]
+fn agent_file_matcher_comes_with_an_agent_file() {
+    let env = std::collections::BTreeMap::new();
+    let input = super::AgentFileInput {
+        profile: None,
+        prompt: "prompt",
+        reminder: "",
+        tools: None,
+        native_subagents: true,
+        env: &env,
+    };
+    for adapter in BUILTINS {
+        let rides_agent_file = matches!(
+            adapter
+                .spec()
+                .launch
+                .preset_arg_matcher(PresetField::SystemPromptFile),
+            Some(PresetArgMatcher::AgentFile(_))
+        );
+        assert_eq!(
+            rides_agent_file,
+            adapter.agent_file(&input).is_some(),
+            "{}",
+            adapter.spec().kind
+        );
+    }
+}
+
 /// Every built-in adapter and a minimal process plugin, whose root the guard keeps.
 fn registry_with_fixture_plugin() -> (tempfile::TempDir, Vec<&'static AgentDefinition>) {
     let root = tempfile::TempDir::new().expect("plugin root");

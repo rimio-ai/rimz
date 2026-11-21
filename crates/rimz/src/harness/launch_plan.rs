@@ -1111,6 +1111,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 AgentProcessStage::Ready(process)
                 | AgentProcessStage::LoginShellReentry { process, .. } => process,
             };
+            // Impossible: `agents::conformance::agent_file_matcher_comes_with_an_agent_file`
+            // pins that every adapter whose matcher is AgentFile renders an agent file.
             let file = adapter
                 .agent_file(&crate::agents::AgentFileInput {
                     profile: request.identity.params.profile.as_deref(),
