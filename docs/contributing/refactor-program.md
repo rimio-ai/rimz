@@ -42,6 +42,7 @@ An edge layer holds only what its `AGENTS.md` admits, and a seam pass rehomes th
 - A workflow qualifies to move when several commands use it, it holds decisions worth unit tests, or it carries a product invariant. A straight-line sequence of library calls stays in the edge. Glue with no owner gets a new library module, never a module inside the edge.
 - Prove a function that leaves whole with an item `[[rehome]]`, and decisions that leave an entry that stays with a [logic `[[rehome]]`](./atlas.md#logic-rehome) from the edge module to the owner. For edge-to-edge edges that close, add `[[dependency]]` rows with leaf `from` modules, and tighten the edge's surface budgets the pass lowers.
 - Give each workflow a small library interface: one typed request in and one typed outcome out, capped by an `[[esc]]` row on the owner, with an `[[assembly]]` row where the edge function wired several modules. Unit-test the moved logic in the owner without spawning a process.
+- A helper the moved code calls moves with it to its library owner (`theme::fmt` for value formats), and the edge's copy becomes a one-line delegate, as `render::compact_count` is, never a second body.
 - Rendering stays in the edge; where a renderer decides things, split it into a view model and a renderer that only draws.
 - A pass that edits the cross-command list in the CLI layer contract maps every `cli`-to-`cli` import `atlas conform` reports to a named entry before committing.
 
