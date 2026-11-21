@@ -1,8 +1,8 @@
-//! The one table of RimZ MCP tools: each tool's capability, description,
-//! argument schema, and the `rimz` command its call runs. `rimz mcp serve`,
-//! `rimz mcp tools`, their `--only` values, the profile `mcps` capability
-//! names, the reference page's tool table, and the routine-command check all
-//! read this table.
+//! The one table of RimZ MCP tools: each tool's capability, argument schema,
+//! and the `rimz` command its call runs; `super::wording` holds what each
+//! tool and the server's instructions say. `rimz mcp serve`, `rimz mcp tools`,
+//! their `--only` values, the profile `mcps` capability names, the reference
+//! page's tool table, and the routine-command check all read this table.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -12,21 +12,11 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use super::wording::Wording;
+
 /// The name a provider registers RimZ's server under; Claude spells a tool
 /// `mcp__rimz__<tool>`.
 pub const SERVER_NAME: &str = "rimz";
-
-/// The server's `instructions`, which a provider shows beside its tools.
-pub const INSTRUCTIONS: &str = "Use `lsp` for what code means where grep cannot tell a call from a \
-                                mention, `wait` over a sleep, poll, or background command, \
-                                `notes_*` to keep or find notes across sessions, and `self_*` when \
-                                the user asks you to stop, compact, or tune yourself.\nEach tool \
-                                runs one `rimz` command as this agent, in its room, and returns \
-                                that command's output: its stdout, then a `stderr:` line and its \
-                                stderr when it wrote any. A command that exits nonzero returns an \
-                                error result whose last line is `exit code N`. Arguments that do \
-                                not fit a tool's schema return `invalid arguments: ...`, and \
-                                nothing runs. A launch may serve only some of these tools.";
 
 /// One group of tools a profile's `mcps` list and `--only` name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -102,8 +92,9 @@ pub struct Invocation {
 
 pub struct Tool {
     pub name: &'static str,
-    pub capability: Capability,
-    pub description: &'static str,
+    /// The group the tool belongs to; `None` for `guide`, which the server
+    /// answers itself and serves beside any group that has a guide.
+    pub capability: Option<Capability>,
     read_only: bool,
     /// The command words after `rimz`; with `verbs`, one command per verb.
     command: &'static str,
@@ -113,11 +104,11 @@ pub struct Tool {
 }
 
 impl Tool {
-    /// The tool's `tools/list` entry.
-    pub fn listing(&self) -> Value {
+    /// The tool's `tools/list` entry, with its description as `wording` resolves it.
+    pub fn listing(&self, wording: &Wording) -> Value {
         let mut entry = serde_json::json!({
             "name": self.name,
-            "description": self.description,
+            "description": wording.description(self).text(),
             "inputSchema": (self.schema)(),
         });
         if self.read_only {
@@ -128,8 +119,34 @@ impl Tool {
 
     /// The listing entry's estimated size in tokens, as `rimz mcp tools` and
     /// `rimz agents explain --mcps` print it.
-    pub fn tokens(&self) -> u64 {
-        crate::utils::tokens::estimate(&self.listing().to_string())
+    pub fn tokens(&self, wording: &Wording) -> u64 {
+        crate::utils::tokens::estimate(&self.listing(wording).to_string())
+    }
+
+    /// The name of the tool's group, or `-` for `guide`, which has none.
+    pub fn group_name(&self) -> &'static str {
+        self.capability.map_or("-", Capability::name)
+    }
+
+    /// The path of the wording file holding the tool's description, relative to
+    /// the wording root.
+    pub(super) fn wording_path(&self) -> String {
+        match self.capability {
+            Some(capability) => format!("{}/{}.md", capability.name(), self.name),
+            None => format!("{}.md", self.name),
+        }
+    }
+
+    /// The characters of the descriptions of the tool's arguments, which a
+    /// provider may count with the tool's own description.
+    pub(super) fn argument_text_len(&self) -> usize {
+        (self.schema)()["properties"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(_, property)| property["description"].as_str())
+            .map(|text| text.chars().count())
+            .sum()
     }
 
     /// The one-shot a call runs, or the error naming the argument that does
@@ -138,8 +155,12 @@ impl Tool {
         (self.invoke)(arguments)
     }
 
-    /// Every `rimz ...` command the tool can run, without flags or values.
+    /// Every `rimz ...` command the tool can run, without flags or values;
+    /// none for `guide`, which the server answers itself.
     pub fn commands(&self) -> Vec<String> {
+        if self.capability.is_none() {
+            return Vec::new();
+        }
         if self.verbs.is_empty() {
             return vec![format!("rimz {}", self.command)];
         }
@@ -150,59 +171,10 @@ impl Tool {
     }
 }
 
-pub static TOOLS: [Tool; 9] = [
+pub static TOOLS: [Tool; 10] = [
     Tool {
         name: "lsp",
-        capability: Capability::Lsp,
-        description: "Ask the checkout's shared language server what code means. It resolves a \
-                      name as the compiler does, through imports, re-exports, and macros, where \
-                      grep also matches comments, strings, and same-named methods of other types; \
-                      keep grep for text (a log message, a string literal, a config \
-                      key).\n\nVerbs: `def` (definition and line span), `hover` (type and docs), \
-                      `refs` (every use site), `callers` (functions whose bodies call it), \
-                      `callees` (functions it calls), `impl` (implementations of a trait), \
-                      `symbols` (a file's outline), `find` (workspace symbols by fuzzy name), \
-                      `show` (numbered source), `check` (the code anchors in Markdown \
-                      files).\n\nEvery verb takes several targets: pass all of a question's \
-                      targets in one call. A server still starting or indexing holds each call up \
-                      to two minutes, a wait a loop of calls pays every time.\n\nA target of \
-                      `def`, `hover`, `refs`, `callers`, `callees`, or `impl` is one of:\n- a name \
-                      as written in code, `Parser::parse`; any segment but the last may be \
-                      dropped, from the front or the middle, and a wrong segment fails;\n- an \
-                      anchor, `path::Symbol`;\n- `path:line:name`, a grep hit's `path:line` plus \
-                      one identifier on that line; a name that occurs several times there fails, \
-                      listing each occurrence as a position;\n- a position, `path:line:col`, \
-                      1-based, the column anywhere on the name's last segment.\nThe last two reach \
-                      a local binding, or an item of a dependency or the standard library, where \
-                      your code declares or uses it. Every name and position a result prints is \
-                      itself a valid target. A path is absolute or relative to the checkout \
-                      root.\n\n`show` prints numbered source for a name, an anchor, \
-                      `path:line:col`, `path:line`, or a line range `path:N-N`. A position or a \
-                      `path:line` prints the item enclosing it, the way to read the function \
-                      around a `refs` hit. An item over 200 lines prints as an outline unless \
-                      `full`. One target `show` cannot parse fails the whole call.\n\n`refs` on a \
-                      trait method also lists every implementing method; `refs` on one \
-                      implementing method lists neither the trait method nor the other \
-                      implementations, so before a signature change run `refs` on the trait \
-                      method.\n\nA list stops at 50 results: pass `all` on the first call when the \
-                      question is about every site, or `limit` for another cap. `refs`, `callers`, \
-                      and `find` list test files and modules last, under a `tests:` line, so the \
-                      cap cuts them first; `no_tests` drops them from `refs` and `callers`. \
-                      `external` adds dependencies and the standard library to `refs`, `callers`, \
-                      `callees`, `impl`, and `find` (on `find`, only path dependencies); `def` and \
-                      `hover` follow a position into dependencies without it.\n\n`check` reads the \
-                      anchors in a Markdown file's code spans: a symbol anchor, `path::Symbol`, \
-                      passes when that file holds the symbol, and a line anchor, `path:~N`, when \
-                      the file has that line. Any number right after a symbol anchor (`(N)`, `~N`, \
-                      `:N`) is read as its line-span hint, so put other numbers elsewhere in the \
-                      sentence. `fix` completes a short path and refreshes stale hints; `fix` with \
-                      `hints` also writes a hint after every anchor that names one item. An \
-                      `owner/repo@ref:` prefix marks an external anchor, left unchecked. A pass \
-                      means the item exists, not that it holds the code you describe; verdicts are \
-                      a recommendation.\n\nOtherwise each target of a multi-target call gets its \
-                      own block and outcome, and the exit code is the most severe: rerun only the \
-                      targets whose block failed. With no language server, use grep. `server` \
-                      picks one of several language servers for the checkout; `check` ignores it.",
+        capability: Some(Capability::Lsp),
         read_only: false,
         command: "lsp",
         verbs: &LspVerb::ALL,
@@ -211,57 +183,7 @@ pub static TOOLS: [Tool; 9] = [
     },
     Tool {
         name: "wait",
-        capability: Capability::Wait,
-        description: "Arm a watcher that runs outside your turn and wakes you with a message: go \
-                      on working or end your turn, and the outcome arrives mid-turn or as your \
-                      next prompt. Use it where you would background a command, sleep, write an \
-                      until or watch loop, tail a log, or poll CI or a pull request; a wait of a \
-                      few seconds stays a plain sleep in your shell.\n\nPick the `trigger` by the \
-                      habit it replaces; `value` is its argument:\n- `run`: a command you would \
-                      background or that could outrun your tool timeout, run once; wakes on its \
-                      exit, either outcome unless `on` names one.\n- `check`: an until-sleep loop \
-                      on a state (a port open, a lock gone); reruns it every `every` until it \
-                      succeeds (or fails, with `on: fail`). Use `every: 30s` against another \
-                      host.\n- `file`: a path, firing when it is created, written, deleted, or \
-                      replaced; with `grep`, on the first new complete line holding that literal, \
-                      case-sensitive text. A relative path resolves from `cwd`, not the checkout \
-                      root. Remove a log before rerunning a command that truncates and rewrites \
-                      it.\n- `pid`: a running process, waking when it is gone, without its exit \
-                      status.\n- `when`: a condition, firing once when it reads true, at the arm \
-                      included.\n- `in`: a delay, one number and unit (`90s`, `2h`, `1d`), rounded \
-                      up to a whole minute.\n- `at`: the next such clock time in the configured \
-                      time zone: `HH:MM`, `<weekday> HH:MM`, or `YYYY-MM-DD HH:MM`.\n\n`run` and \
-                      `check` take the whole command as one string, run through `sh -c` at the \
-                      checkout root with stdin closed and stdout and stderr going to the wait's \
-                      output file, whose path the wake gives.\n\nA `when`, `in`, or `at` wake \
-                      carries only what fired, so give it a `label` saying what you will do on \
-                      waking. When a `run`, `file`, or `pid` watch could hang, give it a \
-                      `check_in` longer than it should take: one still-running notice, never a \
-                      stop. A `check` probe that hangs sends no notice, so give its command a \
-                      timeout of its own. A `when` takes no `check_in`; bound it with an `in` wait \
-                      beside it and cancel whichever is left.\n\n`when` terms: `key=a,b` matches \
-                      either value, and `key!=a,b` a known reading outside them; terms join with \
-                      `&&`, `||`, `!`, and parentheses. Keys:\n- `ci`: passed, failed, pending, \
-                      none\n- `pr`: open, merged, closed, none\n- `pr.queue`: queued, dequeued \
-                      (left the queue unmerged), armed (auto-merge on, not yet queued), none\n- \
-                      `pr.review`: draft, changes_requested, required (a required review not yet \
-                      given), approved, none\n- `pr.mergeable`: mergeable, conflicting, none\n- \
-                      `team.stage`: a stage your team defines (case-sensitive), or Done\n- \
-                      `window.5h.left`, `window.7d.left`: the percent left in the room account's \
-                      usage window, compared with `>=`, `<=`, `>`, or `<`, never `=`; it fires at \
-                      the window's reset when spent. Use 50 to 80, not 100, which a spend before \
-                      the check can miss.\nA bare `ci`, `pr`, `pr.<field>`, or `team.stage` reads \
-                      the checkout you arm from; `[branch]` after the key reads that branch and \
-                      takes whatever PR it finds there, so a reused branch name can read an old PR \
-                      as merged. `none` means nothing to read: no PR or CI, an open PR outside the \
-                      queue, a closed PR for a `pr.<field>` term, or no review decision. A PR in \
-                      the merge queue still reads `pr=open`, so pair a queue term with it. \
-                      `pr.queue`, `pr.review`, and `pr.mergeable` are GitHub only: elsewhere \
-                      `pr.queue` reads `none`, and `pr.review` and `pr.mergeable` stay unread \
-                      until the PR closes. Where the base requires no review, GitHub may report no \
-                      decision, so `pr.review=approved` may never fire. Forge terms trail the \
-                      forge by up to five minutes. For a state no term reads, poll the forge's own \
-                      CLI with `check`.",
+        capability: Some(Capability::Wait),
         read_only: false,
         command: "wait",
         verbs: &[],
@@ -270,8 +192,7 @@ pub static TOOLS: [Tool; 9] = [
     },
     Tool {
         name: "wait_list",
-        capability: Capability::Wait,
-        description: "List the waits you have armed, each with the name `wait_cancel` takes.",
+        capability: Some(Capability::Wait),
         read_only: true,
         command: "wait list",
         verbs: &[],
@@ -280,11 +201,7 @@ pub static TOOLS: [Tool; 9] = [
     },
     Tool {
         name: "wait_cancel",
-        capability: Capability::Wait,
-        description: "Cancel one of your waits by name, as `wait_list` prints it, or every wait \
-                      you armed with `all`. A command a `run` or `check` wait started stops; a \
-                      `pid` process keeps running. Cancel the waits finished work no longer needs: \
-                      an armed wait holds a booked `self_stop`.",
+        capability: Some(Capability::Wait),
         read_only: false,
         command: "wait cancel",
         verbs: &[],
@@ -293,20 +210,7 @@ pub static TOOLS: [Tool; 9] = [
     },
     Tool {
         name: "self_stop",
-        capability: Capability::Control,
-        description: "When the user wants your pane closed, book your own stop: the pane closes \
-                      once you have rested `when_idle` (3m by default, longer when the user needs \
-                      time to read your final reply), counted from the end of your last turn, with \
-                      nothing owed to you; `off` withdraws the booking. Book it in the turn that \
-                      finishes the work, even when the user says now, and say in that reply that \
-                      the pane closes after the rest. Withdraw it with `off` when more work turns \
-                      up. A prompt from the user withdraws the booking, so book again in your \
-                      answer when the user still wants the pane closed. A delivery from rimz (a \
-                      report, a wait, a stage flip) restarts the rest, and the stop waits while \
-                      something is owed to you: a subagent or agent you launched that is mid-turn, \
-                      an armed wait, a background shell, an open question to the user. Cancel the \
-                      waits (`wait_cancel`) and stop the background shells the finished work no \
-                      longer needs.",
+        capability: Some(Capability::Control),
         read_only: false,
         command: "agents stop",
         verbs: &[],
@@ -315,11 +219,7 @@ pub static TOOLS: [Tool; 9] = [
     },
     Tool {
         name: "self_compact",
-        capability: Capability::Control,
-        description: "When the user asks, compact your own context with the configured brief, or \
-                      with the `instruction` you give in its place, which Codex refuses. \
-                      Called mid-turn, the compaction runs when this turn ends, and you are then \
-                      prompted to go on with your work; `no_continue` leaves you at rest instead.",
+        capability: Some(Capability::Control),
         read_only: false,
         command: "agents compact",
         verbs: &[],
@@ -328,16 +228,7 @@ pub static TOOLS: [Tool; 9] = [
     },
     Tool {
         name: "self_tune",
-        capability: Capability::Control,
-        description: "When the user asks, report or change your own settings for this session; \
-                      give no setting to report each one and where its value comes from. \
-                      `keep-warm` (`2h`) keeps the prompt cache warm for up to that long of rest \
-                      after each turn. `idle-compact` (`120k`) compacts at rest, before the cache \
-                      expires, once context reaches that size. `smart-compact` (`70%`, or a token \
-                      count such as `200k`) wraps up and compacts at that share of the window. \
-                      Each also takes `off`, and `reset` drops the override, back to the \
-                      configured value. The override holds through this session's restarts and \
-                      resumes; a molt or fork starts without it. No configuration changes.",
+        capability: Some(Capability::Control),
         read_only: false,
         command: "agents tune",
         verbs: &[],
@@ -346,18 +237,7 @@ pub static TOOLS: [Tool; 9] = [
     },
     Tool {
         name: "notes_add",
-        capability: Capability::Notes,
-        description: "Save a Markdown note that outlives this session in the home-wide note store \
-                      and return its path: a later session or another agent, in any room or \
-                      checkout, reads it by that path, so cite the returned path word for word \
-                      wherever you point at the note. RimZ stamps its header with who wrote it and \
-                      where. `kind` names what the note is: `handoff`, `molt`, `debug`, \
-                      `reflection`, or one word of your own. Give the body inline, or a `file` you \
-                      already have (a report, a subagent's output, a log) and from then on cite \
-                      the note's path in place of the file's. `fence` wraps text that is not \
-                      Markdown (a log, command output) in one code block. A `meta` key is a fact \
-                      to find the note by later (`{\"pr\": \"482\"}`), which a `notes_list` filter \
-                      names.",
+        capability: Some(Capability::Notes),
         read_only: false,
         command: "notes add",
         verbs: &[],
@@ -366,45 +246,60 @@ pub static TOOLS: [Tool; 9] = [
     },
     Tool {
         name: "notes_list",
-        capability: Capability::Notes,
-        description: "Search every note in the RimZ home, whatever room or checkout wrote it, and \
-                      list the newest matches oldest first, so the newest is the last row (20 \
-                      unless `limit` says otherwise). Every `filter` term must match. A term is \
-                      `<field><op><value>[,<value>...]`: under `=` any value matches and under \
-                      `!=` none may; `age` and `written` also take `>`, `>=`, `<`, and `<=`. \
-                      Fields: `kind`, `title` (words, any case), `author` (an agent name, `@` \
-                      optional), `written` (RFC 3339), `age` (`30s`, `5m`, `1h`, `2d`), `project`, \
-                      `worktree`, `profile`, `team`, `role`, `model`, `channel`, `loop-task`, \
-                      `loop-fire`, `workflow-run`; any other field is a `meta` key, matched as \
-                      written. `*` matches any present value and `none` a missing one; quote a \
-                      value that holds spaces or commas. Examples: `kind=handoff`, `author=otter`, \
-                      `age<2d`, `pr=482`. The filter `help` prints every field and operator.",
+        capability: Some(Capability::Notes),
         read_only: true,
         command: "notes list",
         verbs: &[],
         schema: schema::<NotesListArgs>,
         invoke: invoke::<NotesListArgs>,
     },
+    Tool {
+        name: GUIDE,
+        capability: None,
+        read_only: true,
+        command: "",
+        verbs: &[],
+        schema: schema::<GuideArgs>,
+        invoke: invoke::<GuideArgs>,
+    },
 ];
 
-/// The tools of `only`'s capabilities, in table order; empty means all.
+/// The tool that loads a guide, answered by the server from the wording it
+/// resolved at its start.
+pub const GUIDE: &str = "guide";
+
+/// The tools of `only`'s capabilities, in table order, and `guide` when one
+/// of them has a guide; empty means all.
 pub fn tools_for(only: &[Capability]) -> impl Iterator<Item = &'static Tool> {
-    TOOLS
+    let groups = served_groups(only);
+    let guided = groups
         .iter()
-        .filter(move |tool| only.is_empty() || only.contains(&tool.capability))
+        .any(|group| super::wording::has_guides(*group));
+    TOOLS.iter().filter(move |tool| {
+        tool.capability
+            .map_or(guided, |capability| groups.contains(&capability))
+    })
+}
+
+/// The capabilities `only` serves, in group order; empty means all.
+pub fn served_groups(only: &[Capability]) -> Vec<Capability> {
+    Capability::ALL
+        .into_iter()
+        .filter(|capability| only.is_empty() || only.contains(capability))
+        .collect()
 }
 
 /// The `tools/list` result the server answers with for `tools`; a tool whose
 /// capability `modes` names carries its load mode in its `_meta`, under Claude's key
 /// and Antigravity's.
-pub fn tools_list(tools: &[&Tool], modes: &[(Capability, LoadMode)]) -> Value {
+pub fn tools_list(tools: &[&Tool], modes: &[(Capability, LoadMode)], wording: &Wording) -> Value {
     let listing: Vec<Value> = tools
         .iter()
         .map(|tool| {
-            let mut entry = tool.listing();
+            let mut entry = tool.listing(wording);
             let mode = modes
                 .iter()
-                .find(|(capability, _)| *capability == tool.capability);
+                .find(|(capability, _)| Some(*capability) == tool.capability);
             if let Some((_, mode)) = mode {
                 let always = *mode == LoadMode::Always;
                 entry["_meta"] = serde_json::json!({
@@ -420,28 +315,54 @@ pub fn tools_list(tools: &[&Tool], modes: &[(Capability, LoadMode)]) -> Value {
 
 /// The instructions, then each tool's description and input schema under a
 /// `## <tool>` heading with its size, capability, and load mode: what the
-/// server sends for `tools` when `modes` gives their load modes.
-pub fn render_listing(tools: &[&Tool], modes: &[(Capability, LoadMode)]) -> String {
-    let listing = tools_list(tools, modes);
+/// server sends for `tools` of `groups` when `modes` gives their load modes
+/// and `server_wide` the mode of a tool no group's mode covers.
+/// The instructions' heading and a tool's line end with `text <path>` for each
+/// part whose text is the user's file.
+pub fn render_listing(
+    tools: &[&Tool],
+    groups: &[Capability],
+    modes: &[(Capability, LoadMode)],
+    server_wide: Option<LoadMode>,
+    wording: &Wording,
+) -> String {
+    let listing = tools_list(tools, modes, wording);
     let entries = listing["tools"]
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or_default();
+    let instructions = wording.instructions(groups);
+    let paths: Vec<String> = wording
+        .instruction_paths(groups)
+        .map(|path| path.display().to_string())
+        .collect();
+    let mark = if paths.is_empty() {
+        String::new()
+    } else {
+        format!(" · text {}", paths.join(", "))
+    };
     let mut text = format!(
-        "Server instructions (~{} tokens)\n\n{INSTRUCTIONS}\n",
-        crate::utils::tokens::estimate(INSTRUCTIONS)
+        "Server instructions (~{} tokens{mark})\n\n{instructions}\n",
+        crate::utils::tokens::estimate(&instructions)
     );
     for (tool, entry) in tools.iter().zip(entries) {
         let load = modes
             .iter()
-            .find(|(capability, _)| *capability == tool.capability)
-            .map_or("default", |(_, mode)| mode.name());
+            .find(|(capability, _)| Some(*capability) == tool.capability)
+            .map(|(_, mode)| *mode)
+            .or(server_wide)
+            .map_or("default", LoadMode::name);
+        let mark = wording
+            .description(tool)
+            .path()
+            .map(|path| format!(" · text {}", path.display()))
+            .unwrap_or_default();
         let schema = serde_json::to_string_pretty(&entry["inputSchema"]).unwrap_or_default();
         text.push_str(&format!(
-            "\n## {}\n~{} tokens · {} · load {load}\n\n{}\n\n```json\n{schema}\n```\n",
+            "\n## {}\n~{} tokens · {} · load {load}{mark}\n\n{}\n\n```json\n{schema}\n```\n",
             tool.name,
-            tool.tokens(),
-            tool.capability.name(),
+            tool.tokens(wording),
+            tool.group_name(),
             entry["description"].as_str().unwrap_or_default(),
         ));
     }
@@ -926,6 +847,25 @@ impl ToolArgs for NotesListArgs {
             .values("filter", self.filter)
             .value("limit", self.limit)
             .invocation(None)
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GuideArgs {
+    /// The guide, as `<group>/<guide>`.
+    name: String,
+}
+
+impl ToolArgs for GuideArgs {
+    /// The guide's name alone: the server answers a `guide` call itself, and
+    /// runs no command.
+    fn invocation(self) -> Invocation {
+        Invocation {
+            args: vec![self.name],
+            cwd: None,
+            stdin: None,
+        }
     }
 }
 

@@ -8,13 +8,14 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use rimz::mcp::catalog::INSTRUCTIONS;
+use rimz::mcp::catalog::Capability;
+use rimz::mcp::wording::Wording;
 
 use crate::common::Env;
 
 const REPLY_DEADLINE: Duration = Duration::from_secs(60);
 
-const ALL_TOOLS: [&str; 9] = [
+const ALL_TOOLS: [&str; 10] = [
     "lsp",
     "wait",
     "wait_list",
@@ -24,6 +25,7 @@ const ALL_TOOLS: [&str; 9] = [
     "self_tune",
     "notes_add",
     "notes_list",
+    "guide",
 ];
 
 /// The LOAD cell of `tool`'s row in the Tools table of `explain --mcps`,
@@ -325,6 +327,7 @@ fn marked_capabilities_carry_their_load_mode_in_the_listing() {
             (json!("wait_cancel"), deferred),
             (json!("notes_add"), None),
             (json!("notes_list"), None),
+            (json!("guide"), None),
         ]
     );
 
@@ -385,7 +388,7 @@ fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
     let total = stdout.lines().last().unwrap();
     assert_eq!(
         total,
-        format!("total: ~{sum} tokens in 9 tools"),
+        format!("total: ~{sum} tokens in 10 tools"),
         "{stdout}"
     );
 
@@ -464,7 +467,12 @@ fn handshake_lists_the_tools_and_answers_only_known_methods() {
 fn only_serves_the_named_capability() {
     let env = Env::new();
     let mut server = serve(&env, &["--only", "rimz-lsp"]);
-    server.initialize();
+    let init = server.initialize();
+    assert_eq!(
+        init["result"]["instructions"],
+        Wording::built_in().instructions(&[Capability::Lsp]),
+        "{init}"
+    );
     let tools = server.request(1, "tools/list", json!({}));
     assert_eq!(
         tools["result"]["tools"]
@@ -480,6 +488,9 @@ fn only_serves_the_named_capability() {
     assert!(wait["error"]["code"].is_i64(), "{wait}");
     server.start_call(3, "no_such_tool", json!({}));
     assert!(server.reply(&json!(3))["error"]["code"].is_i64());
+    server.start_call(4, "guide", json!({"name": "rimz-wait/conditions"}));
+    let guide = server.reply(&json!(4));
+    assert_eq!(guide["error"]["code"], -32602, "{guide}");
 
     let output = env
         .rimz()
@@ -487,6 +498,202 @@ fn only_serves_the_named_capability() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2), "{output:?}");
+}
+
+/// `guide` is served beside a group that has a guide, answers a served name
+/// with the guide's text, and any other name with the guides the launch has.
+#[test]
+fn guide_answers_a_served_guide_and_lists_the_served_guides_for_any_other() {
+    let env = Env::new();
+    let mut server = serve(&env, &["--only", "rimz-wait"]);
+    server.initialize();
+    let tools = server.request(1, "tools/list", json!({}));
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["wait", "wait_list", "wait_cancel", "guide"]);
+
+    let (text, is_error) = server.call(2, "guide", json!({"name": "rimz-wait/conditions"}));
+    assert!(!is_error, "{text}");
+    assert_eq!(
+        Ok(text.as_str()),
+        Wording::built_in().guide(&[Capability::Wait], "rimz-wait/conditions")
+    );
+    for (id, name) in [(3, "rimz-wait/none"), (4, "rimz-lsp/conditions")] {
+        let (text, is_error) = server.call(id, "guide", json!({"name": name}));
+        assert!(is_error, "{text}");
+        assert_eq!(
+            text,
+            format!("no guide {name:?}; this launch has: rimz-wait/conditions"),
+        );
+    }
+    let (text, is_error) = server.call(5, "guide", json!({}));
+    assert!(
+        is_error && text.starts_with("invalid arguments: "),
+        "{text}"
+    );
+    let (status, lines) = server.close();
+    assert_eq!(status.code(), Some(0), "{status:?}");
+    assert_protocol_lines(&lines);
+}
+
+/// A replacement file under the home's `mcps/` reaches `tools/list`,
+/// `initialize`, `rimz mcp tools`, and `rimz agents explain --mcps`, which
+/// marks it with its path.
+#[test]
+fn a_replacement_reaches_every_reader_of_the_wording() {
+    let env = Env::new();
+    let mcps = env.rimz_home().join("mcps/rimz-wait");
+    std::fs::create_dir_all(&mcps).unwrap();
+    let list = format!(
+        "List your waits, replaced. {}",
+        "Each wait, its name. ".repeat(40)
+    );
+    std::fs::write(mcps.join("wait_list.md"), format!("{list}\n")).unwrap();
+    std::fs::write(mcps.join("instructions.md"), "Use `wait`, replaced.\n").unwrap();
+
+    let mut server = serve(&env, &["--only", "rimz-wait"]);
+    let init = server.initialize();
+    let instructions = init["result"]["instructions"].as_str().unwrap().to_owned();
+    assert!(
+        instructions.starts_with("Use `wait`, replaced.\n"),
+        "{instructions}"
+    );
+    let listing = server.request(1, "tools/list", json!({}));
+    let described = listing["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "wait_list")
+        .map(|tool| tool["description"].clone());
+    assert_eq!(described, Some(json!(list.trim())));
+    server.close();
+
+    let output = env
+        .rimz()
+        .args(["mcp", "tools", "--json", "--only", "rimz-wait"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let printed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(printed, listing["result"]);
+    let output = env.rimz().args(["mcp", "tools"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let tokens: u64 = stdout
+        .lines()
+        .find(|line| line.split_whitespace().nth(1) == Some("wait_list"))
+        .and_then(|line| line.split_whitespace().last())
+        .and_then(|cell| cell.strip_prefix('~')?.parse().ok())
+        .unwrap_or_else(|| panic!("no wait_list row: {stdout}"));
+    assert!(tokens > 150, "{stdout}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "cwait",
+        "description: cwait profile\nagent: claude\ntools: [Bash]\nmcps: [rimz-wait]",
+        "",
+    );
+    let bin = crate::common::write_failing_agent_shim(&env, "claude", 0);
+    let shell = crate::common::write_fake_login_shell(&env, "mcps-wording-sh", &[]);
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = env
+        .rimz()
+        .args(["agents", "explain", "cwait", "--mcps"])
+        .env("SHELL", shell)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert!(out.contains(&instructions), "{out}");
+    assert!(out.contains(list.trim()), "{out}");
+    assert!(
+        out.contains(&format!(
+            " · text {})\n",
+            mcps.join("instructions.md").display()
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "· rimz-wait · load default · text {}\n",
+            mcps.join("wait_list.md").display()
+        )),
+        "{out}"
+    );
+    assert!(out.contains("## wait\n~"), "{out}");
+    assert_eq!(out.matches(" · text ").count(), 2, "{out}");
+}
+
+/// A launch whose home holds a rejected or misplaced wording file carries a
+/// warning for each on its plan, which `rimz agents explain` prints; a clean
+/// home carries none.
+#[test]
+fn a_bad_wording_file_warns_on_the_launch_plan() {
+    let env = Env::new();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "cwait",
+        "description: cwait profile\nagent: claude\ntools: [Bash]\nmcps: [rimz-wait]",
+        "",
+    );
+    let explain = || {
+        let bin = crate::common::write_failing_agent_shim(&env, "claude", 0);
+        let shell = crate::common::write_fake_login_shell(&env, "mcps-wording-sh", &[]);
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let output = env
+            .rimz()
+            .args(["agents", "explain", "cwait"])
+            .env("SHELL", shell)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stderr).unwrap()
+    };
+    let mcps = env.rimz_home().join("mcps");
+    assert!(!explain().contains("mcps"), "{}", explain());
+
+    std::fs::create_dir_all(mcps.join("rimz-wait")).unwrap();
+    std::fs::create_dir_all(mcps.join("rimz-lsp")).unwrap();
+    std::fs::write(mcps.join("rimz-wait/wait_list.md"), " \n").unwrap();
+    std::fs::write(mcps.join("rimz-lsp/wait.md"), "Misplaced.\n").unwrap();
+    std::fs::write(mcps.join("rimz-lsp/lsp.md"), "\n").unwrap();
+    let stderr = explain();
+    let rejected = format!(
+        "rimz: {} is not used, so the built-in text is served: it is empty\n",
+        mcps.join("rimz-wait/wait_list.md").display()
+    );
+    let misplaced = format!(
+        "rimz: {} is ignored: RimZ has no wording file rimz-lsp/wait.md; it belongs at {}\n",
+        mcps.join("rimz-lsp/wait.md").display(),
+        mcps.join("rimz-wait/wait.md").display()
+    );
+    assert!(stderr.contains(&rejected), "{stderr}");
+    assert!(stderr.contains(&misplaced), "{stderr}");
+    assert!(
+        !stderr.contains("rimz-lsp/lsp.md"),
+        "a group the launch does not serve: {stderr}"
+    );
+
+    let output = env.rimz().args(["mcp", "tools"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("rimz-lsp/lsp.md is not used"), "{stderr}");
 }
 
 #[cfg(unix)]
@@ -680,6 +887,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     );
     assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
     assert_eq!(tool_load(&out, "wait"), "default", "{out}");
+    assert_eq!(tool_load(&out, "guide"), "default", "{out}");
     assert!(
         out.contains("every server the account and project configure"),
         "{out}"
@@ -726,6 +934,13 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
     assert_eq!(tool_load(&out, "wait"), "always", "{out}");
     assert_eq!(tool_load(&out, "notes_list"), "always", "{out}");
+    assert_eq!(tool_load(&out, "guide"), "always", "{out}");
+    let guide_line = out
+        .split("\n## guide\n")
+        .nth(1)
+        .and_then(|rest| rest.lines().next())
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(guide_line.ends_with("load always"), "{guide_line}");
 
     let out = explain("cnone");
     assert!(
@@ -734,7 +949,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     );
     assert!(!out.contains("CAPABILITY"), "{out}");
     assert!(
-        !out.contains("## lsp") && !out.contains(INSTRUCTIONS),
+        !out.contains("## lsp") && !out.contains("Server instructions"),
         "{out}"
     );
     assert!(out.contains("only github (allowedMcpServers)"), "{out}");
@@ -765,7 +980,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     );
     assert!(!out.contains("CAPABILITY"), "{out}");
     assert!(
-        !out.contains("## lsp") && !out.contains(INSTRUCTIONS),
+        !out.contains("## lsp") && !out.contains("Server instructions"),
         "{out}"
     );
 
@@ -778,7 +993,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert!(!out.contains("CAPABILITY"), "{out}");
     assert!(!out.contains("Hidden skills"), "{out}");
     assert!(
-        !out.contains("## lsp") && !out.contains(INSTRUCTIONS),
+        !out.contains("## lsp") && !out.contains("Server instructions"),
         "{out}"
     );
 }
@@ -960,6 +1175,7 @@ fn explain_mcps_reads_a_profiles_own_codex_overrides_as_codex_applies_them() {
         .unwrap_or_else(|| panic!("{out}"));
     assert!(user < rimz, "RimZ's override follows the profile's: {out}");
     assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
+    assert_eq!(tool_load(&out, "guide"), "always", "{out}");
 
     let out = explain("xconf");
     assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
@@ -982,7 +1198,7 @@ fn explain_mcps_reads_a_profiles_own_codex_overrides_as_codex_applies_them() {
         );
         assert!(!out.contains("CAPABILITY"), "{out}");
         assert!(
-            !out.contains("## lsp") && !out.contains(INSTRUCTIONS),
+            !out.contains("## lsp") && !out.contains("Server instructions"),
             "{out}"
         );
         assert!(out.contains("mcp_servers.rimz.command="), "{out}");
@@ -1148,6 +1364,40 @@ fn parent_env_fills_the_names_the_servers_own_environment_lacks() {
     server.initialize();
     let path = note_home(&mut server, 1);
     assert!(path.starts_with(&own_home.display().to_string()), "{path}");
+}
+
+/// A server started, as Codex starts it, without the fixture's `RIMZ_HOME`
+/// or `HOME` reads its wording from the home its parent names, as its
+/// one-shots resolve it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn parent_env_names_the_home_the_wording_is_read_from() {
+    let env = Env::new();
+    let mcps = env.rimz_home().join("mcps/rimz-wait");
+    std::fs::create_dir_all(&mcps).unwrap();
+    std::fs::write(
+        mcps.join("wait_list.md"),
+        "List your waits, from the parent's home.\n",
+    )
+    .unwrap();
+    let mut server = serve_under_parent(&env, &[]);
+    server.initialize();
+    let listing = server.request(1, "tools/list", json!({}));
+    let described = listing["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "wait_list")
+        .map(|tool| tool["description"].clone());
+    assert_eq!(
+        described,
+        Some(json!("List your waits, from the parent's home."))
+    );
+    let path = note_home(&mut server, 2);
+    assert!(
+        path.starts_with(&env.rimz_home().display().to_string()),
+        "{path}"
+    );
 }
 
 /// The watcher a `rimz wait` one-shot detached outlives the provider ending

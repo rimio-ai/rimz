@@ -99,6 +99,8 @@ pub enum LaunchPlanWarning {
         kind: crate::ids::AgentKind,
         rule: crate::config::ToolRule,
     },
+    #[error("{0}")]
+    McpWording(String),
     #[error("{kind} has no added-directory permission channel; --add-dir is ignored")]
     AddedDirsUnsupported { kind: crate::ids::AgentKind },
     #[error(
@@ -1000,6 +1002,14 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             .map(|(flag, value)| (flag.to_owned(), value.to_owned()));
     }
     let mcp_capabilities = reminders.mcp_capabilities(&request);
+    if !mcp_capabilities.is_empty() {
+        let wording = crate::mcp::wording::Wording::read_home();
+        warnings.extend(
+            wording
+                .warnings_for(&mcp_capabilities)
+                .map(|warning| LaunchPlanWarning::McpWording(warning.to_string())),
+        );
+    }
     let hidden_skills = reminders.hidden_skills(&request);
     let only_all = request.mcps.as_deref().is_some_and(|entries| {
         !entries.is_empty() && entries.iter().all(crate::config::McpName::is_all)

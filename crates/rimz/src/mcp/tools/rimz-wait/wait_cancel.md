@@ -1,0 +1,1 @@
+Cancel one of your waits by name, as `wait_list` prints it, or every wait you armed with `all`. A command a `run` or `check` wait started stops; a `pid` process keeps running. Cancel the waits finished work no longer needs: an armed wait holds a booked `self_stop`.

@@ -89,8 +89,9 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `rimz mcp serve` runs every tool call as a `rimz` one-shot, so its own
-/// modules never open a store, load config, or resolve a room.
+/// `rimz mcp serve` runs every tool call but `guide`'s as a `rimz` one-shot,
+/// and answers `guide` from wording it read at its start, so its own modules
+/// never open a store, load config, or resolve a room.
 fn ensure_thin_mcp_server(root: &Path, files: &[PathBuf]) -> Result<()> {
     let module = root.join("crates/rimz/src/mcp");
     let cli = root.join("crates/rimz/src/cli/mcp.rs");

@@ -1,6 +1,7 @@
 //! Newline-delimited JSON-RPC 2.0 over stdio. The main thread reads requests
-//! and answers all but `tools/call` inline; each call runs its one-shot on a
-//! thread of its own, so calls overlap and a later one may answer first.
+//! and answers each inline, a `tools/call` of `guide` included; a call of any
+//! other tool runs its one-shot on a thread of its own, so calls overlap and a
+//! later one may answer first.
 //! Stdout carries protocol lines only; logs go to stderr.
 
 use std::collections::HashMap;
@@ -11,8 +12,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde_json::{Value, json};
 
 use super::catalog::{
-    Capability, INSTRUCTIONS, Invocation, LoadMode, SERVER_NAME, Tool, tools_for, tools_list,
+    Capability, Invocation, LoadMode, SERVER_NAME, Tool, served_groups, tools_for, tools_list,
 };
+use super::wording::Wording;
 
 const PROTOCOL_VERSIONS: [&str; 2] = ["2025-06-18", "2025-11-25"];
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -32,14 +34,14 @@ pub enum ServeErr {
 /// SIGTERM, then kill the one-shots still running and return. `modes` gives
 /// the tools of each capability it names that load mode in their listing.
 /// With `parent_env`, each one-shot also gets every variable of the parent
-/// process's environment that the server's own lacks.
+/// process's environment that the server's own lacks, and the wording is read
+/// from the RimZ home that environment names. The wording is read once, here,
+/// so a session keeps the text its server started with.
 pub fn serve(
     only: &[Capability],
     modes: &[(Capability, LoadMode)],
     parent_env: bool,
 ) -> Result<(), ServeErr> {
-    let tools: Vec<&'static Tool> = tools_for(only).collect();
-    let listing = tools_list(&tools, modes);
     let inherited = if parent_env {
         #[cfg(unix)]
         let parent = crate::proc::environ(std::os::unix::process::parent_id());
@@ -54,6 +56,19 @@ pub fn serve(
         })
     } else {
         Vec::new()
+    };
+    let wording = Wording::read(&crate::disk::paths::mcps_dir_under(&rimz_home(&inherited)));
+    for warning in wording.warnings() {
+        tracing::warn!("rimz mcp serve: {warning}");
+    }
+    let tools: Vec<&'static Tool> = tools_for(only).collect();
+    let groups = served_groups(only);
+    let served = Served {
+        listing: tools_list(&tools, modes, &wording),
+        instructions: wording.instructions(&groups),
+        tools,
+        groups,
+        wording,
     };
     let calls = Arc::new(Calls {
         inherited,
@@ -70,9 +85,40 @@ pub fn serve(
             tracing::warn!(%err, "rimz mcp serve: SIGINT and SIGTERM will not stop one-shots");
         }
     }
-    let result = read_requests(&tools, &listing, &calls);
+    let result = read_requests(&served, &calls);
     calls.close();
     result
+}
+
+/// What the server answers with, resolved once at its start.
+struct Served {
+    tools: Vec<&'static Tool>,
+    groups: Vec<Capability>,
+    listing: Value,
+    instructions: String,
+    wording: Wording,
+}
+
+/// The RimZ home the one-shots resolve: the server's own `RIMZ_HOME` and
+/// `HOME`, each filled from `inherited` where the server's environment lacks
+/// it, as a one-shot's environment is.
+fn rimz_home(inherited: &[(String, String)]) -> std::path::PathBuf {
+    let var = |name: &str| {
+        std::env::var_os(name)
+            .or_else(|| {
+                inherited
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.into())
+            })
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from)
+    };
+    crate::disk::paths::rimz_home_from(
+        var("RIMZ_HOME").as_deref(),
+        var("HOME").as_deref(),
+        &std::env::temp_dir(),
+    )
 }
 
 /// The parent's variables the server's own environment lacks; `None` when
@@ -86,11 +132,7 @@ fn inherited_from(parent: Option<Vec<(String, String)>>) -> Option<Vec<(String, 
     )
 }
 
-fn read_requests(
-    tools: &[&'static Tool],
-    listing: &Value,
-    calls: &Arc<Calls>,
-) -> Result<(), ServeErr> {
+fn read_requests(served: &Served, calls: &Arc<Calls>) -> Result<(), ServeErr> {
     let mut stdin = io::stdin().lock();
     let mut line = Vec::new();
     loop {
@@ -102,13 +144,13 @@ fn read_requests(
             continue;
         }
         match serde_json::from_slice::<Value>(&line) {
-            Ok(message) => handle(message, tools, listing, calls),
+            Ok(message) => handle(message, served, calls),
             Err(err) => send_error(&Value::Null, PARSE_ERROR, &format!("parse error: {err}")),
         }
     }
 }
 
-fn handle(message: Value, tools: &[&'static Tool], listing: &Value, calls: &Arc<Calls>) {
+fn handle(message: Value, served: &Served, calls: &Arc<Calls>) {
     let Value::Object(mut message) = message else {
         return send_error(&Value::Null, INVALID_REQUEST, "a request is a JSON object");
     };
@@ -125,10 +167,10 @@ fn handle(message: Value, tools: &[&'static Tool], listing: &Value, calls: &Arc<
         return;
     };
     match method {
-        "initialize" => send_result(&id, initialize(&params)),
+        "initialize" => send_result(&id, initialize(&params, &served.instructions)),
         "ping" => send_result(&id, json!({})),
-        "tools/list" => send_result(&id, listing.clone()),
-        "tools/call" => call(id, params, tools, calls),
+        "tools/list" => send_result(&id, served.listing.clone()),
+        "tools/call" => call(id, params, served, calls),
         _ => send_error(
             &id,
             METHOD_NOT_FOUND,
@@ -137,7 +179,7 @@ fn handle(message: Value, tools: &[&'static Tool], listing: &Value, calls: &Arc<
     }
 }
 
-fn initialize(params: &Value) -> Value {
+fn initialize(params: &Value, instructions: &str) -> Value {
     let asked = params["protocolVersion"].as_str();
     let version = asked
         .filter(|asked| PROTOCOL_VERSIONS.contains(asked))
@@ -146,13 +188,13 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": {} },
         "serverInfo": { "name": SERVER_NAME, "version": crate::build_id::VERSION },
-        "instructions": INSTRUCTIONS,
+        "instructions": instructions,
     })
 }
 
-fn call(id: Value, mut params: Value, tools: &[&'static Tool], calls: &Arc<Calls>) {
+fn call(id: Value, mut params: Value, served: &Served, calls: &Arc<Calls>) {
     let name = params["name"].as_str().unwrap_or_default();
-    let Some(tool) = tools.iter().find(|tool| tool.name == name) else {
+    let Some(tool) = served.tools.iter().find(|tool| tool.name == name) else {
         return send_error(&id, INVALID_PARAMS, &format!("unknown tool: {name:?}"));
     };
     let arguments = match params["arguments"].take() {
@@ -165,6 +207,9 @@ fn call(id: Value, mut params: Value, tools: &[&'static Tool], calls: &Arc<Calls
             return send_result(&id, tool_result(&format!("invalid arguments: {err}"), true));
         }
     };
+    if tool.capability.is_none() {
+        return send_result(&id, guide(served, &invocation));
+    }
     // Listed here, on the thread that reads requests, so a cancel read after
     // this call, or the server's end, always finds it.
     let Some(seq) = calls.begin(id.clone()) else {
@@ -183,6 +228,22 @@ fn call(id: Value, mut params: Value, tools: &[&'static Tool], calls: &Arc<Calls
             &id,
             tool_result(&format!("could not start the call: {err}"), true),
         );
+    }
+}
+
+/// The result of a `guide` call, whose invocation holds the guide's name.
+fn guide(served: &Served, invocation: &Invocation) -> Value {
+    let name = invocation
+        .args
+        .first()
+        .map(String::as_str)
+        .unwrap_or_default();
+    match served.wording.guide(&served.groups, name) {
+        Ok(text) => tool_result(text, false),
+        Err(guides) => tool_result(
+            &format!("no guide {name:?}; this launch has: {}", guides.join(", ")),
+            true,
+        ),
     }
 }
 

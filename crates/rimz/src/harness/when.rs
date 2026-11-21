@@ -717,6 +717,15 @@ pub fn evaluate(
     }
 }
 
+/// Every key a condition term reads, without a `[branch]`.
+fn condition_keys() -> Vec<&'static str> {
+    [TeamStageKey::NAME]
+        .into_iter()
+        .chain(ForgeKey::all(None).map(ForgeKey::name))
+        .chain(["window.5h.left", "window.7d.left"])
+        .collect()
+}
+
 /// The span a `window.<span>.left` key reads.
 fn window_span(key: &str) -> Option<WindowSpan> {
     key.strip_prefix("window.")?
@@ -1265,11 +1274,7 @@ impl Parser<'_> {
             && window_span(&key).is_none()
             && ForgeKey::parse(&key).is_none()
         {
-            let keys = [TeamStageKey::NAME]
-                .into_iter()
-                .chain(forge_keys)
-                .chain(["window.5h.left", "window.7d.left"])
-                .collect::<Vec<_>>();
+            let keys = condition_keys();
             let suggestion = crate::utils::suggest::nearest_name(&key, keys.iter().copied())
                 .map(|name| format!("did you mean {name}? "))
                 .unwrap_or_default();

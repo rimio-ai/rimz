@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use super::*;
+use crate::mcp::wording::Wording;
 
 fn tool(name: &str) -> &'static Tool {
     TOOLS
@@ -21,7 +22,7 @@ fn the_reference_table_lists_every_tool_under_its_capability() {
     let text = include_str!("../../../../docs/reference/cli/mcp.md");
     let published: Vec<(String, String)> = text
         .lines()
-        .filter(|line| line.starts_with("| `rimz-"))
+        .filter(|line| line.starts_with("| `rimz-") || line.starts_with("| - |"))
         .map(|line| {
             let cells: Vec<&str> = line.split('|').map(str::trim).collect();
             (
@@ -32,7 +33,7 @@ fn the_reference_table_lists_every_tool_under_its_capability() {
         .collect();
     let catalog: Vec<(String, String)> = TOOLS
         .iter()
-        .map(|tool| (tool.capability.name().to_owned(), tool.name.to_owned()))
+        .map(|tool| (tool.group_name().to_owned(), tool.name.to_owned()))
         .collect();
     assert_eq!(published, catalog);
 }
@@ -48,11 +49,21 @@ fn capability_names_round_trip_and_become_only_arguments() {
         serve_args(&[Capability::Lsp, Capability::Notes]),
         ["mcp", "serve", "--only", "rimz-lsp", "--only", "rimz-notes"]
     );
-    let names: Vec<_> = tools_for(&[Capability::Wait])
-        .map(|tool| tool.name)
-        .collect();
-    assert_eq!(names, ["wait", "wait_list", "wait_cancel"]);
+    let names = |only: &[Capability]| tools_for(only).map(|tool| tool.name).collect::<Vec<_>>();
+    assert_eq!(
+        names(&[Capability::Wait]),
+        ["wait", "wait_list", "wait_cancel", "guide"]
+    );
+    assert_eq!(
+        names(&[Capability::Lsp, Capability::Notes]),
+        ["lsp", "notes_add", "notes_list"]
+    );
     assert_eq!(tools_for(&[]).count(), TOOLS.len());
+    assert_eq!(served_groups(&[]), Capability::ALL);
+    assert_eq!(
+        served_groups(&[Capability::Notes, Capability::Lsp]),
+        [Capability::Lsp, Capability::Notes]
+    );
 }
 
 #[test]
@@ -191,7 +202,7 @@ fn arguments_outside_the_schema_shape_are_refused() {
 #[test]
 fn schemas_are_inline_objects_without_null_types() {
     for tool in &TOOLS {
-        let listing = tool.listing();
+        let listing = tool.listing(&Wording::built_in());
         let schema = &listing["inputSchema"];
         assert_eq!(schema["type"], "object", "{}", tool.name);
         let text = schema.to_string();
@@ -199,7 +210,7 @@ fn schemas_are_inline_objects_without_null_types() {
             assert!(!text.contains(absent), "{}: {text}", tool.name);
         }
     }
-    let lsp = tool("lsp").listing();
+    let lsp = tool("lsp").listing(&Wording::built_in());
     assert_eq!(lsp["inputSchema"]["required"], json!(["verb", "targets"]));
     assert_eq!(
         lsp["inputSchema"]["properties"]["verb"]["enum"],
@@ -208,7 +219,7 @@ fn schemas_are_inline_objects_without_null_types() {
             "check"
         ])
     );
-    let wait = tool("wait").listing();
+    let wait = tool("wait").listing(&Wording::built_in());
     assert_eq!(
         wait["inputSchema"]["properties"]["on"]["enum"],
         json!(["fail", "success", "any"])
@@ -218,55 +229,62 @@ fn schemas_are_inline_objects_without_null_types() {
         json!(["run", "check", "file", "pid", "when", "in", "at"])
     );
     assert_eq!(wait["inputSchema"]["required"], json!(["trigger", "value"]));
+    let guide = tool("guide").listing(&Wording::built_in());
+    assert_eq!(guide["inputSchema"]["required"], json!(["name"]));
 }
 
-/// Claude Code cuts the instructions and each description at 4,096
-/// characters, and may count a tool's property descriptions with it; Codex
-/// shows only the instructions' first line to a deferred tool, and compacts
-/// an input schema over 5,000 bytes.
+/// Codex compacts an input schema over 5,000 bytes; the text limits are
+/// `Wording::breaches`'.
 #[test]
 fn the_text_fits_what_providers_keep() {
-    let first = INSTRUCTIONS.lines().next().unwrap_or_default();
-    assert!(
-        !first.is_empty() && first.chars().count() <= 250,
-        "{first:?}"
-    );
+    let wording = Wording::built_in();
+    assert_eq!(wording.breaches(), Vec::<String>::new());
+    let instructions = wording.instructions(&Capability::ALL);
+    let first = instructions.lines().next().unwrap_or_default();
     for group in ["`lsp`", "`wait`", "`notes_", "`self_*` when the user asks"] {
         assert!(first.contains(group), "{group} missing from {first:?}");
     }
-    assert!(INSTRUCTIONS.chars().count() <= 4096);
-    for tool in &TOOLS {
-        let listing = tool.listing();
-        let properties = listing["inputSchema"]["properties"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter_map(|(_, property)| property["description"].as_str());
-        let length = properties.map(|text| text.chars().count()).sum::<usize>()
-            + tool.description.chars().count();
-        assert!(length <= 4096, "{}: {length}", tool.name);
-    }
     for tool in TOOLS
         .iter()
-        .filter(|tool| tool.capability == Capability::Control)
+        .filter(|tool| tool.capability == Some(Capability::Control))
     {
+        let description = wording.description(tool).text();
         assert!(
-            tool.description.starts_with("When the user"),
-            "{} acts on the agent unasked: {}",
+            description.starts_with("When the user"),
+            "{} acts on the agent unasked: {description}",
             tool.name,
-            tool.description
         );
     }
-    let wait = tool("wait").listing()["inputSchema"].to_string();
+    let wait = tool("wait").listing(&wording)["inputSchema"].to_string();
     assert!(wait.len() < 5000, "{}", wait.len());
 }
 
 #[test]
 fn the_full_listing_is_the_served_text() {
-    let tools: Vec<&Tool> = tools_for(&[Capability::Lsp, Capability::Control]).collect();
-    let text = render_listing(&tools, &[(Capability::Lsp, LoadMode::Always)]);
-    assert!(text.contains(INSTRUCTIONS), "{text}");
-    let served = tools_list(&tools, &[]);
+    let wording = Wording::built_in();
+    let groups = [Capability::Lsp, Capability::Control];
+    let tools: Vec<&Tool> = tools_for(&groups).collect();
+    let text = render_listing(
+        &tools,
+        &groups,
+        &[(Capability::Lsp, LoadMode::Always)],
+        None,
+        &wording,
+    );
+    let instructions = wording.instructions(&groups);
+    assert!(text.contains(&instructions), "{text}");
+    let first = instructions.lines().next().unwrap();
+    assert!(
+        first.contains("`lsp`") && first.contains("`self_*`"),
+        "{first}"
+    );
+    assert!(
+        !first.contains("`wait`") && !first.contains("`notes_"),
+        "{first}"
+    );
+    assert!(!text.contains("only some of these tools"), "{text}");
+    assert!(!text.contains(" · text "), "{text}");
+    let served = tools_list(&tools, &[], &wording);
     for (tool, entry) in tools.iter().zip(served["tools"].as_array().unwrap()) {
         let schema = serde_json::to_string_pretty(&entry["inputSchema"]).unwrap();
         assert!(text.contains(&format!("\n## {}\n", tool.name)), "{text}");
@@ -278,7 +296,7 @@ fn the_full_listing_is_the_served_text() {
     }
     let lsp = format!(
         "## lsp\n~{} tokens · rimz-lsp · load always\n",
-        tool("lsp").tokens()
+        tool("lsp").tokens(&wording)
     );
     assert!(text.contains(&lsp), "{text}");
     assert!(text.contains("· rimz-control · load default\n"), "{text}");
@@ -336,7 +354,11 @@ fn lsp_passes_a_server_except_to_check() {
         ),
         ["lsp", "check", "--", "a.md"]
     );
-    assert!(tool("lsp").description.contains("`check` ignores"));
+    let description = Wording::built_in()
+        .description(tool("lsp"))
+        .text()
+        .to_owned();
+    assert!(description.contains("`check` ignores"), "{description}");
 }
 
 #[test]
@@ -361,7 +383,7 @@ fn ambiguous_tune_and_note_arguments_are_refused() {
         args("self_tune", json!({"setting": "keep-warm"})),
         ["agents", "tune", "--", "@me", "keep-warm"]
     );
-    let cwd = tool("notes_add").listing()["inputSchema"]["properties"]["cwd"]["description"]
+    let cwd = tool("notes_add").listing(&Wording::built_in())["inputSchema"]["properties"]["cwd"]["description"]
         .as_str()
         .unwrap()
         .to_owned();

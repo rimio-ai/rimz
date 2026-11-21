@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
 use rimz::mcp::catalog::{Capability, LoadMode, Tool, tools_for, tools_list};
+use rimz::mcp::wording::Wording;
 
 use crate::cli::render::{self, Table, cell};
 
@@ -84,31 +85,35 @@ pub fn run(args: McpArgs) -> Result<()> {
             rimz::mcp::serve(&only, &modes, parent_env).context("rimz mcp serve")
         }
         McpSubcmd::Tools { only, json } => {
+            let wording = Wording::read_home();
+            for warning in wording.warnings() {
+                render::finish(writeln!(render::err(), "rimz: warning: {warning}"))?;
+            }
             let tools: Vec<&Tool> = tools_for(&only).collect();
             let rendered = if json {
-                render_json(&tools)
+                render_json(&tools, &wording)
             } else {
-                render_tools(&tools, &mut render::out())
+                render_tools(&tools, &wording, &mut render::out())
             };
             render::finish(rendered)
         }
     }
 }
 
-fn render_json(tools: &[&Tool]) -> std::io::Result<()> {
-    let listing =
-        serde_json::to_string_pretty(&tools_list(tools, &[])).map_err(std::io::Error::other)?;
+fn render_json(tools: &[&Tool], wording: &Wording) -> std::io::Result<()> {
+    let listing = serde_json::to_string_pretty(&tools_list(tools, &[], wording))
+        .map_err(std::io::Error::other)?;
     writeln!(render::out(), "{listing}")
 }
 
-fn render_tools(tools: &[&Tool], w: &mut impl Write) -> std::io::Result<()> {
+fn render_tools(tools: &[&Tool], wording: &Wording, w: &mut impl Write) -> std::io::Result<()> {
     let mut table = Table::new(["CAPABILITY", "TOOL", "TOKENS"]).right(&[2]);
     let mut total = 0;
     for tool in tools {
-        let size = tool.tokens();
+        let size = tool.tokens(wording);
         total += size;
         table.row([
-            cell(tool.capability.name()),
+            cell(tool.group_name()),
             cell(tool.name),
             cell(format!("~{size}")),
         ]);
