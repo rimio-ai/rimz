@@ -446,7 +446,8 @@ upward-dependencies = ["address"]
 # LaunchCapability::mcp_tools_on_first_turn: an adapter whose served tools arrive after the
 # first turn keeps the matching rimz skills (+1).
 # Whether a kind's prompt rides an agent file is read by plan, launch_plan and explain (+1).
-surface-budget = 1322
+# HookCapability::queued_hook_payload lets the feed queue a payload cut of unread tool output (+1).
+surface-budget = 1323
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

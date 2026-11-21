@@ -73,7 +73,9 @@ use super::{
     read_transcript_tail_with_budget, read_transcript_tail_with_status, resolve_root_identity,
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
-use crate::agents::payload::{decode_or_default, finished_task_notification_ids};
+use crate::agents::payload::{
+    decode_or_default, finished_task_notification_ids, queued_post_tool_use,
+};
 use crate::agents::version::{CliVersion, probe_cli_version};
 use crate::agents::{PresetArgMatcher, TurnSettle, TurnSettleOutcome};
 use crate::transcript::AskQuestion;
@@ -1349,6 +1351,10 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
         true
     }
 
+    fn queued_hook_payload(&self, event_name: &str, payload: &Value) -> Option<Value> {
+        queued_post_tool_use(event_name, payload, payloads::read_tool_response)
+    }
+
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let hook = ClaudeHook::parse(event_name, payload);
         let terminal_tail = matches!(hook, ClaudeHook::Stop(_))
@@ -1847,7 +1853,7 @@ impl ClaudeHook {
             "Stop" => Self::Stop(decode_or_default(payload)),
             "StopFailure" => Self::StopFailure(decode_or_default(payload)),
             "PreToolUse" => Self::PreToolUse(decode_or_default(payload)),
-            "PostToolUse" => Self::PostToolUse(decode_or_default(payload)),
+            "PostToolUse" => Self::PostToolUse(ClaudePostToolUse::decode(payload)),
             "PermissionRequest" => Self::PermissionRequest(decode_or_default(payload)),
             "PreCompact" => Self::PreCompact,
             "PostCompact" => Self::PostCompact(decode_or_default(payload)),

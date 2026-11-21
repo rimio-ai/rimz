@@ -845,6 +845,14 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
         true
     }
 
+    fn queued_hook_payload(&self, event_name: &str, payload: &Value) -> Option<Value> {
+        crate::agents::payload::queued_post_tool_use(
+            event_name,
+            payload,
+            payloads::read_tool_response,
+        )
+    }
+
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let hook = CodexHook::parse(event_name, payload);
         let ask_kind = match &hook {
@@ -2147,7 +2155,7 @@ impl CodexHook {
             "SubagentStop" => Self::SubagentStop(decode_or_default(payload)),
             "PreToolUse" => Self::PreToolUse(decode_or_default(payload)),
             "PermissionRequest" => Self::PermissionRequest(decode_or_default(payload)),
-            "PostToolUse" => Self::PostToolUse(decode_or_default(payload)),
+            "PostToolUse" => Self::PostToolUse(CodexPostToolUse::decode(payload)),
             "PreCompact" => Self::PreCompact(decode_or_default(payload)),
             "PostCompact" => Self::PostCompact(decode_or_default(payload)),
             "Stop" => Self::Stop(decode_or_default(payload)),

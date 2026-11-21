@@ -5,9 +5,10 @@
 //! the adapter entry points.
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::agents::hook_types::{BackgroundTask, CompactTrigger, HookEventCommon, SessionSource};
+use crate::agents::payload::{decode_or_default, keep_read_tool_response};
 
 // ── Common ─────────────────────────────────────────────────────────────────
 
@@ -60,13 +61,42 @@ pub struct ClaudePreToolUse {
     pub tool_input: Option<Value>,
 }
 
-/// Silent lifecycle event. `tool_response` is available for audit enrichment.
+/// Silent lifecycle event. `tool_response` holds what [`read_tool_response`]
+/// keeps of the tool's output.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ClaudePostToolUse {
     pub tool_name: Option<String>,
     pub tool_input: Option<Value>,
     pub tool_response: Option<Value>,
+}
+
+impl ClaudePostToolUse {
+    pub(super) fn decode(payload: &Value) -> Self {
+        let mut hook: Self = decode_or_default(payload);
+        keep_read_tool_response(
+            hook.tool_name.as_deref(),
+            &mut hook.tool_response,
+            read_tool_response,
+        );
+        hook
+    }
+}
+
+/// What RimZ reads of a Claude `PostToolUse` response, the keep rule both the
+/// feed and the decode apply: `AskUserQuestion` answers whole, a `Bash`
+/// launch's `backgroundTaskId`, and for every other tool only that a response
+/// is present (the `ExitPlanMode` approval), which the empty object keeps.
+pub(super) fn read_tool_response(tool_name: &str, response: &Value) -> Option<Value> {
+    match tool_name {
+        "AskUserQuestion" => None,
+        "Bash" => Some(
+            response
+                .get("backgroundTaskId")
+                .map_or_else(|| json!({}), |id| json!({ "backgroundTaskId": id })),
+        ),
+        _ => Some(json!({})),
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

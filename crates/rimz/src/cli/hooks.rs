@@ -1003,6 +1003,9 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
         &store.paths().workspace_id,
         &project_root,
     ));
+    let queued = agent
+        .queued_hook_payload(&event_name, &payload)
+        .and_then(|queued| serde_json::to_string(&queued).ok());
     let frame = HookIngress {
         boot_id: rimz::proc::boot_id(),
         schema_version: "1".to_owned(),
@@ -1010,7 +1013,7 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
         ts: jiff::Timestamp::now(),
         source: agent.spec().kind_id(),
         event: Some(event_name.clone()),
-        payload: buf,
+        payload: queued.unwrap_or(buf),
         cwd: match participant_start.canonicalize() {
             Ok(cwd) => cwd,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {

@@ -1046,3 +1046,160 @@ fn effort_reads_the_stop_payloads_and_falls_back_to_thinking_level() {
         "only the stop payloads carry a typed effort marker"
     );
 }
+
+fn claude_post_tool_use(tool_name: &str, tool_input: Value, tool_response: Option<Value>) -> Value {
+    let mut payload = json!({
+        "session_id": "sess-1",
+        "transcript_path": "/nonexistent/sess-1.jsonl",
+        "cwd": "/repo",
+        "permission_mode": "default",
+        "hook_event_name": "PostToolUse",
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "tool_use_id": "toolu_01",
+        "duration_ms": 12,
+        "effort": {"level": "high"},
+    });
+    if let Some(response) = tool_response {
+        payload["tool_response"] = response;
+    }
+    payload
+}
+
+/// Synthetic values in the key shapes Claude sends: one payload per kept tool,
+/// a presence-only tool, a large `Read` and `Edit`, `Bash` in its three
+/// response shapes, and a response that is absent and one that is null.
+fn claude_guard_payloads() -> Vec<Value> {
+    let body = "fn main() {}\n".repeat(2_000);
+    let read = |response| {
+        claude_post_tool_use("Read", json!({"file_path": "/repo/src/main.rs"}), response)
+    };
+    vec![
+        claude_post_tool_use(
+            "AskUserQuestion",
+            json!({"questions": [{"question": "Which route?", "header": "Route", "options": [{"label": "safe"}, {"label": "fast"}], "multiSelect": false}]}),
+            Some(
+                json!({"questions": [{"question": "Which route?", "options": [{"label": "safe"}, {"label": "fast"}]}], "answers": {"Which route?": "safe"}}),
+            ),
+        ),
+        claude_post_tool_use(
+            "ExitPlanMode",
+            json!({"plan": "1. Build it"}),
+            Some(
+                json!({"plan": "1. Build it", "isAgent": false, "filePath": "/home/u/.claude/plans/p.md"}),
+            ),
+        ),
+        claude_post_tool_use(
+            "Bash",
+            json!({"command": "cargo test", "description": "Run tests", "run_in_background": true}),
+            Some(
+                json!({"stdout": "", "stderr": "", "interrupted": false, "isImage": false, "backgroundTaskId": "b1"}),
+            ),
+        ),
+        claude_post_tool_use(
+            "Bash",
+            json!({"command": "cat src/main.rs"}),
+            Some(json!({"stdout": body, "stderr": "", "interrupted": false, "isImage": false})),
+        ),
+        claude_post_tool_use("Bash", json!({"command": "true"}), Some(json!("ok"))),
+        read(Some(
+            json!({"type": "text", "file": {"filePath": "/repo/src/main.rs", "content": body, "numLines": 2_000, "startLine": 1, "totalLines": 2_000}}),
+        )),
+        claude_post_tool_use(
+            "Edit",
+            json!({"file_path": "/repo/src/main.rs", "old_string": "fn main() {}", "new_string": "fn main() { run() }", "replace_all": false}),
+            Some(
+                json!({"filePath": "/repo/src/main.rs", "oldString": "fn main() {}", "newString": "fn main() { run() }", "originalFile": body, "structuredPatch": [{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-fn main() {}", "+fn main() { run() }"]}], "userModified": false, "replaceAll": false}),
+            ),
+        ),
+        read(None),
+        read(Some(Value::Null)),
+    ]
+}
+
+#[test]
+fn queued_post_tool_use_reads_as_the_received_one() {
+    for payload in claude_guard_payloads() {
+        crate::agents::testkit::assert_queued_post_tool_use_reads_alike(&ClaudeAdapter, &payload);
+    }
+}
+
+#[test]
+fn queued_post_tool_use_reads_alike_under_readers_without_the_keep_rule() {
+    let reads = |payload: &Value| {
+        let post: ClaudePostToolUse = decode_or_default(payload);
+        let answers = post
+            .tool_name
+            .as_deref()
+            .zip(post.tool_response.as_ref())
+            .and_then(|(name, response)| ask::answer_detail(name, response));
+        let shells =
+            claude_background_shells(&ClaudeHook::PostToolUse(post), Timestamp::UNIX_EPOCH);
+        (answers, shells)
+    };
+    for payload in claude_guard_payloads() {
+        let queued = ClaudeAdapter
+            .queued_hook_payload("PostToolUse", &payload)
+            .unwrap_or_else(|| payload.clone());
+        assert_eq!(reads(&payload), reads(&queued), "{payload}");
+    }
+}
+
+#[test]
+fn queued_post_tool_use_keeps_only_the_tool_output_rimz_reads() {
+    let payloads = claude_guard_payloads();
+    let responses: Vec<_> = payloads
+        .iter()
+        .map(|payload| {
+            let queued = ClaudeAdapter.queued_hook_payload("PostToolUse", payload)?;
+            let without_response = |payload: &Value| {
+                let mut payload = payload.clone();
+                payload.as_object_mut().unwrap().remove("tool_response");
+                payload
+            };
+            assert_eq!(without_response(&queued), without_response(payload));
+            Some(queued["tool_response"].clone())
+        })
+        .collect();
+    assert_eq!(
+        responses,
+        [
+            None,
+            Some(json!({})),
+            Some(json!({"backgroundTaskId": "b1"})),
+            Some(json!({})),
+            Some(json!({})),
+            Some(json!({})),
+            Some(json!({})),
+            None,
+            None,
+        ]
+    );
+    let read = &payloads[5];
+    for (event, payload) in [
+        ("PreToolUse", read.clone()),
+        ("Stop", read.clone()),
+        ("PostToolUse", json!("not an object")),
+        ("PostToolUse", Value::Null),
+        ("PostToolUse", {
+            let mut nameless = read.clone();
+            nameless.as_object_mut().unwrap().remove("tool_name");
+            nameless
+        }),
+    ] {
+        assert_eq!(
+            ClaudeAdapter.queued_hook_payload(event, &payload),
+            None,
+            "{event} {payload}"
+        );
+    }
+}
+
+#[test]
+fn post_tool_use_decode_hands_readers_the_kept_tool_output() {
+    let payloads = claude_guard_payloads();
+    let ClaudeHook::PostToolUse(read) = ClaudeHook::parse("PostToolUse", &payloads[5]) else {
+        panic!("PostToolUse decodes as itself");
+    };
+    assert_eq!(read.tool_response, Some(json!({})));
+}
