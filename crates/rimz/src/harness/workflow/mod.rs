@@ -1,4 +1,6 @@
 //! Workflow specifications, validation, hosted checks, and durable attempt transitions.
+//!
+//! The engine reaches the CLI only through [`AttemptHost`], and never reports to loop.
 
 use std::path::{Path, PathBuf};
 

@@ -635,6 +635,9 @@ pub(crate) fn bind_agent<'a>(
 /// Every root session that can be named in this snapshot. A pane-bearing
 /// snapshot exposes one recipient per pane; shadowed siblings remain audit
 /// records resolvable through the audit fallback, never message targets.
+///
+/// Handle rendering and address resolution read this set; raw root rows are for
+/// accounting scans.
 pub fn addressable_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {
     snapshot
         .agents
