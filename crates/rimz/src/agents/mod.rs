@@ -26,6 +26,7 @@ mod headless;
 pub(crate) mod hook_types;
 pub(crate) mod identity;
 pub(crate) mod jsonc;
+mod launch_settings;
 pub mod lifecycle;
 mod local_session_cache;
 pub(crate) mod locate;
