@@ -226,6 +226,7 @@ All of these run as `cargo xtask perf --bench hotpath -- <bench>`, before hand-o
 | `sidebar::enrich::enrich_core` or a step it calls | `enrich_cached` |
 | The room spend slice (`aggregate_scoped_rollups` in `crates/rimz/src/agents/spending/aggregate.rs` and what it calls) | `spending_live_scale_additional_workspace_scope`, `spending_live_scale_additional_workspace_partial_scope` |
 | The walker memo build (`SpendingWalker::ensure_memo`) | `spending_walk_cold`, `spending_live_scale_cold_hydrate` |
+| The hook drainer (`crates/rimz/src/harness/hook_drain.rs`) or the apply child (`hooks apply` in `crates/rimz/src/cli/hooks.rs`) | `drainer_latency`, plus two benches an unfiltered run skips because they are ignored by default: `cargo xtask perf --bench hotpath -- drainer_backlog --ignored`, and `apply_scale`, which times a release testkit CLI built first with `cargo build -p rimz --release --features testkit --bins --locked` and then runs as `RIMZ_XTASK_TIMEOUT=90m cargo xtask perf --bench hotpath -- apply_scale --ignored` ([Scale yardstick](../internals/performance.md#scale-yardstick)) |
 
 The benches are `#[divan::bench]` functions in `crates/rimz/benches/hotpath.rs`. The walk benches pass `scope: None` and never reach the room spend slice. The warm fixtures build the walker memo during setup, which is why the memo build is timed on the cold benches.
 
