@@ -275,20 +275,35 @@ fn env_paragraph(
         let adapter = crate::agents::find_definition(kind)
             .expect("the launch kind was resolved before rendering reminders");
         let provider = adapter.spec().display_name;
-        let files = adapter.added_dirs_unloaded_files();
-        let reason = if params.untrusted_checkout {
+        let not_loaded = |files: &str| {
+            let reason = if params.untrusted_checkout {
+                format!(
+                    "{provider} has no trust decision for this folder, so you started in an \
+                     empty directory of your own, and"
+                )
+            } else {
+                "Your caller started you in an empty directory of your own, so".to_owned()
+            };
             format!(
-                "{provider} has no trust decision for this folder, so you started in an empty \
-                 directory of your own, and"
+                "(Your caller asked you to work here. {reason} its {files} were not loaded. \
+                 Read, search, and cd into it freely; read its instruction files yourself if \
+                 the task needs them. If the task needs code run inside it, stop and say so in \
+                 your report.)"
             )
-        } else {
-            "Your caller started you in an empty directory of your own, so".to_owned()
+        };
+        let target_line = match adapter.added_dirs() {
+            crate::agents::capabilities::AddedDirs::FileAccess { unloaded } => not_loaded(unloaded),
+            crate::agents::capabilities::AddedDirs::Unsupported => {
+                not_loaded("project configuration and instruction files")
+            }
+            crate::agents::capabilities::AddedDirs::Workspace => format!(
+                "(Your caller asked you to work here. It started you in an empty directory of \
+                 your own, and {provider} opened this one as a workspace, loading its \
+                 instructions, rules, and skills and running its hooks.)"
+            ),
         };
         lines.push(format!(
-            "- target: {}\n  (Your caller asked you to work here. {reason} its {files} were \
-             not loaded. Read, search, and cd into it freely; read its instruction files \
-             yourself if the task needs them. If the task needs code run inside it, stop \
-             and say so in your report.)",
+            "- target: {}\n  {target_line}",
             escape_reminder_text(target)
         ));
     }

@@ -388,6 +388,65 @@ fn allowed_tools_warnings_follow_resolved_kind_and_nonempty_rules() {
 }
 
 #[test]
+fn antigravity_warnings_name_untranslated_rules_and_the_sandbox_override() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/antigravity.md"),
+        "---\ndescription: Base\n---\nBase.",
+    )
+    .unwrap();
+    for (name, fields) in [
+        (
+            "agy-yolo",
+            "isolation: sandbox\nmode: yolo\nallowed-tools: [\"Bash(git status:*)\", Glob, \"Read(~/notes)\"]\n",
+        ),
+        (
+            "agy-auto",
+            "isolation: sandbox\nmode: auto\nallowed-tools: [Read, \"mcp__github\"]\n",
+        ),
+        ("agy-host", "isolation: host\nmode: yolo\n"),
+        ("agy-machine", "mode: yolo\n"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Worker\nagent: antigravity\ntools: [Read]\n{fields}---\n"),
+        )
+        .unwrap();
+    }
+    let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let warnings: Vec<_> = warnings(&loaded, Isolation::Sandbox, &Default::default())
+        .into_iter()
+        .map(|warning| {
+            (
+                warning
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                warning.message,
+            )
+        })
+        .collect();
+    let untranslated = |rule: &str| {
+        format!("allowed-tools rule `{rule}` has no antigravity permission rule; it is left out")
+    };
+    let overridden = "the antigravity launch carries its skip-permissions flag, which overrides its sandbox; sandbox isolation is not in effect for this launch";
+    let mut expected = vec![
+        ("agy-yolo.md".to_owned(), overridden.to_owned()),
+        ("agy-machine.md".to_owned(), overridden.to_owned()),
+        ("agy-yolo.md".to_owned(), untranslated("Glob")),
+        ("agy-yolo.md".to_owned(), untranslated("Read(~/notes)")),
+    ];
+    let mut actual = warnings;
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn host_skill_warnings_follow_definition_isolation_and_keep_success() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();

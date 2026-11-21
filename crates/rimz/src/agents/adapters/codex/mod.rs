@@ -1592,12 +1592,10 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         }
     }
 
-    fn supports_added_dirs(&self) -> bool {
-        true
-    }
-
-    fn added_dirs_unloaded_files(&self) -> &'static str {
-        ".codex config, hooks, and AGENTS.md"
+    fn added_dirs(&self) -> AddedDirs {
+        AddedDirs::FileAccess {
+            unloaded: ".codex config, hooks, and AGENTS.md",
+        }
     }
 }
 

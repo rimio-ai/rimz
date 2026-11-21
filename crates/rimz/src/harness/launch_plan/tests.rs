@@ -1930,6 +1930,142 @@ fn sandbox_settings_artifact_is_written_only_on_apply() {
 }
 
 #[test]
+fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch() {
+    let project = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let ambient = BTreeMap::from([("HOME".into(), project.path().display().to_string())]);
+    let added = ["/added/one", "/added/two"];
+    let new_warnings = |kind: &str, yolo: bool, isolation: Isolation| {
+        let mut texts = Vec::new();
+        if kind == "antigravity" {
+            texts.push(format!(
+                "allowed-tools rule `Glob` has no {kind} permission rule; it is left out"
+            ));
+            texts.push(format!(
+                "allowed-tools rule `Read(~/notes)` has no {kind} permission rule; it is left out"
+            ));
+            texts.push(format!(
+                "{kind} opens each added directory as a workspace: it loads the directory's instructions, rules, and skills and runs its hooks"
+            ));
+            if yolo && isolation == Isolation::Sandbox {
+                texts.push(format!(
+                    "the {kind} launch carries its skip-permissions flag, which overrides its sandbox; sandbox isolation is not in effect for this launch"
+                ));
+            }
+        }
+        texts
+    };
+    for kind in ["antigravity", "claude", "codex"] {
+        let adapter = crate::agents::find_definition(kind).unwrap();
+        for action in ["launch", "resume"] {
+            for isolation in [Isolation::Host, Isolation::Sandbox] {
+                for yolo in [false, true] {
+                    let mut args = Vec::new();
+                    if kind == "antigravity" {
+                        args.extend([
+                            "--settings".to_owned(),
+                            r#"{"permissions":{"deny":["command(rm)"]}}"#.to_owned(),
+                        ]);
+                    }
+                    if yolo {
+                        args.extend(
+                            adapter
+                                .spec()
+                                .launch
+                                .permission_args(crate::agents::PermissionMode::Yolo),
+                        );
+                    }
+                    let mut request = request(kind, action_with_args(action, args));
+                    request.identity.params =
+                        serde_json::from_value(serde_json::json!({ "add_dirs": added })).unwrap();
+                    request.allowed_tools = Some(
+                        ["Bash(git status:*)", "Glob", "Read(~/notes)"]
+                            .iter()
+                            .map(|rule| rule.parse().unwrap())
+                            .collect(),
+                    );
+                    let plan = compile(LaunchPlanInputs {
+                        recorded_system_prompt_digest: None,
+                        request: &request,
+                        cwd: project.path(),
+                        project_root: project.path(),
+                        rimz_bin: Path::new("/bin/rimz"),
+                        runtime: &runtime,
+                        state: &state,
+                        effective: None,
+                        machine: &machine,
+                        commands: &machine.agents.commands,
+                        accounts: &machine.accounts,
+                        isolation,
+                        bwrap: None,
+                        agents: Ok(&[]),
+                        ambient_env: &ambient,
+                        agent_shell: None,
+                        hibernate: false,
+                    })
+                    .unwrap();
+                    let case = format!("{kind} {action} {isolation:?} yolo={yolo}");
+                    let warnings: Vec<String> =
+                        plan.warnings.iter().map(ToString::to_string).collect();
+                    let expected = new_warnings(kind, yolo, isolation);
+                    let shown: Vec<_> = warnings
+                        .iter()
+                        .filter(|text| {
+                            text.starts_with("allowed-tools rule")
+                                || text.contains("as a workspace")
+                                || text.contains("overrides its sandbox")
+                        })
+                        .cloned()
+                        .collect();
+                    assert_eq!(shown, expected, "{case}");
+                    if kind != "antigravity" {
+                        continue;
+                    }
+                    assert!(
+                        !warnings.iter().any(|text| {
+                            text.contains("no per-launch permission rules")
+                                || text.contains("adds no sandbox flag")
+                                || text.contains("no added-directory permission channel")
+                        }),
+                        "{case}: {warnings:?}"
+                    );
+                    let argv = &plan.process().provider_argv;
+                    let settings: Vec<_> = argv
+                        .windows(2)
+                        .filter(|pair| pair[0] == "--settings")
+                        .map(|pair| pair[1].clone())
+                        .collect();
+                    assert_eq!(settings.len(), 1, "{case}: {argv:?}");
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(&settings[0]).unwrap(),
+                        serde_json::json!({"permissions": {
+                            "deny": ["command(rm)"],
+                            "allow": ["command(git status)"]
+                        }}),
+                        "{case}"
+                    );
+                    let sandbox = argv.iter().filter(|arg| *arg == "--sandbox").count();
+                    assert_eq!(
+                        sandbox,
+                        usize::from(isolation == Isolation::Sandbox),
+                        "{case}: {argv:?}"
+                    );
+                    let dirs: Vec<_> = argv
+                        .windows(2)
+                        .filter(|pair| pair[0] == "--add-dir")
+                        .map(|pair| pair[1].as_str())
+                        .collect();
+                    assert_eq!(dirs, added, "{case}: {argv:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn allowed_tools_warn_on_unsupported_kind_without_changing_argv() {
     let project = tempfile::tempdir().unwrap();
     let id = crate::WorkspaceId::from_project_root(project.path());

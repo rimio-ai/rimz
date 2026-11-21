@@ -202,7 +202,26 @@ pub enum HostSkills {
 #[derive(Clone, Copy, Debug)]
 pub enum ToolRules {
     Unsupported,
-    Settings { render: RenderToolRules },
+    /// `translate` is one rule in the provider's grammar, `None` where it has none; `render`
+    /// merges the translated rules into the launch's settings document.
+    Settings {
+        render: RenderToolRules,
+        translate: fn(&crate::config::ToolRule) -> Option<String>,
+    },
+}
+
+impl ToolRules {
+    /// The rules a launch leaves out because the provider's grammar has no translation for
+    /// them. An unsupported provider applies none, which its own warning covers.
+    pub fn untranslated(self, rules: &[crate::config::ToolRule]) -> Vec<&crate::config::ToolRule> {
+        match self {
+            Self::Unsupported => Vec::new(),
+            Self::Settings { translate, .. } => rules
+                .iter()
+                .filter(|rule| translate(rule).is_none())
+                .collect(),
+        }
+    }
 }
 
 type RenderToolRules = fn(

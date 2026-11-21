@@ -46,6 +46,31 @@ fn empty_directory_target_explains_the_recorded_reason_for_each_kind() {
 }
 
 #[test]
+fn empty_directory_target_on_a_workspace_dir_kind_says_it_loaded() {
+    let cwd = crate::disk::paths::empty_dir_root().join("room/child");
+    let mut request = ExecRequest::bare_launch(
+        crate::ids::AgentKind::new_unchecked("antigravity"),
+        Vec::new(),
+    );
+    request.identity.params = serde_json::from_value(serde_json::json!({
+        "checkout": "/target", "add_dirs": ["/target", "/other"]
+    }))
+    .unwrap();
+    let text = render(&request, &LaunchReminders::default(), &cwd, None);
+    assert!(
+        text.contains(&format!(
+            "- cwd: {}\n- target: /target\n  (Your caller asked you to work here. It started \
+             you in an empty directory of your own, and Antigravity opened this one as a \
+             workspace, loading its instructions, rules, and skills and running its hooks.)\n\
+             - added dir: /other",
+            cwd.display()
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("not loaded"), "{text}");
+}
+
+#[test]
 fn added_directories_render_without_the_environment_switch_and_escape_paths() {
     let mut request =
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());

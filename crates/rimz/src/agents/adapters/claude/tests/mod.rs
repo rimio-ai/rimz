@@ -16,7 +16,12 @@ mod subagents;
 
 #[test]
 fn provider_native_sandbox_capability_is_declared() {
-    for (kind, expected) in [("claude", true), ("codex", true), ("muse", false)] {
+    for (kind, expected) in [
+        ("claude", true),
+        ("codex", true),
+        ("antigravity", true),
+        ("muse", false),
+    ] {
         assert_eq!(
             crate::agents::find_definition(kind)
                 .unwrap()

@@ -94,8 +94,21 @@ pub enum LaunchPlanWarning {
         "{kind} takes no per-launch MCP servers; the profile's mcps list is not applied and the agent loads its MCP servers as usual"
     )]
     McpsUnsupported { kind: crate::ids::AgentKind },
+    #[error("allowed-tools rule `{rule}` has no {kind} permission rule; it is left out")]
+    ToolRuleUntranslated {
+        kind: crate::ids::AgentKind,
+        rule: crate::config::ToolRule,
+    },
     #[error("{kind} has no added-directory permission channel; --add-dir is ignored")]
     AddedDirsUnsupported { kind: crate::ids::AgentKind },
+    #[error(
+        "{kind} opens each added directory as a workspace: it loads the directory's instructions, rules, and skills and runs its hooks"
+    )]
+    AddedDirsLoadConfiguration { kind: crate::ids::AgentKind },
+    #[error(
+        "the {kind} launch carries its skip-permissions flag, which overrides its sandbox; sandbox isolation is not in effect for this launch"
+    )]
+    SandboxOverridden { kind: crate::ids::AgentKind },
     #[error("launching with default RimZ launch reminders")]
     DefaultReminders,
     #[error("team `{0}` is no longer configured; launching without the team context reminder")]
@@ -109,6 +122,22 @@ pub enum LaunchPlanWarning {
         parent: crate::ids::AgentSessionId,
         error: String,
     },
+}
+
+impl LaunchPlanWarning {
+    /// The warning a launch with added directories owes for how `kind` takes them.
+    pub fn added_dirs(
+        kind: &crate::ids::AgentKind,
+        added: crate::agents::capabilities::AddedDirs,
+    ) -> Option<Self> {
+        use crate::agents::capabilities::AddedDirs;
+        let kind = kind.clone();
+        match added {
+            AddedDirs::Unsupported => Some(Self::AddedDirsUnsupported { kind }),
+            AddedDirs::Workspace => Some(Self::AddedDirsLoadConfiguration { kind }),
+            AddedDirs::FileAccess { .. } => None,
+        }
+    }
 }
 
 /// The handle whose temp unit an agent uses: a launched child shares its
@@ -794,14 +823,24 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             kind: request.kind.clone(),
         });
     }
+    for rule in adapter
+        .spec()
+        .tool_rules
+        .untranslated(request.allowed_tools.as_deref().unwrap_or_default())
+    {
+        warnings.push(LaunchPlanWarning::ToolRuleUntranslated {
+            kind: request.kind.clone(),
+            rule: rule.clone(),
+        });
+    }
     match crate::lsp::registry::live_server_names(inputs.cwd) {
         Ok(servers) => reminders.lsp_servers = servers,
         Err(error) => tracing::debug!(%error, "language-server launch reminder unavailable"),
     }
-    if !request.identity.params.add_dirs.is_empty() && !adapter.supports_added_dirs() {
-        warnings.push(LaunchPlanWarning::AddedDirsUnsupported {
-            kind: request.kind.clone(),
-        });
+    if !request.identity.params.add_dirs.is_empty()
+        && let Some(warning) = LaunchPlanWarning::added_dirs(&request.kind, adapter.added_dirs())
+    {
+        warnings.push(warning);
     }
     reminders.sandbox = inputs.isolation.is_scoped();
     reminders.env = inputs
@@ -1032,6 +1071,12 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     };
     if inputs.isolation == Isolation::Sandbox && !adapter.has_native_sandbox() {
         warnings.push(LaunchPlanWarning::NoSandboxFlag {
+            kind: request.kind.clone(),
+        });
+    } else if inputs.isolation == Isolation::Sandbox
+        && adapter.native_sandbox_overridden(&process.provider_argv)
+    {
+        warnings.push(LaunchPlanWarning::SandboxOverridden {
             kind: request.kind.clone(),
         });
     }
