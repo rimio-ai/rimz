@@ -222,6 +222,69 @@ fn resumed_workflow_leader_keeps_supervision_and_companions_start_fresh() {
 /// A fire's blocking launch is the task's agent: its row carries the task (`launched_by` joins
 /// on it) and its run the fire's id. A workflow step's leader outside any loop task still
 /// carries none.
+/// A fresh agy leader whose limiting `mcps` list has no prompt to ride: the
+/// production entry refuses it at layout, before any pane opens.
+#[test]
+fn a_fresh_antigravity_leader_with_a_limiting_mcps_list_and_no_prompt_is_refused() {
+    let mut fixture = Fixture::new();
+    fixture.fresh.layout = antigravity_with_limiting_mcps();
+    let backend = fake_backend::Backend::default();
+    let Err(error) = open_fresh(
+        fixture.fresh.clone(),
+        Some(fixture.leader()),
+        &mut Unattended,
+        &backend,
+    ) else {
+        panic!("a fresh limiting list with no prompt opened");
+    };
+    assert!(
+        error.chain().any(|cause| matches!(
+            cause.downcast_ref::<crate::harness::plan::LaunchFinalizeError>(),
+            Some(
+                crate::harness::plan::LaunchFinalizeError::ListNeedsAgentFile { field: "mcps", .. }
+            )
+        )),
+        "{error:#}"
+    );
+    assert!(backend.tabs.lock().unwrap().is_empty());
+}
+
+/// A workflow step that resumes its agy leader keeps the servers its
+/// conversation started with, so the same list is never refused there.
+#[test]
+fn a_resumed_antigravity_leader_with_a_limiting_mcps_list_opens() {
+    let mut fixture = Fixture::new();
+    fixture.fresh.layout = antigravity_with_limiting_mcps();
+    let mut leader = fixture.leader();
+    leader.resume = Some("saved-conversation".into());
+    let backend = fake_backend::Backend::default();
+    let outcome = open_fresh(
+        fixture.fresh.clone(),
+        Some(leader),
+        &mut Unattended,
+        &backend,
+    );
+    assert!(
+        matches!(outcome, Ok(LaunchOutcome::Opened(_))),
+        "{:#}",
+        outcome.err().unwrap()
+    );
+}
+
+fn antigravity_with_limiting_mcps() -> crate::harness::spec::LayoutSpec {
+    let mut layout = crate::harness::spec::parse_layout_spec(
+        "antigravity",
+        &Default::default(),
+        &Default::default(),
+    )
+    .unwrap();
+    let crate::harness::spec::Cell::Agent(cell) = &mut layout.columns[0].rows[0] else {
+        panic!("an agent cell")
+    };
+    cell.mcps = Some(vec!["github".parse().unwrap()]);
+    layout
+}
+
 #[test]
 fn a_fires_blocking_launch_carries_its_task_and_fire_and_a_taskless_step_none() {
     let request_of = |leader: LeaderRun| {

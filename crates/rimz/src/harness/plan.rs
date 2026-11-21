@@ -2316,7 +2316,10 @@ pub fn compile_layout_panes(
     for (index, cell) in layout.agent_cells().enumerate() {
         let fresh = params
             .resume_seeds
-            .is_none_or(|seeds| matches!(seeds.get(index), Some(CohortSeed::Fresh)));
+            .is_none_or(|seeds| matches!(seeds.get(index), Some(CohortSeed::Fresh)))
+            && params
+                .leader_run
+                .is_none_or(|run| run.leader_index != index || run.resume.is_none());
         if fresh {
             validate_fresh_agent_file_lists(cell)?;
         }
