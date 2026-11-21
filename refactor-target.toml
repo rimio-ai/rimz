@@ -5765,6 +5765,8 @@ allowed-dependencies = [
     "ids",
     "lsp::registry",
     "mcp::catalog",
+    # Compile reads the MCP tool wording so a rejected replacement file warns on the plan.
+    "mcp::wording",
     "mux::domain",
     "sandbox",
     # Compile reads the pinned run's definition folder for workflow environment pins.

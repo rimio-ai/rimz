@@ -1990,6 +1990,12 @@ fn notes_dir_under(home: &Path) -> PathBuf {
     home.join("notes")
 }
 
+/// The user's replacements for the wording of RimZ's MCP tools under the RimZ
+/// home `home`, each at the path of the built-in file it replaces.
+pub(crate) fn mcps_dir_under(home: &Path) -> PathBuf {
+    home.join("mcps")
+}
+
 /// `$XDG_RUNTIME_DIR`, else `/tmp/rimz-<uid>`.
 /// Library unit tests read only `$RIMZ_UNIT_TEST_XDG_RUNTIME_DIR`, falling
 /// back to a short, uncreated per-process path under `/tmp`.

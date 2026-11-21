@@ -17,6 +17,7 @@ use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
 use rimz::harness::launch_plan::{self, LaunchPlan, LaunchPlanInputs};
 use rimz::harness::team_prompt::{self, BUILT_IN_CONSENSUS, Consensus};
 use rimz::mcp::catalog::{Capability, LoadMode, SERVER_NAME, render_listing, tools_for};
+use rimz::mcp::wording::Wording;
 use rimz::sandbox::{EnvPin, Mount, SkippedSkill};
 
 use super::{LaunchOverrideArgs, launch_resolve, restart};
@@ -363,18 +364,20 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
             )?;
         }
     }
+    let wording = Wording::read_home();
+    let tools: Vec<_> = tools_for(served).collect();
     if !served.is_empty() {
         let mut table = Table::new(["CAPABILITY", "TOOL", "TOKENS", "LOAD"]).right(&[2]);
         let mut total = 0;
-        let tools: Vec<_> = tools_for(served).collect();
         for tool in &tools {
-            let size = tool.tokens();
+            let size = tool.tokens(&wording);
             total += size;
+            let load = load_mode(&arguments, tool.capability);
             table.row([
-                render::cell(tool.capability.name()),
+                render::cell(tool.group_name()),
                 render::cell(tool.name),
                 render::cell(format!("~{size}")),
-                render::cell(load_mode(&arguments, tool.capability)),
+                render::cell(load),
             ]);
         }
         writeln!(w, "\nTools")?;
@@ -417,20 +420,25 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     if served.is_empty() {
         return Ok(());
     }
-    let tools: Vec<_> = tools_for(served).collect();
     let modes: Vec<_> = served
         .iter()
         .filter_map(|&capability| {
-            LoadMode::from_name(load_mode(&arguments, capability)).map(|mode| (capability, mode))
+            LoadMode::from_name(load_mode(&arguments, Some(capability)))
+                .map(|mode| (capability, mode))
         })
         .collect();
+    let server_wide = LoadMode::from_name(load_mode(&arguments, None));
     writeln!(w, "\nServed text")?;
     writeln!(
         w,
         "  what RimZ's server puts in context, word for word; rimz cannot see the tools of your \
          own MCP servers\n"
     )?;
-    write!(w, "{}", render_listing(&tools, &modes))
+    write!(
+        w,
+        "{}",
+        render_listing(&tools, served, &modes, server_wide, &wording)
+    )
 }
 
 /// The user's servers a launch keeps, read from what the adapter wrote: the
@@ -510,8 +518,9 @@ fn user_servers(plan: &LaunchPlan, arguments: &[(&str, &str)], rides_agent_file:
 /// flag in the `rimz` item of the agent file's `mcpServers` line; on Codex, the
 /// server's `omit_tools_from` override, where `["deferred"]` loads its tools
 /// from the start and `[]` defers them; the last one passed wins, as in
-/// Codex. `default` when neither is passed.
-fn load_mode(arguments: &[(&str, &str)], capability: Capability) -> &'static str {
+/// Codex. `default` when neither is passed. With no `capability`, as for
+/// `guide`, only the server-wide mode counts.
+fn load_mode(arguments: &[(&str, &str)], capability: Option<Capability>) -> &'static str {
     let omit_prefix = format!("mcp_servers.{SERVER_NAME}.omit_tools_from=");
     let mut load = None;
     for (flag, value) in arguments {
@@ -538,7 +547,7 @@ fn load_mode(arguments: &[(&str, &str)], capability: Capability) -> &'static str
                 .collect();
             let flagged = args
                 .windows(2)
-                .filter(|pair| pair[1] == capability.name())
+                .filter(|pair| capability.is_some_and(|capability| pair[1] == capability.name()))
                 .find_map(|pair| pair[0].strip_prefix("--").and_then(LoadMode::from_name));
             let server_wide = server["alwaysLoad"].as_bool().map(|always| {
                 if always {

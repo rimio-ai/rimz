@@ -1767,3 +1767,34 @@ fn window_readings_drop_windows_read_before_the_identity_floor() {
             .is_empty()
     );
 }
+
+/// The guide can disagree with the evaluator; this holds its built-in half to
+/// the keys the evaluator reads.
+#[test]
+fn the_conditions_guide_names_every_key_the_evaluator_reads() {
+    let wording = crate::mcp::wording::Wording::built_in();
+    let guide = wording
+        .guide(
+            &[crate::mcp::catalog::Capability::Wait],
+            "rimz-wait/conditions",
+        )
+        .expect("the conditions guide");
+    let mut named: Vec<&str> = guide
+        .lines()
+        .filter_map(|line| line.strip_prefix("- `"))
+        .filter_map(|line| line.split_once("`:").map(|(keys, _)| keys))
+        .flat_map(|keys| keys.split(", "))
+        .map(|key| key.trim_matches('`'))
+        .collect();
+    named.sort_unstable();
+    let mut read = condition_keys();
+    read.sort_unstable();
+    assert_eq!(named, read);
+    let wait = crate::mcp::catalog::TOOLS
+        .iter()
+        .find(|tool| tool.name == "wait")
+        .map(|tool| wording.description(tool).text())
+        .unwrap_or_default();
+    assert!(wait.contains("`rimz-wait/conditions`"), "{wait}");
+    assert!(!wait.contains("`pr.queue`"), "{wait}");
+}

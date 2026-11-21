@@ -1,10 +1,13 @@
 //! RimZ's MCP server: `rimz mcp serve`, which a Claude, Codex, or Antigravity
-//! launch starts over stdio, and the catalog of the tools it serves. The server is a thin
-//! front: each tool call runs one `rimz` one-shot with an argv array built
-//! from the call's arguments, so a tool behaves exactly as its command does.
-//! It opens no store, loads no config, and resolves no room; the one-shots do.
+//! launch starts over stdio, the catalog of the tools it serves, and their
+//! wording. The server is a thin front: each tool call but `guide`'s runs one
+//! `rimz` one-shot with an argv array built from the call's arguments, so a
+//! tool behaves exactly as its command does, and `guide` answers from the
+//! wording read at the server's start. It opens no store, loads no config, and
+//! resolves no room; the one-shots do.
 
 pub mod catalog;
 mod server;
+pub mod wording;
 
 pub use server::{ServeErr, serve};

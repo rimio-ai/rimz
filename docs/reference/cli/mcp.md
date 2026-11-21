@@ -10,11 +10,13 @@ rimz mcp serve [--only <capability>]... [--always <capability>]... [--deferred <
 
 `--always` and `--deferred` repeat and take the same values as `--only`. Each adds `_meta: {"anthropic/alwaysLoad": true, "antigravity/alwaysLoad": true}` (`--always`), or both keys `false` (`--deferred`), to the `tools/list` entry of every tool of that capability. The first key tells Claude to load the tool into the agent's context up front or to leave it behind its tool search; the second tells Antigravity to bind the tool directly or to leave it behind its `call_mcp_tool` tool. A capability given to both refuses with exit 1.
 
-`--parent-env` gives each tool's command every variable of the parent process's environment that the server's own environment lacks; a name both hold keeps the server's value. It reads the parent's environment on Linux and macOS. Where that read fails, or on another platform, the server writes one line to stderr and the commands run with the server's own environment.
+`--parent-env` gives each tool's command every variable of the parent process's environment that the server's own environment lacks; a name both hold keeps the server's value. The server reads the [replacement files](#replace-the-wording) from the RimZ home the same environment names, so it finds the home its commands use. It reads the parent's environment on Linux and macOS. Where that read fails, or on another platform, the server writes one line to stderr and the commands run with the server's own environment.
 
 ## Tools
 
-Each tool call runs one `rimz` command as the agent that started the server, in that agent's home and room, and returns the command's output. A capability shares its name with the skill that teaches the same commands, a launch that serves the capability withholds that skill from the model, except on Antigravity ([configuration](../../guide/configuration.md#rimz-tools-over-mcp)), and its tools' descriptions carry that skill's usage knowledge for the options the tools expose: the `lsp` target forms and result cap, the `wait` triggers and `when` grammar, the `notes_list` filter fields, and when to book a stop. The server's `instructions` say when to reach for each group of tools and how a call runs. `rimz agents explain <profile> --mcps` prints all of that text as one launch is served it.
+Each tool call but `guide`'s runs one `rimz` command as the agent that started the server, in that agent's home and room, and returns the command's output. A capability shares its name with the skill that teaches the same commands, a launch that serves the capability withholds that skill from the model, except on Antigravity ([configuration](../../guide/configuration.md#rimz-tools-over-mcp)), and its tools' descriptions carry that skill's usage knowledge for the options the tools expose: the `lsp` target forms and result cap, the `wait` triggers, the `notes_list` filter fields, and when to book a stop. Material few calls need is a guide the agent loads on demand: the `wait` description points to `rimz-wait/conditions`, the `when` condition grammar. The server's `instructions` say, on their first line, when to reach for each capability the launch serves, then how a call runs. `rimz agents explain <profile> --mcps` prints all of that text as one launch is served it.
+
+`guide` belongs to no capability. The server lists it when it serves a capability that has a guide (today only `rimz-wait`), gives it no load mode of its own, and answers a call itself: the text of the named guide, or, for a name of a guide the launch does not serve, an error result `no guide "<name>"; this launch has: <names>`.
 
 | Capability | Tool | Arguments | Command |
 | --- | --- | --- | --- |
@@ -27,6 +29,7 @@ Each tool call runs one `rimz` command as the agent that started the server, in 
 | `rimz-control` | `self_tune` | optional `setting` (`keep-warm`, `idle-compact`, `smart-compact`), optional `value` (only with `setting`) | `rimz agents tune -- @me [setting] [value]` |
 | `rimz-notes` | `notes_add` | `kind`, `title`, and `body` or `file`, not both; optional `fence`, `meta{}` (keys without `=`), `cwd` | `rimz notes add [flags] -- <kind> <title>`, with `body` on stdin |
 | `rimz-notes` | `notes_list` | optional `filter[]`, `limit` | `rimz notes list [flags]` |
+| - | `guide` | `name`, `<capability>/<guide>` | None: the server answers from the guide files it read at its start |
 
 ## List the tools
 
@@ -34,13 +37,13 @@ Each tool call runs one `rimz` command as the agent that started the server, in 
 rimz mcp tools [--only <capability>]... [--json]
 ```
 
-`rimz mcp tools` prints each tool the server offers with its capability and the estimated tokens of its `tools/list` entry (compact JSON, counted with the `o200k_base` tokenizer, so Claude's own count runs somewhat higher), then the total. That entry is what a provider puts in the agent's context for the tool when it loads it up front. `--only` takes the same values as `serve --only` and refuses any other the same way. `--json` prints the server's `tools/list` result for the same `--only`, unchanged.
+`rimz mcp tools` prints each tool the server offers with its capability (`-` for `guide`) and the estimated tokens of its `tools/list` entry (compact JSON, counted with the `o200k_base` tokenizer, so Claude's own count runs somewhat higher), then the total. That entry is what a provider puts in the agent's context for the tool when it loads it up front. `--only` takes the same values as `serve --only` and refuses any other the same way. `--json` prints the server's `tools/list` result for the same `--only`, unchanged. Both read the [replacement files](#replace-the-wording) as the server does, and print a warning on stderr for each one that is not used.
 
 ```console
 $ rimz mcp tools
 CAPABILITY    TOOL          TOKENS
 rimz-lsp      lsp            ~1204
-rimz-wait     wait           ~1227
+rimz-wait     wait            ~864
 rimz-wait     wait_list        ~46
 rimz-wait     wait_cancel     ~135
 rimz-control  self_stop       ~283
@@ -48,14 +51,40 @@ rimz-control  self_compact    ~145
 rimz-control  self_tune       ~251
 rimz-notes    notes_add       ~405
 rimz-notes    notes_list      ~359
-total: ~4055 tokens in 9 tools
+-             guide           ~109
+total: ~3801 tokens in 10 tools
 ```
 
 Every command a tool runs is on the [routine list](../agent-support.md) an installed agent runs without asking. The commands themselves are documented on their own pages: [Language servers](./lsp.md), [Wait](./wait.md), [Agents](./agents.md), and [Notes](./notes.md).
 
+## Replace the wording
+
+Each text the server sends is a Markdown file built into `rimz`, and a file at the same path under `mcps/` in the RimZ home replaces it:
+
+| Path under `~/.rimz/mcps/` | Text |
+| --- | --- |
+| `instructions.md` | The instructions after their first line: how a call runs and what its result holds |
+| `guide.md` | The `guide` description |
+| `<capability>/instructions.md` | The capability's sentence on the instructions' first line, one line |
+| `<capability>/<tool>.md` | The tool's description (`rimz-wait/wait.md`) |
+| `<capability>/guides/<guide>.md` | A guide `guide` loads (`rimz-wait/guides/conditions.md`) |
+
+The built-in files are under `crates/rimz/src/mcp/tools/` in the source tree. The server reads the folder once, when it starts, so a running session keeps the text it started with and an agent launched afterwards gets the new file; a provider that restarts the server inside a session (a resume, a server it respawns) reads the folder again. An argument's description is part of the tool's schema and has no file.
+
+A replacement never switches a tool off. RimZ serves the built-in text in its place, and warns with the file's path and the reason, when the file cannot be read, is not UTF-8, is empty, or breaks a limit a provider keeps:
+
+- a tool's description and its arguments' descriptions over 4,096 characters;
+- a capability's sentence on more than one line;
+- the instructions' first line, every capability's sentence joined, over 250 characters: each replaced sentence falls back;
+- the instructions with every capability over 4,096 characters: a replaced `instructions.md` falls back.
+
+The limits are checked with every capability, so a file passes or fails the same way in every launch. A `.md` file at any other path is ignored with a warning, which names the path it belongs at when exactly one built-in file has its name (`rimz-lsp/wait.md` belongs at `rimz-wait/wait.md`); a file cannot add a tool or a guide. Files that do not end in `.md` are not read.
+
+A launch that hands the server over carries the warnings of the capabilities it serves, of the shared files, and of every misplaced file: they print in the agent's pane before the provider starts, stay on the agent's record for `rimz agents show`, and print on stderr under `rimz agents explain`. `rimz mcp tools` prints every warning on stderr, and `rimz agents explain <profile> --mcps` ends the line of each tool, and the instructions' heading, with `text <path>` for each part whose text is a replacement.
+
 ## Calls
 
-- Each call runs `rimz --color=never` with the command's words, flag values joined as `--flag=value`, and every positional after `--`, so no argument an agent passes is read as a flag. The command never gets `--root` or `--json`.
+- Each call but `guide`'s runs `rimz --color=never` with the command's words, flag values joined as `--flag=value`, and every positional after `--`, so no argument an agent passes is read as a flag. The command never gets `--root` or `--json`.
 - `cwd` sets the command's working directory; without it the command runs in the server's directory, the directory the agent launched in. For `notes_add`, an agent's room pin names the note's project ahead of `cwd`.
 - The command's stdin is empty, except for `notes_add`, whose `body` reaches it byte for byte.
 - The result's text is the command's stdout, then, when the command wrote to stderr, a line `stderr:` and its stderr. A command that exits nonzero returns an error result whose last line is `exit code <N>`, since the [LSP exit codes](./lsp.md#exit-codes) carry meaning.
@@ -69,10 +98,10 @@ The server speaks newline-delimited JSON-RPC 2.0 on stdin and stdout, and writes
 
 | Method | Reply |
 | --- | --- |
-| `initialize` | The tools capability, `serverInfo` named `rimz`, `instructions` whose first line says when to reach for each group of tools and whose other lines say how a call runs and what its result holds, and the client's protocol version when it is `2025-06-18` or `2025-11-25`, else `2025-11-25` |
+| `initialize` | The tools capability, `serverInfo` named `rimz`, `instructions` whose first line says when to reach for each capability the server serves and whose other lines say how a call runs and what its result holds, and the client's protocol version when it is `2025-06-18` or `2025-11-25`, else `2025-11-25` |
 | `ping` | `{}` |
 | `tools/list` | The served tools, each with its JSON Schema, and `_meta` on the tools of a capability `--always` or `--deferred` names |
-| `tools/call` | The call's result; an unknown or unserved tool is error `-32602` |
+| `tools/call` | The call's result, which for `guide` the server writes itself; an unknown or unserved tool is error `-32602` |
 | `notifications/cancelled` | No reply; the named call's command is killed |
 | Any other request, `server/discover` included | Error `-32601` |
 
