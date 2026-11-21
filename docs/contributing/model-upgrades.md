@@ -1,6 +1,6 @@
 # Model upgrades
 
-What to change when a provider ships a new model. The work splits by who resolves the alias a definition names: Claude Code resolves its own, and RimZ resolves Codex's. Pi's per-route fast lists need an explicit entry. Pricing follows on its own, with two narrow exceptions.
+What to change when a provider ships a new model. The work splits by who resolves the alias a definition names: Claude Code resolves its own, and RimZ resolves Codex's and Antigravity's. Pi's per-route fast lists need an explicit entry. Pricing follows on its own, with two narrow exceptions.
 
 ## Claude: fable, opus, sonnet, haiku
 
@@ -20,6 +20,14 @@ An existing family's new release needs no RimZ change. The exec wrapper resolves
 Run `cargo xtask test 'agents::tools'`, `cargo xtask test 'harness::spec'`, and `cargo xtask test 'config::definitions'`, then `cargo xtask docs-links`.
 
 Definitions and tier cells retain the requested alias. With a durable launch record, resume, restart, and fork resolve that requested model through the same pins, catalog, and passthrough path as a fresh launch, ignoring observed `/model` switches. Only legacy sessions without a launch record replay the last observed model for an alias posture, and not when the resume names `--model`, `--tier`, or `--agent`; without an observed model they warn and resolve afresh. Full model ids pass through unchanged. Machine [model alias pins](../guide/configuration.md#model-aliases) override catalog resolution. Pi and OpenCode instead restore their native session's model on plain resume or restart, and Pi also does so on fork: without an explicit model override, RimZ emits no model flag and bypasses alias resolution.
+
+## Antigravity: hydrogen, neon, carbon, argon, flash
+
+agy knows no short names, so RimZ launches each from the `MODELS` table in [`adapters/antigravity/mod.rs`](../../crates/rimz/src/agents/adapters/antigravity/mod.rs). Any `gemini-` ID already runs on Antigravity by its prefix, as written and with no built-in effort.
+
+1. Add an entry for a new short name, or move an existing one to a new base ID deliberately: the short name, the base ID (never an effort-suffixed one), and `max_effort`, the highest level the model takes, where `max` launches.
+2. Confirm the model takes `high`, the default effort every entry carries. A seat whose effort the model refuses fails at every launch. The levels a model takes are found by running `agy --model <id> --effort <level>` in a probe home ([probes](./probes.md)).
+3. Update the Antigravity rows in `model_catalog_and_defaults` in [`agents/tools.rs`](../../crates/rimz/src/agents/tools.rs) and the roster sentence under [Chains and defaults](../reference/definitions.md#chains-and-defaults).
 
 ## Pi: fast-capable models
 

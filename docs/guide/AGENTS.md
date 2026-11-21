@@ -48,7 +48,7 @@ The left column is the word to use. A synonym for one of these is a bug, and a t
 | truecolor | One word, matching the `COLORTERM` value. |
 | cell art | The sextant render tier. |
 | handle | `@name`. |
-| profile, kind base | The two definition shapes: `agents/<kind>.md` is a kind base, every other file under `agents/` is a profile. |
+| profile, kind base | The two definition shapes: `agents/<kind>.md` (or an alias's name, such as `agents/agy.md`) is a kind base, every other file under `agents/` is a profile. |
 | permission mode | What an agent may do without asking. Never "posture", which the reference reserves for launch posture. |
 | cohort | One live copy of a team. |
 | the per-machine config | The `~/.rimz` TOML set. |

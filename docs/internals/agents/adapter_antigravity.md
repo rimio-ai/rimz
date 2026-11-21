@@ -25,8 +25,8 @@ The launch spec maps RimZ's launch inputs onto `agy` flags:
 | --- | --- |
 | fresh launch | `agy` |
 | startup prompt | `agy --prompt-interactive <prompt>` |
-| profile `model` | `--model <model>` |
-| profile `effort` | `--effort <effort>` |
+| profile `model` | `--model <model>`, a catalog short name as its `gemini-` ID |
+| profile `effort` | `--effort <effort>`, from `low`, `medium`, `high`, and `xhigh` |
 | permission `ask` | none (the native default) |
 | permission `auto` | `--mode accept-edits` |
 | permission `plan` | `--mode plan` |
@@ -34,7 +34,9 @@ The launch spec maps RimZ's launch inputs onto `agy` flags:
 | exact resume | `agy --conversation <id>` |
 | profile system prompt, fresh launch | `--agent rimz-<label>-<hash>` after the rest of the argv, selecting [the agent file](#the-agent-file) |
 
-The 1.3.3 CLI accepts `low`, `medium`, `high`, `xhigh`, and `max` for `--effort` ([reference](../../externals/agent-adapter/antigravity-reference.md#flags)). The adapter declares no version floor, so an older `agy` that lacks the flag rejects a profile that sets effort at its own startup. Under `yolo`, implementation-plan approval still follows the user's `artifactReviewPolicy`, which RimZ leaves untouched ([reference](../../externals/agent-adapter/antigravity-reference.md#execution-modes)).
+The 1.3.3 CLI accepts `low`, `medium`, `high`, `xhigh`, and `max` for `--effort` ([reference](../../externals/agent-adapter/antigravity-reference.md#flags)), but agy 1.5.13 refuses `max` on every model and takes a per-model subset of the rest: hydrogen and neon take `low` to `xhigh`, carbon, argon, flash, and `claude-` IDs `low` to `high`. The adapter declares no version floor, so an older `agy` that lacks the flag rejects a profile that sets effort at its own startup.
+
+`crates/rimz/src/agents/adapters/antigravity/mod.rs::MODELS` is the one table of Gemini model facts: each short name, its base ID, its default effort (`high`), and the level `max` launches at. agy knows no short name, so `AntigravityAdapter::resolve_model_alias` rewrites one to its ID at fresh launch, below a machine pin. RimZ sends a base ID plus `--effort`, and sets no kind-wide default effort, because agy exits on an effort-suffixed ID (`gemini-4-hydrogen-high`) beside a differing `--effort`: an uncataloged or suffixed ID launches as written. The effort matcher refuses a level outside `low` to `xhigh` at launch, naming the levels. `crates/rimz/src/agents/definition.rs::LaunchSpec::lower_max_effort` launches `max` at the entry's level, `high` for a `claude-` ID (the ceiling beside that prefix in `foreign_prefixes`), or `xhigh` for another ID outside the catalog, with a `SkippedField` warning. `crates/rimz/src/harness/plan.rs::finalize_agent_cell` settles `max` and the built-in default for the launch's final model, a `--model` override or a machine pin included, and re-renders the one `--effort` arg to match. A level the model lacks within that list is left to agy's own refusal. The `gemini-` prefix routes a definition to Antigravity; a `claude-` ID runs here only under `agent: antigravity` or `agent: agy` (`DefinitionSpec::foreign_prefixes`). Under `yolo`, implementation-plan approval still follows the user's `artifactReviewPolicy`, which RimZ leaves untouched ([reference](../../externals/agent-adapter/antigravity-reference.md#execution-modes)).
 
 Resume takes a conversation id only when `session.rs::valid_conversation_id` accepts it: nonblank after trimming, at most 256 bytes, not `.` or `..`, no leading `-`, and no control character, `/`, or `\`. The same rule gates every path built from an id. On a live pane, `session.rs::resumed_session_id` reads the first `--conversation <id>` or `--conversation=<id>` after a program whose basename is `agy`. `-c` and `--continue` resume the workspace's latest conversation, so they prove no exact identity and bind nothing. The process matcher (`process_names`, `bin_names`) recognizes only `agy`, so the desktop app's `antigravity` processes stay outside this adapter.
 
