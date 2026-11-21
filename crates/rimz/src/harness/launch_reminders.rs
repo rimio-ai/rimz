@@ -115,8 +115,14 @@ impl LaunchReminders {
     }
 
     /// The rimz skills hidden from the model because the launch registers the
-    /// MCP tools of the same name.
+    /// MCP tools of the same name; none on a kind whose tools arrive after the
+    /// first turn, where the skill is the way in on that turn.
     pub(super) fn hidden_skills(&self, request: &ExecRequest) -> Vec<&'static str> {
+        if crate::agents::find_definition(request.kind.as_str())
+            .is_some_and(|adapter| !adapter.mcp_tools_on_first_turn())
+        {
+            return Vec::new();
+        }
         self.mcp_capabilities(request)
             .iter()
             .map(|capability| capability.name())
@@ -201,7 +207,10 @@ pub(super) fn render(
     } else {
         &[]
     };
-    let lsp_via = if reminders.lsp_tool(request) {
+    let lsp_via = if reminders.lsp_tool(request)
+        && (reminders.hidden_skills(request).contains(&"rimz-lsp")
+            || !skill_is_callable(reminders.callable_skills(request).as_deref(), "rimz-lsp"))
+    {
         "via the `lsp` tool of the `rimz` MCP server"
     } else {
         "via Skill(rimz-lsp)"

@@ -147,12 +147,15 @@ fn shared_lsp_reminder_is_in_environment_for_peers_and_children() {
 #[test]
 fn lsp_bullet_names_the_mcp_tool_when_live_and_the_skill_when_only_it_is_callable() {
     let mut actual = Vec::new();
-    for tool in [false, true] {
+    for (kind, tool) in [
+        ("claude", false),
+        ("claude", true),
+        ("antigravity", false),
+        ("antigravity", true),
+    ] {
         for skills in [None, Some(Vec::new())] {
-            let mut request = ExecRequest::bare_launch(
-                crate::ids::AgentKind::new_unchecked("claude"),
-                Vec::new(),
-            );
+            let mut request =
+                ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked(kind), Vec::new());
             request.skills = skills;
             let reminders = LaunchReminders {
                 lsp_configured: true,
@@ -162,6 +165,7 @@ fn lsp_bullet_names_the_mcp_tool_when_live_and_the_skill_when_only_it_is_callabl
             };
             let text = render(&request, &reminders, Path::new("/checkout"), None);
             actual.push((
+                kind,
                 tool,
                 request.skills.is_none(),
                 text.lines()
@@ -172,13 +176,19 @@ fn lsp_bullet_names_the_mcp_tool_when_live_and_the_skill_when_only_it_is_callabl
     }
     let tool = Some("- lsp: rust, via the `lsp` tool of the `rimz` MCP server".to_owned());
     let skill = Some("- lsp: rust, via Skill(rimz-lsp)".to_owned());
+    // Antigravity keeps the skill beside its late-bound tool, so the bullet names the skill
+    // while it is callable.
     assert_eq!(
         actual,
         [
-            (false, true, skill),
-            (false, false, None),
-            (true, true, tool.clone()),
-            (true, false, tool),
+            ("claude", false, true, skill.clone()),
+            ("claude", false, false, None),
+            ("claude", true, true, tool.clone()),
+            ("claude", true, false, tool.clone()),
+            ("antigravity", false, true, skill.clone()),
+            ("antigravity", false, false, None),
+            ("antigravity", true, true, skill),
+            ("antigravity", true, false, tool),
         ]
     );
 }

@@ -678,6 +678,13 @@ pub trait LaunchCapability: CoreCapability {
         None
     }
 
+    /// Whether a handed-over server's tools are there from the conversation's first turn. A
+    /// kind whose tools arrive later keeps the skills of the capabilities it serves, so the
+    /// agent can reach them on that turn.
+    fn mcp_tools_on_first_turn(&self) -> bool {
+        true
+    }
+
     /// Register RimZ's MCP server and keep only the user's servers a `mcps`
     /// list names, within what the provider can switch off per launch.
     /// Returns warnings for a list it could not apply in full.
