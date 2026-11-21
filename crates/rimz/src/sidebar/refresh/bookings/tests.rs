@@ -602,7 +602,7 @@ fn the_lane_writes_only_its_cache() {
     snapshot.project_root = Some(root.clone());
     let mut lane = BookingsState::default();
     let config = MachineConfig::default();
-    refresh_bookings_for(&snapshot, &state, &runtime, &config, None, &mut lane);
+    refresh_bookings_for(&snapshot, None, &state, &runtime, &config, None, &mut lane);
     let after = files(dir.path());
     let added: Vec<_> = after
         .iter()
@@ -621,7 +621,7 @@ fn the_lane_writes_only_its_cache() {
         .unwrap()
         .set_modified(old)
         .unwrap();
-    refresh_bookings_for(&snapshot, &state, &runtime, &config, None, &mut lane);
+    refresh_bookings_for(&snapshot, None, &state, &runtime, &config, None, &mut lane);
     assert_eq!(
         std::fs::metadata(runtime.bookings_path())
             .unwrap()
@@ -1694,4 +1694,345 @@ fn a_fired_team_names_its_cohorts_lane_from_its_rows() {
         "trunk's lane is no lane"
     );
     assert_eq!(lane_with(&[]), None, "no row: the typed target names none");
+}
+
+/// A room with a store and a private machine home, for a test that drives the lane entry: the
+/// task record holds the booking's fire mark and the event log the rows its fire launched.
+struct StoredRoom {
+    _dir: tempfile::TempDir,
+    root: PathBuf,
+    state: StatePaths,
+    runtime: RuntimePaths,
+}
+
+impl StoredRoom {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let state = StatePaths::for_project_root_under(&root, &dir.path().join("home")).unwrap();
+        let runtime = RuntimePaths::for_state_under(&state, &dir.path().join("run"));
+        write_workspace(&root, &state);
+        Self {
+            _dir: dir,
+            root,
+            state,
+            runtime,
+        }
+    }
+
+    /// Records `mark` as the fire of the task `name` this room binds; a consumed task's
+    /// record is retired.
+    fn record_fire(&self, name: &str, mark: &FireMark, consumed: bool) {
+        use crate::harness::schedule::task_record::{Binding, Scope, TaskRecord, TaskRecords};
+        let binding = Binding {
+            scope: Scope::Workspace(WorkspaceId::from_project_root(&self.root)),
+            name: name.to_owned(),
+        };
+        let key = binding.key();
+        let record = TaskRecord {
+            binding,
+            retired_at: consumed.then_some(mark.at),
+            arming: None,
+            strikes: 0,
+            counted: Vec::new(),
+            scheduled: BTreeMap::new(),
+            quiet: None,
+            marks: BTreeMap::from([(self.root.clone(), mark.clone())]),
+        };
+        let mut records = serde_json::to_value(TaskRecords::default()).unwrap();
+        let id = serde_json::to_value(mark.fire.task()).unwrap();
+        records["tasks"][id.as_str().unwrap()] = serde_json::to_value(record).unwrap();
+        let loops = crate::disk::paths::loops_dir();
+        std::fs::create_dir_all(&loops).unwrap();
+        std::fs::write(loops.join("tasks.json"), records.to_string()).unwrap();
+        assert_eq!(task_record::load().unwrap().live(&key).is_none(), consumed);
+    }
+
+    /// Appends `event` to the room's event log and returns its stamp.
+    fn append(&self, event: &crate::EventEnvelope) -> Timestamp {
+        std::fs::create_dir_all(self.state.events_log.parent().unwrap()).unwrap();
+        crate::store::event_log::append(&self.state.events_log, event).unwrap();
+        event.timestamp
+    }
+
+    /// The fire `fire` launching `launch` at `epoch`, in `tree` when given, bound in its pane,
+    /// and its session `session` registering.
+    fn launch(&self, fire: &FireId, launch: &str, epoch: u32, session: &str, tree: Option<&Path>) {
+        let payload: crate::store::event::AgentLaunchPayload =
+            serde_json::from_value(serde_json::json!({
+                "agent_id": launch_id(launch, epoch), "agent_name": launch,
+                "launch_id": launch_id(launch, 0),
+                "state": "bound", "epoch": (epoch > 0).then_some(epoch), "loop_fire": fire,
+                "worktree_path": tree,
+            }))
+            .unwrap();
+        self.append(&crate::EventEnvelope::agent_launched(
+            self.state.workspace_id.clone(),
+            "room",
+            &AgentKind::new_unchecked("claude"),
+            payload,
+        ));
+        self.hook(
+            launch,
+            epoch,
+            session,
+            "test",
+            crate::agents::LifecycleSignal::Registered,
+        );
+    }
+
+    /// The session `session` of `launch` ending by the event `event_name` (`rimz agents stop`'s
+    /// or the provider's SessionEnd hook); returns the end's stamp.
+    fn end(&self, launch: &str, epoch: u32, session: &str, event_name: &str) -> Timestamp {
+        self.hook(
+            launch,
+            epoch,
+            session,
+            event_name,
+            crate::agents::LifecycleSignal::Ended,
+        )
+    }
+
+    fn hook(
+        &self,
+        launch: &str,
+        epoch: u32,
+        session: &str,
+        event_name: &str,
+        signal: crate::agents::LifecycleSignal,
+    ) -> Timestamp {
+        let mut observation =
+            crate::agents::AgentLifecycleObservation::new(Some(session.into()), signal);
+        observation.agent_name = Some(launch.to_owned());
+        observation.launch_id = Some(launch_id(launch, 0).as_str().into());
+        observation.launch.epoch = (epoch > 0).then_some(epoch);
+        self.append(&crate::EventEnvelope::agent_lifecycle(
+            self.state.workspace_id.clone(),
+            "room",
+            "claude",
+            event_name,
+            &observation,
+        ))
+    }
+
+    /// One lane pass as the host runs it, over the fold's Runtime rows and the room's store
+    /// (`None` when it cannot be opened), then the published cache.
+    fn publish(&self, store: bool, teams: Option<&TeamsConfig>) -> BookingsCache {
+        let store = store.then(|| {
+            crate::Store::open_existing(self.state.clone(), self.runtime.clone()).unwrap()
+        });
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(&self.root),
+            Vec::new(),
+            Timestamp::now(),
+        );
+        snapshot.project_root = Some(self.root.clone());
+        if let Some(store) = &store {
+            snapshot.agents = store
+                .runtime_projection(crate::RuntimeScope::Runtime)
+                .map(|projection| projection.agents)
+                .unwrap_or_default()
+                .into();
+        }
+        refresh_bookings_for(
+            &snapshot,
+            store.as_ref(),
+            &self.state,
+            &self.runtime,
+            &MachineConfig::default(),
+            teams,
+            &mut BookingsState::default(),
+        );
+        read_bookings_cache(&self.runtime.bookings_path())
+    }
+}
+
+/// The provisional id of the launch of the agent `name` at `epoch`; at epoch 0, its launch id.
+fn launch_id(name: &str, epoch: u32) -> String {
+    match epoch {
+        0 => format!("launch_{name}"),
+        _ => format!("launch_{name}_{epoch}"),
+    }
+}
+
+/// A booked fire's mark as its fire leaves it, `minutes` ago.
+fn fired_mark(minutes: i64, kind: LaunchKind, target: &str) -> FireMark {
+    FireMark {
+        once: true,
+        ..mark(
+            Timestamp::now() - jiff::SignedDuration::from_mins(minutes),
+            Some(kind),
+            target,
+        )
+    }
+}
+
+/// The published fire of the room's one booking.
+fn published_fire(cache: &BookingsCache) -> &FireFacts {
+    assert_eq!(cache.bookings.len(), 1, "{cache:?}");
+    cache.bookings[0].fire.as_ref().unwrap()
+}
+
+/// An interactive agent a catalog booking launched, ended by `rimz agents stop` or by its
+/// SessionEnd hook, publishes its row's end: the room's durable rows keep the ended row the
+/// fold's Runtime rows drop. Its tree still names the entry's branch after the end.
+#[test]
+fn an_ended_interactive_booking_publishes_its_rows_end() {
+    if crate::harness::schedule::test_homes::reexec_with_private_homes(
+        "sidebar::refresh::bookings::tests::an_ended_interactive_booking_publishes_its_rows_end",
+    ) {
+        return;
+    }
+    for event_name in ["rimz.agent-ended", "SessionEnd"] {
+        let room = StoredRoom::new();
+        let entry = TaskEntry {
+            once_per_checkout: Some(true),
+            ..launching(&["rimz", "agents", "coder", "go"], &room.root)
+        };
+        crate::harness::schedule::instances::seed(&room.state, "lang", &entry);
+        let fire = fired_mark(1, LaunchKind::Agent, "coder");
+        room.record_fire("lang", &fire, false);
+        let tree = marked_tree(room._dir.path(), "booked", "booked-branch", &room.root);
+        room.launch(&fire.fire, "booked", 0, "sess", Some(&tree));
+
+        let live = room.publish(true, None);
+        assert_eq!(
+            published_fire(&live).ended_at,
+            None,
+            "{event_name}: a live row"
+        );
+
+        let end = room.end("booked", 0, "sess", event_name);
+        let ended = room.publish(true, None);
+        assert_eq!(published_fire(&ended).ended_at, Some(end), "{event_name}");
+        assert_eq!(
+            (
+                ended.bookings[0].branch.as_deref(),
+                ended.bookings[0].worktree
+            ),
+            (Some("booked-branch"), true),
+            "{event_name}: the ended row still names its tree"
+        );
+    }
+}
+
+/// A consumed one-shot whose interactive agent ended publishes the row's end and, with no
+/// tree, stays for its window after that end though its fire is older than the window.
+#[test]
+fn an_ended_interactive_one_shot_publishes_its_rows_end() {
+    if crate::harness::schedule::test_homes::reexec_with_private_homes(
+        "sidebar::refresh::bookings::tests::an_ended_interactive_one_shot_publishes_its_rows_end",
+    ) {
+        return;
+    }
+    let room = StoredRoom::new();
+    let fire = fired_mark(20, LaunchKind::Agent, "coder");
+    room.record_fire("timed", &fire, true);
+    room.launch(&fire.fire, "booked", 0, "sess", None);
+    let end = room.end("booked", 0, "sess", "rimz.agent-ended");
+
+    assert_eq!(
+        published_fire(&room.publish(true, None)).ended_at,
+        Some(end)
+    );
+}
+
+/// A team fire ends once every seat carrying its id is over, at the newest seat's end; while
+/// one seat lives it has no end.
+#[test]
+fn a_team_fire_ends_with_its_last_seat() {
+    if crate::harness::schedule::test_homes::reexec_with_private_homes(
+        "sidebar::refresh::bookings::tests::a_team_fire_ends_with_its_last_seat",
+    ) {
+        return;
+    }
+    let room = StoredRoom::new();
+    let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), Team::default())]));
+    let fire = fired_mark(1, LaunchKind::Team, "forge");
+    room.record_fire("crew", &fire, true);
+    room.launch(&fire.fire, "lead", 0, "lead-sess", None);
+    room.launch(&fire.fire, "member", 0, "member-sess", None);
+    room.end("member", 0, "member-sess", "SessionEnd");
+    assert_eq!(
+        published_fire(&room.publish(true, Some(&teams))).ended_at,
+        None,
+        "one seat lives"
+    );
+
+    let last = room.end("lead", 0, "lead-sess", "rimz.agent-ended");
+    assert_eq!(
+        published_fire(&room.publish(true, Some(&teams))).ended_at,
+        Some(last)
+    );
+}
+
+/// A launch swapped to a new session keeps its fire alive: its first session's ended row and
+/// the live replacement are one launch id.
+#[test]
+fn a_swapped_launch_with_one_ended_session_lives() {
+    if crate::harness::schedule::test_homes::reexec_with_private_homes(
+        "sidebar::refresh::bookings::tests::a_swapped_launch_with_one_ended_session_lives",
+    ) {
+        return;
+    }
+    let room = StoredRoom::new();
+    let fire = fired_mark(1, LaunchKind::Agent, "coder");
+    room.record_fire("timed", &fire, true);
+    room.launch(&fire.fire, "booked", 0, "old", None);
+    room.launch(&fire.fire, "booked", 1, "new", None);
+    room.end("booked", 0, "old", "SessionEnd");
+
+    let rows = crate::Store::open_existing(room.state.clone(), room.runtime.clone())
+        .unwrap()
+        .runtime_projection(crate::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.agent_id.as_str(), row.ended_at.is_some()))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([("old", true), ("new", false)]),
+        "the room holds the ended and the live session of the launch"
+    );
+    assert_eq!(published_fire(&room.publish(true, None)).ended_at, None);
+}
+
+/// A pass that cannot read the room's rows leaves the published cache as it was; a room with
+/// no booking reads none and publishes its empty cache.
+#[test]
+fn an_unreadable_store_leaves_the_cache_and_no_booking_reads_none() {
+    if crate::harness::schedule::test_homes::reexec_with_private_homes(
+        "sidebar::refresh::bookings::tests::an_unreadable_store_leaves_the_cache_and_no_booking_reads_none",
+    ) {
+        return;
+    }
+    let room = StoredRoom::new();
+    let empty = room.publish(false, None);
+    assert_eq!(
+        empty.version, BOOKINGS_CACHE_VERSION,
+        "published with no store to read"
+    );
+    assert!(empty.bookings.is_empty());
+
+    let fire = fired_mark(1, LaunchKind::Agent, "coder");
+    room.record_fire("timed", &fire, true);
+    room.launch(&fire.fire, "booked", 0, "sess", None);
+    let end = room.end("booked", 0, "sess", "SessionEnd");
+    let published = room.publish(true, None);
+    assert_eq!(published_fire(&published).ended_at, Some(end));
+    let bytes = std::fs::read(room.runtime.bookings_path()).unwrap();
+    assert_eq!(
+        room.publish(false, None),
+        published,
+        "no store: the cache stands"
+    );
+    std::fs::remove_file(&room.state.events_log).unwrap();
+    std::fs::create_dir(&room.state.events_log).unwrap();
+    room.publish(true, None);
+    assert_eq!(
+        std::fs::read(room.runtime.bookings_path()).unwrap(),
+        bytes,
+        "an unreadable event log: the cache stands"
+    );
 }

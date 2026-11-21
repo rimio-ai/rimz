@@ -49,7 +49,7 @@ pub mod task_record;
 mod task_record_store;
 pub mod team;
 #[cfg(test)]
-pub(in crate::harness) mod test_homes;
+pub(crate) mod test_homes;
 pub mod window;
 
 pub use fire::last_stamps;

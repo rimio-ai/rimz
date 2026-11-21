@@ -22,7 +22,7 @@ use crate::harness::schedule::{TaskAction, TaskKind, Trigger};
 use crate::harness::when::CiSource;
 use crate::ids::FireId;
 use crate::store::snapshot::{BookingPr, BookingStarts, SidebarSnapshot};
-use crate::{RuntimePaths, StatePaths};
+use crate::{RuntimePaths, RuntimeScope, StatePaths, Store};
 
 #[cfg(test)]
 mod tests;
@@ -136,6 +136,7 @@ pub(in crate::sidebar) fn read_bookings_cache(path: &Path) -> BookingsCache {
 
 pub(super) fn refresh_bookings_for(
     snapshot: &SidebarSnapshot,
+    store: Option<&Store>,
     state_paths: &StatePaths,
     runtime: &RuntimePaths,
     config: &MachineConfig,
@@ -153,13 +154,17 @@ pub(super) fn refresh_bookings_for(
                 prior: &prior,
                 now: snapshot.now.to_zoned(config.time_zone()),
                 window_secs: CONSUMED_TREELESS_SECS,
-                rows: &snapshot.agents,
+                store,
                 worktrees: &config.agents.worktree,
             };
-            lane.read(state, || match loaded_teams {
+            let read = lane.read(state, || match loaded_teams {
                 Some(teams) => teams.clone(),
                 None => SeatPolicy::load(config, Some(root)).teams,
-            })
+            });
+            let Some(bookings) = read else {
+                return;
+            };
+            bookings
         }
         None => Vec::new(),
     };
@@ -187,20 +192,24 @@ struct Lane<'a> {
     prior: &'a BookingsCache,
     now: jiff::Zoned,
     window_secs: u64,
-    /// The fold's rows.
-    rows: &'a [AgentState],
+    /// The room's store, whose Audit rows a fired booking reads; `None` when it cannot be
+    /// opened.
+    store: Option<&'a Store>,
     worktrees: &'a WorktreeConfig,
 }
 
 impl Lane<'_> {
     /// The room's bookings; `teams` loads the seat tables only when the room holds one. The
     /// gate is the catalog and the task record: with no booking row and no booked fire of a
-    /// consumed task missing from the catalog outside `expired`, nothing more is read.
+    /// consumed task missing from the catalog outside `expired`, nothing more is read, and the
+    /// room's Audit rows are read only for a fired booking. `None` when those rows cannot be
+    /// read: the pass leaves the published cache as it was, since the fold's Runtime rows have
+    /// dropped every ended row and would publish an ended launch as starting.
     fn read(
         self,
         lane: &mut BookingsState,
         teams: impl FnOnce() -> TeamsConfig,
-    ) -> Vec<BookingFacts> {
+    ) -> Option<Vec<BookingFacts>> {
         let Self {
             root,
             state,
@@ -219,7 +228,7 @@ impl Lane<'_> {
             .collect();
         let booked = catalog.visible().values().any(is_booking);
         if !booked && ledger.is_empty() {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let readings = if booked {
             let stats = lane
@@ -239,11 +248,17 @@ impl Lane<'_> {
         } else {
             BTreeMap::new()
         };
+        let fired = !ledger.is_empty() || readings.values().any(|reading| reading.launch.is_some());
+        let rows = if fired {
+            audit_rows(self.store)?
+        } else {
+            Vec::new()
+        };
         let teams = teams();
         let records = RoomRecords {
             source: CiSource::read(runtime),
             runs: crate::store::run::list(&state.runs_dir).unwrap_or_default(),
-            rows: self.rows,
+            rows: &rows,
             worktrees: self.worktrees,
         };
         let mut facts = Vec::new();
@@ -263,7 +278,23 @@ impl Lane<'_> {
         );
         lane.expired.extend(gone);
         facts.extend(kept);
-        facts
+        Some(facts)
+    }
+}
+
+/// The room's Audit rows, which keep an ended row with its `loop_fire` and end stamp; `None`,
+/// logged, when the store cannot be opened or its rows cannot be read.
+fn audit_rows(store: Option<&Store>) -> Option<Vec<AgentState>> {
+    let Some(store) = store else {
+        tracing::debug!("sidebar bookings pass skipped: the room's store cannot be opened");
+        return None;
+    };
+    match store.runtime_projection(RuntimeScope::Audit) {
+        Ok(projection) => Some(projection.agents),
+        Err(error) => {
+            tracing::debug!(%error, "sidebar bookings pass skipped: the room's rows are unreadable");
+            None
+        }
     }
 }
 
@@ -271,7 +302,7 @@ impl Lane<'_> {
 pub(super) struct RoomRecords<'a> {
     pub source: CiSource,
     pub runs: Vec<crate::store::run::RunRecord>,
-    /// The fold's rows.
+    /// The room's Audit rows, ended and replaced ones included.
     pub rows: &'a [AgentState],
     /// Where a named worktree's checkout lies.
     pub worktrees: &'a WorktreeConfig,
@@ -774,8 +805,8 @@ fn ended_at(mark: &FireMark, records: &RoomRecords, rows: &[&AgentState]) -> Opt
     runs_ended.chain(rows_ended).chain(unlaunched).max()
 }
 
-/// Whether `agent`'s launch is over among the fold's rows: ended, or a provisional launch that
-/// failed; a row no launch answers to is over once its session is.
+/// Whether `agent`'s launch is over among the room's Audit rows: ended, or a provisional launch
+/// that failed; a row no launch answers to is over once its session is.
 fn agent_over(records: &RoomRecords, agent: &AgentState) -> bool {
     match agent_end(records.rows, &agent.kind, &agent.agent_id) {
         AgentEnd::Ended => true,

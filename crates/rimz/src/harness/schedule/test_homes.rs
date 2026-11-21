@@ -1,6 +1,6 @@
-//! The private-home re-exec and the fire mark fixture the schedule's unit tests share. A
-//! fixture that opens a `Store` stays in a `tests.rs`: `cargo xtask invariants` reads this file
-//! as production code.
+//! The private-home re-exec every unit test that writes the machine's loop state shares, and
+//! the fire mark fixture of the schedule's unit tests. A fixture that opens a `Store` stays in
+//! a `tests.rs`: `cargo xtask invariants` reads this file as production code.
 
 use std::process::Command;
 
@@ -13,7 +13,7 @@ use crate::ids::FireId;
 /// Runs test `name` again in a child process with private homes, for a test that writes the
 /// machine's loop state (a created run, the task record): every test process shares the
 /// unit-test home. Returns whether this is the parent, done.
-pub(in crate::harness) fn reexec_with_private_homes(name: &str) -> bool {
+pub(crate) fn reexec_with_private_homes(name: &str) -> bool {
     const CHILD: &str = "RIMZ_TEST_PRIVATE_HOMES_CHILD";
     if std::env::var_os(CHILD).is_some() {
         return false;
