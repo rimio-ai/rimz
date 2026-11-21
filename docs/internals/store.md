@@ -111,7 +111,7 @@ log/hook-ingress.log.jsonl                    pending hook frames
 log/hook-drainer.log                          drainer diagnostics
 log/wait-watch.log                            wait watcher diagnostics
 log/archive/events.<uuidv7>.jsonl             rotated logs
-records/hook-drain.json                       applied/claimed cursor with boot-aware write classes, frame ids, claim extent
+records/hook-drain.json                       applied/claimed cursor with boot-aware write classes, frame ids, claim extent, frame count
 records/agents-carryover.json                 agent rollup carried across rotation
 records/log-generation.json                  durable active-log generation
 records/messages/messages.jsonl               live message queue
@@ -394,12 +394,13 @@ Linux frames carry an optional `boot_id` from the cached native boot identity. W
 
 Shared appenders can tear a line: a killed or short append leaves a partial frame ahead of later frames. Before applying pending ingress, the drainer takes the workspace lock and then the ingress lock exclusively for its repair read (`store::ingress::repair_and_read`). It truncates an unterminated tail and resynchronizes at the next newline after a corrupt terminated record. Good frames after corruption still apply, including a whole frame that a later appender wrote onto the same line as a torn one. The drainer advances past skipped records and leaves typed repair evidence in the [main diagnostic log](./diagnostics.md#hook-drain-evidence). It releases the ingress lock before it applies frames.
 
-`records/hook-drain.json` is the drain cursor. It records `applied` and `claimed` byte offsets, their frame ids, and the event-log extent at claim time, for crash recovery. Cursor writes take only the workspace lock.
+`records/hook-drain.json` is the drain cursor. It records `applied` and `claimed` byte offsets, their frame ids, and the event-log extent at claim time, for crash recovery. Its optional `applied_frames` counts the frames the applied offset has moved past since the last truncation, applied, skipped and dropped alike, for the sidebar's [drain rate](./sidebar/state.md). An older drainer's cursor write drops the count, the next write resumes it from zero, and a truncation reset clears it. Cursor writes take only the workspace lock.
 
 - An absent cursor starts at zero.
 - A nonzero offset must end at a row carrying the recorded id, and skipped corrupt rows carry no id.
 - An invalid offset or a mismatched id resets the cursor to zero. That covers a lost truncation reset followed by log regrowth. A malformed cursor still errors.
 - Validation seeks backward to the rows ending at the two offsets, reading only those rows plus bounded boundary-search blocks, so a cursor check costs O(frame) whatever the ingress history.
+- `crates/rimz/src/store/ingress.rs::drain_lag` dates the oldest unapplied frame for the sidebar: it validates the cursor as above and reads the one row starting at `applied`, without a lock. A cursor that validation would reset, or a head row that is torn or corrupt, reads as no lag.
 - Only `applied == claimed == len` permits in-place truncation, under the workspace lock and then the exclusive ingress lock. Truncation retains its fdatasync and finishes before the cache-class cursor reset.
 
 Claim and applied publications are durable only for unstamped frames or when the drainer cannot identify its boot. Same-boot claims and applications, corrupt-row skips, other-boot drops and resets use atomic rename without fsync. This assumes replace-on-rename leaves the complete old or new cursor after power loss (as on ZFS and ext4). Elsewhere a torn cursor errors as before. Lost cursor writes cannot reapply stamped frames after reboot because surviving older-boot frames drop.

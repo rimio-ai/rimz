@@ -20,6 +20,7 @@ use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{AgentKind, EventId};
 
 use super::event_log::{self, EventLogErr, LogExtent};
+use super::snapshot::HookDrainLag;
 
 const CURSOR_VERSION: u32 = 1;
 
@@ -94,6 +95,11 @@ pub struct HookDrainCursor {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_event_id: Option<EventId>,
     pub log_extent_at_claim: LogExtent,
+    /// Frames the applied offset has moved past since the log was last
+    /// truncated, applied, skipped and dropped alike. An older drainer drops
+    /// it, and a reset clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_frames: Option<u64>,
 }
 
 impl Default for HookDrainCursor {
@@ -108,6 +114,7 @@ impl Default for HookDrainCursor {
                 generation: 0,
                 offset: 0,
             },
+            applied_frames: None,
         }
     }
 }
@@ -195,10 +202,17 @@ fn fused_frame(at: u64, row: &[u8]) -> Option<(u64, HookIngress)> {
 
 /// A missing cursor or one whose offsets no longer end at the recorded frame IDs starts at zero; malformed or unsupported cursors remain errors.
 pub fn read_cursor(paths: &StatePaths) -> Result<HookDrainCursor, EventLogErr> {
+    Ok(read_valid_cursor(paths)?.unwrap_or_default())
+}
+
+/// The cursor as recorded, `None` where [`read_cursor`] would reset it to zero.
+fn read_valid_cursor(paths: &StatePaths) -> Result<Option<HookDrainCursor>, EventLogErr> {
     let path = &paths.hook_drain_cursor;
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(HookDrainCursor::default()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Ok(Some(HookDrainCursor::default()));
+        }
         Err(source) => return Err(io_error(path, source)),
     };
     let cursor: HookDrainCursor =
@@ -214,7 +228,7 @@ pub fn read_cursor(paths: &StatePaths) -> Result<HookDrainCursor, EventLogErr> {
     }
     let len = log_len(paths)?;
     if cursor.applied > len || cursor.claimed > len {
-        return Ok(HookDrainCursor::default());
+        return Ok(None);
     }
     for (end, expected_id) in [
         (cursor.applied, &cursor.applied_event_id),
@@ -222,13 +236,13 @@ pub fn read_cursor(paths: &StatePaths) -> Result<HookDrainCursor, EventLogErr> {
     ] {
         if end == 0 {
             if expected_id.is_some() {
-                return Ok(HookDrainCursor::default());
+                return Ok(None);
             }
             continue;
         }
         let Some((at, bytes)) = event_log::frame::read_row_ending_at(&paths.hook_ingress_log, end)?
         else {
-            return Ok(HookDrainCursor::default());
+            return Ok(None);
         };
         let id = match event_log::frame::decode_record::<HookIngress>(at, true, &bytes) {
             Ok(frame) => Some(frame.event_id),
@@ -238,10 +252,33 @@ pub fn read_cursor(paths: &StatePaths) -> Result<HookDrainCursor, EventLogErr> {
             Err(error) => return Err(error),
         };
         if *expected_id != id {
-            return Ok(HookDrainCursor::default());
+            return Ok(None);
         }
     }
-    Ok(cursor)
+    Ok(Some(cursor))
+}
+
+/// When the oldest unapplied frame was fed, beside the cursor's frame count.
+/// Takes no lock and reads that one frame whatever the backlog. A frame that
+/// cannot be dated (torn, corrupt, or behind a cursor [`read_cursor`] would
+/// reset) reads as no lag.
+pub fn drain_lag(paths: &StatePaths) -> Result<Option<HookDrainLag>, EventLogErr> {
+    let Some(cursor) = read_valid_cursor(paths)? else {
+        return Ok(None);
+    };
+    let Some(row) =
+        event_log::frame::read_row_starting_at(&paths.hook_ingress_log, cursor.applied)?
+    else {
+        return Ok(None);
+    };
+    let Ok(frame) = event_log::frame::decode_record::<HookIngress>(cursor.applied, true, &row)
+    else {
+        return Ok(None);
+    };
+    Ok(Some(HookDrainLag {
+        since: frame.ts,
+        applied_frames: cursor.applied_frames,
+    }))
 }
 
 /// Publish the cursor durably while the caller holds `paths.workspace_lock`.

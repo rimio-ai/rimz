@@ -1049,6 +1049,7 @@ impl Drainer {
                     cursor.claimed = end;
                     cursor.applied_event_id = None;
                     cursor.claimed_event_id = None;
+                    cursor.applied_frames = Some(expected.applied_frames.unwrap_or(0) + 1);
                     ingress::write_cursor_cache(store.paths(), &cursor, &lock)?;
                     expected = cursor;
                     self.applied = end;
@@ -1096,6 +1097,7 @@ impl Drainer {
                     cursor.claimed = end;
                     cursor.applied_event_id = Some(last_ingress.clone());
                     cursor.claimed_event_id = Some(last_ingress);
+                    cursor.applied_frames = Some(expected.applied_frames.unwrap_or(0) + dropped);
                     ingress::write_cursor_cache(store.paths(), &cursor, &lock)?;
                     expected = cursor;
                     self.applied = end;
@@ -1201,6 +1203,7 @@ impl Drainer {
                 let mut cursor = expected.clone();
                 cursor.applied = end;
                 cursor.applied_event_id = Some(frame.event_id.clone());
+                cursor.applied_frames = Some(expected.applied_frames.unwrap_or(0) + 1);
                 write_cursor(store.paths(), &cursor, &lock)?;
                 expected = cursor;
                 self.applied = end;
@@ -1465,6 +1468,43 @@ mod tests {
             reads.push(read);
         }
         assert!(reads[0].abs_diff(reads[1]) <= 1024, "{reads:?}");
+    }
+
+    #[test]
+    fn applied_frame_count_advances_per_frame_and_resets_on_truncation() {
+        register_processor(|_, _, _, _, _| Ok(HookReply::Silent));
+        let (_dir, store, pending) = fixture(1);
+        {
+            let mut log = fs::OpenOptions::new()
+                .append(true)
+                .open(&store.paths().hook_ingress_log)
+                .unwrap();
+            log.write_all(b"3 deadbeef abc\n").unwrap();
+            let lock =
+                crate::disk::lock::SharedAppendLock::acquire(&store.paths().hook_ingress_lock)
+                    .unwrap();
+            let mut after_skip = pending[0].0.clone();
+            after_skip.event_id = EventId::new();
+            ingress::append(store.paths(), &after_skip, &lock).unwrap();
+        }
+        let lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+        let mut counts = Vec::new();
+        Drainer::new(&store)
+            .drain(&store, &lifetime, None, None, |_| {
+                counts.push(ingress::read_cursor(store.paths())?.applied_frames);
+                Ok(false)
+            })
+            .unwrap();
+        assert_eq!(
+            counts,
+            (1..=6).map(Some).collect::<Vec<_>>(),
+            "applied and skipped frames each advance the count"
+        );
+        assert_eq!(
+            ingress::read_cursor(store.paths()).unwrap().applied_frames,
+            None,
+            "truncation resets the count"
+        );
     }
 
     #[test]

@@ -318,6 +318,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         presence,
         truth_degraded,
         hook_drainer_outage,
+        hook_drain_lag,
         worktree_groups,
         agents,
         wired_kinds,
@@ -374,6 +375,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         && presence == &right.presence
         && truth_degraded == &right.truth_degraded
         && hook_drainer_outage == &right.hook_drainer_outage
+        && hook_drain_lag == &right.hook_drain_lag
         && wired_kinds == &right.wired_kinds
         && untracked_kinds == &right.untracked_kinds
         && wired_default_models == &right.wired_default_models

@@ -670,7 +670,7 @@ pub(super) fn build_bottom_chrome(
     }
     if !alert.is_some_and(Alert::is_active) {
         bottom.extend_inert(notice_rows(
-            hook_drainer_alert_lines(theme, snapshot, view.hook_drainer_alert.as_ref()),
+            hook_drainer_alert_lines(theme, snapshot, view),
             inner,
         ));
     }
