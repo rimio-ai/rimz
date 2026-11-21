@@ -31,6 +31,7 @@ Local contract for `crates/rimz/src/cli/`: argv to typed requests, the process e
 Before a change of one of these kinds, read the section named beside it and do what it asks. No gate catches a skipped one.
 
 - A clap parser shape, a free-text positional, a mode that refuses flags another mode accepts, or a `value_parser` refusal: [CLI shape](../../../../docs/contributing/rust-conventions.md#cli-shape).
+- A clap command or flag, or a top-level command's one-line help: [Snapshot tests](../../../../docs/contributing/rust-conventions.md#snapshot-tests), which names the tests its focused pass includes.
 - Human rendering, a `doctor` row, a finding or notice built from a template, or a command a view prints for the user to copy: [Changing rendered output](../../../../docs/contributing/cli-scenes.md#changing-rendered-output).
 - A screen that prints stored records as rows or blocks (a history, recent runs, logs, a timeline): [Human history lists](../../../../docs/contributing/cli-scenes.md#human-history-lists).
 - A `rimz agents`, `rimz teams`, or `rimz subagents` list, verb, exit code, or user-facing noun: [CLI scenes](../../../../docs/contributing/cli-scenes.md).

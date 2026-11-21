@@ -245,6 +245,7 @@ Each kind of test has its own rules.
 
 - Use `insta::assert_snapshot!` for every protocol stdout (CLI, hook, `--json` events), failure shapes included.
 - For a clap command or flag change, include `cargo xtask test --name cli_surface_is_stable` in the focused pass.
+- For a changed one-line doc on a top-level command (its `Subcmd` variant in `crates/rimz/src/cli/mod.rs`), include `cargo xtask test --name top_level_command_lines_fit_eighty_column_help`: it caps each line of the grouped help at 80 columns.
 - Normalize UUIDs, timestamps, absolute paths, and other transient identifiers at the assertion boundary before the snapshot. Snapshot churn from a transient ID is a bug in the test helper, fixed in its normalization.
 - A shared helper is for normalization that several suites need.
 - Sidebar render tests draw through a `vt100::Parser`-backed ratatui backend and snapshot the screen contents, never widget internals.
