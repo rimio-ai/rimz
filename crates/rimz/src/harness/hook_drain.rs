@@ -1502,8 +1502,8 @@ mod tests {
         );
         assert_eq!(
             ingress::read_cursor(store.paths()).unwrap().applied_frames,
-            None,
-            "truncation resets the count"
+            Some(0),
+            "truncation resets the count to zero"
         );
     }
 

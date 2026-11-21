@@ -340,7 +340,13 @@ fn truncate_requires_applied_and_claimed_to_equal_the_log_length() {
         std::os::unix::fs::MetadataExt::ino(&fs::metadata(&paths.hook_ingress_log).unwrap()),
         inode
     );
-    assert_eq!(read_cursor(&paths).unwrap(), HookDrainCursor::default());
+    assert_eq!(
+        read_cursor(&paths).unwrap(),
+        HookDrainCursor {
+            applied_frames: Some(0),
+            ..HookDrainCursor::default()
+        }
+    );
 }
 
 #[test]
