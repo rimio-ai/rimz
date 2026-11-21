@@ -51,6 +51,9 @@ pub(super) const FOCUSED_PANE_BIND_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(1_000);
 const REPLY_WAIT: std::time::Duration = std::time::Duration::from_millis(1_200);
 const APPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Frames one stream apply child applies before it is closed: it bounds how long a child keeps
+/// state it loaded once, such as the plugin registry.
+const APPLY_RUN_CAP: usize = 256;
 #[derive(Debug, Args)]
 pub struct HooksArgs {
     #[command(subcommand)]
@@ -82,6 +85,8 @@ enum HooksSubcmd {
         recover_from: Option<String>,
         #[arg(long)]
         with_lifetime_lock: bool,
+        #[arg(long, conflicts_with_all = ["recover_from", "with_lifetime_lock"])]
+        stream: bool,
     },
     /// Install the adapter's hooks into the agent's per-user config file.
     /// Pass --dry-run to preview the config diff without writing files.
@@ -135,9 +140,11 @@ pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         HooksSubcmd::Feed { source, event } => run_feed(source, event, globals),
         HooksSubcmd::Drain { project_root, once } => run_drain(project_root, once),
+        HooksSubcmd::Apply { stream: true, .. } => run_apply_stream(),
         HooksSubcmd::Apply {
             recover_from,
             with_lifetime_lock,
+            stream: false,
         } => run_apply(recover_from, with_lifetime_lock),
         HooksSubcmd::Install { agent, dry_run } => run_install(agent, dry_run),
         HooksSubcmd::Uninstall { agent } => run_uninstall(agent),
@@ -145,9 +152,7 @@ pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 pub(super) fn register_drainer() {
-    rimz::harness::hook_drain::register_processor(|store, frame, claim, lifetime, deadline| {
-        process_in_child(store, frame, claim.recover_from(), lifetime, deadline)
-    });
+    hook_drain::register_applier(|| Box::<RunApplier>::default());
 }
 
 #[cfg(test)]
@@ -172,81 +177,30 @@ fn process_in_child(
 ) -> Result<rimz::agents::HookReply> {
     use std::io::Write as _;
     use std::os::fd::AsFd;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
-    let mut frame = frame.clone();
-    map_sandbox_paths(store, &mut frame)?;
-    if let Err(error) = std::fs::metadata(&frame.cwd) {
-        if error.kind() != io::ErrorKind::NotFound {
-            return Err(error.into());
-        }
-        frame.cwd = PathBuf::from(
-            frame
-                .env
-                .get(workspace::ENV_PROJECT_ROOT)
-                .context("hook apply requires a project root for a removed cwd")?,
-        );
-    }
-    let binary = rimz::proc::rimz_exe();
-    let mut command = Command::new(if binary.is_file() {
-        binary
-    } else {
-        std::env::current_exe()?
-    });
-    command.args(["hooks", "apply", "--with-lifetime-lock"]);
+    let frame = child_frame(store, frame)?;
+    let timeout =
+        apply_timeout().min(deadline.saturating_duration_since(std::time::Instant::now()));
+    anyhow::ensure!(!timeout.is_zero(), "hook drain deadline reached");
+    let mut command = apply_command(store, &frame)?;
+    command.arg("--with-lifetime-lock");
     if let Some(extent) = recover_from {
         command
             .arg("--recover-from")
             .arg(serde_json::to_string(&extent)?);
     }
     let (mut sender, input) = std::os::unix::net::UnixStream::pair()?;
-    let timeout =
-        apply_timeout().min(deadline.saturating_duration_since(std::time::Instant::now()));
-    anyhow::ensure!(!timeout.is_zero(), "hook drain deadline reached");
     sender.set_write_timeout(Some(timeout))?;
     let mut bytes = serde_json::to_vec(&frame)?;
     bytes.push(b'\n');
-    let log_path = store.paths().hook_drainer_log();
-    if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)?;
-    rimz::child_process::clear_env_preserving_coverage(&mut command);
     command
-        .envs(&frame.env)
-        .current_dir(&frame.cwd)
         .stdin(Stdio::from(std::os::fd::OwnedFd::from(input)))
-        .stdout(Stdio::piped())
-        .stderr(log);
-    #[cfg(feature = "testkit")]
-    if let Some(socket) = std::env::var_os("RIMZ_TEST_HOOK_DRAIN_AFTER_LOCKED_APPLY") {
-        command.env("RIMZ_TEST_HOOK_DRAIN_AFTER_LOCKED_APPLY", socket);
-    }
+        .stdout(Stdio::piped());
     let deadline = deadline.min(std::time::Instant::now() + timeout);
     let child = command.spawn().context("spawning hook apply child")?;
-    let sent = (|| -> Result<()> {
-        let fds = [lifetime.as_fd()];
-        let mut space = [std::mem::MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
-        let mut control = rustix::net::SendAncillaryBuffer::new(&mut space);
-        anyhow::ensure!(
-            control.push(rustix::net::SendAncillaryMessage::ScmRights(&fds)),
-            "apply lock control buffer"
-        );
-        anyhow::ensure!(
-            rustix::net::sendmsg(
-                &sender,
-                &[io::IoSlice::new(&bytes[..1])],
-                &mut control,
-                rustix::net::SendFlags::empty()
-            )? == 1,
-            "sending apply lifetime lock"
-        );
-        sender.write_all(&bytes[1..])?;
-        Ok(())
-    })();
+    let sent = send_descriptors(&sender, bytes[0], &[lifetime.as_fd()])
+        .and_then(|()| Ok(sender.write_all(&bytes[1..])?));
     drop(sender);
     let output = hook_drain::wait_for_apply(child, deadline)?;
     sent?;
@@ -261,6 +215,368 @@ fn process_in_child(
     Ok(rimz::agents::HookReply::Json(serde_json::from_slice(
         &output.stdout,
     )?))
+}
+
+/// The frame as its apply child runs it: sandbox paths mapped to the host, and a removed cwd
+/// replaced by the project root.
+fn child_frame(store: &Store, frame: &HookIngress) -> Result<HookIngress> {
+    let mut frame = frame.clone();
+    map_sandbox_paths(store, &mut frame)?;
+    if let Err(error) = std::fs::metadata(&frame.cwd) {
+        if error.kind() != io::ErrorKind::NotFound {
+            return Err(error.into());
+        }
+        frame.cwd = PathBuf::from(
+            frame
+                .env
+                .get(workspace::ENV_PROJECT_ROOT)
+                .context("hook apply requires a project root for a removed cwd")?,
+        );
+    }
+    Ok(frame)
+}
+
+/// `hooks apply` under exactly the captured environment and cwd of `frame`, logging to the
+/// drainer log.
+fn apply_command(store: &Store, frame: &HookIngress) -> Result<std::process::Command> {
+    let binary = rimz::proc::rimz_exe();
+    let mut command = std::process::Command::new(if binary.is_file() {
+        binary
+    } else {
+        std::env::current_exe()?
+    });
+    command.args(["hooks", "apply"]);
+    let log_path = store.paths().hook_drainer_log();
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)?;
+    rimz::child_process::clear_env_preserving_coverage(&mut command);
+    command.envs(&frame.env).current_dir(&frame.cwd).stderr(log);
+    #[cfg(feature = "testkit")]
+    if let Some(socket) = std::env::var_os("RIMZ_TEST_HOOK_DRAIN_AFTER_LOCKED_APPLY") {
+        command.env("RIMZ_TEST_HOOK_DRAIN_AFTER_LOCKED_APPLY", socket);
+    }
+    Ok(command)
+}
+
+/// Send `byte` carrying `fds` by SCM_RIGHTS.
+fn send_descriptors(
+    sender: &std::os::unix::net::UnixStream,
+    byte: u8,
+    fds: &[std::os::fd::BorrowedFd<'_>],
+) -> Result<()> {
+    let mut space = [std::mem::MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+    let mut control = rustix::net::SendAncillaryBuffer::new(&mut space);
+    anyhow::ensure!(
+        control.push(rustix::net::SendAncillaryMessage::ScmRights(fds)),
+        "apply lock control buffer"
+    );
+    anyhow::ensure!(
+        rustix::net::sendmsg(
+            sender,
+            &[io::IoSlice::new(&[byte])],
+            &mut control,
+            rustix::net::SendFlags::empty()
+        )? == 1,
+        "sending apply lifetime lock"
+    );
+    Ok(())
+}
+
+/// Receive the byte a drainer sent on stdin and the descriptors it carried, each made
+/// close-on-exec before anything here can spawn.
+fn receive_descriptors() -> Result<(u8, Vec<std::os::fd::OwnedFd>)> {
+    let mut byte = [0];
+    let mut space = [std::mem::MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+    let mut control = rustix::net::RecvAncillaryBuffer::new(&mut space);
+    let received = rustix::net::recvmsg(
+        io::stdin(),
+        &mut [io::IoSliceMut::new(&mut byte)],
+        &mut control,
+        rustix::net::RecvFlags::empty(),
+    )?;
+    anyhow::ensure!(received.bytes == 1, "missing apply lifetime lock");
+    let fds: Vec<_> = control
+        .drain()
+        .filter_map(|message| match message {
+            rustix::net::RecvAncillaryMessage::ScmRights(fds) => Some(fds),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    for fd in &fds {
+        rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::CLOEXEC)?;
+    }
+    Ok((byte[0], fds))
+}
+
+/// The production applier: consecutive first attempts whose child environment and cwd are equal
+/// go to one `hooks apply --stream` child, up to [`APPLY_RUN_CAP`] frames. At most one apply
+/// child runs at a time, and none outlives the applier.
+#[derive(Default)]
+struct RunApplier {
+    child: Option<StreamChild>,
+}
+
+impl hook_drain::FrameApplier for RunApplier {
+    fn apply(
+        &mut self,
+        store: &Store,
+        frame: &HookIngress,
+        claim: hook_drain::FrameClaim,
+        lifetime: &WorkspaceLock,
+        deadline: std::time::Instant,
+    ) -> Result<rimz::agents::HookReply> {
+        // Each attempt is timed alone: the caller's window is re-anchored at the start of each
+        // one, so closing the previous child or a failed stream attempt spends none of it.
+        let budget = deadline.saturating_duration_since(std::time::Instant::now());
+        let attempt_deadline = || std::time::Instant::now() + budget;
+        if claim.recovering {
+            self.close();
+            return process_in_child(
+                store,
+                frame,
+                Some(claim.extent),
+                lifetime,
+                attempt_deadline(),
+            );
+        }
+        let mapped = child_frame(store, frame)?;
+        let directory = directory_id(&mapped.cwd)?;
+        if self.child.as_ref().is_some_and(|child| {
+            child.applied >= apply_run_cap()
+                || child.env != mapped.env
+                || child.cwd != mapped.cwd
+                || child.directory != directory
+        }) {
+            self.close();
+        }
+        let timeout = apply_timeout().min(budget);
+        anyhow::ensure!(!timeout.is_zero(), "hook drain deadline reached");
+        let child = match &mut self.child {
+            Some(child) => child,
+            slot @ None => slot.insert(StreamChild::spawn(store, &mapped, directory, lifetime)?),
+        };
+        match child.exchange(&mapped, std::time::Instant::now() + timeout)? {
+            Exchange::Reply(reply) => {
+                child.applied += 1;
+                Ok(reply)
+            }
+            Exchange::TimedOut => {
+                let pid = child.process.id();
+                self.kill();
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("hook apply child {pid} timed out"),
+                )
+                .into())
+            }
+            // The child may have died at any point of the frame, so the frame recovers from
+            // its claim as a crashed attempt does. A child that ended its stream is exiting and
+            // is reaped first, so its own error report reaches the drainer log.
+            Exchange::Ended => {
+                self.close();
+                process_in_child(
+                    store,
+                    frame,
+                    Some(claim.extent),
+                    lifetime,
+                    attempt_deadline(),
+                )
+            }
+            Exchange::Garbled => {
+                self.kill();
+                process_in_child(
+                    store,
+                    frame,
+                    Some(claim.extent),
+                    lifetime,
+                    attempt_deadline(),
+                )
+            }
+        }
+    }
+}
+
+impl RunApplier {
+    /// Close the child's stream and reap it, killing it if it has not exited within the apply
+    /// timeout.
+    fn close(&mut self) {
+        let Some(StreamChild {
+            process, stream, ..
+        }) = self.child.take()
+        else {
+            return;
+        };
+        drop(stream);
+        let deadline = std::time::Instant::now() + apply_timeout();
+        if let Err(error) = hook_drain::wait_for_apply(process, deadline) {
+            warn!(%error, "hook apply stream child did not exit at end of stream");
+        }
+    }
+
+    fn kill(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if let Err(error) = child
+            .process
+            .kill()
+            .and_then(|()| child.process.wait().map(drop))
+        {
+            warn!(%error, "hook apply stream child could not be reaped");
+        }
+    }
+}
+
+impl Drop for RunApplier {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+struct StreamChild {
+    process: std::process::Child,
+    stream: io::BufReader<std::os::unix::net::UnixStream>,
+    env: std::collections::BTreeMap<String, String>,
+    cwd: PathBuf,
+    /// The device and inode of `cwd` at spawn: the directory the child runs in.
+    directory: (u64, u64),
+    applied: usize,
+}
+
+#[derive(Debug, PartialEq)]
+enum Exchange {
+    Reply(rimz::agents::HookReply),
+    TimedOut,
+    /// The stream ended or failed: the child is exiting.
+    Ended,
+    /// The child answered with a line that is not this frame's reply.
+    Garbled,
+}
+
+fn directory_id(path: &Path) -> Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = std::fs::metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+/// The exchange one reply line ends for the frame `ingress`: a missing `reply` is a silent reply.
+fn reply_line(line: &[u8], ingress: &str) -> Exchange {
+    let Ok(mut reply) = serde_json::from_slice::<serde_json::Map<String, Value>>(line) else {
+        return Exchange::Garbled;
+    };
+    if reply.get("ingress").and_then(Value::as_str) != Some(ingress) {
+        return Exchange::Garbled;
+    }
+    Exchange::Reply(match reply.remove("reply") {
+        Some(value) => rimz::agents::HookReply::Json(value),
+        None => rimz::agents::HookReply::Silent,
+    })
+}
+
+impl StreamChild {
+    fn spawn(
+        store: &Store,
+        frame: &HookIngress,
+        directory: (u64, u64),
+        lifetime: &WorkspaceLock,
+    ) -> Result<Self> {
+        use std::os::fd::AsFd;
+        use std::process::Stdio;
+
+        let mut command = apply_command(store, frame)?;
+        let (sender, input) = std::os::unix::net::UnixStream::pair()?;
+        let (stream, child_end) = std::os::unix::net::UnixStream::pair()?;
+        command
+            .arg("--stream")
+            .stdin(Stdio::from(std::os::fd::OwnedFd::from(input)))
+            .stdout(Stdio::null());
+        let process = command.spawn().context("spawning hook apply child")?;
+        sender.set_write_timeout(Some(apply_timeout()))?;
+        // A child that took no descriptors exits on its closed stdin, which the first exchange
+        // reads as the end of the stream.
+        if let Err(error) = send_descriptors(&sender, b'\n', &[lifetime.as_fd(), child_end.as_fd()])
+        {
+            debug!(%error, "hook apply stream child took no descriptors");
+        }
+        Ok(Self {
+            process,
+            stream: io::BufReader::new(stream),
+            env: frame.env.clone(),
+            cwd: frame.cwd.clone(),
+            directory,
+            applied: 0,
+        })
+    }
+
+    /// Send one frame and read its reply line by `deadline`.
+    fn exchange(&mut self, frame: &HookIngress, deadline: std::time::Instant) -> Result<Exchange> {
+        use std::io::{BufRead as _, Write as _};
+
+        let timed_out = |error: &io::Error| {
+            matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            )
+        };
+        let mut bytes = serde_json::to_vec(frame)?;
+        bytes.push(b'\n');
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Ok(Exchange::TimedOut);
+        }
+        self.stream.get_ref().set_write_timeout(Some(remaining))?;
+        if let Err(error) = self.stream.get_ref().write_all(&bytes) {
+            return Ok(if timed_out(&error) {
+                Exchange::TimedOut
+            } else {
+                Exchange::Ended
+            });
+        }
+        let mut line = Vec::new();
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(Exchange::TimedOut);
+            }
+            self.stream.get_ref().set_read_timeout(Some(remaining))?;
+            let buffer = match self.stream.fill_buf() {
+                Ok(buffer) => buffer,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if timed_out(&error) => return Ok(Exchange::TimedOut),
+                Err(_) => return Ok(Exchange::Ended),
+            };
+            if buffer.is_empty() {
+                return Ok(Exchange::Ended);
+            }
+            if let Some(end) = buffer.iter().position(|&byte| byte == b'\n') {
+                line.extend_from_slice(&buffer[..end]);
+                self.stream.consume(end + 1);
+                break;
+            }
+            line.extend_from_slice(buffer);
+            let read = buffer.len();
+            self.stream.consume(read);
+        }
+        Ok(reply_line(&line, frame.event_id.as_str()))
+    }
+}
+
+fn apply_run_cap() -> usize {
+    #[cfg(feature = "testkit")]
+    if let Some(cap) = std::env::var("RIMZ_TEST_HOOK_APPLY_RUN_CAP")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+    {
+        return cap;
+    }
+    APPLY_RUN_CAP
 }
 
 fn apply_timeout() -> std::time::Duration {
@@ -363,41 +679,20 @@ fn map_sandbox_paths(store: &Store, frame: &mut HookIngress) -> Result<()> {
 fn run_apply(recover_from: Option<String>, with_lifetime_lock: bool) -> Result<()> {
     let mut prefix = Vec::new();
     let _lifetime = if with_lifetime_lock {
-        let mut byte = [0];
-        let mut space = [std::mem::MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
-        let mut control = rustix::net::RecvAncillaryBuffer::new(&mut space);
-        let received = rustix::net::recvmsg(
-            io::stdin(),
-            &mut [io::IoSliceMut::new(&mut byte)],
-            &mut control,
-            rustix::net::RecvFlags::empty(),
-        )?;
-        anyhow::ensure!(received.bytes == 1, "missing apply lifetime lock");
-        let lock = control
-            .drain()
-            .find_map(|message| match message {
-                rustix::net::RecvAncillaryMessage::ScmRights(mut fds) => fds.next(),
-                _ => None,
-            })
+        let (byte, fds) = receive_descriptors()?;
+        let lock = fds
+            .into_iter()
+            .next()
             .context("missing apply lifetime lock descriptor")?;
-        rustix::io::fcntl_setfd(&lock, rustix::io::FdFlags::CLOEXEC)?;
-        prefix.extend(byte);
+        prefix.push(byte);
         Some(lock)
     } else {
         None
     };
     let frame: HookIngress =
         serde_json::from_reader(io::Cursor::new(prefix).chain(io::stdin().lock()))?;
-    let root = frame
-        .env
-        .get(workspace::ENV_WORKSPACE_ID)
-        .zip(frame.env.get(workspace::ENV_PROJECT_ROOT))
-        .and_then(|(id, root)| workspace::verify_pin(id, Path::new(root)))
-        .context("hook apply requires verified workspace pins")?;
-    let paths = rimz::StatePaths::for_project_root(&root)?;
-    let runtime = rimz::RuntimePaths::for_state(&paths)?;
-    let store =
-        Store::open_existing(paths, runtime).context("hook apply requires an existing room")?;
+    let root = frame_root(&frame)?;
+    let store = open_room(&root)?;
     let mut recovered = Vec::new();
     let redo = recover_from.is_some();
     if let Some(extent) = recover_from {
@@ -430,6 +725,76 @@ fn run_apply(recover_from: Option<String>, with_lifetime_lock: bool) -> Result<(
         )
     })?;
     emit_reply(&reply)
+}
+
+/// Apply each frame read from the stream the drainer sent, as a first attempt on this thread,
+/// answering each with one line; see [`StreamChild::exchange`] for the reader.
+fn run_apply_stream() -> Result<()> {
+    use std::io::{BufRead as _, Write as _};
+
+    let (byte, fds) = receive_descriptors()?;
+    anyhow::ensure!(byte == b'\n', "unexpected apply stream preamble");
+    let mut fds = fds.into_iter();
+    let (Some(_lifetime), Some(stream), None) = (fds.next(), fds.next(), fds.next()) else {
+        anyhow::bail!("hook apply stream requires the lifetime lock and stream descriptors");
+    };
+    let stream = std::os::unix::net::UnixStream::from(stream);
+    let mut frames = io::BufReader::new(&stream);
+    let mut room: Option<(PathBuf, Store)> = None;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if frames.read_line(&mut line)? == 0 {
+            return Ok(());
+        }
+        let frame: HookIngress = serde_json::from_str(&line)?;
+        let root = frame_root(&frame)?;
+        let store = match &room {
+            Some((opened, store)) => {
+                anyhow::ensure!(
+                    *opened == root,
+                    "hook apply stream frame belongs to another room"
+                );
+                store
+            }
+            None => &room.insert((root.clone(), open_room(&root)?)).1,
+        };
+        #[cfg(feature = "testkit")]
+        anyhow::ensure!(
+            std::env::var_os("RIMZ_TEST_HOOK_APPLY_STREAM_FAIL").is_none(),
+            "hook apply stream failpoint refused frame {}",
+            frame.event_id
+        );
+        let reply = hook_drain::with_frame_env(&frame, hook_drain::FrameAttempt::First, || {
+            process_frame(
+                &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+                &frame,
+                &[],
+            )
+        })?;
+        let mut answer = serde_json::json!({ "ingress": frame.event_id });
+        if let rimz::agents::HookReply::Json(value) = reply {
+            answer["reply"] = value;
+        }
+        let mut bytes = serde_json::to_vec(&answer)?;
+        bytes.push(b'\n');
+        (&stream).write_all(&bytes)?;
+    }
+}
+
+fn frame_root(frame: &HookIngress) -> Result<PathBuf> {
+    frame
+        .env
+        .get(workspace::ENV_WORKSPACE_ID)
+        .zip(frame.env.get(workspace::ENV_PROJECT_ROOT))
+        .and_then(|(id, root)| workspace::verify_pin(id, Path::new(root)))
+        .context("hook apply requires verified workspace pins")
+}
+
+fn open_room(root: &Path) -> Result<Store> {
+    let paths = rimz::StatePaths::for_project_root(root)?;
+    let runtime = rimz::RuntimePaths::for_state(&paths)?;
+    Store::open_existing(paths, runtime).context("hook apply requires an existing room")
 }
 
 fn run_drain(project_root: PathBuf, once: bool) -> Result<()> {

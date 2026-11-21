@@ -382,7 +382,7 @@ The environment a RimZ-started process gets depends on its route, so a claim abo
 | --- | --- |
 | Agent pane the harness opens | The multiplexer session's baseline, the room identity pin from `crates/rimz/src/room/mod.rs::pane_identity_env`, and the launch's own variables. Never the calling process's environment. |
 | In-place launch | The calling process's environment, with the launch's variables over it: `crates/rimz/src/launcher/placement.rs::exec_wrapper_in_place` execs the wrapper in the caller's process without clearing it. |
-| Hook apply child of the host drainer | Only the environment recorded in the hook frame, on a cleared environment (`crates/rimz/src/cli/hooks.rs::process_in_child`). |
+| Hook apply child of the host drainer | Only the environment recorded in the hook frame, on a cleared environment (`crates/rimz/src/cli/hooks.rs::apply_command`). |
 
 ### Placement
 

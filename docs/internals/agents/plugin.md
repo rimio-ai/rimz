@@ -34,7 +34,7 @@ The result is `LoadedPlugins`: the valid `definitions`, one `PluginLoadError` pe
 
 `loaded()` runs the load once per process behind a `OnceLock` and logs one warning per rejected manifest. `registry::all_definitions()` chains `BUILTINS` with `loaded().definitions`, so a valid plugin reaches every consumer that resolves agents through the registry, with no plugin-specific branch. `rimz agents register --check` and `rimz agents check` call `load_from_root` directly and get a fresh load.
 
-The once-per-process load means a long-lived process keeps the plugin set it saw at its first registry read. A bundle that is added, fixed, or broken later reaches that process only after it restarts. Short-lived commands, such as each `rimz hooks feed` and each `rimz hooks apply` child, see the change at once.
+The once-per-process load means a long-lived process keeps the plugin set it saw at its first registry read. A bundle that is added, fixed, or broken later reaches that process only after it restarts. Short-lived commands, such as each `rimz hooks feed`, see the change at once, and the drainer's apply children see it from the next child it starts ([the hook path](./adapter.md#the-hook-path)).
 
 A plugin's spec must outlive the process like a built-in's `static` spec, because `AgentDefinition` and `AgentSpec` hold `&'static` references. `build_adapter` therefore leaks the manifest, the bundle path, the spec, and every derived string and slice. The leak happens once per load, including for a manifest that step 4 rejects, so its size is bounded by machine configuration. Live manifest reload would need the registry to move to owned shared values, as the comment on `build_adapter` says.
 
