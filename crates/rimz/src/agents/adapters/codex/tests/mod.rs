@@ -784,8 +784,6 @@ fn native_subagent_denial_replaces_codex_multi_agent_overrides() {
     assert_eq!(
         args,
         [
-            "-c",
-            "features.multi_agent=true",
             "--config",
             "model_reasoning_effort=high",
             "--enable",
