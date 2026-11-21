@@ -293,12 +293,8 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     }
     if args.prompt {
         write_prompt(&report.prompt, &mut render::out())?;
-        if report.prompt.reminder.is_some() && !report.prompt.reminder_delivered {
-            writeln!(
-                render::err(),
-                "rimz: this {} launch has no reminder channel; the reminder is not delivered",
-                report.kind
-            )?;
+        if let Some(notice) = undelivered_reminder_notice(&report.prompt, report.kind.as_str()) {
+            writeln!(render::err(), "rimz: {notice}")?;
         }
         return Ok(());
     }
@@ -929,14 +925,7 @@ impl<'a> ExplainReport<'a> {
                     .as_deref()
                     .or(plan.agent_file.as_ref().map(|file| file.path.as_path())),
                 reminder: Some(process.reminder.as_str()),
-                reminder_channel: plan.reminder_channel.as_ref().map(|channel| match channel {
-                    SystemTextChannel::TextFlag { flags } => flags.join(" "),
-                    SystemTextChannel::ConfigKey { flags, key } => {
-                        format!("{} {key}", flags.join(" "))
-                    }
-                    SystemTextChannel::ExtensionEnv => "rimz extension".to_owned(),
-                    SystemTextChannel::AgentFile => "the launch's agent file".to_owned(),
-                }),
+                reminder_channel: plan.reminder_channel.as_ref().map(reminder_channel_label),
                 reminder_delivered: plan.reminder_channel.is_some(),
             },
             sandbox,
@@ -962,6 +951,22 @@ fn channel_label(matcher: PresetArgMatcher) -> String {
         PresetArgMatcher::EnvConfigMember { var, member } => format!("{var} {member}"),
         PresetArgMatcher::AgentFile(flag) => format!("agent file selected by {flag}"),
     }
+}
+
+fn reminder_channel_label(channel: &SystemTextChannel) -> String {
+    match channel {
+        SystemTextChannel::TextFlag { flags } => flags.join(" "),
+        SystemTextChannel::ConfigKey { flags, key } => format!("{} {key}", flags.join(" ")),
+        SystemTextChannel::ExtensionEnv => "rimz extension".to_owned(),
+        SystemTextChannel::AgentFile => "the launch's agent file".to_owned(),
+    }
+}
+
+/// The `--prompt` notice for a reminder the launch renders but no channel carries.
+fn undelivered_reminder_notice(prompt: &PromptReport<'_>, kind: &str) -> Option<String> {
+    (prompt.reminder.is_some() && !prompt.reminder_delivered).then(|| {
+        format!("this {kind} launch has no reminder channel; the reminder is not delivered")
+    })
 }
 
 fn applied_overrides(
@@ -1372,6 +1377,39 @@ mod tests {
             channel.as_deref(),
             Some("OPENCODE_CONFIG_CONTENT agents.build.system")
         );
+    }
+
+    /// An Antigravity prompt rides the fresh launch's agent file, with the reminder in it;
+    /// a launch with no prompt sources writes no file, so its reminder has no channel.
+    #[test]
+    fn antigravity_prompt_and_reminder_channels_name_the_agent_file() {
+        let channel = rimz::agents::find_definition("antigravity")
+            .unwrap()
+            .spec()
+            .launch
+            .preset_arg_matcher(PresetField::SystemPromptFile)
+            .map(channel_label);
+        assert_eq!(channel.as_deref(), Some("agent file selected by --agent"));
+        assert_eq!(
+            reminder_channel_label(&SystemTextChannel::AgentFile),
+            "the launch's agent file"
+        );
+        let mut prompt = PromptReport {
+            sources: Vec::new(),
+            composed: None,
+            channel,
+            artifact: None,
+            reminder: Some("<system_reminder>\nmodel\n</system_reminder>"),
+            reminder_channel: None,
+            reminder_delivered: false,
+        };
+        assert_eq!(
+            undelivered_reminder_notice(&prompt, "antigravity").as_deref(),
+            Some("this antigravity launch has no reminder channel; the reminder is not delivered")
+        );
+        prompt.reminder_channel = Some(reminder_channel_label(&SystemTextChannel::AgentFile));
+        prompt.reminder_delivered = true;
+        assert_eq!(undelivered_reminder_notice(&prompt, "antigravity"), None);
     }
 
     #[test]
