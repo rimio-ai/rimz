@@ -250,11 +250,10 @@ impl Resolver<'_> {
             .as_deref()
             .and_then(agents::find_runtime)
             .map(agents::Runtime::kind);
-        let model_kind = fm
-            .model
-            .as_deref()
-            .and_then(agents::definition_model_kind)
-            .filter(|_| !own_kind.is_some_and(agents::runs_other_providers_models));
+        let model_kind = fm.model.as_deref().and_then(|model| {
+            agents::definition_model_kind(model)
+                .filter(|_| !own_kind.is_some_and(|kind| agents::keeps_model(kind, model)))
+        });
         let mut runtime_kind = model_kind.or(own_kind).map(str::to_owned);
         if let (Some(kind), Some(implied)) = (own_kind, model_kind)
             && kind != implied
@@ -357,7 +356,10 @@ impl Resolver<'_> {
         if agents::runs_other_providers_models(&profile.agent) {
             runtime_kind = Some(profile.agent.clone());
             preference.family = Some(profile.agent.clone());
-        } else if let Some(kind) = fm.model.as_deref().and_then(agents::definition_model_kind) {
+        } else if let Some(kind) = fm.model.as_deref().and_then(|model| {
+            agents::definition_model_kind(model)
+                .filter(|_| !agents::keeps_model(&profile.agent, model))
+        }) {
             if profile.agent != kind {
                 profile.variant = None;
             }
@@ -587,7 +589,7 @@ impl Resolver<'_> {
         if let Some(model) = fm.model.as_deref()
             && let Some(implied) = agents::definition_model_kind(model)
             && implied != kind
-            && !agents::runs_other_providers_models(kind)
+            && !agents::keeps_model(kind, model)
         {
             return Err(DefinitionErr::new(
                 path,

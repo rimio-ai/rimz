@@ -338,8 +338,15 @@ impl SeatLoader<'_> {
         let kind = fm
             .model
             .as_deref()
-            .and_then(agents::definition_model_kind)
-            .filter(|_| !agents::runs_other_providers_models(&original.agent))
+            .and_then(|model| {
+                // A model the role writes routes by its id; only the chain's own stays.
+                let kept = if role.model.is_some() {
+                    agents::runs_other_providers_models(&original.agent)
+                } else {
+                    agents::keeps_model(&original.agent, model)
+                };
+                agents::definition_model_kind(model).filter(|_| !kept)
+            })
             .unwrap_or(&original.agent);
         fm.agent = if role.tier.is_some() && !agents::runs_other_providers_models(kind) {
             None

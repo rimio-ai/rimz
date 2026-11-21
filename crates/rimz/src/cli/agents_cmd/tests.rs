@@ -2161,6 +2161,7 @@ mod launch_options {
                 passthrough: &[],
                 budget: None,
                 max_turns: None,
+                machine_config: None,
             },
         )
         .expect("layout can finalize");

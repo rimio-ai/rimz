@@ -441,7 +441,9 @@ upward-dependencies = ["address"]
 # and apply (+5).
 # LaunchCapability::rimz_server_switched_off: the harness asks the adapter whether a
 # launch's own arguments switch RimZ's MCP server off (+1).
-surface-budget = 1318
+# keeps_model decides whether an agent: kind keeps a model whose id routes elsewhere (+1).
+# pinned_definition_defaults keeps a cataloged name's effort over a pin to an unlisted id (+1).
+surface-budget = 1320
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

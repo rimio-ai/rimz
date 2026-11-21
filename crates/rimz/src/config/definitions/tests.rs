@@ -3409,6 +3409,85 @@ fn alias_named_kind_bases_are_claimed_and_read_under_the_canonical_kind() {
 }
 
 #[test]
+fn gemini_models_route_to_antigravity_and_claude_ids_follow_an_explicit_agent() {
+    let root = fixture();
+    definition(root.path(), "agents/agy.md", "tools: [Read]", "Agy base.");
+    for (name, fields) in [
+        ("short", "model: hydrogen"),
+        ("id", "model: gemini-3.8-flash"),
+        ("suffixed", "model: gemini-4-hydrogen-high"),
+        ("other", "model: gemini-x"),
+        ("claude-on-agy", "agent: agy\nmodel: claude-opus-4-6"),
+        (
+            "claude-on-antigravity",
+            "agent: antigravity\nmodel: claude-opus-4-6",
+        ),
+        ("routed", "model: claude-opus-4-6\ntools: [Bash]"),
+    ] {
+        definition(root.path(), &format!("agents/{name}.md"), fields, "");
+    }
+    let loaded = clean(root.path());
+    let kinds: Vec<_> = [
+        "short",
+        "id",
+        "suffixed",
+        "other",
+        "claude-on-agy",
+        "claude-on-antigravity",
+        "routed",
+    ]
+    .map(|name| loaded.agent_profiles.0[name].agent.as_str())
+    .to_vec();
+    assert_eq!(
+        kinds,
+        [
+            "antigravity",
+            "antigravity",
+            "antigravity",
+            "antigravity",
+            "antigravity",
+            "antigravity",
+            "claude"
+        ]
+    );
+    // Only a model the chain writes under its own `agent:` stays: a child's or a role's
+    // `claude-` model over an Antigravity parent routes by its id.
+    definition(root.path(), "agents/gp.md", "agent: agy", "");
+    definition(
+        root.path(),
+        "agents/child.md",
+        "agent: gp\nmodel: claude-opus-4-6\ntools: [Bash]",
+        "",
+    );
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        "  - agent: short\n    role: lead\n    model: claude-opus-4-6\n    tools: [Bash]\n    owns: [Plan, Implement]\n  - agent: claude-on-agy\n    role: judge\n    owns: [Review]",
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let roles = &loaded.teams.0["probe"].roles;
+    let kinds = [
+        roles[0].profile.as_str(),
+        roles[1].profile.as_str(),
+        "child",
+        "gp",
+    ]
+    .map(|name| loaded.agent_profiles.0[name].agent.as_str());
+    assert_eq!(kinds, ["claude", "antigravity", "claude", "antigravity"]);
+    definition(
+        root.path(),
+        "agents/mismatch.md",
+        "agent: codex\nmodel: claude-opus-4-6\ntools: [Bash]",
+        "",
+    );
+    error(
+        root.path(),
+        "runs on 'codex' but model 'claude-opus-4-6' runs on 'claude'",
+    );
+}
+
+#[test]
 fn crafts_on_non_prompt_kinds_refuse_the_body_not_a_missing_base() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();

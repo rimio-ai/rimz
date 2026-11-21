@@ -219,6 +219,11 @@ pub enum SkippedPresetField {
     EffortNeedsModel(String),
     /// Effort on a model session-step kind resumed without a model switch.
     EffortNeedsModelSwitch(String),
+    /// `max` on a kind whose effort list lacks it, launched at the model's highest level.
+    EffortLowered {
+        value: String,
+        level: &'static str,
+    },
     /// The provider's fast alternative, when it has one.
     Fast {
         alternative: Option<&'static str>,
@@ -438,7 +443,11 @@ impl LaunchSpec {
         self,
         mut preset: LaunchPreset,
     ) -> (LaunchPreset, Vec<SkippedPresetField>) {
-        let mut skipped = Vec::new();
+        let model = preset.model.clone();
+        let mut skipped: Vec<_> = self
+            .lower_max_effort(&mut preset, model.as_deref())
+            .into_iter()
+            .collect();
         if self.presets.auto_compact.is_none()
             && let Some(value) = preset.auto_compact.take()
         {
@@ -463,6 +472,43 @@ impl LaunchSpec {
             preset.fast = None;
         }
         (preset, skipped)
+    }
+
+    /// Launch `max` effort at `model`'s highest level when the kind's effort list lacks
+    /// `max`: the catalog entry's ceiling, else its foreign prefix's, else the list's highest
+    /// level.
+    fn lower_max_effort(
+        self,
+        preset: &mut LaunchPreset,
+        model: Option<&str>,
+    ) -> Option<SkippedPresetField> {
+        let Some(StaticPresetMatcher::ValueFlag { values, .. }) =
+            self.static_preset_matcher(PresetField::Effort)
+        else {
+            return None;
+        };
+        if preset.effort.as_deref() != Some("max") || values.contains(&"max") {
+            return None;
+        }
+        let level = model
+            .and_then(|model| {
+                self.definitions
+                    .models
+                    .iter()
+                    .find(|entry| entry.name == model || entry.id == model)
+            })
+            .and_then(|entry| entry.max_effort)
+            .or_else(|| {
+                let model = model?;
+                self.definitions
+                    .foreign_prefixes
+                    .iter()
+                    .find(|(prefix, _)| model.starts_with(prefix))
+                    .map(|(_, ceiling)| *ceiling)
+            })
+            .or_else(|| values.last().copied())?;
+        let value = preset.effort.replace(level.to_owned())?;
+        Some(SkippedPresetField::EffortLowered { value, level })
     }
 
     /// Remove every exact rendered fast switch, on and off, from launch argv.
@@ -537,6 +583,7 @@ impl LaunchSpec {
                     agent: agent_kind,
                     field: field_name,
                     value,
+                    values,
                 });
             }
             if !self.supports_preset(field) {
@@ -624,6 +671,9 @@ pub(super) struct DefinitionModel {
     pub name: &'static str,
     pub id: &'static str,
     pub effort: Option<&'static str>,
+    /// The highest level this model takes, where `max` launches when the kind's effort list
+    /// lacks it; `None` takes the list's highest level.
+    pub max_effort: Option<&'static str>,
 }
 
 /// Renders a tools list, plus provider tool names to append, each once.
@@ -647,6 +697,10 @@ pub(super) struct DefinitionSpec {
     pub models: &'static [DefinitionModel],
     pub runs_other_providers_models: bool,
     pub prefixes: &'static [&'static str],
+    /// Other providers' model prefixes this kind also runs, only for a definition that names it
+    /// in `agent:`: routing by model leaves them to the kind that owns the prefix. Each carries
+    /// the highest effort its models take here, where `max` launches.
+    pub foreign_prefixes: &'static [(&'static str, &'static str)],
     pub tools: DefinitionTools,
 }
 
@@ -657,6 +711,7 @@ impl DefinitionSpec {
         models: &[],
         runs_other_providers_models: false,
         prefixes: &[],
+        foreign_prefixes: &[],
         tools: DefinitionTools::Unsupported,
     };
 }

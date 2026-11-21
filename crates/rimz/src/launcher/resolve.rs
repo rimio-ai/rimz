@@ -223,6 +223,7 @@ fn resolve_routed(
             passthrough: &overrides.passthrough,
             budget,
             max_turns,
+            machine_config: Some(machine_config),
         },
     )?;
     if let Some(login) = &overrides.login {

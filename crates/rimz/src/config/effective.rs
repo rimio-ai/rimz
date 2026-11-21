@@ -167,7 +167,7 @@ impl LaunchAgents {
         if let (Some(implied), Some(model), Some(family), Some(base)) =
             (model_kind, model, family, &base)
         {
-            if crate::agents::runs_other_providers_models(&base.kind) {
+            if crate::agents::keeps_model(&base.kind, model) {
                 model_kind = None;
             } else if base.kind.as_str() != implied {
                 return Err(super::tiers::TierError(format!(

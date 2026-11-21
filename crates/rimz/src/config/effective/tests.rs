@@ -671,6 +671,7 @@ fn mini_tier_and_model_overrides_keep_the_selected_interface() {
                 passthrough: &[],
                 budget: None,
                 max_turns: None,
+                machine_config: None,
             },
         )
         .unwrap();
@@ -886,6 +887,7 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
                 passthrough: &[],
                 budget: None,
                 max_turns: None,
+                machine_config: None,
             },
         )
         .unwrap();
@@ -984,6 +986,7 @@ fn opencode_model_overrides_finalize_without_provider_model_args() {
                 passthrough: &[],
                 budget: None,
                 max_turns: None,
+                machine_config: None,
             },
         )
         .unwrap();
@@ -1175,6 +1178,7 @@ fn team_cli_models_route_each_markdown_role() {
                 passthrough: &[],
                 budget: None,
                 max_turns: None,
+                machine_config: None,
             },
         )
         .unwrap();
@@ -1245,6 +1249,7 @@ fn team_cli_models_route_each_markdown_role() {
             passthrough: &[],
             budget: None,
             max_turns: None,
+            machine_config: None,
         },
     )
     .unwrap();
@@ -2563,4 +2568,51 @@ fn a_project_row_with_a_key_outside_the_row_refuses_alone() {
         refused.detail.contains("unknown field `agent`"),
         "{refused:?}"
     );
+}
+
+#[test]
+fn tier_routes_read_an_alias_launch_word_as_its_kind() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, fields) in [("agy", "tools: [Read]"), ("mcode", "tools: [Read]")] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Base\n{fields}\n---\nWork."),
+        )
+        .unwrap();
+    }
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        machine.harness.auto_compact,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    let route = |word: &str| {
+        let mut launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+        let routed = launch
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some(word),
+                Some(super::super::tiers::ModelTier::Intern),
+                None,
+                None,
+                |_, _| None,
+            )
+            .map_err(|error| error.to_string());
+        (routed, launch.profiles)
+    };
+    for (alias, kind) in [("agy", "antigravity"), ("mcode", "minimax")] {
+        let (routed, profiles) = route(alias);
+        assert!(
+            !format!("{routed:?}").contains("needs Markdown definitions"),
+            "{alias}: {routed:?}"
+        );
+        assert_eq!((routed, profiles), route(kind), "{alias}");
+    }
 }

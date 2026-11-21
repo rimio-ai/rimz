@@ -197,6 +197,9 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         definitions: crate::agents::definition::DefinitionSpec {
+            models: MODELS,
+            prefixes: &["gemini-"],
+            foreign_prefixes: &[("claude-", "high")],
             tools: crate::agents::definition::DefinitionTools::RequiredFile(
                 agent_file::render_definition_tools,
             ),
@@ -220,7 +223,10 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         presets: super::PresetMatchers {
             code_mode: super::CodeModeSwitch::Unsupported,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
-            effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
+            effort: Some(super::StaticPresetMatcher::ValueFlag {
+                flags: &["--effort"],
+                values: &["low", "medium", "high", "xhigh"],
+            }),
             system_prompt_file: Some(super::StaticPresetMatcher::AgentFile(
                 agent_file::AGENT_FLAG,
             )),
@@ -229,6 +235,32 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         ..super::LaunchSpec::EMPTY
     },
 };
+
+/// The Gemini models agy runs, each launched by base id with `--effort`, never by an
+/// effort-suffixed id: agy knows no short name, and refuses a suffixed id beside a differing
+/// `--effort`. Each defaults to `high`, the highest level every model takes, and sets no
+/// kind-wide default, so an uncataloged or suffixed id launches as written. Neon and hydrogen
+/// take low to xhigh; carbon, argon, and flash low to high (agy 1.5.13).
+const MODELS: &[crate::agents::definition::DefinitionModel] = &[
+    gemini("hydrogen", "gemini-4-hydrogen", "xhigh"),
+    gemini("neon", "gemini-4-neon", "xhigh"),
+    gemini("carbon", "gemini-4-carbon", "high"),
+    gemini("argon", "gemini-4-argon", "high"),
+    gemini("flash", "gemini-3.8-flash", "high"),
+];
+
+const fn gemini(
+    name: &'static str,
+    id: &'static str,
+    max_effort: &'static str,
+) -> crate::agents::definition::DefinitionModel {
+    crate::agents::definition::DefinitionModel {
+        name,
+        id,
+        effort: Some("high"),
+        max_effort: Some(max_effort),
+    }
+}
 
 const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     turn_lifecycle: ConcernCoverage::Wired {
@@ -497,6 +529,22 @@ impl crate::agents::capabilities::InstallationCapability for AntigravityAdapter 
 impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
     fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
         Some(SystemTextChannel::AgentFile)
+    }
+
+    /// A catalog short name launches its base id; agy has no catalog to read.
+    fn resolve_model_alias(
+        &self,
+        request: ModelAliasRequest<'_>,
+        _source: Option<&mut dyn ModelCatalogSource>,
+    ) -> Option<ModelAliasResolution> {
+        let entry = MODELS.iter().find(|entry| entry.name == request.alias)?;
+        Some(ModelAliasResolution {
+            id: entry.id.to_owned(),
+            rung: ModelAliasRung::Baked,
+            warnings: Vec::new(),
+            movement: None,
+            refresh_failure: None,
+        })
     }
 
     fn agent_file(

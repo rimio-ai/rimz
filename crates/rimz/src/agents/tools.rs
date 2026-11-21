@@ -163,16 +163,38 @@ pub fn definition_model_kind(model: &str) -> Option<&'static str> {
 
 pub(crate) fn definition_defaults(kind: &str, requested_model: Option<&str>) -> DefinitionDefaults {
     spec_by_kind(kind).map_or(DefinitionDefaults { effort: None }, |spec| {
-        defaults_for_launch(&spec.launch, requested_model)
+        defaults_for_launch(&spec.launch, requested_model, None)
+    })
+}
+
+/// The defaults for `pinned`, the id a machine pin maps `name` to. On a kind with a kind-wide
+/// effort, an id the catalog does not list keeps `name`'s own effort.
+pub(crate) fn pinned_definition_defaults(
+    kind: &str,
+    name: &str,
+    pinned: &str,
+) -> DefinitionDefaults {
+    spec_by_kind(kind).map_or(DefinitionDefaults { effort: None }, |spec| {
+        defaults_for_launch(&spec.launch, Some(pinned), Some(name))
     })
 }
 
 fn defaults_for_launch(
     launch: &super::LaunchSpec,
     requested_model: Option<&str>,
+    pinned_from: Option<&str>,
 ) -> DefinitionDefaults {
     let spec = launch.definitions;
+    let listed = |model: &str| {
+        spec.models
+            .iter()
+            .any(|entry| entry.name == model || entry.id == model)
+    };
     let effort = requested_model
+        .map(|model| match pinned_from {
+            Some(name) if spec.effort.is_some() && !listed(model) => name,
+            _ => model,
+        })
         .and_then(|model| {
             spec.models
                 .iter()
@@ -215,6 +237,17 @@ pub fn skills_lack_skill_tool(kind: &str, tools: Option<&ToolSet>) -> bool {
 /// Whether `kind` runs models named by other providers' vocabularies.
 pub fn runs_other_providers_models(kind: &str) -> bool {
     definitions(kind).runs_other_providers_models
+}
+
+/// Whether `kind`, named in `agent:`, keeps `model` though the model's id routes to another
+/// kind: the kind runs every provider's models, or the id carries one of its foreign prefixes.
+pub(crate) fn keeps_model(kind: &str, model: &str) -> bool {
+    let definition = definitions(kind);
+    definition.runs_other_providers_models
+        || definition
+            .foreign_prefixes
+            .iter()
+            .any(|(prefix, _)| model.starts_with(prefix))
 }
 
 pub(crate) fn render_tool_args(
@@ -646,8 +679,38 @@ mod tests {
             ("claude-opus-4-6", Some("claude")),
             ("gpt-x", Some("codex")),
             ("custom", None),
+            ("hydrogen", Some("antigravity")),
+            ("flash", Some("antigravity")),
+            ("gemini-4-hydrogen", Some("antigravity")),
+            ("gemini-3.8-flash", Some("antigravity")),
+            ("gemini-4-hydrogen-high", Some("antigravity")),
+            ("gemini-x", Some("antigravity")),
         ] {
-            assert_eq!(definition_model_kind(model), kind);
+            assert_eq!(definition_model_kind(model), kind, "{model}");
+        }
+        for (name, id) in [
+            ("hydrogen", "gemini-4-hydrogen"),
+            ("neon", "gemini-4-neon"),
+            ("carbon", "gemini-4-carbon"),
+            ("argon", "gemini-4-argon"),
+            ("flash", "gemini-3.8-flash"),
+        ] {
+            for model in [name, id] {
+                assert_eq!(
+                    definition_defaults("antigravity", Some(model)).effort,
+                    Some("high"),
+                    "{model}"
+                );
+            }
+            assert!(
+                definitions("antigravity")
+                    .models
+                    .iter()
+                    .any(|entry| entry.name == name && entry.id == id)
+            );
+        }
+        for model in [Some("gemini-4-hydrogen-high"), Some("gemini-x"), None] {
+            assert_eq!(definition_defaults("antigravity", model).effort, None);
         }
         for (alias, id) in [
             ("astra", "gpt-6-astra"),
@@ -691,9 +754,9 @@ mod tests {
             },
             ..super::super::LaunchSpec::EMPTY
         };
-        let unsupported = defaults_for_launch(&launch, None);
+        let unsupported = defaults_for_launch(&launch, None, None);
         launch.presets.effort = Some(super::super::StaticPresetMatcher::Flag(&["--effort"]));
-        let supported = defaults_for_launch(&launch, None);
+        let supported = defaults_for_launch(&launch, None, None);
         assert_eq!(
             [unsupported, supported],
             [

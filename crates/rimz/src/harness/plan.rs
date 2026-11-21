@@ -247,6 +247,8 @@ pub struct LaunchFinalizeOptions<'a> {
     pub passthrough: &'a [String],
     pub budget: Option<BudgetSpec>,
     pub max_turns: Option<u32>,
+    /// The machine config whose model pins pick the model effort settles for.
+    pub machine_config: Option<&'a crate::config::MachineConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -1207,6 +1209,7 @@ pub fn plan_supervised_launch(
             passthrough: &request.passthrough,
             budget: request.budget,
             max_turns: request.max_turns,
+            machine_config: Some(machine_config),
         },
     );
     match finalized {
@@ -1365,6 +1368,10 @@ impl fmt::Display for LaunchFinalizeWarning {
                     SkippedPresetField::EffortNeedsModel(value) => write!(
                         formatter,
                         "warning: `{profile}` effort {value} needs a model on {agent}; launching without it; set `model:` or pass --model"
+                    ),
+                    SkippedPresetField::EffortLowered { value, level } => write!(
+                        formatter,
+                        "warning: `{profile}` effort {value} is unsupported on {agent}; launching at {level}"
                     ),
                     SkippedPresetField::EffortNeedsModelSwitch(value) => write!(
                         formatter,
@@ -1590,6 +1597,7 @@ pub(super) fn finalize_agent_cell(
         ..options
     };
     let adapter = crate::agents::find_definition(&cell.kind);
+    let rendered_effort = cell.launch.effort.is_some();
     if options.isolation.is_some() {
         cell.launch.isolation = options.isolation;
     }
@@ -1651,7 +1659,13 @@ pub(super) fn finalize_agent_cell(
                 "--no-fast"
             }));
         }
-        apply_preset_args(&mut cell.args, adapter, options.preset, &overridden)?;
+        apply_preset_args(
+            &mut cell.args,
+            adapter,
+            options.preset,
+            &overridden,
+            cell.launch.model.as_deref(),
+        )?;
     }
     validate_finalized_cell(cell, adapter)?;
     cell.args.extend(options.passthrough.iter().cloned());
@@ -1664,12 +1678,31 @@ pub(super) fn finalize_agent_cell(
         .clone()
         .unwrap_or_else(|| cell.kind.to_string());
     if let Some(adapter) = adapter {
-        for field in normalize_cell_preset(cell, adapter) {
+        let model = cell.launch.model.as_deref().map(|model| {
+            options
+                .machine_config
+                .and_then(|config| config.model_alias(&cell.kind, model))
+                .unwrap_or(model)
+                .to_owned()
+        });
+        if matches!(cell.tuning.effort, Some(TuningSource::BuiltIn)) {
+            let defaults = match (cell.launch.model.as_deref(), model.as_deref()) {
+                (Some(name), Some(pinned)) => {
+                    crate::agents::pinned_definition_defaults(&cell.kind, name, pinned)
+                }
+                _ => crate::agents::definition_defaults(&cell.kind, None),
+            };
+            cell.launch.effort = defaults.effort.map(str::to_owned);
+        }
+        for field in normalize_cell_preset(cell, adapter, model.as_deref()) {
             warnings.push(LaunchFinalizeWarning::SkippedField {
                 profile: profile.clone(),
                 agent: adapter.spec().kind,
                 field,
             });
+        }
+        if rendered_effort || overridden.contains(&crate::agents::PresetField::Effort) {
+            settle_effort_arg(cell, adapter)?;
         }
         reconcile_preset_args(cell, adapter, &overridden, warnings)?;
     }
@@ -1734,12 +1767,14 @@ pub(super) fn finalize_agent_cell(
 pub(super) fn normalize_cell_preset(
     cell: &mut AgentCell,
     adapter: &crate::agents::AgentDefinition,
+    model: Option<&str>,
 ) -> Vec<crate::agents::definition::SkippedPresetField> {
     let (mut preset, mut skipped) =
         adapter
             .spec()
             .launch
             .normalize_preset(crate::agents::LaunchPreset {
+                model: model.map(str::to_owned),
                 auto_compact: cell.auto_compact.take(),
                 effort: cell.launch.effort.take(),
                 fast: cell.launch.fast,
@@ -1768,13 +1803,54 @@ pub(super) fn normalize_cell_preset(
     skipped
 }
 
+/// Re-render the one effort arg RimZ rendered when the effort settled since, for the model the
+/// launch finally runs: `max` lowers to its level and a built-in default follows the model.
+/// Several effort args are a conflict `reconcile_preset_args` warns about instead.
+fn settle_effort_arg(
+    cell: &mut AgentCell,
+    adapter: &crate::agents::AgentDefinition,
+) -> std::result::Result<(), LaunchFinalizeError> {
+    let field = crate::agents::PresetField::Effort;
+    let Some(matcher) = adapter.spec().launch.preset_arg_matcher(field) else {
+        return Ok(());
+    };
+    let occurrences = matcher.occurrences(&cell.args);
+    let [rendered] = occurrences.as_slice() else {
+        return Ok(());
+    };
+    if cell.launch.effort.as_ref() == Some(&rendered.value) {
+        return Ok(());
+    }
+    remove_occurrences(&mut cell.args, &occurrences);
+    if let Some(effort) = cell.launch.effort.clone() {
+        cell.args.extend(
+            adapter
+                .spec()
+                .render_preset(&field.launch_preset(effort))
+                .map_err(unsupported_preset_error)?,
+        );
+    }
+    Ok(())
+}
+
+/// `model` is the cell's model, which picks the level `max` effort launches at when the
+/// preset names none.
 pub(super) fn apply_preset_args(
     args: &mut Vec<String>,
     adapter: &crate::agents::AgentDefinition,
     preset: &crate::agents::LaunchPreset,
     replaced: &[crate::agents::PresetField],
+    model: Option<&str>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
-    let (preset, _) = adapter.spec().launch.normalize_preset(preset.clone());
+    let requested = preset.model.clone();
+    let (mut preset, _) = adapter
+        .spec()
+        .launch
+        .normalize_preset(crate::agents::LaunchPreset {
+            model: requested.clone().or(model.map(str::to_owned)),
+            ..preset.clone()
+        });
+    preset.model = requested;
     let rendered = adapter
         .spec()
         .render_preset(&preset)

@@ -64,6 +64,228 @@ fn finalized_launch_warns_once_per_moved_cell_with_full_passes() {
 }
 
 #[test]
+fn antigravity_effort_max_launches_at_the_models_highest_level_with_a_notice() {
+    let notice = |level: &str| {
+        format!(
+            "warning: `antigravity-coder` effort max is unsupported on antigravity; launching at \
+             {level}"
+        )
+    };
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (model, level) in [
+        ("hydrogen", "xhigh"),
+        ("carbon", "high"),
+        ("gemini-4-carbon", "high"),
+        ("flash", "high"),
+        ("gemini-x", "xhigh"),
+        ("claude-sonnet-5-5", "high"),
+    ] {
+        let mut layout = LayoutSpec::single(preset_cell(
+            "antigravity",
+            &["--model", model],
+            Some(model),
+            Some("max"),
+        ));
+        let warnings = finalize(&mut layout, &Default::default(), &[]).unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        actual.push((
+            cell.launch.effort.clone(),
+            warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ));
+        expected.push((Some(level.to_owned()), vec![notice(level)]));
+    }
+    let mut layout = LayoutSpec::single(preset_cell(
+        "antigravity",
+        &["--model", "carbon", "--effort", "high"],
+        Some("carbon"),
+        Some("high"),
+    ));
+    let warnings = finalize(
+        &mut layout,
+        &crate::agents::LaunchPreset {
+            effort: Some("max".into()),
+            ..Default::default()
+        },
+        &[],
+    )
+    .unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    actual.push((
+        cell.launch.effort.clone(),
+        warnings.iter().map(ToString::to_string).collect(),
+    ));
+    expected.push((Some("high".to_owned()), vec![notice("high")]));
+    assert_eq!(actual, expected);
+    assert_eq!(cell.args, ["--model", "carbon", "--effort", "high"]);
+}
+
+/// Effort settles for the model the launch finally runs: a `--model` override and a machine pin
+/// move `max` and the built-in default, and argv, the record, and the notice follow.
+#[test]
+fn antigravity_effort_settles_for_the_final_model() {
+    let notice = |level: &str| {
+        format!(
+            "warning: `antigravity-coder` effort max is unsupported on antigravity; launching at \
+             {level}"
+        )
+    };
+    let pins = crate::config::MachineConfig {
+        models: std::collections::BTreeMap::from([(
+            AgentKind::new_unchecked("antigravity"),
+            std::collections::BTreeMap::from([(
+                "hydrogen".to_owned(),
+                "gemini-4-carbon".to_owned(),
+            )]),
+        )]),
+        ..Default::default()
+    };
+    let cases = [
+        // A profile's max over hydrogen, launched with `--model carbon`.
+        ("hydrogen", "max", false, Some("carbon"), None, Some("high")),
+        // The built-in high over hydrogen, launched with a suffixed id.
+        (
+            "gemini-4-hydrogen",
+            "high",
+            true,
+            Some("gemini-4-hydrogen-low"),
+            None,
+            None,
+        ),
+        // A profile's max over hydrogen, which the machine pins to carbon.
+        ("hydrogen", "max", false, None, Some(&pins), Some("high")),
+    ];
+    for (model, effort, built_in, launched, machine_config, settled) in cases {
+        let rendered = if effort == "max" { "xhigh" } else { effort };
+        let mut layout = LayoutSpec::single(preset_cell(
+            "antigravity",
+            &["--model", model, "--effort", rendered],
+            Some(model),
+            Some(effort),
+        ));
+        if built_in {
+            for cell in layout.agent_cells_mut() {
+                cell.tuning.effort = Some(crate::harness::spec::TuningSource::BuiltIn);
+            }
+        }
+        let preset = crate::agents::LaunchPreset {
+            model: launched.map(str::to_owned),
+            ..Default::default()
+        };
+        let warnings = finalize_launch_layout(
+            &mut layout,
+            LaunchFinalizeOptions {
+                smart_compact: None,
+                agent_base: None,
+                permission_mode: None,
+                isolation: None,
+                preset: &preset,
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+                machine_config,
+            },
+        )
+        .unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        let final_model = launched.unwrap_or(model);
+        let args: Vec<String> = ["--model", final_model]
+            .into_iter()
+            .chain(settled.into_iter().flat_map(|level| ["--effort", level]))
+            .map(str::to_owned)
+            .collect();
+        let warnings: Vec<_> = warnings.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            (
+                cell.launch.effort.as_deref(),
+                cell.launch
+                    .record
+                    .as_deref()
+                    .and_then(|record| record.effort.as_deref()),
+                warnings,
+                cell.args.clone(),
+            ),
+            (
+                settled,
+                settled,
+                if effort == "max" {
+                    vec![notice(settled.unwrap())]
+                } else {
+                    Vec::new()
+                },
+                args,
+            ),
+            "{model} -> {launched:?} {}",
+            machine_config.is_some()
+        );
+    }
+}
+
+#[test]
+fn a_pin_keeps_a_cataloged_names_built_in_effort_unless_its_id_is_listed() {
+    let config = crate::config::MachineConfig {
+        models: std::collections::BTreeMap::from([(
+            AgentKind::new_unchecked("claude"),
+            std::collections::BTreeMap::from([
+                ("fable".to_owned(), "claude-fable-5-2".to_owned()),
+                ("opus".to_owned(), "fable".to_owned()),
+            ]),
+        )]),
+        ..Default::default()
+    };
+    // fable's built-in high survives a pin to an unlisted id; opus pinned to the listed fable
+    // takes fable's high over the kind-wide xhigh.
+    for (model, built_in, pinned, settled) in [
+        ("fable", "high", None, "high"),
+        ("fable", "high", Some(&config), "high"),
+        ("opus", "xhigh", Some(&config), "high"),
+    ] {
+        let mut layout = LayoutSpec::single(preset_cell(
+            "claude",
+            &["--model", model, "--effort", built_in],
+            Some(model),
+            Some(built_in),
+        ));
+        for cell in layout.agent_cells_mut() {
+            cell.tuning.effort = Some(crate::harness::spec::TuningSource::BuiltIn);
+        }
+        finalize_launch_layout(
+            &mut layout,
+            LaunchFinalizeOptions {
+                smart_compact: None,
+                agent_base: None,
+                permission_mode: None,
+                isolation: None,
+                preset: &crate::agents::LaunchPreset::default(),
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+                machine_config: pinned,
+            },
+        )
+        .unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(
+            (
+                cell.launch.effort.as_deref(),
+                cell.launch
+                    .record
+                    .as_deref()
+                    .and_then(|record| record.effort.as_deref()),
+                cell.args
+                    .windows(2)
+                    .filter(|pair| pair[0] == "--effort")
+                    .map(|pair| pair[1].as_str())
+                    .collect::<Vec<_>>(),
+            ),
+            (Some(settled), Some(settled), vec![settled]),
+            "{model} pinned: {}",
+            pinned.is_some()
+        );
+    }
+}
+
+#[test]
 fn finalized_launch_stamps_verbatim_record() {
     let mut layout = LayoutSpec::single(preset_cell("claude", &[], Some("opus[1m]"), Some("high")));
     finalize(&mut layout, &Default::default(), &[]).unwrap();
@@ -704,8 +926,32 @@ fn launch_preset_validation_matches_provider_support() {
                 agent: "hermes",
                 field: "effort",
                 value: "bogus".into(),
+                values: &[
+                    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+                ],
             }
         ))
+    );
+    let antigravity = |effort: &str| crate::agents::LaunchPreset {
+        model: Some("carbon".into()),
+        effort: Some(effort.into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        validate_launch_preset("antigravity", &antigravity("bogus")),
+        Err(LaunchFinalizeError::PresetValue(
+            crate::agents::PresetErr::UnsupportedValue {
+                agent: "antigravity",
+                field: "effort",
+                value: "bogus".into(),
+                values: &["low", "medium", "high", "xhigh"],
+            }
+        ))
+    );
+    // A listed level the model lacks is agy's to refuse.
+    assert_eq!(
+        validate_launch_preset("antigravity", &antigravity("xhigh")),
+        Ok(vec![])
     );
 }
 
@@ -1753,6 +1999,7 @@ fn finalize<'a>(
             passthrough,
             budget: None,
             max_turns: None,
+            machine_config: None,
         },
     )
 }
@@ -1861,6 +2108,7 @@ fn finalized_smart_compact_warnings(
             passthrough: &[],
             budget: None,
             max_turns: None,
+            machine_config: None,
         },
     )
     .unwrap()
@@ -2937,6 +3185,7 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
             passthrough: &[],
             budget: None,
             max_turns: None,
+            machine_config: None,
         },
     )
     .expect("finalize");
@@ -2971,6 +3220,7 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
             passthrough: &[],
             budget: None,
             max_turns: None,
+            machine_config: None,
         },
     )
     .expect_err("droid cannot replace prompts");
@@ -3224,6 +3474,7 @@ fn resolved_launch_finalizes_profile_cli_and_passthrough_precedence() {
             passthrough: &passthrough,
             budget: Some("2/day".parse().expect("budget")),
             max_turns: None,
+            machine_config: None,
         },
     )
     .expect("finalize launch");
@@ -3294,6 +3545,7 @@ fn fresh_permission_modes_default_and_map_at_finalization() {
                 passthrough: &[],
                 budget: None,
                 max_turns: None,
+                machine_config: None,
             },
         )
         .unwrap();
@@ -3340,6 +3592,7 @@ fn raw_permission_flags_in_profiles_and_passthrough_keep_the_mode_unknown() {
                         passthrough: if passthrough { &raw } else { &[] },
                         budget: None,
                         max_turns: None,
+                        machine_config: None,
                     },
                 )
                 .unwrap();
@@ -3383,6 +3636,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
             passthrough: &[],
             budget: None,
             max_turns: None,
+            machine_config: None,
         },
     )
     .expect("finalize launch");
@@ -3413,6 +3667,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
             passthrough: &[],
             budget: None,
             max_turns: Some(3),
+            machine_config: None,
         },
     )
     .expect("finalize supervised launch");
@@ -3442,6 +3697,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
             passthrough: &[],
             budget: None,
             max_turns: Some(3),
+            machine_config: None,
         },
     )
     .expect_err("codex should reject max turns");
@@ -3485,6 +3741,7 @@ fn explicit_permission_mode_replaces_profile_and_virtual_modes() {
                     passthrough: &[],
                     budget: None,
                     max_turns: None,
+                    machine_config: None,
                 },
             )
             .expect("finalize profile");
@@ -3531,6 +3788,7 @@ fn explicit_permission_mode_replaces_profile_and_virtual_modes() {
             passthrough: &[],
             budget: None,
             max_turns: None,
+            machine_config: None,
         },
     )
     .expect("finalize virtual cell");
@@ -3594,6 +3852,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
             passthrough: &["--debug".to_owned()],
             budget: None,
             max_turns: None,
+            machine_config: None,
         },
     )
     .expect("finalize launch");
@@ -4012,6 +4271,7 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
             passthrough: &[],
             budget: None,
             max_turns: Some(3),
+            machine_config: None,
         },
     )
     .expect("claude supports max turns");
@@ -4042,6 +4302,7 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
             passthrough: &[],
             budget: None,
             max_turns: Some(3),
+            machine_config: None,
         },
     )
     .expect_err("codex rejects max turns");
@@ -4090,6 +4351,7 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
             passthrough: &["--debug".to_owned()],
             budget: Some("2/day".parse().expect("budget")),
             max_turns: None,
+            machine_config: None,
         },
     )
     .expect("finalize mixed layout");
@@ -4522,6 +4784,7 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
                 passthrough: &[],
                 budget: None,
                 max_turns: None,
+                machine_config: None,
             },
         )
         .unwrap();
