@@ -117,12 +117,33 @@ fn file_tools(tools: Option<&[String]>, native_subagents: bool) -> Vec<&'static 
 /// item for each of the user's servers a limiting list keeps. An agent that lists any item and
 /// omits `inheritMcp` loses the account's servers, so the key is written whenever a line is;
 /// with neither a server nor a limit the file names no MCP key and agy loads every server.
-/// The list is one line of JSON flow style, the form agy 1.5.13 was observed to accept.
+/// The list is one line of JSON flow style, the form agy 1.5.13 was observed to accept. A
+/// capability's mark becomes its `rimz mcp serve` flag, and agy has no server-level key, so a
+/// mark on `rimz` becomes the flag of every served capability that has no mark of its own.
 fn mcp_lines(mcp: &McpLaunch<'_>) -> String {
     let json = |text: &str| serde_json::Value::from(text).to_string();
     let limits = crate::config::mcps_limit(mcp.mcps);
     let server = mcp.server.as_ref().map(|server| {
-        let args: Vec<String> = server.args.iter().map(|arg| json(arg)).collect();
+        let mut args = server.args.clone();
+        args.extend(mcp.capability_mark_args());
+        let entries = mcp.mcps.unwrap_or_default();
+        let rimz_mode = entries
+            .iter()
+            .find(|entry| entry.name() == crate::mcp::catalog::SERVER_NAME)
+            .and_then(crate::config::McpName::mode);
+        if let Some(mode) = rimz_mode {
+            let unmarked = crate::config::mcp_capabilities(mcp.mcps)
+                .into_iter()
+                .filter(|capability| {
+                    !entries.iter().any(|entry| {
+                        entry.capability() == Some(*capability) && entry.mode().is_some()
+                    })
+                });
+            for capability in unmarked {
+                args.extend([format!("--{}", mode.name()), capability.name().to_owned()]);
+            }
+        }
+        let args: Vec<String> = args.iter().map(|arg| json(arg)).collect();
         format!(
             "{{\"name\": {}, \"command\": {}, \"args\": [{}]}}",
             json(crate::mcp::catalog::SERVER_NAME),
@@ -188,6 +209,9 @@ pub(super) fn plan(input: &AgentFileInput<'_>) -> Result<AgentFile, AgentFileRef
     let hash = hex::encode(Sha256::digest(rest.as_bytes()));
     let name = format!("rimz-{label}-{}", &hash[..12]);
     Ok(AgentFile {
+        warnings: input
+            .mcp
+            .unapplied_marks("Antigravity takes a load mode only for RimZ's capabilities"),
         path: plugin.join("agents").join(format!("{name}.md")),
         bytes: format!("---\nname: {name}\n{rest}").into_bytes(),
         name,

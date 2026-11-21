@@ -489,7 +489,42 @@ fn antigravity_writes_the_server_and_the_list_into_its_agent_file() {
     );
     assert!(plan.mcp_capabilities.is_empty());
 
-    let mut resumed = limited.clone();
+    // A capability's own mark wins over the `rimz` mark, which agy, having no server-level
+    // key, takes as a flag for every other served capability. A marked user server warns
+    // and keeps its name-only item.
+    let marked = prompted(launch(
+        "antigravity",
+        Some(&["rimz:deferred", "rimz-lsp:always", "github:always"]),
+        &[],
+    ));
+    let plan = room.compile(&switches(true, true), &marked);
+    assert_eq!(
+        mcp_lines(&plan),
+        [
+            "inheritMcp: false".to_owned(),
+            format!(
+                r#"mcpServers: [{rimz}", "--always", "rimz-lsp", "--deferred", "rimz-wait", "--deferred", "rimz-control", "--deferred", "rimz-notes"]}}, {{"name": "github"}}]"#
+            ),
+        ]
+    );
+    let github = "the mcps entry `github:always` is not applied: Antigravity takes a load mode only for RimZ's capabilities";
+    assert_eq!(mcps_warnings(&plan), [github]);
+    assert_eq!(plan.process().mcp_warnings, [github]);
+    let plan = room.compile(&switches(true, false), &marked);
+    assert_eq!(
+        mcp_lines(&plan),
+        ["inheritMcp: false", r#"mcpServers: [{"name": "github"}]"#]
+    );
+    assert_eq!(
+        mcps_warnings(&plan),
+        [
+            "the mcps entry `rimz:deferred` is not applied: RimZ's MCP server is off for this launch",
+            "the mcps entry `rimz-lsp:always` is not applied: RimZ's MCP server is off for this launch",
+            github,
+        ]
+    );
+
+    let mut resumed = marked.clone();
     resumed.action = ExecAction::Resume {
         session_id: "conversation".to_owned(),
         extra_args: Vec::new(),
@@ -500,7 +535,7 @@ fn antigravity_writes_the_server_and_the_list_into_its_agent_file() {
     assert_eq!(mcps_warnings(&plan), Vec::<String>::new());
     no_mcp_argv(&plan);
 
-    for mcps in [None, Some(&["*"][..])] {
+    for mcps in [None, Some(&["*"][..]), Some(&["*", "rimz-lsp:always"])] {
         let plan = room.compile(&switches(true, true), &launch("antigravity", mcps, &[]));
         assert_eq!(plan.agent_file, None);
         assert!(plan.mcp_capabilities.is_empty(), "{mcps:?}");

@@ -498,7 +498,8 @@ fn user_servers(plan: &LaunchPlan, arguments: &[(&str, &str)]) -> String {
 
 /// A capability's load mode as the launch passes it. On Claude, a
 /// `--always` or `--deferred` flag naming it in the `rimz` server's
-/// `--mcp-config` args, else that entry's `alwaysLoad`; on Codex, the
+/// `--mcp-config` args, else that entry's `alwaysLoad`; on Antigravity, such a
+/// flag in the `rimz` item of the agent file's `mcpServers` line; on Codex, the
 /// server's `omit_tools_from` override, where `["deferred"]` loads its tools
 /// from the start and `[]` defers them; the last one passed wins, as in
 /// Codex. `default` when neither is passed.
@@ -506,11 +507,21 @@ fn load_mode(arguments: &[(&str, &str)], capability: Capability) -> &'static str
     let omit_prefix = format!("mcp_servers.{SERVER_NAME}.omit_tools_from=");
     let mut load = None;
     for (flag, value) in arguments {
-        if *flag == "--mcp-config" {
+        if *flag == "--mcp-config" || *flag == "mcpServers:" {
             let Ok(config) = serde_json::from_str::<serde_json::Value>(value) else {
                 continue;
             };
-            let server = &config["mcpServers"][SERVER_NAME];
+            let server = match *flag {
+                "--mcp-config" => config["mcpServers"].get(SERVER_NAME),
+                _ => config
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|item| item["name"] == SERVER_NAME),
+            };
+            let Some(server) = server else {
+                continue;
+            };
             let args: Vec<&str> = server["args"]
                 .as_array()
                 .into_iter()

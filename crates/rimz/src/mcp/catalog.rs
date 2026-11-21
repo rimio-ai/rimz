@@ -395,7 +395,8 @@ pub fn tools_for(only: &[Capability]) -> impl Iterator<Item = &'static Tool> {
 }
 
 /// The `tools/list` result the server answers with for `tools`; a tool whose
-/// capability `modes` names carries Claude's load mode in its `_meta`.
+/// capability `modes` names carries its load mode in its `_meta`, under Claude's key
+/// and Antigravity's.
 pub fn tools_list(tools: &[&Tool], modes: &[(Capability, LoadMode)]) -> Value {
     let listing: Vec<Value> = tools
         .iter()
@@ -405,8 +406,11 @@ pub fn tools_list(tools: &[&Tool], modes: &[(Capability, LoadMode)]) -> Value {
                 .iter()
                 .find(|(capability, _)| *capability == tool.capability);
             if let Some((_, mode)) = mode {
-                entry["_meta"] =
-                    serde_json::json!({ "anthropic/alwaysLoad": *mode == LoadMode::Always });
+                let always = *mode == LoadMode::Always;
+                entry["_meta"] = serde_json::json!({
+                    "anthropic/alwaysLoad": always,
+                    "antigravity/alwaysLoad": always,
+                });
             }
             entry
         })
