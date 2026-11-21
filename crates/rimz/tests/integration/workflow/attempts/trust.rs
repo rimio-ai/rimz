@@ -366,9 +366,9 @@ fn a_trust_waits_age_and_order_keep_its_first_stamp_across_rechecks() {
     .to_owned();
     fs::remove_file(room.env.agent_config_path("claude")).unwrap();
     fs::write(&release, "").unwrap();
-    // Both launches can meet in the queue, where whichever is admitted second waits `capacity`
-    // behind the other's in-flight turn for as long as that turn holds its ticket; the fixture
-    // runs no tick, so advances stand in for its rechecks until the wait moves to `trust`.
+    // Both launches can meet in the queue, where either waits `capacity` behind the other's
+    // in-flight turn for as long as that turn holds its ticket; the fixture runs no tick, so
+    // advances stand in for its rechecks until each wait moves to `trust`.
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
     for id in [&older, &newer] {
         loop {
