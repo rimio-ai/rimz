@@ -110,13 +110,14 @@ pub struct AddRequest {
     pub root: Option<PathBuf>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Added {
     /// Absolute path of the published note.
     pub path: PathBuf,
     /// `--meta` keys dropped because RimZ owns a header key of that name.
     pub dropped_meta: Vec<String>,
     /// Why the note has no `project` key, when resolving the project failed.
+    #[serde(serialize_with = "error_text")]
     pub unresolved_project: Option<WorkspaceErr>,
 }
 
@@ -141,7 +142,7 @@ pub struct Note {
     pub written: Timestamp,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct Listing {
     /// The newest matches the limit keeps, by write time, then path.
     pub notes: Vec<Note>,
@@ -154,8 +155,9 @@ pub struct Listing {
     pub skipped: Vec<(PathBuf, String)>,
 }
 
-/// Write one note for the calling process and return its absolute path.
-pub fn add(request: &AddRequest) -> Result<Added, NotesErr> {
+/// Write one note for the calling process and return its absolute path. Without `--root` or
+/// a room pin, the project is the one `dir` resolves to.
+pub fn add(request: &AddRequest, dir: &Path) -> Result<Added, NotesErr> {
     let env = |key: &str| std::env::var(key).ok();
     // `--root` names the project ahead of the room pin, the pin ahead of the cwd.
     let pin = match request.root {
@@ -164,7 +166,7 @@ pub fn add(request: &AddRequest) -> Result<Added, NotesErr> {
     };
     let (project, unresolved_project) = match pin {
         Some(pin) => (Some(pin), None),
-        None => match WorkspaceResolver::resolve(".", request.root.clone()) {
+        None => match WorkspaceResolver::resolve(dir, request.root.clone()) {
             Ok(workspace) => (Some(workspace.project_root.display().to_string()), None),
             Err(error) => (None, Some(error)),
         },
@@ -176,6 +178,16 @@ pub fn add(request: &AddRequest) -> Result<Added, NotesErr> {
         unresolved_project,
         ..added
     })
+}
+
+fn error_text<S: serde::Serializer>(
+    error: &Option<WorkspaceErr>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    error
+        .as_ref()
+        .map(ToString::to_string)
+        .serialize(serializer)
 }
 
 /// Read the newest notes in the store that `request` keeps.
