@@ -1599,6 +1599,9 @@ fn invalid_record_effort_degrades_to_the_bare_posture() {
                     agent: "hermes",
                     field: "effort",
                     value: "bogus".into(),
+                    values: &[
+                        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+                    ],
                 }
                 .to_string(),
             }),
@@ -1640,4 +1643,30 @@ fn stamped_resume_degrades_when_the_profile_loses_its_family_render() {
             now: AgentKind::new_unchecked("codex"),
         })
     );
+}
+
+#[test]
+fn a_pre_upgrade_alias_stamp_replays_the_recorded_model_over_its_kinds_base() {
+    let mut base = profile("minimax");
+    base.kind_base = true;
+    base.model = Some("minimax-new".into());
+    let profiles = profiles("minimax", base);
+    let record = crate::agents::LaunchRecord {
+        model: Some("minimax-old".into()),
+        ..Default::default()
+    };
+    for name in ["minimax", "mcode"] {
+        let posture = resolve_posture(
+            PostureRequest {
+                record: Some(&record),
+                profile: Some(name),
+                kind: &AgentKind::new_unchecked("minimax"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles,
+        );
+        assert!(posture.degraded.is_none(), "{name}: {:?}", posture.degraded);
+        assert_eq!(posture.launch.model, record.model, "{name}");
+    }
 }

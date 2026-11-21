@@ -163,9 +163,10 @@ pub use state::{
     QueuedAsk, TurnCompletion, is_turn_dead, settled_outcome, single_line_description,
 };
 use tools::ToolErr;
+pub(crate) use tools::keeps_model;
 pub(crate) use tools::{
-    ToolNotice, canonical_tool_name, definition_defaults, render_launch_tool_args,
-    render_tool_args, tools_required,
+    ToolNotice, canonical_tool_name, definition_defaults, pinned_definition_defaults,
+    render_launch_tool_args, render_tool_args, tools_required,
 };
 pub use tools::{
     ToolSet, definition_model_kind, runs_other_providers_models, skills_lack_skill_tool,
@@ -465,12 +466,14 @@ fn flag_occurrence(flags: &[String], argv: &[String], index: usize) -> Option<Pr
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PresetErr {
     #[error(
-        "agent `{agent}` does not support profile {field} value `{value}`; use a native value or remove it"
+        "agent `{agent}` does not support profile {field} value `{value}`; use one of {} or remove it",
+        .values.join(", ")
     )]
     UnsupportedValue {
         agent: &'static str,
         field: &'static str,
         value: String,
+        values: &'static [&'static str],
     },
     #[error(
         "agent `{agent}` does not support profile field `{field}`; remove it or put provider-specific flags in `args`"

@@ -3918,6 +3918,43 @@ fn specs_that_need_no_help_pass_through_unchanged() {
 }
 
 #[test]
+fn antigravity_layouts_render_catalog_effort_and_the_max_fallback() {
+    let args = |model: &str, effort: Option<&str>| {
+        let profiles = profiles([(
+            "worker",
+            Profile {
+                kind_defaults: true,
+                model: Some(model.to_owned()),
+                effort: effort.map(str::to_owned),
+                tools: Some(crate::agents::ToolSet::parse(&["Read".into()]).unwrap()),
+                ..profile("antigravity")
+            },
+        )]);
+        agent_cell("worker", &profiles, &CommandsConfig::default()).args
+    };
+    assert_eq!(
+        [
+            args("hydrogen", None),
+            args("gemini-4-carbon", None),
+            args("gemini-x", None),
+            args("gemini-4-hydrogen-high", None),
+            args("hydrogen", Some("low")),
+            args("hydrogen", Some("max")),
+            args("carbon", Some("max")),
+        ],
+        [
+            vec!["--model", "hydrogen", "--effort", "high"],
+            vec!["--model", "gemini-4-carbon", "--effort", "high"],
+            vec!["--model", "gemini-x"],
+            vec!["--model", "gemini-4-hydrogen-high"],
+            vec!["--model", "hydrogen", "--effort", "low"],
+            vec!["--model", "hydrogen", "--effort", "xhigh"],
+            vec!["--model", "carbon", "--effort", "high"],
+        ]
+    );
+}
+
+#[test]
 fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
     use crate::agents::Toggle::{Off, On, Unset};
 

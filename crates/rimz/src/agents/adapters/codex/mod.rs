@@ -624,24 +624,29 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
                 name: "astra",
                 id: "gpt-6-astra",
                 effort: None,
+                max_effort: None,
             },
             crate::agents::definition::DefinitionModel {
                 name: "sol",
                 id: "gpt-6-sol",
                 effort: None,
+                max_effort: None,
             },
             crate::agents::definition::DefinitionModel {
                 name: "luna",
                 id: "gpt-6-luna",
                 effort: None,
+                max_effort: None,
             },
             crate::agents::definition::DefinitionModel {
                 name: "terra",
                 id: "gpt-5.6-terra",
                 effort: None,
+                max_effort: None,
             },
         ],
         prefixes: &["gpt-"],
+        foreign_prefixes: &[],
         tools: crate::agents::definition::DefinitionTools::Required(render_definition_tools),
     };
 

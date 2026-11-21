@@ -346,6 +346,7 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
         effort: Some("xhigh"),
         models: &[],
         prefixes: &[],
+        foreign_prefixes: &[],
         tools: crate::agents::definition::DefinitionTools::Optional(render_definition_tools),
     };
 

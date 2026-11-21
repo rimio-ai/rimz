@@ -662,9 +662,13 @@ fn resolve_posture_with_role(
             if record.effort.is_some() {
                 replaced.push(crate::agents::PresetField::Effort);
             }
-            if let Err(err) =
-                crate::harness::plan::apply_preset_args(&mut cell.args, adapter, &preset, &replaced)
-            {
+            if let Err(err) = crate::harness::plan::apply_preset_args(
+                &mut cell.args,
+                adapter,
+                &preset,
+                &replaced,
+                None,
+            ) {
                 return Err(PostureDegrade::Unresolved {
                     profile: name.to_owned(),
                     reason: err.to_string(),
@@ -673,7 +677,8 @@ fn resolve_posture_with_role(
         }
     }
     if let Some(adapter) = find_definition(cell.kind.as_str()) {
-        crate::harness::plan::normalize_cell_preset(&mut cell, adapter);
+        let model = cell.launch.model.clone();
+        crate::harness::plan::normalize_cell_preset(&mut cell, adapter, model.as_deref());
     }
     if let Some(((name, team), role)) = team.zip(role) {
         cell.team_prompt = crate::harness::spec::role_team_prompt(
@@ -3369,6 +3374,7 @@ fn restore_resume_cell(
                     crate::agents::PresetField::Model,
                     crate::agents::PresetField::Effort,
                 ],
+                None,
             )
             .map_err(|err| error(err.to_string()))?;
         }
@@ -3429,6 +3435,7 @@ fn restore_resume_cell(
             passthrough: &[],
             budget: None,
             max_turns: None,
+            machine_config: None,
         },
         &mut warnings,
     )

@@ -497,24 +497,29 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
                 name: "opus",
                 id: "opus",
                 effort: None,
+                max_effort: None,
             },
             crate::agents::definition::DefinitionModel {
                 name: "sonnet",
                 id: "sonnet",
                 effort: None,
+                max_effort: None,
             },
             crate::agents::definition::DefinitionModel {
                 name: "haiku",
                 id: "haiku",
                 effort: None,
+                max_effort: None,
             },
             crate::agents::definition::DefinitionModel {
                 name: "fable",
                 id: "fable",
                 effort: Some("high"),
+                max_effort: None,
             },
         ],
         prefixes: &["claude-"],
+        foreign_prefixes: &[],
         tools: crate::agents::definition::DefinitionTools::Required(render_definition_tools),
     };
 

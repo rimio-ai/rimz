@@ -1416,6 +1416,45 @@ fn check_alias_resume(explicit: bool) {
 }
 
 #[test]
+fn antigravity_short_names_launch_their_catalog_id_and_pins_win() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(root.path()),
+        root.path(),
+    )
+    .unwrap();
+    let login = ProviderLogin::default_for(AgentKind::new_unchecked("antigravity"));
+    let default = crate::config::MachineConfig::default();
+    let pinned: crate::config::MachineConfig =
+        toml::from_str("[models.antigravity]\nhydrogen = 'gemini-4-hydrogen-preview'").unwrap();
+    for (machine, requested, expected) in [
+        (&default, "hydrogen", "gemini-4-hydrogen"),
+        (&default, "flash", "gemini-3.8-flash"),
+        (&default, "gemini-4-neon", "gemini-4-neon"),
+        (&default, "gemini-4-hydrogen-high", "gemini-4-hydrogen-high"),
+        (&pinned, "hydrogen", "gemini-4-hydrogen-preview"),
+    ] {
+        let mut req = request(
+            "antigravity",
+            action_with_args("launch", vec!["--model".into(), requested.into()]),
+        );
+        req.identity.params.model = Some(requested.into());
+        resolve_model(
+            &mut req,
+            machine,
+            &runtime,
+            &login,
+            None,
+            None,
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(req.identity.params.model.as_deref(), Some(expected));
+        assert_eq!(req.action.extra_args(), ["--model", expected]);
+    }
+}
+
+#[test]
 fn model_alias_resolution_at_the_process_boundary() {
     use crate::agents::capabilities::{ModelCatalogEntry, ModelCatalogErr, ModelCatalogSource};
     struct Catalog(usize, bool);
