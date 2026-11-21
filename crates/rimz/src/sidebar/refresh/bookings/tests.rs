@@ -1721,10 +1721,10 @@ impl StoredRoom {
         }
     }
 
-    /// Records `mark` as the fire of the task `name` this room binds; a consumed task's
-    /// record is retired.
+    /// Adds `mark` to the machine's task record as the fire of the task `name` this room binds;
+    /// a consumed task's record is retired.
     fn record_fire(&self, name: &str, mark: &FireMark, consumed: bool) {
-        use crate::harness::schedule::task_record::{Binding, Scope, TaskRecord, TaskRecords};
+        use crate::harness::schedule::task_record::{Binding, Scope, TaskRecord};
         let binding = Binding {
             scope: Scope::Workspace(WorkspaceId::from_project_root(&self.root)),
             name: name.to_owned(),
@@ -1740,7 +1740,7 @@ impl StoredRoom {
             quiet: None,
             marks: BTreeMap::from([(self.root.clone(), mark.clone())]),
         };
-        let mut records = serde_json::to_value(TaskRecords::default()).unwrap();
+        let mut records = serde_json::to_value(task_record::load().unwrap()).unwrap();
         let id = serde_json::to_value(mark.fire.task()).unwrap();
         records["tasks"][id.as_str().unwrap()] = serde_json::to_value(record).unwrap();
         let loops = crate::disk::paths::loops_dir();
@@ -2034,5 +2034,38 @@ fn an_unreadable_store_leaves_the_cache_and_no_booking_reads_none() {
         std::fs::read(room.runtime.bookings_path()).unwrap(),
         bytes,
         "an unreadable event log: the cache stands"
+    );
+}
+
+/// A fired one-off that is no booking reads no rows: with no store to read, the pass still
+/// publishes the unfired booking beside it.
+#[test]
+fn a_fired_one_off_that_is_no_booking_reads_no_rows() {
+    if crate::harness::schedule::test_homes::reexec_with_private_homes(
+        "sidebar::refresh::bookings::tests::a_fired_one_off_that_is_no_booking_reads_no_rows",
+    ) {
+        return;
+    }
+    let room = StoredRoom::new();
+    crate::harness::schedule::instances::seed(&room.state, "waiting", &booked(&room.root));
+    let chore = TaskEntry {
+        once_per_checkout: Some(true),
+        ..launching(&["make", "check"], &room.root)
+    };
+    crate::harness::schedule::instances::seed(&room.state, "chore", &chore);
+    let fire = FireMark {
+        result: Some(LoopRunResult::Completed),
+        ..fired_mark(1, LaunchKind::Shell, "make")
+    };
+    room.record_fire("chore", &fire, false);
+
+    let cache = room.publish(false, None);
+    assert_eq!(
+        cache
+            .bookings
+            .iter()
+            .map(|facts| (facts.task.as_str(), facts.fire.is_some()))
+            .collect::<Vec<_>>(),
+        [("waiting", false)]
     );
 }
