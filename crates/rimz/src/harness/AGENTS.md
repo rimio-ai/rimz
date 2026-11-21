@@ -11,6 +11,10 @@ Behaviour is documented per topic under `docs/internals/harness/`: [fleet.md](..
 - `harness` never reaches `sidebar`: a helper that refreshes provider usage returns it, and its CLI entry publishes through `sidebar::refresh`.
 - **Invariant.** `plan` never imports `resume` (`cargo xtask invariants`), and `harness::workflow` imports nothing from `harness::schedule` (its `[[module]]` entry in `refactor-target.toml`).
 
+## Before a change
+
+- A new launch-time check, refusal, or stamp holds on every path in [Every path that builds a launch layout](../../../../docs/internals/harness/fleet.md#every-path-that-builds-a-launch-layout), molt and a fresh restart included, which compile no layout.
+
 ## The sidebar import graph
 
 - **Invariant.** The store-write gate in `cargo xtask invariants` searches every harness file the sidebar's production code imports, directly or through other harness files. A file joins that set by being imported, not by a list, so a new import from a sidebar-reached file can fail the gate in a file the change never edited.
