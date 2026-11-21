@@ -156,8 +156,8 @@ fn consecutive_equal_environment_frames_share_one_apply_child() {
     let (_, rows) = drain_queued(&env, &[0, 0, 0], &log, &[]);
     assert_eq!(rows.len(), 1, "one run, one apply child: {rows:?}");
     assert_eq!(
-        rows[0]["rollup_bytes_parsed"].as_u64().unwrap() / rollup_bytes,
-        1,
+        rows[0]["rollup_bytes_parsed"].as_u64().unwrap(),
+        rollup_bytes,
         "later frames reuse the child's held fold: {}",
         rows[0]
     );
