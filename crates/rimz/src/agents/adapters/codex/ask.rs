@@ -7,7 +7,8 @@ use crate::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply, non_empty_trim
 use crate::pane::keys::NamedKey;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
-const REQUEST_USER_INPUT_TOOL: &str = "request_user_input";
+pub(super) const REQUEST_USER_INPUT_TOOL: &str = "request_user_input";
+pub(super) const REQUEST_USER_INPUT_ASYNC_TOOL: &str = "request_user_input_async";
 const SUBMITTED_PROMPT_MAX_CHARS: usize = 1_000;
 
 #[derive(Deserialize)]
@@ -39,7 +40,7 @@ struct QuestionReply {
 pub(super) fn queued_questions(
     tool: &super::payloads::CodexPostToolUse,
 ) -> Option<crate::agents::AskQueueEdit> {
-    if tool.tool_name.as_deref()? != "request_user_input_async" {
+    if tool.tool_name.as_deref()? != REQUEST_USER_INPUT_ASYNC_TOOL {
         return None;
     }
     let response: AsyncAccepted =

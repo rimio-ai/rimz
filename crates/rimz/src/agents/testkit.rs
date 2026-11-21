@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::agents::capabilities::HookCapability;
 use crate::agents::lifecycle::{LifecycleSignal, ToolEffect};
-use crate::agents::{AgentLifecycleObservation, AskKind, HookOutput};
+use crate::agents::{AgentLifecycleObservation, AskKind, BackgroundShellReport, HookOutput};
 
 pub(super) fn outdated_json_source(
     source: &super::managed_source::ManagedSource,
@@ -159,6 +159,59 @@ pub(crate) fn hook_output(
     adapter
         .decode_hook(event, payload)
         .unwrap_or_else(|err| panic!("{kind} decodes {event}: {err}"))
+}
+
+/// Assert the `PostToolUse` payload `rimz hooks feed` queues for `payload`
+/// reads, after a serialize and parse round trip, as `payload` reads under every
+/// adapter call the apply path makes with it, and queues again unchanged. A
+/// background shell's start and a context reading's time are the decode's
+/// clock, so they are set aside.
+pub(crate) fn assert_queued_post_tool_use_reads_alike(
+    adapter: &impl HookCapability,
+    payload: &Value,
+) {
+    let event = "PostToolUse";
+    let queued = adapter.queued_hook_payload(event, payload).map_or_else(
+        || payload.clone(),
+        |queued| serde_json::from_str(&serde_json::to_string(&queued).unwrap()).unwrap(),
+    );
+    assert_eq!(
+        adapter.queued_hook_payload(event, &queued),
+        None,
+        "requeued: {queued}"
+    );
+    let decoded = |payload: &Value| {
+        let mut output = hook_output(adapter, event, payload);
+        if let Some(mut observation) = output.take_lifecycle() {
+            if let Some(BackgroundShellReport::Started { shell }) =
+                &mut observation.background_shells
+            {
+                shell.started_at = jiff::Timestamp::UNIX_EPOCH;
+            }
+            output.attach_lifecycle(observation);
+        }
+        if let Some(mut observed) = output.take_observed_context() {
+            observed.context.observed_at = jiff::Timestamp::UNIX_EPOCH;
+            output.set_observed_context(Some(observed));
+        }
+        output
+    };
+    assert_eq!(decoded(payload), decoded(&queued), "{payload}");
+    let spec = adapter.spec();
+    assert_eq!(spec.tool_signature(payload), spec.tool_signature(&queued));
+    assert_eq!(spec.tool_effect(payload), spec.tool_effect(&queued));
+    assert_eq!(
+        adapter.tool_call_resolved(payload, "call"),
+        adapter.tool_call_resolved(&queued, "call")
+    );
+    assert_eq!(
+        adapter.recognizes_hook_payload(payload),
+        adapter.recognizes_hook_payload(&queued)
+    );
+    assert_eq!(
+        crate::agents::payload::is_task_notification_turn(payload),
+        crate::agents::payload::is_task_notification_turn(&queued)
+    );
 }
 
 /// The lifecycle observation a native hook payload produces, if any.

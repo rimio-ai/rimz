@@ -976,3 +976,154 @@ fn generated_session_title_reaches_activity_description_on_post_tool_refresh() {
     };
     assert!(refresh_local_context_under(&unchanged_ctx, Some(dir.path())).is_none());
 }
+
+fn codex_post_tool_use(tool_name: &str, tool_input: Value, tool_response: Option<Value>) -> Value {
+    let mut payload = json!({
+        "session_id": "sess-1",
+        "turn_id": "turn-1",
+        "transcript_path": "/nonexistent/rollout.jsonl",
+        "cwd": "/repo",
+        "hook_event_name": "PostToolUse",
+        "model": "gpt-5.5",
+        "permission_mode": "default",
+        "tool_name": tool_name,
+        "tool_use_id": "call_1",
+        "tool_input": tool_input,
+    });
+    if let Some(response) = tool_response {
+        payload["tool_response"] = response;
+    }
+    payload
+}
+
+/// Synthetic values in the key shapes Codex sends: both question tools (the
+/// blocking one in its documented string form and the object form its reader
+/// parses), a large shell and patch output, an MCP content array, and a
+/// response that is absent and one that is null.
+fn codex_guard_payloads() -> Vec<Value> {
+    let body = "fn main() {}\n".repeat(2_000);
+    let questions = json!({"questions": [{"id": "path", "header": "Migration", "question": "Pick a path?", "options": [{"label": "Blue", "description": "Safer"}]}]});
+    let shell =
+        |response| codex_post_tool_use("Bash", json!({"command": "cat src/main.rs"}), response);
+    vec![
+        codex_post_tool_use(
+            "request_user_input",
+            questions.clone(),
+            Some(json!("{\"answers\":{\"path\":{\"answers\":[\"Blue\"]}}}")),
+        ),
+        codex_post_tool_use(
+            "request_user_input",
+            questions,
+            Some(json!({"answers": {"path": {"answers": ["Blue"]}}})),
+        ),
+        codex_post_tool_use(
+            "request_user_input_async",
+            json!({"questions": [{"title": "Which branch?", "options": ["main", "dev"]}]}),
+            Some(json!("{\"accepted\":true}")),
+        ),
+        shell(Some(json!(body))),
+        codex_post_tool_use(
+            "apply_patch",
+            json!({"command": format!("*** Begin Patch\n*** Update File: src/main.rs\n{body}*** End Patch")}),
+            Some(json!(
+                "Success. Updated the following files:\nM src/main.rs"
+            )),
+        ),
+        codex_post_tool_use(
+            "mcp__rimz__lsp",
+            json!({"op": "refs"}),
+            Some(json!([{"type": "text", "text": body}])),
+        ),
+        shell(None),
+        shell(Some(Value::Null)),
+    ]
+}
+
+#[test]
+fn queued_post_tool_use_reads_as_the_received_one() {
+    for payload in codex_guard_payloads() {
+        crate::agents::testkit::assert_queued_post_tool_use_reads_alike(&CodexAdapter, &payload);
+    }
+}
+
+#[test]
+fn queued_post_tool_use_reads_alike_under_readers_without_the_keep_rule() {
+    let reads = |payload: &Value| {
+        let post: CodexPostToolUse = decode_or_default(payload);
+        let answers = match (
+            post.tool_name.as_deref(),
+            post.tool_input.as_ref(),
+            post.tool_response.as_ref(),
+        ) {
+            (Some(name), Some(input), Some(response)) => {
+                super::super::ask::answer_detail(name, input, response)
+            }
+            _ => None,
+        };
+        (answers, super::super::ask::queued_questions(&post))
+    };
+    for payload in codex_guard_payloads() {
+        let queued = CodexAdapter
+            .queued_hook_payload("PostToolUse", &payload)
+            .unwrap_or_else(|| payload.clone());
+        assert_eq!(reads(&payload), reads(&queued), "{payload}");
+    }
+}
+
+#[test]
+fn queued_post_tool_use_keeps_only_the_tool_output_rimz_reads() {
+    let payloads = codex_guard_payloads();
+    let responses: Vec<_> = payloads
+        .iter()
+        .map(|payload| {
+            let queued = CodexAdapter.queued_hook_payload("PostToolUse", payload)?;
+            let without_response = |payload: &Value| {
+                let mut payload = payload.clone();
+                payload.as_object_mut().unwrap().remove("tool_response");
+                payload
+            };
+            assert_eq!(without_response(&queued), without_response(payload));
+            Some(queued["tool_response"].clone())
+        })
+        .collect();
+    assert_eq!(
+        responses,
+        [
+            None,
+            None,
+            None,
+            Some(json!({})),
+            Some(json!({})),
+            Some(json!({})),
+            None,
+            None
+        ]
+    );
+    let shell = &payloads[3];
+    for (event, payload) in [
+        ("PreToolUse", shell.clone()),
+        ("Stop", shell.clone()),
+        ("PostToolUse", json!("not an object")),
+        ("PostToolUse", Value::Null),
+        ("PostToolUse", {
+            let mut nameless = shell.clone();
+            nameless.as_object_mut().unwrap().remove("tool_name");
+            nameless
+        }),
+    ] {
+        assert_eq!(
+            CodexAdapter.queued_hook_payload(event, &payload),
+            None,
+            "{event} {payload}"
+        );
+    }
+}
+
+#[test]
+fn post_tool_use_decode_hands_readers_the_kept_tool_output() {
+    let payloads = codex_guard_payloads();
+    let CodexHook::PostToolUse(shell) = CodexHook::parse("PostToolUse", &payloads[3]) else {
+        panic!("PostToolUse decodes as itself");
+    };
+    assert_eq!(shell.tool_response, Some(json!({})));
+}

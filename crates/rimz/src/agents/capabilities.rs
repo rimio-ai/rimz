@@ -161,6 +161,13 @@ pub trait HookCapability: CoreCapability {
         HookReply::Silent
     }
 
+    /// The payload `rimz hooks feed` queues in place of the one it received, or
+    /// `None` to queue the received bytes as they arrived. The feed computes its
+    /// stdout reply from the received payload, never from this one.
+    fn queued_hook_payload(&self, _event_name: &str, _payload: &Value) -> Option<Value> {
+        None
+    }
+
     /// Attach additive model context when this native event is the provider's
     /// prompt submit and its reply accepts it.
     fn attach_prompt_context(&self, _decoded: &mut HookOutput, _text: &str) -> bool {

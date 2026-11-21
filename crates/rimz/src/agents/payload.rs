@@ -7,7 +7,7 @@ use std::borrow::Cow;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// A prompt that has been through `sanitize_user_prompt`. The one constructor
 /// is what an adapter must go through before prompt text can reach the
@@ -39,6 +39,53 @@ pub(super) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<
         .find_map(|key| payload.get(*key).and_then(Value::as_str))
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// A keep rule: what RimZ reads of one tool's `PostToolUse` response, or `None`
+/// when it reads the response whole. A rule applied to its own output keeps
+/// that output as it is.
+pub(super) type ToolResponseRule = fn(&str, &Value) -> Option<Value>;
+
+/// The `PostToolUse` payload to queue in place of `payload`: the same fields
+/// with `tool_response` cut to what `keep` leaves of it. `None` keeps the
+/// received payload, for another event, a payload with no tool name or no
+/// response (absent or null), and a response the rule leaves as it is.
+pub(super) fn queued_post_tool_use(
+    event_name: &str,
+    payload: &Value,
+    keep: ToolResponseRule,
+) -> Option<Value> {
+    if event_name != "PostToolUse" {
+        return None;
+    }
+    let fields = payload.as_object()?;
+    let tool_name = fields.get("tool_name")?.as_str()?;
+    let response = fields
+        .get("tool_response")
+        .filter(|value| !value.is_null())?;
+    let kept = keep(tool_name, response).filter(|kept| kept != response)?;
+    let mut queued: Map<String, Value> = fields
+        .iter()
+        .filter(|(key, _)| *key != "tool_response")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    queued.insert("tool_response".to_owned(), kept);
+    Some(Value::Object(queued))
+}
+
+/// Cut a decoded `PostToolUse` response to what `keep` leaves of it, so its
+/// readers see the value [`queued_post_tool_use`] queues whether the payload
+/// arrived whole or already cut.
+pub(super) fn keep_read_tool_response(
+    tool_name: Option<&str>,
+    response: &mut Option<Value>,
+    keep: ToolResponseRule,
+) {
+    if let (Some(tool_name), Some(response)) = (tool_name, response.as_mut())
+        && let Some(kept) = keep(tool_name, response)
+    {
+        *response = kept;
+    }
 }
 
 /// Decode a typed payload by borrow, defaulting every field when it does not fit the type.

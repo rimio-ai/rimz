@@ -3353,6 +3353,51 @@ fn failed_inline_drain_keeps_the_durable_hook_successful() {
 }
 
 #[test]
+fn feed_queues_the_received_bytes_but_unread_tool_output() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+    let feed = |source: &str, payload: &str| {
+        let mut command = env.hook_command(source);
+        command.env("RIMZ_BIN", env.project_root.join("missing-rimz"));
+        let output = env
+            .spawn_payload(command, payload)
+            .wait_with_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let read = json!({
+        "hook_event_name": "PostToolUse", "session_id": "trim-session", "tool_name": "Read",
+        "tool_input": {"file_path": "src/main.rs"}, "tool_use_id": "toolu_1",
+        "tool_response": {"type": "text", "file": {"filePath": "src/main.rs", "content": "fn main() {}\n".repeat(500)}},
+    })
+    .to_string();
+    // Spacing and key order a re-serialization would change.
+    let stop = r#"{ "session_id": "trim-session", "hook_event_name": "Stop", "tool_response": {"b": 1, "a": 2} }"#;
+    let cursor = r#"{ "hook_event_name": "postToolUse", "conversation_id": "trim-cursor", "tool_name": "Read", "tool_response": {"b": 1, "a": 2} }"#;
+    assert_eq!(
+        feed("claude", &read),
+        "",
+        "the reply the full payload gives"
+    );
+    feed("claude", stop);
+    feed("cursor", cursor);
+    drop(lifetime);
+    let (frames, _) = ingress::read_from_offset(store.paths(), 0).unwrap();
+    let payloads: Vec<_> = frames
+        .iter()
+        .map(|(frame, _)| frame.payload.as_str())
+        .collect();
+    let mut trimmed: Value = serde_json::from_str(&read).unwrap();
+    trimmed["tool_response"] = json!({});
+    assert_eq!(payloads.len(), 3, "{payloads:?}");
+    assert_eq!(serde_json::from_str::<Value>(payloads[0]).unwrap(), trimmed);
+    assert_eq!(payloads[1..], [stop, cursor]);
+}
+
+#[test]
 fn apply_child_returns_the_native_reply_and_stamps_its_frame() {
     let env = Env::new();
     env.record(&env.project_root);
