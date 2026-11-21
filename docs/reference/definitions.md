@@ -162,7 +162,7 @@ Codex emits these settings in order. Boolean values are unquoted; `web_search` i
 | `web_search` | `"cached"` with `WebSearch` or `WebFetch`, otherwise `"disabled"` |
 | `agents.enabled` | Whether `Agent` is present |
 | `features.goals` | `false` |
-| `features.multi_agent`, `features.multi_agent_v2` | Whether `Agent` is present |
+| `features.multi_agent_v2` | Whether `Agent` is present |
 | `features.shell_snapshot`, `features.shell_tool` | Whether `Bash` is present |
 | `features.skill_mcp_dependency_install`, `features.tool_call_mcp_elicitation` | `false` |
 | `features.browser_use`, `features.browser_use_external`, `features.computer_use`, `features.in_app_browser` | `false` |

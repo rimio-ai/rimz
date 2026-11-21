@@ -717,7 +717,6 @@ fn render_definition_tools(
     let flags = [
         ("agents.enabled", agent),
         ("features.goals", false),
-        ("features.multi_agent", agent),
         ("features.multi_agent_v2", agent),
         ("features.shell_snapshot", bash),
         ("features.shell_tool", bash),
