@@ -58,7 +58,8 @@ impl CompactErr {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
 pub enum CompactOutcome {
     Sent,
     /// The command waits for a turn boundary; `continues` when a continue is queued behind it.
@@ -104,6 +105,87 @@ pub fn refuse_repeat(store: &Store, agent: &AgentState, now: Timestamp) -> Resul
         return Err(CompactErr::Repeated { at });
     }
     Ok(())
+}
+
+/// What compacting an agent on request did: the command's record and whether it was sent now
+/// or waits for a turn boundary.
+#[derive(Debug, serde::Serialize)]
+pub struct CompactReceipt {
+    pub message_id: MessageId,
+    #[serde(flatten)]
+    pub outcome: CompactOutcome,
+}
+
+/// Send `agent` its native compaction command, with `instruction` in place of the configured
+/// brief, from `sender`. A busy agent gets the configured continue after the compaction unless
+/// `no_continue`. `handle` names the agent in a delivery refusal.
+pub fn compact_agent(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &AgentState,
+    handle: &str,
+    instruction: Option<&str>,
+    no_continue: bool,
+    sender: MessageSender,
+) -> anyhow::Result<CompactReceipt> {
+    use anyhow::{Context, bail};
+
+    let pane_id = agent
+        .pane
+        .as_ref()
+        .context("agent has no bound pane; nothing to compact")?
+        .pane_id
+        .clone();
+    let spec = crate::agents::spec_by_kind(agent.kind.as_str())
+        .with_context(|| format!("{} has no native compaction command", agent.kind))?;
+    let compact = spec
+        .launch
+        .compact_command
+        .with_context(|| format!("{} has no native compaction command", agent.kind))?;
+    if !spec.lifecycle_hooks.turn_started.is_native() {
+        bail!(
+            "{} reports no durable turn starts, so RimZ cannot guarantee a compaction never follows a compaction; compact it in its own pane",
+            agent.kind
+        );
+    }
+    if instruction.is_some()
+        && compact.instruction == crate::agents::definition::CompactInstruction::Unsupported
+    {
+        bail!(
+            "{} does not accept a compaction instruction; it receives `{}` bare — rerun without the instruction",
+            agent.kind,
+            compact.command,
+        );
+    }
+    let config = crate::config::MachineConfig::load_lenient();
+    let command = match instruction {
+        Some(instruction) => spec.launch.compact_command(instruction),
+        None => crate::agents::compact_command(agent, &config.harness),
+    }
+    .context("adapter has no native compaction command")?;
+    let message_id = MessageId::new();
+    let outcome = send_compact(
+        workspace,
+        store,
+        CompactRequest {
+            premises: crate::store::message::Premise::NONE,
+            idle: false,
+            message_id: message_id.clone(),
+            agent,
+            pane_id,
+            command,
+            sender,
+            automated: false,
+            continue_text: Some(config.resume.auto_continue_text.trim())
+                .filter(|text| !text.is_empty() && !no_continue)
+                .map(str::to_owned),
+        },
+    )
+    .map_err(|err| anyhow::anyhow!("{handle}: {}", err.live_message(Timestamp::now())))?;
+    Ok(CompactReceipt {
+        message_id,
+        outcome,
+    })
 }
 
 pub fn send_compact(

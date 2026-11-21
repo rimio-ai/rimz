@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use super::runs_lookup::{newest_run_by_ref, newest_run_for_agent};
 use crate::cli::{render, select};
 use rimz::agents::state::session_row;
+use rimz::harness::stop_booking::{StopBooking, book_stop};
 use rimz::ids::PaneId;
 use rimz::sidebar::produce::hosting::{Hosting, HostingRead, read_hosting};
 use rimz::store::runtime::{AgentLiveness, OWNER_EXIT_BOUND, agent_liveness};
@@ -383,54 +384,34 @@ fn request_idle_stop(reference: &str, when_idle: WhenIdle, globals: &GlobalFlags
     };
     let peers = rimz::address::addressable_agents(&snapshot);
     let label = rimz::address::agent_handle(agent, &peers, true);
-    let paths = ctx.store.paths();
-    let pending = rimz::store::idle_stop::read(paths)
-        .into_iter()
-        .find(|request| request.kind == agent.kind && request.agent_id == agent.agent_id);
-    let mut out = render::out();
-    let WhenIdle::After(after) = when_idle else {
-        if rimz::store::idle_stop::withdraw(paths, &agent.kind, &agent.agent_id)? {
-            writeln!(out, "withdrew the pending idle stop for {label}")?;
-        } else {
-            writeln!(out, "{label} has no pending idle stop")?;
-        }
-        return Ok(());
+    let after = match when_idle {
+        WhenIdle::After(after) => Some(after),
+        WhenIdle::Off | WhenIdle::Reference(_) => None,
     };
-    if agent.ended_at.is_some() {
-        bail!(
-            "{label} has ended, and --when-idle needs one live agent; reopen it with `rimz agents resume` first"
-        );
-    }
-    if agent.is_provider_subagent() {
-        bail!(
-            "{label} is a provider subagent and ends with its parent; request the stop on the parent"
-        );
-    }
-    let requested_by = crate::cli::send::resolve_caller(&ctx.store)?
-        .and_then(|caller| {
-            rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, &caller).ok()
-        })
-        .map(|caller| rimz::address::agent_handle(caller, &peers, true));
-    rimz::store::idle_stop::arm(
-        paths,
-        rimz::store::idle_stop::IdleStopRequest {
-            kind: agent.kind.clone(),
-            agent_id: agent.agent_id.clone(),
-            stop: rimz::agents::IdleStop {
-                after_secs: after.as_secs(),
-                requested_at: jiff::Timestamp::now(),
-                requested_by,
-            },
-        },
-    )?;
-    let duration = rimz::harness::schedule::arm::duration_label(after);
-    let replaced = pending
-        .map(|request| {
+    let booking = book_stop(ctx.store.paths(), &snapshot, agent, after, || {
+        crate::cli::send::resolve_caller(&ctx.store)
+    })?;
+    let mut out = render::out();
+    let (after_secs, replaces_after_secs) = match booking {
+        StopBooking::Withdrawn => {
+            writeln!(out, "withdrew the pending idle stop for {label}")?;
+            return Ok(());
+        }
+        StopBooking::NonePending => {
+            writeln!(out, "{label} has no pending idle stop")?;
+            return Ok(());
+        }
+        StopBooking::Booked {
+            after_secs,
+            replaces_after_secs,
+        } => (after_secs, replaces_after_secs),
+    };
+    let duration = rimz::harness::schedule::arm::duration_label(Duration::from_secs(after_secs));
+    let replaced = replaces_after_secs
+        .map(|after_secs| {
             format!(
                 " (replaces the pending {} request)",
-                rimz::harness::schedule::arm::duration_label(Duration::from_secs(
-                    request.stop.after_secs
-                ))
+                rimz::harness::schedule::arm::duration_label(Duration::from_secs(after_secs))
             )
         })
         .unwrap_or_default();

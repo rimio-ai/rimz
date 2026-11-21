@@ -2495,7 +2495,9 @@ path = "crates/rimz/src/harness"
 # Self waits arm, list and cancel through `schedule::wait`, which the CLI and the MCP server
 # both present; its wake rows and room reading serve `loop list` too, and the sandbox
 # remedy of a failed home write moved beside it as `home_write` (+37).
-surface-budget = 1319
+# Booking a soft stop (`stop_booking`) and retuning a session (`tune`) return values the CLI
+# and the MCP server present (+7).
+surface-budget = 1326
 
 [[verdict]]
 kind = "item"
