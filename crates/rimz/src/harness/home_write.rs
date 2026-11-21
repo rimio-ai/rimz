@@ -2,7 +2,7 @@
 //! command sandbox, and the remedy that sandbox needs.
 
 /// How an agent runs `command` so its routine rule reaches past the sandbox.
-pub(super) fn sandbox_remedy(command: &str) -> String {
+pub fn sandbox_remedy(command: &str) -> String {
     format!(
         "Run `{command} …` as its own command, without a chain, pipe, redirect, or `VAR=` \
          prefix, so its routine rule runs outside the sandbox; if `allow-routine-rimz` is off, \
@@ -11,7 +11,7 @@ pub(super) fn sandbox_remedy(command: &str) -> String {
     )
 }
 
-pub(super) fn is_read_only(error: &anyhow::Error) -> bool {
+pub fn is_read_only(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<std::io::Error>()
@@ -21,7 +21,7 @@ pub(super) fn is_read_only(error: &anyhow::Error) -> bool {
 
 /// Adds the sandbox context and remedy for `command` when `error` holds a read-only
 /// filesystem; any other error passes through unchanged.
-pub(super) fn hint(error: anyhow::Error, command: &str, action: Option<&str>) -> anyhow::Error {
+pub fn hint(error: anyhow::Error, command: &str, action: Option<&str>) -> anyhow::Error {
     if !is_read_only(&error) {
         return error;
     }
@@ -50,8 +50,8 @@ mod tests {
                 std::io::ErrorKind::ReadOnlyFilesystem,
                 std::io::ErrorKind::PermissionDenied,
             ] {
-                let error = anyhow::Error::from(rimz::harness::schedule::arm::ArmFailure::State(
-                    Box::new(rimz::disk::lock::LockErr::Open {
+                let error = anyhow::Error::from(crate::harness::schedule::arm::ArmFailure::State(
+                    Box::new(crate::disk::lock::LockErr::Open {
                         path: "rimz-home/loops/tasks.lock".into(),
                         source: std::io::Error::from(kind),
                     }),

@@ -573,7 +573,7 @@ fn wake_ups(
     current_root: Option<&Path>,
     mux: Option<rimz::ids::MuxName>,
 ) -> Result<()> {
-    use crate::cli::wake_view::{self, RoomSource, WakeRow};
+    use crate::cli::wake_view::{self, WakeRow};
 
     let rows = room
         .tasks
@@ -611,7 +611,7 @@ fn wake_ups(
         .iter()
         .flat_map(|audit| audit.iter())
         .collect::<Vec<_>>();
-    let source = RoomSource::read(&room.root);
+    let source = wake_view::room_source(&room.root);
     let wakes = rows
         .iter()
         .filter_map(|row| {

@@ -1,6 +1,5 @@
 //! Shared self-wait lines, room cards, subscription summaries, and condition readings.
 
-use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
@@ -10,22 +9,17 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rimz::agents::AgentState;
 use rimz::config::TaskEntry;
-use rimz::disk::paths::{RuntimePaths, StatePaths};
-use rimz::harness::schedule::arm::duration_label;
 use rimz::harness::schedule::arming::ArmState;
+pub(super) use rimz::harness::schedule::wait::{
+    ConditionReading, RoomSource, WakeRow, read_condition, runtime_for_root, worktree_name,
+};
+use rimz::harness::schedule::wait::{WakeState, target_agent};
 use rimz::harness::schedule::{self, DeliveryOwner, TaskActionKind, Trigger, delivery_owner};
-use rimz::harness::when::{self, CiSource, Verdict, WhenExpr, WindowReadings};
+use rimz::harness::when::WhenExpr;
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::snapshot::SidebarSnapshot;
-use rimz::utils::time::parse_compact_duration;
-use serde::Serialize;
 
 use super::render as ui;
-
-pub(super) fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
-    let state = StatePaths::for_project_root(root).ok()?;
-    RuntimePaths::for_state(&state).ok()
-}
 
 /// Whether a room for `root` runs a sidebar fresh enough to read forge state.
 pub(super) fn room_open(root: &Path) -> bool {
@@ -34,68 +28,9 @@ pub(super) fn room_open(root: &Path) -> bool {
         .is_some_and(rimz::sidebar::fresh_sidebar_present)
 }
 
-/// A room's condition source, read once per list and shared by each row's reading.
-pub(super) struct RoomSource {
-    runtime: Option<RuntimePaths>,
-    pub(super) room_open: bool,
-    pub(super) source: Option<CiSource>,
-}
-
-impl RoomSource {
-    pub(super) fn read(root: &Path) -> Self {
-        let runtime = runtime_for_root(root);
-        let room_open = room_open(root);
-        let source = runtime.as_ref().filter(|_| room_open).map(CiSource::read);
-        Self {
-            runtime,
-            room_open,
-            source,
-        }
-    }
-}
-
-pub(super) struct ConditionReading {
-    pub(super) verdict: Verdict,
-    /// Each forge term that reads nothing, with its reason (`Verdict::unread_reasons`).
-    pub(super) unread: BTreeMap<String, String>,
-    /// When each window holding the condition back next resets (`WindowReadings::resets`),
-    /// on the windows `verdict` read.
-    pub(super) resets: BTreeMap<String, Timestamp>,
-}
-
-/// Read `expr` for `entry` under the freshness rule firing applies, against the task's fire
-/// stamp when it has one. `room` is the entry's room, read once by the caller.
-pub(super) fn read_condition(
-    room: &RoomSource,
-    entry: &TaskEntry,
-    expr: &WhenExpr,
-    fired_at: Option<Timestamp>,
-) -> ConditionReading {
-    let scope = entry.run_dir();
-    let source = room.source.as_ref();
-    let now = Timestamp::now();
-    let windows = WindowReadings::new(room.runtime.as_ref(), now);
-    let verdict = when::evaluate(
-        expr,
-        &scope,
-        source,
-        entry.provider.as_ref(),
-        entry.account.as_ref(),
-        &windows,
-    )
-    .freshen(expr, &scope, source, fired_at, Some(now), true);
-    let unread = verdict.unread_reasons(expr, &scope, source, Some(now));
-    let resets = windows.resets(
-        expr,
-        entry.provider.as_ref(),
-        entry.account.as_ref(),
-        &verdict.readings,
-    );
-    ConditionReading {
-        verdict,
-        unread,
-        resets,
-    }
+/// The condition source of the room at `root`, read once per list.
+pub(super) fn room_source(root: &Path) -> RoomSource {
+    RoomSource::read(root, rimz::sidebar::fresh_sidebar_present)
 }
 
 /// A window reset as a reading line shows it, in `zone`.
@@ -153,7 +88,7 @@ pub(super) fn condition_now(
     expr: &WhenExpr,
     hold: Option<std::time::Duration>,
 ) -> String {
-    let reading = read_condition(&RoomSource::read(&entry.resolved_root()), entry, expr, None);
+    let reading = read_condition(&room_source(&entry.resolved_root()), entry, expr, None);
     let state = match schedule::TaskTimingState::unmet(expr, &reading.verdict) {
         Some(unmet) => with_resets(
             unmet,
@@ -176,28 +111,13 @@ pub(super) fn condition_now(
 }
 
 /// Refuse arming `expr` at `scope` in the room at `root` when the room's forge reading already
-/// says the checkout has no supported forge: a term on it could never be read. A scope never
-/// probed, a detached HEAD, and a closed room are not known to be unreadable, so they arm.
+/// says the checkout has no supported forge (`wait::refuse_unreadable_forge`).
 pub(super) fn refuse_unreadable_forge(root: &Path, scope: &Path, expr: &WhenExpr) -> Result<()> {
-    if !expr.reads_forge() || !room_open(root) {
-        return Ok(());
-    }
-    let Some(source) = runtime_for_root(root).as_ref().map(CiSource::read) else {
-        return Ok(());
-    };
-    let Some(term) = expr.terms().find(|term| {
-        term.reads_forge()
-            && source.unread_reason(&term.key, scope) == Some(when::UnreadReason::NoForge)
-    }) else {
-        return Ok(());
-    };
-    let reason = when::condition::unread_reason(Some(when::UnreadReason::NoForge), None);
-    anyhow::bail!(
-        "--when: `{}` cannot be read in {}: {reason}; RimZ reads a git checkout whose `origin` \
-         remote is on github.com (through `gh`) or on a host whose name contains gitea, forgejo \
-         or codeberg (through `tea`), so wait on something else here",
-        term.key,
-        ui::home_relative(&scope.to_string_lossy())
+    rimz::harness::schedule::wait::refuse_unreadable_forge(
+        root,
+        scope,
+        expr,
+        rimz::sidebar::fresh_sidebar_present,
     )
 }
 
@@ -211,296 +131,6 @@ pub(super) fn refuse_unreadable_forge_task(entry: &TaskEntry) -> Result<()> {
         return Ok(());
     };
     refuse_unreadable_forge(&entry.resolved_root(), &entry.run_dir(), &expr)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum WakeState {
-    Pending,
-    Waiting,
-    Watching,
-    Starting,
-    Lost,
-    Disabled,
-    Paused,
-}
-
-#[derive(Serialize)]
-pub(super) struct WakeRow {
-    pub(super) name: String,
-    #[serde(rename = "type")]
-    kind: &'static str,
-    state: WakeState,
-    target: String,
-    trigger: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    dir: Option<String>,
-    elapsed: Option<String>,
-    elapsed_s: Option<u64>,
-    check_in: Option<String>,
-    check_in_s: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    watcher_pid: Option<u32>,
-    owner: String,
-    parent: Option<String>,
-    /// Each unread forge key of a live condition with its reason.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    unread: BTreeMap<String, String>,
-    #[serde(skip)]
-    entry: TaskEntry,
-    #[serde(skip)]
-    arm_state: ArmState,
-}
-
-impl WakeRow {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each list reads the snapshot, audit rows, and room source once for every row"
-    )]
-    pub(super) fn new(
-        name: &str,
-        entry: &TaskEntry,
-        arm_state: ArmState,
-        watcher_pid: Option<u32>,
-        snapshot: Option<&SidebarSnapshot>,
-        audit: &[&AgentState],
-        room: &RoomSource,
-        now: Timestamp,
-    ) -> Self {
-        // The row keeps its target as the key its holder files it under now,
-        // read over `audit`, so an older session target reads as its launch's.
-        let mut entry = entry.clone();
-        if let Some(target) = &mut entry.wait {
-            (target.kind, target.session) =
-                schedule::pending::holder_key(audit.iter().copied(), &target.kind, &target.session);
-        }
-        let entry = &entry;
-        let parsed = schedule::parse_trigger(name, entry);
-        let delay = entry
-            .wait_meta
-            .as_ref()
-            .and_then(|meta| meta.delay.as_deref());
-        let (kind, state, timeout) = match parsed.as_ref().map(|parsed| &parsed.trigger) {
-            Ok(Trigger::Watch(spec)) => (
-                spec.kind(),
-                if watcher_pid.is_some() {
-                    WakeState::Watching
-                } else if schedule::watch_lost(entry, false, now) {
-                    WakeState::Lost
-                } else {
-                    WakeState::Starting
-                },
-                entry.timeout.as_deref().and_then(|raw| {
-                    parse_compact_duration(raw)
-                        .ok()
-                        .map(|value| (duration_label(value), value.as_secs()))
-                }),
-            ),
-            Ok(Trigger::Schedule(_)) if delay.is_some() => (
-                "timer",
-                WakeState::Pending,
-                delay.and_then(|raw| {
-                    parse_compact_duration(raw)
-                        .ok()
-                        .map(|value| (raw.to_owned(), value.as_secs()))
-                }),
-            ),
-            Ok(Trigger::Signal { .. }) => ("signal", WakeState::Waiting, None),
-            Ok(Trigger::Condition { .. }) => ("condition", WakeState::Waiting, None),
-            Ok(Trigger::Schedule(_)) | Err(_) => ("schedule", WakeState::Waiting, None),
-        };
-        let meta = match parsed.as_ref().map(|parsed| &parsed.trigger) {
-            Ok(Trigger::Schedule(_)) if delay.is_some() => entry.wait_meta.as_ref(),
-            _ => entry.watch.as_ref().and(entry.wait_meta.as_ref()),
-        };
-        let dir = entry
-            .dir
-            .as_deref()
-            .map(|dir| ui::home_relative(&dir.to_string_lossy()));
-        let mut trigger = match &parsed {
-            Ok(parsed) => match &parsed.trigger {
-                Trigger::Watch(spec) => {
-                    let subject = entry.label.clone().unwrap_or_else(|| spec.subject());
-                    dir.as_ref()
-                        .map_or_else(|| subject.clone(), |dir| format!("{subject} · in {dir}"))
-                }
-                _ => parsed.describe(),
-            },
-            Err(error) => error.to_string(),
-        };
-        let state = match arm_state {
-            ArmState::Live => state,
-            ArmState::Disabled(_) => WakeState::Disabled,
-            ArmState::Paused(until) => {
-                trigger.push_str(&format!(" · resumes {}", ui::rel_until(until, now)));
-                WakeState::Paused
-            }
-        };
-        let unread = match parsed.as_ref().map(|parsed| &parsed.trigger) {
-            Ok(Trigger::Condition { expr, .. }) if state == WakeState::Waiting => {
-                let fired_at = room
-                    .runtime
-                    .as_ref()
-                    .and_then(|runtime| schedule::fire::last_stamps(runtime).get(name).copied());
-                read_condition(room, entry, expr, fired_at).unread
-            }
-            _ => BTreeMap::new(),
-        };
-        let peers = snapshot
-            .map(rimz::address::addressable_agents)
-            .unwrap_or_default();
-        let parent = entry.wait.as_ref().and_then(|target| {
-            let agent = target_agent(&peers, target)?;
-            let parent = rimz::address::launched_parent(peers.iter().copied(), agent)?;
-            Some(rimz::address::agent_handle(parent, &peers, true))
-        });
-        Self {
-            name: name.to_owned(),
-            kind,
-            state,
-            target: entry
-                .wait
-                .as_ref()
-                .map(|target| target.handle.clone())
-                .unwrap_or_default(),
-            trigger,
-            label: entry.label.clone(),
-            dir,
-            elapsed: meta.map(|meta| ui::age_short(meta.armed_at, now)),
-            elapsed_s: meta.map(|meta| now.duration_since(meta.armed_at).as_secs().max(0) as u64),
-            check_in_s: timeout.as_ref().map(|(_, seconds)| *seconds),
-            check_in: timeout.map(|(label, _)| label),
-            watcher_pid,
-            owner: delivery_owner(name, entry).to_string(),
-            parent,
-            unread,
-            entry: entry.clone(),
-            arm_state,
-        }
-    }
-
-    /// The key the row's target files under, as [`Self::new`] resolved it.
-    pub(super) fn target_key(&self) -> Option<(AgentKind, AgentSessionId)> {
-        let target = self.entry.wait.as_ref()?;
-        Some((target.kind.clone(), target.session.clone()))
-    }
-
-    pub(super) fn is_self(&self) -> bool {
-        self.owner() == DeliveryOwner::SelfWait
-    }
-
-    pub(super) fn owner(&self) -> DeliveryOwner<'_> {
-        delivery_owner(&self.name, &self.entry)
-    }
-
-    fn past_check_in(&self) -> bool {
-        match self.state {
-            WakeState::Watching => self
-                .elapsed_s
-                .zip(self.check_in_s)
-                .is_some_and(|(elapsed, limit)| elapsed >= limit),
-            WakeState::Pending
-            | WakeState::Waiting
-            | WakeState::Starting
-            | WakeState::Lost
-            | WakeState::Disabled
-            | WakeState::Paused => false,
-        }
-    }
-
-    fn priority(&self) -> (u8, Reverse<u64>, &str) {
-        (
-            match self.state {
-                WakeState::Lost => 0,
-                WakeState::Watching if self.past_check_in() => 1,
-                WakeState::Pending
-                | WakeState::Waiting
-                | WakeState::Watching
-                | WakeState::Starting
-                | WakeState::Disabled
-                | WakeState::Paused => 2,
-            },
-            Reverse(self.elapsed_s.unwrap_or(0)),
-            &self.name,
-        )
-    }
-
-    fn wait_state(&self, now: &jiff::Zoned) -> String {
-        match self.state {
-            WakeState::Watching => {
-                let mut state = format!("watching {}", self.elapsed.as_deref().unwrap_or("0s"));
-                if let Some(limit) = self.check_in_s {
-                    if self.past_check_in() {
-                        state.push_str(&format!(
-                            " · past check-in at {}",
-                            self.check_in.as_deref().unwrap_or("0s")
-                        ));
-                    } else {
-                        state.push_str(&format!(
-                            " · check-in in {}",
-                            ui::age_label(limit.saturating_sub(self.elapsed_s.unwrap_or(0)))
-                        ));
-                    }
-                }
-                state
-            }
-            WakeState::Lost => format!(
-                "lost · armed {} ago",
-                self.elapsed.as_deref().unwrap_or("0s")
-            ),
-            WakeState::Pending => schedule::parse_trigger(&self.name, &self.entry)
-                .ok()
-                .and_then(|parsed| parsed.next_after(now))
-                .map_or_else(
-                    || "pending".into(),
-                    |next| format!("pending · fires {}", ui::rel_until(next, now.timestamp())),
-                ),
-            WakeState::Paused => match self.arm_state {
-                ArmState::Paused(until) => {
-                    format!("paused · resumes {}", ui::rel_until(until, now.timestamp()))
-                }
-                _ => "paused".into(),
-            },
-            WakeState::Waiting if !self.unread.is_empty() => format!(
-                "waiting · {}",
-                self.unread
-                    .iter()
-                    .map(|(key, reason)| format!("{key}: {reason}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            WakeState::Waiting => "waiting".into(),
-            WakeState::Starting => "starting".into(),
-            WakeState::Disabled => "disabled".into(),
-        }
-    }
-
-    /// A watch's label replaces its command preview; a clock or condition row keeps the
-    /// time or expression and adds its label after them.
-    fn subject(&self, current_root: &Path) -> String {
-        let subject = match &self.entry.watch {
-            Some(spec) => self.label.clone().unwrap_or_else(|| spec.subject()),
-            None => {
-                let trigger = schedule::parse_trigger(&self.name, &self.entry)
-                    .map_or_else(|error| error.to_string(), |parsed| parsed.describe());
-                match &self.label {
-                    Some(label) => format!("{trigger} · {label}"),
-                    None => trigger,
-                }
-            }
-        };
-        format!("{subject}{}", self.worktree_suffix(current_root))
-    }
-
-    fn worktree_suffix(&self, current_root: &Path) -> String {
-        if self.entry.dir.is_none() || self.entry.run_dir() == current_root {
-            return String::new();
-        }
-        worktree_name(&self.entry, &self.entry.run_dir())
-            .map_or_else(String::new, |name| format!(" · in {name}"))
-    }
 }
 
 pub(super) fn counts<'a>(owners: impl IntoIterator<Item = DeliveryOwner<'a>>) -> String {
@@ -701,17 +331,6 @@ fn card_header(
     header
 }
 
-/// The row of the agent a wait target names, among one row per agent.
-fn target_agent<'a>(
-    peers: &[&'a AgentState],
-    target: &rimz::config::TaskTarget,
-) -> Option<&'a AgentState> {
-    peers
-        .iter()
-        .copied()
-        .find(|agent| schedule::pending::wait_for(&target.kind, &target.session, agent))
-}
-
 /// Whether a wait target names the calling agent, in whichever session it now runs.
 fn is_caller(
     target: &rimz::config::TaskTarget,
@@ -841,27 +460,6 @@ fn signal_names(mut signals: Vec<String>) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-pub(super) fn worktree_name(entry: &TaskEntry, run_dir: &Path) -> Option<String> {
-    if let Some(worktree) = &entry.worktree {
-        return Some(worktree.clone());
-    }
-    (entry.wait.is_some() || entry.dir.is_some()).then(|| {
-        entry
-            .dir
-            .as_ref()
-            .map(|_| checkout_name(run_dir))
-            .or_else(|| {
-                entry.wait.as_ref().and_then(|target| {
-                    target
-                        .handle
-                        .split_once('#')
-                        .map(|(_, channel)| channel.to_owned())
-                })
-            })
-            .unwrap_or_else(|| checkout_name(run_dir))
-    })
 }
 
 pub(super) fn checkout_name(path: &Path) -> String {

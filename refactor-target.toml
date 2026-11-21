@@ -2492,7 +2492,10 @@ path = "crates/rimz/src/harness"
 # The hook drainer's applier seam crosses to the CLI's apply child: `FrameApplier` and its `apply`, `FrameClaim` with `recover_from`, and `register_applier` (+5).
 # A molt and a fresh restart run the layout's agent-file list check on their posture (+1).
 # LaunchPlanWarning::added_dirs is the one kind-to-warning mapping launch and supervised share (+1).
-surface-budget = 1282
+# Self waits arm, list and cancel through `schedule::wait`, which the CLI and the MCP server
+# both present; its wake rows and room reading serve `loop list` too, and the sandbox
+# remedy of a failed home write moved beside it as `home_write` (+37).
+surface-budget = 1319
 
 [[verdict]]
 kind = "item"
@@ -4976,7 +4979,8 @@ upward-dependencies = ["agents"]
 # fmt::local_clock gives workflow and capacity instants one day-qualified clock (+1).
 # fmt::one_line and fmt::checkout_name move with the loop verdict's reason text out of the CLI, whose copies delegate (+2).
 # ProviderLogo and resolve_provider_logos put the logo tier order beside provider identity (+2).
-surface-budget = 45
+# The age, countdown and home-relative path words a wake row carries are shared with the CLI (+4).
+surface-budget = 49
 
 [[verdict]]
 kind = "item"

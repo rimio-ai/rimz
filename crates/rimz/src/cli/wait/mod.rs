@@ -2,12 +2,13 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
-use rimz::config::{CheckOn, TaskTarget, WatchSpec};
+use rimz::config::CheckOn;
 use rimz::harness::ancestry::CallerIdentity;
 use rimz::harness::schedule::arm::TaskName;
+use rimz::harness::schedule::wait::{self, WaitRequest, WaitRoom};
 use rimz::store::snapshot::SidebarSnapshot;
 
 use super::{Ctx, GlobalFlags};
@@ -142,47 +143,35 @@ fn caller(ctx: &Ctx) -> Result<Option<CallerIdentity>> {
     super::send::resolve_caller(&ctx.store)
 }
 
-fn caller_agent<'a>(
-    snapshot: &'a SidebarSnapshot,
-    caller: Option<&CallerIdentity>,
-    action: Option<&str>,
-) -> Result<Option<&'a rimz::agents::AgentState>> {
-    let Some(caller) = caller else {
-        return Ok(None);
-    };
-    let agent =
-        rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, caller).map_err(|_| {
-            let identity = match (&caller.launch_id, &caller.pane_id) {
-                (Some(launch_id), _) => format!("launch id `{launch_id}`"),
-                (None, Some(pane_id)) => format!("pane `{pane_id}`"),
-                (None, None) => "no launch id or pane".into(),
-            };
-            let unchanged = action
-                .map(|action| format!("nothing was {action}: "))
-                .unwrap_or_default();
-            anyhow!(
-                "{unchanged}RimZ could not find the calling agent's live session from this \
-                 process (looked for kind `{}`, {identity}). If this ran inside a provider's \
-                 command sandbox: {}",
-                caller.kind,
-                super::home_write::sandbox_remedy("rimz wait")
-            )
-        })?;
-    if agent.ended_at.is_some() {
-        bail!("RimZ identified the calling agent but its live session is unavailable");
-    }
-    Ok(Some(agent))
-}
-
-fn parse_on(raw: Option<&str>) -> CheckOn {
-    match raw {
-        Some("fail") => CheckOn::Fail,
-        Some("success") => CheckOn::Success,
-        Some("any") | None => CheckOn::Any,
-        Some(_) => unreachable!("clap restricts --on values"),
+fn room<'a>(ctx: &'a Ctx, snapshot: &'a SidebarSnapshot) -> WaitRoom<'a> {
+    WaitRoom {
+        workspace: &ctx.workspace,
+        store: &ctx.store,
+        snapshot,
+        sidebar_fresh: rimz::sidebar::fresh_sidebar_present,
     }
 }
 
-fn home_write_hint(error: anyhow::Error, action: Option<&str>) -> anyhow::Error {
-    super::home_write::hint(error, "rimz wait", action)
+impl WaitArgs {
+    fn into_request(self) -> WaitRequest {
+        WaitRequest {
+            label: self.label,
+            in_after: self.in_after,
+            at: self.at,
+            when: self.when,
+            pid: self.pid,
+            check: self.check,
+            run: self.run,
+            every: self.every,
+            file: self.file,
+            grep: self.grep,
+            // clap restricts --on to these three values.
+            on: self.on.as_deref().map(|on| match on {
+                "fail" => CheckOn::Fail,
+                "success" => CheckOn::Success,
+                _ => CheckOn::Any,
+            }),
+            check_in: self.check_in,
+        }
+    }
 }

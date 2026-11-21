@@ -2,107 +2,22 @@ use anyhow::Result;
 use std::io::Write;
 
 use rimz::agents::AgentState;
-use rimz::harness::schedule::arming::{self, ArmState};
-use rimz::harness::schedule::catalog::TaskCatalog;
-use rimz::harness::schedule::pending::session_deliveries;
-use rimz::harness::schedule::signal::watcher_info;
-use rimz::harness::schedule::{TaskKind, Trigger};
-use rimz::utils::time::parse_compact_duration;
 
 use super::*;
 use crate::cli::{render as ui, wake_view};
 
-use crate::cli::wake_view::RoomSource;
 pub(super) use crate::cli::wake_view::WakeRow;
 
 pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let caller = caller(&ctx)?;
     let snapshot = ctx.resolution_snapshot()?;
-    let agent = caller_agent(&snapshot, caller.as_ref(), None)?;
-    let rows = if agent.is_some() {
-        pending_rows(&ctx, agent, &snapshot).map_err(|error| home_write_hint(error, None))?
-    } else {
-        room_rows(&ctx, &snapshot)?
-    };
+    let agent = wait::caller_agent(&snapshot, caller.as_ref(), None)?;
+    let rows = wait::list(&room(&ctx, &snapshot), agent)?;
     if json {
         return ui::json(&rows);
     }
     write_rows(&mut ui::out(), &ctx, agent, &snapshot, rows)
-}
-
-pub(super) fn pending_rows(
-    ctx: &Ctx,
-    agent: Option<&AgentState>,
-    snapshot: &SidebarSnapshot,
-) -> Result<Vec<WakeRow>> {
-    let root = &ctx.workspace.project_root;
-    let catalog = TaskCatalog::load(Some(root))?;
-    let arming = arming::load()?;
-    let now = jiff::Timestamp::now();
-    let audit = ctx.store.audit_rows()?;
-    let rows = audit.iter().collect::<Vec<_>>();
-    let room = RoomSource::read(root);
-    session_deliveries(&catalog, root, agent, &rows)
-        .map(|(name, task)| {
-            let entry = task.entry();
-            let parsed = task.trigger().as_ref().map_err(Clone::clone)?;
-            let duration = match &parsed.trigger {
-                Trigger::Watch(_) => entry.timeout.as_deref(),
-                Trigger::Schedule(_) => entry
-                    .wait_meta
-                    .as_ref()
-                    .and_then(|meta| meta.delay.as_deref()),
-                Trigger::Signal { .. } | Trigger::Condition { .. } => None,
-            };
-            if let Some(duration) = duration {
-                parse_compact_duration(duration).map_err(anyhow::Error::msg)?;
-            }
-            let state = ArmState::resolve(arming.get(&task.key(name)), task.source(), now);
-            let pid = if entry.watch.is_some() {
-                watcher_info(ctx.runtime(), name)?.map(|info| info.pid)
-            } else {
-                None
-            };
-            Ok(WakeRow::new(
-                name,
-                entry,
-                state,
-                pid,
-                Some(snapshot),
-                &rows,
-                &room,
-                now,
-            ))
-        })
-        .collect()
-}
-
-fn room_rows(ctx: &Ctx, snapshot: &SidebarSnapshot) -> Result<Vec<WakeRow>> {
-    let root = &ctx.workspace.project_root;
-    let catalog = TaskCatalog::load_room(root)?;
-    let arming = arming::load()?;
-    let now = jiff::Timestamp::now();
-    let audit = ctx.store.audit_rows()?;
-    let rows = audit.iter().collect::<Vec<_>>();
-    let room = RoomSource::read(root);
-    Ok(catalog
-        .visible()
-        .iter()
-        .filter(|(_, task)| {
-            task.kind() == TaskKind::WakeUp && task.entry().resolved_root() == *root
-        })
-        .map(|(name, task)| {
-            let entry = task.entry();
-            let state = ArmState::resolve(arming.get(&task.key(name)), task.source(), now);
-            let pid = entry
-                .watch
-                .as_ref()
-                .and_then(|_| watcher_info(ctx.runtime(), name).ok().flatten())
-                .map(|info| info.pid);
-            WakeRow::new(name, entry, state, pid, Some(snapshot), &rows, &room, now)
-        })
-        .collect())
 }
 
 pub(super) fn write_rows(

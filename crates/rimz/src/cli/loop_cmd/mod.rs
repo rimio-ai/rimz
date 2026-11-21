@@ -50,7 +50,7 @@ use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;
 use super::render as ui;
-use super::wake_view::runtime_for_root;
+use rimz::harness::schedule::wait::runtime_for_root;
 
 mod add;
 mod condition;

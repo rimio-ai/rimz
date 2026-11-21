@@ -20,7 +20,6 @@ mod first_run;
 mod folder_trust;
 mod gc;
 mod help;
-mod home_write;
 mod hooks;
 mod keys;
 mod launch_interaction;
