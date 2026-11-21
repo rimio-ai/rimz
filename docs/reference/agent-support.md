@@ -94,6 +94,7 @@ These are the gaps you will notice, per agent in matrix order, beyond what the m
 
 ### Antigravity
 
+- `agy` is an alias of `antigravity`: `agent: agy` and the kind base `agents/agy.md` work as their `antigravity` spellings do.
 - Permission prompts and questions stay in Antigravity's UI, because RimZ installs no permission hook. An open prompt raises Waiting and routes you to the pane.
 - Context, tokens, plan, and the Gemini 5h and weekly quota windows are live from the wrapped statusline. The card's dollar figure is the session's total at list price, set when each turn ends, so no figure shows before the first turn ends. It counts toward room spend and per-agent and room [budget caps](./cli/budget.md), never account caps.
 - History replays every past session and prices its tokens at list price in `rimz stats`. A model the price book has no exact entry for shows tokens without dollars.
@@ -241,7 +242,7 @@ A profile `skills` list keeps the listed skills model-callable and makes the res
 
 ## Launch flags
 
-RimZ launches each agent with the provider's own flags. An unsupported typed `model` or system-prompt field fails the launch before any pane opens, naming the field. Unsupported `effort`, `auto-compact`, `fast`, and `code-mode` warn and launch without that setting. Three refusals remain: Hermes refuses effort outside its supported level list, OpenCode refuses effort outside the chosen model's live variants, and an invalid auto-compact count refuses. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`.
+RimZ launches each agent with the provider's own flags. An unsupported typed `model` or system-prompt field fails the launch before any pane opens, naming the field. Unsupported `effort`, `auto-compact`, `fast`, and `code-mode` warn and launch without that setting. Three refusals remain: Hermes and Antigravity refuse effort outside their level lists, naming the levels (Antigravity launches `max` at the model's highest level instead), OpenCode refuses effort outside the chosen model's live variants, and an invalid auto-compact count refuses. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`.
 
 Codex rejects `--remote X` or `--remote=X` from either source, because managed panes run embedded with `--no-daemon`. Remove `--remote` to launch. Codex requires 0.163.0 or newer for embedded sessions (`--no-daemon`) and Guardian review on every launch, resume, and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper. An unreadable version passes without a verdict.
 
@@ -360,7 +361,7 @@ Set `allow-routine-rimz = false` to remove the managed file at the next hook ins
 
 ### Model and effort
 
-`--model` and `--effort` on `rimz agents`, and the `model` and `effort` profile fields, render as below. OpenCode [picks a model and checks its effort variant](../internals/agents/adapter_opencode.md#model-selection) against the configured catalog before launching, and a missing model warns and launches without effort. Other model values pass through to the agent. Effort levels are whatever the agent's CLI accepts, except that Hermes checks its level list.
+`--model` and `--effort` on `rimz agents`, and the `model` and `effort` profile fields, render as below. OpenCode [picks a model and checks its effort variant](../internals/agents/adapter_opencode.md#model-selection) against the configured catalog before launching, and a missing model warns and launches without effort. Other model values pass through to the agent. Effort levels are whatever the agent's CLI accepts, except that Hermes and Antigravity check their level lists.
 
 | Agent | Model | Effort |
 | --- | --- | --- |
@@ -368,7 +369,7 @@ Set `allow-routine-rimz = false` to remove the managed file at the next hook ins
 | Codex | `--model <model>` | `-c model_reasoning_effort=<level>` |
 | Pi | `--model <model>` | `--thinking <level>` |
 | OpenCode | session step, checked | session-step variant, checked against the chosen model |
-| Antigravity | `--model <model>` | `--effort <level>` |
+| Antigravity | `--model <model>`, a short name such as `hydrogen` as its Gemini ID | `--effort <level>`, and levels other than `low`, `medium`, `high`, and `xhigh` are refused, except that `max` launches at the model's highest level with a warning |
 | Copilot | `--model <model>` | `--reasoning-effort <level>` |
 | Droid | refused | skipped with a warning |
 | Cursor | `--model <model>` | skipped with a warning |
