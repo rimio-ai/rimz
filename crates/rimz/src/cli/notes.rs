@@ -1,7 +1,7 @@
 //! `rimz notes` — write and list Markdown notes in the home-wide note store.
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
@@ -92,7 +92,7 @@ fn add(mut request: AddRequest, file: Option<PathBuf>) -> Result<()> {
             body
         }
     };
-    let added = notes::add(&request).map_err(usage_or_error)?;
+    let added = notes::add(&request, Path::new(".")).map_err(usage_or_error)?;
     let mut stderr = render::err();
     for key in &added.dropped_meta {
         let _ = writeln!(
