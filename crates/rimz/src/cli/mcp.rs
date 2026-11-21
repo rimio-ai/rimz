@@ -1,4 +1,4 @@
-//! `rimz mcp` — the stdio MCP server a Claude or Codex launch starts.
+//! `rimz mcp` — the stdio MCP server a Claude, Codex, or Antigravity launch starts.
 
 use std::io::{IsTerminal, Write};
 
@@ -47,7 +47,7 @@ enum McpSubcmd {
 
 /// What `serve` prints instead of serving when a person runs it at a terminal.
 const TERMINAL_NOTE: &str = "\
-rimz mcp serve is the MCP server RimZ hands to every Claude and Codex launch.
+rimz mcp serve is the MCP server RimZ hands to Claude, Codex, and Antigravity launches.
 The provider starts it over stdio, so there is nothing to serve here.
 To see its tools and their sizes: rimz mcp tools
 To see what one launch passes it and the text of each tool: rimz agents explain <profile> --mcps";

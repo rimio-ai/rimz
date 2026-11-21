@@ -277,7 +277,10 @@ fn serve_in_a_terminal_prints_a_note_and_exits() {
     };
     assert!(status.success(), "{status:?}");
     let output = output.join().unwrap();
-    assert!(output.contains("Claude and Codex launch"), "{output}");
+    assert!(
+        output.contains("Claude, Codex, and Antigravity launches"),
+        "{output}"
+    );
     assert!(
         output.contains("rimz agents explain <profile> --mcps"),
         "{output}"
@@ -776,6 +779,94 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert!(!out.contains("Hidden skills"), "{out}");
     assert!(
         !out.contains("## lsp") && !out.contains(INSTRUCTIONS),
+        "{out}"
+    );
+}
+
+/// On Antigravity `explain --mcps` reads the planned agent file: the inline `rimz` item, the
+/// servers `inheritMcp: false` keeps, and the file's two MCP lines; a launch that writes no
+/// file hands over no server and limits nothing.
+#[test]
+fn explain_mcps_reads_the_antigravity_agent_file() {
+    let explain = |env: &Env, profile: &str| {
+        let plugin = env.home_root.join(".gemini/config/plugins/rimz");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(
+            plugin.join("plugin.json"),
+            r#"{"name":"rimz","author":"RimZ"}"#,
+        )
+        .unwrap();
+        let bin = crate::common::write_failing_agent_shim(env, "agy", 0);
+        let shell = crate::common::write_fake_login_shell(env, "mcps-explain-sh", &[]);
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let output = env
+            .rimz()
+            .args(["agents", "explain", profile, "--mcps"])
+            .env("SHELL", shell)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let env = Env::new();
+    for (name, mcps) in [
+        ("glimit", "\nmcps: [rimz-lsp, github, notion]"),
+        ("gopen", ""),
+    ] {
+        crate::common::write_definition(
+            &env,
+            "agents",
+            name,
+            &format!("description: {name} profile\nagent: antigravity\ntools: [Bash]{mcps}"),
+            "",
+        );
+    }
+
+    let out = explain(&env, "glimit");
+    assert!(out.contains("serves rimz-lsp\n"), "{out}");
+    assert!(
+        out.contains("only github, notion (inheritMcp: false)"),
+        "{out}"
+    );
+    assert_eq!(tool_load(&out, "lsp"), "default", "{out}");
+    assert!(out.contains("\n  inheritMcp: false\n"), "{out}");
+    assert!(
+        out.contains(r#"{"name": "github"}, {"name": "notion"}]"#),
+        "{out}"
+    );
+
+    let out = explain(&env, "gopen");
+    assert!(
+        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes"),
+        "{out}"
+    );
+    assert!(
+        out.contains("every server the account and project configure"),
+        "{out}"
+    );
+    assert!(out.contains("\n  inheritMcp: true\n"), "{out}");
+
+    let bare = Env::new();
+    let out = explain(&bare, "antigravity");
+    assert!(
+        out.contains("not handed over: this launch writes no agent file"),
+        "{out}"
+    );
+    assert!(
+        out.contains("every server the account and project configure"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("CAPABILITY") && !out.contains("inheritMcp"),
         "{out}"
     );
 }

@@ -1436,17 +1436,9 @@ fn compile_agent_process_with_extra_env(
     }
     let mut mcp_warnings = Vec::new();
     if adapter.takes_mcp_servers() {
-        let server = reminders.mcp_server.as_ref().map(|(command, args)| {
-            crate::agents::capabilities::McpServer {
-                command: command.clone(),
-                args: args.clone(),
-                grant: reminders.routine_rimz.is_some(),
-                env_names: spawn_env_names(&skill_env, &env),
-            }
-        });
         mcp_warnings = adapter.mcp_server_args(
             &crate::agents::capabilities::McpLaunch {
-                server,
+                server: mcp_server(reminders, &skill_env, &env),
                 mcps: request.mcps.as_deref(),
                 login_env: &skill_env,
             },
@@ -1484,6 +1476,22 @@ fn compile_agent_process_with_extra_env(
     };
     process.rebuild_argv();
     Ok(process)
+}
+
+/// RimZ's MCP server as the launch hands it over, the one value the argv channel and an agent
+/// file both render: none when `compile` set no server for the launch.
+pub(super) fn mcp_server(
+    reminders: &LaunchReminders,
+    login_env: &BTreeMap<String, String>,
+    env: &BTreeMap<String, String>,
+) -> Option<crate::agents::capabilities::McpServer> {
+    let (command, args) = reminders.mcp_server.as_ref()?;
+    Some(crate::agents::capabilities::McpServer {
+        command: command.clone(),
+        args: args.clone(),
+        grant: reminders.routine_rimz.is_some(),
+        env_names: spawn_env_names(login_env, env),
+    })
 }
 
 /// The variables RimZ sets for the provider: the login environment, the

@@ -1,11 +1,13 @@
 //! The agy custom-agent file that carries a fresh launch's composed system prompt, launch
-//! reminder, and tools. agy reads a plugin-shipped agent selected by `--agent <name>` once at
-//! conversation start; its `tools` key is an allowlist, and a name agy does not register stops
-//! agy before its first turn, so one mapping decides both the layout notices and the file.
-//! Observed on agy 1.5.13.
+//! reminder, tools, and MCP servers. agy reads a plugin-shipped agent selected by
+//! `--agent <name>` once at conversation start, and a resume keeps what it read. Its `tools` key
+//! is an allowlist, and a name agy does not register stops agy before its first turn, so one
+//! mapping decides both the layout notices and the file. Its `mcpServers` items limit the
+//! account's servers only beside `inheritMcp: false`. Observed on agy 1.5.13.
 
 use sha2::{Digest, Sha256};
 
+use crate::agents::capabilities::McpLaunch;
 use crate::agents::tools::{ToolNotice, ToolSet};
 use crate::agents::{AgentFile, AgentFileInput, AgentFileRefusal};
 
@@ -111,6 +113,41 @@ fn file_tools(tools: Option<&[String]>, native_subagents: bool) -> Vec<&'static 
     names
 }
 
+/// The `inheritMcp` and `mcpServers` lines: RimZ's server as an inline item, then a name-only
+/// item for each of the user's servers a limiting list keeps. An agent that lists any item and
+/// omits `inheritMcp` loses the account's servers, so the key is written whenever a line is;
+/// with neither a server nor a limit the file names no MCP key and agy loads every server.
+/// The list is one line of JSON flow style, the form agy 1.5.13 was observed to accept.
+fn mcp_lines(mcp: &McpLaunch<'_>) -> String {
+    let json = |text: &str| serde_json::Value::from(text).to_string();
+    let limits = crate::config::mcps_limit(mcp.mcps);
+    let server = mcp.server.as_ref().map(|server| {
+        let args: Vec<String> = server.args.iter().map(|arg| json(arg)).collect();
+        format!(
+            "{{\"name\": {}, \"command\": {}, \"args\": [{}]}}",
+            json(crate::mcp::catalog::SERVER_NAME),
+            json(&server.command.to_string_lossy()),
+            args.join(", ")
+        )
+    });
+    if server.is_none() && !limits {
+        return String::new();
+    }
+    let named = mcp
+        .mcps
+        .filter(|_| limits)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(crate::config::McpName::user_server)
+        .map(|name| format!("{{\"name\": {}}}", json(name)));
+    let items: Vec<String> = server.into_iter().chain(named).collect();
+    let mut lines = format!("inheritMcp: {}\n", !limits);
+    if !items.is_empty() {
+        lines.push_str(&format!("mcpServers: [{}]\n", items.join(", ")));
+    }
+    lines
+}
+
 /// The file name agy selects: `rimz-<label>-<hash>`, the hash over everything else the
 /// file holds, so equal content shares one file and any change gets its own.
 pub(super) fn plan(input: &AgentFileInput<'_>) -> Result<AgentFile, AgentFileRefusal> {
@@ -144,8 +181,10 @@ pub(super) fn plan(input: &AgentFileInput<'_>) -> Result<AgentFile, AgentFileRef
             input.reminder
         )
     };
-    let rest =
-        format!("description: \"{description}\"\nmainAgent: true\ntools: [{tools}]\n---\n{body}");
+    let mcp = mcp_lines(&input.mcp);
+    let rest = format!(
+        "description: \"{description}\"\nmainAgent: true\ntools: [{tools}]\n{mcp}---\n{body}"
+    );
     let hash = hex::encode(Sha256::digest(rest.as_bytes()));
     let name = format!("rimz-{label}-{}", &hash[..12]);
     Ok(AgentFile {
@@ -208,6 +247,96 @@ mod tests {
                 file_tools(tools.as_deref(), native_subagents),
                 expected,
                 "{tools:?} native subagents {native_subagents}"
+            );
+        }
+    }
+
+    /// The two MCP keys for each pairing of RimZ's server and a limiting list, inside the
+    /// hashed part; with neither, the file is byte for byte what it was before the keys.
+    #[test]
+    fn mcp_lines_follow_the_server_and_the_list() {
+        let home = tempfile::tempdir().unwrap();
+        let plugin = home.path().join(".gemini/config/plugins/rimz");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(
+            plugin.join("plugin.json"),
+            r#"{"name":"rimz","author":"RimZ"}"#,
+        )
+        .unwrap();
+        let env = std::collections::BTreeMap::from([(
+            "HOME".to_owned(),
+            home.path().display().to_string(),
+        )]);
+        let render = |server: bool, mcps: Option<&[&str]>| {
+            let mcps: Option<Vec<crate::config::McpName>> =
+                mcps.map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
+            let file = plan(&AgentFileInput {
+                profile: None,
+                prompt: "Body.",
+                reminder: "",
+                tools: Some(&[]),
+                native_subagents: true,
+                env: &env,
+                mcp: crate::agents::capabilities::McpLaunch {
+                    server: server.then(|| crate::agents::capabilities::McpServer {
+                        command: "/room dir/rimz".into(),
+                        args: vec!["mcp".to_owned(), "serve".to_owned()],
+                        grant: true,
+                        env_names: ["HOME".to_owned()].into(),
+                    }),
+                    mcps: mcps.as_deref(),
+                    login_env: &env,
+                },
+            })
+            .unwrap();
+            let text = String::from_utf8(file.bytes).unwrap();
+            let rest = text
+                .strip_prefix(&format!("---\nname: {}\n", file.name))
+                .unwrap()
+                .to_owned();
+            assert_eq!(
+                file.name,
+                format!(
+                    "rimz-antigravity-{}",
+                    &hex::encode(Sha256::digest(rest.as_bytes()))[..12]
+                )
+            );
+            rest
+        };
+        let head = "description: \"Written by RimZ for an antigravity launch\"\nmainAgent: true\ntools: []\n";
+        let rimz = r#"{"name": "rimz", "command": "/room dir/rimz", "args": ["mcp", "serve"]}"#;
+        let cases: [(bool, Option<&[&str]>, String); 7] = [
+            (false, None, String::new()),
+            (false, Some(&["*", "github"]), String::new()),
+            (
+                true,
+                None,
+                format!("inheritMcp: true\nmcpServers: [{rimz}]\n"),
+            ),
+            (
+                true,
+                Some(&["*"]),
+                format!("inheritMcp: true\nmcpServers: [{rimz}]\n"),
+            ),
+            (
+                true,
+                Some(&["rimz-lsp", "github", "notion"]),
+                format!(
+                    "inheritMcp: false\nmcpServers: [{rimz}, {{\"name\": \"github\"}}, {{\"name\": \"notion\"}}]\n"
+                ),
+            ),
+            (
+                false,
+                Some(&["github"]),
+                "inheritMcp: false\nmcpServers: [{\"name\": \"github\"}]\n".to_owned(),
+            ),
+            (false, Some(&[]), "inheritMcp: false\n".to_owned()),
+        ];
+        for (server, mcps, lines) in cases {
+            assert_eq!(
+                render(server, mcps),
+                format!("{head}{lines}---\nBody."),
+                "server {server} mcps {mcps:?}"
             );
         }
     }

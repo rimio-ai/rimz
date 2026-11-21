@@ -627,7 +627,8 @@ pub trait LaunchCapability: CoreCapability {
     }
 
     /// Whether a launch hands this agent RimZ's MCP server and applies a
-    /// profile's `mcps` list.
+    /// profile's `mcps` list. A kind whose system prompt rides an agent file
+    /// takes both only in that file, so only on a launch that writes one.
     fn takes_mcp_servers(&self) -> bool {
         false
     }
@@ -802,7 +803,7 @@ pub trait LaunchCapability: CoreCapability {
     }
 
     /// Plan the provider agent file that carries a fresh launch's composed
-    /// prompt, reminder, and tools, for an adapter whose system-prompt matcher is
+    /// prompt, reminder, tools, and MCP servers, for an adapter whose system-prompt matcher is
     /// [`PresetArgMatcher::AgentFile`]. `None` means the adapter has no agent file;
     /// a refusal names what keeps the provider from reading one.
     fn agent_file(

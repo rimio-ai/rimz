@@ -581,6 +581,12 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         session::resolve_home(None, env.get("HOME").map(std::ffi::OsStr::new))
     }
 
+    /// The server and the list ride the agent file (`agent_file`), never argv, so
+    /// `mcp_server_args` keeps its default.
+    fn takes_mcp_servers(&self) -> bool {
+        true
+    }
+
     /// The global root agy's own built-in skills name. agy also reads
     /// `~/.gemini/antigravity-cli/skills`, a plugin's `skills/`, and the workspace
     /// `.agents/skills`, which the scoped view leaves native.

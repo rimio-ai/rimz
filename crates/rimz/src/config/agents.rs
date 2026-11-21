@@ -100,7 +100,7 @@ pub struct AgentsConfig {
     /// Allow routine RimZ coordination through Claude launch settings and Codex installed rules.
     #[serde(rename = "allow-routine-rimz")]
     pub allow_routine_rimz: bool,
-    /// Hand RimZ's own MCP server to every Claude and Codex launch.
+    /// Hand RimZ's own MCP server to Claude, Codex, and Antigravity launches.
     #[serde(rename = "rimz-mcp-server")]
     pub rimz_mcp_server: bool,
     /// The shell every agent launch runs under in place of the user's own;
