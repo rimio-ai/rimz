@@ -10,13 +10,11 @@ Behaviour is documented per topic under `docs/internals/harness/`: [fleet.md](..
 - Harness delivery rides `message`; it never reimplements queues, gates, retries, or transcript audit.
 - `harness` never reaches `sidebar`: a helper that refreshes provider usage returns it, and its CLI entry publishes through `sidebar::refresh`.
 - **Invariant.** `plan` never imports `resume` (`cargo xtask invariants`), and `harness::workflow` imports nothing from `harness::schedule` (its `[[module]]` entry in `refactor-target.toml`).
-- The workflow engine reaches the CLI only through the attempt host seam (`AttemptHost`), and never reports to loop.
 
 ## The sidebar import graph
 
 - **Invariant.** The store-write gate in `cargo xtask invariants` searches every harness file the sidebar's production code imports, directly or through other harness files. A file joins that set by being imported, not by a list, so a new import from a sidebar-reached file can fail the gate in a file the change never edited.
-- A sidebar-reached file keeps its evaluation side read-only: it selects, decides, and paces, and a detached helper outside the graph does the durable mutation, the provider transport, and the stop. Its only writes are runtime caches through `disk::atomic::write_temp_then_rename_cache`, and its reads take no lock and run no migration.
-- Sidebar-graph modules append no assist record; they pass the evidence to the writers (CLI handlers, the shared launcher, detached helpers, the stage-flip domain, the loop runner).
+- A sidebar-reached file keeps its evaluation side read-only: it selects, decides, and paces, and a detached helper outside the graph does the durable mutation (an assist record included), the provider transport, and the stop. Its only writes are runtime caches through `disk::atomic::write_temp_then_rename_cache`, and its reads take no lock and run no migration.
 
 ## Host-fired helpers
 
@@ -31,19 +29,8 @@ Each of these is decided in one place. Call it; a second copy drifts.
 - Relaunch: `resume::resolve_posture` is the one posture resolution for restart, fork, and every resume path.
 - Supervised runs: every status transition is a locked read-modify-write in `run.rs` over the `store::run` record. `response_path` and `earlier_response_path` are the one derivation of a response file. A reflex that asks an agent to end its turn registers its remaining work in `owed.rs`, or a supervised run completes at that turn end.
 - Fleet: `fleet.rs` holds the detached and held rules (`FleetRuns`, `owed_team_runs`, `ended_team_runs`), so no consumer filters on `report_to` or `limit_hold` itself.
-- Boards: a reader that judges a checkout by its board treats a symlinked `.rimz` as owning none.
 - Signals: `WatchVerdict::label` is the one wording of a watch outcome, `wait_output_path` the one derivation of a wait's output file, and `From<&Signal> for SignalEventPayload` the one conversion into the store, so no store module reaches up for a harness signal type.
 - Loop tasks: a wait row's target is matched only through `schedule/pending.rs`; `retire_session` is the one removal primitive and `retire_ended_sessions` the one spelling of "durably ended"; `in_flight_run` is the one lookup of a run lock's holder; terminal history rows are appended only through `run_log`, and the CLI renders the transition it gets back.
-- Addresses: handle rendering and address resolution read the addressable peer set; raw root rows are for accounting scans.
-
-## The hook drainer
-
-`hook_drain.rs` owns the elected drainer [ARCHITECTURE.md](../../../../ARCHITECTURE.md#processes-and-helpers) describes. A change there keeps these:
-
-- A spawn lock elects starters and a lifetime lock admits one drainer. The drainer unlinks its socket before its final drain and releases the lifetime lock last.
-- An apply child only applies frames whose captured environment and cwd equal the ones it was spawned with, and no apply child outlives the drain call that started it.
-- Frames stamped with an earlier boot are dropped with diagnostic evidence before application or recovery. Claimed frames recover by ingress ID: existing lifecycle records are not appended again, keyed repairs can repeat, and signal firing and unkeyed transcript writes are at-most-once, never replayed.
-- Cursor replies stay payload-only in the frontend. Antigravity and prompt-context replies wait up to 1200 ms for the drainer, then return neutral on a miss.
 
 ## Fail-fast
 

@@ -1,6 +1,17 @@
 //! Elected hook ingress draining, recovery, and the local drain-through wire.
 //!
 //! Drain-through callers poll the socket and lifetime lock until their deadline, requesting the elected drainer's result or applying inline as soon as the lock is free.
+//!
+//! A change here keeps these:
+//!
+//! - A spawn lock elects starters and a lifetime lock admits one drainer. The drainer unlinks its
+//!   socket before its final drain and releases the lifetime lock last.
+//! - An apply child applies only frames whose captured environment and cwd equal the ones it was
+//!   spawned with.
+//! - Frames stamped with an earlier boot are dropped with diagnostic evidence before application
+//!   or recovery. Claimed frames recover by ingress ID: existing lifecycle records are not
+//!   appended again, keyed repairs can repeat, and signal firing and unkeyed transcript writes
+//!   are at-most-once, never replayed.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};

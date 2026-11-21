@@ -49,6 +49,8 @@ use owner::{attach_agent_owner, attach_agent_pane, hook_agent_pid};
 use proctree::sibling_agent_pins;
 pub(super) const FOCUSED_PANE_BIND_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(1_000);
+/// How long Antigravity and prompt-context replies wait for the drainer before they return
+/// neutral on a miss. Cursor replies stay payload-only, here in the frontend.
 const REPLY_WAIT: std::time::Duration = std::time::Duration::from_millis(1_200);
 const APPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Frames one stream apply child applies before it is closed: it bounds how long a child keeps
