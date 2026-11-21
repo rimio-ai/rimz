@@ -201,6 +201,8 @@ These lifecycle events carry the event-specific fields below, in addition to the
 | `PostCompact` | after compaction | `trigger` | `trigger`, `compact_summary` |
 | `SessionEnd` | the session ends | `reason` | `reason` (`clear` \| `resume` \| `logout` \| `prompt_input_exit` \| `other`) |
 
+`tool_response` is the tool's own result object, and its shape differs per tool. In a Claude Code 2.1.330 live capture on 2026-11-21, `ExitPlanMode` fired `PostToolUse` once the user approved the plan, with `tool_response` `{plan, isAgent, filePath}` (the plan text, a boolean, and the plan file's path) and an empty `tool_input`. `Read` of a text file returned `{type, file}`, the file object holding the content. `Write` of a new file returned `{type, filePath, content, structuredPatch, originalFile, userModified}`, with `originalFile` null and `structuredPatch` empty. `Read` and `Write` carry the whole file content in the response, and `Write` carries it in `tool_input.content` as well.
+
 The event payloads carry these enumerations and nested shapes:
 
 | Field | Values or shape |
