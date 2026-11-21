@@ -1560,11 +1560,13 @@ mod tests {
         });
         for claimed in [false, true] {
             let (_dir, store, pending) = pending_boot_fixture(Some("other-boot"), 4);
+            let earlier_count = claimed.then_some(7);
             if claimed {
                 let lock = WorkspaceLock::acquire(&store.paths().workspace_lock).unwrap();
                 let cursor = ingress::HookDrainCursor {
                     claimed: pending[0].1,
                     claimed_event_id: Some(pending[0].0.event_id.clone()),
+                    applied_frames: earlier_count,
                     ..Default::default()
                 };
                 ingress::write_cursor(store.paths(), &cursor, &lock).unwrap();
@@ -1588,6 +1590,11 @@ mod tests {
                     assert_eq!((cursor.applied, cursor.claimed), (*end, *end));
                     assert_eq!(cursor.applied_event_id.as_ref(), Some(&frame.event_id));
                     assert_eq!(cursor.claimed_event_id.as_ref(), Some(&frame.event_id));
+                    assert_eq!(
+                        cursor.applied_frames,
+                        Some(earlier_count.unwrap_or(0) + pending.len() as u64),
+                        "a drop run advances the count by every frame it drops"
+                    );
                     responses += 1;
                     Ok(false)
                 })
