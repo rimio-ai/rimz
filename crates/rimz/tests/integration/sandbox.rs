@@ -3814,6 +3814,53 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
 }
 
 #[test]
+fn sandbox_antigravity_skill_list_views_its_global_root() {
+    let env = Env::new();
+    let vars = environment(&env);
+    let agy = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let root = env.home_root.join(".gemini/config/skills");
+    assert_eq!(agy.skills_home(&vars), Some(root.clone()));
+    assert!(!matches!(
+        rimz::sandbox::preflight_launch(
+            Isolation::Scoped,
+            &AgentKind::new_unchecked("antigravity"),
+            true,
+            agy.manual_skill(),
+        ),
+        Err(SandboxErr::ManualSkillsUnsupported { .. })
+    ));
+    for name in ["listed", "hidden"] {
+        std::fs::create_dir_all(root.join(name)).unwrap();
+        std::fs::write(root.join(name).join("SKILL.md"), "body\n").unwrap();
+    }
+    let argv = skill_argv(
+        &env,
+        &vars,
+        SkillInputs {
+            kind: "antigravity",
+            home: agy.skills_home(&vars),
+            manual: agy.manual_skill(),
+            withheld: &[],
+            callable: Some(&["listed".parse().unwrap()]),
+        },
+    )
+    .unwrap();
+    assert!(
+        argv.windows(2)
+            .any(|args| args[0] == "--tmpfs" && Path::new(&args[1]) == root)
+    );
+    assert_eq!(
+        skill_bind_source(&argv, &root.join("listed")),
+        root.join("listed").canonicalize().unwrap()
+    );
+    let copy = skill_bind_source(&argv, &root.join("hidden"));
+    assert_eq!(
+        std::fs::read_to_string(copy.join("SKILL.md")).unwrap(),
+        "---\ndisable-model-invocation: true\n---\nbody\n"
+    );
+}
+
+#[test]
 fn sandbox_prepare_preserves_symlinked_skill_sources() {
     let env = Env::new();
     let root = env.home_root.join(".agents/skills");

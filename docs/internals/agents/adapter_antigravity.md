@@ -45,7 +45,6 @@ Some launch inputs have no Antigravity channel:
 | Input | Behaviour |
 | --- | --- |
 | `rimz agents fork` | unsupported: native `/fork` switches identity inside the TUI and has no source-id launch flag ([reference](../../externals/agent-adapter/antigravity-reference.md#fork-rewind-and-clear)) |
-| scoped profile `skills` list | refused: the manual-skill marker is `Unsupported` ([sandbox.md](../sandbox.md#skill-roots-and-user-only-markers)) |
 | `sandbox` isolation | warns and launches without a provider sandbox: `has_native_sandbox` keeps its `false` default |
 
 ### The agent file
@@ -68,6 +67,10 @@ agy needs a `tools` list on every definition. `agent_file.rs::map_tools` maps Ri
 | `Skill` | none |
 
 An agy name passes as written: the 13 defaults (`agent_file.rs::DEFAULT_TOOLS`) and `generate_image`. Any other name is dropped with the dropped-tools notice and never reaches the file, and a restriction suffix (`Bash(git *)`) is reported with the restrictions notice while its base name is mapped. A launch with no list writes the 13 defaults. The three subagent names are written only when the launch keeps native subagents on (`crates/rimz/src/harness/launch_reminders.rs::LaunchReminders::disable_native_subagents`). On agy 1.5.13 `read_file` refuses a directory under a custom agent (`path is a directory, not a file`) and agy registers no other listing tool, so `LS` maps to `read_file` and grants no directory listing: a definition that needs one lists `Bash`.
+
+### Skills
+
+`skills_home` is `$HOME/.gemini/config/skills`, the global root agy's built-in skills name, and `manual_skill` is `Frontmatter`: on 1.5.13 `disable-model-invocation: true` hides a skill from the model and keeps it in the `/` menu, and symlinked skill directories and a read-only root are discovered ([reference](../../externals/agent-adapter/antigravity-reference.md#remote-control-mcp-plugins-and-custom-agents)). Host launches link RimZ skills there, creating the root, and a scoped profile `skills` list overlays it ([sandbox.md](../sandbox.md#skill-roots-and-user-only-markers)). agy also reads `~/.gemini/antigravity-cli/skills`, a plugin's `skills/`, and the workspace `.agents/skills`, which RimZ leaves native, so a list does not restrict a skill kept there. On a duplicate name the `~/.gemini/antigravity-cli/skills` copy wins. agy never reads `~/.agents/skills`, so a skill kept only there does not reach it. Nothing about skills goes in the agent file. `host_skills` stays `Unsupported`: a host launch with a list warns and runs unrestricted.
 
 ## Hooks
 
