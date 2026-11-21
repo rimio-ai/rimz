@@ -2452,6 +2452,219 @@ fn discovery_rejects_symlinked_conversation_directories() {
     assert!(session::discover_under(dir.path(), Path::new("/workspace/project")).is_empty());
 }
 #[test]
+fn allowed_tools_translate_row_by_row_and_leave_the_rest_out() {
+    let rows = [
+        ("Bash", Some("command(*)")),
+        ("Bash(*)", Some("command(*)")),
+        ("Bash(git status)", Some("command(git status)")),
+        ("Bash(git status:*)", Some("command(git status)")),
+        ("Bash(git *)", Some("command(git)")),
+        ("Bash(git * --force)", None),
+        ("Bash(git*)", None),
+        ("Read", Some("read_file(*)")),
+        ("Edit", Some("write_file(*)")),
+        ("Write", Some("write_file(*)")),
+        ("Read(//etc/hosts)", Some("read_file(/etc/hosts)")),
+        ("Read(/docs/**)", Some("read_file(docs)")),
+        ("Read(./src)", Some("read_file(src)")),
+        ("Edit(src/lib.rs)", Some("write_file(src/lib.rs)")),
+        ("Write(//tmp/out/**)", Some("write_file(/tmp/out)")),
+        ("Read(/**)", None),
+        ("Read(~/notes)", None),
+        ("Read(src/*.rs)", None),
+        ("Read(src/**/mod.rs)", None),
+        ("Edit(file?.md)", None),
+        ("Read(docs/[ab])", None),
+        ("Read({a,b})", None),
+        ("WebFetch", Some("read_url(*)")),
+        (
+            "WebFetch(domain:example.com)",
+            Some("read_url(example.com)"),
+        ),
+        ("WebFetch(https://example.com)", None),
+        ("WebFetch(domain:*)", Some("read_url(*)")),
+        ("WebFetch(domain:https://example.com)", None),
+        ("WebFetch(domain:*.example.com)", None),
+        ("WebFetch(domain:example.com/docs)", None),
+        ("WebFetch(domain:example.com:8080)", None),
+        ("WebFetch(domain:a b)", None),
+        ("Bash(regex:^git)", None),
+        ("Bash(regex:rm *)", None),
+        ("Bash(echo (a))", None),
+        ("Write(.//var/opt/reports/**)", None),
+        ("Read(///x)", None),
+        ("Read(//)", None),
+        ("Read(src/(a))", None),
+        (
+            "mcp__github__create_issue",
+            Some("mcp(github/create_issue)"),
+        ),
+        ("mcp__github", Some("mcp(github/*)")),
+        ("mcp__github__*", Some("mcp(github/*)")),
+        ("mcp__rimz__agents_list", Some("mcp(rimz/agents_list)")),
+        ("mcp__github__create_*", None),
+        ("mcp__*", None),
+        ("Glob", None),
+        ("Grep", None),
+        ("Agent", None),
+        ("Skill(commit)", None),
+        ("WebSearch", None),
+        ("Bogus", None),
+        ("Bash*", None),
+    ];
+    let actual: Vec<_> = rows
+        .iter()
+        .map(|(rule, _)| (*rule, permissions::translate(&rule.parse().unwrap())))
+        .collect();
+    let expected: Vec<_> = rows
+        .iter()
+        .map(|(rule, translated)| (*rule, translated.map(ToOwned::to_owned)))
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn allowed_tools_merge_into_the_one_settings_document() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = (root.path(), root.path());
+    let rules: Vec<crate::config::ToolRule> =
+        ["Bash(git status:*)", "Read", "Glob", "Bash(git status)"]
+            .iter()
+            .map(|rule| rule.parse().unwrap())
+            .collect();
+    let settings = |args: &[String]| -> Vec<String> {
+        args.windows(2)
+            .filter(|pair| pair[0] == "--settings")
+            .map(|pair| pair[1].clone())
+            .collect()
+    };
+
+    let mut args = vec!["--mode".to_owned(), "plan".to_owned()];
+    let mut artifact = None;
+    permissions::render(&rules, paths, &mut args, &mut artifact).unwrap();
+    assert!(artifact.is_none());
+    assert_eq!(args[..2], ["--mode", "plan"]);
+    let [inline] = settings(&args).try_into().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&inline).unwrap(),
+        json!({"permissions": {"allow": ["command(git status)", "read_file(*)"]}})
+    );
+
+    let mut args = vec![
+        "--settings".to_owned(),
+        r#"{"permissions":{"allow":["command(ls)"]},"enableTerminalSandbox":true}"#.to_owned(),
+    ];
+    permissions::render(&rules, paths, &mut args, &mut None).unwrap();
+    let [inline] = settings(&args).try_into().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&inline).unwrap(),
+        json!({
+            "permissions": {"allow": ["command(ls)", "command(git status)", "read_file(*)"]},
+            "enableTerminalSandbox": true
+        })
+    );
+
+    std::fs::write(
+        root.path().join("user.json"),
+        r#"{"permissions":{"deny":["command(rm)"]}}"#,
+    )
+    .unwrap();
+    let mut args = vec!["--settings".to_owned(), "user.json".to_owned()];
+    let mut artifact = None;
+    permissions::render(&rules, paths, &mut args, &mut artifact).unwrap();
+    let (path, value, source) = artifact.expect("a file source becomes a private artifact");
+    assert_eq!(settings(&args), [path.display().to_string()]);
+    assert_eq!(source, root.path().join("user.json"));
+    assert_eq!(
+        value,
+        json!({"permissions": {
+            "deny": ["command(rm)"],
+            "allow": ["command(git status)", "read_file(*)"]
+        }})
+    );
+
+    std::fs::write(root.path().join("list.json"), "[1]").unwrap();
+    for (source, reason) in [
+        ("{oops", "invalid JSON"),
+        ("list.json", "expected a JSON object"),
+    ] {
+        let mut args = vec!["--settings".to_owned(), source.to_owned()];
+        let error = permissions::render(&rules, paths, &mut args, &mut None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.starts_with("invalid launch settings at ")
+                && error.contains(reason)
+                && error
+                    .ends_with("; correct that key, or remove the definition's allowed-tools list"),
+            "{error}"
+        );
+    }
+
+    let untranslated: Vec<crate::config::ToolRule> = ["Glob", "Grep"]
+        .iter()
+        .map(|rule| rule.parse().unwrap())
+        .collect();
+    let mut args = vec!["--mode".to_owned(), "plan".to_owned()];
+    permissions::render(&untranslated, paths, &mut args, &mut None).unwrap();
+    assert_eq!(args, ["--mode", "plan"]);
+}
+
+#[test]
+fn sandbox_and_added_dirs_ride_agy_flags_once() {
+    use crate::config::Isolation;
+    assert!(AntigravityAdapter.has_native_sandbox());
+    assert_eq!(AntigravityAdapter.added_dirs(), AddedDirs::Workspace);
+    for (isolation, passthrough, expected) in [
+        (Isolation::Host, false, &[][..]),
+        (Isolation::Scoped, false, &[][..]),
+        (Isolation::Sandbox, false, &["--sandbox"][..]),
+        (Isolation::Sandbox, true, &["--sandbox"][..]),
+        (Isolation::Host, true, &["--sandbox"][..]),
+    ] {
+        let mut args: Vec<String> = passthrough
+            .then(|| "--sandbox".to_owned())
+            .into_iter()
+            .collect();
+        AntigravityAdapter.configure_room_permissions(
+            &mut args,
+            &BTreeMap::new(),
+            (Path::new("/workspace/project"), None),
+            &[],
+            isolation,
+        );
+        assert_eq!(args, expected, "{isolation:?} passthrough={passthrough}");
+    }
+
+    let mut args = vec!["--add-dir".to_owned(), "/a".to_owned()];
+    AntigravityAdapter
+        .allow_added_dirs_args(
+            &["/a".to_owned(), "/b".to_owned(), "/c".to_owned()],
+            (Path::new("/workspace/project"), Path::new("/tmp")),
+            &mut args,
+            &mut None,
+        )
+        .unwrap();
+    assert_eq!(
+        args,
+        ["--add-dir", "/a", "--add-dir", "/b", "--add-dir", "/c"]
+    );
+
+    for (mode, overridden) in [
+        (PermissionMode::Ask, false),
+        (PermissionMode::Auto, false),
+        (PermissionMode::Plan, false),
+        (PermissionMode::Yolo, true),
+    ] {
+        let argv = AntigravityAdapter.spec().launch.permission_args(mode);
+        assert_eq!(
+            AntigravityAdapter.native_sandbox_overridden(&argv),
+            overridden,
+            "{mode:?}"
+        );
+    }
+}
+#[test]
 fn launch_resume_permissions_and_model_preset_match_agy() {
     let extra = ["--sandbox".to_owned()];
     assert_eq!(

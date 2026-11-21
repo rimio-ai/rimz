@@ -173,11 +173,26 @@ fn warnings(
         let Some(adapter) = rimz::agents::find_definition(&row.kind) else {
             continue;
         };
+        let kind = rimz::ids::AgentKind::new_unchecked(&row.kind);
+        let mode_args = profile
+            .mode
+            .map(|mode| adapter.spec().launch.permission_args(mode))
+            .unwrap_or_default();
         if profile.isolation == Some(Isolation::Sandbox) && !adapter.has_native_sandbox() {
             warnings.push(Warning {
                 path: row.source.clone(),
                 message: rimz::harness::launch_plan::LaunchPlanWarning::NoSandboxFlag {
-                    kind: rimz::ids::AgentKind::new_unchecked(&row.kind),
+                    kind: kind.clone(),
+                }
+                .to_string(),
+            });
+        } else if Isolation::resolve(None, profile.isolation, machine) == Isolation::Sandbox
+            && adapter.native_sandbox_overridden(&mode_args)
+        {
+            warnings.push(Warning {
+                path: row.source.clone(),
+                message: rimz::harness::launch_plan::LaunchPlanWarning::SandboxOverridden {
+                    kind: kind.clone(),
                 }
                 .to_string(),
             });
@@ -209,7 +224,21 @@ fn warnings(
             warnings.push(Warning {
                 path: row.source.clone(),
                 message: rimz::harness::launch_plan::LaunchPlanWarning::ToolRulesUnsupported {
-                    kind: rimz::ids::AgentKind::new_unchecked(&row.kind),
+                    kind: kind.clone(),
+                }
+                .to_string(),
+            });
+        }
+        for rule in adapter
+            .spec()
+            .tool_rules
+            .untranslated(profile.allowed_tools.as_deref().unwrap_or_default())
+        {
+            warnings.push(Warning {
+                path: row.source.clone(),
+                message: rimz::harness::launch_plan::LaunchPlanWarning::ToolRuleUntranslated {
+                    kind: kind.clone(),
+                    rule: rule.clone(),
                 }
                 .to_string(),
             });

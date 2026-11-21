@@ -9,6 +9,7 @@
 mod agent_file;
 mod install;
 mod payloads;
+mod permissions;
 mod session;
 mod spend;
 mod statusline;
@@ -53,6 +54,9 @@ const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source antigravity
 const STATUS_LINE_COMMAND: &str =
     "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source antigravity";
 const COMPACT_COMMAND: &str = "/compact";
+const ADD_DIR_FLAG: &str = "--add-dir";
+const SANDBOX_FLAG: &str = "--sandbox";
+const SKIP_PERMISSIONS_FLAG: &str = "--dangerously-skip-permissions";
 struct AntigravityHook {
     pub(super) hook: HookEventSpec,
     pub(super) config_event: &'static str,
@@ -140,7 +144,10 @@ const fn antigravity_event_names<const N: usize>(
 const ANTIGRAVITY_EVENT_NAMES: [&str; 6] = antigravity_event_names(&ANTIGRAVITY_HOOKS);
 
 static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
-    tool_rules: crate::agents::skills::ToolRules::Unsupported,
+    tool_rules: crate::agents::skills::ToolRules::Settings {
+        render: permissions::render,
+        translate: permissions::translate,
+    },
     host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "antigravity",
     aliases: &["agy"],
@@ -214,7 +221,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         permission: super::LaunchPermissionArgs {
             ask: &[],
             auto: &["--mode", "accept-edits"],
-            yolo: &["--dangerously-skip-permissions", "--mode", "accept-edits"],
+            yolo: &[SKIP_PERMISSIONS_FLAG, "--mode", "accept-edits"],
             plan: &["--mode", "plan"],
             ..super::LaunchPermissionArgs::EMPTY
         },
@@ -579,6 +586,57 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
 
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         session::resolve_home(None, env.get("HOME").map(std::ffi::OsStr::new))
+    }
+
+    /// `--add-dir` opens a workspace: agy loads its `AGENTS.md`, `.agents/rules`, and
+    /// `.agents/skills` and runs its `.agents/hooks.json`, with no trust prompt (agy 1.5.14).
+    fn added_dirs(&self) -> AddedDirs {
+        AddedDirs::Workspace
+    }
+
+    fn allow_added_dirs_args(
+        &self,
+        dirs: &[String],
+        _paths: (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        _artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        let present: Vec<String> =
+            crate::agents::PresetArgMatcher::Flag(vec![ADD_DIR_FLAG.to_owned()])
+                .occurrences(extra_args)
+                .into_iter()
+                .map(|entry| entry.value)
+                .collect();
+        for dir in dirs.iter().filter(|dir| !present.contains(dir)) {
+            extra_args.extend([ADD_DIR_FLAG.to_owned(), dir.clone()]);
+        }
+        Ok(())
+    }
+
+    /// `--sandbox` confines agy's terminal commands to the workspace and added dirs, with no
+    /// network (agy 1.5.14).
+    fn has_native_sandbox(&self) -> bool {
+        true
+    }
+
+    /// The skip flag runs commands outside the sandbox even beside `--sandbox` (agy 1.5.14).
+    fn native_sandbox_overridden(&self, argv: &[String]) -> bool {
+        argv.iter().any(|arg| arg == SKIP_PERMISSIONS_FLAG)
+    }
+
+    fn configure_room_permissions(
+        &self,
+        extra_args: &mut Vec<String>,
+        _login_env: &BTreeMap<String, String>,
+        _paths: (&Path, Option<&Path>),
+        _roots: &[PathBuf],
+        isolation: crate::config::Isolation,
+    ) {
+        if isolation == crate::config::Isolation::Sandbox
+            && !extra_args.iter().any(|arg| arg == SANDBOX_FLAG)
+        {
+            extra_args.push(SANDBOX_FLAG.to_owned());
+        }
     }
 
     /// The server and the list ride the agent file (`agent_file`), never argv, so

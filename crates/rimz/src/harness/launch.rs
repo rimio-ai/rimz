@@ -1276,7 +1276,7 @@ fn compile_agent_process_with_extra_env(
         )?;
     }
     if let (Some(rules), Some((artifact_dir, _))) = (&request.allowed_tools, &reminders.settings)
-        && let crate::agents::skills::ToolRules::Settings { render } = adapter.spec().tool_rules
+        && let crate::agents::skills::ToolRules::Settings { render, .. } = adapter.spec().tool_rules
     {
         render(
             rules,

@@ -107,6 +107,18 @@ pub struct McpServer {
 #[error("{0}")]
 pub struct SessionStepRefusal(pub(crate) String);
 
+/// How a provider takes the directories a launch adds (`--add-dir`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddedDirs {
+    /// No channel: the launch warns and ignores them.
+    Unsupported,
+    /// File access without folder trust. `unloaded` names the files the provider does not
+    /// load from them, for the empty-directory reminder.
+    FileAccess { unloaded: &'static str },
+    /// Each opens as a workspace, which loads its configuration and runs its hooks.
+    Workspace,
+}
+
 /// Launch-scoped provider channel for additive system or developer text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SystemTextChannel {
@@ -717,14 +729,9 @@ pub trait LaunchCapability: CoreCapability {
         Ok(())
     }
 
-    /// Whether added directories can grant file access without granting folder trust.
-    fn supports_added_dirs(&self) -> bool {
-        false
-    }
-
-    /// Files not loaded from added directories, named in the empty-directory reminder.
-    fn added_dirs_unloaded_files(&self) -> &'static str {
-        "project configuration and instruction files"
+    /// How this provider takes the directories a launch adds.
+    fn added_dirs(&self) -> AddedDirs {
+        AddedDirs::Unsupported
     }
 
     /// Grant file access through launch settings, independent of routine RimZ permissions.
@@ -805,6 +812,12 @@ pub trait LaunchCapability: CoreCapability {
 
     /// Whether sandbox isolation maps to a provider-native sandbox switch.
     fn has_native_sandbox(&self) -> bool {
+        false
+    }
+
+    /// Whether this compiled provider argv carries a flag that overrides the native sandbox,
+    /// so sandbox isolation is not in effect for the launch.
+    fn native_sandbox_overridden(&self, _argv: &[String]) -> bool {
         false
     }
 

@@ -168,7 +168,7 @@ struct SubagentLaunchArgs {
     /// Working directory for the launched agent; the room stays the caller's.
     #[arg(long, value_name = "DIR")]
     cwd: Option<PathBuf>,
-    /// Additional working directory with file access, without loading its configuration.
+    /// Additional working directory with file access; Antigravity also loads its configuration.
     #[arg(long = "add-dir", value_name = "DIR")]
     add_dirs: Vec<PathBuf>,
     /// Require a private empty working directory, also beside --cwd.

@@ -292,6 +292,7 @@ upward-dependencies = ["address"]
 # LaunchCapability::configure_sandbox_settings merges launch-scoped sandbox settings (+1).
 # RaisedAsk, RaisedAskState and CardAlert share enrich-only attention vocabulary (+3).
 # LaunchCapability::has_native_sandbox declares whether sandbox isolation adds a provider flag (+1).
+# LaunchCapability::native_sandbox_overridden names a launch argv that defeats that flag (+1).
 # project_display carries the sidebar's row facts into the agents-owned status ladder.
 # PendingWaitClass (including its re-export) and display_rest_status replace sleeping_over.
 # InstallationCapability::hook_trust_choice adds main's provider hook-consent choice (+1).
@@ -368,9 +369,8 @@ upward-dependencies = ["address"]
 # AgentState::settleable_permission_since gives refresh callers the one ask that proof can close.
 # LinkMaintenance and ShareReport's launch_warnings/maintenance split launch notices from quiet evidence (+3).
 # pane_title, Seat, Seat::from_launch, short_label and title share pane and tab identity (+5).
-# LaunchCapability::supports_added_dirs and allow_added_dirs_args expose non-trusting file access (+2).
+# LaunchCapability::added_dirs, AddedDirs and allow_added_dirs_args expose how a provider takes added dirs (+3).
 # LaunchDirRefusal::Undecided distinguishes a fallback from a saved refusal.
-# LaunchCapability::added_dirs_unloaded_files keeps target reminder wording in the adapter (+1).
 # LaunchFrontend carries provider frontend placement and extension auto-approval (+1).
 # LaunchCapability::take_frontend finalizes frontend arguments before compilation (+1).
 # SessionCapability::is_untracked_frontend identifies frontends without session feeds (+1).
@@ -447,7 +447,9 @@ upward-dependencies = ["address"]
 # first turn keeps the matching rimz skills (+1).
 # Whether a kind's prompt rides an agent file is read by plan, launch_plan and explain (+1).
 # HookCapability::queued_hook_payload lets the feed queue a payload cut of unread tool output (+1).
-surface-budget = 1323
+# AddedDirs and ToolRules::untranslated let launch, validate and supervised readers agree on
+# added-dir and tool-rule handling across kinds (+2).
+surface-budget = 1325
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -845,13 +847,13 @@ reason = "The process compiler delegates provider-native host room permission pr
 
 [[verdict]]
 kind = "item"
-key = "agents::capabilities::LaunchCapability::supports_added_dirs"
-reason = "Supervised entry selects non-trusting fallback support and launch inspection warns on unsupported grants."
+key = "agents::capabilities::LaunchCapability::added_dirs"
+reason = "Supervised entry selects the non-trusting fallback only for AddedDirs::FileAccess, launch inspection and the supervised launcher warn for the other two answers, and launch reminders take the unloaded-file wording from it."
 
 [[verdict]]
 kind = "item"
-key = "agents::capabilities::LaunchCapability::added_dirs_unloaded_files"
-reason = "Launch reminders take provider-specific unloaded-file wording from the adapter."
+key = "agents::capabilities::LaunchCapability::native_sandbox_overridden"
+reason = "Launch inspection and definition validation share whether a launch argv defeats the provider-native sandbox."
 
 [[verdict]]
 kind = "item"
@@ -2484,7 +2486,8 @@ path = "crates/rimz/src/harness"
 # The shutdown checklist's read crosses to the CLI: `idle_stop::started` with `Seat`, `Started` and `Started::is_empty`, `StartedRow`, `RowKind` and `RowKind::as_str`, `started`, and `SessionWaits::of`, the catalog waits it shares with `decide` (+9).
 # The hook drainer's applier seam crosses to the CLI's apply child: `FrameApplier` and its `apply`, `FrameClaim` with `recover_from`, and `register_applier` (+5).
 # A molt and a fresh restart run the layout's agent-file list check on their posture (+1).
-surface-budget = 1281
+# LaunchPlanWarning::added_dirs is the one kind-to-warning mapping launch and supervised share (+1).
+surface-budget = 1282
 
 [[verdict]]
 kind = "item"

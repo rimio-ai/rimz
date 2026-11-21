@@ -85,6 +85,7 @@ use crate::transcript::AskQuestion;
 static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
     tool_rules: crate::agents::skills::ToolRules::Settings {
         render: render_tool_rules,
+        translate: |rule| Some(rule.to_string()),
     },
     host_skills: crate::agents::skills::HostSkills::Switch {
         flag: "--settings skillOverrides",
@@ -1018,12 +1019,10 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         Ok(())
     }
 
-    fn supports_added_dirs(&self) -> bool {
-        true
-    }
-
-    fn added_dirs_unloaded_files(&self) -> &'static str {
-        "hooks, settings, and CLAUDE.md/AGENTS.md"
+    fn added_dirs(&self) -> AddedDirs {
+        AddedDirs::FileAccess {
+            unloaded: "hooks, settings, and CLAUDE.md/AGENTS.md",
+        }
     }
 
     fn allow_added_dirs_args(

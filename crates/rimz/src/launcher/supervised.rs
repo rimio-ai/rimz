@@ -299,10 +299,12 @@ fn prepare(
     };
     let adapter = crate::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
-    if !add_dirs.is_empty() && !adapter.supports_added_dirs() {
-        let warning = crate::harness::launch_plan::LaunchPlanWarning::AddedDirsUnsupported {
-            kind: agent_cell.kind.clone(),
-        };
+    if !add_dirs.is_empty()
+        && let Some(warning) = crate::harness::launch_plan::LaunchPlanWarning::added_dirs(
+            &agent_cell.kind,
+            adapter.added_dirs(),
+        )
+    {
         interaction.notice(Notice::Warning(&warning.to_string()))?;
     }
     let isolation = crate::config::Isolation::resolve(
@@ -485,26 +487,28 @@ fn prepare(
             crate::agents::LaunchDirMode::Displaced,
         )?;
     }
-    let fallback =
-        if request.subagent && cwd.is_some() && !request.empty_dir && adapter.supports_added_dirs()
-        {
-            match crate::agents::preflight_launch_dir(
-                adapter,
-                &launch.cwd,
-                launch.repo_root.as_deref(),
-                &login.env(&crate::agents::ambient_env()),
-                crate::agents::LaunchDirMode::Supervised,
-            ) {
-                Err(refusal @ crate::agents::LaunchDirRefusal::Undecided { .. }) => Some(refusal),
-                Err(error @ crate::agents::LaunchDirRefusal::Home { .. }) => {
-                    bail!("{error}; {home_fix}")
-                }
-                Err(error) => bail!("`rimz agents -p` supervised launch refused: {error}"),
-                Ok(()) => None,
+    let file_access = matches!(
+        adapter.added_dirs(),
+        crate::agents::capabilities::AddedDirs::FileAccess { .. }
+    );
+    let fallback = if request.subagent && cwd.is_some() && !request.empty_dir && file_access {
+        match crate::agents::preflight_launch_dir(
+            adapter,
+            &launch.cwd,
+            launch.repo_root.as_deref(),
+            &login.env(&crate::agents::ambient_env()),
+            crate::agents::LaunchDirMode::Supervised,
+        ) {
+            Err(refusal @ crate::agents::LaunchDirRefusal::Undecided { .. }) => Some(refusal),
+            Err(error @ crate::agents::LaunchDirRefusal::Home { .. }) => {
+                bail!("{error}; {home_fix}")
             }
-        } else {
-            None
-        };
+            Err(error) => bail!("`rimz agents -p` supervised launch refused: {error}"),
+            Ok(()) => None,
+        }
+    } else {
+        None
+    };
     let mut preflight_launch = agent_cell.launch.clone();
     if fallback.is_some() {
         let target = launch.cwd.display().to_string();
