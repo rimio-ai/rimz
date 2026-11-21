@@ -145,7 +145,9 @@ pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 pub(super) fn register_drainer() {
-    rimz::harness::hook_drain::register_processor(process_in_child);
+    rimz::harness::hook_drain::register_processor(|store, frame, claim, lifetime, deadline| {
+        process_in_child(store, frame, claim.recover_from(), lifetime, deadline)
+    });
 }
 
 #[cfg(test)]
