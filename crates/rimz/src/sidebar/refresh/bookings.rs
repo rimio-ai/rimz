@@ -248,7 +248,13 @@ impl Lane<'_> {
         } else {
             BTreeMap::new()
         };
-        let fired = !ledger.is_empty() || readings.values().any(|reading| reading.launch.is_some());
+        let fired = !ledger.is_empty()
+            || catalog.visible().iter().any(|(name, task)| {
+                is_booking(task)
+                    && readings
+                        .get(name)
+                        .is_some_and(|reading| reading.launch.is_some())
+            });
         let rows = if fired {
             audit_rows(self.store)?
         } else {
