@@ -888,15 +888,8 @@ fn agent_file_matcher_comes_with_an_agent_file() {
         },
     };
     for adapter in BUILTINS {
-        let rides_agent_file = matches!(
-            adapter
-                .spec()
-                .launch
-                .preset_arg_matcher(PresetField::SystemPromptFile),
-            Some(PresetArgMatcher::AgentFile(_))
-        );
         assert_eq!(
-            rides_agent_file,
+            adapter.rides_agent_file(),
             adapter.agent_file(&input).is_some(),
             "{}",
             adapter.spec().kind

@@ -321,13 +321,7 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         return servers.render(w);
     }
     let process = plan.process();
-    let rides_agent_file = matches!(
-        adapter
-            .spec()
-            .launch
-            .preset_arg_matcher(PresetField::SystemPromptFile),
-        Some(PresetArgMatcher::AgentFile(_))
-    );
+    let rides_agent_file = adapter.rides_agent_file();
     let arguments = if rides_agent_file {
         agent_file_mcp_lines(plan)
     } else {

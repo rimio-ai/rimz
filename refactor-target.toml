@@ -445,7 +445,8 @@ upward-dependencies = ["address"]
 # pinned_definition_defaults keeps a cataloged name's effort over a pin to an unlisted id (+1).
 # LaunchCapability::mcp_tools_on_first_turn: an adapter whose served tools arrive after the
 # first turn keeps the matching rimz skills (+1).
-surface-budget = 1321
+# Whether a kind's prompt rides an agent file is read by plan, launch_plan and explain (+1).
+surface-budget = 1322
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

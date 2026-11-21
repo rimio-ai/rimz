@@ -937,13 +937,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     let capabilities = crate::config::mcp_capabilities(request.mcps.as_deref());
     // A kind whose prompt rides an agent file takes the server only inside the file, which
     // only a fresh launch with a composed prompt writes.
-    let rides_agent_file = matches!(
-        adapter
-            .spec()
-            .launch
-            .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile),
-        Some(crate::agents::PresetArgMatcher::AgentFile(_))
-    );
+    let rides_agent_file = adapter.rides_agent_file();
     let plans_agent_file =
         agent_file_flag.is_some() && matches!(request.action, launch::ExecAction::Launch { .. });
     if inputs.machine.agents.rimz_mcp_server
