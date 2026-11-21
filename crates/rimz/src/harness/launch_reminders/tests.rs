@@ -453,20 +453,27 @@ fn env_paragraph_escapes_cwd_and_names_shell_kind_only() {
 fn skills_section_follows_a_listed_rimz_skill() {
     let mut request =
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
-    for (skills, shown) in [
-        (None, true),
-        (Some(vec![]), false),
-        (Some(vec!["commit"]), false),
-        (Some(vec!["commit", "rimz-lsp"]), true),
+    for (skills, tool, shown) in [
+        (None, false, true),
+        (Some(vec![]), false, false),
+        (Some(vec!["commit"]), false, false),
+        (Some(vec!["commit", "rimz-lsp"]), false, true),
+        (None, true, true),
+        (Some(vec!["commit", "rimz-lsp"]), true, false),
+        (Some(vec!["commit", "rimz-lsp", "rimz-commit"]), true, true),
     ] {
         request.skills = skills.map(|names| names.iter().map(|n| n.parse().unwrap()).collect());
-        let text = render(
-            &request,
-            &LaunchReminders::default(),
-            Path::new("/checkout"),
-            None,
+        let reminders = LaunchReminders {
+            mcp_server: tool.then(|| ("/bin/rimz".into(), Vec::new())),
+            ..LaunchReminders::default()
+        };
+        let text = render(&request, &reminders, Path::new("/checkout"), None);
+        assert_eq!(
+            text.contains(SKILLS_REMINDER_BODY),
+            shown,
+            "{:?} tool={tool}",
+            request.skills
         );
-        assert_eq!(text.contains(SKILLS_REMINDER_BODY), shown);
     }
 }
 

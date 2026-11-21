@@ -439,7 +439,9 @@ upward-dependencies = ["address"]
 # AgentFile, AgentFileInput, AgentFileRefusal, publish_agent_file, and LaunchCapability::agent_file
 # carry a fresh launch's provider agent file from the adapter that renders it to harness compile
 # and apply (+5).
-surface-budget = 1317
+# LaunchCapability::rimz_server_switched_off: the harness asks the adapter whether a
+# launch's own arguments switch RimZ's MCP server off (+1).
+surface-budget = 1318
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

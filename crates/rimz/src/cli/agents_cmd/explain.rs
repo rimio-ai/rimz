@@ -322,13 +322,8 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     }
     let process = plan.process();
     let arguments = mcp_arguments(&process.provider_argv);
-    let switched_off = rimz_switched_off(&arguments).filter(|_| !plan.mcp_capabilities.is_empty());
-    let served = if switched_off.is_some() {
-        &[][..]
-    } else {
-        &plan.mcp_capabilities[..]
-    };
-    let rimz_line = if let Some((flag, value)) = switched_off {
+    let served = &plan.mcp_capabilities[..];
+    let rimz_line = if let Some((flag, value)) = &plan.mcp_switched_off {
         format!("off: {flag} {value}")
     } else if !served.is_empty() {
         let names: Vec<_> = served.iter().map(|c| c.name()).collect();
@@ -342,6 +337,15 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     servers.push("your servers", render::cell(user_servers(plan)));
     writeln!(w, "MCP servers")?;
     servers.render(w)?;
+    if !plan.hidden_skills.is_empty() {
+        writeln!(w, "\nHidden skills")?;
+        for skill in &plan.hidden_skills {
+            writeln!(
+                w,
+                "  {skill}: the launch serves its MCP tools, so the model is not offered the skill"
+            )?;
+        }
+    }
     if !served.is_empty() {
         let mut table = Table::new(["CAPABILITY", "TOOL", "TOKENS", "LOAD"]).right(&[2]);
         let mut total = 0;
@@ -531,37 +535,6 @@ fn mcp_arguments(argv: &[String]) -> Vec<(&str, &str)> {
     arguments
 }
 
-/// The override that switches RimZ's server off, when the one a launch passes
-/// last on its `enabled` is false. Codex applies overrides in argv order, and
-/// a table value replaces what earlier overrides set under its key.
-fn rimz_switched_off<'a>(arguments: &[(&'a str, &'a str)]) -> Option<(&'a str, &'a str)> {
-    let server = format!("mcp_servers.{SERVER_NAME}");
-    let mut switch = None;
-    for &argument in arguments {
-        let Some((key, value)) = argument.1.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        let Ok(table) = toml::from_str::<toml::Table>(&format!("value = {value}")) else {
-            continue;
-        };
-        let value = &table["value"];
-        let enabled = if key == "mcp_servers" {
-            value
-                .get(SERVER_NAME)
-                .and_then(|entry| entry.get("enabled"))
-        } else if key == server {
-            value.get("enabled")
-        } else if key == format!("{server}.enabled") {
-            Some(value)
-        } else {
-            continue;
-        };
-        switch = (enabled.and_then(toml::Value::as_bool) == Some(false)).then_some(argument);
-    }
-    switch
-}
-
 fn validate_target_overrides(args: &ExplainArgs) -> Result<()> {
     if args.target.starts_with('@')
         && (args.overrides != LaunchOverrideArgs::default() || args.budget.is_some())
@@ -629,7 +602,9 @@ struct ProfileReport<'a> {
 }
 #[derive(Serialize)]
 struct SkillsReport<'a> {
-    callable: Option<&'a [SkillName]>,
+    callable: Option<Vec<SkillName>>,
+    /// The rimz skills hidden because the launch registers their MCP tools.
+    hidden: &'a [&'static str],
     #[serde(skip)]
     no_skill_tool: bool,
     applied: bool,
@@ -898,7 +873,8 @@ impl<'a> ExplainReport<'a> {
             tier_stamp: params.tier.as_deref(),
             budget: params.budget.as_deref(),
             skills: SkillsReport {
-                callable: request.callable_skills(),
+                callable: request.callable_skills(&plan.hidden_skills),
+                hidden: &plan.hidden_skills,
                 no_skill_tool: request.no_skill_tool,
                 applied: bwrap.is_some(),
                 host: process.host_skills.as_ref(),
@@ -1186,7 +1162,7 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
         if report.skills.no_skill_tool {
             "none (tools list has no Skill)".to_owned()
         } else {
-            report.skills.callable.map_or_else(
+            report.skills.callable.as_deref().map_or_else(
                 || "native discovery".to_owned(),
                 |skills| {
                     if skills.is_empty() {
@@ -1337,32 +1313,6 @@ mod tests {
     struct ParserArgs {
         #[command(flatten)]
         explain: ExplainArgs,
-    }
-
-    /// Codex applies its `-c` overrides in argv order, and a table value
-    /// replaces what earlier overrides set under its key.
-    #[test]
-    fn rimz_switched_off_takes_the_last_word_on_enabled() {
-        type Argument = (&'static str, &'static str);
-        let off = ("-c", "mcp_servers.rimz.enabled=false");
-        let cases: [(&[Argument], Option<Argument>); 7] = [
-            (&[], None),
-            (&[off], Some(off)),
-            (
-                &[off, ("-c", "mcp_servers.rimz.command=\"rimz\"")],
-                Some(off),
-            ),
-            (&[off, ("-c", "mcp_servers.rimz.enabled=true")], None),
-            (&[off, ("-c", "mcp_servers={notion={enabled=false}}")], None),
-            (
-                &[("--config", "mcp_servers.rimz={enabled=false}")],
-                Some(("--config", "mcp_servers.rimz={enabled=false}")),
-            ),
-            (&[("-c", "mcp_servers.notion.enabled=false")], None),
-        ];
-        for (arguments, expected) in cases {
-            assert_eq!(rimz_switched_off(arguments), expected, "{arguments:?}");
-        }
     }
 
     #[test]

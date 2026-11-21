@@ -62,8 +62,14 @@ pub struct LaunchPlan {
     pub sandbox: Option<SandboxPlan>,
     pub skill_links: Option<SkillLinkPlan>,
     /// The RimZ capabilities whose tools the launch's MCP server serves;
-    /// empty when the launch is handed no server.
+    /// empty when the launch is handed no server or switches it off.
     pub mcp_capabilities: Vec<crate::mcp::catalog::Capability>,
+    /// The launch argument, as `(flag, value)`, that switches the handed-over
+    /// RimZ server off.
+    pub mcp_switched_off: Option<(String, String)>,
+    /// The rimz skills hidden from the model because the launch serves the
+    /// MCP tools of the same name.
+    pub hidden_skills: Vec<&'static str>,
     pub warnings: Vec<LaunchPlanWarning>,
     temp_owner: Option<String>,
     runtime: RuntimePaths,
@@ -944,12 +950,12 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             &[]
         };
         reminders.mcp_server = Some((program, crate::mcp::catalog::serve_args(only)));
+        reminders.mcp_switched_off = adapter
+            .rimz_server_switched_off(request.action.extra_args())
+            .map(|(flag, value)| (flag.to_owned(), value.to_owned()));
     }
-    let mcp_capabilities = if reminders.mcp_server.is_some() {
-        capabilities
-    } else {
-        Vec::new()
-    };
+    let mcp_capabilities = reminders.mcp_capabilities(&request);
+    let hidden_skills = reminders.hidden_skills(&request);
     let only_all = request.mcps.as_deref().is_some_and(|entries| {
         !entries.is_empty() && entries.iter().all(crate::config::McpName::is_all)
     });
@@ -1153,7 +1159,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 source: path.clone(),
                 target: path,
             });
-            let (listed, withheld) = request.launch_skills();
+            let (listed, withheld) = request.launch_skills(&hidden_skills);
             let plan = sandbox::plan(&sandbox::SandboxInputs {
                 env: &env,
                 cwd: inputs.cwd,
@@ -1175,7 +1181,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                     kind: request.kind.as_str(),
                     home: adapter.skills_home(&env),
                     manual: adapter.manual_skill(),
-                    withheld,
+                    withheld: &withheld,
                     callable: listed.as_deref(),
                 },
             })?;
@@ -1210,6 +1216,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         sandbox,
         skill_links,
         mcp_capabilities,
+        mcp_switched_off: reminders.mcp_switched_off.clone(),
+        hidden_skills,
         warnings,
         temp_owner,
         runtime: inputs.runtime.clone(),

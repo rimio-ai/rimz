@@ -51,7 +51,7 @@ fn plan_view(
         };
     };
     super::validate_path(home)?;
-    if (inputs.callable.is_some() || inputs.withheld.is_some())
+    if (inputs.callable.is_some() || !inputs.withheld.is_empty())
         && inputs.manual == ManualSkill::Unsupported
     {
         return Err(SandboxErr::ManualSkillsUnsupported {
@@ -116,14 +116,14 @@ fn plan_view(
             }
         }
     }
-    if inputs.callable.is_some() || inputs.withheld.is_some() {
+    if inputs.callable.is_some() || !inputs.withheld.is_empty() {
         let mut policies = BTreeMap::new();
         for (name, entry) in &entries {
             if !entry.source.is_dir() || !entry.source.join("SKILL.md").is_file() {
                 continue;
             }
             let listed = crate::config::skill_is_callable(inputs.callable, name)
-                && inputs.withheld != Some(name.as_str());
+                && !inputs.withheld.contains(&name.as_str());
             if let Some((other_name, other_listed)) = policies.get(&entry.source) {
                 if listed != *other_listed {
                     return Err(SandboxErr::ConflictingSkillAliases {

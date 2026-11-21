@@ -639,3 +639,86 @@ fn a_kind_without_mcp_servers_takes_a_bare_star_silently() {
         assert_eq!(mcps_warnings(&plan).len(), usize::from(warns), "{mcps:?}");
     }
 }
+
+/// A launch that registers a capability's tools hides the rimz skill of the
+/// same name from the model, on Claude and Codex, with a profile list and
+/// without one; a launch that registers nothing hides nothing.
+#[test]
+fn a_registered_capability_hides_its_skill_from_the_host_view() {
+    let room = Room::new();
+    let home = Path::new(&room.ambient["HOME"]);
+    let names = [
+        "commit",
+        "rimz-control",
+        "rimz-lsp",
+        "rimz-notes",
+        "rimz-wait",
+    ];
+    for root in [home.join(".claude/skills"), home.join(".agents/skills")] {
+        for name in names {
+            std::fs::create_dir_all(root.join(name)).unwrap();
+            std::fs::write(
+                root.join(name).join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: {name}\n---\n{name}\n"),
+            )
+            .unwrap();
+        }
+    }
+    let all = ["rimz-control", "rimz-lsp", "rimz-notes", "rimz-wait"];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for kind in ["claude", "codex"] {
+        for listed in [false, true] {
+            for (server, mcps, hidden) in [
+                (true, None, &all[..]),
+                (
+                    true,
+                    Some(&["rimz-wait", "rimz-lsp", "github"][..]),
+                    &["rimz-lsp", "rimz-wait"][..],
+                ),
+                (true, Some(&[][..]), &[][..]),
+                (false, None, &[][..]),
+            ] {
+                let mut request = launch(kind, mcps, &[]);
+                request.skills = listed.then(|| names.map(|name| name.parse().unwrap()).to_vec());
+                let plan = room.compile(&switches(true, server), &request);
+                let unlisted = match &plan.process().host_skills {
+                    Some(crate::agents::skills::HostSkillPlan::Applied { unlisted, .. }) => {
+                        serde_json::to_value(unlisted).unwrap()
+                    }
+                    _ => serde_json::json!([]),
+                };
+                actual.push((
+                    format!("{kind} listed={listed} {mcps:?} server={server}"),
+                    unlisted,
+                ));
+                expected.push((
+                    format!("{kind} listed={listed} {mcps:?} server={server}"),
+                    serde_json::json!(hidden),
+                ));
+            }
+        }
+    }
+    for listed in [false, true] {
+        for off in [
+            ["-c", "mcp_servers.rimz.enabled=false"],
+            ["--config", "mcp_servers={rimz={enabled=false}}"],
+        ] {
+            let mut request = launch("codex", None, &off);
+            request.skills = listed.then(|| names.map(|name| name.parse().unwrap()).to_vec());
+            let plan = room.compile(&switches(true, true), &request);
+            let unlisted = match &plan.process().host_skills {
+                Some(crate::agents::skills::HostSkillPlan::Applied { unlisted, .. }) => {
+                    serde_json::to_value(unlisted).unwrap()
+                }
+                _ => serde_json::json!([]),
+            };
+            actual.push((format!("codex listed={listed} {off:?}"), unlisted));
+            expected.push((
+                format!("codex listed={listed} {off:?}"),
+                serde_json::json!([]),
+            ));
+        }
+    }
+    assert_eq!(actual, expected);
+}

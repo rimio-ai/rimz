@@ -8,6 +8,7 @@ use super::subagent_policy::{self, SubagentCatalog};
 use crate::agents::payload::{RimzBlock, wrap_rimz_block};
 use crate::agents::{LaunchParams, model_display::display_model};
 use crate::config::skill_is_callable;
+use crate::mcp::catalog::Capability;
 
 pub use super::launch_context::TeamReminder;
 
@@ -36,6 +37,9 @@ pub(super) struct LaunchReminders {
     /// RimZ's MCP server for the launch: its program and arguments. `None` for
     /// preflight compiles and when the launch hands over no server.
     pub mcp_server: Option<(std::path::PathBuf, Vec<String>)>,
+    /// The launch argument, as `(flag, value)`, that switches the handed-over
+    /// server off, so the launch serves none of its tools.
+    pub mcp_switched_off: Option<(String, String)>,
     /// Room-root write grants; absent in preflight compiles.
     pub permission_roots: Option<[PathBuf; 3]>,
     /// The canonical automation and team notes runs; empty in preflight compiles.
@@ -78,6 +82,7 @@ impl Default for LaunchReminders {
             settings: None,
             routine_rimz: None,
             mcp_server: None,
+            mcp_switched_off: None,
             permission_roots: None,
             notes_runs: Vec::new(),
             notes_store: None,
@@ -95,22 +100,44 @@ impl Default for LaunchReminders {
 }
 
 impl LaunchReminders {
+    /// The RimZ capabilities whose MCP tools the launch serves; empty when it
+    /// hands over no server or its arguments switch the server off.
+    pub(super) fn mcp_capabilities(&self, request: &ExecRequest) -> Vec<Capability> {
+        if self.mcp_server.is_none() || self.mcp_switched_off.is_some() {
+            return Vec::new();
+        }
+        crate::config::mcp_capabilities(request.mcps.as_deref())
+    }
+
     /// The `lsp` tool of RimZ's MCP server is live for the launch.
     pub(super) fn lsp_tool(&self, request: &ExecRequest) -> bool {
-        self.mcp_server.is_some()
-            && crate::config::mcp_capabilities(request.mcps.as_deref())
-                .contains(&crate::mcp::catalog::Capability::Lsp)
+        self.mcp_capabilities(request).contains(&Capability::Lsp)
+    }
+
+    /// The rimz skills hidden from the model because the launch registers the
+    /// MCP tools of the same name.
+    pub(super) fn hidden_skills(&self, request: &ExecRequest) -> Vec<&'static str> {
+        self.mcp_capabilities(request)
+            .iter()
+            .map(|capability| capability.name())
+            .collect()
+    }
+
+    /// The skills callable for the launch, less those its MCP tools hide.
+    fn callable_skills(&self, request: &ExecRequest) -> Option<Vec<crate::config::SkillName>> {
+        request.callable_skills(&self.hidden_skills(request))
     }
 
     /// The launch can query the room's shared language servers, through the
     /// MCP tool or the skill.
     pub(super) fn lsp_callable(&self, request: &ExecRequest) -> bool {
-        self.lsp_tool(request) || skill_is_callable(request.callable_skills(), "rimz-lsp")
+        self.lsp_tool(request)
+            || skill_is_callable(self.callable_skills(request).as_deref(), "rimz-lsp")
     }
 
     pub(super) fn disable_native_subagents(&self, request: &ExecRequest) -> bool {
         request.subagent
-            || (skill_is_callable(request.callable_skills(), "rimz-subagents")
+            || (skill_is_callable(self.callable_skills(request).as_deref(), "rimz-subagents")
                 && matches!(self.subagent_catalog, Some(SubagentCatalog::Available(_))))
     }
 }
@@ -150,7 +177,8 @@ pub(super) fn render(
 ) -> String {
     let mut paragraphs = Vec::new();
     let params = &request.identity.params;
-    let skills = request.callable_skills();
+    let skills = reminders.callable_skills(request);
+    let skills = skills.as_deref();
     let team_context = reminders
         .team
         .as_ref()

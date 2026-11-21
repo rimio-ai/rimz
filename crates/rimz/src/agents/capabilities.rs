@@ -632,6 +632,16 @@ pub trait LaunchCapability: CoreCapability {
         false
     }
 
+    /// The launch argument that switches RimZ's MCP server off, as
+    /// `(flag, value)`, when the last argument that sets the server's
+    /// `enabled` sets it false. The launch then serves none of RimZ's tools.
+    fn rimz_server_switched_off<'a>(
+        &self,
+        _extra_args: &'a [String],
+    ) -> Option<(&'a str, &'a str)> {
+        None
+    }
+
     /// Register RimZ's MCP server and keep only the user's servers a `mcps`
     /// list names, within what the provider can switch off per launch.
     /// Returns warnings for a list it could not apply in full.

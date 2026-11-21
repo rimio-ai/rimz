@@ -471,7 +471,7 @@ fn read_skill(
 impl HostSkills {
     pub(crate) fn apply(
         self,
-        (listed, withheld): (Option<&[SkillName]>, Option<&str>),
+        (listed, withheld): (Option<&[SkillName]>, &[&str]),
         root: Option<&Path>,
         chain: Option<&SkillChain>,
         paths: (&Path, &Path),
@@ -511,7 +511,7 @@ impl HostSkills {
         for (name, skill) in inventory.skills {
             let provider_key = key(&skill)?;
             let (keys, other_policy) = if crate::config::skill_is_callable(listed, &name)
-                && withheld != Some(name.as_str())
+                && !withheld.contains(&name.as_str())
             {
                 (&mut callable, &unlisted)
             } else {

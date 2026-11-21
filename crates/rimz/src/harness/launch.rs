@@ -813,23 +813,39 @@ pub struct ExecRequest {
 }
 
 impl ExecRequest {
-    /// The skills callable with the launch's applied tools and profile policy.
-    pub fn callable_skills(&self) -> Option<&[crate::config::SkillName]> {
+    /// The skills callable with the launch's applied tools and profile policy,
+    /// less the rimz skills `hidden` because the launch registers the MCP
+    /// tools of the same name.
+    pub fn callable_skills(&self, hidden: &[&str]) -> Option<Vec<crate::config::SkillName>> {
         if self.no_skill_tool {
-            Some(&[])
-        } else {
-            self.skills.as_deref()
+            return Some(Vec::new());
         }
+        self.skills.as_ref().map(|skills| {
+            skills
+                .iter()
+                .filter(|skill| !hidden.contains(&skill.as_str()))
+                .cloned()
+                .collect()
+        })
     }
 
-    pub(super) fn launch_skills(
+    /// The profile list handed to the provider, and the skills withheld from
+    /// the model: `rimz-subagents` on a child, and the rimz skills `hidden`
+    /// because the launch registers the MCP tools of the same name.
+    pub(super) fn launch_skills<'a>(
         &self,
-    ) -> (Option<Vec<crate::config::SkillName>>, Option<&'static str>) {
-        let withheld = self.subagent.then_some("rimz-subagents");
+        hidden: &[&'a str],
+    ) -> (Option<Vec<crate::config::SkillName>>, Vec<&'a str>) {
+        let withheld: Vec<&str> = self
+            .subagent
+            .then_some("rimz-subagents")
+            .into_iter()
+            .chain(hidden.iter().copied())
+            .collect();
         let listed = self.skills.as_ref().map(|skills| {
             skills
                 .iter()
-                .filter(|skill| Some(skill.as_str()) != withheld)
+                .filter(|skill| !withheld.contains(&skill.as_str()))
                 .cloned()
                 .collect()
         });
@@ -1218,10 +1234,10 @@ fn compile_agent_process_with_extra_env(
     }
     let skill_env = login_env;
     let skill_chain = crate::agents::skills::SkillChain::from_env(&skill_env);
-    let (listed, withheld) = request.launch_skills();
+    let (listed, withheld) = request.launch_skills(&reminders.hidden_skills(request));
     let (host_skills, mut settings_artifact) = if let Some(runtime) = host_runtime
         && (listed.is_some()
-            || (withheld.is_some()
+            || (!withheld.is_empty()
                 && matches!(
                     adapter.spec().host_skills,
                     crate::agents::skills::HostSkills::Switch { .. }
@@ -1229,7 +1245,7 @@ fn compile_agent_process_with_extra_env(
         let artifact_dir = runtime.prompt_dir();
         let mut args = action.extra_args().to_vec();
         match adapter.spec().host_skills.apply(
-            (listed.as_deref(), withheld),
+            (listed.as_deref(), &withheld),
             adapter.skills_home(&skill_env).as_deref(),
             skill_chain.as_ref(),
             (cwd, &artifact_dir),
