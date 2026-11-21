@@ -164,6 +164,146 @@ fn native_hooks_normalize_lifecycle() {
 }
 
 #[test]
+fn bare_compact_hooks_bracket_a_manual_compaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript_full.jsonl",
+        &[
+            user_record(0, AT_09, "<USER_REQUEST>\nremember maple\n</USER_REQUEST>"),
+            record(1, "MODEL", "PLANNER_RESPONSE", "DONE", AT_10, "noted.").to_string(),
+        ]
+        .join("\n"),
+    );
+    let common = with(&hook_payload(), [("transcriptPath", json!(transcript))]);
+    let closed = |failed| LifecycleSignal::CompactionEnded {
+        auto: Some(false),
+        failed,
+    };
+    for input in ["/compact", "  /compact\n"] {
+        let opened = observe_lifecycle_with_prompt_reader(
+            "PreInvocation",
+            &with(
+                &common,
+                [("invocationNum", json!(0)), ("lastUserInput", json!(input))],
+            ),
+            |_, _| panic!("a compaction reads no prompt"),
+        )
+        .unwrap();
+        assert_eq!(opened.signal, LifecycleSignal::Compacting, "{input:?}");
+        assert!(opened.prompt.is_none());
+        for (stop, expected) in [
+            (
+                with(
+                    &common,
+                    [
+                        ("lastUserInput", json!(input)),
+                        ("terminationReason", json!("TERMINAL_CUSTOM_HOOK")),
+                        ("fullyIdle", json!(true)),
+                    ],
+                ),
+                closed(false),
+            ),
+            (
+                with(
+                    &common,
+                    [
+                        ("lastUserInput", json!(input)),
+                        ("terminationReason", json!("TERMINAL_CUSTOM_HOOK")),
+                    ],
+                ),
+                closed(false),
+            ),
+            (
+                with(
+                    &common,
+                    [
+                        ("lastUserInput", json!(input)),
+                        ("terminationReason", json!("error")),
+                        ("fullyIdle", json!(true)),
+                    ],
+                ),
+                closed(true),
+            ),
+        ] {
+            let decoded = AntigravityAdapter.decode_hook("Stop", &stop).unwrap();
+            assert_eq!(
+                decoded.lifecycle().map(|observation| &observation.signal),
+                Some(&expected),
+                "{stop}"
+            );
+            assert_eq!(decoded.final_message(), None, "{stop}");
+            assert_eq!(
+                hook_output(&AntigravityAdapter, "Stop", &stop)
+                    .json_reply()
+                    .cloned(),
+                Some(json!({"decision": ""}))
+            );
+        }
+    }
+    let ended = AntigravityAdapter
+        .decode_hook(
+            "Stop",
+            &with(
+                &common,
+                [
+                    ("terminationReason", json!("NO_TOOL_CALL")),
+                    ("fullyIdle", json!(true)),
+                ],
+            ),
+        )
+        .unwrap();
+    assert_eq!(ended.final_message(), Some("noted."));
+}
+
+#[test]
+fn other_inputs_keep_the_turn_bracket() {
+    let common = hook_payload();
+    let ended = LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    };
+    for input in [
+        Some(json!("/compact keep the notes")),
+        Some(json!("Reply exactly: noted.")),
+        Some(json!("/compactor")),
+        None,
+    ] {
+        let mut pre = with(&common, [("invocationNum", json!(0))]);
+        let mut stop = with(
+            &common,
+            [
+                ("terminationReason", json!("NO_TOOL_CALL")),
+                ("fullyIdle", json!(true)),
+            ],
+        );
+        if let Some(input) = &input {
+            pre["lastUserInput"] = input.clone();
+            stop["lastUserInput"] = input.clone();
+        }
+        let started = observe_lifecycle_with_prompt_reader("PreInvocation", &pre, |_, _| {
+            Some("asked".into())
+        })
+        .unwrap();
+        assert_eq!(
+            (started.signal, started.prompt.as_deref()),
+            (
+                LifecycleSignal::TurnStarted { turn_id: None },
+                Some("asked")
+            ),
+            "{input:?}"
+        );
+        assert_eq!(
+            hook_signal(&AntigravityAdapter, "Stop", &stop),
+            ended.clone(),
+            "{input:?}"
+        );
+    }
+}
+
+#[test]
 fn post_tool_use_tool_call_names_the_tool_when_present() {
     let named = |name: Option<&str>| LifecycleSignal::ToolUsed {
         effect: ToolEffect::Observed,
@@ -1400,6 +1540,31 @@ fn visible_transcript_contract_exposes_only_normalized_messages() {
             .map(|message| message.text)
             .collect::<Vec<_>>(),
         ["refine the card\nwithout metadata", "legacy prompt"]
+    );
+    let compacted = [
+        user_record(0, AT_09, "<USER_REQUEST>\n/compact\n</USER_REQUEST>"),
+        record(
+            1,
+            "SYSTEM",
+            "CHECKPOINT",
+            "DONE",
+            AT_10,
+            "# Resuming from a compaction",
+        )
+        .to_string(),
+        user_record(
+            2,
+            AT_11,
+            "<USER_REQUEST>\n/compact keep the notes\n</USER_REQUEST>",
+        ),
+    ]
+    .join("\n");
+    assert_eq!(
+        session::messages(&compacted)
+            .into_iter()
+            .map(|message| message.text)
+            .collect::<Vec<_>>(),
+        ["/compact keep the notes"]
     );
     assert!(
         AntigravityAdapter

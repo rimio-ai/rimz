@@ -195,7 +195,8 @@ fn interrupt_fixture(kind: &str) -> (Env, PathBuf) {
             observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
         });
     }
-    let panes = env.write_pane_fixture(&[agent_pane(&env, kind)]);
+    let program = rimz::agents::spec_by_kind(kind).map_or(kind, |spec| spec.bin_names[0]);
+    let panes = env.write_pane_fixture(&[agent_pane(&env, program)]);
     (env, panes)
 }
 
@@ -344,6 +345,14 @@ fn interrupt_order_case(kind: &str, queued_agent_id: Option<&str>, force: bool) 
     let enter = lines.iter().position(|line| is_enter_key(line)).unwrap();
     let escape = lines.iter().position(|line| is_escape_key(line)).unwrap();
     assert!(paste < enter && enter < escape, "{lines:?}");
+    assert_eq!(
+        lines[escape..]
+            .iter()
+            .filter(|line| is_enter_key(line))
+            .count(),
+        usize::from(kind == "antigravity"),
+        "only Antigravity resubmits the text its key returned to the composer: {lines:?}"
+    );
     let records = env.store().list_messages().unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].status, MessageStatus::Sent);
@@ -439,6 +448,16 @@ fn deadline_stop_interrupts_a_key_kind_steers_a_pane_kind_and_spares_a_waiting_c
         "{lines:?}"
     );
     assert_eq!(lines.iter().filter(|line| is_escape_key(line)).count(), 1);
+
+    let (_env, lines) = deadline_stop_trace("antigravity", false);
+    let escape = lines.iter().position(|line| is_escape_key(line));
+    let enters: Vec<_> = (0..lines.len())
+        .filter(|&at| is_enter_key(&lines[at]))
+        .collect();
+    assert!(
+        matches!((escape, enters.as_slice()), (Some(e), [n, r]) if n < &e && e < *r),
+        "{lines:?}"
+    );
 
     let (_env, lines) = deadline_stop_trace("kimi", false);
     let paste = lines.iter().position(|line| is_paste_start(line));
@@ -620,6 +639,63 @@ fn interrupt_claude_pastes_then_presses_escape() {
 }
 
 #[test]
+fn interrupt_antigravity_presses_escape_then_enter() {
+    interrupt_order_case("antigravity", None, false);
+}
+
+/// An Antigravity row can read Running from a turn agy already left (a user's Escape fires no
+/// hook), so the paste opens a fresh turn whose start lands during the interrupt delay: neither
+/// Escape nor the resubmitting Enter may cancel the turn the paste opened.
+#[test]
+fn interrupt_antigravity_spares_the_turn_its_paste_opened() {
+    let (env, panes) = interrupt_fixture("antigravity");
+    let hold = DeliveryRendezvous::new(&env, "before-key");
+    let trace = env.project_root.join("interrupt-own-turn.log");
+    let send = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .env("RIMZ_TEST_MESSAGE_BEFORE_INTERRUPT_KEY", &hold.path)
+        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
+        .args(["message", "--interrupt", "@antigravity", "new direction"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut held = hold.arrive();
+    append_lifecycle(
+        &env,
+        "antigravity",
+        "PreInvocation",
+        "sess-interrupt",
+        LifecycleSignal::TurnStarted { turn_id: None },
+        |_| {},
+    );
+    held.write_all(&[0]).unwrap();
+    let output = send.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let lines = trace_lines(&trace);
+    assert!(!lines.iter().any(|line| is_escape_key(line)), "{lines:?}");
+    assert_eq!(
+        lines.iter().filter(|line| is_enter_key(line)).count(),
+        1,
+        "{lines:?}"
+    );
+    assert_text_then_enter(&trace, &user_message("new direction"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "the message was sent, but its interrupt key was not: the message \
+             opened a new turn during the interrupt delay, and the key would cancel it"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("left its pane"), "{stderr}");
+    assert_eq!(
+        env.store().list_messages().unwrap()[0].status,
+        MessageStatus::Sent
+    );
+}
+
+#[test]
 fn interrupt_queued_record_pastes_then_presses_escape() {
     interrupt_order_case("codex", Some("sess-interrupt"), false);
 }
@@ -704,29 +780,42 @@ fn auto_review_permission_refuses_steer_and_interrupt_with_review_wording() {
 
 #[test]
 fn interrupt_idle_skips_escape() {
-    let (env, panes) = interrupt_fixture("claude");
-    append_lifecycle(
-        &env,
-        "claude",
-        "Stop",
-        "sess-interrupt",
-        LifecycleSignal::TurnInterrupted { turn_id: None },
-        |_| {},
-    );
-    let trace = env.project_root.join("interrupt-idle.log");
-    let output = run_success(
-        traced_rimz(&env, &trace)
-            .env("RIMZ_TEST_PANE_LIST", panes)
-            .args(["message", "--interrupt", "@claude", "new direction"]),
-        "interrupt idle",
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("sent to"));
-    assert!(!trace_lines(&trace).iter().any(|line| is_escape_key(line)));
-    assert_text_then_enter(&trace, &user_message("new direction"));
-    assert_eq!(
-        env.store().list_messages().unwrap()[0].status,
-        MessageStatus::Sent
-    );
+    for kind in ["claude", "antigravity"] {
+        let (env, panes) = interrupt_fixture(kind);
+        append_lifecycle(
+            &env,
+            kind,
+            "Stop",
+            "sess-interrupt",
+            LifecycleSignal::TurnInterrupted { turn_id: None },
+            |_| {},
+        );
+        let trace = env.project_root.join("interrupt-idle.log");
+        let output = run_success(
+            traced_rimz(&env, &trace)
+                .env("RIMZ_TEST_PANE_LIST", panes)
+                .args([
+                    "message",
+                    "--interrupt",
+                    &format!("@{kind}"),
+                    "new direction",
+                ]),
+            "interrupt idle",
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("sent to"));
+        let lines = trace_lines(&trace);
+        assert!(!lines.iter().any(|line| is_escape_key(line)), "{kind}");
+        assert_eq!(
+            lines.iter().filter(|line| is_enter_key(line)).count(),
+            1,
+            "{kind}: {lines:?}"
+        );
+        assert_text_then_enter(&trace, &user_message("new direction"));
+        assert_eq!(
+            env.store().list_messages().unwrap()[0].status,
+            MessageStatus::Sent
+        );
+    }
 }
 
 #[test]
@@ -15009,6 +15098,7 @@ fn agents_compact_uses_configured_custom_and_bare_instructions() {
 fn agents_compact_uses_native_commands_and_refuses_unsupported_instructions() {
     for (kind, native) in [
         ("codex", Some("/compact")),
+        ("antigravity", Some("/compact")),
         ("cursor", Some("/summarize")),
         ("qwen", Some("/compress")),
         ("amp", None),

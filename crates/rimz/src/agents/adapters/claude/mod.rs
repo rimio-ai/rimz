@@ -207,6 +207,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         max_turn_flag: Some("--max-turns"),
         interrupt_key: Some(crate::pane::keys::NamedKey::Escape),
         confirm_interrupt: false,
+        interrupt_returns_queued_text: false,
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Trailing,

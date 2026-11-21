@@ -485,6 +485,8 @@ pub(super) fn messages(lines: &str) -> Vec<TranscriptMessage> {
                 }
                 TranscriptRole::Assistant => normalized(Some(content)),
             }?;
+            // A bare `/compact` is a command to agy, not words of the user's.
+            (role != TranscriptRole::User || text != super::COMPACT_COMMAND).then_some(())?;
             Some(TranscriptMessage {
                 role,
                 at: record.created_at.parse::<Timestamp>().ok(),

@@ -17,6 +17,9 @@ pub(super) struct CommonPayload {
     pub transcript_path: Option<String>,
     #[serde(rename = "modelName")]
     pub model_name: Option<String>,
+    /// The user input that started the execution; releases before 1.5.13 may omit it.
+    #[serde(rename = "lastUserInput")]
+    pub last_user_input: Option<String>,
 }
 
 impl CommonPayload {
@@ -24,6 +27,11 @@ impl CommonPayload {
         self.conversation_id
             .as_deref()
             .or(self.conversation_id_camel.as_deref())
+    }
+
+    /// Whether the execution runs a bare `/compact`: `/compact <message>` is a prompt.
+    pub(super) fn runs_compact_command(&self) -> bool {
+        self.last_user_input.as_deref().map(str::trim) == Some(super::COMPACT_COMMAND)
     }
 }
 

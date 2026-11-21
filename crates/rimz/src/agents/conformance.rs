@@ -205,16 +205,23 @@ fn interrupt_keys_are_declared_only_for_verified_builtins() {
 
     assert_eq!(super::LaunchSpec::EMPTY.interrupt_key, None);
     const { assert!(!super::LaunchSpec::EMPTY.confirm_interrupt) };
+    const { assert!(!super::LaunchSpec::EMPTY.interrupt_returns_queued_text) };
     for adapter in BUILTINS {
         let spec = adapter.spec();
         let expected = match spec.kind {
-            "claude" | "codex" => Some(NamedKey::Escape),
+            "claude" | "codex" | "antigravity" => Some(NamedKey::Escape),
             _ => None,
         };
         assert_eq!(spec.launch.interrupt_key, expected, "{}", spec.kind);
         assert_eq!(
             spec.launch.confirm_interrupt,
             spec.kind == "codex",
+            "{}",
+            spec.kind
+        );
+        assert_eq!(
+            spec.launch.interrupt_returns_queued_text,
+            spec.kind == "antigravity",
             "{}",
             spec.kind
         );

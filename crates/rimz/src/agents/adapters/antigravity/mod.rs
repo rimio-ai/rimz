@@ -52,6 +52,7 @@ const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source antigravity";
 const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source antigravity";
 const STATUS_LINE_COMMAND: &str =
     "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source antigravity";
+const COMPACT_COMMAND: &str = "/compact";
 struct AntigravityHook {
     pub(super) hook: HookEventSpec,
     pub(super) config_event: &'static str,
@@ -215,8 +216,12 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
             ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: None,
-        interrupt_key: None,
-        compact_command: None,
+        interrupt_key: Some(crate::pane::keys::NamedKey::Escape),
+        interrupt_returns_queued_text: true,
+        compact_command: Some(super::CompactCommand {
+            command: COMPACT_COMMAND,
+            instruction: super::CompactInstruction::Unsupported,
+        }),
         presets: super::PresetMatchers {
             code_mode: super::CodeModeSwitch::Unsupported,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
@@ -248,8 +253,8 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     answer: ConcernCoverage::Unsupported {
         reason: "no out-of-band answer API or verified native-key planner",
     },
-    compaction: ConcernCoverage::Unsupported {
-        reason: "no documented compaction command, event, or transcript marker",
+    compaction: ConcernCoverage::Wired {
+        via: "PreInvocation and Stop hooks whose lastUserInput is a bare /compact",
     },
     subagents: ConcernCoverage::Partial {
         via: "child hooks joined to ordered invoke_subagent parent transcript results",
@@ -347,12 +352,10 @@ const ANTIGRAVITY_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
         via: "child Stop joined to its parent's invoke_subagent transcript result",
         gap: "the parent-result transcript shape is live-verified rather than documented",
     },
-    compacting: HookCoverage::Absent {
-        reason: "no compaction signal",
+    compacting: HookCoverage::Native {
+        event: "PreInvocation",
     },
-    compaction_ended: HookCoverage::Absent {
-        reason: "no compaction signal",
-    },
+    compaction_ended: HookCoverage::Native { event: "Stop" },
     ended: HookCoverage::Derived {
         via: "pane liveness + rollup reaper",
         gap: "no session-end event",
@@ -373,11 +376,30 @@ impl crate::agents::capabilities::CoreCapability for AntigravityAdapter {
 
     #[cfg(test)]
     fn conformance(&self) -> super::AdapterConformance {
+        let mut classification: Vec<_> = ANTIGRAVITY_HOOKS
+            .iter()
+            .map(|entry| super::hook_types::classification_sample(&entry.hook))
+            .collect();
+        // A bare `/compact` brackets its compaction on the same two events (probe link 5, P1).
+        for (event, payload) in [
+            (
+                "PreInvocation",
+                r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl","invocationNum":0,"lastUserInput":"/compact"}"#,
+            ),
+            (
+                "Stop",
+                r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl","fullyIdle":true,"terminationReason":"TERMINAL_CUSTOM_HOOK","lastUserInput":"/compact"}"#,
+            ),
+        ] {
+            classification.push(super::ClassificationSample::new(
+                event,
+                serde_json::from_str(payload).expect("valid compaction sample"),
+                AgentHookClass::Lifecycle,
+                None,
+            ));
+        }
         super::AdapterConformance {
-            classification: ANTIGRAVITY_HOOKS
-                .iter()
-                .map(|entry| super::hook_types::classification_sample(&entry.hook))
-                .collect(),
+            classification,
             spend: Some(super::SpendFixture {
                 session_id: "11111111-1111-4111-8111-111111111111",
                 file_name: "brain/11111111-1111-4111-8111-111111111111/.system_generated/logs/transcript_full.jsonl",
@@ -414,8 +436,8 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
             HookRouting::session(fields.agent_id.map(Into::into))
                 .with_worktree(fields.worktree_path),
         );
-        if event_name == "Stop"
-            && let Some(observation) = fields.lifecycle.as_ref()
+        if let Some(observation) = fields.lifecycle.as_ref()
+            && matches!(observation.signal, LifecycleSignal::TurnEnded { .. })
         {
             decoded.set_final_message(
                 observation
@@ -631,11 +653,14 @@ fn decode_lifecycle_fields(
             let Some(invocation) = payloads::parse_invocation(payload) else {
                 return DecodedLifecycleFields::default();
             };
-            (
-                invocation.common,
-                (invocation.invocation_num == Some(0))
-                    .then_some(LifecycleSignal::TurnStarted { turn_id: None }),
-            )
+            let signal = match invocation.invocation_num {
+                Some(0) if invocation.common.runs_compact_command() => {
+                    Some(LifecycleSignal::Compacting)
+                }
+                Some(0) => Some(LifecycleSignal::TurnStarted { turn_id: None }),
+                _ => None,
+            };
+            (invocation.common, signal)
         }
         "PostToolUse:edit" | "PostToolUse:mutating" | "PostToolUse:observed" => {
             let Some(tool) = payloads::parse_post_tool(payload) else {
@@ -662,16 +687,23 @@ fn decode_lifecycle_fields(
             let Some(stop) = payloads::parse_stop(payload) else {
                 return DecodedLifecycleFields::default();
             };
-            let fully_idle = stop.fully_idle;
             let failed = stop.failed();
-            (
-                stop.common,
-                fully_idle.map(|fully_idle| LifecycleSignal::TurnEnded {
-                    errored: failed,
-                    parked_on_background: !fully_idle && !failed,
-                    turn_id: None,
-                }),
-            )
+            // A bare `/compact` ends on a Stop of its own (`TERMINAL_CUSTOM_HOOK`), which
+            // closes the compaction whether or not it carries `fullyIdle`.
+            let signal = if stop.common.runs_compact_command() {
+                Some(LifecycleSignal::CompactionEnded {
+                    auto: Some(false),
+                    failed,
+                })
+            } else {
+                stop.fully_idle
+                    .map(|fully_idle| LifecycleSignal::TurnEnded {
+                        errored: failed,
+                        parked_on_background: !fully_idle && !failed,
+                        turn_id: None,
+                    })
+            };
+            (stop.common, signal)
         }
         _ => {
             let Some(common) = payloads::parse_common(payload) else {

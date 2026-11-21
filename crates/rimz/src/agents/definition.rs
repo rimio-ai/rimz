@@ -249,6 +249,11 @@ pub struct LaunchSpec {
     pub compact_command: Option<CompactCommand>,
     pub interrupt_key: Option<crate::pane::keys::NamedKey>,
     pub confirm_interrupt: bool,
+    /// The interrupt key moves text queued behind the running turn back into the composer,
+    /// so an interrupt presses Enter after the key to submit it. Such a kind opens no turn
+    /// for queued text until the running one ends, so an interrupt also withholds both keys
+    /// when the receiver's turn start moved during the delay: that turn is the paste's own.
+    pub interrupt_returns_queued_text: bool,
     pub presets: PresetMatchers,
     /// Provider env pair requesting long prompt-cache retention for a keep-warm launch.
     pub long_cache_env: Option<(&'static str, &'static str)>,
@@ -271,6 +276,7 @@ impl LaunchSpec {
         compact_command: None,
         interrupt_key: None,
         confirm_interrupt: false,
+        interrupt_returns_queued_text: false,
         presets: PresetMatchers::EMPTY,
         long_cache_env: None,
     };
