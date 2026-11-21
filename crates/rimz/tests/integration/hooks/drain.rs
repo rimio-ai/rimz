@@ -3995,6 +3995,89 @@ fn a_later_frame_of_a_run_sees_a_run_created_after_its_child_started() {
 }
 
 #[test]
+fn a_later_frame_of_a_run_finds_a_peer_run_created_after_its_child_started() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let launched = |kind: &str, agent_id: &str, launched_by| {
+        store
+            .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+                env.workspace_id.clone(),
+                "rimz-test",
+                &AgentKind::new_unchecked(kind),
+                rimz::store::event::AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: agent_id.into(),
+                    launch_id: Some(format!("{agent_id}-launch").as_str().into()),
+                    agent_name: agent_id.to_owned(),
+                    agent_name_explicit: true,
+                    launch: rimz::agents::LaunchParams {
+                        launched_by,
+                        ..Default::default()
+                    },
+                    state: rimz::store::event::AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: None,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+    };
+    launched("codex", "launcher", None);
+    launched(
+        "claude",
+        "drain-session",
+        Some(Box::new(rimz::agents::LaunchedBy {
+            kind: AgentKind::new_unchecked("codex"),
+            agent_id: "launcher-launch".into(),
+        })),
+    );
+    let first = append_stop(&env).0;
+    let second = append_stop(&env).0;
+    let (mut drainer, listener) = barrier_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY", &[]);
+    // The first frame listed the open runs and found none.
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "first frame");
+    let child = rimz::proc::children(drainer.id());
+    assert_eq!(child.len(), 1, "the run's child waits for its next frame");
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "finish".into(),
+        env.project_root.clone(),
+    );
+    run.peer = Some(rimz::store::run::PeerRun {
+        launch_id: "drain-session-launch".into(),
+        opened_by: Vec::new(),
+    });
+    run.status = rimz::store::run::RunStatus::Running;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    release.write_all(&[1]).unwrap();
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "second frame");
+    assert_eq!(
+        rimz::proc::children(drainer.id()),
+        child,
+        "one child applies both frames"
+    );
+    release.write_all(&[1]).unwrap();
+    release_until_exit(&env, &mut drainer, &listener);
+    let log = std::fs::read_to_string(store.paths().hook_drainer_log()).unwrap();
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &run.run_id)
+            .unwrap()
+            .status,
+        rimz::store::run::RunStatus::Completed,
+        "the second frame's open-run listing must see the run created after the first: {log}"
+    );
+    assert_eq!(lifecycle_count(&env, &first.event_id), 1, "{log}");
+    assert_eq!(lifecycle_count(&env, &second.event_id), 1, "{log}");
+}
+
+#[test]
 fn a_hung_second_frame_of_a_run_is_killed_and_the_next_frame_applied() {
     let env = Env::new();
     env.record(&env.project_root);
