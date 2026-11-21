@@ -35,17 +35,75 @@ const WIRE_LIMIT: u64 = 1024 * 1024;
 
 pub use crate::agents::hook_types::HOOK_ENV_NAMES;
 
-type Processor = fn(
-    &Store,
-    &HookIngress,
-    Option<LogExtent>,
-    &WorkspaceLock,
-    Instant,
-) -> anyhow::Result<HookReply>;
-static PROCESSOR: OnceLock<Processor> = OnceLock::new();
+/// The claim a frame is applied under: the cursor's log extent at claim, the crashed attempt's
+/// when `recovering`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameClaim {
+    pub extent: LogExtent,
+    pub recovering: bool,
+}
 
+impl FrameClaim {
+    /// The extent a recovering apply replays from; `None` for a first attempt.
+    pub fn recover_from(self) -> Option<LogExtent> {
+        self.recovering.then_some(self.extent)
+    }
+}
+
+/// Applies the frames of one drain call, in order. The call drops it on every path out, and
+/// dropping it leaves no apply child alive or unreaped.
+pub trait FrameApplier {
+    fn apply(
+        &mut self,
+        store: &Store,
+        frame: &HookIngress,
+        claim: FrameClaim,
+        lifetime: &WorkspaceLock,
+        deadline: Instant,
+    ) -> anyhow::Result<HookReply>;
+}
+
+type Processor =
+    fn(&Store, &HookIngress, FrameClaim, &WorkspaceLock, Instant) -> anyhow::Result<HookReply>;
+
+impl FrameApplier for Processor {
+    fn apply(
+        &mut self,
+        store: &Store,
+        frame: &HookIngress,
+        claim: FrameClaim,
+        lifetime: &WorkspaceLock,
+        deadline: Instant,
+    ) -> anyhow::Result<HookReply> {
+        self(store, frame, claim, lifetime, deadline)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Registered {
+    Frame(Processor),
+    Drain(fn() -> Box<dyn FrameApplier>),
+}
+static PROCESSOR: OnceLock<Registered> = OnceLock::new();
+
+/// Register a processor that applies each frame on its own.
 pub fn register_processor(processor: Processor) {
-    let _ = PROCESSOR.set(processor);
+    let _ = PROCESSOR.set(Registered::Frame(processor));
+}
+
+/// Register the applier each drain call starts and drops.
+pub fn register_applier(start: fn() -> Box<dyn FrameApplier>) {
+    let _ = PROCESSOR.set(Registered::Drain(start));
+}
+
+fn start_applier() -> io::Result<Box<dyn FrameApplier>> {
+    match PROCESSOR.get() {
+        Some(Registered::Frame(processor)) => Ok(Box::new(*processor)),
+        Some(Registered::Drain(start)) => Ok(start()),
+        None => Err(io::Error::other(
+            "hook processor was not registered by the CLI",
+        )),
+    }
 }
 
 /// Capture an apply child's output until the deadline, killing and reaping its PID on timeout.
@@ -942,6 +1000,7 @@ impl Drainer {
         };
         let workspace_lock =
             || WorkspaceLock::acquire_with_timeout(&store.paths().workspace_lock, remaining());
+        let mut applier = None;
         loop {
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Err(
@@ -1081,9 +1140,10 @@ impl Drainer {
                     write_cursor(store.paths(), &cursor, &lock)?;
                     expected = cursor;
                 }
-                let processor = PROCESSOR.get().ok_or_else(|| {
-                    io::Error::other("hook processor was not registered by the CLI")
-                })?;
+                let applier = match &mut applier {
+                    Some(applier) => applier,
+                    slot @ None => slot.insert(start_applier()?),
+                };
                 let lag = jiff::Timestamp::now().duration_since(frame.ts);
                 if lag > jiff::SignedDuration::from_secs(10)
                     && let Ok(metadata) = fs::metadata(&store.paths().hook_ingress_log)
@@ -1096,10 +1156,14 @@ impl Drainer {
                             pending_bytes: metadata.len().saturating_sub(expected.applied),
                         });
                 }
-                let reply = match processor(
+                let claim = FrameClaim {
+                    extent: expected.log_extent_at_claim,
+                    recovering,
+                };
+                let reply = match applier.apply(
                     store,
                     &frame,
-                    recovering.then_some(cursor.log_extent_at_claim),
+                    claim,
                     lifetime,
                     Instant::now() + LOCK_WAIT,
                 ) {
@@ -1396,12 +1460,12 @@ mod tests {
     fn crash_redo_is_only_the_in_flight_frame() {
         static CALLS: std::sync::Mutex<Vec<(Option<LogExtent>, LogExtent)>> =
             std::sync::Mutex::new(Vec::new());
-        register_processor(|store, _, recover, _, _| {
+        register_processor(|store, _, claim, _, _| {
             let cursor = ingress::read_cursor(store.paths())?;
             CALLS
                 .lock()
                 .unwrap()
-                .push((recover, cursor.log_extent_at_claim));
+                .push((claim.recover_from(), cursor.log_extent_at_claim));
             Ok(HookReply::Silent)
         });
         let (_dir, store, pending) = fixture(1);
@@ -1507,9 +1571,9 @@ mod tests {
         use rustix::fs::inotify;
 
         static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        register_processor(|_, frame, recover, _, _| {
+        register_processor(|_, frame, claim, _, _| {
             assert!(matches!(frame.boot_id.as_deref(), Some("this-boot") | None));
-            assert!(recover.is_none());
+            assert!(!claim.recovering);
             CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(HookReply::Silent)
         });
