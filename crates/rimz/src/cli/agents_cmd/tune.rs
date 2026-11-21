@@ -4,17 +4,14 @@ mod budget;
 
 use std::io::Write;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, ValueEnum};
 use serde::Serialize;
 
 use super::{Ctx, GlobalFlags};
-use rimz::agents::state::{TuneOverride, TuneSetting};
-use rimz::config::{FlipCompact, IdleCompact, KeepWarm, MachineConfig};
+use rimz::agents::state::TuneSetting;
 use rimz::harness::budget::{BudgetSpec, read_ledger};
-use rimz::harness::cache_keepalive::SeatPolicy;
-use rimz::store::event::AgentTunePayload;
-use rimz::store::message::AutoCompact;
+use rimz::harness::tune::SettingReport;
 use rimz::store::snapshot::SidebarSnapshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ValueEnum)]
@@ -24,12 +21,6 @@ enum Setting {
     IdleCompact,
     SmartCompact,
     Budget,
-}
-
-impl Setting {
-    fn name(self) -> String {
-        TuneSetting::from(self).to_string()
-    }
 }
 
 impl From<Setting> for TuneSetting {
@@ -112,62 +103,16 @@ pub(super) fn run_tune(args: TuneArgs, globals: &GlobalFlags) -> Result<()> {
         return budget::run_budget(&ctx, agent, &peers, &args, by);
     }
 
-    let updated_snapshot;
-    let agent = if let (Some(setting), Some(raw)) = (args.setting, args.value.as_deref()) {
-        let value = if raw.trim() == "reset" {
-            None
-        } else {
-            Some(canonical_value(setting, raw)?)
-        };
-        ctx.store.tune_agent(
-            &agent.kind,
-            &AgentTunePayload {
-                agent_id: agent.agent_id.clone(),
-                setting: setting.into(),
-                value,
-                by,
-            },
-            &ctx.workspace.session_name,
-        )?;
-        updated_snapshot = ctx.store.snapshot()?;
-        updated_snapshot
-            .agents
-            .iter()
-            .find(|updated| updated.kind == agent.kind && updated.agent_id == agent.agent_id)
-            .context("tuned session is no longer in the rollup")?
-    } else {
-        agent
-    };
-    let machine = MachineConfig::load_lenient();
-    let policy = SeatPolicy::load(&machine, Some(&ctx.workspace.project_root));
-    let configured = policy.configured_values(agent, &machine.harness);
-    let reports = [
-        setting_report(
-            Setting::KeepWarm,
-            agent.tune.keep_warm.as_ref(),
-            configured
-                .keep_warm
-                .as_ref()
-                .map(|(max, _)| KeepWarm::For(*max).to_string()),
-            ToString::to_string,
-        ),
-        setting_report(
-            Setting::IdleCompact,
-            agent.tune.idle_compact.as_ref(),
-            configured
-                .idle_compact
-                .map(|floor| IdleCompact::Tokens(floor).to_string()),
-            ToString::to_string,
-        ),
-        setting_report(
-            Setting::SmartCompact,
-            agent.tune.smart_compact.as_ref(),
-            configured
-                .smart_compact
-                .map(|line| smart_value(&FlipCompact::Threshold(line))),
-            smart_value,
-        ),
-    ];
+    let change = args.setting.zip(args.value.as_deref());
+    let tuned = rimz::harness::tune::tune(
+        &ctx.workspace,
+        &ctx.store,
+        agent,
+        change.map(|(setting, raw)| (setting.into(), raw)),
+        by,
+    )?;
+    let agent = &tuned.agent;
+    let reports = &tuned.reports;
     let handle = target_handle(agent, &peers);
     if args.setting.is_none() && args.json {
         let ledger = read_ledger(ctx.store.runtime_paths(), &agent.kind, &agent.agent_id);
@@ -187,10 +132,10 @@ pub(super) fn run_tune(args: TuneArgs, globals: &GlobalFlags) -> Result<()> {
             "agent": handle, "settings": reports, "budget": budget,
         }));
     }
-    for report in &reports {
+    for report in reports {
         if args
             .setting
-            .is_some_and(|setting| setting != report.setting)
+            .is_some_and(|setting| TuneSetting::from(setting) != report.setting)
         {
             continue;
         }
@@ -199,13 +144,8 @@ pub(super) fn run_tune(args: TuneArgs, globals: &GlobalFlags) -> Result<()> {
             value["agent"] = serde_json::json!(handle);
             return crate::cli::render::json(&value);
         }
-        let condition = (report.setting == Setting::KeepWarm)
-            .then(|| {
-                configured
-                    .keep_warm
-                    .as_ref()
-                    .and_then(|(_, condition)| condition.as_deref())
-            })
+        let condition = (report.setting == TuneSetting::KeepWarm)
+            .then_some(tuned.keep_warm_condition.as_deref())
             .flatten();
         render_setting(&handle, report, condition)?;
     }
@@ -255,72 +195,12 @@ fn target_handle(agent: &rimz::agents::AgentState, peers: &[&rimz::agents::Agent
     rimz::address::agent_handle(agent, peers, true)
 }
 
-fn parse<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T> {
-    Ok(serde_json::from_value(serde_json::json!(raw))?)
-}
-
-fn canonical_value(setting: Setting, raw: &str) -> Result<String> {
-    Ok(match setting {
-        Setting::KeepWarm => parse::<KeepWarm>(raw)?.to_string(),
-        Setting::IdleCompact => parse::<IdleCompact>(raw)?.to_string(),
-        Setting::SmartCompact => smart_value(&parse(raw)?),
-        Setting::Budget => raw.to_owned(),
-    })
-}
-
-fn smart_value(value: &FlipCompact) -> String {
-    match value {
-        FlipCompact::Off => "off".into(),
-        FlipCompact::Threshold(AutoCompact::Percent(percent)) => format!("{percent}%"),
-        FlipCompact::Threshold(AutoCompact::Tokens(tokens)) => {
-            IdleCompact::Tokens(*tokens).to_string()
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct SettingReport {
-    setting: Setting,
-    value: String,
-    source: &'static str,
-    configured: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    set_by: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    set_at: Option<jiff::Timestamp>,
-}
-
-fn setting_report<T>(
-    setting: Setting,
-    tuned: Option<&TuneOverride<T>>,
-    configured: Option<String>,
-    format: impl FnOnce(&T) -> String,
-) -> SettingReport {
-    SettingReport {
-        setting,
-        value: tuned
-            .map(|tuned| format(&tuned.value))
-            .or_else(|| configured.clone())
-            .unwrap_or_else(|| "off".into()),
-        source: if tuned.is_some() {
-            "override"
-        } else {
-            "config"
-        },
-        configured,
-        set_by: tuned.and_then(|tuned| tuned.by.clone()),
-        set_at: tuned.map(|tuned| tuned.at),
-    }
-}
-
 fn render_setting(handle: &str, report: &SettingReport, condition: Option<&str>) -> Result<()> {
     let mut out = crate::cli::render::out();
     write!(
         out,
         "{handle} {}: {} · {}",
-        report.setting.name(),
-        report.value,
-        report.source
+        report.setting, report.value, report.source
     )?;
     if report.source == "override" {
         if let Some(by) = &report.set_by {
