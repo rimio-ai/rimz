@@ -116,6 +116,7 @@ kill "$(cat "$TMPDIR/sshd-probe/sshd.pid")"
 - A check of Claude alone (a mod, a flag, a hook payload) needs no room. Run it from a Claude agent's pane, on the login its shell already exports: start `claude` under `env -i` with `PATH`, `HOME`, `TERM` and that `CLAUDE_CONFIG_DIR`, from a scratch directory under `$TMPDIR`, with `--model haiku` and one-line prompts.
 - Pass `--setting-sources project,local`, so the account's own hooks, `env`, and permission rules (which may deny the native `Agent` tool) stay out.
 - A dialog check drives the same command in a private tmux server (`tmux -L <name> -f /dev/null`, short `TMUX_TMPDIR`).
+- A check that needs `ExitPlanMode` drives an interactive session started with `--permission-mode plan` in the private tmux server: print mode (`-p`) does not offer the tool. A scratch directory whose `.claude/settings.json` declares hooks asks for folder trust first. Approving the plan writes a plan file under the account's `plans/` directory: remove it afterwards.
 - Run it yourself: a subagent on another provider has no Claude login. It spends the user's real usage, so keep it to the questions the change rests on.
 - A check of agy (Antigravity) alone needs no room and no model turn. Run `agy` under `env -i` with `PATH`, a scratch `HOME`, its own `RIMZ_HOME`, and a short `XDG_RUNTIME_DIR`, from a scratch directory under `$TMPDIR`. A logged-in check copies `~/.gemini` into the scratch home.
 - Print-mode slash commands (`agy -p /usage --output-format json`), `agy plugin validate`, and `agy plugin list` spend no quota.
