@@ -788,7 +788,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
 /// file hands over no server and limits nothing.
 #[test]
 fn explain_mcps_reads_the_antigravity_agent_file() {
-    let explain = |env: &Env, profile: &str| {
+    let explain = |env: &Env, target: &str, extra: &[&str]| {
         let plugin = env.home_root.join(".gemini/config/plugins/rimz");
         std::fs::create_dir_all(&plugin).unwrap();
         std::fs::write(
@@ -805,7 +805,8 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
         );
         let output = env
             .rimz()
-            .args(["agents", "explain", profile, "--mcps"])
+            .args(["agents", "explain", target, "--mcps"])
+            .args(extra)
             .env("SHELL", shell)
             .env("PATH", path)
             .output()
@@ -831,7 +832,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
         );
     }
 
-    let out = explain(&env, "glimit");
+    let out = explain(&env, "glimit", &[]);
     assert!(out.contains("serves rimz-lsp\n"), "{out}");
     assert!(
         out.contains("only github, notion (inheritMcp: false)"),
@@ -848,7 +849,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
         "{out}"
     );
 
-    let out = explain(&env, "gopen");
+    let out = explain(&env, "gopen", &[]);
     assert!(
         out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes"),
         "{out}"
@@ -860,7 +861,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     assert!(out.contains("\n  inheritMcp: true\n"), "{out}");
 
     let bare = Env::new();
-    let out = explain(&bare, "antigravity");
+    let out = explain(&bare, "antigravity", &[]);
     assert!(
         out.contains("not handed over: this launch writes no agent file"),
         "{out}"
@@ -873,6 +874,31 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
         !out.contains("CAPABILITY") && !out.contains("inheritMcp"),
         "{out}"
     );
+
+    // A raw `allowedMcpServers` setting is Claude's, never an Antigravity limit.
+    let out = explain(
+        &env,
+        "gopen",
+        &["--", "--settings", r#"{"allowedMcpServers":[]}"#],
+    );
+    assert!(
+        out.contains("every server the account and project configure")
+            && !out.contains("only none"),
+        "{out}"
+    );
+
+    // A resumed conversation keeps the servers it started with, whatever its profile lists now.
+    env.record(&env.project_root);
+    let transcript = env.home_root.join("planner.jsonl");
+    std::fs::write(&transcript, "{}\n").unwrap();
+    let launch = rimz::agents::LaunchParams {
+        profile: Some("glimit".to_owned()),
+        ..Default::default()
+    };
+    crate::common::wait::register_seat(&env, "antigravity", launch, "terminal_1", &transcript);
+    let out = explain(&env, "@planner", &[]);
+    let kept = "kept from the conversation's start: a resume writes no agent file";
+    assert_eq!(out.matches(kept).count(), 2, "{out}");
 }
 
 /// A profile's own Codex overrides sit in the argv beside RimZ's, and

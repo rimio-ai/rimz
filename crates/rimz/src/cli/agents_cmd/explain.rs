@@ -328,11 +328,16 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         mcp_arguments(&process.provider_argv)
     };
     let served = &plan.mcp_capabilities[..];
+    // A resume writes no agent file: the conversation keeps the servers it started with.
+    let resumes = rides_agent_file && !matches!(plan.request.action, ExecAction::Launch { .. });
+    let kept = "kept from the conversation's start: a resume writes no agent file";
     let rimz_line = if let Some((flag, value)) = &plan.mcp_switched_off {
         format!("off: {flag} {value}")
     } else if !served.is_empty() {
         let names: Vec<_> = served.iter().map(|c| c.name()).collect();
         format!("serves {}", names.join(", "))
+    } else if resumes {
+        kept.to_owned()
     } else if !server_on {
         "off: [agents] rimz-mcp-server = false".to_owned()
     } else if rides_agent_file && plan.agent_file.is_none() {
@@ -341,7 +346,12 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         "not handed over: the mcps list names no RimZ capability".to_owned()
     };
     servers.push("rimz", render::cell(rimz_line));
-    servers.push("your servers", render::cell(user_servers(plan, &arguments)));
+    let user_line = if resumes {
+        kept.to_owned()
+    } else {
+        user_servers(plan, &arguments, rides_agent_file)
+    };
+    servers.push("your servers", render::cell(user_line));
     writeln!(w, "MCP servers")?;
     servers.render(w)?;
     if !plan.hidden_skills.is_empty() {
@@ -424,10 +434,11 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
 }
 
 /// The user's servers a launch keeps, read from what the adapter wrote: the
-/// name-only items an agent file lists beside `inheritMcp: false`, a Claude
-/// allowlist in its settings (a file or the inline `--settings`), or the
-/// servers a Codex `-c` override switches off.
-fn user_servers(plan: &LaunchPlan, arguments: &[(&str, &str)]) -> String {
+/// name-only items an agent file lists beside `inheritMcp: false`, and on a kind
+/// whose prompt rides an agent file nothing else; a Claude allowlist in its
+/// settings (a file or the inline `--settings`), or the servers a Codex `-c`
+/// override switches off.
+fn user_servers(plan: &LaunchPlan, arguments: &[(&str, &str)], rides_agent_file: bool) -> String {
     if arguments.contains(&("inheritMcp:", "false")) {
         let items = arguments
             .iter()
@@ -445,6 +456,9 @@ fn user_servers(plan: &LaunchPlan, arguments: &[(&str, &str)]) -> String {
             names.join(", ")
         };
         return format!("only {names} (inheritMcp: false)");
+    }
+    if rides_agent_file {
+        return "every server the account and project configure".to_owned();
     }
     let process = plan.process();
     let inline = process
