@@ -6,6 +6,7 @@ pub mod broker;
 pub mod check;
 pub mod history;
 mod installed;
+pub mod invoke;
 pub mod memory;
 pub mod protocol;
 pub mod query;

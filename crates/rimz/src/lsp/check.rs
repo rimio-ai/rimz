@@ -23,6 +23,7 @@ pub enum Mode {
 
 pub fn run(
     notes: &[PathBuf],
+    dir: &Path,
     root: &Path,
     entries: &[registry::Entry],
     servers: &BTreeMap<String, crate::config::LspServerConfig>,
@@ -38,17 +39,19 @@ pub fn run(
     )?;
     Ok(notes
         .iter()
-        .map(|notes| check_file(notes, &mut context, mode))
+        .map(|notes| check_file(notes, dir, &mut context, mode))
         .collect())
 }
 
+/// `notes` as given names the report; it is read relative to `dir`.
 fn check_file(
     notes: &Path,
+    dir: &Path,
     context: &mut Context<'_>,
     mode: Mode,
 ) -> Result<Report, query::QueryErr> {
     let root = context.checkout;
-    let source = std::fs::read_to_string(notes)
+    let source = std::fs::read_to_string(dir.join(notes))
         .map_err(|error| {
             std::io::Error::new(
                 error.kind(),
@@ -103,7 +106,7 @@ fn check_file(
     // Written only once the anchors are judged, so a file that reports an
     // error is a file left as it was.
     if fixes.as_ref().is_some_and(|fixes| !fixes.is_empty()) {
-        let target = std::fs::canonicalize(notes).map_err(LspErr::from)?;
+        let target = std::fs::canonicalize(dir.join(notes)).map_err(LspErr::from)?;
         crate::disk::atomic::write_bytes_atomically(&target, source.as_bytes())
             .map_err(LspErr::from)?;
     }

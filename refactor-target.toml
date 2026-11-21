@@ -156,7 +156,9 @@ path = "crates/rimz/src/lsp"
 # retire, retire::run, and retire::Outcome expose one machine-wide reload pass and counts (+3).
 # query::typed_path and Target::locate share typed input readings with the CLI.
 # query::json_targets annotates JSON answers with the positions the text prints (+1).
-surface-budget = 110
+# lsp::invoke carries the query, check, and show verbs out of the CLI handler
+# so the MCP server can run them in-process.
+surface-budget = 121
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
