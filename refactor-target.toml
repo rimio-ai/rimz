@@ -5698,7 +5698,8 @@ allowed-dependencies = [
 # AgentShellPersistence selects room-scoped or per-launch shell lookups (+1).
 # ReminderSection shares explicit launch-reminder headings across callers (+1).
 # CompiledAgentProcess::settings lets `agents explain --mcps` read the allowlist the adapter wrote (+1).
-surface-budget = 58
+# `mcp_server` builds RimZ's MCP server once for the argv channel and an agent file (+1).
+surface-budget = 59
 
 [[verdict]]
 kind = "item"

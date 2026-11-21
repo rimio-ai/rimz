@@ -1,5 +1,5 @@
-//! Provider agent files: a fresh launch's composed system prompt, launch reminder, and tools
-//! written into a file the provider selects by name. The adapter renders the file
+//! Provider agent files: a fresh launch's composed system prompt, launch reminder, tools, and
+//! MCP servers written into a file the provider selects by name. The adapter renders the file
 //! ([`LaunchCapability::agent_file`](super::capabilities::LaunchCapability::agent_file)); this
 //! module publishes it and prunes the old ones beside it.
 
@@ -21,6 +21,9 @@ pub struct AgentFileInput<'a> {
     pub native_subagents: bool,
     /// The launch env, where the launched provider resolves its home.
     pub env: &'a BTreeMap<String, String>,
+    /// RimZ's MCP server when the launch hands it over, and the `mcps` list over the user's
+    /// own servers, which a provider whose agent file names its servers applies there.
+    pub mcp: super::capabilities::McpLaunch<'a>,
 }
 
 /// A planned agent file: where it goes, the name the provider selects it by, and its bytes.

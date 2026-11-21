@@ -321,7 +321,18 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         return servers.render(w);
     }
     let process = plan.process();
-    let arguments = mcp_arguments(&process.provider_argv);
+    let rides_agent_file = matches!(
+        adapter
+            .spec()
+            .launch
+            .preset_arg_matcher(PresetField::SystemPromptFile),
+        Some(PresetArgMatcher::AgentFile(_))
+    );
+    let arguments = if rides_agent_file {
+        agent_file_mcp_lines(plan)
+    } else {
+        mcp_arguments(&process.provider_argv)
+    };
     let served = &plan.mcp_capabilities[..];
     let rimz_line = if let Some((flag, value)) = &plan.mcp_switched_off {
         format!("off: {flag} {value}")
@@ -330,11 +341,13 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         format!("serves {}", names.join(", "))
     } else if !server_on {
         "off: [agents] rimz-mcp-server = false".to_owned()
+    } else if rides_agent_file && plan.agent_file.is_none() {
+        "not handed over: this launch writes no agent file".to_owned()
     } else {
         "not handed over: the mcps list names no RimZ capability".to_owned()
     };
     servers.push("rimz", render::cell(rimz_line));
-    servers.push("your servers", render::cell(user_servers(plan)));
+    servers.push("your servers", render::cell(user_servers(plan, &arguments)));
     writeln!(w, "MCP servers")?;
     servers.render(w)?;
     if !plan.hidden_skills.is_empty() {
@@ -371,7 +384,12 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         }
     }
     if !arguments.is_empty() {
-        writeln!(w, "\nProvider arguments")?;
+        let heading = if rides_agent_file {
+            "Agent file"
+        } else {
+            "Provider arguments"
+        };
+        writeln!(w, "\n{heading}")?;
         for (flag, value) in &arguments {
             writeln!(w, "  {flag} {value}")?;
         }
@@ -411,10 +429,29 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     write!(w, "{}", render_listing(&tools, &modes))
 }
 
-/// The user's servers a launch keeps, read from what the adapter wrote: a
-/// Claude allowlist in its settings (a file or the inline `--settings`), or
-/// the servers a Codex `-c` override switches off.
-fn user_servers(plan: &LaunchPlan) -> String {
+/// The user's servers a launch keeps, read from what the adapter wrote: the
+/// name-only items an agent file lists beside `inheritMcp: false`, a Claude
+/// allowlist in its settings (a file or the inline `--settings`), or the
+/// servers a Codex `-c` override switches off.
+fn user_servers(plan: &LaunchPlan, arguments: &[(&str, &str)]) -> String {
+    if arguments.contains(&("inheritMcp:", "false")) {
+        let items = arguments
+            .iter()
+            .find(|(key, _)| *key == "mcpServers:")
+            .and_then(|(_, value)| serde_json::from_str::<Vec<serde_json::Value>>(value).ok())
+            .unwrap_or_default();
+        let names: Vec<_> = items
+            .iter()
+            .filter_map(|item| item["name"].as_str())
+            .filter(|name| *name != SERVER_NAME)
+            .collect();
+        let names = if names.is_empty() {
+            "none".to_owned()
+        } else {
+            names.join(", ")
+        };
+        return format!("only {names} (inheritMcp: false)");
+    }
     let process = plan.process();
     let inline = process
         .provider_argv
@@ -511,6 +548,23 @@ fn load_mode(arguments: &[(&str, &str)], capability: Capability) -> &'static str
         }
     }
     load.map_or("default", LoadMode::name)
+}
+
+/// The MCP lines of a planned agent file's frontmatter, each split into its key and value.
+fn agent_file_mcp_lines(plan: &LaunchPlan) -> Vec<(&str, &str)> {
+    let Some(text) = plan
+        .agent_file
+        .as_ref()
+        .and_then(|file| std::str::from_utf8(&file.bytes).ok())
+    else {
+        return Vec::new();
+    };
+    text.lines()
+        .skip(1)
+        .take_while(|line| *line != "---")
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(key, _)| matches!(*key, "inheritMcp:" | "mcpServers:"))
+        .collect()
 }
 
 /// The provider arguments that carry MCP servers, in argv order: Claude's

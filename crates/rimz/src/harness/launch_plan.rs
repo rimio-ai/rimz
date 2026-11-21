@@ -935,9 +935,21 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         reminders.routine_rimz = Some((inputs.runtime.prompt_dir(), [tmp.clone(), shared.clone()]));
     }
     let capabilities = crate::config::mcp_capabilities(request.mcps.as_deref());
+    // A kind whose prompt rides an agent file takes the server only inside the file, which
+    // only a fresh launch with a composed prompt writes.
+    let rides_agent_file = matches!(
+        adapter
+            .spec()
+            .launch
+            .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile),
+        Some(crate::agents::PresetArgMatcher::AgentFile(_))
+    );
+    let plans_agent_file =
+        agent_file_flag.is_some() && matches!(request.action, launch::ExecAction::Launch { .. });
     if inputs.machine.agents.rimz_mcp_server
         && adapter.takes_mcp_servers()
         && !capabilities.is_empty()
+        && (plans_agent_file || !rides_agent_file)
     {
         let program = if inputs.state.room_bin.is_file() {
             inputs.state.room_bin.clone()
@@ -1117,6 +1129,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 AgentProcessStage::Ready(process)
                 | AgentProcessStage::LoginShellReentry { process, .. } => process,
             };
+            let server = launch::mcp_server(&reminders, &env, &process.env);
             // Impossible: `agents::conformance::agent_file_matcher_comes_with_an_agent_file`
             // pins that every adapter whose matcher is AgentFile renders an agent file.
             let file = adapter
@@ -1127,6 +1140,11 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                     tools: request.tools.as_deref(),
                     native_subagents: !reminders.disable_native_subagents(&request),
                     env: &env,
+                    mcp: crate::agents::capabilities::McpLaunch {
+                        server,
+                        mcps: request.mcps.as_deref(),
+                        login_env: &env,
+                    },
                 })
                 .expect("an agent-file prompt matcher comes with its adapter's agent file")
                 .map_err(|refusal| LaunchPlanErr::AgentFile {

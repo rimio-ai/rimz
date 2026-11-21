@@ -881,6 +881,11 @@ fn agent_file_matcher_comes_with_an_agent_file() {
         tools: None,
         native_subagents: true,
         env: &env,
+        mcp: super::capabilities::McpLaunch {
+            server: None,
+            mcps: None,
+            login_env: &env,
+        },
     };
     for adapter in BUILTINS {
         let rides_agent_file = matches!(
@@ -893,6 +898,52 @@ fn agent_file_matcher_comes_with_an_agent_file() {
         assert_eq!(
             rides_agent_file,
             adapter.agent_file(&input).is_some(),
+            "{}",
+            adapter.spec().kind
+        );
+    }
+}
+
+/// An adapter whose system prompt rides an agent file applies a limiting `mcps` list only
+/// there, so its file must change with the list; one that dropped it would launch with every
+/// server while the layout refusal promised a limit.
+#[test]
+fn agent_file_kinds_write_a_limiting_mcps_list() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = home.path().join(".gemini/config/plugins/rimz");
+    fs::create_dir_all(&plugin).unwrap();
+    fs::write(
+        plugin.join("plugin.json"),
+        r#"{"name":"rimz","author":"RimZ"}"#,
+    )
+    .unwrap();
+    let env =
+        std::collections::BTreeMap::from([("HOME".to_owned(), home.path().display().to_string())]);
+    let limited: Vec<crate::config::McpName> = vec!["github".parse().unwrap()];
+    let bytes = |mcps: Option<&[crate::config::McpName]>, adapter: &AgentDefinition| {
+        adapter
+            .agent_file(&super::AgentFileInput {
+                profile: None,
+                prompt: "prompt",
+                reminder: "",
+                tools: None,
+                native_subagents: true,
+                env: &env,
+                mcp: super::capabilities::McpLaunch {
+                    server: None,
+                    mcps,
+                    login_env: &env,
+                },
+            })
+            .map(|file| file.unwrap().bytes)
+    };
+    for adapter in BUILTINS {
+        let Some(open) = bytes(None, adapter) else {
+            continue;
+        };
+        assert_ne!(
+            Some(open),
+            bytes(Some(&limited), adapter),
             "{}",
             adapter.spec().kind
         );

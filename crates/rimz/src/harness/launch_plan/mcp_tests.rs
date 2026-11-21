@@ -18,6 +18,13 @@ impl Room {
         let state = StatePaths::under(id, project.path()).unwrap();
         let home = project.path().join("home");
         std::fs::create_dir_all(home.join(".codex")).unwrap();
+        let plugin = home.join(".gemini/config/plugins/rimz");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(
+            plugin.join("plugin.json"),
+            r#"{"name":"rimz","author":"RimZ"}"#,
+        )
+        .unwrap();
         let ambient = BTreeMap::from([
             ("HOME".into(), home.display().to_string()),
             (
@@ -408,6 +415,97 @@ fn other_kinds_get_no_entry_and_a_warning_for_a_list() {
             &[]
         };
         assert_eq!(warnings, expected);
+    }
+}
+
+/// Antigravity takes the server and the list through the agent file a fresh launch with a
+/// system prompt writes, never through argv; a launch that writes no file hands over no
+/// server and warns nothing, and its conversation keeps the servers it started with.
+#[test]
+fn antigravity_writes_the_server_and_the_list_into_its_agent_file() {
+    let room = Room::new();
+    let prompted = |mut request: ExecRequest| {
+        request.system_prompt_file = Some(crate::config::PromptSource::Text {
+            origin: room.project.path().join("antigravity.md"),
+            text: "Base.\n".to_owned(),
+        });
+        request
+    };
+    let mcp_lines = |plan: &LaunchPlan| {
+        let file = plan
+            .agent_file
+            .as_ref()
+            .expect("a fresh launch plans a file");
+        let text = String::from_utf8(file.bytes.clone()).unwrap();
+        let lines: Vec<String> = text
+            .lines()
+            .filter(|line| line.starts_with("inheritMcp: ") || line.starts_with("mcpServers: "))
+            .map(str::to_owned)
+            .collect();
+        lines
+    };
+    let no_mcp_argv = |plan: &LaunchPlan| {
+        let argv = &plan.process().provider_argv;
+        assert!(!argv.iter().any(|arg| arg.contains("mcp")), "{argv:?}");
+    };
+    let rimz = r#"{"name": "rimz", "command": "/bin/rimz", "args": ["mcp", "serve"#;
+
+    let limited = prompted(launch("antigravity", Some(&["rimz-lsp", "github"]), &[]));
+    let plan = room.compile(&switches(true, true), &limited);
+    assert_eq!(
+        mcp_lines(&plan),
+        [
+            "inheritMcp: false".to_owned(),
+            format!(r#"mcpServers: [{rimz}", "--only", "rimz-lsp"]}}, {{"name": "github"}}]"#),
+        ]
+    );
+    assert_eq!(
+        plan.mcp_capabilities,
+        [crate::mcp::catalog::Capability::Lsp]
+    );
+    assert_eq!(mcps_warnings(&plan), Vec::<String>::new());
+    no_mcp_argv(&plan);
+
+    let plan = room.compile(
+        &switches(true, true),
+        &prompted(launch("antigravity", None, &[])),
+    );
+    assert_eq!(
+        mcp_lines(&plan),
+        [
+            "inheritMcp: true".to_owned(),
+            format!(r#"mcpServers: [{rimz}"]}}]"#),
+        ]
+    );
+    assert_eq!(
+        plan.mcp_capabilities,
+        crate::mcp::catalog::Capability::ALL.to_vec()
+    );
+
+    let plan = room.compile(&switches(true, false), &limited);
+    assert_eq!(
+        mcp_lines(&plan),
+        ["inheritMcp: false", r#"mcpServers: [{"name": "github"}]"#]
+    );
+    assert!(plan.mcp_capabilities.is_empty());
+
+    let mut resumed = limited.clone();
+    resumed.action = ExecAction::Resume {
+        session_id: "conversation".to_owned(),
+        extra_args: Vec::new(),
+    };
+    let plan = room.compile(&switches(true, true), &resumed);
+    assert_eq!(plan.agent_file, None);
+    assert!(plan.mcp_capabilities.is_empty());
+    assert_eq!(mcps_warnings(&plan), Vec::<String>::new());
+    no_mcp_argv(&plan);
+
+    for mcps in [None, Some(&["*"][..])] {
+        let plan = room.compile(&switches(true, true), &launch("antigravity", mcps, &[]));
+        assert_eq!(plan.agent_file, None);
+        assert!(plan.mcp_capabilities.is_empty(), "{mcps:?}");
+        assert_eq!(mcps_warnings(&plan), Vec::<String>::new());
+        no_mcp_argv(&plan);
     }
 }
 
