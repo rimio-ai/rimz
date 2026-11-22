@@ -41,7 +41,7 @@ impl ZellijNamespace {
                 home_root: root_path.clone(),
                 runtime_root: root_path.clone(),
             },
-            Path::new(env!("CARGO_BIN_EXE_rimz-test-reaper")),
+            &super::shim::cargo_bin("rimz-test-reaper", env!("CARGO_BIN_EXE_rimz-test-reaper")),
         )
         .expect("arm Zellij namespace reaper");
         let config_dir = root_path.join(".config/zellij");

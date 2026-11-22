@@ -154,7 +154,7 @@ impl Env {
                 home_root: home_root.clone(),
                 runtime_root: runtime_root.clone(),
             },
-            Path::new(env!("CARGO_BIN_EXE_rimz-test-reaper")),
+            &super::shim::cargo_bin("rimz-test-reaper", env!("CARGO_BIN_EXE_rimz-test-reaper")),
         )
         .expect("arm test sandbox reaper");
         // The armed sandbox now owns removal, and a kept root must survive.
