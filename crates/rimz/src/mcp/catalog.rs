@@ -30,6 +30,12 @@ pub enum Capability {
 impl Capability {
     pub const ALL: [Capability; 4] = [Self::Lsp, Self::Wait, Self::Control, Self::Notes];
 
+    /// Whether the group's tools start things, which `tasks`, `join`, and `stop` list, await,
+    /// and end.
+    pub fn starts_things(self) -> bool {
+        self == Self::Wait
+    }
+
     /// The capability's name, which is also the name of the skill it matches.
     pub fn name(self) -> &'static str {
         match self {
@@ -87,25 +93,31 @@ pub fn serve_args(only: &[Capability]) -> Vec<String> {
 pub enum Call {
     Lsp(LspArgs),
     Wait(WaitArgs),
-    WaitList(WaitListArgs),
-    WaitCancel(WaitCancelArgs),
+    Tasks(TasksArgs),
+    Join(JoinArgs),
+    Stop(StopArgs),
     SelfStop(SelfStopArgs),
     SelfCompact(SelfCompactArgs),
     SelfTune(SelfTuneArgs),
-    NotesAdd(NotesAddArgs),
-    NotesList(NotesListArgs),
+    Notes(NotesArgs),
     Guide(GuideArgs),
 }
 
 pub struct Tool {
     pub name: &'static str,
-    /// The group the tool belongs to; `None` for `guide`, which the server
-    /// answers itself and serves beside any group that has a guide.
+    /// The group the tool belongs to; `None` for a tool of no group: `guide`,
+    /// served beside any group that has a guide, and `tasks`, `join`, and
+    /// `stop`, served beside any group that starts things.
     pub capability: Option<Capability>,
+    /// What the tool is for, which the instructions' first line groups the
+    /// served tools by.
+    pub purpose: Purpose,
     read_only: bool,
     /// The command words after `rimz` of the command the tool stands for; with
-    /// `verbs`, one command per verb.
+    /// `verbs`, one command per verb. A tool of no group stands for each
+    /// command of `declared` instead.
     command: &'static str,
+    declared: &'static [&'static str],
     verbs: &'static [LspVerb],
     schema: fn() -> Value,
     /// The schema of a data answer; `None` for a tool that answers text.
@@ -142,7 +154,7 @@ impl Tool {
         crate::utils::tokens::estimate(&self.listing(wording).to_string())
     }
 
-    /// The name of the tool's group, or `-` for `guide`, which has none.
+    /// The name of the tool's group, or `-` for a tool of no group.
     pub fn group_name(&self) -> &'static str {
         self.capability.map_or("-", Capability::name)
     }
@@ -175,11 +187,16 @@ impl Tool {
     }
 
     /// Every `rimz ...` command the tool stands for, without flags or values,
-    /// so an agent may do through the tool only what it may run unasked; none
-    /// for `guide`, which the server answers itself.
+    /// so an agent may do through the tool only what it may run unasked: a
+    /// tool of no group declares its commands, and `guide`, which the server
+    /// answers itself, declares none.
     pub fn commands(&self) -> Vec<String> {
         if self.capability.is_none() {
-            return Vec::new();
+            return self
+                .declared
+                .iter()
+                .map(|command| format!("rimz {command}"))
+                .collect();
         }
         if self.verbs.is_empty() {
             return vec![format!("rimz {}", self.command)];
@@ -195,8 +212,10 @@ pub static TOOLS: [Tool; 10] = [
     Tool {
         name: "lsp",
         capability: Some(Capability::Lsp),
+        purpose: Purpose::Code,
         read_only: false,
         command: "lsp",
+        declared: &[],
         verbs: &LspVerb::ALL,
         schema: schema::<LspArgs>,
         output: None,
@@ -205,38 +224,69 @@ pub static TOOLS: [Tool; 10] = [
     Tool {
         name: "wait",
         capability: Some(Capability::Wait),
+        purpose: Purpose::Start,
         read_only: false,
         command: "wait",
+        declared: &[],
         verbs: &[],
         schema: schema::<WaitArgs>,
         output: Some(start_schema),
         parse: |arguments| parse::<WaitArgs>(arguments).map(Call::Wait),
     },
     Tool {
-        name: "wait_list",
-        capability: Some(Capability::Wait),
+        name: "tasks",
+        capability: None,
+        purpose: Purpose::Started,
         read_only: true,
-        command: "wait list",
+        command: "",
+        declared: &["agents show"],
         verbs: &[],
-        schema: schema::<WaitListArgs>,
-        output: Some(wait_list_schema),
-        parse: |arguments| parse::<WaitListArgs>(arguments).map(Call::WaitList),
+        schema: schema::<TasksArgs>,
+        output: Some(tasks_schema),
+        parse: |arguments| parse::<TasksArgs>(arguments).map(Call::Tasks),
     },
     Tool {
-        name: "wait_cancel",
-        capability: Some(Capability::Wait),
+        name: "join",
+        capability: None,
+        purpose: Purpose::Started,
         read_only: false,
-        command: "wait cancel",
+        command: "",
+        declared: &[
+            "agents wait",
+            "subagents wait",
+            "teams wait",
+            "workflow wait",
+        ],
         verbs: &[],
-        schema: schema::<WaitCancelArgs>,
-        output: Some(wait_cancel_schema),
-        parse: |arguments| parse::<WaitCancelArgs>(arguments).map(Call::WaitCancel),
+        schema: schema::<JoinArgs>,
+        output: Some(join_schema),
+        parse: |arguments| parse::<JoinArgs>(arguments).map(Call::Join),
+    },
+    Tool {
+        name: "stop",
+        capability: None,
+        purpose: Purpose::Started,
+        read_only: false,
+        command: "",
+        declared: &[
+            "agents stop",
+            "subagents stop",
+            "teams stop",
+            "wait cancel",
+            "workflow cancel",
+        ],
+        verbs: &[],
+        schema: schema::<StopArgs>,
+        output: Some(stop_schema),
+        parse: |arguments| parse::<StopArgs>(arguments).map(Call::Stop),
     },
     Tool {
         name: "self_stop",
         capability: Some(Capability::Control),
+        purpose: Purpose::Yourself,
         read_only: false,
         command: "agents stop",
+        declared: &[],
         verbs: &[],
         schema: schema::<SelfStopArgs>,
         output: Some(self_stop_schema),
@@ -245,8 +295,10 @@ pub static TOOLS: [Tool; 10] = [
     Tool {
         name: "self_compact",
         capability: Some(Capability::Control),
+        purpose: Purpose::Yourself,
         read_only: false,
         command: "agents compact",
+        declared: &[],
         verbs: &[],
         schema: schema::<SelfCompactArgs>,
         output: Some(self_compact_schema),
@@ -255,38 +307,34 @@ pub static TOOLS: [Tool; 10] = [
     Tool {
         name: "self_tune",
         capability: Some(Capability::Control),
+        purpose: Purpose::Yourself,
         read_only: false,
         command: "agents tune",
+        declared: &[],
         verbs: &[],
         schema: schema::<SelfTuneArgs>,
         output: Some(self_tune_schema),
         parse: |arguments| parse::<SelfTuneArgs>(arguments).map(Call::SelfTune),
     },
     Tool {
-        name: "notes_add",
+        name: "notes",
         capability: Some(Capability::Notes),
+        purpose: Purpose::Notes,
         read_only: false,
         command: "notes add",
+        declared: &[],
         verbs: &[],
-        schema: schema::<NotesAddArgs>,
-        output: Some(notes_add_schema),
-        parse: |arguments| parse::<NotesAddArgs>(arguments).map(Call::NotesAdd),
-    },
-    Tool {
-        name: "notes_list",
-        capability: Some(Capability::Notes),
-        read_only: true,
-        command: "notes list",
-        verbs: &[],
-        schema: schema::<NotesListArgs>,
-        output: Some(notes_list_schema),
-        parse: |arguments| parse::<NotesListArgs>(arguments).map(Call::NotesList),
+        schema: schema::<NotesArgs>,
+        output: Some(notes_schema),
+        parse: |arguments| parse::<NotesArgs>(arguments).map(Call::Notes),
     },
     Tool {
         name: GUIDE,
         capability: None,
+        purpose: Purpose::Guides,
         read_only: true,
         command: "",
+        declared: &[],
         verbs: &[],
         schema: schema::<GuideArgs>,
         output: None,
@@ -294,20 +342,48 @@ pub static TOOLS: [Tool; 10] = [
     },
 ];
 
+/// What a tool is for, in the order the instructions' first line names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Purpose {
+    Code,
+    Start,
+    Started,
+    Yourself,
+    Notes,
+    Guides,
+}
+
+impl Purpose {
+    /// What the tools of this purpose do, after their names in the first line.
+    pub fn phrase(self) -> &'static str {
+        match self {
+            Self::Code => "to read code",
+            Self::Start => "to wait outside your turn",
+            Self::Started => "to list, await, or end what you started",
+            Self::Yourself => "to manage yourself",
+            Self::Notes => "to save a note",
+            Self::Guides => "for usage guides",
+        }
+    }
+}
+
 /// The tool that loads a guide, answered by the server from the wording it
 /// resolved at its start.
 pub const GUIDE: &str = "guide";
 
-/// The tools of `only`'s capabilities, in table order, and `guide` when one
-/// of them has a guide; empty means all.
+/// The tools of `only`'s capabilities, in table order, with `guide` when one
+/// of them has a guide and `tasks`, `join`, and `stop` when one of them
+/// starts things; empty means all.
 pub fn tools_for(only: &[Capability]) -> impl Iterator<Item = &'static Tool> {
     let groups = served_groups(only);
     let guided = groups
         .iter()
         .any(|group| super::wording::has_guides(*group));
-    TOOLS.iter().filter(move |tool| {
-        tool.capability
-            .map_or(guided, |capability| groups.contains(&capability))
+    let starting = groups.iter().any(|group| group.starts_things());
+    TOOLS.iter().filter(move |tool| match tool.capability {
+        Some(capability) => groups.contains(&capability),
+        None if tool.name == GUIDE => guided,
+        None => starting,
     })
 }
 
@@ -621,28 +697,46 @@ pub struct WaitArgs {
 
 impl ToolArgs for WaitArgs {}
 
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WaitListArgs {}
-
-impl ToolArgs for WaitListArgs {}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WaitCancelArgs {
-    /// The wait's name, as `wait_list` prints it.
-    pub name: Option<String>,
-    /// Cancel every wait you armed, leaving subscriptions intact.
-    #[serde(default)]
-    pub all: bool,
+/// A kind of thing a tool starts, as an id names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum StartedKind {
+    Subagent,
+    Agent,
+    Team,
+    Workflow,
+    Schedule,
+    Wait,
 }
 
-impl ToolArgs for WaitCancelArgs {
-    fn refusal(&self) -> Option<String> {
-        (self.name.is_some() == self.all)
-            .then(|| "give a wait's name or `all`, and only one of them".to_owned())
-    }
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TasksArgs {
+    /// List only things of this kind.
+    pub kind: Option<StartedKind>,
 }
+
+impl ToolArgs for TasksArgs {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JoinArgs {
+    /// The id `tasks` or a start answered, as `subagent:warm-haven`.
+    pub id: String,
+    /// How long to block (`90s`, `4m`); 4m when absent, at most 9m.
+    pub timeout: Option<String>,
+}
+
+impl ToolArgs for JoinArgs {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StopArgs {
+    /// The id `tasks` or a start answered, as `subagent:warm-haven`.
+    pub id: String,
+}
+
+impl ToolArgs for StopArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -692,7 +786,7 @@ impl ToolArgs for SelfTuneArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct NotesAddArgs {
+pub struct NotesArgs {
     /// The note's kind, which names its folder (handoff, reflection, ...).
     pub kind: String,
     /// The note's title, which names its file.
@@ -709,7 +803,7 @@ pub struct NotesAddArgs {
     pub meta: BTreeMap<String, String>,
 }
 
-impl ToolArgs for NotesAddArgs {
+impl ToolArgs for NotesArgs {
     fn refusal(&self) -> Option<String> {
         if self.body.is_some() && self.file.is_some() {
             return Some("give the body or a file, not both".to_owned());
@@ -720,16 +814,6 @@ impl ToolArgs for NotesAddArgs {
             .map(|key| format!("meta key {key:?} contains `=`"))
     }
 }
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct NotesListArgs {
-    /// Keep notes matching every `field=value` term; `help` lists the fields.
-    #[serde(default)]
-    pub filter: Vec<String>,
-}
-
-impl ToolArgs for NotesListArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -768,19 +852,50 @@ fn start_schema() -> Value {
     )
 }
 
-fn wait_list_schema() -> Value {
+/// One row per thing the caller started, by `tasks`.
+fn tasks_schema() -> Value {
+    let row = object(
+        serde_json::json!({
+            "id": string(),
+            "kind": string(),
+            "status": { "type": "string", "enum": ["running", "done", "disabled"] },
+            "on_your_stop": { "type": "string", "enum": ["holds", "closes", "outlives"] },
+            "age": string(),
+            "about": string(),
+            "detail": string(),
+        }),
+        &["id", "kind", "status", "on_your_stop"],
+    );
+    object(serde_json::json!({ "tasks": array_of(row) }), &["tasks"])
+}
+
+/// What `join` answers: the result of a thing that is done, that one still
+/// runs, or for a schedule or a wait how its outcome comes.
+fn join_schema() -> Value {
     object(
-        serde_json::json!({ "waits": array_of(any_object()) }),
-        &["waits"],
+        serde_json::json!({
+            "id": string(),
+            "status": { "type": "string", "enum": ["done", "running", "ended", "disabled"] },
+            "result": { "type": ["string", "null"] },
+            "detail": string(),
+            "report": string(),
+            "hint": string(),
+        }),
+        &["id", "status"],
     )
 }
 
-fn wait_cancel_schema() -> Value {
+/// What `stop` answers: that the thing stopped, or had already ended, and
+/// what it left running.
+fn stop_schema() -> Value {
     object(
         serde_json::json!({
-            "canceled": array_of(string()), "pending": array_of(any_object()),
+            "id": string(),
+            "status": { "type": "string", "enum": ["stopped", "ended"] },
+            "still_running": array_of(string()),
+            "hint": string(),
         }),
-        &["canceled", "pending"],
+        &["id", "status"],
     )
 }
 
@@ -827,7 +942,7 @@ fn self_tune_schema() -> Value {
     )
 }
 
-fn notes_add_schema() -> Value {
+fn notes_schema() -> Value {
     object(
         serde_json::json!({
             "path": string(),
@@ -835,21 +950,6 @@ fn notes_add_schema() -> Value {
             "unresolved_project": { "type": ["string", "null"] },
         }),
         &["path", "dropped_meta"],
-    )
-}
-
-/// A listing, or for the filter `help` the fields a filter names and its grammar.
-fn notes_list_schema() -> Value {
-    object(
-        serde_json::json!({
-            "notes": array_of(any_object()),
-            "hidden": { "type": "integer" },
-            "unknown_keys": array_of(string()),
-            "skipped": array_of(serde_json::json!({ "type": "array" })),
-            "fields": array_of(any_object()),
-            "grammar": array_of(string()),
-        }),
-        &[],
     )
 }
 

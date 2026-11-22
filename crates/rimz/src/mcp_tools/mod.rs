@@ -3,13 +3,22 @@
 //! the one the CLI command of the same job prints, and answers with the value
 //! that function returns. Nothing here writes to stdout, which is the
 //! protocol's channel, or ends the process, which serves every tool of the
-//! agent.
+//! agent. A process-wide memo outlives the call: a tool that writes what one
+//! caches (the loop config's `LOOP_MEMO`, the machine config's `LOAD_MEMO`)
+//! invalidates it, and a claim stamped with this process's pid reads as live
+//! until the server exits. `tasks`, `join`, and `stop` act on what the agent
+//! started, by an id `start` defines, and only on what `owned` traces back to
+//! the caller.
 
 mod control;
+mod join;
 mod lsp;
 mod notes;
+mod owned;
 mod room;
 mod start;
+mod stop;
+mod tasks;
 mod wait;
 
 use std::path::{Path, PathBuf};
@@ -73,17 +82,17 @@ impl Tools {
 }
 
 impl Runner for Tools {
-    fn run(&self, call: Call) -> Answer {
+    fn run(&self, call: Call, cancelled: &dyn Fn() -> bool) -> Answer {
         let answered = match call {
             Call::Lsp(args) => lsp::run(self, &args),
             Call::Wait(args) => wait::arm(self, &args),
-            Call::WaitList(_) => wait::list(self),
-            Call::WaitCancel(args) => wait::cancel(self, &args),
+            Call::Tasks(args) => tasks::tasks(self, &args),
+            Call::Join(args) => join::join(self, &args, cancelled),
+            Call::Stop(args) => stop::stop(self, &args),
             Call::SelfStop(args) => control::stop(self, &args),
             Call::SelfCompact(args) => control::compact(self, &args),
             Call::SelfTune(args) => control::tune(self, &args),
-            Call::NotesAdd(args) => notes::add(self, args),
-            Call::NotesList(args) => notes::list(args),
+            Call::Notes(args) => notes::add(self, args),
             Call::Guide(_) => Err(Failure::new("the server answers guide itself")),
         };
         answered.unwrap_or_else(Answer::Failure)

@@ -1,1 +1,1 @@
-Use `notes_*` to keep or find notes across sessions.
+Use `notes` to keep a note across sessions.

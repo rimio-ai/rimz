@@ -18,13 +18,13 @@ const REPLY_DEADLINE: Duration = Duration::from_secs(60);
 const ALL_TOOLS: [&str; 10] = [
     "lsp",
     "wait",
-    "wait_list",
-    "wait_cancel",
+    "tasks",
+    "join",
+    "stop",
     "self_stop",
     "self_compact",
     "self_tune",
-    "notes_add",
-    "notes_list",
+    "notes",
     "guide",
 ];
 
@@ -314,6 +314,156 @@ fn serve_as_agent(env: &Env) -> McpServer {
     McpServer::spawn(command)
 }
 
+/// The server as `serve_as_agent` starts it, on the tracing Zellij shim listing Zellij
+/// terminals `panes`, each running `claude`; its `close-pane` drops the closed one.
+fn serve_live(env: &Env, panes: &[u64]) -> McpServer {
+    McpServer::spawn(live_server(env, panes))
+}
+
+/// The command of [`serve_live`]'s server, for a test that adds to its environment.
+fn live_server(env: &Env, panes: &[u64]) -> Command {
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let listing = env.project_root.join("stop-panes.json");
+    let rows: Vec<Value> = panes
+        .iter()
+        .map(|id| json!({"id": id, "is_plugin": false, "tab_id": 1, "title": "sh", "pane_command": "claude"}))
+        .collect();
+    std::fs::write(&listing, serde_json::to_vec(&rows).unwrap()).unwrap();
+    let mut command = crate::common::wait::agent_wait(env);
+    command
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env(
+            "RIMZ_TEST_ZELLIJ_LOG",
+            env.project_root.join("stop-trace.log"),
+        )
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", listing)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{session} [Created 1s ago]\n"),
+        )
+        .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "2000")
+        .args(["mcp", "serve"]);
+    command
+}
+
+/// Registers `name` (session `<name>-session`, launch `launch-<name>`) as `launch` says, in
+/// Zellij terminal `pane` and owned by a process of its own that a stop can end, and returns
+/// that process.
+fn live_seat(env: &Env, name: &str, pane: u64, launch: rimz::agents::LaunchParams) -> Child {
+    use crate::common::ScrubSessionEnvExt;
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+
+    let session = format!("{name}-session");
+    let process = Command::new("sleep")
+        .scrub_session_env()
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let mut observation =
+        AgentLifecycleObservation::new(Some(session.as_str().into()), LifecycleSignal::Registered);
+    observation.agent_name = Some(name.to_owned());
+    observation.launch_id = Some(format!("launch-{name}").into());
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    observation.pane_id = Some(rimz::ids::PaneId::from_parts(
+        rimz::ids::MuxName::Zellij,
+        format!("terminal_{pane}"),
+    ));
+    observation.runtime_owner = Some(rimz::store::runtime::process_owner(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        &session,
+        process.id(),
+    ));
+    observation.launch = rimz::agents::LaunchParams {
+        lane: Some(match launch.channel.as_deref() {
+            Some(channel) => crate::common::wait::stamped_lane(env, &env.project_root, channel),
+            None => rimz::worktree::own_lane(&env.project_root, &env.project_root),
+        }),
+        ..launch
+    };
+    env.store()
+        .append_event(&rimz::store::event::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    process
+}
+
+/// Records the provider's end of session `session`.
+fn end_session(env: &Env, session: &str) {
+    session_event(
+        env,
+        session,
+        rimz::agents::LifecycleSignal::Ended,
+        "SessionEnd",
+    );
+}
+
+/// Appends `session`'s lifecycle `signal` as its provider's `event` hook would.
+fn session_event(env: &Env, session: &str, signal: rimz::agents::LifecycleSignal, event: &str) {
+    let observation = rimz::agents::AgentLifecycleObservation::new(Some(session.into()), signal);
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: rimz::ids::AgentKind::new_unchecked("claude"),
+            event_name: event,
+            observation: &observation,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+}
+
+fn launched_by(launch: &str) -> rimz::agents::LaunchParams {
+    rimz::agents::LaunchParams {
+        launched_by: Some(Box::new(rimz::agents::LaunchedBy {
+            kind: rimz::ids::AgentKind::new_unchecked("claude"),
+            agent_id: rimz::ids::AgentSessionId::from(launch),
+        })),
+        ..rimz::agents::LaunchParams::default()
+    }
+}
+
+fn child_of_caller() -> rimz::agents::LaunchParams {
+    rimz::agents::LaunchParams {
+        parent_agent_id: Some(rimz::ids::AgentSessionId::from("launch-session")),
+        parent_agent_kind: Some(rimz::ids::AgentKind::new_unchecked("claude")),
+        launch_depth: Some(1),
+        ..rimz::agents::LaunchParams::default()
+    }
+}
+
+/// The id of each row a `tasks` answer lists.
+fn task_ids(listed: &Value) -> Vec<&str> {
+    listed["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].as_str().unwrap())
+        .collect()
+}
+
+/// Writes subagent `name`'s running supervised run and returns its id.
+fn seed_subagent_run(env: &Env, name: &str) -> rimz::ids::RunId {
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".to_owned(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some(format!("{name}-session").into());
+    run.agent_name = Some(name.to_owned());
+    run.status = rimz::store::run::RunStatus::Running;
+    run.subagent = true;
+    rimz::harness::run::create(env.store().paths(), &run).unwrap();
+    run.run_id
+}
+
 fn assert_protocol_lines(lines: &[String]) {
     assert!(!lines.is_empty());
     for line in lines {
@@ -420,13 +570,14 @@ fn launch_env_serves_the_launchs_selection_in_its_directory() {
             .collect::<Vec<_>>(),
         [
             (json!("lsp"), None),
-            (json!("wait"), always.clone()),
-            (json!("wait_list"), always.clone()),
-            (json!("wait_cancel"), always),
+            (json!("wait"), always),
+            (json!("tasks"), None),
+            (json!("join"), None),
+            (json!("stop"), None),
             (json!("guide"), None),
         ]
     );
-    let (text, is_error) = server.call(2, "wait_list", json!({}));
+    let (text, is_error) = server.call(2, "tasks", json!({}));
     assert!(is_error, "{text}");
     assert!(
         text.contains(&format!("no room at {}", launched.display())),
@@ -528,11 +679,11 @@ fn marked_capabilities_carry_their_load_mode_in_the_listing() {
         meta(&[&only[..], &marks].concat()),
         [
             (json!("lsp"), always),
-            (json!("wait"), deferred.clone()),
-            (json!("wait_list"), deferred.clone()),
-            (json!("wait_cancel"), deferred),
-            (json!("notes_add"), None),
-            (json!("notes_list"), None),
+            (json!("wait"), deferred),
+            (json!("tasks"), None),
+            (json!("join"), None),
+            (json!("stop"), None),
+            (json!("notes"), None),
             (json!("guide"), None),
         ]
     );
@@ -724,7 +875,7 @@ fn guide_answers_a_served_guide_and_lists_the_served_guides_for_any_other() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["wait", "wait_list", "wait_cancel", "guide"]);
+    assert_eq!(names, ["wait", "tasks", "join", "stop", "guide"]);
 
     let (text, is_error) = server.call(2, "guide", json!({"name": "rimz-wait/conditions"}));
     assert!(!is_error, "{text}");
@@ -766,17 +917,18 @@ fn a_replacement_reaches_every_reader_of_the_wording() {
     let mcps = env.rimz_home().join("mcps/rimz-wait");
     std::fs::create_dir_all(&mcps).unwrap();
     let list = format!(
-        "List your waits, replaced. {}",
+        "Wait outside your turn, replaced. {}",
         "Each wait, its name. ".repeat(40)
     );
-    std::fs::write(mcps.join("wait_list.md"), format!("{list}\n")).unwrap();
+    std::fs::write(mcps.join("wait.md"), format!("{list}\n")).unwrap();
     std::fs::write(mcps.join("instructions.md"), "Use `wait`, replaced.\n").unwrap();
 
     let mut server = serve(&env, &["--only", "rimz-wait"]);
     let init = server.initialize();
     let instructions = init["result"]["instructions"].as_str().unwrap().to_owned();
-    assert!(
-        instructions.starts_with("Use `wait`, replaced.\n"),
+    assert_eq!(
+        instructions.lines().nth(1),
+        Some("Use `wait`, replaced."),
         "{instructions}"
     );
     let listing = server.request(1, "tools/list", json!({}));
@@ -784,7 +936,7 @@ fn a_replacement_reaches_every_reader_of_the_wording() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|tool| tool["name"] == "wait_list")
+        .find(|tool| tool["name"] == "wait")
         .map(|tool| tool["description"].clone());
     assert_eq!(described, Some(json!(list.trim())));
     server.close();
@@ -801,10 +953,10 @@ fn a_replacement_reaches_every_reader_of_the_wording() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let tokens: u64 = stdout
         .lines()
-        .find(|line| line.split_whitespace().nth(1) == Some("wait_list"))
+        .find(|line| line.split_whitespace().nth(1) == Some("wait"))
         .and_then(|line| line.split_whitespace().last())
         .and_then(|cell| cell.strip_prefix('~')?.parse().ok())
-        .unwrap_or_else(|| panic!("no wait_list row: {stdout}"));
+        .unwrap_or_else(|| panic!("no wait row: {stdout}"));
     assert!(tokens > 150, "{stdout}");
     assert!(output.stderr.is_empty(), "{output:?}");
 
@@ -843,7 +995,7 @@ fn a_replacement_reaches_every_reader_of_the_wording() {
     assert!(
         out.contains(&format!(
             "· rimz-wait · load default · text {}\n",
-            mcps.join("wait_list.md").display()
+            mcps.join("wait.md").display()
         )),
         "{out}"
     );
@@ -887,13 +1039,13 @@ fn a_bad_wording_file_warns_on_the_launch_plan() {
 
     std::fs::create_dir_all(mcps.join("rimz-wait")).unwrap();
     std::fs::create_dir_all(mcps.join("rimz-lsp")).unwrap();
-    std::fs::write(mcps.join("rimz-wait/wait_list.md"), " \n").unwrap();
+    std::fs::write(mcps.join("rimz-wait/instructions.md"), " \n").unwrap();
     std::fs::write(mcps.join("rimz-lsp/wait.md"), "Misplaced.\n").unwrap();
     std::fs::write(mcps.join("rimz-lsp/lsp.md"), "\n").unwrap();
     let stderr = explain();
     let rejected = format!(
         "rimz: {} is not used, so the built-in text is served: it is empty\n",
-        mcps.join("rimz-wait/wait_list.md").display()
+        mcps.join("rimz-wait/instructions.md").display()
     );
     let misplaced = format!(
         "rimz: {} is ignored: RimZ has no wording file rimz-lsp/wait.md; it belongs at {}\n",
@@ -932,14 +1084,14 @@ fn signals_end_the_server_cleanly() {
 /// keys stay data; a warning the command would print is a field of the answer,
 /// and a call that cannot do its job answers a failure naming why.
 #[test]
-fn notes_add_keeps_the_body_bytes_and_the_server_keeps_parsing() {
+fn notes_keeps_the_body_bytes_and_the_server_keeps_parsing() {
     let env = Env::new();
     let mut server = serve(&env, &[]);
     server.initialize();
     let body = "say \"hi\" and 'bye'\n$(touch pwned) `id`\n\n\\n not a newline\n";
     let (added, is_error) = server.answer(
         1,
-        "notes_add",
+        "notes",
         json!({
             "kind": "handoff",
             "title": "--force",
@@ -957,7 +1109,7 @@ fn notes_add_keeps_the_body_bytes_and_the_server_keeps_parsing() {
     assert!(!env.project_root.join("pwned").exists());
     assert_eq!(server.request(2, "ping", json!({}))["result"], json!({}));
 
-    let (failure, is_error) = server.answer(3, "notes_add", json!({"kind": "log", "title": 7}));
+    let (failure, is_error) = server.answer(3, "notes", json!({"kind": "log", "title": 7}));
     assert!(is_error, "{failure}");
     assert!(
         failure["error"]
@@ -1008,26 +1160,27 @@ fn a_call_as_an_agent_resolves_its_home_room_and_caller() {
         json!({"trigger": "in", "value": "1h", "label": "via mcp"}),
     );
     assert!(!is_error, "{start}");
-    let (waits, is_error) = server.answer(2, "wait_list", json!({}));
-    assert!(!is_error, "{waits}");
-    let rows = waits["waits"].as_array().expect("the wait rows");
+    let (listed, is_error) = server.answer(2, "tasks", json!({}));
+    assert!(!is_error, "{listed}");
+    let rows = listed["tasks"].as_array().expect("the task rows");
     let [row] = rows.as_slice() else {
-        panic!("one wait: {waits}");
+        panic!("one task: {listed}");
     };
-    assert!(row.to_string().contains("via mcp"), "{waits}");
-    let name = row["name"].as_str().expect("the wait's name");
+    assert_eq!(row["about"], json!("via mcp"), "{listed}");
+    let id = row["id"].as_str().expect("the wait's id");
+    assert!(id.starts_with("wait:"), "{listed}");
     assert_eq!(
         start,
         json!({
-            "id": format!("wait:{name}"),
+            "id": id,
             "status": "running",
-            "stop": format!("wait_cancel({{name: \"{name}\"}})"),
+            "stop": format!("stop({{id: \"{id}\"}})"),
             "report": "a message to you when the wait fires",
         })
     );
     let (added, is_error) = server.answer(
         3,
-        "notes_add",
+        "notes",
         json!({"kind": "diary", "title": "Day", "body": "text\n"}),
     );
     assert!(!is_error, "{added}");
@@ -1065,21 +1218,21 @@ fn a_wait_label_is_one_trimmed_line_as_the_command_takes_it() {
             "{failure}"
         );
     }
-    let (waits, _) = server.answer(4, "wait_list", json!({}));
-    assert_eq!(waits["waits"], json!([]), "a refused label arms nothing");
+    let (listed, _) = server.answer(4, "tasks", json!({}));
+    assert_eq!(listed["tasks"], json!([]), "a refused label arms nothing");
     let (start, is_error) = server.answer(
         5,
         "wait",
         json!({"trigger": "in", "value": "1h", "label": "  fix it  "}),
     );
     assert!(!is_error, "{start}");
-    let (waits, _) = server.answer(6, "wait_list", json!({}));
-    assert_eq!(waits["waits"][0]["label"], json!("fix it"), "{waits}");
+    let (listed, _) = server.answer(6, "tasks", json!({}));
+    assert_eq!(listed["tasks"][0]["about"], json!("fix it"), "{listed}");
 }
 
 /// A booked `self_stop` answers what holds the stop, as the command's receipt
-/// prints it; the control and wait tools answer data for the inputs the
-/// command's flags took (`off`, a tuned value, `all`).
+/// prints it; the control tools answer data for the inputs the command's
+/// flags took (`off`, a tuned value), and `stop` ends the wait by its id.
 #[test]
 fn self_stop_answers_what_holds_it_and_control_calls_answer_data() {
     let env = Env::new();
@@ -1089,7 +1242,8 @@ fn self_stop_answers_what_holds_it_and_control_calls_answer_data() {
     server.initialize();
     let (start, is_error) = server.answer(1, "wait", json!({"trigger": "in", "value": "2h"}));
     assert!(!is_error, "{start}");
-    let name = start["id"].as_str().unwrap().trim_start_matches("wait:");
+    let id = start["id"].as_str().unwrap();
+    let name = id.trim_start_matches("wait:");
     let (booked, is_error) = server.answer(2, "self_stop", json!({}));
     assert!(!is_error, "{booked}");
     assert_eq!(booked["booking"], json!("booked"), "{booked}");
@@ -1112,11 +1266,9 @@ fn self_stop_answers_what_holds_it_and_control_calls_answer_data() {
         json!({"setting": "keep-warm", "value": "2h"}),
     );
     assert!(!is_error, "{tuned}");
-    let (canceled, is_error) = server.answer(5, "wait_cancel", json!({"all": true}));
-    assert!(!is_error, "{canceled}");
-    assert_eq!(canceled["canceled"], json!([name]), "{canceled}");
-    let (listed, is_error) = server.answer(6, "notes_list", json!({}));
-    assert!(!is_error, "{listed}");
+    let (stopped, is_error) = server.answer(5, "stop", json!({"id": id}));
+    assert!(!is_error, "{stopped}");
+    assert_eq!(stopped, json!({"id": id, "status": "stopped"}));
 }
 
 /// A tool that reads `/dev/stdin` reads nothing of the client's requests: the
@@ -1129,11 +1281,11 @@ fn a_tool_reading_stdin_leaves_the_protocol_alone() {
     server.initialize();
     server.start_call(
         1,
-        "notes_add",
+        "notes",
         json!({"kind": "stdin", "title": "From stdin", "file": "/dev/stdin"}),
     );
     server.send(&json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}));
-    let (failure, is_error) = tool_answer("notes_add", &server.reply(&json!(1)));
+    let (failure, is_error) = tool_answer("notes", &server.reply(&json!(1)));
     assert!(is_error, "{failure}");
     assert_eq!(
         failure["error"],
@@ -1315,7 +1467,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("cflip");
     assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
     assert_eq!(tool_load(&out, "wait"), "always", "{out}");
-    assert_eq!(tool_load(&out, "notes_list"), "always", "{out}");
+    assert_eq!(tool_load(&out, "notes"), "always", "{out}");
     assert_eq!(tool_load(&out, "guide"), "always", "{out}");
     let guide_line = out
         .split("\n## guide\n")
@@ -1343,7 +1495,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
     assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
-    assert_eq!(tool_load(&out, "notes_add"), "deferred", "{out}");
+    assert_eq!(tool_load(&out, "notes"), "deferred", "{out}");
     assert!(out.contains("switched off: notion"), "{out}");
     assert!(
         out.contains(
@@ -1700,12 +1852,12 @@ fn a_call_under_the_codex_entrys_env_vars_resolves_the_same_agent() {
         json!({"trigger": "in", "value": "1h", "label": "cleared"}),
     );
     assert!(!is_error, "{start}");
-    let (waits, is_error) = server.answer(2, "wait_list", json!({}));
-    assert!(!is_error, "{waits}");
-    assert!(waits.to_string().contains("cleared"), "{waits}");
+    let (listed, is_error) = server.answer(2, "tasks", json!({}));
+    assert!(!is_error, "{listed}");
+    assert!(listed.to_string().contains("cleared"), "{listed}");
     let (added, is_error) = server.answer(
         3,
-        "notes_add",
+        "notes",
         json!({"kind": "diary", "title": "Day", "body": "text\n"}),
     );
     assert!(!is_error, "{added}");
@@ -1748,7 +1900,7 @@ fn serve_under_parent(env: &Env, own: &[(&str, &std::path::Path)]) -> McpServer 
 fn note_home(server: &mut McpServer, id: i64) -> String {
     let (added, is_error) = server.answer(
         id,
-        "notes_add",
+        "notes",
         json!({"kind": "diary", "title": format!("Day {id}"), "body": "text\n"}),
     );
     assert!(!is_error, "{added}");
@@ -1788,8 +1940,8 @@ fn parent_env_names_the_home_the_wording_is_read_from() {
     let mcps = env.rimz_home().join("mcps/rimz-wait");
     std::fs::create_dir_all(&mcps).unwrap();
     std::fs::write(
-        mcps.join("wait_list.md"),
-        "List your waits, from the parent's home.\n",
+        mcps.join("wait.md"),
+        "Wait outside your turn, from the parent's home.\n",
     )
     .unwrap();
     let mut server = serve_under_parent(&env, &[]);
@@ -1799,11 +1951,11 @@ fn parent_env_names_the_home_the_wording_is_read_from() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|tool| tool["name"] == "wait_list")
+        .find(|tool| tool["name"] == "wait")
         .map(|tool| tool["description"].clone());
     assert_eq!(
         described,
-        Some(json!("List your waits, from the parent's home."))
+        Some(json!("Wait outside your turn, from the parent's home."))
     );
     let path = note_home(&mut server, 2);
     assert!(
@@ -2008,6 +2160,712 @@ fn a_cancelled_call_gets_no_reply_and_the_server_keeps_answering() {
     );
 }
 
+/// The hint of a wait, schedule, or team RimZ holds no record of.
+const GONE: &str = "nothing of this name runs now: it ended, or never existed, and RimZ keeps no \
+     record that tells which";
+
+/// Seed a live workflow run in the fixture's room, started by the agent whose launch is
+/// `starter`, with `extra` merged into its record; returns its id.
+fn seed_started_run(env: &Env, starter: &str, extra: Value) -> String {
+    let paths = env.state_path_for(&env.project_root);
+    let guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
+    let now = jiff::Timestamp::now();
+    let id = rimz::ids::WorkflowRunId::new();
+    let mut record = json!({
+        "version": rimz::store::workflow::VERSION, "id": id, "workflow": "review",
+        "spec_dir": "/definitions/review",
+        "scope": {"kind": "worktree", "path": env.project_root},
+        "project_root": env.project_root, "created_at": now, "entered_at": now,
+        "state": "active", "node": "agent", "visits": {}, "deadline_fired": false,
+        "next_seq": 1, "starter": {"by": "agent", "kind": "claude", "launch": starter},
+    });
+    if let (Some(record), Value::Object(extra)) = (record.as_object_mut(), extra) {
+        record.extend(extra);
+    }
+    let record: rimz::store::workflow::RunRecord = serde_json::from_value(record).unwrap();
+    rimz::store::workflow::initialize(&paths, &record, &guard).unwrap();
+    id.to_string()
+}
+
+/// The record of run `id` and whether its home is the finished one.
+fn run_record(env: &Env, id: &str) -> (Value, bool) {
+    let state = env.state_path_for(&env.project_root);
+    let found = rimz::store::workflow::find(&state, &id.parse().unwrap())
+        .unwrap()
+        .unwrap_or_else(|| panic!("run {id} has no home"));
+    let record = serde_json::from_slice(&std::fs::read(&found.paths.record).unwrap()).unwrap();
+    (record, found.finished)
+}
+
+/// A wait the agent armed is a row of `tasks` by its id; `join` answers that its outcome
+/// comes by message, `stop` ends it, and a second stop answers `ended` as a value. An id
+/// of another shape, or of nothing RimZ holds, is refused with its fix.
+#[test]
+fn tasks_join_and_stop_act_on_a_wait_by_its_id() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (start, is_error) = server.answer(
+        1,
+        "wait",
+        json!({"trigger": "in", "value": "1h", "label": "nightly check"}),
+    );
+    assert!(!is_error, "{start}");
+    let id = start["id"].as_str().unwrap().to_owned();
+    let (listed, is_error) = server.answer(2, "tasks", json!({"kind": "wait"}));
+    assert!(!is_error, "{listed}");
+    let [row] = listed["tasks"].as_array().unwrap().as_slice() else {
+        panic!("one task: {listed}");
+    };
+    assert_eq!(
+        (
+            &row["id"],
+            &row["kind"],
+            &row["status"],
+            &row["on_your_stop"],
+            &row["about"]
+        ),
+        (
+            &json!(id),
+            &json!("wait"),
+            &json!("running"),
+            &json!("holds"),
+            &json!("nightly check")
+        ),
+        "{listed}"
+    );
+    let (listed, _) = server.answer(3, "tasks", json!({"kind": "agent"}));
+    assert_eq!(listed, json!({"tasks": []}));
+
+    let (joined, is_error) = server.answer(4, "join", json!({"id": id}));
+    assert!(!is_error, "{joined}");
+    assert_eq!(
+        joined,
+        json!({
+            "id": id,
+            "status": "running",
+            "report": "its outcome comes to you as a message; join does not wait for it",
+        })
+    );
+    let (stopped, is_error) = server.answer(5, "stop", json!({"id": id}));
+    assert!(!is_error, "{stopped}");
+    assert_eq!(stopped, json!({"id": id, "status": "stopped"}));
+    let (listed, _) = server.answer(6, "tasks", json!({}));
+    assert_eq!(listed, json!({"tasks": []}), "the stopped wait is gone");
+    let (again, is_error) = server.answer(7, "stop", json!({"id": id}));
+    assert!(!is_error, "{again}");
+    assert_eq!(again, json!({"id": id, "status": "ended", "hint": GONE}));
+    let (joined, _) = server.answer(8, "join", json!({"id": id}));
+    assert_eq!(joined, json!({"id": id, "status": "ended", "hint": GONE}));
+
+    let (failure, is_error) = server.answer(9, "stop", json!({"id": "toolu_01ABC"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure,
+        json!({
+            "error": "`toolu_01ABC` is no id of a thing RimZ started",
+            "hint": "an id is a kind (subagent, agent, team, workflow, schedule, or wait), a \
+                     colon, and a name, as `tasks` lists it; end a task or subagent your \
+                     provider started with your provider's own tool",
+        })
+    );
+    let (failure, is_error) = server.answer(11, "stop", json!({"id": "wait:../x"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure,
+        json!({
+            "error": "invalid wait name `../x`: schedule name `../x` must be non-empty and use \
+                      only letters, digits, `-`, or `_`",
+            "hint": "`tasks` lists what you started, by id",
+        }),
+        "an invalid name is refused, not read as gone"
+    );
+    let (failure, is_error) = server.answer(10, "join", json!({"id": "subagent:nobody"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure,
+        json!({
+            "error": "no subagent named `nobody`",
+            "hint": "`tasks` lists what you started, by id",
+        })
+    );
+}
+
+/// A wait the caller armed for itself is its to stop; a subscription that wakes the caller but
+/// that its team armed is not, and stays booked.
+#[test]
+fn stop_refuses_a_subscription_another_armed_for_the_caller() {
+    use crate::common::wait::{seed_signal_wait, wait_instances};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    seed_signal_wait(&env, "own-ping", "own-ping", false);
+    seed_signal_wait(&env, "team-ping", "team-ping", false);
+    let mut tasks = wait_instances(&env);
+    tasks.0.get_mut("team-ping").unwrap().team = Some("forge#main".parse().unwrap());
+    std::fs::write(
+        crate::common::wait::loop_instances_path(&env),
+        serde_json::to_vec(&tasks).unwrap(),
+    )
+    .unwrap();
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+
+    let (listed, is_error) = server.answer(3, "tasks", json!({"kind": "wait"}));
+    assert!(!is_error, "{listed}");
+    let ids: Vec<&Value> = listed["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| &row["id"])
+        .collect();
+    assert_eq!(ids, [&json!("wait:own-ping")], "{listed}");
+    let (failure, is_error) = server.answer(1, "stop", json!({"id": "wait:team-ping"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure,
+        json!({
+            "error": "wait:team-ping was started by another agent",
+            "hint": "stop and join act on what you started, or what an agent you started \
+                     started; `tasks` lists it",
+        })
+    );
+    assert!(wait_instances(&env).0.contains_key("team-ping"));
+    let (stopped, is_error) = server.answer(2, "stop", json!({"id": "wait:own-ping"}));
+    assert!(!is_error, "{stopped}");
+    assert_eq!(stopped, json!({"id": "wait:own-ping", "status": "stopped"}));
+    assert!(!wait_instances(&env).0.contains_key("own-ping"));
+}
+
+/// Live children the caller launched stop through the tree stop of `rimz subagents stop` and
+/// `rimz agents stop`, which cancels the subagent's run and ends each one's process, and a
+/// second stop answers `ended`; a live agent another agent launched is refused and runs on.
+#[test]
+fn stop_ends_a_live_child_and_refuses_another_agents_live_one() {
+    use rimz::store::run::RunStatus;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let mut kid = live_seat(&env, "otter", 3, child_of_caller());
+    let mut peer = live_seat(&env, "scout", 4, launched_by("launch-session"));
+    let mut far = live_seat(&env, "rival", 5, launched_by("launch-other"));
+    let run = seed_subagent_run(&env, "otter");
+    let mut server = serve_live(&env, &[3, 4, 5]);
+    server.initialize();
+
+    let (listed, is_error) = server.answer(10, "tasks", json!({}));
+    assert!(!is_error, "{listed}");
+    let ids = task_ids(&listed);
+    for id in ["subagent:otter", "agent:scout"] {
+        assert!(ids.contains(&id), "{id} is listed: {listed}");
+    }
+    assert!(!ids.contains(&"agent:rival"), "{listed}");
+    for (seq, id, process) in [
+        (1, "subagent:otter", &mut kid),
+        (3, "agent:scout", &mut peer),
+    ] {
+        let (stopped, is_error) = server.answer(seq, "stop", json!({"id": id}));
+        assert!(!is_error, "{stopped}");
+        assert_eq!(stopped, json!({"id": id, "status": "stopped"}));
+        assert!(
+            process.try_wait().unwrap().is_some(),
+            "{id}'s process is gone"
+        );
+        // The stop records a subagent's end itself; an agent's comes from its provider's
+        // SessionEnd, which the stand-in process never sends.
+        if id == "agent:scout" {
+            end_session(&env, "scout-session");
+        }
+        let (again, is_error) = server.answer(seq + 1, "stop", json!({"id": id}));
+        assert!(!is_error, "{again}");
+        assert_eq!(again, json!({"id": id, "status": "ended"}));
+    }
+    assert_eq!(
+        rimz::harness::run::load(env.store().paths(), &run)
+            .unwrap()
+            .status,
+        RunStatus::Canceled
+    );
+    let (failure, is_error) = server.answer(5, "stop", json!({"id": "agent:rival"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure,
+        json!({
+            "error": "agent:rival was started by another agent",
+            "hint": "stop and join act on what you started, or what an agent you started \
+                     started; `tasks` lists it",
+        })
+    );
+    assert!(
+        far.try_wait().unwrap().is_none(),
+        "the refused agent runs on"
+    );
+    far.kill().unwrap();
+    far.wait().unwrap();
+}
+
+/// `join` of a live subagent answers `running` at a short deadline while its run goes, and
+/// `done` with the run's last message once the run completes.
+#[test]
+fn join_answers_running_at_its_deadline_then_a_finished_subagents_result() {
+    use rimz::store::run::RunStatus;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let mut kid = live_seat(&env, "otter", 3, child_of_caller());
+    let run = seed_subagent_run(&env, "otter");
+    let mut server = serve_live(&env, &[3]);
+    server.initialize();
+
+    let (listed, is_error) = server.answer(10, "tasks", json!({"kind": "subagent"}));
+    assert!(!is_error, "{listed}");
+    assert_eq!(task_ids(&listed), ["subagent:otter"], "{listed}");
+    let began = Instant::now();
+    let (joined, is_error) =
+        server.answer(1, "join", json!({"id": "subagent:otter", "timeout": "1s"}));
+    assert!(!is_error, "{joined}");
+    assert_eq!(joined, json!({"id": "subagent:otter", "status": "running"}));
+    assert!(
+        began.elapsed() >= Duration::from_secs(1),
+        "{:?}",
+        began.elapsed()
+    );
+    let paths = env.store().paths().clone();
+    let mut record = rimz::harness::run::load(&paths, &run).unwrap();
+    record.status = RunStatus::Completed;
+    record.last_message = Some("all green".to_owned());
+    rimz::harness::run::create(&paths, &record).unwrap();
+    let (joined, is_error) =
+        server.answer(2, "join", json!({"id": "subagent:otter", "timeout": "10s"}));
+    assert!(!is_error, "{joined}");
+    assert_eq!(
+        joined,
+        json!({"id": "subagent:otter", "status": "done", "result": "all green"})
+    );
+    kid.kill().unwrap();
+    kid.wait().unwrap();
+}
+
+/// A join cancelled once its subagent's run has settled leaves the run unclaimed, for the
+/// digest to deliver; an answered join claims it.
+#[test]
+fn a_join_cancelled_as_its_run_settles_leaves_the_run_unclaimed() {
+    use rimz::store::run::RunStatus;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let mut kid = live_seat(&env, "otter", 3, child_of_caller());
+    let run = seed_subagent_run(&env, "otter");
+    let paths = env.store().paths().clone();
+    let mut record = rimz::harness::run::load(&paths, &run).unwrap();
+    record.status = RunStatus::Completed;
+    record.last_message = Some("all green".to_owned());
+    rimz::harness::run::create(&paths, &record).unwrap();
+    let joined_at = || rimz::harness::run::load(&paths, &run).unwrap().joined_at;
+    // A join claims a run only inside its caller's turn.
+    session_event(
+        &env,
+        "provider-session",
+        rimz::agents::LifecycleSignal::TurnStarted { turn_id: None },
+        "UserPromptSubmit",
+    );
+    let gate = crate::common::DeliveryRendezvous::new(&env, "join-claim");
+    let mut command = live_server(&env, &[3]);
+    command.env("RIMZ_TEST_MCP_JOIN_CLAIM_GATE", &gate.path);
+    let mut server = McpServer::spawn(command);
+    server.initialize();
+
+    let id = "subagent:otter";
+    server.start_call(1, "join", json!({"id": id, "timeout": "10s"}));
+    let mut held = gate.arrive();
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": {"requestId": 1, "reason": "test"},
+    }));
+    // The reader handles lines in order, so the ping's reply shows it has taken the cancel.
+    assert_eq!(server.request(2, "ping", json!({}))["result"], json!({}));
+    held.write_all(&[0]).unwrap();
+    let mut decided = gate.arrive();
+    assert_eq!(joined_at(), None, "a cancelled join claims nothing");
+    decided.write_all(&[0]).unwrap();
+
+    server.start_call(3, "join", json!({"id": id, "timeout": "10s"}));
+    gate.arrive().write_all(&[0]).unwrap();
+    let mut decided = gate.arrive();
+    assert!(joined_at().is_some(), "an answered join claims the run");
+    decided.write_all(&[0]).unwrap();
+    let (joined, is_error) = tool_answer("join", &server.reply(&json!(3)));
+    assert!(!is_error, "{joined}");
+    assert_eq!(
+        joined,
+        json!({"id": id, "status": "done", "result": "all green"})
+    );
+    let (_, lines) = server.close();
+    assert!(
+        lines.iter().all(|line| !line.contains("\"id\":1,")),
+        "a cancelled join is not answered: {lines:?}"
+    );
+    kid.kill().unwrap();
+    kid.wait().unwrap();
+}
+
+/// `stop` of a team the caller launched ends every seat, and a second stop finds no cohort.
+#[test]
+fn stop_ends_every_seat_of_a_team_the_caller_launched() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let seat = |role: &str| rimz::agents::LaunchParams {
+        team: Some("forge".into()),
+        role: Some(role.to_owned()),
+        channel: Some("feature-team".to_owned()),
+        ..launched_by("launch-session")
+    };
+    let mut seats = [
+        live_seat(&env, "coder", 3, seat("coder")),
+        live_seat(&env, "reviewer", 4, seat("reviewer")),
+    ];
+    let mut rival = live_seat(
+        &env,
+        "rival",
+        5,
+        rimz::agents::LaunchParams {
+            team: Some("forge".into()),
+            role: Some("coder".to_owned()),
+            channel: Some("rival-team".to_owned()),
+            ..launched_by("launch-other")
+        },
+    );
+    let mut server = serve_live(&env, &[3, 4, 5]);
+    server.initialize();
+
+    let id = "team:forge#feature-team";
+    let (listed, is_error) = server.answer(10, "tasks", json!({"kind": "team"}));
+    assert!(!is_error, "{listed}");
+    assert_eq!(task_ids(&listed), [id], "{listed}");
+    let (joined, is_error) = server.answer(11, "join", json!({"id": id, "timeout": "1s"}));
+    assert!(!is_error, "{joined}");
+    assert_eq!(joined, json!({"id": id, "status": "running"}));
+    let board = env.project_root.join(".rimz/team/blackboard.md");
+    std::fs::create_dir_all(board.parent().unwrap()).unwrap();
+    std::fs::write(&board, "# Work\nStage: Done\n\n## Result\nshipped\n").unwrap();
+    let (joined, is_error) = server.answer(12, "join", json!({"id": id, "timeout": "10s"}));
+    assert!(!is_error, "{joined}");
+    assert_eq!(
+        joined,
+        json!({"id": id, "status": "done", "result": "shipped"})
+    );
+    let (failure, is_error) = server.answer(13, "stop", json!({"id": "team:forge#rival-team"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure,
+        json!({
+            "error": "team:forge#rival-team was started by another agent",
+            "hint": "stop and join act on what you started, or what an agent you started \
+                     started; `tasks` lists it",
+        })
+    );
+    assert!(
+        rival.try_wait().unwrap().is_none(),
+        "the refused team runs on"
+    );
+    rival.kill().unwrap();
+    rival.wait().unwrap();
+
+    let (stopped, is_error) = server.answer(1, "stop", json!({"id": id}));
+    assert!(!is_error, "{stopped}");
+    assert_eq!(stopped, json!({"id": id, "status": "stopped"}));
+    for seat in &mut seats {
+        assert!(
+            seat.try_wait().unwrap().is_some(),
+            "every seat's process is gone"
+        );
+    }
+    let (again, is_error) = server.answer(2, "stop", json!({"id": id}));
+    assert!(!is_error, "{again}");
+    assert_eq!(again, json!({"id": id, "status": "ended", "hint": GONE}));
+}
+
+/// An agent and a subagent the caller launched that have ended stop as `ended`, a value;
+/// one another agent launched is refused, and left as it was.
+#[test]
+fn stop_answers_an_ended_child_as_a_value_and_refuses_another_agents() {
+    use rimz::agents::{AgentLifecycleObservation, LaunchParams, LaunchedBy, LifecycleSignal};
+    use rimz::ids::{AgentKind, AgentSessionId};
+    use rimz::store::writer::AgentLifecycleIntent;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let claude = AgentKind::new_unchecked("claude");
+    let by = |launch: &str| {
+        Some(Box::new(LaunchedBy {
+            kind: claude.clone(),
+            agent_id: AgentSessionId::from(launch),
+        }))
+    };
+    let peer = |launch: &str| LaunchParams {
+        launched_by: by(launch),
+        ..LaunchParams::default()
+    };
+    let child = LaunchParams {
+        parent_agent_id: Some(AgentSessionId::from("launch-session")),
+        launch_depth: Some(1),
+        ..LaunchParams::default()
+    };
+    let register = crate::common::wait::register_agent;
+    register(
+        &env,
+        "peer-session",
+        "launch-peer",
+        "ended-peer",
+        peer("launch-session"),
+    );
+    register(&env, "kid-session", "launch-kid", "ended-kid", child);
+    register(
+        &env,
+        "other-session",
+        "launch-other",
+        "other",
+        LaunchParams::default(),
+    );
+    register(
+        &env,
+        "far-session",
+        "launch-far",
+        "far-peer",
+        peer("launch-other"),
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    for session in ["peer-session", "kid-session"] {
+        let observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(session)),
+            LifecycleSignal::Ended,
+        );
+        env.store()
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: claude.clone(),
+                event_name: "SessionEnd",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    for (seq, id) in [(1, "agent:ended-peer"), (2, "subagent:ended-kid")] {
+        let (stopped, is_error) = server.answer(seq, "stop", json!({"id": id}));
+        assert!(!is_error, "{stopped}");
+        assert_eq!(stopped, json!({"id": id, "status": "ended"}));
+    }
+    let (listed, is_error) = server.answer(3, "tasks", json!({}));
+    assert!(!is_error, "{listed}");
+    assert!(!task_ids(&listed).contains(&"agent:far-peer"), "{listed}");
+    for (seq, tool) in [(4, "stop"), (5, "join")] {
+        let (failure, is_error) = server.answer(seq, tool, json!({"id": "agent:far-peer"}));
+        assert!(is_error, "{failure}");
+        assert_eq!(
+            failure,
+            json!({
+                "error": "agent:far-peer was started by another agent",
+                "hint": "stop and join act on what you started, or what an agent you started \
+                         started; `tasks` lists it",
+            })
+        );
+    }
+}
+
+/// A workflow run the agent started: `join` answers `running` at its deadline, `stop`
+/// cancels it, and until the room's reconcile moves its home, `join` and a second `stop`
+/// read the cancelled run in the live home as ended. After the reconcile, its record is
+/// the one `rimz workflow cancel` leaves, in the finished home.
+#[test]
+fn a_stopped_workflow_run_reads_as_ended_and_settles_as_a_cli_cancel_does() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let run = seed_started_run(&env, "launch-session", json!({}));
+    let by_cli = seed_started_run(&env, "launch-session", json!({}));
+    let foreign = seed_started_run(&env, "launch-other", json!({}));
+    let id = format!("workflow:{run}");
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (listed, is_error) = server.answer(1, "tasks", json!({"kind": "workflow"}));
+    assert!(!is_error, "{listed}");
+    let row = listed["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == json!(id))
+        .unwrap_or_else(|| panic!("{id} is listed: {listed}"));
+    assert_eq!(row["status"], json!("running"), "{listed}");
+
+    let began = Instant::now();
+    let (joined, is_error) = server.answer(2, "join", json!({"id": id, "timeout": "1s"}));
+    assert!(!is_error, "{joined}");
+    assert_eq!(joined, json!({"id": id, "status": "running"}));
+    assert!(
+        began.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        began.elapsed()
+    );
+
+    let (stopped, is_error) = server.answer(3, "stop", json!({"id": id}));
+    assert!(!is_error, "{stopped}");
+    assert_eq!(
+        stopped,
+        json!({"id": id, "status": "stopped", "still_running": []})
+    );
+    let (record, finished) = run_record(&env, &run);
+    assert!(!finished, "the stop leaves the home for the reconcile");
+    assert_eq!(record["state"], json!("canceled"), "{record:#}");
+    let (joined, is_error) = server.answer(4, "join", json!({"id": id}));
+    assert!(!is_error, "{joined}");
+    let detail = format!("canceled · checkout {}", env.project_root.display());
+    assert_eq!(
+        joined,
+        json!({"id": id, "status": "done", "detail": detail})
+    );
+    let (again, _) = server.answer(5, "stop", json!({"id": id}));
+    assert_eq!(again, json!({"id": id, "status": "ended"}));
+
+    let (failure, is_error) =
+        server.answer(6, "stop", json!({"id": format!("workflow:{foreign}")}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure["error"],
+        json!(format!("workflow:{foreign} was started by another agent"))
+    );
+    assert_eq!(run_record(&env, &foreign).0["state"], json!("active"));
+    server.close();
+
+    let output = env
+        .rimz()
+        .args(["workflow", "cancel", &by_cli])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let output = env.rimz().args(["workflow", "reconcile"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let (record, finished) = run_record(&env, &run);
+    let (cli, cli_finished) = run_record(&env, &by_cli);
+    assert!(finished && cli_finished, "both homes are finished");
+    let settled = |record: &Value| (record["state"].clone(), record["loop_report"].clone());
+    assert_eq!(settled(&record), settled(&cli), "{record:#}\n{cli:#}");
+}
+
+/// A schedule the agent booked: `join` answers that its outcome comes by message, and
+/// `stop` removes the booking while the run it already started runs on, named.
+#[test]
+fn stopping_a_schedule_removes_its_booking_and_leaves_its_run_running() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let output = crate::common::wait::agent_wait(&env)
+        .args(["loop", "add", "nightly", "--every", "1h", "--", "true"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let records: rimz::harness::schedule::task_record::TaskRecords =
+        serde_json::from_slice(&std::fs::read(env.rimz_home().join("loops/tasks.json")).unwrap())
+            .unwrap();
+    let task = records
+        .named_in(&env.project_root, "nightly")
+        .expect("the booking's record")
+        .0
+        .clone();
+    let run = seed_started_run(
+        &env,
+        "launch-unrelated",
+        json!({"task": "nightly", "loop_fire": rimz::ids::FireId::new(&task)}),
+    );
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (listed, _) = server.answer(1, "tasks", json!({"kind": "schedule"}));
+    assert_eq!(
+        listed["tasks"][0]["id"],
+        json!("schedule:nightly"),
+        "{listed}"
+    );
+    let (joined, _) = server.answer(2, "join", json!({"id": "schedule:nightly"}));
+    assert_eq!(
+        joined,
+        json!({
+            "id": "schedule:nightly",
+            "status": "running",
+            "report": "its outcome comes to you as a message; join does not wait for it",
+        })
+    );
+    let (stopped, is_error) = server.answer(3, "stop", json!({"id": "schedule:nightly"}));
+    assert!(!is_error, "{stopped}");
+    assert_eq!(
+        stopped,
+        json!({
+            "id": "schedule:nightly",
+            "status": "stopped",
+            "still_running": [format!("workflow:{run}")],
+        })
+    );
+    assert_eq!(run_record(&env, &run).0["state"], json!("active"));
+    // The stop's write of `loop.toml` drops the server's memo of it, so the next read is fresh.
+    let (listed, _) = server.answer(4, "tasks", json!({"kind": "schedule"}));
+    assert_eq!(listed, json!({"tasks": []}));
+    let (again, _) = server.answer(5, "stop", json!({"id": "schedule:nightly"}));
+    assert_eq!(
+        again,
+        json!({"id": "schedule:nightly", "status": "ended", "hint": GONE})
+    );
+
+    // A switched-off schedule promises no message, and a stop that leaves nothing running
+    // says so with an empty list.
+    for args in [
+        &["loop", "add", "weekly", "--every", "7d", "--", "true"][..],
+        &["loop", "disable", "weekly"],
+    ] {
+        let output = crate::common::wait::agent_wait(&env)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    let (joined, _) = server.answer(6, "join", json!({"id": "schedule:weekly"}));
+    assert_eq!(
+        joined,
+        json!({"id": "schedule:weekly", "status": "disabled"})
+    );
+    let (stopped, _) = server.answer(7, "stop", json!({"id": "schedule:weekly"}));
+    assert_eq!(
+        stopped,
+        json!({"id": "schedule:weekly", "status": "stopped", "still_running": []})
+    );
+
+    // A schedule booked from outside the caller's tree is another's.
+    let output = env
+        .rimz()
+        .args(["loop", "add", "hourly", "--every", "1h", "--", "true"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let (failure, is_error) = server.answer(8, "stop", json!({"id": "schedule:hourly"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure,
+        json!({
+            "error": "schedule:hourly was started by another agent",
+            "hint": "stop and join act on what you started, or what an agent you started \
+                     started; `tasks` lists it",
+        })
+    );
+}
+
 /// An idle server holds the parked wrapper's private-memory budget.
 #[cfg(target_os = "linux")]
 #[test]
@@ -2134,4 +2992,58 @@ fn a_server_swaps_builds_only_when_quiet_and_loses_no_request() {
     server.list_changed();
     assert_eq!(executable(server.pid()), builds.second);
     assert_eq!(server.request(3, "ping", json!({}))["result"], json!({}));
+}
+
+/// A cancelled `join` stops waiting within a poll: its call leaves the server's calls in
+/// flight, so the build the room moved to is taken at once, long before the join's deadline.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_cancelled_join_frees_its_call_within_a_poll() {
+    use crate::common::builds::{RoomBuilds, executable};
+
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let builds = RoomBuilds::new(&env);
+    crate::common::wait::register_calling_agent(&env);
+    let run = seed_started_run(&env, "launch-session", json!({}));
+    let mut server = serve_in_room_at(&env, &builds.first);
+    server.initialize();
+    server.start_call(
+        1,
+        "join",
+        json!({"id": format!("workflow:{run}"), "timeout": "9m"}),
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    builds.record(&env, &builds.second);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        executable(server.pid()),
+        builds.first,
+        "the server swapped with a join in flight"
+    );
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": {"requestId": 1, "reason": "test"},
+    }));
+    let cancelled = Instant::now();
+    while executable(server.pid()) != builds.second && cancelled.elapsed() < REPLY_DEADLINE {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    // The join reads its cancel each half-second poll and the quiet server swaps within its
+    // 50 ms idle poll; the rest of the bound is slack for the exec on a loaded host.
+    assert!(
+        cancelled.elapsed() < Duration::from_millis(1500),
+        "the cancelled join held its call for {:?}",
+        cancelled.elapsed()
+    );
+    server.list_changed();
+    assert_eq!(server.request(2, "ping", json!({}))["result"], json!({}));
+    let (_, lines) = server.close();
+    assert!(
+        lines.iter().all(|line| !line.contains("\"id\":1,")),
+        "a cancelled join is not answered: {lines:?}"
+    );
 }

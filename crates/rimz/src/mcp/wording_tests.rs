@@ -23,11 +23,7 @@ fn messages(wording: &Wording) -> Vec<String> {
 #[test]
 fn a_replacement_replaces_its_file_and_is_marked_with_its_path() {
     let dir = tempfile::tempdir().unwrap();
-    put(
-        dir.path(),
-        "rimz-wait/wait_list.md",
-        "List your waits, replaced.\n",
-    );
+    put(dir.path(), "stop.md", "End what you started, replaced.\n");
     put(
         dir.path(),
         "rimz-lsp/instructions.md",
@@ -48,12 +44,9 @@ fn a_replacement_replaces_its_file_and_is_marked_with_its_path() {
     let wording = Wording::read(dir.path());
     assert_eq!(messages(&wording), Vec::<String>::new());
 
-    let list = wording.description(tool("wait_list"));
-    assert_eq!(list.text(), "List your waits, replaced.");
-    assert_eq!(
-        list.path(),
-        Some(dir.path().join("rimz-wait/wait_list.md").as_path())
-    );
+    let stop = wording.description(tool("stop"));
+    assert_eq!(stop.text(), "End what you started, replaced.");
+    assert_eq!(stop.path(), Some(dir.path().join("stop.md").as_path()));
     assert_eq!(
         wording.description(tool(GUIDE)).text(),
         "Load a guide, replaced."
@@ -67,7 +60,7 @@ fn a_replacement_replaces_its_file_and_is_marked_with_its_path() {
 
     assert_eq!(
         wording.instructions(&[Capability::Lsp]),
-        "Use `lsp`, replaced.\nShared, replaced.\nSecond line."
+        "RimZ tools: `lsp` to read code.\nUse `lsp`, replaced.\nShared, replaced.\nSecond line."
     );
     let paths: Vec<_> = wording.instruction_paths(&[Capability::Lsp]).collect();
     assert_eq!(
@@ -92,14 +85,18 @@ fn the_instructions_name_only_the_served_groups_in_group_order() {
     assert_eq!(
         wording.instructions(&[Capability::Notes, Capability::Lsp]),
         format!(
-            "{} {}\n{shared}",
+            "RimZ tools: `lsp` to read code; `notes` to save a note.\n{}\n{}\n{shared}",
             sentence(Capability::Lsp),
             sentence(Capability::Notes)
         )
     );
     assert_eq!(
         wording.instructions(&[Capability::Wait]),
-        format!("{}\n{shared}", sentence(Capability::Wait))
+        format!(
+            "RimZ tools: `wait` to wait outside your turn; `tasks`, `join`, and `stop` to \
+             list, await, or end what you started; `guide` for usage guides.\n{}\n{shared}",
+            sentence(Capability::Wait)
+        )
     );
     let all = wording.instructions(&Capability::ALL);
     assert!(!all.contains("only some of these tools"), "{all}");
@@ -136,6 +133,11 @@ fn an_unusable_replacement_warns_and_the_built_in_text_is_served() {
             "the instructions with every group would hold",
         ),
         (
+            "rimz-notes/instructions.md",
+            "y".repeat(4000).into_bytes(),
+            "the instructions with every group would hold",
+        ),
+        (
             "rimz-wait/guides/conditions.md",
             b"\n".to_vec(),
             "it is empty",
@@ -165,31 +167,28 @@ fn an_unusable_replacement_warns_and_the_built_in_text_is_served() {
     for group in Capability::ALL {
         put(dir.path(), &group_sentence(group), &long_sentence);
     }
+    // Each group's sentence has a line of its own, so a long one leaves the generated first
+    // line as it is.
     let wording = Wording::read(dir.path());
+    assert_eq!(messages(&wording), Vec::<String>::new());
+    let all = wording.instructions(&Capability::ALL);
     assert_eq!(
-        wording.instructions(&Capability::ALL),
-        built_in.instructions(&Capability::ALL)
+        all.lines().next(),
+        built_in.instructions(&Capability::ALL).lines().next()
     );
-    let warnings = messages(&wording);
-    assert_eq!(warnings.len(), 4, "{warnings:?}");
-    assert!(
-        warnings
-            .iter()
-            .all(|warning| warning.contains("the instructions' first line")),
-        "{warnings:?}"
-    );
+    assert!(all.contains(&long_sentence), "{all}");
 
     #[cfg(unix)]
     {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("rimz-wait")).unwrap();
+        std::fs::create_dir_all(dir.path().join("rimz-notes")).unwrap();
         std::os::unix::fs::symlink(
             dir.path().join("missing.md"),
-            dir.path().join("rimz-wait/wait_cancel.md"),
+            dir.path().join("rimz-notes/notes.md"),
         )
         .unwrap();
         let wording = Wording::read(dir.path());
-        assert_eq!(wording.description(tool("wait_cancel")).path(), None);
+        assert_eq!(wording.description(tool("notes")).path(), None);
         let warnings = messages(&wording);
         assert!(
             warnings.len() == 1 && warnings[0].contains("it cannot be read: "),

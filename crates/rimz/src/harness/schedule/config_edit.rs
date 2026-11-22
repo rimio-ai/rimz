@@ -104,8 +104,7 @@ pub(super) fn set_entry(store: TaskStore<'_>, name: &str, entry: &TaskEntry) -> 
 
     let rendered = doc.to_string();
     store.validate(&rendered, name)?;
-    write_bytes_atomically(&path, rendered.as_bytes())
-        .with_context(|| format!("writing {}", path.display()))?;
+    write(&path, &rendered).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
@@ -143,8 +142,7 @@ fn remove_at_root(store: TaskStore<'_>, name: &str, root: Option<&Path>) -> Resu
         if matches!(store, TaskStore::Project(_)) {
             store.validate(&rendered, name)?;
         }
-        write_bytes_atomically(&path, rendered.as_bytes())
-            .with_context(|| format!("writing {}", path.display()))?;
+        write(&path, &rendered).with_context(|| format!("writing {}", path.display()))?;
     }
     Ok(removed)
 }
@@ -170,9 +168,16 @@ pub(super) fn rename(store: TaskStore<'_>, name: &str, new_name: &str) -> Result
 
     let rendered = doc.to_string();
     store.validate(&rendered, new_name)?;
-    write_bytes_atomically(&path, rendered.as_bytes())
-        .with_context(|| format!("writing {}", path.display()))?;
+    write(&path, &rendered).with_context(|| format!("writing {}", path.display()))?;
     Ok(true)
+}
+
+/// Write a task store, and drop this process's memos of `loop.toml` so a read after it is
+/// fresh: the MCP server outlives the call that wrote it.
+fn write(path: &Path, rendered: &str) -> std::result::Result<(), crate::disk::atomic::AtomicErr> {
+    write_bytes_atomically(path, rendered.as_bytes())?;
+    crate::config::forget_loop_memos();
+    Ok(())
 }
 
 fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Result<Table> {

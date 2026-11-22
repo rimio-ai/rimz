@@ -1,15 +1,11 @@
-//! `notes_add` and `notes_list`: the jobs of `rimz notes add` and `rimz notes list`.
-
-use serde::Serialize;
+//! `notes`: the job of `rimz notes add`.
 
 use super::Tools;
-use crate::harness::notes::{
-    self, AddRequest, FILTER_GRAMMAR, FilterField, LIST_DEFAULT, ListRequest,
-};
-use crate::mcp::catalog::{NotesAddArgs, NotesListArgs};
+use crate::harness::notes::{self, AddRequest};
+use crate::mcp::catalog::NotesArgs;
 use crate::mcp::{Answer, Failure};
 
-pub(super) fn add(tools: &Tools, args: NotesAddArgs) -> Result<Answer, Failure> {
+pub(super) fn add(tools: &Tools, args: NotesArgs) -> Result<Answer, Failure> {
     let body = match (args.body, &args.file) {
         (Some(body), _) => body.into_bytes(),
         (None, Some(file)) => {
@@ -34,26 +30,4 @@ pub(super) fn add(tools: &Tools, args: NotesAddArgs) -> Result<Answer, Failure> 
     let added =
         notes::add(&request, &tools.start_dir).map_err(|err| Failure::new(err.to_string()))?;
     Ok(Answer::data(&added))
-}
-
-/// What the filter `help` answers: every field a filter names and the grammar.
-#[derive(Serialize)]
-struct FilterHelp {
-    fields: Vec<FilterField>,
-    grammar: [&'static str; 4],
-}
-
-pub(super) fn list(args: NotesListArgs) -> Result<Answer, Failure> {
-    if notes::asks_filter_help(&args.filter) {
-        return Ok(Answer::data(&FilterHelp {
-            fields: notes::filter_fields(),
-            grammar: FILTER_GRAMMAR,
-        }));
-    }
-    let listing = notes::list(&ListRequest {
-        filters: args.filter,
-        limit: LIST_DEFAULT,
-    })
-    .map_err(|err| Failure::new(err.to_string()))?;
-    Ok(Answer::data(&listing))
 }

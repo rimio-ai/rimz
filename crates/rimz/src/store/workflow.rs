@@ -713,6 +713,15 @@ pub struct RunOutcome {
     pub quiet: bool,
 }
 
+/// The word for how a run in `state` ended: `tried` for a try, else the state's own.
+pub fn state_word(state: RunState, ending: Option<&RunEnding>) -> &'static str {
+    if ending == Some(&RunEnding::Tried) {
+        "tried"
+    } else {
+        state.as_str()
+    }
+}
+
 /// The decision that ended a run; a failure the run's last decision explains names it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]

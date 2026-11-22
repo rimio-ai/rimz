@@ -12,7 +12,10 @@ use super::catalog::Call;
 /// What carries out a tool call; `serve` calls it on a thread of the call's
 /// own, so calls overlap.
 pub trait Runner: Send + Sync {
-    fn run(&self, call: Call) -> Answer;
+    /// Carry out `call`. `cancelled` turns true once the client cancels the
+    /// call or the server ends, when its reply is withheld; a call that blocks
+    /// reads it at each poll and returns.
+    fn run(&self, call: Call, cancelled: &dyn Fn() -> bool) -> Answer;
 
     /// The binary of the build the server's room moved to, when a read due by
     /// `now` finds one other than the server's own; each move is reported once.

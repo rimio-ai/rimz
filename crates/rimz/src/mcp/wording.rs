@@ -11,12 +11,15 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::catalog::{Capability, TOOLS, Tool};
+use super::catalog::{Capability, Purpose, TOOLS, Tool};
 
 /// Every built-in wording file, by its path relative to `tools/`.
 const BUILT_IN: [(&str, &str); 16] = [
     ("instructions.md", include_str!("tools/instructions.md")),
     ("guide.md", include_str!("tools/guide.md")),
+    ("tasks.md", include_str!("tools/tasks.md")),
+    ("join.md", include_str!("tools/join.md")),
+    ("stop.md", include_str!("tools/stop.md")),
     (
         "rimz-lsp/instructions.md",
         include_str!("tools/rimz-lsp/instructions.md"),
@@ -27,14 +30,6 @@ const BUILT_IN: [(&str, &str); 16] = [
         include_str!("tools/rimz-wait/instructions.md"),
     ),
     ("rimz-wait/wait.md", include_str!("tools/rimz-wait/wait.md")),
-    (
-        "rimz-wait/wait_list.md",
-        include_str!("tools/rimz-wait/wait_list.md"),
-    ),
-    (
-        "rimz-wait/wait_cancel.md",
-        include_str!("tools/rimz-wait/wait_cancel.md"),
-    ),
     (
         "rimz-wait/guides/conditions.md",
         include_str!("tools/rimz-wait/guides/conditions.md"),
@@ -60,20 +55,18 @@ const BUILT_IN: [(&str, &str); 16] = [
         include_str!("tools/rimz-notes/instructions.md"),
     ),
     (
-        "rimz-notes/notes_add.md",
-        include_str!("tools/rimz-notes/notes_add.md"),
-    ),
-    (
-        "rimz-notes/notes_list.md",
-        include_str!("tools/rimz-notes/notes_list.md"),
+        "rimz-notes/notes.md",
+        include_str!("tools/rimz-notes/notes.md"),
     ),
 ];
 
-/// The shared part of the instructions, after the first line.
+/// The shared part of the instructions, after the group sentences.
 const SHARED: &str = "instructions.md";
 
 /// Codex shows a deferred tool only the instructions' first line; Codex's
-/// docs give 250 and 512 characters for what it keeps, and the smaller holds.
+/// docs give 250 and 512 characters for what it keeps, and the smaller holds
+/// for the line generated with every group served.
+#[cfg(test)]
 const FIRST_LINE_LIMIT: usize = 250;
 
 /// Claude Code cuts the instructions and each description at 4,096
@@ -185,12 +178,10 @@ impl Wording {
                 Err(reason) => wording.reject(known, path, &reason),
             }
         }
-        if let Some(reason) = wording.first_line_breach() {
+        if let Some(reason) = wording.instructions_breach() {
             for group in Capability::ALL {
                 wording.revert(&group_sentence(group), &reason);
             }
-        }
-        if let Some(reason) = wording.instructions_breach() {
             wording.revert(SHARED, &reason);
         }
         wording
@@ -224,16 +215,21 @@ impl Wording {
         self.file(&tool.wording_path())
     }
 
-    /// The server's instructions for a launch serving `groups`: the
-    /// sentence of each group, in group order, on the first line, then the
-    /// shared text.
+    /// The server's instructions for a launch serving `groups`: a first
+    /// line naming the served tools by purpose, then the sentence of each
+    /// group, in group order, a line each, then the shared text.
     pub fn instructions(&self, groups: &[Capability]) -> String {
-        let first: Vec<&str> = Capability::ALL
+        let sentences: Vec<&str> = Capability::ALL
             .into_iter()
             .filter(|group| groups.contains(group))
             .map(|group| self.file(&group_sentence(group)).text())
             .collect();
-        format!("{}\n{}", first.join(" "), self.file(SHARED).text())
+        format!(
+            "{}\n{}\n{}",
+            first_line(groups),
+            sentences.join("\n"),
+            self.file(SHARED).text()
+        )
     }
 
     /// The user's files among the parts of `groups`' instructions.
@@ -281,9 +277,9 @@ impl Wording {
         breaches
     }
 
-    /// Why the instructions' first line with every group's sentence breaks
-    /// its limit: the check is on every group, so a file's verdict does not
-    /// depend on the launch.
+    /// Why the instructions' first line with every group served breaks its
+    /// limit.
+    #[cfg(test)]
     fn first_line_breach(&self) -> Option<String> {
         let instructions = self.instructions(&Capability::ALL);
         let length = instructions
@@ -294,7 +290,7 @@ impl Wording {
             .count();
         (length > FIRST_LINE_LIMIT).then(|| {
             format!(
-                "the instructions' first line, every group's sentence joined, would hold {length} \
+                "the instructions' first line, with every group served, would hold {length} \
                  characters, over the {FIRST_LINE_LIMIT} Codex shows"
             )
         })
@@ -467,6 +463,37 @@ fn guide_names(groups: &[Capability]) -> Vec<String> {
             Some(format!("{}/{}", group.name(), file.strip_suffix(".md")?))
         })
         .collect()
+}
+
+/// The instructions' first line for a launch serving `groups`: each served
+/// tool's name, grouped by what the tools are for.
+fn first_line(groups: &[Capability]) -> String {
+    let tools: Vec<&Tool> = if groups.is_empty() {
+        Vec::new()
+    } else {
+        super::catalog::tools_for(groups).collect()
+    };
+    let mut purposes: Vec<Purpose> = tools.iter().map(|tool| tool.purpose).collect();
+    purposes.sort();
+    purposes.dedup();
+    let parts: Vec<String> = purposes
+        .into_iter()
+        .map(|purpose| {
+            let names: Vec<String> = tools
+                .iter()
+                .filter(|tool| tool.purpose == purpose)
+                .map(|tool| format!("`{}`", tool.name))
+                .collect();
+            let names = match names.as_slice() {
+                [one] => one.clone(),
+                [first, second] => format!("{first} and {second}"),
+                [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+                [] => String::new(),
+            };
+            format!("{names} {}", purpose.phrase())
+        })
+        .collect();
+    format!("RimZ tools: {}.", parts.join("; "))
 }
 
 /// The path of `group`'s one-line instructions.
