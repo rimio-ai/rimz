@@ -42,6 +42,8 @@ static READS: Reads = Mutex::new(BTreeMap::new());
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Read {
     Usage(Quota),
+    /// Signed in by `GEMINI_API_KEY`, which has no quota for `/usage` to read.
+    ApiKey,
     LoggedOut,
     Failed(AccountProbeError),
 }
@@ -69,6 +71,11 @@ impl Read {
                     ..AgentAccount::default()
                 })
             }
+            Self::ApiKey => AccountProbe::Found(AgentAccount {
+                plan: Some("API key".to_owned()),
+                metered: Some(false),
+                ..AgentAccount::default()
+            }),
             Self::LoggedOut => AccountProbe::LoggedOut,
             Self::Failed(cause) => AccountProbe::Unavailable(*cause),
         }
@@ -83,7 +90,7 @@ impl Read {
                     ..Default::default()
                 },
             },
-            Self::Usage(Quota::Absent) | Self::LoggedOut => {
+            Self::Usage(Quota::Absent) | Self::ApiKey | Self::LoggedOut => {
                 AccountUsageProbe::NoCredentials(Default::default())
             }
             Self::Usage(Quota::Invalid) | Self::Failed(_) => {
@@ -225,11 +232,12 @@ pub(super) fn classify(code: Option<i32>, stdout: &[u8], observed_at: Timestamp)
     if let Some(envelope) = &envelope
         && envelope.status == "ERROR"
     {
-        let logged_out = envelope
-            .error
-            .as_deref()
-            .is_some_and(|error| error.to_ascii_lowercase().contains("authentication"));
-        return if logged_out {
+        let error = envelope.error.as_deref().unwrap_or_default();
+        // agy 1.5.14 refuses `/usage` this way when `GEMINI_API_KEY` selects the session.
+        if error.contains("not available with a Gemini API key") {
+            return Read::ApiKey;
+        }
+        return if error.to_ascii_lowercase().contains("authentication") {
             Read::LoggedOut
         } else {
             Read::Failed(AccountProbeError::SourceUnavailable)
