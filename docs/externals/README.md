@@ -17,7 +17,7 @@ Each page names its upstream sources and the version or commit it was last refre
 | [claude-reference.md](./agent-adapter/claude-reference.md) | Claude Code | 2.1.296 (tag `v2.1.296`, 2026-10-09) | [adapter_claude.md](../internals/agents/adapter_claude.md) |
 | [codex-reference.md](./agent-adapter/codex-reference.md) | Codex | 0.162.1 (tag `rust-v0.162.1`, 2026-10-09) | [adapter_codex.md](../internals/agents/adapter_codex.md) |
 | [amp-reference.md](./agent-adapter/amp-reference.md) | Amp CLI | `@ampcode/cli` 0.0.1791849701-g1448da (2026-10-13) | [adapter_amp.md](../internals/agents/adapter_amp.md) |
-| [antigravity-reference.md](./agent-adapter/antigravity-reference.md) | Antigravity CLI | 1.3.3 (tag `1.3.3`, 2026-10-10; transcript and subagent captures: 1.1.2) | [adapter_antigravity.md](../internals/agents/adapter_antigravity.md) |
+| [antigravity-reference.md](./agent-adapter/antigravity-reference.md) | Antigravity CLI | 1.5.14 (tag `1.5.14`, 2026-11-21; transcript and subagent captures: 1.1.2) | [adapter_antigravity.md](../internals/agents/adapter_antigravity.md) |
 | [copilot-reference.md](./agent-adapter/copilot-reference.md) | GitHub Copilot CLI | 1.0.96 (tag `v1.0.96`, 2026-10-12) | [adapter_copilot.md](../internals/agents/adapter_copilot.md) |
 | [cursor-reference.md](./agent-adapter/cursor-reference.md) | Cursor CLI | 2026.10.01-e373342 (2026-10-01) | [adapter_cursor.md](../internals/agents/adapter_cursor.md) |
 | [droid-reference.md](./agent-adapter/droid-reference.md) | Factory Droid CLI | 0.239.1 (JSON-RPC: `@factory/droid-sdk` 0.9.1) | [adapter_droid.md](../internals/agents/adapter_droid.md) |
