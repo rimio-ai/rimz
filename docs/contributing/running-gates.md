@@ -74,7 +74,7 @@ A test that returns early because the host lacks a capability records the skip t
 ### Durations
 
 - Locally, `--no-capture` prints each test's duration ([the test runner](#the-test-runner)).
-- CI's `gate` profile prints only failures and retries. Like `live` and `journey`, it writes a JUnit report (`[profile.gate.junit]` in `.config/nextest.toml`), so a gate test's CI duration is in `gate/junit.xml` of the run's `nextest-junit` artifact (`gh run download <id> -R rimio-ai/rimz -n nextest-junit`).
+- CI's `gate` profile prints only failures and retries. Like `live` and `journey`, it writes a JUnit report (`[profile.gate.junit]` in `.config/nextest.toml`), so a gate test's CI duration is in the run's `nextest-junit` artifact: `gate/junit.xml`, which on GitHub holds the integration binary alone, with every other binary in `gate-units/junit.xml` (`gh run download <id> -R rimio-ai/rimz -n nextest-junit`).
 
 ## Tests outside the change
 
