@@ -382,7 +382,7 @@ fn signal_host(pid: u32, signal: i32) {
 }
 
 fn host_stop_grace() -> Duration {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if let Some(millis) = std::env::var("RIMZ_TEST_DAEMON_HOST_STOP_MS")
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())

@@ -153,7 +153,7 @@ struct MirrorSource {
     alert: Option<render::Alert>,
     gate_notice: Option<render::GateNotice>,
     nonce: Option<crate::ids::FocusNonce>,
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     revision: u64,
 }
 
@@ -266,12 +266,12 @@ pub(super) struct PaneState {
     painted_at: Instant,
     painted_height: u16,
     paints: u64,
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     bench_painted_revision: Option<u64>,
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     bench_painted_deadline: Option<Instant>,
     /// The scenario player's live surface is its own screen, so it draws images.
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     play_own_screen: bool,
     paint_reports: Vec<(FocusPush, PushVerdict)>,
     optimistic_watch_until: Option<Instant>,
@@ -525,19 +525,19 @@ impl LoopState {
         }
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn set_play_cosmetic_phase(&mut self, phase: Option<u64>) {
         self.views.with(&mut self.pane, Route::READ, |_, v| {
             v.state.cosmetic_phase = phase;
         });
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn play_on_own_screen(&mut self) {
         self.pane.play_own_screen = true;
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn prepare_play_pet(&mut self, snapshot: &SidebarSnapshot) -> bool {
         let presentation = self.inspect_view(|ui, _| ui.clone());
         self.pane.paint.prepare_play_pet(
@@ -548,7 +548,7 @@ impl LoopState {
         )
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn play_frame_settled(&self) -> bool {
         !self.pane.dirty
             && self.inspect_view(|ui, context| {
@@ -641,11 +641,11 @@ impl LoopState {
                 painted_at: now,
                 painted_height: 0,
                 paints: 0,
-                #[cfg(feature = "testkit")]
+                #[cfg(any(test, feature = "testkit"))]
                 bench_painted_revision: None,
-                #[cfg(feature = "testkit")]
+                #[cfg(any(test, feature = "testkit"))]
                 bench_painted_deadline: None,
-                #[cfg(feature = "testkit")]
+                #[cfg(any(test, feature = "testkit"))]
                 play_own_screen: false,
                 paint_reports: Vec::new(),
                 optimistic_watch_until: None,
@@ -783,7 +783,7 @@ impl LoopState {
         snapshot
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn bench_painted(&self) -> Option<(u64, Instant, Option<Instant>)> {
         self.pane.bench_painted_revision.map(|revision| {
             (
@@ -794,7 +794,7 @@ impl LoopState {
         })
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn bench_frame_timing(&mut self, paint: bool) -> bool {
         if paint && self.watched() {
             let mut terminal =
@@ -2435,7 +2435,7 @@ impl LoopState {
             target: source.target,
             size,
         });
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         {
             self.pane.bench_painted_revision = Some(source.revision);
             self.pane.bench_painted_deadline = None;
@@ -2444,7 +2444,7 @@ impl LoopState {
     }
 
     fn paint_now(&mut self, terminal: &mut Terminal<PaneBackend>, now: Instant) -> Result<()> {
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         let (paints, deadline) = (self.pane.paints, self.pane.next_frame);
         let (paint, interval, nonce) = self.views.with(&mut self.pane, Route::READ, |state, v| {
             frame_clock(
@@ -2477,7 +2477,7 @@ impl LoopState {
                 return Ok(());
             }
             self.draw_frame(terminal, now, false)?;
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             if self.pane.paints != paints {
                 self.pane.bench_painted_deadline = (deadline <= now).then_some(deadline);
             }
@@ -2551,7 +2551,7 @@ impl LoopState {
             result.and(output)?;
             self.pane.paint.routed_frame_written(&mut self.pane.ui);
             self.pane.painted_at = self.pane.clock.now();
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             {
                 self.pane.bench_painted_revision = token.map(|(_, revision, _)| revision);
                 self.pane.bench_painted_deadline = None;
@@ -2589,7 +2589,7 @@ impl LoopState {
 
     /// This pass's image permit, from the host's on-screen reading and landing.
     fn image_permit(&self, now: Instant) -> Option<ImagePermit> {
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         if self.pane.play_own_screen {
             return Some(ImagePermit::for_test());
         }
@@ -2831,11 +2831,11 @@ impl PaneState {
             painted_at: _,
             painted_height: _,
             paints: _,
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
                 bench_painted_revision: _,
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
                 bench_painted_deadline: _,
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
                 play_own_screen: _,
             paint_reports: _,
             // Paint, animation, and frame scheduling, which a clock-only

@@ -385,7 +385,7 @@ fn an_empty_frame_never_brackets() {
     assert!(pty.drain().is_empty());
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 #[test]
 fn a_capturing_backend_never_brackets() {
     let mut pty = Pty::open(60, 24);

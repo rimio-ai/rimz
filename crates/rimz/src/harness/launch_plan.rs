@@ -1521,7 +1521,7 @@ fn apply_materialized_system_prompt(
 #[cfg(test)]
 mod tests;
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub mod testkit {
     /// Assert the consumer's compiled home with a different room default.
     pub fn assert_claude_stamped_home(

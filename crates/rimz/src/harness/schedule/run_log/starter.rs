@@ -29,7 +29,7 @@ pub(super) fn report(
     }
     let message = workflow::stamp_report_message(&paths, &guard)?;
     drop(guard);
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_REPORT_GATE");
     queue(state, run, header, &message)?;
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;

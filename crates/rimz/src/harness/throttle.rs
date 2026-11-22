@@ -431,7 +431,7 @@ pub(super) fn try_admit_in(
 
 /// How long admission waits for the queue lock; a `testkit` build can shorten it.
 fn admission_lock_wait() -> Duration {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if let Some(ms) = std::env::var("RIMZ_TEST_THROTTLE_LOCK_WAIT_MS")
         .ok()
         .and_then(|raw| raw.parse().ok())

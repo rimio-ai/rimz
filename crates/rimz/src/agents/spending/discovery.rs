@@ -487,7 +487,7 @@ impl SpendingDiscoveryIndex {
         self.discover_declared_sources("test", sources, now_secs)
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(crate) fn discover_sources_for_testkit(
         &mut self,
         sources: Vec<SpendingSource>,

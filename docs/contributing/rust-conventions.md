@@ -234,7 +234,8 @@ Each kind of test has its own rules.
 - Integration tests under `crates/rimz/tests/integration/performance/` assert deterministic work bounds, not timing.
 - Counters live at the funnel they measure: fsyncs in `disk::atomic::testkit`, event-log bytes in `store::event_log::testkit`, and hot-path subprocess attempts in `proc::testkit`.
 - The crate-level `testkit` feature exposes test seams to tests and benches: synthetic fleet builders, counter readers, and rendezvous points for subprocess tests. Shipped artifacts do not enable it.
-- Nothing has to pass `--features testkit` by hand. `crates/rimz/Cargo.toml` carries a self dev-dependency (`rimz = { path = ".", features = ["testkit"] }`), so any build that pulls dev-dependencies resolves the feature on: `cargo check --tests`, `cargo nextest`, `cargo bench`, and the crate graph rust-analyzer builds from `cargo metadata`. `cargo build`, the shipped binary, and the install-host lint passes never see it.
+- Test-support code in the library is gated `cfg(any(test, feature = "testkit"))`, so the library's unit tests see it without the feature. The binary's unit tests, the integration tests, the fixture bins, and the benches need the feature itself. Every `cargo xtask` build turns it on (`--all-features`, or `--features testkit` for `perf`); a bare `cargo` command that builds those targets passes `--features testkit`, and an editor sets its rust-analyzer cargo features to include it. `cargo build`, the shipped binary, and the install-host lint passes never see it.
+- Do not turn `testkit` on with a self dev-dependency (`rimz` naming itself under `[dev-dependencies]`): that edge makes the library's unit-test build wait for the whole library and link a second copy of it.
 
 ### Performance benches
 

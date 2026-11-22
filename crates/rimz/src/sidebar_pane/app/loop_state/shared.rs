@@ -156,7 +156,7 @@ impl ViewAccess {
             alert: context.health.alert.clone(),
             gate_notice: context.gate.rule.map(|rule| render::GateNotice { rule }),
             nonce: context.last_folded_focus_intent,
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             revision: _revision,
         })
     }

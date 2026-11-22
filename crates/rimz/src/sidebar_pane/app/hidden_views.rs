@@ -298,7 +298,7 @@ fn emit_run(diag: &DiagSink, summary: Option<Summary>) {
     }
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub(super) mod testkit {
     use super::{DiagSink, Sweep};
 

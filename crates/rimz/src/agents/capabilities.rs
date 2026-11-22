@@ -1016,7 +1016,7 @@ pub trait SessionCapability: CoreCapability {
     ) {
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     fn discover_local_sessions_under(
         &self,
         _home: &Path,

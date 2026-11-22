@@ -58,7 +58,7 @@ pub fn locate(
     launch: &AgentSessionId,
     notices: &mut Vec<String>,
 ) -> Result<Option<AgentPane>, HostingErr> {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_AGENT_PANE_BEFORE_READ");
     read_answer(workspace, store, mux, kind, launch, notices).map(|(_, pane)| pane)
 }
@@ -73,7 +73,7 @@ pub fn find(
     launch: &AgentSessionId,
     notices: &mut Vec<String>,
 ) -> Result<AgentPane, FindErr> {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_AGENT_PANE_BEFORE_READ");
     find_with(
         mux,
@@ -96,7 +96,7 @@ pub fn open_writer(
     launch: &AgentSessionId,
     notices: &mut Vec<String>,
 ) -> Result<(AgentPane, PaneWriter), FindErr> {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_AGENT_PANE_BEFORE_READ");
     find_with(
         mux,
@@ -166,7 +166,7 @@ fn find_with<H>(
         pane: first.pane_id.clone(),
         source,
     })?;
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_AGENT_PANE_AFTER_WAKE");
     let (_, second) = read(Some(mux)).map_err(FindErr::Read)?;
     match second {

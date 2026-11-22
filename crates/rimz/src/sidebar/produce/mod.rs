@@ -102,7 +102,7 @@ impl HostInputs {
         })
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn from_frame(frame: PaneFrame) -> Self {
         Self {
             projection: Arc::new(AgentProjectionPublication {
@@ -138,7 +138,7 @@ impl HostInputs {
     }
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub(crate) fn publish_test_pane_frame(
     runtime: &RuntimePaths,
     frame: &PaneFrame,
@@ -147,13 +147,13 @@ pub(crate) fn publish_test_pane_frame(
 }
 
 /// Retained bench/performance producer for the real host pipeline, without renderer delivery.
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub struct SnapshotProducer {
     panes: PaneProducer,
     projection: Option<AgentProjectionPublication>,
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 impl SnapshotProducer {
     pub fn seeded(runtime: &RuntimePaths, session: &str) -> Self {
         Self {
@@ -172,7 +172,7 @@ impl SnapshotProducer {
     }
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub fn produce_snapshot(
     cursor: &mut RollupCursor,
     state: &StatePaths,

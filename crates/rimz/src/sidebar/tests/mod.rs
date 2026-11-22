@@ -391,7 +391,7 @@ fn sweep_removes_orphan_socket_keeps_live_and_starting() {
 
 /// The roster `rimz sidebar renderers` and `rimz sidebar click` read applies the
 /// live renderer discovery: a stale heartbeat is not a renderer at all.
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 #[test]
 fn live_sidebars_discovers_fresh_renderers_in_instance_order() {
     use crate::ids::PaneId;

@@ -1929,7 +1929,7 @@ pub fn find(state: &StatePaths, id: &WorkflowRunId) -> Result<Option<FoundRun>> 
     match classify(&live)? {
         RunClass::Recordless => {}
         class => {
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_AFTER_FIND");
             return Ok(Some(FoundRun {
                 paths: live,

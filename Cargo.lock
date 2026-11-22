@@ -3484,7 +3484,6 @@ dependencies = [
  "pulldown-cmark",
  "ratatui",
  "resvg",
- "rimz",
  "rusqlite",
  "rustix 1.1.6",
  "schemars",

@@ -268,7 +268,7 @@ pub(super) fn send_batch_to_live_pane(
         return Ok(receipt);
     };
     sleep(super::interrupt_delay_from_env());
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_BEFORE_INTERRUPT_KEY");
     // The delay leaves the receiver time to move: the key goes only to the session the paste
     // decided on, in the claim's pane.
@@ -686,7 +686,7 @@ fn wait_and_decide(
         .expect("wait_and_decide requires at least one message");
     debug_assert!(batch.iter().all(|message| message.enter == head.enter));
     send.pacer.tick();
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_BEFORE_WRITE");
     // Every delivery binds its claim to the pane before entering the write path.
     let pane = head
@@ -823,7 +823,7 @@ fn withdraw_broken(
     if broken.is_empty() {
         return Ok(None);
     }
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_BEFORE_WITHDRAW");
     store.withdraw_messages(&workspace.session_name, |message| {
         broken
@@ -960,7 +960,7 @@ fn type_command_with<E>(
     let (token, arguments) =
         declared.map_or((text, None), |command| command_segments(text, command));
     write(token)?;
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_COMMAND_TOKEN_WRITTEN");
     if let Some(arguments) = arguments {
         send.pause_raw_typing_with(MessageBody::Command, sleeper);

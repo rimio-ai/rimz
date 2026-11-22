@@ -32,7 +32,7 @@ pub(crate) use presence::PresenceUpgrade;
 pub use presence::{ensure_presence_plugin_artifact, presence_plugin_build, presence_plugin_path};
 pub(crate) use session::PresenceProbe;
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]
 pub fn background_plugins_for_test(raw: &str) -> kdl::KdlDocument {
     background_plugins::from_config(&raw.parse().expect("test config parses"))

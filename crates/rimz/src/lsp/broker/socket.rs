@@ -159,7 +159,7 @@ pub(super) fn listen(listener: UnixListener, shared: Arc<Shared>) {
     std::thread::spawn(move || {
         loop {
             let accepted = listener.accept();
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             shared.tick(b'A');
             match accepted {
                 Ok((stream, _)) => {
@@ -538,7 +538,7 @@ mod tests {
             in_flight: std::sync::atomic::AtomicUsize::new(0),
             editor_forwarding: std::sync::atomic::AtomicUsize::new(0),
             requests: Requests::default(),
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             ticks: Mutex::new(None),
         }
     }

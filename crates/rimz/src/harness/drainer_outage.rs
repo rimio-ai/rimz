@@ -120,7 +120,7 @@ pub(crate) fn read(runtime: &RuntimePaths) -> Vec<OutageRecord> {
     records
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub mod testkit {
     pub fn read(runtime: &crate::disk::paths::RuntimePaths) -> Vec<serde_json::Value> {
         super::read(runtime)
@@ -268,7 +268,7 @@ fn since_ms(opened: Instant) -> u64 {
 }
 
 fn threshold() -> Duration {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if let Some(ms) = std::env::var("RIMZ_TEST_HOOK_DRAINER_OUTAGE_MS")
         .ok()
         .and_then(|raw| raw.parse().ok())

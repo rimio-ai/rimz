@@ -718,7 +718,7 @@ impl MachineConfig {
         agents_home: &Path,
         env: &BTreeMap<String, String>,
     ) -> Result<(Self, AgentSpecSources)> {
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         record_machine_config_load("strict");
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let theme_path = files.path(MachineConfigFileKind::Theme);
@@ -748,7 +748,7 @@ impl MachineConfig {
         agents_home: &Path,
         env: &BTreeMap<String, String>,
     ) -> Self {
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         record_machine_config_load("lenient");
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let theme_path = files.path(MachineConfigFileKind::Theme);
@@ -1380,7 +1380,7 @@ impl<T: Default> Default for Parsed<T> {
     }
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 fn record_machine_config_load(kind: &str) {
     use std::io::Write;
 

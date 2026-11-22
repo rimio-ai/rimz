@@ -322,7 +322,7 @@ impl Store {
             self.clear_frame_read();
         }
         drop(transaction);
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         crate::testkit::rendezvous("RIMZ_TEST_HOOK_DRAIN_AFTER_LOCKED_APPLY");
         for event in &events {
             self.wake_sidebars_for_event_best_effort(event);

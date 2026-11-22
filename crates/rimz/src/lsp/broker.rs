@@ -99,7 +99,7 @@ struct Shared {
     in_flight: std::sync::atomic::AtomicUsize,
     editor_forwarding: std::sync::atomic::AtomicUsize,
     requests: socket::Requests,
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     ticks: Mutex<Option<std::os::unix::net::UnixStream>>,
 }
 
@@ -133,7 +133,7 @@ enum Exit {
 }
 
 impl Shared {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     fn tick(&self, event: u8) {
         use std::io::Write;
         if let Some(ticks) = self
@@ -371,7 +371,7 @@ fn serve_inner(request: &mut ServeRequest, exit_shared: &mut Option<Arc<Shared>>
         in_flight: std::sync::atomic::AtomicUsize::new(0),
         editor_forwarding: std::sync::atomic::AtomicUsize::new(0),
         requests: socket::Requests::default(),
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         ticks: Mutex::new(
             std::env::var_os("RIMZ_TEST_LSP_BROKER_TICKS")
                 .map(std::os::unix::net::UnixStream::connect)
@@ -420,7 +420,7 @@ fn serve_inner(request: &mut ServeRequest, exit_shared: &mut Option<Arc<Shared>>
                         .wait_timeout(model, remaining)
                         .unwrap_or_else(|e| e.into_inner()),
                 );
-                #[cfg(feature = "testkit")]
+                #[cfg(any(test, feature = "testkit"))]
                 shared.tick(b'W');
                 continue;
             }
@@ -812,7 +812,7 @@ fn run(
                 .wait_timeout(model, remaining)
                 .unwrap_or_else(|e| e.into_inner()),
         );
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         shared.tick(b'W');
     }
     let transport = transport.clone();
@@ -1043,7 +1043,7 @@ mod tests {
             in_flight: std::sync::atomic::AtomicUsize::new(0),
             editor_forwarding: std::sync::atomic::AtomicUsize::new(0),
             requests: socket::Requests::default(),
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             ticks: Mutex::new(None),
         };
 

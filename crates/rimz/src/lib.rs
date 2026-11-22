@@ -57,7 +57,7 @@ pub mod sidebar;
 pub mod sidebar_pane;
 pub mod sock;
 pub mod store;
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]
 pub mod testkit;
 pub mod theme;

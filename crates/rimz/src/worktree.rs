@@ -2106,7 +2106,7 @@ pub fn lane_lifetimes<'a>(records: impl IntoIterator<Item = &'a AgentState>) -> 
 fn read_marker_file(marker: &Path) -> Result<Option<WorktreeMarker>> {
     match std::fs::read_to_string(marker) {
         Ok(text) => {
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             crate::testkit::WORK_COUNTERS
                 .marker_reads
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

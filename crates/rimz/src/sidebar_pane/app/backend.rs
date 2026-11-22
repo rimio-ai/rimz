@@ -156,7 +156,7 @@ impl PaneBackend {
         }
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn captured(width: u16, height: u16) -> Self {
         let size = Size::new(width, height);
         Self {
@@ -171,13 +171,13 @@ impl PaneBackend {
         }
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn buffer(&self) -> &ratatui::buffer::Buffer {
         // Only the player's capturing backend calls this accessor.
         self.captured.as_ref().expect("capturing backend")
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn play_output(&mut self, writer: impl Write + Send + 'static) {
         self.output = Box::new(writer);
     }

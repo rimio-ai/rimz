@@ -14,7 +14,7 @@ fn wait_for_sidebar_heartbeat(
     pane: &PaneId,
     build: &str,
 ) -> bool {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if opts
         .extra_env
         .get("RIMZ_TEST_ASSUME_SIDEBAR_HEARTBEAT")

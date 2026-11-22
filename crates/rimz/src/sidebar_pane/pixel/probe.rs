@@ -160,7 +160,7 @@ pub fn detect_env() -> (PixelRenderCaps, bool) {
     detect_env_with(&LiveProbe::ambient())
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub(in crate::sidebar_pane) fn player_caps() -> PixelRenderCaps {
     let probe = LiveProbe::ambient();
     if env_present(&probe, "TMUX") || env_present(&probe, "ZELLIJ") {

@@ -405,7 +405,7 @@ impl SpendingWalker {
 
     /// Exercise the production discovery index with an explicit source set.
     /// Performance fixtures use this without mutating provider-home globals.
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     #[doc(hidden)]
     pub fn discover_declared_spending_files(
         &mut self,
@@ -427,7 +427,7 @@ impl SpendingWalker {
     }
 
     /// Exercise account-aware discovery without reading the machine's login config.
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     #[doc(hidden)]
     pub fn discover_login_spending_files(
         &mut self,

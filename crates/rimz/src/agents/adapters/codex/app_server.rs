@@ -435,14 +435,14 @@ fn daemon_socket(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
 }
 
 fn loaded_threads_timeout(login_env: &BTreeMap<String, String>) -> Duration {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if let Some(ms) = login_env
         .get("RIMZ_TEST_CODEX_LOADED_THREADS_MS")
         .and_then(|value| value.parse::<std::num::NonZeroU64>().ok())
     {
         return Duration::from_millis(ms.get());
     }
-    #[cfg(not(feature = "testkit"))]
+    #[cfg(not(any(test, feature = "testkit")))]
     let _ = login_env;
     DAEMON_PROBE_DEADLINE
 }

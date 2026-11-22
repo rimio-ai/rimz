@@ -33,7 +33,7 @@ use crate::workspace::record::{self, WorkspaceRecordErr};
 /// pre-projects the agent rollup into `agents.carryover.json` before advancing
 /// the durable generation, so the reducer stays bounded.
 pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::WORK_COUNTERS
         .snapshot_publishes
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -85,7 +85,7 @@ fn assemble_snapshot<'a>(
     agents: impl IntoIterator<Item = &'a AgentState>,
     resume_outcomes: Vec<ResumeOutcome>,
 ) -> Result<SidebarSnapshot> {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::WORK_COUNTERS
         .snapshot_assemblies
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -167,7 +167,7 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
         return snapshot_is_current(&snapshot).then_some(snapshot);
     }
     let bytes = fs::read(&path).ok()?;
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::WORK_COUNTERS
         .latest_bytes_parsed
         .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);

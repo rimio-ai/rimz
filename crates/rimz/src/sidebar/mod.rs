@@ -22,7 +22,7 @@ pub mod presence;
 pub mod produce;
 pub mod read_marks;
 pub mod refresh;
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub mod scenario;
 pub mod stall;
 #[cfg(test)]
@@ -58,13 +58,13 @@ const LAUNCH_WAIT_STEP: Duration = Duration::from_millis(25);
 const LAUNCH_WAIT_STEPS: u32 = 60;
 
 /// One live renderer of this workspace.
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub struct LiveSidebar {
     pub heartbeat: SidebarHeartbeat,
 }
 
 /// Discover this workspace's live renderers in instance-id order.
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub fn live_sidebars(runtime: &RuntimePaths) -> Vec<LiveSidebar> {
     let mut heartbeats: Vec<_> = fresh_sidebar_heartbeats(runtime)
         .into_iter()

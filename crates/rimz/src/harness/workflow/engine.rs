@@ -1149,7 +1149,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
                     throttle::check_group_size(&config.throttle, &run)
                         .and_then(|()| throttle::try_admit(&config.throttle, &run)),
                 ));
-                #[cfg(feature = "testkit")]
+                #[cfg(any(test, feature = "testkit"))]
                 crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_ADMISSION_GATE");
                 continue;
             }
@@ -1190,7 +1190,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             .as_ref()
             .expect("prepared evaluation has an attempt")
             .seq;
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_CONTEXT_GATE");
         if spec.step(&record.node).is_some() {
             if command_step(state, &paths, &spec, &record, &reader, host)? {
@@ -1200,7 +1200,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
         }
         let reread = || reader.reread(&paths, &record);
         let result = script::evaluate(state, &paths, &script::Live::new(&spec, &reread), &record);
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
         let fresh = reader.reread(&paths, &record);
         let spec = fresh.as_ref().unwrap_or(&spec);
@@ -1278,7 +1278,7 @@ fn command_step(
         || accounting::step(record, None),
     );
     let head_end = super::head(&record.scope.path);
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
     let fresh = reader.reread(paths, record);
     let spec = fresh.as_ref().unwrap_or(spec);
@@ -1435,7 +1435,7 @@ fn message_step(
         )?,
         Err(reason) => Err(reason),
     };
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
     let guard = Commit::acquire(state, Some(host))?;
     let current = reload(paths)?;

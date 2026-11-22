@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,29 +35,29 @@ use self::host_link::{HostEvent, HostLink};
 
 const INSTANCE_ENV: &str = "RIMZ_SIDEBAR_INSTANCE_ID";
 const BASELINE_ENV: &str = "RIMZ_SIDEBAR_BASELINE_PANE";
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_REAP_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_REAP_POLL_MS";
 /// Testkit hook: names a file the supervisor writes the pid of a stray child it spawns to,
 /// for the stray-reaping test.
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_STRAY_PID_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_STRAY_PID_FILE";
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_RESPAWN_BACKOFF_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_RESPAWN_BACKOFF_MS";
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_HOLD_DELAY_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_HOLD_DELAY_MS";
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_PANE_PROBE_INTERVAL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS";
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_PANE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE";
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_PANE_PROBE_ABSENT_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_ABSENT_FILE";
 /// Testkit log: names a file the pane watchdog appends each logged strike count to, one per
 /// line, so a test synchronizes on counted strikes, never on time.
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_PANE_PROBE_STRIKE_LOG_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_STRIKE_LOG";
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_STABLE_RUN_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_STABLE_RUN_MS";
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_SELF_CLOSE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_SELF_CLOSE_PROBE";
 const REAP_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const PANE_PROBE_INTERVAL: Duration = Duration::from_secs(60);
@@ -137,7 +137,7 @@ pub fn run(config: SupervisorConfig) -> Result<()> {
     let runtime = crate::RuntimePaths::for_workspace(config.workspace_id.clone())?;
     let state = crate::StatePaths::for_workspace(config.workspace_id.clone())?;
     runtime.ensure_dirs()?;
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     thread::sleep(duration_override(TEST_HOLD_DELAY_MS_ENV, Duration::ZERO));
     let _room = crate::disk::lock::RoomLock::hold(&runtime.room_lock())?;
     if let Err(error) = crate::mux::backend_for(config.mux).close_pane_on_exit(&config.own_pane) {
@@ -630,7 +630,7 @@ impl PaneWatchdog {
         let Ok(runtime) = crate::RuntimePaths::for_workspace(self.workspace_id.clone()) else {
             return PaneProbe::Unknown;
         };
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         let roster = forced_pane_probe()
             .is_none()
             .then(|| {
@@ -638,7 +638,7 @@ impl PaneWatchdog {
                     .cached_pane_roster(&self.session_name, &self.workspace_id)
             })
             .flatten();
-        #[cfg(not(feature = "testkit"))]
+        #[cfg(not(any(test, feature = "testkit")))]
         let roster = crate::mux::backend_for(self.mux)
             .cached_pane_roster(&self.session_name, &self.workspace_id);
         ladder_probe(&self.pane, roster.as_ref(), || {
@@ -647,7 +647,7 @@ impl PaneWatchdog {
     }
 
     fn produce_probe(&self) -> Option<AuthoritativePaneProbe> {
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         if let Some(probe) = forced_pane_probe() {
             let pane_ids = match probe {
                 PaneProbe::Present(_) => vec![self.pane.clone()],
@@ -715,7 +715,7 @@ enum SelfCloseConfirmation {
 }
 
 fn confirm_self_close(config: &SupervisorConfig, watchdog: &PaneWatchdog) -> SelfCloseConfirmation {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if let Some(confirmation) = forced_self_close_confirmation() {
         return confirmation;
     }
@@ -782,7 +782,7 @@ fn reconfirm_pane_gone(
     }
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 fn forced_self_close_confirmation() -> Option<SelfCloseConfirmation> {
     match env::var(TEST_SELF_CLOSE_PROBE_ENV).ok().as_deref() {
         Some("empty") => Some(SelfCloseConfirmation::Close),
@@ -961,37 +961,37 @@ fn render_program(exe: &std::path::Path) -> String {
     exe.to_string_lossy().into_owned()
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 fn reap_poll_interval() -> Duration {
     duration_override(TEST_REAP_POLL_MS_ENV, REAP_POLL_INTERVAL)
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 fn respawn_delay(delay: Duration) -> Duration {
     duration_override(TEST_RESPAWN_BACKOFF_MS_ENV, delay)
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 fn respawn_stable_run() -> Duration {
     duration_override(TEST_STABLE_RUN_MS_ENV, RESPAWN_STABLE_RUN)
 }
 
-#[cfg(not(feature = "testkit"))]
+#[cfg(not(any(test, feature = "testkit")))]
 fn respawn_stable_run() -> Duration {
     RESPAWN_STABLE_RUN
 }
 
-#[cfg(not(feature = "testkit"))]
+#[cfg(not(any(test, feature = "testkit")))]
 fn respawn_delay(delay: Duration) -> Duration {
     delay
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 fn pane_probe_interval() -> Duration {
     duration_override(TEST_PANE_PROBE_INTERVAL_MS_ENV, PANE_PROBE_INTERVAL)
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 fn duration_override(name: &str, default: Duration) -> Duration {
     env::var_os(name)
         .filter(|value| !value.is_empty())
@@ -1000,12 +1000,12 @@ fn duration_override(name: &str, default: Duration) -> Duration {
         .unwrap_or(default)
 }
 
-#[cfg(not(feature = "testkit"))]
+#[cfg(not(any(test, feature = "testkit")))]
 fn pane_probe_interval() -> Duration {
     PANE_PROBE_INTERVAL
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 fn forced_pane_probe() -> Option<PaneProbe> {
     if let Some(path) = env::var_os(TEST_PANE_PROBE_ABSENT_FILE_ENV).filter(|path| !path.is_empty())
     {
@@ -1023,7 +1023,7 @@ fn forced_pane_probe() -> Option<PaneProbe> {
     }
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 fn log_test_strike(strikes: u8) {
     use std::io::Write as _;
     let Some(path) = env::var_os(TEST_PANE_PROBE_STRIKE_LOG_ENV).filter(|path| !path.is_empty())
@@ -1039,15 +1039,15 @@ fn log_test_strike(strikes: u8) {
     }
 }
 
-#[cfg(not(feature = "testkit"))]
+#[cfg(not(any(test, feature = "testkit")))]
 fn log_test_strike(_strikes: u8) {}
 
-#[cfg(not(feature = "testkit"))]
+#[cfg(not(any(test, feature = "testkit")))]
 fn reap_poll_interval() -> Duration {
     REAP_POLL_INTERVAL
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 fn spawn_test_stray_if_requested() {
     let Some(path) = env::var_os(TEST_STRAY_PID_FILE_ENV).filter(|value| !value.is_empty()) else {
         return;
@@ -1070,7 +1070,7 @@ fn spawn_test_stray_if_requested() {
     }
 }
 
-#[cfg(not(feature = "testkit"))]
+#[cfg(not(any(test, feature = "testkit")))]
 fn spawn_test_stray_if_requested() {}
 
 #[cfg(test)]

@@ -37,7 +37,7 @@ mod mirror_queue;
 mod notify;
 mod paint;
 mod plane;
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 mod play;
 mod remind;
 mod selection;
@@ -58,15 +58,15 @@ pub(super) use self::input::{Wakeup, decode_wakeup};
 pub(super) use self::plane::{DataPlane, RoomEvents};
 pub(super) use self::socket::{EventForwarder, ForwarderEnd};
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub use fetch::{ConcurrentFanout, FanoutThread, IdleCycleFixture};
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub use hidden_views::testkit::{HiddenViewSweep, start_hidden_view_sweep};
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub use play::{PlayError, PlayOptions, play};
 
 /// Send a pane-addressed left-button press through the host's room socket.
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub fn send_click(
     wakeup_socket: &std::path::Path,
     instance_id: &SidebarInstanceId,

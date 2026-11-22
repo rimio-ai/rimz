@@ -141,7 +141,7 @@ fn record_generation<T>(
 }
 
 pub(crate) fn record_poll_interval() -> Duration {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if let Some(interval) = std::env::var("RIMZ_TEST_SIDEBAR_RECORD_POLL_MS")
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())

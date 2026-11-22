@@ -546,7 +546,7 @@ type CachedBookMemo = Option<(PathBuf, Option<CacheStamp>, Arc<PriceBook>)>;
 
 static CACHED_BOOK_MEMO: LazyLock<Mutex<CachedBookMemo>> = LazyLock::new(|| Mutex::new(None));
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]
 pub mod testkit {
     use std::path::{Path, PathBuf};
@@ -605,7 +605,7 @@ pub fn cached_book_with_fingerprint(cache_path: &Path) -> (Arc<PriceBook>, Optio
     {
         return (Arc::clone(book), book.fingerprint());
     }
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     testkit::count_load();
     let book = Arc::new(match sqlite::Table::open(cache_path) {
         Some(table) => PriceBook::new(Backing::Sqlite(table)),

@@ -22,7 +22,7 @@ impl PaneWriter {
     /// Every write addresses `session` (see [`MuxBackend::send_keys`]).
     /// `runtime` names its owning room, or is absent for a non-RimZ session.
     pub fn open(runtime: Option<&RuntimePaths>, pane: &PaneId, session: &str) -> Result<Self> {
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         crate::testkit::rendezvous("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK");
         let lock_path = runtime.map_or_else(
             || RuntimePaths::shared().pane_write_lock(pane),

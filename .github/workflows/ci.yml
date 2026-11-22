@@ -229,14 +229,13 @@ jobs:
       # The Release cross-build is the only other Darwin compile, and it runs
       # after merge; this type-checks the macOS target in the merge queue. Both
       # runs are needed: the plain one checks the shipped library and binary,
-      # and `--tests` checks the test targets, which the crate's self
-      # dev-dependency builds with `testkit` on, so it never sees the install
-      # shape.
+      # and `--tests --features testkit` checks the test targets, which need
+      # `testkit` on, so it never sees the install shape.
       - name: darwin check
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           cargo-zigbuild check -p rimz --target aarch64-apple-darwin --locked
-          cargo-zigbuild check -p rimz --tests --target aarch64-apple-darwin --locked
+          cargo-zigbuild check -p rimz --tests --features testkit --target aarch64-apple-darwin --locked
 
       # The installer sends musl and ARM Linux users to cargo install. No other
       # queue job compiles these targets, and the only other aarch64 Linux

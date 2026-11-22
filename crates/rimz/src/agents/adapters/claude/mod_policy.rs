@@ -59,7 +59,7 @@ fn blocker_in(root: &Path) -> Option<ModBlocker> {
 /// does, so the suite never reads the host's own policy.
 fn root(login_env: &BTreeMap<String, String>) -> PathBuf {
     let root = managed_settings_root();
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if let Some(machine) = login_env
         .get("RIMZ_TEST_GROK_POLICY_ROOT")
         .filter(|value| !value.is_empty())

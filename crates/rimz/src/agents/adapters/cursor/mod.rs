@@ -572,7 +572,7 @@ fn cursor_launch_binary(located: Option<PathBuf>) -> String {
 }
 
 impl crate::agents::capabilities::SessionCapability for CursorAdapter {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     fn discover_local_sessions_under(
         &self,
         home: &Path,

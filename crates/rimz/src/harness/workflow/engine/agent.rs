@@ -681,7 +681,7 @@ pub(super) fn finish(
 ) -> Result<bool> {
     // Only a published ending reaches the off-lock stop cascade.
     let attempt = record.attempt.as_ref().expect("published agent ending");
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_STOP_GATE");
     let detached = detaches(spec, attempt);
     let mut run = attempt.run.clone();

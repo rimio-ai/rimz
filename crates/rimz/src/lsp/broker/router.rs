@@ -454,7 +454,7 @@ mod tests {
             in_flight: std::sync::atomic::AtomicUsize::new(0),
             editor_forwarding: AtomicUsize::new(0),
             requests: Default::default(),
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             ticks: Mutex::new(None),
         })
     }

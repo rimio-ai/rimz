@@ -258,7 +258,7 @@ impl CheckSignals {
     }
 
     fn pending(&mut self) -> impl Iterator<Item = i32> + '_ {
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         crate::testkit::rendezvous("RIMZ_TEST_CHECK_BEFORE_SIGNAL_READ");
         self.signals.pending()
     }

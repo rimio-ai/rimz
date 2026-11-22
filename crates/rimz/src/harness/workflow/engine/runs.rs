@@ -306,7 +306,7 @@ fn start_runs(at: &Attempt<'_>, machine: &MachineConfig) -> Result<Start> {
                 )));
             }
         };
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RUNS_GATE");
         if let Some(go_on) = at.recheck(None)? {
             discard(record, &created.marker, machine);

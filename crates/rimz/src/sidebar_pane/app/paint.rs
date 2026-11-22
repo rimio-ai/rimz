@@ -117,7 +117,7 @@ pub(super) struct FramePainter {
 }
 
 impl FramePainter {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn prepare_play_pet(
         &mut self,
         view: &ViewState,

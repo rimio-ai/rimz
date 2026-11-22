@@ -306,7 +306,7 @@ struct TrackSelection {
 }
 
 impl PetAssets {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn settle_load(&mut self, timeout: std::time::Duration) -> bool {
         let (request, result) = match &self.load_state {
             PetLoadState::Loading { request, receiver } => {

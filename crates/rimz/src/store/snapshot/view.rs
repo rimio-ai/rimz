@@ -425,7 +425,7 @@ pub struct SidebarSnapshot {
 }
 
 impl SidebarSnapshot {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub(crate) fn score_scenario_rows(&mut self) {
         let windows = aggregate::AttentionWindows::from_config(&self.attention);
         for group in Arc::make_mut(&mut self.worktree_groups) {

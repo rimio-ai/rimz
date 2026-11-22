@@ -27,15 +27,15 @@ use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{RuntimePaths, StatePaths};
 
 use super::RoomConfig;
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 use super::ServeConfig;
 use super::input::Wakeup;
 use super::timing::{fold_interval, tick_for};
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 mod concurrent;
 mod heal;
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub use concurrent::{ConcurrentFanout, FanoutThread};
 
 /// Run one produce behind a panic guard. An unwind keeps the renderer alive on its last good frame and degrades health; `panic = "abort"` falls back to host death and supervisor recovery, as an unwind elsewhere in the cycle does by ending the worker.
@@ -513,7 +513,7 @@ struct FastFold {
 }
 
 /// A retained fetch worker and consumer cursors, without a live multiplexer.
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub struct IdleCycleFixture {
     worker: FetchWorker,
     sink: ResultSink,
@@ -523,7 +523,7 @@ pub struct IdleCycleFixture {
     receivers: Vec<Receiver<Wakeup>>,
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 impl IdleCycleFixture {
     pub fn new(
         state: StatePaths,
@@ -747,7 +747,7 @@ impl IdleCycleFixture {
     }
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 fn fixture_renderer(
     room: RoomConfig,
     runtime: RuntimePaths,
@@ -1494,7 +1494,7 @@ struct ResultSink {
     cycle: Vec<Subscriber>,
     context: Option<Arc<FoldShared>>,
     inputs: Arc<FoldInputs>,
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     publication: Option<Arc<Mutex<(u64, Instant)>>>,
 }
 
@@ -1513,7 +1513,7 @@ impl ResultSink {
             cycle: Vec::new(),
             context: None,
             inputs: Arc::default(),
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             publication: None,
         };
         sink.begin_cycle();
@@ -1583,10 +1583,10 @@ impl ResultSink {
             };
         }
         let mut views = views.lock();
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         let published_at = self.publication.as_ref().map(|_| Instant::now());
         views.publish(update, Instant::now());
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         if let (Some(publication), Some(stamp)) = (&self.publication, published_at) {
             *publication.lock().expect("publication stamp") = (views.revision, stamp);
         }

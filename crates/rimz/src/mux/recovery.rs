@@ -254,7 +254,7 @@ pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if std::env::var_os("RIMZ_TEST_SKIP_STATS_RELOAD").is_some() {
         return Vec::new();
     }

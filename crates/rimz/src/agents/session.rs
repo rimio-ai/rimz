@@ -1,7 +1,7 @@
 //! Provider-neutral local-session and daemon evidence services.
 
 use std::collections::BTreeSet;
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -98,7 +98,7 @@ pub(crate) fn infer_turn_death_from_spent_window(
     }
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]
 pub fn discover_local_sessions_under(
     kind: &str,

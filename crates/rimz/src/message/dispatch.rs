@@ -1054,7 +1054,7 @@ impl DispatchState<'_> {
             return Ok((message, reason));
         }
         if pane.is_some() {
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             crate::testkit::rendezvous("RIMZ_TEST_FRESH_SEND_BEFORE_CLAIM");
             if mode.kind == DeliveryKind::Boundary && target.agent.is_some() {
                 let claim = self.store.queue_boundary_message(

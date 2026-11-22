@@ -29,9 +29,9 @@ const RECONFIRM_DELAY: Duration = Duration::from_millis(500);
 const RECEIPT_POLL: Duration = Duration::from_secs(1);
 #[cfg(any(test, feature = "testkit"))]
 const TEST_PROBE_INTERVAL_MS_ENV: &str = "RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS";
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_WATCH_ENV: &str = "RIMZ_TEST_SUBAGENT_PARENT_WATCH";
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 const TEST_PARENT_ENDED_MARKER_ENV: &str = "RIMZ_TEST_PARENT_ENDED_MARKER";
 
 /// The parent launch's members and cursor, captured before startup projection.
@@ -244,7 +244,7 @@ impl ParentWatchdog {
                 }
                 if self.probe_if_due(now) {
                     signal.store(true, Ordering::Release);
-                    #[cfg(feature = "testkit")]
+                    #[cfg(any(test, feature = "testkit"))]
                     if let Some(path) = std::env::var_os(TEST_PARENT_ENDED_MARKER_ENV)
                         && let Ok(mut file) = std::fs::OpenOptions::new()
                             .create(true)
@@ -276,7 +276,7 @@ impl ParentWatchdog {
         if now < self.next_tail && now < self.next_probe {
             return false;
         }
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         if std::env::var(TEST_WATCH_ENV).ok().as_deref() == Some("disabled") {
             self.next_probe = now + probe_interval();
             self.next_tail = self.next_probe;
@@ -322,7 +322,7 @@ impl ParentWatchdog {
         } else {
             pane_probe(&self.seed, &self.paths.workspace_id)
         };
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         if let Some(path) = std::env::var_os("RIMZ_TEST_PARENT_PROBE_MARKER")
             && let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)

@@ -92,7 +92,7 @@ pub mod testkit {
     }
 
     /// `agents.carryover.json` bytes parsed since process start.
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn carryover_bytes_parsed() -> u64 {
         CARRYOVER_BYTES_PARSED.load(Ordering::Relaxed)
     }
@@ -431,7 +431,7 @@ fn read_rollup_cache(path: &Path) -> Option<Arc<RollupCache>> {
         return Some(cache);
     }
     let bytes = fs::read(path).ok()?;
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::WORK_COUNTERS
         .rollup_bytes_parsed
         .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);

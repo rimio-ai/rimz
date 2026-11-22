@@ -62,7 +62,7 @@ impl BindGuard {
             if entries.is_empty() {
                 return Ok(None);
             }
-            #[cfg(feature = "testkit")]
+            #[cfg(any(test, feature = "testkit"))]
             if let Some(errno) = std::env::var("RIMZ_TEST_SCOPED_BIND_ARM_ERRNO")
                 .ok()
                 .and_then(|value| value.parse().ok())

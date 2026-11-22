@@ -299,7 +299,7 @@ pub(crate) fn aggregate_counted_rollups(
     headline: HeadlineContext<'_>,
     history: HistoryContext<'_>,
 ) -> SpendingWalkResult {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::WORK_COUNTERS
         .spending_fleet_folds
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

@@ -231,7 +231,7 @@ pub fn with_frame_env<T>(
         }))
     });
     let _frame = FrameGuard(previous);
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_HOOK_APPLY");
     apply()
 }
@@ -456,7 +456,7 @@ impl DrainerLease {
         inherited: Option<RawFd>,
         acquire: impl FnOnce() -> Result<Option<Self>, E>,
     ) -> Result<Option<Self>, E> {
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         crate::testkit::rendezvous("RIMZ_TEST_DRAINER_LEASE_HANDOVER");
         let lease = acquire();
         if let Some(fd) = inherited {
@@ -811,12 +811,12 @@ pub fn run(store: &Store) -> Result<(), HookDrainErr> {
         return Ok(());
     }
     let mut active = Instant::now();
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     let mut ticks = std::env::var_os("RIMZ_TEST_HOOK_DRAIN_TICKS")
         .map(UnixStream::connect)
         .transpose()?;
     loop {
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         crate::testkit::rendezvous("RIMZ_TEST_HOOK_DRAIN_BEFORE_POLL_CLIENTS");
         if poll_clients(store, &listener, &mut clients)? {
             active = Instant::now();
@@ -867,7 +867,7 @@ pub fn run(store: &Store) -> Result<(), HookDrainErr> {
                 .iter()
                 .map(|client| PollFd::new(client.stream.as_fd(), PollFlags::POLLIN)),
         );
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         if let Some(ticks) = ticks.as_mut() {
             ticks.write_all(&[1])?;
         }
@@ -876,14 +876,14 @@ pub fn run(store: &Store) -> Result<(), HookDrainErr> {
             Err(error) => return Err(io::Error::from(error).into()),
         }
     }
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_HOOK_DRAIN_BEFORE_UNLINK");
     drop(socket_guard);
     drop(listener);
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_HOOK_DRAIN_BEFORE_FINAL_DRAIN");
     drain.drain(store, &_lifetime, None, None, |_| Ok(false))?;
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_HOOK_DRAIN_AFTER_FINAL_DRAIN");
     Ok(())
 }
@@ -939,7 +939,7 @@ fn validate_ownership(
 }
 
 fn idle() -> Duration {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if let Some(ms) = std::env::var("RIMZ_TEST_HOOK_DRAIN_IDLE_MS")
         .ok()
         .and_then(|raw| raw.parse().ok())
@@ -949,10 +949,10 @@ fn idle() -> Duration {
     DRAINER_IDLE
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 struct DrainTiming(Value);
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 impl Drop for DrainTiming {
     fn drop(&mut self) {
         let _ = writeln!(io::stderr().lock(), "{}", self.0);
@@ -1116,9 +1116,9 @@ impl Drainer {
                 } else {
                     ingress::write_cursor
                 };
-                #[cfg(feature = "testkit")]
+                #[cfg(any(test, feature = "testkit"))]
                 let mut processor_succeeded = true;
-                #[cfg(feature = "testkit")]
+                #[cfg(any(test, feature = "testkit"))]
                 let timing_start = {
                     static ENABLED: OnceLock<bool> = OnceLock::new();
                     ENABLED
@@ -1182,7 +1182,7 @@ impl Drainer {
                 ) {
                     Ok(reply) => reply,
                     Err(error) => {
-                        #[cfg(feature = "testkit")]
+                        #[cfg(any(test, feature = "testkit"))]
                         {
                             processor_succeeded = false;
                         }
@@ -1195,7 +1195,7 @@ impl Drainer {
                         HookReply::Silent
                     }
                 };
-                #[cfg(feature = "testkit")]
+                #[cfg(any(test, feature = "testkit"))]
                 crate::testkit::rendezvous("RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY");
                 let lock =
                     WorkspaceLock::acquire_with_timeout(&store.paths().workspace_lock, LOCK_WAIT)?;
@@ -1207,9 +1207,9 @@ impl Drainer {
                 write_cursor(store.paths(), &cursor, &lock)?;
                 expected = cursor;
                 self.applied = end;
-                #[cfg(feature = "testkit")]
+                #[cfg(any(test, feature = "testkit"))]
                 let elapsed = timing_start.map(|start| start.elapsed());
-                #[cfg(feature = "testkit")]
+                #[cfg(any(test, feature = "testkit"))]
                 let _timing = elapsed.map(|elapsed| {
                     DrainTiming(serde_json::json!({"hook_drain_timing": {
                         "ingress": frame.event_id,
@@ -1306,7 +1306,7 @@ impl Drainer {
 }
 
 fn reply_retention() -> Duration {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if let Some(ms) = std::env::var("RIMZ_TEST_HOOK_REPLY_RETENTION_MS")
         .ok()
         .and_then(|raw| raw.parse().ok())

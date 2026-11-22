@@ -238,7 +238,7 @@ fn scan_records<T: DeserializeOwned>(
 #[doc(hidden)]
 pub mod testkit {
     use std::path::Path;
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -264,13 +264,13 @@ pub mod testkit {
         BYTES_WRITTEN.fetch_add(n, Ordering::Relaxed);
     }
 
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     static PATH_BYTES_READ: std::sync::Mutex<std::collections::BTreeMap<PathBuf, u64>> =
         std::sync::Mutex::new(std::collections::BTreeMap::new());
 
     /// Event-log bytes scanned since process start from files under `dir`,
     /// charged in the same amounts as [`bytes_read`].
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn bytes_read_under(dir: &Path) -> u64 {
         PATH_BYTES_READ
             .lock()
@@ -284,7 +284,7 @@ pub mod testkit {
     /// Charged once per scan call, off the row loop, so the per-row path
     /// pays nothing for the per-path tally.
     pub(super) fn count_path_bytes_read(path: &Path, n: u64) {
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         if n > 0 {
             *PATH_BYTES_READ
                 .lock()
@@ -292,7 +292,7 @@ pub mod testkit {
                 .entry(path.to_path_buf())
                 .or_default() += n;
         }
-        #[cfg(not(feature = "testkit"))]
+        #[cfg(not(any(test, feature = "testkit")))]
         let _ = (path, n);
     }
 }

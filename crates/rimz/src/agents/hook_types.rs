@@ -45,7 +45,7 @@ pub const HOOK_ENV_NAMES: &[&str] = &[
     "RIMZ_TMUX_BIN",
     "RIMZ_MESSAGE_INTERVAL_MS",
     "RIMZ_MESSAGE_SETTLE_MS",
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     "RIMZ_TEST_ZELLIJ_LOG",
     "RIMZ_CODEX_SESSIONS",
     "RIMZ_CODEX_APP_SERVER_SOCK",

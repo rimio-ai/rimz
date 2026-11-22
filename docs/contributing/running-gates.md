@@ -4,10 +4,10 @@ How the gates and the test runner behave in practice: what each command shows an
 
 ## Compile and lint signals
 
-- Compile tests with `cargo xtask check`. It passes `--workspace --all-targets --all-features`, so it alone covers `sentry` code. A bare `cargo check --tests` still compiles `testkit` code, as editors and agent harnesses do, through the crate's [self dev-dependency](./rust-conventions.md#performance-gates).
+- Compile tests with `cargo xtask check`. It passes `--workspace --all-targets --all-features`, so it alone covers `sentry` code. A bare `cargo check --tests` compiles the library's unit tests with their `testkit` code, but fails on the binary's unit tests and skips the integration tests and fixture bins, which need the feature itself ([Performance gates](./rust-conventions.md#performance-gates)).
 - `cargo xtask check` and `cargo xtask lint` build with `testkit` on (lint runs only the all-features clippy, `lint_all_features` in `xtask/src/gates.rs`), so production code that calls a `cfg(any(test, feature = "testkit"))` item passes both. Before hand-off, run `cargo clippy -p rimz --bin rimz --locked -- -D warnings`, the install-host shape the gate runs (`INSTALL_HOST_LINT_ARGS` in `xtask/src/gates.rs`).
 - A passing `cargo xtask check` prints no compiler warnings. After an edit that can leave test code with unused bindings (a removed parameter, a dropped field), run `cargo xtask lint` before the first test run, or list the warnings with `cargo build --tests -p rimz --message-format short`.
-- A remove-and-compile census (delete an item, count the compile errors) measures the library alone. The unit-test target is the library built under `cfg(test)`, and the crate's self dev-dependency links the library into it, so neither `--tests` nor `--keep-going` type-checks `#[cfg(test)]` code while the library fails. Count test-side reach after the production errors are fixed, or report it as unmeasured.
+- A remove-and-compile census (delete an item, count the compile errors) measures the library alone. The unit-test target is the library's own source built under `cfg(test)`, so it fails on every production error too, and a `--tests` count mixes those with test-side errors. Count test-side reach after the production errors are fixed, or report it as unmeasured.
 - Never gate a command on a piped check (`cargo xtask check | tail && git commit`). The pipe exits with the status of `tail`, so a failed check still commits.
 
 ## The test runner
@@ -202,8 +202,8 @@ Every test that reaches the interactive shell probe of a launch (`bash_interacti
 ```sh
 # Linux-only items in the shipped library and binary, on macOS
 RUSTFLAGS='-D warnings' cargo-zigbuild check -p rimz --target aarch64-apple-darwin --locked
-# the same in the test targets, which build with testkit on
-RUSTFLAGS='-D warnings' cargo-zigbuild check -p rimz --target aarch64-apple-darwin --locked --tests
+# the same in the test targets, which need testkit on
+RUSTFLAGS='-D warnings' cargo-zigbuild check -p rimz --target aarch64-apple-darwin --locked --tests --features testkit
 # glibc-only items, on musl
 RUSTFLAGS='-D warnings' cargo-zigbuild check -p rimz --target x86_64-unknown-linux-musl --locked
 # architecture-specific types, on aarch64 Linux

@@ -148,7 +148,7 @@ fn policy_blocker_for_env(
 /// `RIMZ_TEST_GROK_POLICY_ROOT` so the suite never reads the host's own
 /// policy; a shipped binary has no override for the managed-hooks pin.
 fn machine_path(path: &str) -> PathBuf {
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     if let Some(root) =
         std::env::var_os("RIMZ_TEST_GROK_POLICY_ROOT").filter(|value| !value.is_empty())
     {

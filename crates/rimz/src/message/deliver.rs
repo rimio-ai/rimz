@@ -440,7 +440,7 @@ fn attempt_delivery(
     if let Some(wait) = hosting_wait(workspace, store, candidate.target, candidate.bound) {
         return Ok(DeliveryReport::Refused(wait));
     }
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_BEFORE_CLAIM");
     let claimed = match policy {
         DeliveryPolicy::Boundary => {
@@ -453,7 +453,7 @@ fn attempt_delivery(
     let Some(claimed) = claimed else {
         return Ok(DeliveryReport::Stopped);
     };
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_AFTER_CLAIM");
     let mut send_messages = claimed
         .iter()
@@ -885,7 +885,7 @@ pub fn sweep(
     }
     // An acknowledgement after this queue read must not free a card in a snapshot that still has it idle.
     let live = store.list_messages()?;
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     crate::testkit::rendezvous("RIMZ_TEST_SWEEP_AFTER_SNAPSHOT");
     // Built on first need, after the first queue read: a record enqueued between
     // the two reads can be a deliverable head the first read never showed.

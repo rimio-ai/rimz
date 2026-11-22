@@ -31,7 +31,7 @@ pub(super) use fold::AgentRollup;
 pub(super) use fold::PendingRollup;
 pub(super) use fold::lifecycle_follow_seed;
 pub use fold::lifecycle_log_generation;
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub(crate) use fold::testkit as fold_testkit;
 pub(crate) use fold::testkit::count_rows_materialized;
 pub use fold::{ResumeOutcome, RollupCursor};

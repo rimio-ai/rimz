@@ -913,7 +913,7 @@ impl<'a> Fire<'a> {
         run: Option<&crate::ids::WorkflowRunId>,
         at: Timestamp,
     ) -> Option<String> {
-        #[cfg(feature = "testkit")]
+        #[cfg(any(test, feature = "testkit"))]
         crate::testkit::rendezvous("RIMZ_TEST_LOOP_BEFORE_LAUNCH_MEMORY");
         let scheduled =
             (self.mode == LoopRunMode::Scheduled).then_some((self.checkout.as_deref(), at));

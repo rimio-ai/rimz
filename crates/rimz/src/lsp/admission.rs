@@ -298,7 +298,7 @@ impl std::fmt::Display for QueueTimeout {
     }
 }
 
-#[cfg(feature = "testkit")]
+#[cfg(any(test, feature = "testkit"))]
 pub mod testkit {
     use super::*;
 

@@ -51,6 +51,11 @@ name = "rimz"
 path = "src/lib.rs"
 
 [features]
+# Test-support code. The library's own unit tests see it through `cfg(test)`;
+# the binary's unit tests, the integration tests, the fixture bins, and the
+# benches need the feature itself, which every `cargo xtask` build turns on
+# through `--all-features`. No self dev-dependency forces it on: that edge
+# made the library's unit-test build wait for the whole library rlib.
 testkit = []
 # Off-box error reporting (src/observability/). Non-default and stripped from
 # shipped binaries, like `testkit`; dev opts in, CI builds it via --all-features.
@@ -244,16 +249,6 @@ insta.workspace = true
 portable-pty.workspace = true
 predicates.workspace = true
 proptest.workspace = true
-# Self dev-dependency: test-support code sits behind the non-default `testkit`
-# feature, and this edge turns it on for exactly the builds that carry
-# dev-dependencies — tests, benches, and the crate graph every rust-analyzer
-# builds from `cargo metadata`. Binaries and `cargo build` never pull a
-# dev-dependency, so shipped builds stay feature-free and lints still see
-# production-only dead code. Without it, a bare `cargo check --tests` and every
-# editor or agent harness running one reports phantom `cannot find testkit in
-# crate` errors. Cargo allows dev-dependency cycles and strips version-less path
-# dev-dependencies when packaging, so publishing is unaffected.
-rimz = { path = ".", features = ["testkit"] }
 tempfile.workspace = true
 tracing.workspace = true
 vt100.workspace = true

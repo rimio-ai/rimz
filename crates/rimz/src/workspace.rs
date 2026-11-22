@@ -412,7 +412,7 @@ const NO_SCAN: PinScan<'static> = &|_| Vec::new();
 
 impl WorkspaceResolver {
     /// Resolve a room choice using an explicit RimZ home for fixture isolation.
-    #[cfg(feature = "testkit")]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn resolve_under(
         start: impl AsRef<Path>,
         root_override: Option<PathBuf>,
