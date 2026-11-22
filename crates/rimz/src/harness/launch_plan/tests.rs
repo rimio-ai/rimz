@@ -4753,7 +4753,12 @@ fn antigravity_fresh_launch_selects_an_agent_file_in_rimz_plugin() {
             .lines()
             .find(|line| line.starts_with("tools: "))
             .unwrap();
-        for name in ["invoke_subagent", "define_subagent", "manage_subagents"] {
+        for name in [
+            "invoke_subagent",
+            "define_subagent",
+            "manage_subagents",
+            "run_workflow",
+        ] {
             assert_eq!(tools.contains(name), kept, "subagent={subagent}: {tools}");
         }
     }

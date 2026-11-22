@@ -74,10 +74,10 @@ agy needs a `tools` list on every definition. `agent_file.rs::map_tools` maps Ri
 | `Bash` | `run_command` |
 | `WebSearch`, `WebFetch` | `search_web` |
 | `AskUserQuestion` | `ask_question` |
-| `Agent` | `invoke_subagent`, `define_subagent`, `manage_subagents` |
+| `Agent` | `invoke_subagent`, `define_subagent`, `manage_subagents`, `run_workflow` |
 | `Skill` | none |
 
-An agy name passes as written: the 13 defaults (`agent_file.rs::DEFAULT_TOOLS`) and `generate_image`. Any other name is dropped with the dropped-tools notice and never reaches the file, and a restriction suffix (`Bash(git *)`) is reported with the restrictions notice while its base name is mapped. A launch with no list writes the 13 defaults. The three subagent names are written only when the launch keeps native subagents on (`crates/rimz/src/harness/launch_reminders.rs::LaunchReminders::disable_native_subagents`). On agy 1.5.13 `read_file` refuses a directory under a custom agent (`path is a directory, not a file`) and agy registers no other listing tool, so `LS` maps to `read_file` and grants no directory listing: a definition that needs one lists `Bash`.
+An agy name passes as written: the 13 defaults (`agent_file.rs::DEFAULT_TOOLS`) and `generate_image`. Any other name is dropped with the dropped-tools notice and never reaches the file, and a restriction suffix (`Bash(git *)`) is reported with the restrictions notice while its base name is mapped. A launch with no list writes the 13 defaults. The four subagent names, `run_workflow` among them since it fans work out to subagents, are written only when the launch keeps native subagents on (`crates/rimz/src/harness/launch_reminders.rs::LaunchReminders::disable_native_subagents`). On agy 1.5.13 `read_file` refuses a directory under a custom agent (`path is a directory, not a file`) and agy registers no other listing tool, so `LS` maps to `read_file` and grants no directory listing: a definition that needs one lists `Bash`.
 
 #### MCP servers
 

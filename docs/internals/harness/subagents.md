@@ -210,7 +210,7 @@ Where the provider exposes a verified native restriction, the exec compiler disa
 | Codex | removes earlier `agents.enabled` and `features.multi_agent_v2` config overrides and every split or equals `--enable multi_agent_v2`, then appends `-c agents.enabled=false -c features.multi_agent_v2=false`; `features.multi_agent` is untouched |
 | OpenCode | appends `"-opencode.tool.subagent"` last in `OPENCODE_CONFIG_CONTENT.plugins`, keeping every other key and leaving permissions untouched |
 | Pi | no built-in subagents; third-party extensions stay installed because disabling them all would remove unrelated tools |
-| Antigravity | a fresh launch's agent file leaves out `invoke_subagent`, `define_subagent`, and `manage_subagents`; a resume, or a launch with no prompt sources, writes no file and keeps native delegation ([the agent file](../agents/adapter_antigravity.md#the-agent-file)) |
+| Antigravity | a fresh launch's agent file leaves out `invoke_subagent`, `define_subagent`, `manage_subagents`, and `run_workflow`; a resume, or a launch with no prompt sources, writes no file and keeps native delegation ([the agent file](../agents/adapter_antigravity.md#the-agent-file)) |
 | Other adapters | no native-tool restriction until one is verified |
 
 OpenCode removes the built-in tool, so neither an agent-specific permission allow nor `--auto` restores it. The base object is composed launch env over inherited login env. Malformed content is replaced with the selector-only object and produces one launch warning with the problem and fix ([adapter_opencode.md](../agents/adapter_opencode.md)).
