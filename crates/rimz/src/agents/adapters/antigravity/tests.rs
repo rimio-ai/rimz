@@ -377,6 +377,81 @@ fn catalog_events_without_lifecycle_signal_keep_context_identity() {
     );
     assert!(snake.lifecycle().cloned().is_none());
 }
+/// The catalog event whose `PostToolUse` matcher names `tool`. Each matcher is an anchored
+/// alternation of names, and a name ending in `.*` matches by prefix.
+fn post_tool_event(tool: &str) -> Option<&'static str> {
+    ANTIGRAVITY_HOOKS
+        .iter()
+        .filter(|hook| hook.config_event == "PostToolUse")
+        .find(|hook| {
+            let names = hook.config_matcher.unwrap();
+            let names = names.strip_prefix('^').unwrap().strip_suffix('$').unwrap();
+            let names = names
+                .strip_prefix('(')
+                .and_then(|names| names.strip_suffix(')'))
+                .unwrap_or(names);
+            names.split('|').any(|name| match name.strip_suffix(".*") {
+                Some(prefix) => tool.starts_with(prefix),
+                None => tool == name,
+            })
+        })
+        .map(|hook| hook.hook.event)
+}
+
+#[test]
+fn post_tool_use_matchers_route_legacy_and_current_tool_names() {
+    for (tool, event, effect) in [
+        ("write_to_file", "PostToolUse:edit", ToolEffect::Editing),
+        (
+            "replace_file_content",
+            "PostToolUse:edit",
+            ToolEffect::Editing,
+        ),
+        (
+            "multi_replace_file_content",
+            "PostToolUse:edit",
+            ToolEffect::Editing,
+        ),
+        ("write_file", "PostToolUse:edit", ToolEffect::Editing),
+        ("edit_file", "PostToolUse:edit", ToolEffect::Editing),
+        ("run_command", "PostToolUse:mutating", ToolEffect::Mutating),
+        ("run_workflow", "PostToolUse:mutating", ToolEffect::Mutating),
+        (
+            "call_mcp_tool",
+            "PostToolUse:mutating",
+            ToolEffect::Mutating,
+        ),
+        ("view_file", "PostToolUse:observed", ToolEffect::Observed),
+        ("read_file", "PostToolUse:observed", ToolEffect::Observed),
+        ("search_web", "PostToolUse:observed", ToolEffect::Observed),
+        (
+            "invoke_subagent",
+            "PostToolUse:observed",
+            ToolEffect::Observed,
+        ),
+        (
+            "browser_click_element",
+            "PostToolUse:observed",
+            ToolEffect::Observed,
+        ),
+    ] {
+        assert_eq!(post_tool_event(tool), Some(event), "{tool}");
+        let payload = with(&hook_payload(), [("toolCall", json!({"name": tool}))]);
+        assert_eq!(
+            hook_signal(&AntigravityAdapter, event, &payload),
+            LifecycleSignal::ToolUsed {
+                effect,
+                name: Some(tool.to_owned()),
+                native_key: None,
+                turn_id: None,
+            },
+            "{tool}"
+        );
+    }
+    for tool in ["mcp_rimz_tools_lsp", "unknown_tool"] {
+        assert_eq!(post_tool_event(tool), None, "{tool}");
+    }
+}
 #[test]
 fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
     for error in [

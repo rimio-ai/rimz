@@ -85,7 +85,9 @@ const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
         )
         .progress(),
         config_event: "PostToolUse",
-        config_matcher: Some("^(write_to_file|replace_file_content|multi_replace_file_content)$"),
+        config_matcher: Some(
+            "^(write_to_file|replace_file_content|multi_replace_file_content|write_file|edit_file)$",
+        ),
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:edit",
     },
     AntigravityHook {
@@ -95,7 +97,7 @@ const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
         )
         .progress(),
         config_event: "PostToolUse",
-        config_matcher: Some("^run_command$"),
+        config_matcher: Some("^(run_command|run_workflow|call_mcp_tool)$"),
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:mutating",
     },
     AntigravityHook {
@@ -106,7 +108,7 @@ const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
         .progress(),
         config_event: "PostToolUse",
         config_matcher: Some(
-            "^(view_file|list_dir|find_by_name|grep_search|search_web|read_url_content|manage_task|schedule|list_permissions|ask_permission|invoke_subagent|define_subagent|send_message|manage_subagents|ask_question|generate_image|manage_inbox|read_resource|browser_.*)$",
+            "^(view_file|read_file|list_dir|find_by_name|grep_search|search_web|read_url_content|manage_task|schedule|list_permissions|ask_permission|invoke_subagent|define_subagent|send_message|manage_subagents|ask_question|generate_image|manage_inbox|read_resource|browser_.*)$",
         ),
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:observed",
     },
@@ -170,12 +172,18 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
             "write_to_file",
             "replace_file_content",
             "multi_replace_file_content",
+            "write_file",
+            "edit_file",
             "run_command",
+            "run_workflow",
+            "call_mcp_tool",
         ],
         editing: &[
             "write_to_file",
             "replace_file_content",
             "multi_replace_file_content",
+            "write_file",
+            "edit_file",
         ],
         blocking: &[],
     },
