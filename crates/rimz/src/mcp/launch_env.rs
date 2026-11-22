@@ -12,7 +12,7 @@ use super::catalog::{Capability, LoadMode};
 /// or empty serves nothing.
 pub const ENV_SERVE: &str = "RIMZ_MCP_SERVE";
 
-/// The directory the agent launched in, where every one-shot runs.
+/// The directory the agent launched in, where every tool call runs.
 pub const ENV_CWD: &str = "RIMZ_MCP_CWD";
 
 /// One served capability and its load mark.

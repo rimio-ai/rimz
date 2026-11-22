@@ -44,9 +44,8 @@ impl Tools {
             ))
         });
         Arc::new(Self {
-            start_dir: start_dir.unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-            }),
+            start_dir: start_dir
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
             pinned_room,
             follower,
         })
