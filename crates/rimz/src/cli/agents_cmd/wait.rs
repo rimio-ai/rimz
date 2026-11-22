@@ -4,6 +4,8 @@ use super::runs_lookup::{agent_name, newest_run_by_ref};
 use crate::cli::render::announce::{MESSAGE_STOP_EXIT, write_message_stop};
 use crate::cli::{render, select};
 use rimz::agents::TurnCompletion;
+use rimz::launcher::agent_join::{Joined, Observed, WaitSet, WaitTarget, join, mark_joined};
+pub(super) use rimz::launcher::agent_join::{TargetOutcome, TerminalPayload};
 use rimz::message::announce::WaitCaller;
 use rimz::message::turn_wait::{TurnWaitReason, TurnWaitView};
 
@@ -203,19 +205,33 @@ fn wait_deferred(
 ) -> Result<()> {
     let store = &ctx.store;
     let session_name = &ctx.workspace.session_name;
-    let mode = if any { JoinMode::Any } else { JoinMode::All };
-    let mut waits = WaitSet::once(targets, mode, caller);
-    let (exit, announcement) = match waits.poll(store, session_name, &ctx.address_context())? {
-        WaitPoll::Settled { selected, .. } => (
+    let mut waits = WaitSet::once(targets, any);
+    let mut caller = caller;
+    let joined = join(
+        store,
+        &ctx.address_context(),
+        &mut waits,
+        &mut || caller.queued(store, session_name),
+        &mut |observed| match observed {
+            Observed::Reason {
+                address,
+                mut previous,
+                reason,
+            } => report_wait_reason(&mut render::err(), &mut previous, reason, address),
+            Observed::Pending { .. } => Ok(()),
+        },
+    )?;
+    let (exit, announcement) = match joined {
+        Joined::Settled { selected, .. } => (
             if any {
-                settled_outcome(&waits, selected)?.exit_code()
+                exit_code(settled_outcome(&waits, selected)?)
             } else {
-                waits.all_exit_code()
+                all_exit_code(&waits)
             },
             None,
         ),
-        WaitPoll::Pending { .. } | WaitPoll::TimedOut { .. } => (MESSAGE_STOP_EXIT, None),
-        WaitPoll::Announced { announcement, .. } => (MESSAGE_STOP_EXIT, Some(announcement)),
+        Joined::StillRunning { .. } => (MESSAGE_STOP_EXIT, None),
+        Joined::Interrupted { answer, .. } => (MESSAGE_STOP_EXIT, Some(answer)),
     };
     let audit = store.runtime_projection(rimz::RuntimeScope::Audit)?.agents;
     let mut rows = Vec::new();
@@ -237,7 +253,7 @@ fn wait_deferred(
             ));
             entries.insert(
                 target.typed_reference(),
-                target.unfinished_entry(Unfinished::Running),
+                unfinished_entry(target, Unfinished::Running),
             );
             continue;
         };
@@ -261,7 +277,7 @@ fn wait_deferred(
             record,
             response.as_ref(),
         ));
-        let mut entry = outcome.entry();
+        let mut entry = entry(outcome);
         entry.last_message = None;
         if let Some(response) = response {
             entry.response_path = Some(response.path);
@@ -341,18 +357,27 @@ fn wait_non_stream(
     let current_channel = &ctx.address_context();
     let store = &ctx.store;
     let session_name = &ctx.workspace.session_name;
-    let mut waits = WaitSet::new(
-        targets,
-        if any { JoinMode::Any } else { JoinMode::All },
-        timeout,
-        caller,
-    );
-    loop {
-        match waits.poll(store, session_name, current_channel)? {
-            WaitPoll::Pending { settled } => {
-                style.report_progress(store, session_name, &waits, &settled)?;
+    let mut waits = WaitSet::new(targets, any, timeout);
+    let mut caller = caller;
+    let joined = join(
+        store,
+        current_channel,
+        &mut waits,
+        &mut || caller.queued(store, session_name),
+        &mut |observed| match observed {
+            Observed::Reason {
+                address,
+                mut previous,
+                reason,
+            } => report_wait_reason(&mut render::err(), &mut previous, reason, address),
+            Observed::Pending { waits, settled } => {
+                style.report_progress(store, session_name, waits, settled)
             }
-            WaitPoll::Settled { selected, settled } => {
+        },
+    )?;
+    {
+        match joined {
+            Joined::Settled { selected, settled } => {
                 style.report_settled(
                     store,
                     session_name,
@@ -364,7 +389,7 @@ fn wait_non_stream(
                 render::err().flush()?;
                 std::process::exit(style.exit_code(&waits, selected)?);
             }
-            WaitPoll::TimedOut { settled } => {
+            Joined::StillRunning { settled } => {
                 style.report_unfinished(
                     store,
                     session_name,
@@ -375,9 +400,9 @@ fn wait_non_stream(
                 render::err().flush()?;
                 std::process::exit(Unfinished::TimedOut.exit_code());
             }
-            WaitPoll::Announced {
+            Joined::Interrupted {
                 settled,
-                announcement,
+                answer: announcement,
             } => {
                 style.report_unfinished(
                     store,
@@ -390,7 +415,6 @@ fn wait_non_stream(
                 std::process::exit(Unfinished::Running.exit_code());
             }
         }
-        std::thread::sleep(Duration::from_millis(500));
     }
 }
 
@@ -520,9 +544,9 @@ impl WaitStyle {
     fn exit_code(self, waits: &WaitSet, selected: usize) -> Result<i32> {
         match self {
             Self::Single { .. } | Self::Any { .. } => {
-                Ok(settled_outcome(waits, selected)?.exit_code())
+                Ok(exit_code(settled_outcome(waits, selected)?))
             }
-            Self::All { .. } => Ok(waits.all_exit_code()),
+            Self::All { .. } => Ok(all_exit_code(waits)),
         }
     }
 }
@@ -543,184 +567,74 @@ fn mark_settled_joined(
     Ok(())
 }
 
-fn mark_joined<'a>(
-    store: &rimz::Store,
-    session_name: &str,
-    outcomes: impl IntoIterator<Item = &'a TargetOutcome>,
-) {
-    let snapshot = std::cell::LazyCell::new(|| {
-        store
-            .snapshot_cached()
-            .inspect_err(|err| {
-                tracing::warn!(error = %err, "could not read the caller for the joined run");
-            })
-            .ok()
-    });
-    let caller = std::cell::LazyCell::new(|| {
-        snapshot
-            .as_ref()
-            .and_then(|snapshot| rimz::harness::ancestry::resolve_caller(&snapshot.agents))
-    });
-    let audit = std::cell::LazyCell::new(|| {
-        store
-            .runtime_projection(rimz::RuntimeScope::Audit)
-            .inspect_err(|err| {
-                tracing::warn!(error = %err, "could not read the joined run's agent rows");
-            })
-            .ok()
-    });
-    for outcome in outcomes {
-        let TerminalPayload::Run(record) = &outcome.payload else {
-            continue;
-        };
-        let claims = snapshot
-            .as_ref()
-            .zip(audit.as_ref())
-            .is_some_and(|(snapshot, audit)| {
-                rimz::harness::run::report::may_claim(
-                    snapshot,
-                    &audit.agents,
-                    caller.as_ref(),
-                    record,
-                )
-            });
-        if !claims {
-            tracing::debug!(
-                run_id = %record.run_id,
-                "result printed outside its launcher's turn; left unjoined for the digest",
-            );
-            continue;
-        }
-        let result = rimz::harness::run::report::join_and_settle_digest(
-            store,
-            session_name,
-            &record.run_id,
-            Some(record.follow_ups + 1),
-            "joined inline",
-        );
-        if let Err(err) = result {
-            tracing::warn!(
-                run_id = %record.run_id,
-                error = %err,
-                "could not mark the joined run",
-            );
-        }
-    }
-}
-
 fn settled_outcome(waits: &WaitSet, index: usize) -> Result<&TargetOutcome> {
     waits.outcome(index).context("settled wait without outcome")
 }
 
-enum WaitTarget {
-    Run {
-        run_id: rimz::RunId,
-        name: String,
-        typed_reference: String,
-        reason: Option<TurnWaitReason>,
-    },
-    Agent {
-        reference: String,
-        typed_reference: String,
-        name: String,
-        reason: Option<TurnWaitReason>,
-        kind: rimz::ids::AgentKind,
-        completed_seen_at: Option<Instant>,
-    },
-}
-
-impl WaitTarget {
-    fn typed_reference(&self) -> &str {
-        match self {
-            Self::Run {
-                typed_reference, ..
-            }
-            | Self::Agent {
-                typed_reference, ..
-            } => typed_reference,
+fn unfinished_entry(target: &WaitTarget, ending: Unfinished) -> WaitEntryJson {
+    let (name, reason) = match target {
+        WaitTarget::Run { name, reason, .. } | WaitTarget::Agent { name, reason, .. } => {
+            (name, reason)
         }
-    }
-
-    fn unfinished_entry(&self, ending: Unfinished) -> WaitEntryJson {
-        let (name, reason) = match self {
-            Self::Run { name, reason, .. } | Self::Agent { name, reason, .. } => (name, reason),
-        };
-        let mut entry = WaitEntryJson::new(name.clone(), ending.status(), None, None, None, None);
-        entry.exit = ending.exit_code();
-        entry.reason = reason
-            .as_ref()
-            .and_then(|reason| wait_reason_text(reason, jiff::Timestamp::now()));
-        entry
-    }
+    };
+    let mut entry = WaitEntryJson::new(name.clone(), ending.status(), None, None, None, None);
+    entry.exit = ending.exit_code();
+    entry.reason = reason
+        .as_ref()
+        .and_then(|reason| wait_reason_text(reason, jiff::Timestamp::now()));
+    entry
 }
 
-pub(super) struct TargetOutcome {
-    pub(super) reference: String,
-    pub(super) name: String,
-    pub(super) payload: TerminalPayload,
-}
-
-pub(super) enum TerminalPayload {
-    Run(Box<RunRecord>),
-    Agent {
-        agent: Box<AgentState>,
-        completion: TurnCompletion,
-        last_message: Option<String>,
-    },
-    Disappeared,
-}
-
-impl TargetOutcome {
-    pub(super) fn entry(&self) -> WaitEntryJson {
-        match &self.payload {
-            TerminalPayload::Run(record) => {
-                let mut entry = WaitEntryJson::new(
-                    self.name.clone(),
-                    record.status,
-                    record.cost_usd,
-                    record.transcript_path.clone(),
-                    record.last_message.clone(),
-                    (record.status == RunStatus::Failed)
-                        .then(|| record.failure_tail.clone())
-                        .flatten(),
-                );
-                entry.cancel_reason = record.cancel_reason;
-                entry
-            }
-            TerminalPayload::Agent {
-                agent,
-                completion,
-                last_message,
-            } => WaitEntryJson::new(
-                self.name.clone(),
-                if *completion == TurnCompletion::Failed {
-                    RunStatus::Failed
-                } else {
-                    RunStatus::Completed
-                },
-                agent
-                    .context
-                    .as_ref()
-                    .and_then(|context| context.cost.as_ref())
-                    .and_then(|cost| cost.total_cost_usd),
-                agent.transcript_path.clone(),
-                last_message.clone(),
-                None,
-            ),
-            TerminalPayload::Disappeared => WaitEntryJson::new(
-                self.name.clone(),
-                RunStatus::Failed,
-                None,
-                None,
-                None,
-                Some("agent disappeared while waiting".to_owned()),
-            ),
+/// The JSON entry of a settled target.
+pub(super) fn entry(outcome: &TargetOutcome) -> WaitEntryJson {
+    match &outcome.payload {
+        TerminalPayload::Run(record) => {
+            let mut entry = WaitEntryJson::new(
+                outcome.name.clone(),
+                record.status,
+                record.cost_usd,
+                record.transcript_path.clone(),
+                record.last_message.clone(),
+                (record.status == RunStatus::Failed)
+                    .then(|| record.failure_tail.clone())
+                    .flatten(),
+            );
+            entry.cancel_reason = record.cancel_reason;
+            entry
         }
+        TerminalPayload::Agent {
+            agent,
+            completion,
+            last_message,
+        } => WaitEntryJson::new(
+            outcome.name.clone(),
+            if *completion == TurnCompletion::Failed {
+                RunStatus::Failed
+            } else {
+                RunStatus::Completed
+            },
+            agent
+                .context
+                .as_ref()
+                .and_then(|context| context.cost.as_ref())
+                .and_then(|cost| cost.total_cost_usd),
+            agent.transcript_path.clone(),
+            last_message.clone(),
+            None,
+        ),
+        TerminalPayload::Disappeared => WaitEntryJson::new(
+            outcome.name.clone(),
+            RunStatus::Failed,
+            None,
+            None,
+            None,
+            Some("agent disappeared while waiting".to_owned()),
+        ),
     }
+}
 
-    fn exit_code(&self) -> i32 {
-        self.entry().exit
-    }
+fn exit_code(outcome: &TargetOutcome) -> i32 {
+    entry(outcome).exit
 }
 
 #[derive(serde::Serialize)]
@@ -843,184 +757,6 @@ fn run_describes_latest_turn(
     ))
 }
 
-/// How long a completed turn may wait for its final message to reach the
-/// transcript. The hook helper records the turn's end before it appends the
-/// message, and a provider whose hook carries none settles after this grace.
-const FINAL_MESSAGE_GRACE: Duration = Duration::from_secs(3);
-
-/// Decide whether an interactive turn has settled, and with which message.
-/// `None` keeps waiting; `Some(message)` settles. Only a message recorded
-/// during the current turn counts. A wait deadline cuts the grace short, since
-/// the turn itself has already completed.
-pub(super) fn settle_agent_turn(
-    completion: TurnCompletion,
-    turn_started_at: Option<jiff::Timestamp>,
-    latest: Option<rimz::transcript::TranscriptEntry>,
-    completed_seen_at: &mut Option<Instant>,
-    (now, deadline): (Instant, Option<Instant>),
-) -> Option<Option<String>> {
-    if completion == TurnCompletion::Open {
-        *completed_seen_at = None;
-        return None;
-    }
-    let message = latest
-        .filter(|entry| turn_started_at.is_some_and(|started| entry.at >= started))
-        .map(|entry| entry.text);
-    if message.is_some() || completion == TurnCompletion::Failed {
-        return Some(message);
-    }
-    let seen = *completed_seen_at.get_or_insert(now);
-    (now.duration_since(seen) >= FINAL_MESSAGE_GRACE
-        || deadline.is_some_and(|deadline| now >= deadline))
-    .then_some(None)
-}
-
-fn poll_target(
-    store: &rimz::Store,
-    agent_view: Option<&TurnWaitView>,
-    target: &mut WaitTarget,
-    current_channel: &rimz::address::AddressContext,
-    deadline: Option<Instant>,
-) -> Result<Option<TargetOutcome>> {
-    match target {
-        WaitTarget::Run {
-            run_id,
-            name,
-            typed_reference,
-            reason,
-        } => {
-            let record = rimz::harness::run::load(store.paths(), run_id)?;
-            *name = record
-                .agent_name
-                .clone()
-                .unwrap_or_else(|| run_id.to_string());
-            if !record.status.is_terminal() {
-                if let Some(view) = agent_view {
-                    report_run_wait_reason(view, &record, current_channel, reason)?;
-                } else {
-                    *reason = None;
-                }
-                return Ok(None);
-            }
-            Ok(Some(TargetOutcome {
-                reference: typed_reference.clone(),
-                name: name.clone(),
-                payload: TerminalPayload::Run(Box::new(record)),
-            }))
-        }
-        WaitTarget::Agent {
-            reference,
-            typed_reference,
-            name,
-            reason,
-            completed_seen_at,
-            ..
-        } => {
-            let view = agent_view.context("pending agent target without snapshot")?;
-            match crate::cli::resolve_agent_one(
-                store,
-                &view.snapshot,
-                reference,
-                None,
-                current_channel,
-            ) {
-                Ok(agent) => {
-                    let address =
-                        rimz::address::paste_address(agent, &view.snapshot, current_channel);
-                    report_wait_reason(&mut render::err(), reason, view.reason(agent), &address)?;
-                    *name = agent_name(agent).to_owned();
-                    let completion = view.completion(agent);
-                    let latest = match agent.turn_started_at {
-                        Some(since) if completion != TurnCompletion::Open => {
-                            rimz::transcript::latest_assistant(
-                                store.paths(),
-                                &agent.kind,
-                                &agent.agent_id,
-                                since,
-                            )
-                            .context("reading the agent's final message")?
-                        }
-                        _ => None,
-                    };
-                    let settled = settle_agent_turn(
-                        completion,
-                        agent.turn_started_at,
-                        latest,
-                        completed_seen_at,
-                        (Instant::now(), deadline),
-                    );
-                    Ok(settled.map(|last_message| TargetOutcome {
-                        reference: typed_reference.clone(),
-                        name: agent_name(agent).to_owned(),
-                        payload: TerminalPayload::Agent {
-                            agent: Box::new(agent.clone()),
-                            completion,
-                            last_message,
-                        },
-                    }))
-                }
-                Err(_) => Ok(Some(TargetOutcome {
-                    reference: typed_reference.clone(),
-                    name: name.clone(),
-                    payload: TerminalPayload::Disappeared,
-                })),
-            }
-        }
-    }
-}
-
-fn report_run_wait_reason(
-    view: &TurnWaitView,
-    record: &RunRecord,
-    current_channel: &rimz::address::AddressContext,
-    reason: &mut Option<TurnWaitReason>,
-) -> Result<()> {
-    let Some(agent) = view
-        .snapshot
-        .agents
-        .iter()
-        .find(|agent| record.matches_agent(agent))
-    else {
-        *reason = None;
-        return Ok(());
-    };
-    let address = rimz::address::paste_address(agent, &view.snapshot, current_channel);
-    report_wait_reason(&mut render::err(), reason, view.reason(agent), &address)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum JoinMode {
-    Any,
-    All,
-}
-
-struct WaitSet {
-    targets: Vec<WaitTarget>,
-    outcomes: Vec<Option<TargetOutcome>>,
-    deadline: Option<Instant>,
-    mode: JoinMode,
-    caller: WaitCaller,
-    /// Polls every target once and stops, as a deferring join does.
-    once: bool,
-}
-
-enum WaitPoll {
-    Pending {
-        settled: Vec<usize>,
-    },
-    Settled {
-        selected: usize,
-        settled: Vec<usize>,
-    },
-    TimedOut {
-        settled: Vec<usize>,
-    },
-    Announced {
-        settled: Vec<usize>,
-        announcement: rimz::message::announce::Announcement,
-    },
-}
-
 /// How a wait that stops with targets unfinished reports them.
 #[derive(Clone, Copy)]
 enum Unfinished {
@@ -1045,125 +781,38 @@ impl Unfinished {
     }
 }
 
-impl WaitSet {
-    fn new(
-        targets: Vec<WaitTarget>,
-        mode: JoinMode,
-        timeout: Option<Duration>,
-        caller: WaitCaller,
-    ) -> Self {
-        let outcomes = std::iter::repeat_with(|| None)
-            .take(targets.len())
-            .collect();
-        Self {
-            targets,
-            outcomes,
-            deadline: timeout.map(|duration| Instant::now() + duration),
-            mode,
-            caller,
-            once: false,
-        }
-    }
+fn report_run_wait_reason(
+    view: &TurnWaitView,
+    record: &RunRecord,
+    current_channel: &rimz::address::AddressContext,
+    reason: &mut Option<TurnWaitReason>,
+) -> Result<()> {
+    let Some(agent) = view
+        .snapshot
+        .agents
+        .iter()
+        .find(|agent| record.matches_agent(agent))
+    else {
+        *reason = None;
+        return Ok(());
+    };
+    let address = rimz::address::paste_address(agent, &view.snapshot, current_channel);
+    report_wait_reason(&mut render::err(), reason, view.reason(agent), &address)
+}
 
-    /// A set polled once: every target is read, `--any` is met by the first settled one in
-    /// order, and an unmet join ends as `TimedOut` unless a message stop is due.
-    fn once(targets: Vec<WaitTarget>, mode: JoinMode, caller: WaitCaller) -> Self {
-        Self {
-            once: true,
-            ..Self::new(targets, mode, None, caller)
-        }
-    }
-
-    fn poll(
-        &mut self,
-        store: &rimz::Store,
-        session_name: &str,
-        current_channel: &rimz::address::AddressContext,
-    ) -> Result<WaitPoll> {
-        let pending_agent = self
-            .targets
-            .iter()
-            .zip(&self.outcomes)
-            .any(|(target, outcome)| {
-                matches!(target, WaitTarget::Agent { .. }) && outcome.is_none()
-            });
-        let agent_view = if pending_agent {
-            Some(TurnWaitView::load(store).context("reading agent snapshot")?)
-        } else if self.outcomes.iter().any(Option::is_none) {
-            TurnWaitView::load(store).ok()
-        } else {
-            None
-        };
-
-        let mut settled = Vec::new();
-        for (index, target) in self.targets.iter_mut().enumerate() {
-            if self.outcomes[index].is_some() {
-                continue;
-            }
-            let Some(outcome) = poll_target(
-                store,
-                agent_view.as_ref(),
-                target,
-                current_channel,
-                self.deadline,
-            )?
-            else {
-                continue;
-            };
-            self.outcomes[index] = Some(outcome);
-            settled.push(index);
-            if self.mode == JoinMode::Any && !self.once {
-                return Ok(WaitPoll::Settled {
-                    selected: index,
-                    settled,
-                });
-            }
-        }
-
-        if self.mode == JoinMode::Any
-            && let Some(selected) = self.outcomes.iter().position(Option::is_some)
-        {
-            return Ok(WaitPoll::Settled { selected, settled });
-        }
-        if self.outcomes.iter().all(Option::is_some) {
-            return Ok(WaitPoll::Settled {
-                selected: 0,
-                settled,
-            });
-        }
-        if let Some(announcement) = self.caller.queued(store, session_name) {
-            return Ok(WaitPoll::Announced {
-                settled,
-                announcement,
-            });
-        }
-        if self.once
-            || self
-                .deadline
-                .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            return Ok(WaitPoll::TimedOut { settled });
-        }
-        Ok(WaitPoll::Pending { settled })
-    }
-
-    fn outcome(&self, index: usize) -> Option<&TargetOutcome> {
-        self.outcomes.get(index)?.as_ref()
-    }
-
-    fn all_exit_code(&self) -> i32 {
-        self.outcomes
-            .iter()
-            .flatten()
-            .find(|outcome| outcome.entry().status != RunStatus::Completed)
-            .map_or(0, TargetOutcome::exit_code)
-    }
+fn all_exit_code(waits: &WaitSet) -> i32 {
+    waits
+        .outcomes
+        .iter()
+        .flatten()
+        .find(|outcome| entry(outcome).status != RunStatus::Completed)
+        .map_or(0, exit_code)
 }
 
 fn print_wait_json<'a>(outcomes: impl IntoIterator<Item = &'a TargetOutcome>) -> Result<()> {
     let entries = outcomes
         .into_iter()
-        .map(|outcome| (outcome.reference.as_str(), outcome.entry()))
+        .map(|outcome| (outcome.reference.as_str(), entry(outcome)))
         .collect::<BTreeMap<_, _>>();
     render::json(&entries)
 }
@@ -1176,7 +825,7 @@ pub(super) fn print_wait_block(
 ) -> Result<()> {
     write_wait_header(out, outcome)?;
     if let TerminalPayload::Agent { last_message, .. } = &outcome.payload {
-        let completed = outcome.entry().status == RunStatus::Completed;
+        let completed = entry(outcome).status == RunStatus::Completed;
         if completed && last_message.is_none() {
             write_wait_header(err, outcome)?;
         }
@@ -1214,7 +863,7 @@ pub(super) fn print_wait_block(
 }
 
 fn write_wait_header(out: &mut impl Write, outcome: &TargetOutcome) -> Result<()> {
-    let entry = outcome.entry();
+    let entry = entry(outcome);
     writeln!(
         out,
         "--- {} ({}) ---",
@@ -1241,7 +890,7 @@ fn print_single_outcome(outcome: &TargetOutcome) -> Result<()> {
             supervised::output::FinalMessage {
                 scope: "turn",
                 message: last_message.as_deref(),
-                completed: outcome.entry().status == RunStatus::Completed,
+                completed: entry(outcome).status == RunStatus::Completed,
             },
             &mut render::out(),
             &mut render::err(),
@@ -1293,7 +942,7 @@ fn print_unfinished_headers(waits: &WaitSet, ending: Unfinished) -> Result<()> {
             write_unfinished_header(
                 &mut err,
                 target.typed_reference(),
-                target.unfinished_entry(ending).reason,
+                unfinished_entry(target, ending).reason,
                 ending,
             )?;
         }
@@ -1328,8 +977,8 @@ fn print_unfinished_json(waits: &WaitSet, ending: Unfinished) -> Result<()> {
         .iter()
         .zip(&waits.outcomes)
         .map(|(target, outcome)| match outcome {
-            Some(outcome) => (outcome.reference.as_str(), outcome.entry()),
-            None => (target.typed_reference(), target.unfinished_entry(ending)),
+            Some(outcome) => (outcome.reference.as_str(), entry(outcome)),
+            None => (target.typed_reference(), unfinished_entry(target, ending)),
         })
         .collect::<BTreeMap<_, _>>();
     render::json(&entries)
@@ -1550,11 +1199,11 @@ mod tests {
             name: "otter".to_owned(),
             payload: TerminalPayload::Run(Box::new(record.clone())),
         };
-        let json = serde_json::to_value(outcome(&record).entry()).unwrap();
+        let json = serde_json::to_value(entry(&outcome(&record))).unwrap();
         assert!(json.get("cancel_reason").is_none(), "{json}");
 
         record.cancel_reason = Some(rimz::store::run::CancelReason::ParentEnded);
-        let json = serde_json::to_value(outcome(&record).entry()).unwrap();
+        let json = serde_json::to_value(entry(&outcome(&record))).unwrap();
         assert_eq!(json["cancel_reason"], "parent_ended", "{json}");
         assert_eq!(json["status"], "canceled", "{json}");
     }

@@ -377,7 +377,7 @@ A join whose every target is a run that reports to its launcher, run by that lau
 
 ### Attendance
 
-A printed result counts as consumed only while the calling agent holds an open provider turn. The [wait print path](../../../crates/rimz/src/cli/agents_cmd/wait.rs) resolves the caller against `Store::snapshot_cached()` and asks `AgentState::holds_open_turn`. The cached snapshot attaches provider rest certificates, so a turn settled without a `Stop` hook reads as closed, while native waits and proposed plans keep the turn open. Attendance is read again at each print: a background wait that outlives its parent's turn still prints, but leaves its rows unjoined so the digest reaches the parent at its next boundary.
+A printed result counts as consumed only while the calling agent holds an open provider turn. The [joined mark](../../../crates/rimz/src/launcher/agent_join.rs) resolves the caller against `Store::snapshot_cached()` and asks `AgentState::holds_open_turn`. The cached snapshot attaches provider rest certificates, so a turn settled without a `Stop` hook reads as closed, while native waits and proposed plans keep the turn open. Attendance is read again at each print: a background wait that outlives its parent's turn still prints, but leaves its rows unjoined so the digest reaches the parent at its next boundary.
 
 An unresolved caller is a human shell and counts as attended. A failed snapshot read logs a warning and also counts as attended. `stop` skips the check because dismissal is deliberate.
 

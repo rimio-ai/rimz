@@ -2950,7 +2950,7 @@ fn plural_wait_block_for_agent_payload_prints_last_message() {
     );
     assert!(err.is_empty());
     assert_eq!(
-        serde_json::to_value(outcome.entry()).unwrap()["last_message"],
+        serde_json::to_value(wait::entry(&outcome)).unwrap()["last_message"],
         "reviewed; two findings"
     );
 }
@@ -2983,7 +2983,7 @@ fn agent_wait_entry_keeps_the_settled_completion_after_status_changes() {
                     last_message: None,
                 },
             };
-            let entry = serde_json::to_value(outcome.entry()).unwrap();
+            let entry = serde_json::to_value(wait::entry(&outcome)).unwrap();
             assert_eq!(
                 entry["status"], status,
                 "{completion:?} then {later_status:?}"
@@ -3013,7 +3013,7 @@ fn agent_wait_settles_on_this_turns_final_message_or_after_grace() {
     let mut seen = None;
 
     assert_eq!(
-        wait::settle_agent_turn(
+        rimz::launcher::agent_join::settle_agent_turn(
             TurnCompletion::Open,
             Some(started),
             Some(entry(1_001)),
@@ -3023,7 +3023,7 @@ fn agent_wait_settles_on_this_turns_final_message_or_after_grace() {
         None
     );
     assert_eq!(
-        wait::settle_agent_turn(
+        rimz::launcher::agent_join::settle_agent_turn(
             TurnCompletion::Completed,
             Some(started),
             Some(entry(999)),
@@ -3033,7 +3033,7 @@ fn agent_wait_settles_on_this_turns_final_message_or_after_grace() {
         None
     );
     assert_eq!(
-        wait::settle_agent_turn(
+        rimz::launcher::agent_join::settle_agent_turn(
             TurnCompletion::Completed,
             Some(started),
             Some(entry(1_001)),
@@ -3043,7 +3043,7 @@ fn agent_wait_settles_on_this_turns_final_message_or_after_grace() {
         Some(Some("answer at 1001".to_owned()))
     );
     assert_eq!(
-        wait::settle_agent_turn(
+        rimz::launcher::agent_join::settle_agent_turn(
             TurnCompletion::Failed,
             Some(started),
             Some(entry(999)),
@@ -3055,7 +3055,7 @@ fn agent_wait_settles_on_this_turns_final_message_or_after_grace() {
 
     let mut seen = None;
     assert_eq!(
-        wait::settle_agent_turn(
+        rimz::launcher::agent_join::settle_agent_turn(
             TurnCompletion::Completed,
             Some(started),
             None,
@@ -3065,7 +3065,7 @@ fn agent_wait_settles_on_this_turns_final_message_or_after_grace() {
         None
     );
     assert_eq!(
-        wait::settle_agent_turn(
+        rimz::launcher::agent_join::settle_agent_turn(
             TurnCompletion::Completed,
             Some(started),
             None,
@@ -3076,7 +3076,7 @@ fn agent_wait_settles_on_this_turns_final_message_or_after_grace() {
     );
     let mut seen = None;
     assert_eq!(
-        wait::settle_agent_turn(
+        rimz::launcher::agent_join::settle_agent_turn(
             TurnCompletion::Completed,
             Some(started),
             None,
@@ -3104,7 +3104,7 @@ fn plural_wait_json_entry_includes_last_message() {
         payload: wait::TerminalPayload::Run(Box::new(record)),
     };
 
-    let value = serde_json::to_value(outcome.entry()).unwrap();
+    let value = serde_json::to_value(wait::entry(&outcome)).unwrap();
 
     assert_eq!(value["last_message"], "finished review");
 }
