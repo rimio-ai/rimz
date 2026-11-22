@@ -553,8 +553,12 @@ pub(super) fn prompt_taken_in_under(
 ) -> Option<String> {
     valid_transcript_under(home, path, session_id).then_some(())?;
     let lines = read_transcript_tail(path)?;
+    // The invocation's own answer ends what it took in: a frame applied late reads a
+    // transcript that already holds the next invocation's rows.
     let prompts = parse_records(&lines)
-        .filter(|record| record.step_index >= from_step && is_turn_start(record))
+        .skip_while(|record| record.step_index < from_step)
+        .take_while(|record| record.record_type != "PLANNER_RESPONSE")
+        .filter(is_turn_start)
         .filter_map(|record| normalize_user_content(record.content.as_deref()))
         .filter(|text| text != super::COMPACT_COMMAND)
         .collect::<Vec<_>>();

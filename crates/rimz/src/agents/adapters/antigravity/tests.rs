@@ -2866,6 +2866,31 @@ fn post_invocation_reports_each_prompt_taken_in_mid_turn_once() {
         post(&drained, 0, 5).is_none(),
         "a queued prompt agy drains at the turn's end is the opener's to report"
     );
+    assert!(
+        post(&drained, 1, 3).is_none(),
+        "a report applied after the drain stops at its own invocation's answer"
+    );
+    let apart = vec![
+        user_record(0, AT_09, "sleep"),
+        user_record(8, AT_10, "Also include APPLE."),
+        record(
+            9,
+            "SYSTEM",
+            "SYSTEM_MESSAGE",
+            "DONE",
+            AT_10,
+            "Task 2 completed",
+        )
+        .to_string(),
+        user_record(10, AT_10, "Also include BERRY."),
+        planner_record(11, AT_11, None),
+        user_record(12, AT_11, "the next turn's prompt"),
+    ];
+    assert_eq!(
+        post(&apart, 2, 8).and_then(|reported| reported.prompt.map(|prompt| prompt.to_string())),
+        Some("Also include APPLE.\n\nAlso include BERRY.".to_owned()),
+        "a row that is no answer between two steers ends nothing"
+    );
     let compact = with(
         &hook_payload(),
         [
