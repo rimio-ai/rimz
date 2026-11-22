@@ -152,7 +152,8 @@ impl TurnWaitView {
     }
 
     /// A non-terminal compaction continue still owed to this live card: queued, and not yet
-    /// canceled on the row by an interrupt, a `/clear`, or a user-authored prompt.
+    /// settled on the row by an interrupt, a `/clear`, a user-authored prompt, a turn started
+    /// after the compaction, or an automatic compaction inside the open turn.
     pub(crate) fn soft_compact_in_flight(&self, agent: &AgentState) -> bool {
         agent.soft_compact_in_flight()
             && self.messages.iter().any(|message| {

@@ -14635,7 +14635,10 @@ fn agents_compact_reports_sibling_delivery_and_terminal_reasons() {
         } else {
             assert_eq!(output.status.code(), Some(1));
             assert!(
-                stderr.contains("a compaction never follows a compaction"),
+                stderr.contains(&format!(
+                    "@claude: compaction {}: agent compacted before this compaction was typed",
+                    command.message_id
+                )) && !stderr.contains("never follows a compaction"),
                 "{stderr}"
             );
             assert_no_report_pane_write(&trace);
@@ -16172,7 +16175,7 @@ fn queued_compaction_is_rejected_after_a_native_manual_compaction() {
         traced_rimz(&env, &trace).args(["message", "sweep"]),
         "sweep obsolete compaction",
     );
-    wait_for_message_event(&env, "message.errored", Duration::from_secs(5));
+    wait_for_message_event(&env, "message.canceled", Duration::from_secs(5));
     let settled = env
         .store()
         .list_message_history()
@@ -16180,13 +16183,10 @@ fn queued_compaction_is_rejected_after_a_native_manual_compaction() {
         .into_iter()
         .find(|record| record.message_id == command.message_id)
         .expect("settled command");
-    assert_eq!(settled.status, MessageStatus::Errored);
-    assert!(
-        settled
-            .last_error
-            .as_deref()
-            .unwrap()
-            .contains("a compaction never follows a compaction")
+    assert_eq!(settled.status, MessageStatus::Canceled);
+    assert_eq!(
+        settled.last_error.as_deref(),
+        Some("agent compacted before this compaction was typed")
     );
     assert!(
         trace_lines(&trace)

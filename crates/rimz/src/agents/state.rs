@@ -1130,8 +1130,10 @@ pub struct SoftCompactMark {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compactions: Option<u32>,
     /// The continue most recently enqueued behind a compaction command, while that record has
-    /// not reached a terminal status and no interrupt, registration, or user-authored turn
-    /// start in the fold has cleared it; another continue's terminal event leaves it. An
+    /// not reached a terminal status and the fold has not cleared it: an interrupt, a
+    /// registration, a user-authored turn start, any non-keepalive turn start after a compaction
+    /// later than the enqueue (`AgentState::compacted_at`), or an automatic compaction that
+    /// ends inside the open turn. Another continue's terminal event leaves it. An
     /// interrupt only a provider's turn settle reports (Claude's Esc) withdraws it at read
     /// time, in `AgentState::soft_compact_in_flight`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1645,6 +1647,14 @@ pub struct AgentState {
     /// compaction. Also re-arms the smart-compaction reminder.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compaction_count: u32,
+    /// When this session last completed a compaction: a bracket close, or a successful end whose
+    /// open was lost, but not the same compaction reported again. A compaction continuation's
+    /// row is stamped by the end that opened it. Carried forward on every other event. A
+    /// compaction command queued before it is withdrawn untyped
+    /// (`MessageRecord::broken_row_premise`), and a turn start after it settles the continue
+    /// owed from before it (`SoftCompactMark::continue_owed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_at: Option<Timestamp>,
     /// Serialized as `soft_compact_mark`: the unversioned carryover keeps rows an older
     /// binary must decode, and its `soft_compact` key held a mark of another shape, which this
     /// binary reads as absent.
@@ -2214,6 +2224,7 @@ impl AgentState {
             closed_turn_id: None,
             compacting_since: None,
             compaction_count: 0,
+            compacted_at: None,
             soft_compact: None,
             tool_calls: BTreeMap::new(),
             tool_repeat: None,
