@@ -35,8 +35,14 @@ const DEFAULT_TOOLS: [&str; 13] = [
 /// Registered beyond the default set, so accepted when a list names it.
 const EXTRA_TOOLS: [&str; 1] = ["generate_image"];
 
-/// Written only while the launch keeps native subagents on.
-const SUBAGENT_TOOLS: [&str; 3] = ["invoke_subagent", "define_subagent", "manage_subagents"];
+/// Written only while the launch keeps native subagents on. `run_workflow` fans work out to
+/// subagents (agy 1.5.9), so it goes with them.
+const SUBAGENT_TOOLS: [&str; 4] = [
+    "invoke_subagent",
+    "define_subagent",
+    "manage_subagents",
+    "run_workflow",
+];
 
 /// RimZ tool names beside the agy tools each grants. `Skill` is RimZ's switch for
 /// skill callability and grants no agy tool.
@@ -197,11 +203,17 @@ mod tests {
 
     #[test]
     fn tools_map_once_drop_unknown_names_and_follow_native_subagents() {
-        let all_but_subagents: Vec<&str> = DEFAULT_TOOLS
-            .iter()
-            .copied()
-            .filter(|name| !SUBAGENT_TOOLS.contains(name))
-            .collect();
+        let all_but_subagents = vec![
+            "ask_question",
+            "edit_file",
+            "manage_task",
+            "read_file",
+            "run_command",
+            "schedule",
+            "search_web",
+            "send_message",
+            "write_file",
+        ];
         type Case<'a> = (Option<&'a [&'a str]>, bool, Vec<&'a str>);
         let cases: [Case<'_>; 7] = [
             (None, true, DEFAULT_TOOLS.to_vec()),
@@ -219,12 +231,13 @@ mod tests {
                     "invoke_subagent",
                     "define_subagent",
                     "manage_subagents",
+                    "run_workflow",
                     "edit_file",
                     "generate_image",
                 ],
             ),
             (
-                Some(&["Agent", "invoke_subagent", "Write"]),
+                Some(&["Agent", "invoke_subagent", "run_workflow", "Write"]),
                 false,
                 vec!["write_file"],
             ),
