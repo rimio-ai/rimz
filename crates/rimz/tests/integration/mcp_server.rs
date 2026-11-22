@@ -165,6 +165,19 @@ impl McpServer {
         tool_answer(tool, &self.reply(&json!(id)))
     }
 
+    /// Wait for the `notifications/tools/list_changed` a replaced server sends
+    /// first, which `reply` may already have held while it read for a reply.
+    #[cfg(target_os = "linux")]
+    fn list_changed(&mut self) {
+        let changed = json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"});
+        if let Some(index) = self.unclaimed.iter().position(|line| line == &changed) {
+            self.unclaimed.remove(index);
+            return;
+        }
+        let line = self.next_line(Instant::now() + REPLY_DEADLINE);
+        assert_eq!(line, Some(changed), "saw {:?}", self.seen);
+    }
+
     fn assert_silent_for(&mut self, wait: Duration) {
         if let Some(line) = self.next_line(Instant::now() + wait) {
             panic!("unexpected output: {line}");
@@ -603,7 +616,11 @@ fn handshake_lists_the_tools_and_answers_only_known_methods() {
     let init = server.initialize();
     let result = &init["result"];
     assert_eq!(result["protocolVersion"], "2025-06-18", "{init}");
-    assert_eq!(result["capabilities"], json!({"tools": {}}), "{init}");
+    assert_eq!(
+        result["capabilities"],
+        json!({"tools": {"listChanged": true}}),
+        "{init}"
+    );
     assert_eq!(result["serverInfo"]["name"], "rimz", "{init}");
     let instructions = result["instructions"].as_str().expect("instructions");
     let first = instructions.lines().next().expect("a first line");
@@ -1100,6 +1117,30 @@ fn self_stop_answers_what_holds_it_and_control_calls_answer_data() {
     assert_eq!(canceled["canceled"], json!([name]), "{canceled}");
     let (listed, is_error) = server.answer(6, "notes_list", json!({}));
     assert!(!is_error, "{listed}");
+}
+
+/// A tool that reads `/dev/stdin` reads nothing of the client's requests: the
+/// call answers, refusing the empty body it read, and the next request on the
+/// pipe is answered.
+#[test]
+fn a_tool_reading_stdin_leaves_the_protocol_alone() {
+    let env = Env::new();
+    let mut server = serve(&env, &[]);
+    server.initialize();
+    server.start_call(
+        1,
+        "notes_add",
+        json!({"kind": "stdin", "title": "From stdin", "file": "/dev/stdin"}),
+    );
+    server.send(&json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}));
+    let (failure, is_error) = tool_answer("notes_add", &server.reply(&json!(1)));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure["error"],
+        json!("the note body is empty; write the note on stdin or name it with --file"),
+        "{failure}"
+    );
+    assert_eq!(server.reply(&json!(2))["result"], json!({}));
 }
 
 /// `lsp show` on one target that shows no code fails the call, as `query` and
@@ -1977,4 +2018,116 @@ fn an_idle_server_stays_inside_its_memory_budget() {
     server.request(1, "tools/list", json!({}));
     std::thread::sleep(Duration::from_millis(500));
     crate::common::assert_wrapper_memory_budget("idle mcp server", server.pid(), 8 * 1024);
+}
+
+/// The server as an agent's pane in the fixture's room starts it, through
+/// `bin`, with the room pin set and the room record polled every 50 ms.
+#[cfg(target_os = "linux")]
+fn serve_in_room_at(env: &Env, bin: &std::path::Path) -> McpServer {
+    let mut command = crate::common::wait::agent_wait_at(env, bin);
+    command
+        .args(["mcp", "serve"])
+        .env("RIMZ_WORKSPACE_ID", env.workspace_id.as_str())
+        .env("RIMZ_PROJECT_ROOT", &env.project_root)
+        .env("RIMZ_TEST_SIDEBAR_RECORD_POLL_MS", "50");
+    McpServer::spawn(command)
+}
+
+/// A server follows a change of its room's build in place, keeping its pid and
+/// its pipes: the new image first announces a changed tool list, then answers,
+/// and a wait watcher the old image armed is reaped by the new one when it ends.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_server_follows_its_rooms_build_in_place_and_announces_its_tools() {
+    use crate::common::builds::{RoomBuilds, executable};
+
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let builds = RoomBuilds::new(&env);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    let mut server = serve_in_room_at(&env, &builds.first);
+    server.initialize();
+    let (start, is_error) = server.answer(1, "wait", json!({"trigger": "run", "value": "sleep 3"}));
+    assert!(!is_error, "{start}");
+    // The call's thread may still be handing its children to the main thread.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while children(server.pid()).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let watchers = children(server.pid());
+    assert_eq!(
+        watchers.len(),
+        1,
+        "the wait's watcher is the server's child"
+    );
+
+    builds.record(&env, &builds.first);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(executable(server.pid()), builds.first);
+    builds.record(&env, &builds.second);
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    while executable(server.pid()) != builds.second && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(
+        executable(server.pid()),
+        builds.second,
+        "the server did not follow"
+    );
+    server.list_changed();
+    assert_eq!(server.request(2, "ping", json!({}))["result"], json!({}));
+
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    while !children(server.pid()).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        children(server.pid()),
+        Vec::<String>::new(),
+        "the old image's watcher {watchers:?} was left unreaped"
+    );
+    let (status, lines) = server.close();
+    assert_eq!(status.code(), Some(0), "{status:?}");
+    assert_protocol_lines(&lines);
+}
+
+/// A server never replaces itself while a call is in flight, and a request
+/// written right behind the last reply is answered, by whichever image reads it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_server_swaps_builds_only_when_quiet_and_loses_no_request() {
+    use crate::common::builds::{RoomBuilds, executable};
+
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let builds = RoomBuilds::new(&env);
+    let checkout = checkout_with_fifo(&env, "follow-5b1e");
+    let mut server = serve_in_room_at(&env, &builds.first);
+    server.initialize();
+    server.start_call(
+        1,
+        "lsp",
+        json!({"verb": "check", "targets": ["held.md"], "cwd": checkout}),
+    );
+    let held = HeldFifo::when_read(&checkout);
+    builds.record(&env, &builds.second);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        executable(server.pid()),
+        builds.first,
+        "the server swapped with a call in flight"
+    );
+
+    held.release("no anchors\n");
+    let (text, is_error) = tool_answer("lsp", &server.reply(&json!(1)));
+    assert!(!is_error, "{text}");
+    assert_eq!(server.request(2, "ping", json!({}))["result"], json!({}));
+    server.list_changed();
+    assert_eq!(executable(server.pid()), builds.second);
+    assert_eq!(server.request(3, "ping", json!({}))["result"], json!({}));
 }

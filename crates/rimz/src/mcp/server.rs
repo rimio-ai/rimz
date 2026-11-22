@@ -4,11 +4,18 @@
 //! `serve` was handed, so calls overlap and a later one may answer first.
 //! The protocol goes out on a private copy of stdout taken at the start, and
 //! descriptor 1 then points at stderr, so a stray write under a tool path
-//! lands in the logs, not in the protocol.
+//! lands in the logs, not in the protocol. It comes in on a private copy of
+//! stdin, and descriptor 0 then reads `/dev/null`, so a tool that opens
+//! `/dev/stdin` reads none of the client's requests. When the runner reports that the
+//! room's build moved, the server replaces itself in place with that build at
+//! the first quiet point: no call listed, every reply written, and no byte
+//! read from stdin that is not yet handled.
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, Write};
+use std::io::{self, Read, Write};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -26,6 +33,14 @@ const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
+/// Set, to the server's pid, on the image a server replaces itself with, so
+/// that image knows it follows an earlier one of the same process; a server a
+/// tool's command starts has another pid.
+const FOLLOWED_ENV: &str = "RIMZ_MCP_FOLLOWED";
+
+/// How often a server waiting for a quiet point to follow a build looks again.
+const QUIET_POLL: Duration = Duration::from_millis(50);
+
 #[derive(Debug, thiserror::Error)]
 pub enum ServeErr {
     #[error("reading the client's requests: {0}")]
@@ -42,7 +57,13 @@ pub fn serve(
     modes: &[(Capability, LoadMode)],
     runner: Arc<dyn Runner>,
 ) -> Result<(), ServeErr> {
+    let followed =
+        std::env::var(FOLLOWED_ENV).is_ok_and(|pid| pid == std::process::id().to_string());
+    if followed {
+        crate::child_process::reap_inherited_children();
+    }
     let out = protocol_out();
+    let input = take_stdin().map_err(ServeErr::Read)?;
     let wording = Wording::read_home();
     for warning in wording.warnings() {
         tracing::warn!("rimz mcp serve: {warning}");
@@ -59,6 +80,7 @@ pub fn serve(
         },
         calls: Calls::default(),
         out: Mutex::new(out),
+        input,
         runner,
     });
     #[cfg(unix)]
@@ -72,6 +94,9 @@ pub fn serve(
             tracing::warn!(%err, "rimz mcp serve: SIGINT and SIGTERM will not end the server");
         }
     }
+    if followed {
+        server.send(&json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" }));
+    }
     let result = read_requests(&server);
     server.calls.close();
     result
@@ -81,7 +106,9 @@ pub fn serve(
 struct Server {
     served: Served,
     calls: Calls,
-    out: Mutex<Box<dyn Write + Send>>,
+    out: Mutex<Out>,
+    /// The private copy of stdin the requests are read from.
+    input: std::fs::File,
     runner: Arc<dyn Runner>,
 }
 
@@ -94,23 +121,45 @@ struct Served {
     wording: Wording,
 }
 
-/// The protocol's channel: a private copy of stdout, with descriptor 1 then
-/// pointed at stderr; stdout itself when that cannot be done.
-fn protocol_out() -> Box<dyn Write + Send> {
-    #[cfg(unix)]
-    match take_stdout() {
-        Ok(private) => return Box::new(private),
-        Err(err) => tracing::warn!(
-            %err,
-            "rimz mcp serve: the protocol shares stdout; a stray write can break it"
-        ),
+/// The protocol's channel.
+enum Out {
+    /// A private copy of stdout, with descriptor 1 pointed at stderr.
+    Private(std::fs::File),
+    /// Stdout itself, when no copy could be taken.
+    Shared(io::Stdout),
+}
+
+impl Write for Out {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Private(file) => file.write(buf),
+            Self::Shared(stdout) => stdout.write(buf),
+        }
     }
-    Box::new(io::stdout())
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Private(file) => file.flush(),
+            Self::Shared(stdout) => stdout.flush(),
+        }
+    }
+}
+
+fn protocol_out() -> Out {
+    match take_stdout() {
+        Ok(private) => Out::Private(private),
+        Err(err) => {
+            tracing::warn!(
+                %err,
+                "rimz mcp serve: the protocol shares stdout; a stray write can break it"
+            );
+            Out::Shared(io::stdout())
+        }
+    }
 }
 
 /// Copy stdout to a new descriptor that a child does not inherit, then point
 /// descriptor 1 at stderr.
-#[cfg(unix)]
 fn take_stdout() -> io::Result<std::fs::File> {
     use std::os::fd::AsFd;
 
@@ -121,23 +170,106 @@ fn take_stdout() -> io::Result<std::fs::File> {
     Ok(std::fs::File::from(private))
 }
 
+/// Copy stdin to a new descriptor that a child does not inherit, then point
+/// descriptor 0 at `/dev/null`.
+fn take_stdin() -> io::Result<std::fs::File> {
+    use std::os::fd::AsFd;
+
+    let private = std::fs::File::from(io::stdin().as_fd().try_clone_to_owned()?);
+    if let Err(err) = null_stdin() {
+        tracing::warn!(
+            %err,
+            "rimz mcp serve: descriptor 0 stays the protocol's; a tool reading stdin can take requests"
+        );
+    }
+    Ok(private)
+}
+
+fn null_stdin() -> io::Result<()> {
+    let null = std::fs::File::open("/dev/null")?;
+    nix::unistd::dup2_stdin(&null).map_err(io::Error::from)
+}
+
+/// Read and handle requests until stdin ends, following a build the runner
+/// reports at the first quiet point. stdin is read unbuffered into a buffer of
+/// the loop's own, so the loop knows when every byte read has been handled.
 fn read_requests(server: &Arc<Server>) -> Result<(), ServeErr> {
-    let mut stdin = io::stdin().lock();
-    let mut line = Vec::new();
+    let mut stdin = &server.input;
+    let runner = server.runner.as_ref();
+    let mut unread = Vec::new();
+    // How many bytes of `unread` hold no newline, so each byte is searched once.
+    let mut scanned = 0;
+    let mut chunk = [0; 8192];
+    let mut build_moved = false;
     loop {
-        line.clear();
-        if stdin.read_until(b'\n', &mut line).map_err(ServeErr::Read)? == 0 {
-            return Ok(());
+        while let Some(end) = unread[scanned..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|at| scanned + at)
+        {
+            let line: Vec<u8> = unread.drain(..=end).collect();
+            scanned = 0;
+            handle_line(&line, server);
         }
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        match serde_json::from_slice::<Value>(&line) {
-            Ok(message) => handle(message, server),
-            Err(err) => {
-                server.send_error(&Value::Null, PARSE_ERROR, &format!("parse error: {err}"))
+        scanned = unread.len();
+        build_moved |= runner.poll_build(Instant::now()).is_some();
+        if build_moved && unread.is_empty() && server.calls.idle() {
+            build_moved = false;
+            if let Some(target) = runner.recheck_build() {
+                let err = server.replace(&target);
+                tracing::warn!(%err, "rimz mcp serve: could not follow the room's build; serving on");
             }
         }
+        let wait = if build_moved {
+            Some(QUIET_POLL)
+        } else {
+            runner
+                .next_build_poll()
+                .map(|due| due.saturating_duration_since(Instant::now()))
+        };
+        if !readable(stdin, wait).map_err(ServeErr::Read)? {
+            continue;
+        }
+        let read = match stdin.read(&mut chunk) {
+            Ok(read) => read,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(ServeErr::Read(err)),
+        };
+        if read == 0 {
+            handle_line(&unread, server);
+            return Ok(());
+        }
+        unread.extend_from_slice(&chunk[..read]);
+    }
+}
+
+/// Whether `stdin` has bytes or its end to read within `wait`, forever when
+/// `None`.
+fn readable(stdin: &std::fs::File, wait: Option<Duration>) -> io::Result<bool> {
+    use std::os::fd::AsFd;
+
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+
+    let timeout = wait.map_or(PollTimeout::NONE, |wait| {
+        PollTimeout::try_from(wait).unwrap_or(PollTimeout::MAX)
+    });
+    match poll(
+        &mut [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)],
+        timeout,
+    ) {
+        Ok(ready) => Ok(ready > 0),
+        Err(nix::errno::Errno::EINTR) => Ok(false),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn handle_line(line: &[u8], server: &Arc<Server>) {
+    if line.iter().all(u8::is_ascii_whitespace) {
+        return;
+    }
+    match serde_json::from_slice::<Value>(line) {
+        Ok(message) => handle(message, server),
+        Err(err) => server.send_error(&Value::Null, PARSE_ERROR, &format!("parse error: {err}")),
     }
 }
 
@@ -178,7 +310,7 @@ fn initialize(params: &Value, instructions: &str) -> Value {
         .unwrap_or(LATEST_PROTOCOL_VERSION);
     json!({
         "protocolVersion": version,
-        "capabilities": { "tools": {} },
+        "capabilities": { "tools": { "listChanged": true } },
         "serverInfo": { "name": SERVER_NAME, "version": crate::build_id::VERSION },
         "instructions": instructions,
     })
@@ -214,16 +346,18 @@ fn call(id: Value, mut params: Value, server: &Arc<Server>) {
             let (id, server) = (id.clone(), Arc::clone(server));
             move || {
                 let answer = run_isolated(server.runner.as_ref(), call);
-                if server.calls.finish(seq) {
+                if server.calls.answerable(seq) {
                     server.send_result(&id, tool_result(answer));
                 }
+                server.calls.end(seq);
             }
         });
-    if let Err(err) = spawned
-        && server.calls.finish(seq)
-    {
-        let failure = Failure::new(format!("could not start the call: {err}"));
-        server.send_result(&id, tool_result(Answer::Failure(failure)));
+    if let Err(err) = spawned {
+        if server.calls.answerable(seq) {
+            let failure = Failure::new(format!("could not start the call: {err}"));
+            server.send_result(&id, tool_result(Answer::Failure(failure)));
+        }
+        server.calls.end(seq);
     }
 }
 
@@ -273,7 +407,7 @@ fn tool_result(answer: Answer) -> Value {
 }
 
 /// The calls in flight, each under the request id that started it, from
-/// before its thread starts until it answers.
+/// before its thread starts until its reply is written or withheld.
 #[derive(Default)]
 struct Calls {
     state: Mutex<CallsState>,
@@ -317,15 +451,21 @@ impl Calls {
         Some(seq)
     }
 
-    /// Unlist a call that has its answer; `false` when a cancel or the
-    /// server's end withholds its reply.
-    fn finish(&self, seq: u64) -> bool {
-        let mut state = self.lock();
-        let closed = state.closed;
-        state
-            .live
-            .remove(&seq)
-            .is_some_and(|call| !call.cancelled && !closed)
+    /// Whether a call that has its answer may reply: `false` when a cancel
+    /// or the server's end withholds its reply.
+    fn answerable(&self, seq: u64) -> bool {
+        let state = self.lock();
+        !state.closed && state.live.get(&seq).is_some_and(|call| !call.cancelled)
+    }
+
+    /// Unlist a call once its reply is written or withheld.
+    fn end(&self, seq: u64) {
+        self.lock().live.remove(&seq);
+    }
+
+    /// Whether no call is listed, so every reply is written or withheld.
+    fn idle(&self) -> bool {
+        self.lock().live.is_empty()
     }
 
     /// Withhold the reply of the call `id` names; its work runs to its end,
@@ -343,6 +483,45 @@ impl Calls {
 }
 
 impl Server {
+    /// Replace this process in place with `target` under the same arguments,
+    /// keeping its pid and its pipes, with descriptors 0 and 1 the protocol's
+    /// again for the new image to take. Returns why the exec failed, which
+    /// leaves the server serving as it was.
+    fn replace(&self, target: &Path) -> io::Error {
+        use std::os::unix::process::CommandExt;
+
+        let out = self
+            .out
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let handed = self.hand_over(&out);
+        let err = match handed {
+            Ok(()) => std::process::Command::new(target)
+                .args(std::env::args_os().skip(1))
+                .env(FOLLOWED_ENV, std::process::id().to_string())
+                .exec(),
+            Err(err) => err,
+        };
+        if matches!(*out, Out::Private(_))
+            && let Err(stuck) = nix::unistd::dup2_stdout(io::stderr())
+        {
+            tracing::warn!(%stuck, "rimz mcp serve: descriptor 1 stays the protocol's");
+        }
+        if let Err(stuck) = null_stdin() {
+            tracing::warn!(%stuck, "rimz mcp serve: descriptor 0 stays the protocol's");
+        }
+        err
+    }
+
+    /// Put the protocol back on descriptors 0 and 1.
+    fn hand_over(&self, out: &Out) -> io::Result<()> {
+        if let Out::Private(private) = out {
+            nix::unistd::dup2_stdout(private)?;
+        }
+        nix::unistd::dup2_stdin(&self.input)?;
+        Ok(())
+    }
+
     fn send_result(&self, id: &Value, result: Value) {
         self.send(&json!({ "jsonrpc": "2.0", "id": id, "result": result }));
     }

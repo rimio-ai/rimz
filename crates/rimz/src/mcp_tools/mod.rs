@@ -13,19 +13,23 @@ mod start;
 mod wait;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use crate::mcp::catalog::Call;
 use crate::mcp::{Answer, Failure, Runner};
+use crate::reload::RoomBuildFollower;
 
 pub use start::{Start, TaskKind};
 
 /// The tools of one server: its start directory, which a call's relative
 /// `cwd` and a call without one resolve against, and the room its pane pin
-/// names, both read once at its start.
+/// names, both read once at its start, with the follower of that room's
+/// build.
 pub struct Tools {
     start_dir: PathBuf,
     pinned_room: Option<PathBuf>,
+    follower: Option<Mutex<RoomBuildFollower>>,
 }
 
 impl Tools {
@@ -33,12 +37,28 @@ impl Tools {
     /// launch directory `serve --launch-env` reads, or else the directory the
     /// process started in.
     pub fn new(start_dir: Option<PathBuf>) -> Arc<Self> {
+        let pinned_room = crate::launcher::checkout::pinned_room_root();
+        let follower = pinned_room.as_deref().map(|root| {
+            Mutex::new(RoomBuildFollower::new(
+                &crate::ids::WorkspaceId::from_project_root(root),
+            ))
+        });
         Arc::new(Self {
             start_dir: start_dir.unwrap_or_else(|| {
                 std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
             }),
-            pinned_room: crate::launcher::checkout::pinned_room_root(),
+            pinned_room,
+            follower,
         })
+    }
+
+    fn follower(&self) -> Option<MutexGuard<'_, RoomBuildFollower>> {
+        let follower = self.follower.as_ref()?;
+        Some(
+            follower
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     /// The directory a call runs in: its `cwd` against the start directory,
@@ -68,6 +88,18 @@ impl Runner for Tools {
             Call::Guide(_) => Err(Failure::new("the server answers guide itself")),
         };
         answered.unwrap_or_else(Answer::Failure)
+    }
+
+    fn poll_build(&self, now: Instant) -> Option<PathBuf> {
+        self.follower()?.poll_if_due(now)
+    }
+
+    fn next_build_poll(&self) -> Option<Instant> {
+        Some(self.follower()?.next_poll())
+    }
+
+    fn recheck_build(&self) -> Option<PathBuf> {
+        self.follower()?.recheck()
     }
 }
 

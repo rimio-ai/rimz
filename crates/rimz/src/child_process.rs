@@ -326,6 +326,59 @@ pub fn register_signal_wake(
     Ok(())
 }
 
+/// Reap, on a thread of its own, every child this process has when it calls
+/// this: the children an earlier image of the same process spawned before it
+/// replaced itself in place, whose `Child` handles that image's reaper lost in
+/// the exec. Call it before this image spawns a child, so it takes no
+/// `Child`'s status from under its handle. Off Linux nothing reaps them: each
+/// one that ends stays a zombie under this process until it exits, and only
+/// then does `init` reap it.
+pub(crate) fn reap_inherited_children() {
+    #[cfg(target_os = "linux")]
+    reap_inherited_linux_children();
+}
+
+#[cfg(target_os = "linux")]
+fn reap_inherited_linux_children() {
+    use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+    use nix::unistd::Pid;
+
+    let me = std::process::id();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    let mut inherited: Vec<Pid> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| crate::proc::comm_and_ppid(*pid).is_some_and(|(_, parent)| parent == me))
+        .filter_map(|pid| i32::try_from(pid).ok().map(Pid::from_raw))
+        .collect();
+    if inherited.is_empty() {
+        return;
+    }
+    let _worker_mask = CleanupSignalMask::block()
+        .inspect_err(
+            |error| tracing::warn!(%error, "could not mask the inherited reaper's signals"),
+        )
+        .ok();
+    let spawned = std::thread::Builder::new()
+        .name("rimz-inherited-reaper".to_owned())
+        .spawn(move || {
+            while !inherited.is_empty() {
+                inherited.retain(|pid| {
+                    matches!(
+                        waitpid(*pid, Some(WaitPidFlag::WNOHANG)),
+                        Ok(WaitStatus::StillAlive) | Err(nix::errno::Errno::EINTR)
+                    )
+                });
+                std::thread::sleep(POLL_INTERVAL);
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "the children of an earlier image stay unreaped");
+    }
+}
+
 /// Signal wakeups are unavailable off Unix; polling remains bounded there.
 #[cfg(not(unix))]
 pub fn register_signal_wake(

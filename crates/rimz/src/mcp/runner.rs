@@ -1,6 +1,9 @@
 //! The seam between the server and RimZ's code: `serve` hands each parsed
 //! call to the runner it was given and turns the answer into the call's result.
 
+use std::path::PathBuf;
+use std::time::Instant;
+
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -10,6 +13,25 @@ use super::catalog::Call;
 /// own, so calls overlap.
 pub trait Runner: Send + Sync {
     fn run(&self, call: Call) -> Answer;
+
+    /// The binary of the build the server's room moved to, when a read due by
+    /// `now` finds one other than the server's own; each move is reported once.
+    /// A runner that follows no room reports none.
+    fn poll_build(&self, _now: Instant) -> Option<PathBuf> {
+        None
+    }
+
+    /// When `poll_build` next reads the room; `None` when it follows none.
+    fn next_build_poll(&self) -> Option<Instant> {
+        None
+    }
+
+    /// The room's build read again once the server is quiet, after
+    /// `poll_build` reported a move: its binary while it still differs from
+    /// the server's own.
+    fn recheck_build(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// A tool call's answer.
