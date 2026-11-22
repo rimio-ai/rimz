@@ -492,6 +492,7 @@ fn started_row(kind: RowKind, name: &str, status: &str, command: Option<&str>) -
         since: Some(jiff::Timestamp::from_second(3_480).unwrap()),
         due: None,
         detail: Vec::new(),
+        key: None,
         command: command.map(str::to_owned),
     }
 }
