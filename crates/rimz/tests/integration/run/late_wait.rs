@@ -188,19 +188,12 @@ fn joined(env: &Env, peer: &EndedPeer) -> bool {
 }
 
 fn digest_status(env: &Env, digest: &MessageId) -> MessageStatus {
-    let store = env.store();
-    if let Some(queued) = store
-        .list_messages()
-        .expect("list messages")
-        .into_iter()
-        .find(|message| &message.message_id == digest)
-    {
-        return queued.status;
-    }
-    store
-        .list_message_history()
-        .expect("list history")
-        .into_iter()
+    let (live, history) = env
+        .store()
+        .list_messages_and_history()
+        .expect("list messages or list history");
+    live.into_iter()
+        .chain(history)
         .find(|message| &message.message_id == digest)
         .expect("digest in queue or history")
         .status

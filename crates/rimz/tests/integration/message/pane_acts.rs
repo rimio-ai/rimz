@@ -1268,8 +1268,8 @@ fn idle_compact(env: &Env, hold: Option<&dyn Fn()>) -> std::process::Output {
 }
 
 fn compact_records(env: &Env) -> Vec<MessageRecord> {
-    let mut messages = env.store().list_messages().unwrap();
-    messages.extend(env.store().list_message_history().unwrap());
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
     messages.retain(|message| message.body == MessageBody::Command);
     messages
 }

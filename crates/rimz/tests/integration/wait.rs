@@ -2409,8 +2409,8 @@ fn self_wait_parks_at_an_open_prompt_then_delivers_at_the_turn_boundary() {
     assert!(output.status.success());
 
     let records = wait_for_wait_records(&env, 1);
-    let mut messages = env.store().list_messages().unwrap();
-    messages.extend(env.store().list_message_history().unwrap());
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
     assert_eq!(messages.len(), 1);
     let wake = &messages[0];
     assert_eq!(wake.status, MessageStatus::Queued);
@@ -2509,8 +2509,8 @@ fn watch_checkin_parks_at_an_open_prompt_without_consuming_or_killing_command() 
     let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let name = receipt["name"].as_str().unwrap();
     let records = wait_for_wait_records(&env, 1);
-    let mut messages = env.store().list_messages().unwrap();
-    messages.extend(env.store().list_message_history().unwrap());
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
     assert_eq!(messages.len(), 1);
     let checkin = &messages[0];
     assert_eq!(checkin.status, MessageStatus::Queued);
