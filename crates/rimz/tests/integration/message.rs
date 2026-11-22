@@ -2525,11 +2525,10 @@ fn assert_sweep_registration_wait(ends_again: bool) {
             .args(["message", "sweep"]),
         "defer resuming child",
     );
-    let live = store
-        .list_messages()
-        .unwrap()
+    let (queued, history) = store.list_messages_and_history().unwrap();
+    let live = queued
         .into_iter()
-        .chain(store.list_message_history().unwrap())
+        .chain(history)
         .find(|message| message.message_id == record.message_id)
         .expect("follow-up retained in the queue or history");
     if ends_again {
@@ -8700,11 +8699,9 @@ fn assert_silent_resume_outcome(
         std::fs::write(silent_resume_exit_marker(env), "").unwrap();
     }
     let read = |message_id: &MessageId| {
-        env.store()
-            .list_messages()
-            .unwrap()
-            .into_iter()
-            .chain(env.store().list_message_history().unwrap())
+        let (live, history) = env.store().list_messages_and_history().unwrap();
+        live.into_iter()
+            .chain(history)
             .find(|record| &record.message_id == message_id)
             .unwrap()
     };
@@ -9290,12 +9287,8 @@ fn agent_broadcast_sends_to_peers_without_itself() {
         .expect("run agent fanout send");
     assert!(out.status.success(), "agent fanout send failed: {out:?}");
     let store = env.store();
-    let records = store
-        .list_messages()
-        .unwrap()
-        .into_iter()
-        .chain(store.list_message_history().unwrap())
-        .collect::<Vec<_>>();
+    let (live, history) = store.list_messages_and_history().unwrap();
+    let records = live.into_iter().chain(history).collect::<Vec<_>>();
     assert_eq!(records.len(), 1, "one record per peer: {records:?}");
     assert_eq!(
         records[0].agent_id.as_str(),

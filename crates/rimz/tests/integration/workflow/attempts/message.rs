@@ -55,11 +55,10 @@ fn notice(room: &Room, id: &str) -> (Value, rimz::store::message::MessageRecord)
         .parse()
         .unwrap();
     let store = room.env.store();
-    let record = store
-        .list_messages()
-        .unwrap()
+    let (live, history) = store.list_messages_and_history().unwrap();
+    let record = live
         .into_iter()
-        .chain(store.list_message_history().unwrap())
+        .chain(history)
         .find(|row| row.message_id == message)
         .unwrap_or_else(|| panic!("notice {message} not recorded: {value:#}"));
     (value, record)
