@@ -3952,6 +3952,33 @@ fn antigravity_layouts_render_catalog_effort_and_the_max_fallback() {
             vec!["--model", "carbon", "--effort", "high"],
         ]
     );
+    for id in [
+        "gemini-pro-orchestrator-neon",
+        "gemini-pro-orchestrator",
+        "gemini-pro-orchestrator-argon",
+    ] {
+        // The final model settles the effort, so the profile render keeps it.
+        assert_eq!(args(id, None), ["--model", id], "{id}");
+        assert_eq!(
+            args(id, Some("high")),
+            ["--model", id, "--effort", "high"],
+            "{id}"
+        );
+        assert_eq!(
+            args(id, Some("max")),
+            ["--model", id, "--effort", "xhigh"],
+            "{id}"
+        );
+        let bogus = profiles([(
+            "worker",
+            Profile {
+                model: Some(id.to_owned()),
+                effort: Some("bogus".to_owned()),
+                ..profile("antigravity")
+            },
+        )]);
+        assert!(profile_cell("worker", &bogus).is_err(), "{id}");
+    }
 }
 
 #[test]

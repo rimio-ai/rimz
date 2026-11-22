@@ -268,13 +268,18 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
 /// effort-suffixed id: agy knows no short name, and refuses a suffixed id beside a differing
 /// `--effort`. Each defaults to `high`, the highest level every model takes, and sets no
 /// kind-wide default, so an uncataloged or suffixed id launches as written. Neon and hydrogen
-/// take low to xhigh; carbon, argon, and flash low to high (agy 1.5.13).
+/// take low to xhigh; carbon, argon, and flash low to high (agy 1.5.13). The Orchestrator ids
+/// take no effort and no short name: agy 1.5.14 runs Gemini 4 Neon instead when `--effort`
+/// comes with one, so a launch of one never carries it.
 const MODELS: &[crate::agents::definition::DefinitionModel] = &[
     gemini("hydrogen", "gemini-4-hydrogen", "xhigh"),
     gemini("neon", "gemini-4-neon", "xhigh"),
     gemini("carbon", "gemini-4-carbon", "high"),
     gemini("argon", "gemini-4-argon", "high"),
     gemini("flash", "gemini-3.8-flash", "high"),
+    orchestrator("gemini-pro-orchestrator-neon"),
+    orchestrator("gemini-pro-orchestrator"),
+    orchestrator("gemini-pro-orchestrator-argon"),
 ];
 
 const fn gemini(
@@ -287,6 +292,17 @@ const fn gemini(
         id,
         effort: Some("high"),
         max_effort: Some(max_effort),
+        takes_effort: true,
+    }
+}
+
+const fn orchestrator(id: &'static str) -> crate::agents::definition::DefinitionModel {
+    crate::agents::definition::DefinitionModel {
+        name: id,
+        id,
+        effort: None,
+        max_effort: None,
+        takes_effort: false,
     }
 }
 

@@ -678,7 +678,16 @@ fn resolve_posture_with_role(
     }
     if let Some(adapter) = find_definition(cell.kind.as_str()) {
         let model = cell.launch.model.clone();
+        let rendered_effort = cell.launch.effort.is_some();
         crate::harness::plan::normalize_cell_preset(&mut cell, adapter, model.as_deref());
+        if rendered_effort
+            && let Err(err) = crate::harness::plan::settle_effort_arg(&mut cell, adapter)
+        {
+            return Err(PostureDegrade::Unresolved {
+                profile: name.to_owned(),
+                reason: err.to_string(),
+            });
+        }
     }
     if let Some(((name, team), role)) = team.zip(role) {
         cell.team_prompt = crate::harness::spec::role_team_prompt(

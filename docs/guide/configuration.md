@@ -758,7 +758,7 @@ Prefer Claude for people and loose intent, and Codex for literal briefs. Put a r
 
 ## Model aliases
 
-Like `codex --model`, a provider model ID selects one specific model. RimZ's Codex aliases (`sol`, `astra`, `luna`, and `terra`) instead follow their model family on fresh launches. Antigravity's short names (`hydrogen`, `neon`, `carbon`, `argon`, and `flash`) launch their fixed Gemini IDs, such as `gemini-4-hydrogen`. When you want a stable choice across those launches, or another ID for a short name, pin the alias in your per-machine `~/.rimz/config.toml`:
+Like `codex --model`, a provider model ID selects one specific model. RimZ's Codex aliases (`sol`, `astra`, `luna`, and `terra`) instead follow their model family on fresh launches. Antigravity's short names (`hydrogen`, `neon`, `carbon`, `argon`, and `flash`) launch their fixed Gemini IDs, such as `gemini-4-hydrogen`; the Orchestrator models have none and launch by ID, such as `gemini-pro-orchestrator-neon`. When you want a stable choice across those launches, or another ID for a short name, pin the alias in your per-machine `~/.rimz/config.toml`:
 
 ```toml
 [models.codex]

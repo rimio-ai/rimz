@@ -480,6 +480,26 @@ impl LaunchSpec {
         (preset, skipped)
     }
 
+    /// Skip the effort of a catalog `model` that takes none. Only a launch's final model may
+    /// drop it: a profile renders its effort for a `--model` override to keep.
+    pub(crate) fn drop_refused_effort(
+        self,
+        preset: &mut LaunchPreset,
+        model: Option<&str>,
+    ) -> Option<SkippedPresetField> {
+        let model = model?;
+        self.definitions
+            .models
+            .iter()
+            .find(|entry| entry.name == model || entry.id == model)
+            .filter(|entry| !entry.takes_effort)?;
+        preset
+            .effort
+            .take()
+            .filter(|value| !value.is_empty())
+            .map(SkippedPresetField::Effort)
+    }
+
     /// Launch `max` effort at `model`'s highest level when the kind's effort list lacks
     /// `max`: the catalog entry's ceiling, else its foreign prefix's, else the list's highest
     /// level.
@@ -680,6 +700,8 @@ pub(super) struct DefinitionModel {
     /// The highest level this model takes, where `max` launches when the kind's effort list
     /// lacks it; `None` takes the list's highest level.
     pub max_effort: Option<&'static str>,
+    /// Whether an effort may launch with this model; when false, any effort is skipped.
+    pub takes_effort: bool,
 }
 
 /// Renders a tools list, plus provider tool names to append, each once.

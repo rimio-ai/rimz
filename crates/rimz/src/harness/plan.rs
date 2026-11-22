@@ -1781,17 +1781,17 @@ pub(super) fn normalize_cell_preset(
     adapter: &crate::agents::AgentDefinition,
     model: Option<&str>,
 ) -> Vec<crate::agents::definition::SkippedPresetField> {
-    let (mut preset, mut skipped) =
-        adapter
-            .spec()
-            .launch
-            .normalize_preset(crate::agents::LaunchPreset {
-                model: model.map(str::to_owned),
-                auto_compact: cell.auto_compact.take(),
-                effort: cell.launch.effort.take(),
-                fast: cell.launch.fast,
-                ..Default::default()
-            });
+    let launch = adapter.spec().launch;
+    let mut preset = crate::agents::LaunchPreset {
+        model: model.map(str::to_owned),
+        auto_compact: cell.auto_compact.take(),
+        effort: cell.launch.effort.take(),
+        fast: cell.launch.fast,
+        ..Default::default()
+    };
+    let refused = launch.drop_refused_effort(&mut preset, model);
+    let (mut preset, normalized) = launch.normalize_preset(preset);
+    let mut skipped: Vec<_> = refused.into_iter().chain(normalized).collect();
     if adapter.spec().launch.model_session_step
         && cell.launch.model.as_deref().is_none_or(str::is_empty)
         && let Some(effort) = preset.effort.take()
@@ -1818,7 +1818,7 @@ pub(super) fn normalize_cell_preset(
 /// Re-render the one effort arg RimZ rendered when the effort settled since, for the model the
 /// launch finally runs: `max` lowers to its level and a built-in default follows the model.
 /// Several effort args are a conflict `reconcile_preset_args` warns about instead.
-fn settle_effort_arg(
+pub(super) fn settle_effort_arg(
     cell: &mut AgentCell,
     adapter: &crate::agents::AgentDefinition,
 ) -> std::result::Result<(), LaunchFinalizeError> {
@@ -1855,13 +1855,14 @@ pub(super) fn apply_preset_args(
     model: Option<&str>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
     let requested = preset.model.clone();
-    let (mut preset, _) = adapter
-        .spec()
-        .launch
-        .normalize_preset(crate::agents::LaunchPreset {
-            model: requested.clone().or(model.map(str::to_owned)),
-            ..preset.clone()
-        });
+    let model = requested.clone().or(model.map(str::to_owned));
+    let mut preset = crate::agents::LaunchPreset {
+        model: model.clone(),
+        ..preset.clone()
+    };
+    let launch = adapter.spec().launch;
+    launch.drop_refused_effort(&mut preset, model.as_deref());
+    let (mut preset, _) = launch.normalize_preset(preset);
     preset.model = requested;
     let rendered = adapter
         .spec()

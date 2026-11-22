@@ -21,12 +21,12 @@ Run `cargo xtask test 'agents::tools'`, `cargo xtask test 'harness::spec'`, and 
 
 Definitions and tier cells retain the requested alias. With a durable launch record, resume, restart, and fork resolve that requested model through the same pins, catalog, and passthrough path as a fresh launch, ignoring observed `/model` switches. Only legacy sessions without a launch record replay the last observed model for an alias posture, and not when the resume names `--model`, `--tier`, or `--agent`; without an observed model they warn and resolve afresh. Full model ids pass through unchanged. Machine [model alias pins](../guide/configuration.md#model-aliases) override catalog resolution. Pi and OpenCode instead restore their native session's model on plain resume or restart, and Pi also does so on fork: without an explicit model override, RimZ emits no model flag and bypasses alias resolution.
 
-## Antigravity: hydrogen, neon, carbon, argon, flash
+## Antigravity: hydrogen, neon, carbon, argon, flash, Orchestrator
 
 agy knows no short names, so RimZ launches each from the `MODELS` table in [`adapters/antigravity/mod.rs`](../../crates/rimz/src/agents/adapters/antigravity/mod.rs). Any `gemini-` ID already runs on Antigravity by its prefix, as written and with no built-in effort.
 
 1. Add an entry for a new short name, or move an existing one to a new base ID deliberately: the short name, the base ID (never an effort-suffixed one), and `max_effort`, the highest level the model takes, where `max` launches.
-2. Confirm the model takes `high`, the default effort every entry carries. A seat whose effort the model refuses fails at every launch. The levels a model takes are found by running `agy --model <id> --effort <level>` in a probe home ([probes](./probes.md)).
+2. Confirm the model takes `high`, the default effort every `gemini` entry carries. A model that refuses `--effort` (the Orchestrator IDs) is an `orchestrator` entry instead: its ID as its name, no effort, and `takes_effort: false`, so no launch sends one. A seat whose effort the model refuses fails at every launch. The levels a model takes are found by running `agy --model <id> --effort <level>` in a probe home ([probes](./probes.md)).
 3. Update the Antigravity rows in `model_catalog_and_defaults` in [`agents/tools.rs`](../../crates/rimz/src/agents/tools.rs) and the roster sentence under [Chains and defaults](../reference/definitions.md#chains-and-defaults).
 
 ## Pi: fast-capable models

@@ -1568,6 +1568,43 @@ fn unsupported_profile_effort_replays_without_degrading() {
     }
 }
 
+/// A profile renders its effort beside an Orchestrator id for a `--model` override to keep, so
+/// a relaunch that keeps the id drops it from argv as well as from the record.
+#[test]
+fn orchestrator_profile_effort_relaunches_without_effort() {
+    let id = "gemini-pro-orchestrator-neon";
+    let mut worker = profile("antigravity");
+    worker.model = Some(id.into());
+    worker.effort = Some("high".into());
+    let profiles = profiles("worker", worker);
+    let record = crate::agents::LaunchRecord {
+        model: Some(id.into()),
+        ..Default::default()
+    };
+    for record in [None, Some(&record)] {
+        let posture = resolve_posture(
+            PostureRequest {
+                record,
+                profile: Some("worker"),
+                kind: &AgentKind::new_unchecked("antigravity"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles,
+        );
+        assert_eq!(posture.degraded, None);
+        assert_eq!(posture.launch.effort, None);
+        assert!(
+            posture
+                .launch
+                .record
+                .as_deref()
+                .is_none_or(|record| record.effort.is_none())
+        );
+        assert_eq!(posture.launch.args, ["--model", id], "{record:?}");
+    }
+}
+
 #[test]
 fn invalid_record_effort_degrades_to_the_bare_posture() {
     let profiles = profiles("worker", profile("hermes"));

@@ -372,7 +372,7 @@ Set `allow-routine-rimz = false` to remove the managed file at the next hook ins
 | Codex | `--model <model>` | `-c model_reasoning_effort=<level>` |
 | Pi | `--model <model>` | `--thinking <level>` |
 | OpenCode | session step, checked | session-step variant, checked against the chosen model |
-| Antigravity | `--model <model>`, a short name such as `hydrogen` as its Gemini ID | `--effort <level>`, and levels other than `low`, `medium`, `high`, and `xhigh` are refused, except that `max` launches at the model's highest level with a warning |
+| Antigravity | `--model <model>`, a short name such as `hydrogen` as its Gemini ID | `--effort <level>`, and levels other than `low`, `medium`, `high`, and `xhigh` are refused, except that `max` launches at the model's highest level with a warning; an Orchestrator ID (`gemini-pro-orchestrator` and its `-neon` and `-argon` variants) launches without effort, with a warning when one was set |
 | Copilot | `--model <model>` | `--reasoning-effort <level>` |
 | Droid | refused | skipped with a warning |
 | Cursor | `--model <model>` | skipped with a warning |

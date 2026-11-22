@@ -1432,6 +1432,12 @@ fn antigravity_short_names_launch_their_catalog_id_and_pins_win() {
         (&default, "flash", "gemini-3.8-flash"),
         (&default, "gemini-4-neon", "gemini-4-neon"),
         (&default, "gemini-4-hydrogen-high", "gemini-4-hydrogen-high"),
+        (
+            &default,
+            "gemini-pro-orchestrator",
+            "gemini-pro-orchestrator",
+        ),
+        (&default, "orchestrator", "orchestrator"),
         (&pinned, "hydrogen", "gemini-4-hydrogen-preview"),
     ] {
         let mut req = request(
