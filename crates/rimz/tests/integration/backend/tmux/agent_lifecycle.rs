@@ -15,7 +15,7 @@ use rimz::testkit::sandbox::{SandboxSpec, sandbox_processes};
 const SCOPED_BIND_GUARD_ALLOWANCE_KIB: u64 = 256;
 
 #[test]
-fn parked_wrapper_holds_under_8_mib() {
+fn parked_wrapper_holds_under_4_mib() {
     parked_wrapper_memory_budget(rimz::config::Isolation::Host);
 }
 
@@ -38,7 +38,9 @@ fn parked_wrapper_memory_budget(isolation: rimz::config::Isolation) {
         return;
     }
     let budget_mib = std::env::var("RIMZ_TEST_PARK_BUDGET_MIB")
-        .map_or(8, |value| value.parse::<u64>().expect("park budget in MiB"));
+        .map_or(crate::common::WRAPPER_BUDGET_MIB, |value| {
+            value.parse::<u64>().expect("park budget in MiB")
+        });
     let budget_kib = budget_mib * 1024
         + if isolation.is_scoped() {
             SCOPED_BIND_GUARD_ALLOWANCE_KIB

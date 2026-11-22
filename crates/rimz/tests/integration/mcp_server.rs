@@ -2017,7 +2017,11 @@ fn an_idle_server_stays_inside_its_memory_budget() {
     server.initialize();
     server.request(1, "tools/list", json!({}));
     std::thread::sleep(Duration::from_millis(500));
-    crate::common::assert_wrapper_memory_budget("idle mcp server", server.pid(), 8 * 1024);
+    crate::common::assert_wrapper_memory_budget(
+        "idle mcp server",
+        server.pid(),
+        crate::common::WRAPPER_BUDGET_MIB * 1024,
+    );
 }
 
 /// The server as an agent's pane in the fixture's room starts it, through
