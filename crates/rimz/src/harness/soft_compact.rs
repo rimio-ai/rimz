@@ -41,12 +41,12 @@ pub struct SoftCompactRequest {
 
 /// Whether the smart-compaction reminder is due for `agent`: an open turn above its line, once
 /// per compaction epoch, with a continue to follow a self-compaction (blank continue text
-/// withholds it) and no compaction open, pending, or owed a continue. It is not due while the
-/// agent's login's usage holds a compaction back; `compaction_blocked` answers that, as
+/// withholds it) and no compaction open, unprompted since, or owed a continue. It is not due
+/// while the agent's login's usage holds a compaction back; `compaction_blocked` answers that, as
 /// `RoomCapacities::compaction_blocked` in the host pass and as
 /// [`login_compaction_blocked`](crate::agents::ProviderCapacity::login_compaction_blocked) in
-/// the helper, only for a reminder otherwise due. The helper also refuses one while a
-/// compaction command is still pending in the queue, which this row-only read cannot see.
+/// the helper, only for a reminder otherwise due. A compaction command waiting in the queue
+/// does not withhold it by itself: the agent's request to compact joins that command.
 pub fn reminder_due(
     snapshot: &SidebarSnapshot,
     agent: &AgentState,

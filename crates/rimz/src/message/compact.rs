@@ -107,13 +107,32 @@ pub fn refuse_repeat(store: &Store, agent: &AgentState, now: Timestamp) -> Resul
     Ok(())
 }
 
-/// What compacting an agent on request did: the command's record and whether it was sent now
-/// or waits for a turn boundary.
+/// What compacting an agent on request did: the command's record and whether it was sent now,
+/// waits for a turn boundary, or was already waiting there and the request joined it.
 #[derive(Debug, serde::Serialize)]
 pub struct CompactReceipt {
     pub message_id: MessageId,
     #[serde(flatten)]
-    pub outcome: CompactOutcome,
+    pub outcome: ReceiptOutcome,
+}
+
+/// A request's [`CompactOutcome`], or `Joined` when the agent's command was already queued:
+/// `continues` when a continue follows that command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum ReceiptOutcome {
+    Sent,
+    Queued { continues: bool },
+    Joined { continues: bool },
+}
+
+impl From<CompactOutcome> for ReceiptOutcome {
+    fn from(outcome: CompactOutcome) -> Self {
+        match outcome {
+            CompactOutcome::Sent => Self::Sent,
+            CompactOutcome::Queued { continues } => Self::Queued { continues },
+        }
+    }
 }
 
 /// Send `agent` its native compaction command, with `instruction` in place of the configured
@@ -163,6 +182,36 @@ pub fn compact_agent(
         None => crate::agents::compact_command(agent, &config.harness),
     }
     .context("adapter has no native compaction command")?;
+    let continue_text = Some(config.resume.auto_continue_text.trim())
+        .filter(|text| !text.is_empty() && !no_continue)
+        .map(str::to_owned);
+    let refused =
+        |err: CompactErr| anyhow::anyhow!("{handle}: {}", err.live_message(Timestamp::now()));
+    // One compaction waits per agent: a request joins a queued command, and one that the join
+    // finds no longer queued goes on to `send_compact`, which refuses the state it finds now.
+    match refuse_repeat(store, agent, Timestamp::now()) {
+        Ok(()) => {}
+        Err(CompactErr::Pending {
+            message_id,
+            status: MessageStatus::Queued,
+        }) => {
+            if instruction.is_some() {
+                bail!(
+                    "{handle}: compaction {message_id} is already queued and has not been typed; an instruction cannot change its text — rerun without the instruction to join it"
+                );
+            }
+            if let Some(continues) =
+                join_waiting(workspace, store, agent, &message_id, continue_text.clone())
+                    .map_err(refused)?
+            {
+                return Ok(CompactReceipt {
+                    message_id,
+                    outcome: ReceiptOutcome::Joined { continues },
+                });
+            }
+        }
+        Err(err) => return Err(refused(err)),
+    }
     let message_id = MessageId::new();
     let outcome = send_compact(
         workspace,
@@ -176,16 +225,30 @@ pub fn compact_agent(
             command,
             sender,
             automated: false,
-            continue_text: Some(config.resume.auto_continue_text.trim())
-                .filter(|text| !text.is_empty() && !no_continue)
-                .map(str::to_owned),
+            continue_text,
         },
     )
-    .map_err(|err| anyhow::anyhow!("{handle}: {}", err.live_message(Timestamp::now())))?;
+    .map_err(refused)?;
     Ok(CompactReceipt {
         message_id,
-        outcome,
+        outcome: outcome.into(),
     })
+}
+
+/// Join `agent`'s compaction `command_id`, waiting `Queued`: queue `continue_text` behind it
+/// when the agent holds an open turn and nothing follows the command yet. `None` when the
+/// command left `Queued` before the join's commit, else whether a continue follows it.
+fn join_waiting(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &AgentState,
+    command_id: &MessageId,
+    continue_text: Option<String>,
+) -> Result<Option<bool>> {
+    let tail = continue_text
+        .filter(|_| agent.holds_open_turn())
+        .map(|text| continue_record(workspace, agent, command_id, text));
+    Ok(store.join_queued_command(command_id, tail.as_ref(), &workspace.session_name)?)
 }
 
 pub fn send_compact(
@@ -395,25 +458,101 @@ mod tests {
         assert_eq!((tied, lapsed, claimed), (true, true, true));
     }
 
-    #[test]
-    fn standalone_compaction_persists_the_idle_decision_stamp() {
-        let dir = tempfile::tempdir().unwrap();
+    fn room(dir: &std::path::Path) -> (ResolvedWorkspace, Store) {
         let workspace = ResolvedWorkspace {
-            workspace_id: WorkspaceId::from_project_root(dir.path()),
-            project_root: dir.path().into(),
+            workspace_id: WorkspaceId::from_project_root(dir),
+            project_root: dir.into(),
             cwd_project_root: None,
             root_class: crate::workspace::RootClass::Directory,
-            worktree_root: dir.path().into(),
+            worktree_root: dir.into(),
             worktree_branch: None,
             session_name: "room".into(),
             mux_hint: None,
         };
         let store = Store::open(
-            StatePaths::under(workspace.workspace_id.clone(), &dir.path().join("state")).unwrap(),
-            RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("runtime"))
-                .unwrap(),
+            StatePaths::under(workspace.workspace_id.clone(), &dir.join("state")).unwrap(),
+            RuntimePaths::under(workspace.workspace_id.clone(), &dir.join("runtime")).unwrap(),
         )
         .unwrap();
+        (workspace, store)
+    }
+
+    #[test]
+    fn a_join_adds_one_continue_behind_a_queued_command_and_nothing_once_it_left_queued() {
+        let dir = tempfile::tempdir().unwrap();
+        let (workspace, store) = room(dir.path());
+        let queue = |agent: &AgentState, text: &str, body: MessageBody| {
+            let record = MessageRecord::new(
+                workspace.workspace_id.clone(),
+                agent,
+                text.to_owned(),
+                DeliveryGate::Done,
+            )
+            .with_body(body);
+            store.queue_message(&record, "room").unwrap();
+            record.message_id
+        };
+        let live = |agent: &AgentState| -> Vec<MessageRecord> {
+            store
+                .list_messages()
+                .unwrap()
+                .into_iter()
+                .filter(|record| record.same_agent_card(agent))
+                .collect()
+        };
+        let join = |agent: &AgentState, command: &MessageId, text: Option<&str>| {
+            join_waiting(&workspace, &store, agent, command, text.map(str::to_owned)).unwrap()
+        };
+
+        let busy = AgentState::stub("claude", "session-1", AgentStatus::Running);
+        assert!(busy.holds_open_turn());
+        let command = queue(&busy, "/compact", MessageBody::Command);
+        let between = queue(&busy, "between", MessageBody::Prompt);
+        assert_eq!(join(&busy, &command, Some("keep going")), Some(true));
+        assert_eq!(
+            join(&busy, &command, Some("keep going")),
+            Some(true),
+            "a continue already follows the command, so a second join adds none"
+        );
+        let records = live(&busy);
+        let continues: Vec<_> = records
+            .iter()
+            .filter(|record| record.soft_compact == Some(SoftCompactStep::Continue))
+            .collect();
+        assert_eq!((records.len(), continues.len()), (3, 1), "{records:?}");
+        assert_eq!(continues[0].follows_command.as_ref(), Some(&command));
+        assert_eq!(continues[0].text, "keep going");
+        assert!(
+            continues[0].message_id > between,
+            "the continue queues behind every live record on the card"
+        );
+
+        let bare = AgentState::stub("claude", "session-2", AgentStatus::Running);
+        let command = queue(&bare, "/compact", MessageBody::Command);
+        assert_eq!(join(&bare, &command, None), Some(false));
+        let resting = AgentState::stub("claude", "session-3", AgentStatus::Idle);
+        let resting_command = queue(&resting, "/compact", MessageBody::Command);
+        assert_eq!(
+            join(&resting, &resting_command, Some("keep going")),
+            Some(false),
+            "an agent holding no open turn is owed no continue"
+        );
+        store
+            .claim_message_for_steer(&command, Timestamp::now())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            join(&bare, &command, Some("keep going")),
+            None,
+            "a claimed command is no longer joined"
+        );
+        assert_eq!((live(&bare).len(), live(&resting).len()), (1, 1));
+    }
+
+    #[test]
+    fn standalone_compaction_persists_the_idle_decision_stamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let (workspace, store) = room(dir.path());
         let stamp = Timestamp::from_second(1_000).unwrap();
         let earlier = stamp - std::time::Duration::from_secs(1);
         let cases = [

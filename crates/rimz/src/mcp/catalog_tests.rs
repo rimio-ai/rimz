@@ -139,6 +139,37 @@ fn data_tools_list_an_object_output_schema() {
     );
 }
 
+/// `self_compact` answers every receipt status its schema lists, a join included.
+#[test]
+fn self_compact_schema_admits_every_receipt_status() {
+    use crate::message::compact::{CompactReceipt, ReceiptOutcome};
+
+    let schema = tool("self_compact").output_schema().unwrap();
+    let statuses: Vec<Value> = [
+        ReceiptOutcome::Sent,
+        ReceiptOutcome::Queued { continues: true },
+        ReceiptOutcome::Joined { continues: true },
+    ]
+    .into_iter()
+    .map(|outcome| {
+        serde_json::to_value(CompactReceipt {
+            message_id: crate::ids::MessageId::new(),
+            outcome,
+        })
+        .unwrap()["status"]
+            .clone()
+    })
+    .collect();
+    assert_eq!(
+        statuses,
+        json!(["sent", "queued", "joined"])
+            .as_array()
+            .unwrap()
+            .clone()
+    );
+    assert_eq!(schema["properties"]["status"]["enum"], json!(statuses));
+}
+
 #[test]
 fn arguments_outside_the_schema_shape_are_refused() {
     for (name, arguments) in [

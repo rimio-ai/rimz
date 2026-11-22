@@ -372,17 +372,15 @@ fn non_trailing_adapter_gets_one_reminder_per_epoch_and_nothing_after_it() {
 }
 
 #[test]
-fn reminder_is_withheld_behind_a_pending_compaction_blank_text_or_an_interrupt_but_not_a_clear() {
-    for extra in [&[][..], &["--no-continue"][..]] {
-        let fixture = Fixture::new("claude");
-        fixture.compact(extra);
-        fixture.send(SoftCompactStep::WrapUp);
-        assert_eq!(
-            fixture.reminders(),
-            0,
-            "a pending compaction withholds the reminder ({extra:?})"
-        );
-    }
+fn reminder_is_withheld_behind_an_owed_continue_blank_text_or_an_interrupt_but_not_a_clear() {
+    let fixture = Fixture::new("claude");
+    fixture.compact(&[]);
+    fixture.send(SoftCompactStep::WrapUp);
+    assert_eq!(
+        fixture.reminders(),
+        0,
+        "a compaction owed a continue withholds the reminder"
+    );
     let fixture = Fixture::new("claude");
     run_success(
         fixture
@@ -491,6 +489,100 @@ fn self_compaction_mid_turn_types_the_command_then_its_continue() {
         trace.iter().filter(|line| is_compact_command(line)).count(),
         1
     );
+    assert_eq!(
+        fixture.status_of(&continuation.message_id),
+        MessageStatus::Sent
+    );
+}
+
+#[test]
+fn a_request_behind_a_waiting_compaction_joins_it_and_one_compaction_runs_before_its_continue() {
+    let fixture = Fixture::new("claude");
+    fixture.compact(&["--no-continue"]);
+    let command = fixture.records()[0].clone();
+    assert_eq!(
+        (command.body, command.status),
+        (MessageBody::Command, MessageStatus::Queued)
+    );
+    fixture.send(SoftCompactStep::WrapUp);
+    assert_eq!(
+        fixture.reminders(),
+        1,
+        "a waiting command no longer withholds the reminder"
+    );
+    for _ in 0..2 {
+        let receipt = fixture.compact(&[]);
+        assert_eq!(
+            receipt.trim_end(),
+            format!(
+                "compaction {} is already queued for @claude; delivers at its next turn boundary, then continues it",
+                command.message_id
+            )
+        );
+    }
+    let records = fixture.records();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.body == MessageBody::Command)
+            .count(),
+        1,
+        "{records:?}"
+    );
+    let continues: Vec<_> = records
+        .iter()
+        .filter(|record| record.soft_compact == Some(SoftCompactStep::Continue))
+        .collect();
+    assert_eq!(continues.len(), 1, "{records:?}");
+    let continuation = continues[0].clone();
+    assert_eq!(
+        continuation.follows_command.as_ref(),
+        Some(&command.message_id)
+    );
+    assert!(
+        fixture
+            .agent()
+            .soft_compact
+            .is_some_and(|mark| mark.continue_owed.is_some())
+    );
+
+    let refused = traced_rimz(&fixture.env, "soft-trace.log")
+        .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+        .args(["agents", "compact", "@claude", "keep the plan"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert!(
+        stderr.contains(&format!(
+            "@claude: compaction {} is already queued and has not been typed; an instruction cannot change its text — rerun without the instruction to join it",
+            command.message_id
+        )) && !stderr.contains("never follows a compaction"),
+        "{stderr}"
+    );
+    assert_eq!(fixture.records().len(), records.len());
+
+    fixture.end_turn();
+    fixture.deliver(&command.message_id);
+    fixture.lifecycle(LifecycleSignal::Compacting);
+    fixture.lifecycle(compaction_end());
+    fixture.context(20_000);
+    fixture.deliver(&continuation.message_id);
+    let trace = fixture.trace();
+    let commands: Vec<_> = trace
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| is_compact_command(line))
+        .map(|(index, _)| index)
+        .collect();
+    let pastes: Vec<_> = trace
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| is_paste(line, "keep going"))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!((commands.len(), pastes.len()), (1, 1), "{trace:?}");
+    assert!(commands[0] < pastes[0], "{trace:?}");
     assert_eq!(
         fixture.status_of(&continuation.message_id),
         MessageStatus::Sent
@@ -939,7 +1031,7 @@ fn reminder_skips_an_input_prompt_raised_while_it_waited_for_the_pane_lock() {
 }
 
 #[test]
-fn an_unreadable_queue_fails_the_reminder_rather_than_reading_as_a_pending_compaction() {
+fn an_unreadable_queue_fails_the_reminder() {
     let fixture = Fixture::new("claude");
     let messages_dir = fixture.env.store().paths().messages_dir.clone();
     std::fs::create_dir_all(&messages_dir).unwrap();
@@ -948,7 +1040,7 @@ fn an_unreadable_queue_fails_the_reminder_rather_than_reading_as_a_pending_compa
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{output:?}");
     assert!(
-        stderr.contains("reading the compaction queue") && stderr.contains("messages.jsonl"),
+        stderr.contains("sending smart-compaction reminder") && stderr.contains("messages.jsonl"),
         "{stderr}"
     );
 }

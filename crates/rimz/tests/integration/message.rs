@@ -16081,13 +16081,18 @@ fn agents_compact_queues_for_a_running_agent() {
             continuation.message_id.to_string()
         ]
     );
-    let refused = traced_rimz(&env, &trace)
-        .args(["agents", "compact", "@claude"])
-        .output()
-        .expect("repeat queued compact");
-    assert_eq!(refused.status.code(), Some(1));
-    assert!(refused.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&refused.stderr).contains(command.message_id.as_str()));
+    let joined = run_success(
+        traced_rimz(&env, &trace).args(["agents", "compact", "@claude"]),
+        "repeat queued compact",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&joined.stdout).trim_end(),
+        format!(
+            "compaction {} is already queued for @claude; delivers at its next turn boundary, then continues it",
+            command.message_id
+        )
+    );
+    assert_eq!(env.store().list_messages().expect("messages").len(), 2);
     assert!(
         trace_lines(&trace)
             .iter()

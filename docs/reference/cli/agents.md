@@ -1141,11 +1141,15 @@ Restarting a current workflow step agent uses `rimz workflow restart <run> --con
 
 When the agent holds an open turn and the command queues, RimZ also queues a continue behind it: the [`[resume] auto_continue_text`](../../guide/configuration.md#resume) prompt, typed once the compaction has ended, so the agent picks its work back up. `--no-continue`, or a blank `auto_continue_text`, queues the command alone. An agent at rest gets no continue, and `--no-continue` changes nothing there.
 
+An agent has at most one compaction waiting. When one is already queued for it (a hand-off compaction, an earlier request), the command queues no second one: it joins the queued command, queues the continue behind it unless one already follows it, prints the queued command's id, and exits `0`.
+
 | Output | Meaning |
 | --- | --- |
 | `compacting @handle (msg_...)` | Sent. The command was submitted; compaction may still be running. |
 | `queued compaction for @handle (msg_...) — @handle is <status>; delivers at its next turn boundary, then continues it` | Queued until the turn ends, with a continue queued behind it. |
 | `queued compaction for @handle (msg_...) — @handle is <status>; delivers at its next turn boundary, with no continue after` | Queued until the turn ends, with no continue. |
+| `compaction msg_... is already queued for @handle; delivers at its next turn boundary, then continues it` | Joined the compaction already queued, with a continue behind it. |
+| `compaction msg_... is already queued for @handle; delivers at its next turn boundary, with no continue after` | Joined the compaction already queued, with no continue. |
 
 The continue is withdrawn (`Canceled`) when you interrupt the agent, when it runs `/clear`, or when a prompt you type opens a turn before the continue lands; a RimZ notice landing first withdraws nothing. It is also withdrawn when its compaction command ends without being typed (canceled, expired, or errored). While the continue is owed, a [supervised run](#supervised-runs--p) stays open and a [`--when-idle`](#stop) stop waits. If the continue cannot be queued, the command prints the reason, exits `1`, and leaves the compaction queued.
 
@@ -1157,7 +1161,8 @@ This is an explicit command, separate from the seat's [`smart-compact`](../defin
 
 The command refuses, printing the reason on stderr with empty stdout and exit `1`, when the agent:
 
-- is compacting now, already has a compaction queued, or has taken no user turn since its last compaction;
+- is compacting now, has a compaction being typed or awaiting its compaction, or has taken no user turn since its last compaction;
+- already has a compaction queued and you passed an `INSTRUCTION`, since the queued command's text is fixed when it is queued;
 - has no bound pane or no native compaction command;
 - has no native turn-start hook (a plugin that declares no `turn_start` event), because RimZ could not guarantee a compaction never follows a compaction; use the native command in the agent's pane.
 
