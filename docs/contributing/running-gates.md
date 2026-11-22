@@ -12,7 +12,7 @@ How the gates and the test runner behave in practice: what each command shows an
 
 ## The test runner
 
-`cargo xtask test` wraps `cargo nextest run --workspace --all-features --locked`, or a bare `cargo nextest run` when it forwards `--archive-file`, which builds nothing. Trailing arguments forward to nextest as filters and profiles (`cargo xtask test auth`, `cargo xtask test -P live`). nextest is the only suite runner. Install it with `cargo install cargo-nextest --locked`.
+`cargo xtask test` wraps `cargo nextest run --workspace --all-features --locked`, or a bare `cargo nextest run` when it forwards `--archive-file`, which builds nothing and refuses `--name` (select the test with `-E 'test(=<name>)'`). Trailing arguments forward to nextest as filters and profiles (`cargo xtask test auth`, `cargo xtask test -P live`). nextest is the only suite runner. Install it with `cargo install cargo-nextest --locked`.
 
 - Drive the suite through `cargo xtask test`. xtask supplies the disposable host-state roots ([test environment](./gates.md#test-environment)) and the suite's feature set.
 - nextest runs each test in its own process, and the suite relies on that. A unit-test binary run directly runs every selected test in one libtest process, where tests that share process-wide state fail each other. A direct run (a `TZ` reproduction, say) names one test with `--exact` per call.

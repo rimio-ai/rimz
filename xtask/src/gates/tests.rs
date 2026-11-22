@@ -615,6 +615,16 @@ fn test_command_rejects_missing_names_and_mixed_discovery_modes() {
             .to_string()
             .contains("does not combine")
     );
+    assert!(
+        parse_test_command(&[
+            "--name=leaf".to_owned(),
+            "--archive-file".to_owned(),
+            "tests.tar.zst".to_owned(),
+        ])
+        .unwrap_err()
+        .to_string()
+        .contains("does not combine `--archive-file`")
+    );
 }
 
 #[test]
