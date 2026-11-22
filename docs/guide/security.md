@@ -116,7 +116,7 @@ Claude Code, Codex, and Antigravity each ship a command sandbox that you turn on
 | --- | --- |
 | Claude Code | `sandbox.enabled: true` in the launch's merged `--settings`. |
 | Codex | `--sandbox workspace-write`, only when the launch's arguments and the [Codex config layers RimZ reads](../reference/agent-support.md#permission-modes) select no sandbox mode. A mode you select, including `danger-full-access`, a permission profile, or Yolo, stays, and RimZ adds nothing. |
-| Antigravity | `--sandbox`. Its Yolo mode keeps `--dangerously-skip-permissions`, which overrides that sandbox, so a Yolo launch prints a warning that sandbox isolation is not in effect. A file rule in a definition's `allowed-tools` also opens its path to sandboxed commands. |
+| Antigravity | `--sandbox`. Its Yolo mode keeps `--dangerously-skip-permissions`, which overrides that sandbox, so a Yolo launch prints a warning that sandbox isolation is not in effect. In Auto mode agy's reviewer model can clear a command to run outside that sandbox without asking. A file rule in a definition's `allowed-tools` also opens its path to sandboxed commands. |
 | Every other provider | Nothing. The launch prints a warning and starts as it would at `host`. |
 
 What these flags do is in the provider's own documentation: [Claude Code sandboxing](https://code.claude.com/docs/en/sandboxing), [Codex sandboxing](https://learn.chatgpt.com/docs/sandboxing), and [Antigravity permissions](https://antigravity.google/docs/permissions?tab=cli). RimZ does not check the provider's dependencies or override its fallback, and it comments on your permission mode only where Antigravity's Yolo flag voids the sandbox.

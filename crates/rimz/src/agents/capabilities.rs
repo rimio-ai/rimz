@@ -812,6 +812,18 @@ pub trait LaunchCapability: CoreCapability {
         Ok(())
     }
 
+    /// Fold a permission mode's own settings document, which the mode's arguments carry as a
+    /// `--settings` of their own, into the launch's one settings document, before any other
+    /// settings mutation. The default leaves argv alone.
+    fn fold_permission_settings(
+        &self,
+        _paths: (&Path, &Path),
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {
+        Ok(())
+    }
+
     /// Switch off a provider sandbox that cannot nest under scoped isolation.
     /// Approval flags stay as the mode set them; other providers keep their sandbox.
     fn disable_native_sandbox_args(&self, _extra_args: &mut Vec<String>) {}

@@ -137,6 +137,14 @@ Explicit `allow`/`ask`/`deny` permission rules, `toolPermission: strict`, and `-
 
 1.5.14 capture: under `--sandbox` and the default `toolPermission`, a command saw an `--add-dir` directory readable and writable and an unadded sibling as absent (`No such file or directory`), with no prompt. With `proceed-in-sandbox` and `--mode accept-edits`, commands ran unprompted but contained: `curl` could not resolve a host and a write outside the workspace failed, while a native `write_file` outside the workspace and an MCP call still asked. With `--dangerously-skip-permissions` beside `--sandbox`, with or without `proceed-in-sandbox`, a command wrote outside the workspace and a native write outside it ran without a dialog: the skip flag wins over the sandbox.
 
+1.5.14 capture of the modes (2026-11-22, on Linux, on the host and inside a scoped and a sandboxed RimZ room):
+
+- With no mode flag and no saved `agentMode`, the TUI starts in `auto`. `--mode default` and `--mode ''` also end in `auto`.
+- `--settings '{"agentMode":""}'` starts in `default`, which asked before a write and before a command, and is not saved. It wins over `--mode auto` in either argv order.
+- A `--conversation` resume takes the mode from its own argv, in both directions.
+- `--dangerously-skip-permissions` alone, beside `--mode auto`, and beside `--mode accept-edits` behaved the same: a write, a command, and a network command ran unprompted, with commands outside the terminal sandbox. The 1.5.2 system command denylist was not observed.
+- Under `auto`, the terminal sandbox started at every isolation level. A network command inside it failed to resolve its host, and the model retried it with the sandbox bypassed. The retry ran without a prompt, also under `--sandbox`.
+
 ## Conversations
 
 Antigravity calls a durable session a **conversation**. Hooks name its ID `conversationId`, the statusline `conversation_id`, and print-mode JSON `conversation_id`. The [hooks](https://antigravity.google/docs/hooks/) page describes `conversationId` as a UUID.

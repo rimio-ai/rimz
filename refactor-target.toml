@@ -457,7 +457,9 @@ upward-dependencies = ["address"]
 # HookCapability::queued_hook_payload lets the feed queue a payload cut of unread tool output (+1).
 # AddedDirs and ToolRules::untranslated let launch, validate and supervised readers agree on
 # added-dir and tool-rule handling across kinds (+2).
-surface-budget = 1328
+# LaunchCapability::fold_permission_settings lets harness compile fold a permission mode's own
+# settings document into the launch's one --settings before other contributions (+1).
+surface-budget = 1329
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

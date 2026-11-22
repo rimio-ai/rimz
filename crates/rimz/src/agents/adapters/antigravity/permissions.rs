@@ -3,6 +3,7 @@
 //! `command(P)` matches P word by word with any trailing arguments, a file target covers a
 //! directory's descendants and expands no glob or `~`, and a rule string agy cannot read is
 //! accepted and matches nothing, so a rule with no translation is left out, never passed on.
+//! The same document carries an ask launch's `agentMode` pin (`pin_ask_mode`).
 
 use std::path::Path;
 
@@ -103,6 +104,37 @@ fn mcp_target(name: &str) -> Option<String> {
         server
     };
     (tool == "*" || !tool.contains('*')).then(|| format!("{server}/{tool}"))
+}
+
+/// Fold the ask launch's own `--settings` document, `pin`, into the launch's one settings
+/// document, its empty `agentMode` winning over any mode a passthrough document sets: agy keeps
+/// only the last `--settings`, and a passthrough one follows the mode's arguments. A launch
+/// without the pin keeps its argv.
+pub(super) fn pin_ask_mode(
+    pin: &[&str],
+    (cwd, artifact_dir): (&Path, &Path),
+    extra_args: &mut Vec<String>,
+    artifact: &mut Option<LaunchSettingsArtifact>,
+) -> Result<(), LaunchSettingsErr> {
+    let Some(start) = extra_args
+        .windows(pin.len())
+        .position(|args| args.iter().map(String::as_str).eq(pin.iter().copied()))
+    else {
+        return Ok(());
+    };
+    extra_args.drain(start..start + pin.len());
+    *artifact = merge_settings(
+        cwd,
+        artifact_dir,
+        extra_args,
+        artifact.as_ref(),
+        false,
+        |object| {
+            object.insert("agentMode".to_owned(), serde_json::Value::from(""));
+            Ok(())
+        },
+    )?;
+    Ok(())
 }
 
 pub(super) fn render(

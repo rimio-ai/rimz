@@ -291,7 +291,7 @@ The recorded mode is what RimZ requested, not what the provider granted. Claude 
 | Codex | `--ask-for-approval on-request -c approvals_reviewer="user"` | `--ask-for-approval on-request -c approvals_reviewer="auto_review"` | none | `--dangerously-bypass-approvals-and-sandbox` |
 | Pi | yolo: none | yolo: none | yolo: none | none |
 | OpenCode | auto: none | none | auto: none | `--auto` |
-| Antigravity | none | `--mode accept-edits` | `--mode plan` | `--dangerously-skip-permissions --mode accept-edits` |
+| Antigravity | `--settings {"agentMode":""}` | `--mode auto` | `--mode plan` | `--dangerously-skip-permissions` |
 | Copilot | `--mode interactive` | `--autopilot` | `--plan` | `--allow-all` |
 | Droid | none | `--auto medium` | `--use-spec` | none |
 | Cursor | none | `--auto-review` | `--mode=plan` | `--force --sandbox disabled` |
@@ -306,6 +306,8 @@ The recorded mode is what RimZ requested, not what the provider granted. Claude 
 | Muse | `--permission-profile :ask-me` | `--permission-profile :auto-review` | `--permission-profile :read-only` | `--yolo` |
 | MiniMax Code | none | none | none | none |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
+
+Antigravity Ask pins agy's Default mode, which asks before a write or a command: with no mode argument agy 1.5.7 and later start in Auto. RimZ merges the pin into the launch's one `--settings` document, over any `agentMode` a `--settings` in the profile's `args` sets. Auto lets agy's reviewer model clear a command to run outside agy's terminal sandbox without asking, also at sandbox isolation, which adds no RimZ view, so there nothing bounds a command the reviewer cleared. Under scoped isolation RimZ's view still confines it. Where agy offers no Auto mode, `--mode auto` falls back to agy's Default. A saved `toolPermission: strict` in agy's settings outranks Auto and still asks before edits.
 
 Grok Plan adds no arguments because Grok's `/plan` is an interactive command, and a session launched with `--permission-mode plan` does not start in plan mode.
 
