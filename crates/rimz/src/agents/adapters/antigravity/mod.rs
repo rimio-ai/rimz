@@ -821,8 +821,9 @@ struct DecodedLifecycleFields {
 fn decode_lifecycle_fields(
     event_name: &str,
     payload: &Value,
-    prompt_reader: impl FnOnce(&Path, &str) -> Option<String>,
+    prompt_reader: impl FnOnce(&Path, &str, Option<u64>) -> Option<String>,
 ) -> DecodedLifecycleFields {
+    let mut taken_in_from = None;
     let (common, signal) = match event_name {
         "PreInvocation" => {
             let Some(invocation) = payloads::parse_invocation(payload) else {
@@ -835,6 +836,18 @@ fn decode_lifecycle_fields(
                 Some(0) => Some(LifecycleSignal::TurnStarted { turn_id: None }),
                 _ => None,
             };
+            (invocation.common, signal)
+        }
+        // A user row at or past the invocation's first step was taken in while it ran: a
+        // steer. Later invocations begin past it, so each steer is reported once.
+        "PostInvocation" => {
+            let Some(invocation) = payloads::parse_invocation(payload) else {
+                return DecodedLifecycleFields::default();
+            };
+            taken_in_from = invocation
+                .initial_num_steps
+                .filter(|_| !invocation.common.runs_compact_command());
+            let signal = taken_in_from.map(|_| LifecycleSignal::TurnStarted { turn_id: None });
             (invocation.common, signal)
         }
         "PostToolUse:edit" | "PostToolUse:mutating" | "PostToolUse:observed" => {
@@ -887,13 +900,14 @@ fn decode_lifecycle_fields(
             (common, None)
         }
     };
-    observation_with_prompt_reader(common, signal, prompt_reader)
+    observation_with_prompt_reader(common, signal, taken_in_from, prompt_reader)
 }
 
 fn observation_with_prompt_reader(
     common: payloads::CommonPayload,
     signal: Option<LifecycleSignal>,
-    prompt_reader: impl FnOnce(&Path, &str) -> Option<String>,
+    taken_in_from: Option<u64>,
+    prompt_reader: impl FnOnce(&Path, &str, Option<u64>) -> Option<String>,
 ) -> DecodedLifecycleFields {
     let Some(agent_id) = common
         .conversation_id()
@@ -918,12 +932,26 @@ fn observation_with_prompt_reader(
         .transcript_path
         .filter(|path| !path.trim().is_empty());
     let prompt = matches!(signal, LifecycleSignal::TurnStarted { .. })
-        .then(|| prompt_reader(Path::new(transcript_path.as_deref()?), agent_id.as_str()))
+        .then(|| {
+            prompt_reader(
+                Path::new(transcript_path.as_deref()?),
+                agent_id.as_str(),
+                taken_in_from,
+            )
+        })
         .flatten();
+    if taken_in_from.is_some() && prompt.is_none() {
+        return DecodedLifecycleFields {
+            agent_id: Some(agent_id),
+            worktree_path,
+            lifecycle: None,
+        };
+    }
     let mut observation = AgentLifecycleObservation::new(Some(agent_id.as_str().into()), signal);
     observation.worktree_path = worktree_path.clone();
     observation.prompt = SanitizedPrompt::new(prompt.as_deref());
     observation.transcript_path = transcript_path;
+    observation.state_snapshot = taken_in_from.map(|_| true);
     observation.launch.model = common.model_name.filter(|model| !model.trim().is_empty());
     DecodedLifecycleFields {
         agent_id: Some(agent_id),
@@ -936,7 +964,7 @@ fn observation_with_prompt_reader(
 fn observe_lifecycle_with_prompt_reader(
     event_name: &str,
     payload: &Value,
-    prompt_reader: impl FnOnce(&Path, &str) -> Option<String>,
+    prompt_reader: impl FnOnce(&Path, &str, Option<u64>) -> Option<String>,
 ) -> Option<AgentLifecycleObservation> {
     decode_lifecycle_fields(event_name, payload, prompt_reader).lifecycle
 }

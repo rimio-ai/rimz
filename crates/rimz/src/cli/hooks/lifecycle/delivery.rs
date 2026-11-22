@@ -56,6 +56,16 @@ pub(super) fn confirm_sent_message_for_lifecycle(
         LifecycleSignal::Compacting => rimz::store::writer::DeliveryAck::Compaction,
         _ => return Vec::new(),
     };
+    confirm_sent_message_with_ack(store, agent, recorded, workspace, ack)
+}
+
+pub(super) fn confirm_sent_message_with_ack(
+    store: &Store,
+    agent: &AgentDefinition,
+    recorded: &RecordedLifecycle,
+    workspace: &ResolvedWorkspace,
+    ack: rimz::store::writer::DeliveryAck<'_>,
+) -> Vec<rimz::store::message::MessageRecord> {
     let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
         return Vec::new();
     };

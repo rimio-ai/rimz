@@ -146,6 +146,13 @@ pub(super) fn handle_lifecycle_frame(
         if recorded.receipt.rotation_due {
             spawn_auto_rotation(workspace);
         }
+        // A prompt the agent took in mid-turn confirms its message without opening a turn.
+        if recorded.observation.prompt.is_some()
+            && !recorded.receipt.stale
+            && !recorded.receipt.replaced
+        {
+            record_prompt_taken_in(workspace, store, agent, recorded);
+        }
         return Ok(decoded.reply().clone());
     }
     // A replaced process's late event is kept in the log and triggers nothing.
@@ -814,6 +821,74 @@ fn withdraw_idle_stop(
             requested_at: stop.requested_at,
         },
     });
+}
+
+fn record_prompt_taken_in(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &AgentDefinition,
+    recorded: &RecordedLifecycle,
+) {
+    let in_flight = in_flight_messages_for_lifecycle(store, agent, recorded);
+    let in_flight = in_flight.iter().collect::<Vec<_>>();
+    // One report carries every prompt the invocation took in, in the order it took them in,
+    // and each may be a separate send: confirm from the front until no record matches.
+    let mut rest = recorded
+        .observation
+        .prompt
+        .as_deref()
+        .unwrap_or_default()
+        .trim();
+    let mut confirmed = Vec::new();
+    while !rest.is_empty() {
+        let ack = rimz::store::writer::DeliveryAck::TurnStarted { prompt: Some(rest) };
+        let delivered = confirm_sent_message_with_ack(store, agent, recorded, workspace, ack);
+        if delivered.is_empty() {
+            break;
+        }
+        let end = rimz::store::message::align_submitted_prompt(
+            rest,
+            &delivered.iter().collect::<Vec<_>>(),
+        )
+        .and_then(|(_, _, trailing)| trailing)
+        .map_or(rest.len(), |trailing| rest.len() - trailing.len());
+        confirmed.push((&rest[..end], delivered));
+        rest = rest[end..].trim_start();
+    }
+    let mut sections = confirmed
+        .iter()
+        .flat_map(|(text, delivered)| {
+            rimz::store::message::classify_submitted_prompt(
+                text,
+                &delivered.iter().collect::<Vec<_>>(),
+                &in_flight,
+            )
+        })
+        .collect::<Vec<_>>();
+    sections.extend(rimz::store::message::classify_submitted_prompt(
+        rest,
+        &[],
+        &in_flight,
+    ));
+    let run_id = session_run_id(store, agent, recorded.observation.agent_id.as_ref());
+    if let Err(err) = record_conversation(
+        workspace,
+        store,
+        agent,
+        recorded,
+        ConversationInput {
+            assistant_message: None,
+            questions: &[],
+            sections: &sections,
+            run_id: run_id.as_ref(),
+        },
+    ) {
+        warn!(
+            agent = agent.spec().kind,
+            error = %err,
+            "lifecycle: failed to record a prompt taken in mid-turn",
+        );
+    }
 }
 
 fn session_run_id(

@@ -68,7 +68,7 @@ fn turn_start_sanitizes_the_transcript_prompt() {
         std::iter::once("a real request").chain(crate::agents::CONTROL_TAG_PREFIXES.iter().copied())
     {
         let decoded =
-            decode_lifecycle_fields("PreInvocation", &payload, |_, _| Some(raw.to_owned()));
+            decode_lifecycle_fields("PreInvocation", &payload, |_, _, _| Some(raw.to_owned()));
         assert_eq!(
             decoded.lifecycle.unwrap().prompt.as_deref(),
             (raw == "a real request").then_some(raw),
@@ -188,7 +188,7 @@ fn bare_compact_hooks_bracket_a_manual_compaction() {
                 &common,
                 [("invocationNum", json!(0)), ("lastUserInput", json!(input))],
             ),
-            |_, _| panic!("a compaction reads no prompt"),
+            |_, _, _| panic!("a compaction reads no prompt"),
         )
         .unwrap();
         assert_eq!(opened.signal, LifecycleSignal::Compacting, "{input:?}");
@@ -283,7 +283,7 @@ fn other_inputs_keep_the_turn_bracket() {
             pre["lastUserInput"] = input.clone();
             stop["lastUserInput"] = input.clone();
         }
-        let started = observe_lifecycle_with_prompt_reader("PreInvocation", &pre, |_, _| {
+        let started = observe_lifecycle_with_prompt_reader("PreInvocation", &pre, |_, _, _| {
             Some("asked".into())
         })
         .unwrap();
@@ -2886,7 +2886,7 @@ fn first_invocation_recovers_only_the_latest_completed_visible_prompt() {
             ("invocationNum", json!(0)),
         ],
     );
-    let started = observe_lifecycle_with_prompt_reader("PreInvocation", &payload, |path, id| {
+    let started = observe_lifecycle_with_prompt_reader("PreInvocation", &payload, |path, id, _| {
         session::latest_prompt_under(dir.path(), path, id)
     })
     .unwrap();
@@ -2900,7 +2900,7 @@ fn first_invocation_recovers_only_the_latest_completed_visible_prompt() {
                 ("terminationReason", json!("model_stop")),
             ],
         ),
-        |_, _| panic!("Stop must not read transcripts"),
+        |_, _, _| panic!("Stop must not read transcripts"),
     )
     .unwrap();
     assert!(stopped.prompt.is_none());
@@ -2913,10 +2913,128 @@ fn first_invocation_recovers_only_the_latest_completed_visible_prompt() {
     let rejected = observe_lifecycle_with_prompt_reader(
         "PreInvocation",
         &with(&payload, [("transcriptPath", json!(unknown))]),
-        |path, id| session::latest_prompt_under(dir.path(), path, id),
+        |path, id, _| session::latest_prompt_under(dir.path(), path, id),
     )
     .unwrap();
     assert!(rejected.prompt.is_none());
+}
+#[test]
+fn post_invocation_reports_each_prompt_taken_in_mid_turn_once() {
+    // Step indexes and invocation fields from the 1.5.14 capture: one steer taken in by
+    // invocation 2 (begun with 8 steps), one by invocation 5 (begun with 15), and the
+    // continuation opener once the background command finished.
+    let dir = tempfile::tempdir().unwrap();
+    let mut lines = vec![
+        user_record(0, AT_09, "run three commands"),
+        planner_record(1, AT_09, None),
+        planner_record(7, AT_09, None),
+    ];
+    let post = |lines: &[String], invocation: u64, initial_steps: u64| {
+        let transcript = write_transcript_named(
+            dir.path(),
+            SESSION_ID,
+            "transcript_full.jsonl",
+            &lines.join("\n"),
+        );
+        let payload = with(
+            &hook_payload(),
+            [
+                ("transcriptPath", json!(transcript)),
+                ("invocationNum", json!(invocation)),
+                ("initialNumSteps", json!(initial_steps)),
+            ],
+        );
+        observe_lifecycle_with_prompt_reader("PostInvocation", &payload, |path, id, from| {
+            session::prompt_taken_in_under(dir.path(), path, id, from?)
+        })
+    };
+    assert!(
+        post(&lines, 0, 1).is_none(),
+        "the opener reported the first prompt"
+    );
+    assert!(post(&lines, 1, 7).is_none());
+    lines.extend([
+        user_record(
+            8,
+            AT_10,
+            "<USER_REQUEST>Also include STEERAPPLE.</USER_REQUEST>",
+        ),
+        planner_record(9, AT_10, None),
+    ]);
+    let reported = post(&lines, 2, 8).expect("the invocation that took the steer in reports it");
+    assert_eq!(
+        reported.signal,
+        LifecycleSignal::TurnStarted { turn_id: None }
+    );
+    assert!(
+        reported.is_state_snapshot(),
+        "a steer joins the running turn rather than opening one"
+    );
+    assert_eq!(reported.prompt.as_deref(), Some("Also include STEERAPPLE."));
+    assert!(
+        post(&lines, 3, 10).is_none(),
+        "each later invocation begins past it"
+    );
+    assert!(post(&lines, 4, 13).is_none());
+    lines.extend([user_record(15, AT_11, "Also include STEERBERRY.")]);
+    assert_eq!(
+        post(&lines, 5, 15).and_then(|reported| reported.prompt.map(|prompt| prompt.to_string())),
+        Some("Also include STEERBERRY.".to_owned()),
+    );
+    lines.push(planner_record(16, AT_11, None));
+    assert!(
+        post(&lines, 0, 17).is_none(),
+        "a continuation takes no prompt in"
+    );
+
+    // Live run 1, case 3: two steers into one invocation, one row each, both reported in the
+    // order agy took them in.
+    let two_steers = vec![
+        user_record(0, AT_09, "sleep"),
+        planner_record(32, AT_10, None),
+        user_record(33, AT_10, "Also include the word RZLIVE3TA."),
+        user_record(34, AT_10, "Also include the word RZLIVE3TB."),
+        planner_record(35, AT_11, None),
+    ];
+    assert_eq!(
+        post(&two_steers, 4, 33)
+            .and_then(|reported| reported.prompt.map(|prompt| prompt.to_string())),
+        Some("Also include the word RZLIVE3TA.\n\nAlso include the word RZLIVE3TB.".to_owned()),
+    );
+
+    let drained = vec![
+        user_record(0, AT_09, "sleep"),
+        planner_record(3, AT_10, None),
+        user_record(4, AT_11, "Also include PLUM."),
+    ];
+    assert!(
+        post(&drained, 0, 5).is_none(),
+        "a queued prompt agy drains at the turn's end is the opener's to report"
+    );
+    let compact = with(
+        &hook_payload(),
+        [
+            ("invocationNum", json!(1)),
+            ("initialNumSteps", json!(0)),
+            ("lastUserInput", json!("/compact")),
+        ],
+    );
+    assert!(
+        observe_lifecycle_with_prompt_reader("PostInvocation", &compact, |_, _, _| {
+            panic!("a compaction reads no prompt")
+        })
+        .is_none()
+    );
+    let unreadable = with(
+        &hook_payload(),
+        [("invocationNum", json!(2)), ("initialNumSteps", json!(8))],
+    );
+    let fields = decode_lifecycle_fields("PostInvocation", &unreadable, |_, _, _| None);
+    assert!(
+        fields.lifecycle.is_none(),
+        "an unread transcript reports nothing"
+    );
+    assert_eq!(fields.agent_id.as_deref(), Some(SESSION_ID));
 }
 #[cfg(unix)]
 #[test]

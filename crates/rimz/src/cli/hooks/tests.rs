@@ -2336,6 +2336,150 @@ fn correlated_antigravity_children_keep_independent_lifecycle_and_root_parent() 
 }
 
 #[test]
+fn a_prompt_taken_in_mid_turn_confirms_its_steer_without_opening_a_turn() {
+    use rimz::store::message::{DeliveryGate, MessageRecord};
+    let (_dir, store) = hooks_test_store();
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let mut opener = antigravity_payload("steered");
+    opener["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, adapter, "PreInvocation", opener.clone());
+    let row = || {
+        store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|state| state.agent_id == "steered")
+            .cloned()
+            .unwrap()
+    };
+    let opened = row();
+    let steer = MessageRecord::new(
+        store.paths().workspace_id.clone(),
+        &opened,
+        "Also include STEERAPPLE.".to_owned(),
+        DeliveryGate::Done,
+    );
+    store.queue_message(&steer, "hooks-test").unwrap();
+    store
+        .record_sent_batch(std::slice::from_ref(&steer), "hooks-test")
+        .unwrap();
+
+    // What the adapter reports from the PostInvocation of the invocation that took it in.
+    let mut decoded = adapter.decode_hook("PreInvocation", &opener).unwrap();
+    decoded.update_lifecycle(|observation| {
+        observation.state_snapshot = Some(true);
+        observation.prompt = rimz::agents::SanitizedPrompt::new(Some("Also include STEERAPPLE."));
+    });
+    handle_lifecycle_hook(
+        &hooks_test_workspace(Some("main")),
+        &store,
+        adapter,
+        &mut decoded,
+        &opener,
+        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+        &hooks_test_globals(),
+    )
+    .unwrap();
+
+    assert!(
+        store.list_messages().unwrap().is_empty(),
+        "the steer is confirmed delivered"
+    );
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    let recorded: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.message_id.as_ref() == Some(&steer.message_id))
+        .collect();
+    assert_eq!(recorded.len(), 1, "{entries:?}");
+    assert_eq!(recorded[0].text, "Also include STEERAPPLE.");
+    let steered = row();
+    assert_eq!(steered.status, rimz::agents::AgentStatus::Running);
+    assert_eq!(
+        steered.turn_started_at, opened.turn_started_at,
+        "a steer joins the running turn"
+    );
+}
+
+/// Live run 1, case 3: agy took two steers in during one invocation, and the person typed a
+/// third prompt among them. Each RimZ record is confirmed and recorded once, in the order agy
+/// took them in, and the person's text is recorded as direct input.
+#[test]
+fn prompts_taken_in_by_one_invocation_each_confirm_their_steer() {
+    use rimz::store::message::{DeliveryGate, MessageRecord};
+    let (_dir, store) = hooks_test_store();
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let mut opener = antigravity_payload("steered");
+    opener["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, adapter, "PreInvocation", opener.clone());
+    let opened = store
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .iter()
+        .find(|state| state.agent_id == "steered")
+        .cloned()
+        .unwrap();
+    let steers = [
+        "Also include RZLIVE3TA.",
+        "Also include RZLIVE3TB.",
+        "Also include RZLIVE3TC.",
+    ]
+    .map(|text| {
+        let steer = MessageRecord::new(
+            store.paths().workspace_id.clone(),
+            &opened,
+            text.to_owned(),
+            DeliveryGate::Done,
+        );
+        store.queue_message(&steer, "hooks-test").unwrap();
+        store
+            .record_sent_batch(std::slice::from_ref(&steer), "hooks-test")
+            .unwrap();
+        steer
+    });
+    let mut decoded = adapter.decode_hook("PreInvocation", &opener).unwrap();
+    decoded.update_lifecycle(|observation| {
+        observation.state_snapshot = Some(true);
+        observation.prompt = rimz::agents::SanitizedPrompt::new(Some(
+            "Also include RZLIVE3TA.\n\nAnd keep it short.\n\nAlso include RZLIVE3TB.\n\nAlso include RZLIVE3TC.",
+        ));
+    });
+    handle_lifecycle_hook(
+        &hooks_test_workspace(Some("main")),
+        &store,
+        adapter,
+        &mut decoded,
+        &opener,
+        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+        &hooks_test_globals(),
+    )
+    .unwrap();
+
+    assert!(
+        store.list_messages().unwrap().is_empty(),
+        "every steer is confirmed delivered: {:?}",
+        store.list_messages().unwrap()
+    );
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    let inputs = entries
+        .iter()
+        .filter(|entry| entry.agent_id == "steered" && entry.text != "steered")
+        .map(|entry| (entry.text.as_str(), entry.message_id.as_ref()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        inputs,
+        [
+            ("Also include RZLIVE3TA.", Some(&steers[0].message_id)),
+            ("And keep it short.", None),
+            ("Also include RZLIVE3TB.", Some(&steers[1].message_id)),
+            ("Also include RZLIVE3TC.", Some(&steers[2].message_id)),
+        ],
+        "{entries:?}"
+    );
+}
+
+#[test]
 fn copilot_child_metadata_reconciles_at_the_parent_checkpoint() {
     let (_store_dir, store) = hooks_test_store();
     let transcript_dir = tempfile::tempdir().unwrap();

@@ -42,6 +42,10 @@ pub(super) struct InvocationPayload {
     pub common: CommonPayload,
     #[serde(rename = "invocationNum")]
     pub invocation_num: Option<u64>,
+    /// The transcript's step count when the invocation began; a row at or past it arrived
+    /// during the invocation.
+    #[serde(rename = "initialNumSteps")]
+    pub initial_num_steps: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

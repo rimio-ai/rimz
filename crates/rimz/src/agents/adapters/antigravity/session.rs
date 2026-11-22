@@ -30,8 +30,7 @@ const TRANSCRIPT_BASENAMES: [&str; 2] = ["transcript_full.jsonl", "transcript.js
 
 #[derive(Deserialize)]
 struct TranscriptRecord {
-    #[serde(rename = "step_index")]
-    _step_index: u64,
+    step_index: u64,
     source: String,
     #[serde(rename = "type")]
     record_type: String,
@@ -528,15 +527,38 @@ pub(super) fn transcript_for_session(session_id: &str) -> Option<PathBuf> {
     transcript_for_session_under(&home, session_id)
 }
 
-pub(super) fn latest_prompt(path: &Path, session_id: &str) -> Option<String> {
+pub(super) fn latest_prompt(
+    path: &Path,
+    session_id: &str,
+    from_step: Option<u64>,
+) -> Option<String> {
     let home = home()?;
-    latest_prompt_under(&home, path, session_id)
+    match from_step {
+        Some(from_step) => prompt_taken_in_under(&home, path, session_id, from_step),
+        None => latest_prompt_under(&home, path, session_id),
+    }
 }
 
 pub(super) fn latest_prompt_under(home: &Path, path: &Path, session_id: &str) -> Option<String> {
     valid_transcript_under(home, path, session_id).then_some(())?;
     let lines = read_transcript_tail(path)?;
     fold(&lines).latest_prompt
+}
+
+pub(super) fn prompt_taken_in_under(
+    home: &Path,
+    path: &Path,
+    session_id: &str,
+    from_step: u64,
+) -> Option<String> {
+    valid_transcript_under(home, path, session_id).then_some(())?;
+    let lines = read_transcript_tail(path)?;
+    let prompts = parse_records(&lines)
+        .filter(|record| record.step_index >= from_step && is_turn_start(record))
+        .filter_map(|record| normalize_user_content(record.content.as_deref()))
+        .filter(|text| text != super::COMPACT_COMMAND)
+        .collect::<Vec<_>>();
+    (!prompts.is_empty()).then(|| prompts.join("\n\n"))
 }
 
 pub(super) fn correlate_subagent(
