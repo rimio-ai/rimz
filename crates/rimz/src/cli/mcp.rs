@@ -35,7 +35,7 @@ enum McpSubcmd {
         /// server's own, for a provider that starts the server with a reduced one.
         #[arg(long)]
         parent_env: bool,
-        /// Serve what the launch names in RIMZ_MCP_SERVE, running each one-shot in
+        /// Serve what the launch names in RIMZ_MCP_SERVE, running each call in
         /// RIMZ_MCP_CWD, for a provider that starts one fixed server for every session.
         #[arg(long, conflicts_with_all = ["only", "always", "deferred"])]
         launch_env: bool,
@@ -117,7 +117,8 @@ pub fn run(args: McpArgs) -> Result<()> {
                         .map(|capability| (capability, LoadMode::Deferred)),
                 )
                 .collect();
-            rimz::mcp::serve(&only, &modes, rimz::mcp_tools::Tools::new(None)).context("rimz mcp serve")
+            rimz::mcp::serve(&only, &modes, rimz::mcp_tools::Tools::new(None))
+                .context("rimz mcp serve")
         }
         McpSubcmd::Tools { only, json } => {
             let wording = Wording::read_home();

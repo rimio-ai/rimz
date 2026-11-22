@@ -395,7 +395,7 @@ fn assert_terminal_note(pair: portable_pty::PtyPair, command: portable_pty::Comm
 }
 
 /// Under `--launch-env` the server serves what the launch's variables name, with their marks,
-/// and runs each one-shot in the launch's directory, not its own.
+/// and runs each call in the launch's directory, not its own.
 #[test]
 fn launch_env_serves_the_launchs_selection_in_its_directory() {
     let env = Env::new();
