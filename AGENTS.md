@@ -74,7 +74,7 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 - `agents/`: the provider-neutral `AgentDefinition` catalog, capability contracts, `state.rs` rollup, handle minting (`petname`), private `adapters/`, spend/pricing/account machinery, provider login resolution (`login`).
 - `room/`: managed-room context, birth/reset/teardown lifecycle, health gating.
 - `sandbox/`: Linux bubblewrap mount views, provider-home binds, per-agent temp units, skill views, capability preflight.
-- `harness/`: layout IR, teams and board stage flips, launch plan and argv, supervised runs, workflows (`workflow/`), the hook drainer (`hook_drain.rs`), loop scheduling and signals (`schedule/fire.rs` and the read-only `when.rs` evaluator are in the sidebar graph), resume and rebirth recovery, hibernation (`hibernate.rs`, `hibernate/`, with `proc/cgroup.rs`), the note store (`notes.rs`).
+- `harness/`: layout IR, teams and board stage flips, launch plan and argv, supervised runs, workflows (`workflow/`), the hook drainer (`hook_drain.rs`), loop scheduling and signals, resume and rebirth recovery, hibernation (`hibernate.rs`, `hibernate/`, with `proc/cgroup.rs`), the note store (`notes.rs`).
 - `message/`: delivery: park-vs-live dispatch, live-pane send, the shared turn reader, scheduled wakeups, synthetic card text.
 - `store/`: durable state engine: `Store` handle, snapshot schema, framed event log, hook ingress and drain cursor (`ingress.rs`), message queue, run and workflow records, GC.
 - `mux/`: Zellij/tmux seam: `MuxBackend`, live-session snapshot, subprocess engine, reconcile planner, recovery, focus anchor, per-pane write lock.
@@ -86,7 +86,7 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 
 **Top-level modules** in `crates/rimz/src/`:
 
-- `launcher/`: launch orchestration, checkout creation, the agent tree stop (`launcher::stop`), and the agent and team joins (`launcher::agent_join`, `launcher::team_join`).
+- `launcher/`: launch orchestration, checkout creation, the agent tree stop, the agent and team joins, and the production workflow host.
 - `disk`: atomic publish, home and workspace paths, JSONL append, locks and leases (`disk::lease`), usage and output measurement.
 - `address`: agent-address grammar, pane binding, launch-instance grouping, and `address::selector` (the `agents list` fields and `--filter`). `workspace`: resolution, `workspace.json`, and the room identity pin. `web`, `worktree`, `forge` (with PR state).
 - `transcript`, `pane` (identity and classification), `pixel_wire` (kitty placeholder encoding), `sock`, `ids`, `trust`, `wakeup` (the sidebar wire).
