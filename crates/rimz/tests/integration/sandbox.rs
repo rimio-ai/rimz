@@ -3833,6 +3833,14 @@ fn sandbox_antigravity_skill_list_views_its_global_root() {
         std::fs::create_dir_all(root.join(name)).unwrap();
         std::fs::write(root.join(name).join("SKILL.md"), "body\n").unwrap();
     }
+    let native = [
+        env.home_root.join(".gemini/skills"),
+        env.home_root.join(".gemini/antigravity-cli/skills"),
+    ];
+    for native_root in &native {
+        std::fs::create_dir_all(native_root.join("native")).unwrap();
+        std::fs::write(native_root.join("native/SKILL.md"), "body\n").unwrap();
+    }
     let argv = skill_argv(
         &env,
         &vars,
@@ -3858,6 +3866,15 @@ fn sandbox_antigravity_skill_list_views_its_global_root() {
         std::fs::read_to_string(copy.join("SKILL.md")).unwrap(),
         "---\ndisable-model-invocation: true\n---\nbody\n"
     );
+    for native_root in &native {
+        assert!(
+            !argv
+                .iter()
+                .any(|arg| Path::new(arg).starts_with(native_root)),
+            "{} stays native: {argv:?}",
+            native_root.display()
+        );
+    }
 }
 
 #[test]

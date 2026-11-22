@@ -2,7 +2,7 @@
 
 This page maps the Antigravity CLI (`agy`) onto RimZ's types: launch and resume, the hooks RimZ installs, session discovery from the provider's local store, the transcript, subagents, statusline context, the account, and cost. The provider-neutral agent model is in [model.md](./model.md), the integration layer in [adapter.md](./adapter.md), and pane binding and supersession in [instances.md](./instances.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream protocol, pinned at `agy` 1.5.14 with transcript and subagent captures from 1.1.2, plugin and `/usage` captures from 1.5.12, custom-agent and `/compact` captures from 1.5.13, and permission, sandbox, and MCP captures from 1.5.14, is in [antigravity-reference.md](../../externals/agent-adapter/antigravity-reference.md).
 
-Antigravity reaches RimZ through four sources, and each owns different facts. Command hooks carry turn boundaries and tool progress. The custom statusline carries the live model, account, and context gauge. The provider's local `brain/` store carries conversation identity, history, priced spend, and native questions between hooks. The statusline and a print-mode `agy -p /usage` run both carry the quota. RimZ installs no `PreToolUse` hook, because no documented `PreToolUse` decision is proven to leave native permission policy unchanged ([reference](../../externals/agent-adapter/antigravity-reference.md#decisions)).
+Antigravity reaches RimZ through four sources, and each owns different facts. Command hooks carry turn boundaries and tool progress. The custom statusline carries the live model, account, and context gauge. The provider's local `brain/` store carries conversation identity, history, priced spend, and native questions between hooks. The statusline and a print-mode `agy -p /usage` run both carry the quota. RimZ installs no `PreToolUse` hook. On agy 1.5.14 an `allow` answer left the native permission prompt in place, but an empty or failed reply denies the tool, so every tool call would wait on RimZ's hook for a start signal the transcript and `PostToolUse` already give; file-edit prompts and auto mode are uncaptured ([reference](../../externals/agent-adapter/antigravity-reference.md#decisions)).
 
 ## Files
 
@@ -91,7 +91,7 @@ agy binds a plugin server's tools from the first turn, so a scoped Antigravity l
 
 ### Skills
 
-`skills_home` is `$HOME/.gemini/config/skills`, the global root agy's built-in skills name, and `manual_skill` is `Frontmatter`: on 1.5.13 `disable-model-invocation: true` hides a skill from the model and keeps it in the `/` menu, and symlinked skill directories and a read-only root are discovered ([reference](../../externals/agent-adapter/antigravity-reference.md#remote-control-mcp-plugins-and-custom-agents)). Host launches link RimZ skills there, creating the root, and a scoped profile `skills` list overlays it ([sandbox.md](../sandbox.md#skill-roots-and-user-only-markers)). agy also reads `~/.gemini/antigravity-cli/skills`, a plugin's `skills/`, and the workspace `.agents/skills`, which RimZ leaves native, so a list does not restrict a skill kept there. On a duplicate name the `~/.gemini/antigravity-cli/skills` copy wins. agy never reads `~/.agents/skills`, so a skill kept only there does not reach it. Nothing about skills goes in the agent file. `host_skills` stays `Unsupported`: a host launch with a list warns and runs unrestricted.
+`skills_home` is `$HOME/.gemini/config/skills`, the global root agy's built-in skills name, and `manual_skill` is `Frontmatter`: on 1.5.13 `disable-model-invocation: true` hides a skill from the model and keeps it in the `/` menu, and symlinked skill directories and a read-only root are discovered ([reference](../../externals/agent-adapter/antigravity-reference.md#remote-control-mcp-plugins-and-custom-agents)). Host launches link RimZ skills there, creating the root, and a scoped profile `skills` list overlays it ([sandbox.md](../sandbox.md#skill-roots-and-user-only-markers)). agy also reads `~/.gemini/antigravity-cli/skills`, `~/.gemini/skills`, a plugin's `skills/`, and the workspace `.agents/skills`, which RimZ leaves native, so a list does not restrict a skill kept there. On a duplicate name the `~/.gemini/antigravity-cli/skills` copy wins over `~/.gemini/config/skills`, which wins over `~/.gemini/skills` (1.5.14, print mode). agy never reads `~/.agents/skills`, so a skill kept only there does not reach it. Nothing about skills goes in the agent file. `host_skills` stays `Unsupported`: a host launch with a list warns and runs unrestricted.
 
 ## Hooks
 
@@ -158,7 +158,7 @@ A stale Running row would make that interrupt cancel the turn its own text opene
 
 ## Sessions
 
-Antigravity registers lazily (`registers_lazily`). A live `agy` pane renders as the idle row of [instances.md](./instances.md#before-a-session-binds) until a hook or local discovery binds a conversation. Upstream documents `SessionStart`, but RimZ leaves it unwired until its behaviour on resume, `/clear`, and child conversations is captured ([reference](../../externals/agent-adapter/antigravity-reference.md#events)). The first `PreInvocation` of an unseen conversation creates it.
+Antigravity registers lazily (`registers_lazily`). A live `agy` pane renders as the idle row of [instances.md](./instances.md#before-a-session-binds) until a hook or local discovery binds a conversation. Upstream documents `SessionStart`, but RimZ leaves it unwired: on 1.5.14 it carries no `source`, fires on no `--conversation` resume, and fires for a child before anything ties the child to its parent ([reference](../../externals/agent-adapter/antigravity-reference.md#events)). The first `PreInvocation` of an unseen conversation creates it.
 
 One live `agy` follows its latest conversation, so the spec declares `SamePaneSessionPolicy::FollowLatest`. Pane adoption, ownership, and the in-place-switch supersession follow from that policy ([instances.md](./instances.md#binding-a-session), [same-pane ownership](./instances.md#same-pane-ownership), [supersession](./instances.md#supersession)). RimZ records no `Fresh` origin for a switch, because the hook wire does not say whether `/clear` or `/fork` created the new conversation.
 
@@ -206,7 +206,7 @@ A turn with no answer returns no final text, never the previous turn's reply. A 
 
 ## Subagents
 
-Antigravity fires the ordinary hook set for each asynchronous or nested child, with the child's own `conversationId` and transcript and no parent id ([reference](../../externals/agent-adapter/antigravity-reference.md#subagents-and-background-tasks)). RimZ recovers the parent from the parent's transcript, where a completed `MODEL` / `PLANNER_RESPONSE` record holds an `invoke_subagent` call with ordered `Subagents` specs, and a later completed `MODEL` / `INVOKE_SUBAGENT` record's `content` returns one `{conversationId, logAbsoluteUri, workspaceUris?}` object per spec in the same order. This shape is live-verified, not documented upstream.
+Antigravity fires the ordinary hook set for each asynchronous or nested child, with the child's own `conversationId` and transcript and no parent id: the 1.5.14 binary defines `parentConversationId` and `rootConversationId`, but a capture found neither on any hook of a child or a nested child ([reference](../../externals/agent-adapter/antigravity-reference.md#subagents-and-background-tasks)). RimZ recovers the parent from the parent's transcript, where a completed `MODEL` / `PLANNER_RESPONSE` record holds an `invoke_subagent` call with ordered `Subagents` specs, and a later completed `MODEL` / `INVOKE_SUBAGENT` record's `content` returns one `{conversationId, logAbsoluteUri, workspaceUris?}` object per spec in the same order. This shape is live-verified, not documented upstream.
 
 ### The forward join
 
@@ -277,7 +277,7 @@ Antigravity puts the selector label, such as `Gemini 3.5 Flash (Medium)`, in bot
 
 The `NativeWait` settle projects a `running` card to `waiting` while it is newer than the row's activity ([model.md](./model.md#waiting-and-asks)). It creates no ask and sends nothing to Antigravity. Any later hook advances the row's activity past the marker, so a missed `false` refresh clears itself.
 
-RimZ reads no other statusline field. `cost` has no published shape and RimZ prices the transcript instead ([Cost](#cost)), `subagents` carries no stable ids, and `conversation_title` would replace RimZ's launch description on the card.
+RimZ reads no other statusline field. `cost` reached no 1.5.14 payload on an OAuth sign-in and RimZ prices the transcript instead ([Cost](#cost)), `subagents` carries no stable ids, and `conversation_title` would replace RimZ's launch description on the card.
 
 The plan, the account id, and `metered` reach the login's account record through the producer's live merge, and the windows reach the rate-limit cache, so every surface shows them from there ([the account record](./providers.md#the-account-record)). One session's payloads fill in stages: the first carry neither `quota` nor `plan_tier`. A payload without them is no reading, and what the record and the cache already hold stays.
 
@@ -329,7 +329,7 @@ The `/usage` windows are `Authoritative` and the statusline's are `BestEffort`, 
 
 The dollars are a list-price estimate: Antigravity quota is measured by work, and a plan bills no tokens. That is why `account_spend` is partial, which keeps Antigravity out of account-day caps.
 
-The statusline carries no dollars into RimZ. At each turn end the hook path sets the card's cost to the conversation's transcript total (`supplement_realtime_cost` through `session_cost_usd`) with `Session` coverage, and later statusline payloads keep it ([spending.md](./spending.md#live-cost-coverage)). So the card shows no price until the first turn ends, and the figure moves only at turn ends. It counts toward room spend and per-agent and room budget caps.
+The statusline carries no dollars into RimZ: upstream documents a `cost` object, but no 1.5.14 payload on an OAuth sign-in carried one, so whether it is cumulative or survives a resume is unknown ([reference](../../externals/agent-adapter/antigravity-reference.md#cost)). At each turn end the hook path sets the card's cost to the conversation's transcript total (`supplement_realtime_cost` through `session_cost_usd`) with `Session` coverage, and later statusline payloads keep it ([spending.md](./spending.md#live-cost-coverage)). So the card shows no price until the first turn ends, and the figure moves only at turn ends. It counts toward room spend and per-agent and room budget caps.
 
 ## Known gaps
 
@@ -343,4 +343,4 @@ The statusline carries no dollars into RimZ. At each turn end the hook path sets
 - Permission wait detail, durable asks, artifact-review waits, and structured answers are unsupported. The user answers native prompts in the Antigravity pane.
 - Remote control is unsupported. Upstream offers a daemon (`agy remote-control`) and session-scoped connections (`--remote-control`, `/remote-control`), and RimZ wires neither ([reference](../../externals/agent-adapter/antigravity-reference.md#remote-control-mcp-plugins-and-custom-agents)).
 - Tool statistics are partial. Names come only from live `PostToolUse.toolCall`, on releases that send it and for tools the three matchers cover. A lazily loaded MCP tool counts only as `call_mcp_tool`, without its server or tool name, an eager one (`mcp_<server>_<tool>`) not at all, and transcript history is not counted.
-- Registration is derived. `SessionStart` stays unwired until a live capture shows its behaviour on resume, `/clear`, and child conversations.
+- Registration is derived. `SessionStart` stays unwired, since on 1.5.14 it fires on no resume and carries no `source`.
