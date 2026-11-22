@@ -503,6 +503,7 @@ pub struct LspArgs {
     /// The query.
     pub verb: LspVerb,
     /// Every target of the question.
+    #[schemars(length(min = 1))]
     pub targets: Vec<String>,
     /// Show every location in scope.
     #[serde(default)]
@@ -514,6 +515,7 @@ pub struct LspArgs {
     #[serde(default)]
     pub external: bool,
     /// The most locations to show.
+    #[schemars(range(min = 1))]
     pub limit: Option<u32>,
     /// `show`: print the full body of a large item.
     #[serde(default)]
