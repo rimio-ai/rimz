@@ -212,6 +212,8 @@ fn schemas_are_inline_objects_without_null_types() {
     }
     let lsp = tool("lsp").listing(&Wording::built_in());
     assert_eq!(lsp["inputSchema"]["required"], json!(["verb", "targets"]));
+    assert_eq!(lsp["inputSchema"]["properties"]["targets"]["minItems"], 1);
+    assert_eq!(lsp["inputSchema"]["properties"]["limit"]["minimum"], 1);
     assert_eq!(
         lsp["inputSchema"]["properties"]["verb"]["enum"],
         json!([
