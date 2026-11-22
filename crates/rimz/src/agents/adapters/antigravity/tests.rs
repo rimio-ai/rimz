@@ -407,6 +407,62 @@ fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
         );
     }
 }
+#[test]
+fn stop_termination_reasons_fail_only_on_errors_and_limits() {
+    let ended = |errored, parked_on_background| LifecycleSignal::TurnEnded {
+        errored,
+        parked_on_background,
+        turn_id: None,
+    };
+    for (reason, failed) in [
+        ("ERROR", true),
+        ("MAX_INVOCATIONS", true),
+        ("MAX_FORCED_INVOCATIONS", true),
+        ("MAX_TOKEN_BUDGET_EXCEEDED", true),
+        ("Max_Token_Budget_Exceeded", true),
+        ("error", true),
+        ("max_steps_exceeded", true),
+        (" Max_Steps_Exceeded ", true),
+        ("NO_TOOL_CALL", false),
+        ("USER_CANCELED", false),
+        ("TERMINAL_STEP_TYPE", false),
+        ("TERMINAL_CUSTOM_HOOK", false),
+        ("INJECTED_RESPONSE", false),
+        ("no_tool_call", false),
+        ("SOMETHING_NEW", false),
+    ] {
+        for fully_idle in [true, false] {
+            let payload = with(
+                &hook_payload(),
+                [
+                    ("terminationReason", json!(reason)),
+                    ("fullyIdle", json!(fully_idle)),
+                    ("error", json!("")),
+                ],
+            );
+            assert_eq!(
+                hook_signal(&AntigravityAdapter, "Stop", &payload),
+                ended(failed, !fully_idle && !failed),
+                "{reason} fullyIdle={fully_idle}"
+            );
+        }
+        let compact = with(
+            &hook_payload(),
+            [
+                ("terminationReason", json!(reason)),
+                ("lastUserInput", json!("/compact")),
+            ],
+        );
+        assert_eq!(
+            hook_signal(&AntigravityAdapter, "Stop", &compact),
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed,
+            },
+            "{reason} closing a compaction"
+        );
+    }
+}
 struct AgyHome {
     _dir: tempfile::TempDir,
     paths: install::Paths,
