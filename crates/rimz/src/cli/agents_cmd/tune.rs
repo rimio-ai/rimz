@@ -10,8 +10,7 @@ use serde::Serialize;
 
 use super::{Ctx, GlobalFlags};
 use rimz::agents::state::TuneSetting;
-use rimz::harness::budget::{BudgetSpec, read_ledger};
-use rimz::harness::tune::SettingReport;
+use rimz::harness::tune::{SettingReport, target_handle};
 use rimz::store::snapshot::SidebarSnapshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ValueEnum)]
@@ -115,14 +114,11 @@ pub(super) fn run_tune(args: TuneArgs, globals: &GlobalFlags) -> Result<()> {
     let reports = &tuned.reports;
     let handle = target_handle(agent, &peers);
     if args.setting.is_none() && args.json {
-        let ledger = read_ledger(ctx.store.runtime_paths(), &agent.kind, &agent.agent_id);
-        let launched = agent
-            .budget
-            .as_deref()
-            .map(str::parse::<BudgetSpec>)
-            .transpose()?;
-        let mut budget =
-            serde_json::to_value(budget::report(agent, &peers, ledger.as_ref(), launched))?;
+        let mut budget = serde_json::to_value(rimz::harness::tune::budget(
+            ctx.store.runtime_paths(),
+            agent,
+            &peers,
+        )?)?;
         // AgentBudgetReport is a struct with derived serialization, so it is always an object.
         budget
             .as_object_mut()
@@ -186,13 +182,6 @@ fn resolve_target(
         ) => Err(error),
         Err(error) => Err(error.into()),
     }
-}
-
-fn target_handle(agent: &rimz::agents::AgentState, peers: &[&rimz::agents::AgentState]) -> String {
-    if agent.ended_at.is_some() || agent.is_provider_subagent() {
-        return format!("@{}", agent.agent_id);
-    }
-    rimz::address::agent_handle(agent, peers, true)
 }
 
 fn render_setting(handle: &str, report: &SettingReport, condition: Option<&str>) -> Result<()> {

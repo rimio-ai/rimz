@@ -2499,7 +2499,8 @@ path = "crates/rimz/src/harness"
 # remedy of a failed home write moved beside it as `home_write` (+37).
 # Booking a soft stop (`stop_booking`) and retuning a session (`tune`) return values the CLI
 # and the MCP server present (+7).
-surface-budget = 1326
+# The tune budget report and its handle move from the CLI so the MCP self_tune tool answers it (+4).
+surface-budget = 1330
 
 [[verdict]]
 kind = "item"

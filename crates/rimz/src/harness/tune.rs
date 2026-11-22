@@ -8,10 +8,11 @@ use serde::Serialize;
 use crate::agents::AgentState;
 use crate::agents::state::{TuneOverride, TuneSetting};
 use crate::config::{FlipCompact, IdleCompact, KeepWarm, MachineConfig};
+use crate::harness::budget::{BudgetLedger, BudgetSpec, read_ledger, total_cost_usd};
 use crate::harness::cache_keepalive::SeatPolicy;
 use crate::store::event::AgentTunePayload;
 use crate::store::message::AutoCompact;
-use crate::{ResolvedWorkspace, Store};
+use crate::{ResolvedWorkspace, RuntimePaths, Store};
 
 /// One setting's value, where it comes from, and the configured value an override replaces.
 #[derive(Debug, Serialize)]
@@ -155,4 +156,73 @@ fn setting_report<T>(
         set_by: tuned.and_then(|tuned| tuned.by.clone()),
         set_at: tuned.map(|tuned| tuned.at),
     }
+}
+
+/// One session's dollar cap: what it has spent in the cap's window, the cap, and where the cap
+/// comes from (`launch`, `override`, `cleared`, or `none`).
+#[derive(Debug, Serialize)]
+pub struct AgentBudgetReport {
+    pub agent: String,
+    pub spend_usd: Option<f64>,
+    pub cap_usd: Option<f64>,
+    pub window: Option<&'static str>,
+    pub source: &'static str,
+    pub parked: bool,
+}
+
+/// `agent`'s cap as its ledger stands, or as it launched when it has none.
+pub fn budget(
+    runtime: &RuntimePaths,
+    agent: &AgentState,
+    peers: &[&AgentState],
+) -> Result<AgentBudgetReport> {
+    let ledger = read_ledger(runtime, &agent.kind, &agent.agent_id);
+    let launched = agent
+        .budget
+        .as_deref()
+        .map(str::parse::<BudgetSpec>)
+        .transpose()?;
+    Ok(budget_report(agent, peers, ledger.as_ref(), launched))
+}
+
+pub fn budget_report(
+    agent: &AgentState,
+    peers: &[&AgentState],
+    ledger: Option<&BudgetLedger>,
+    launched: Option<BudgetSpec>,
+) -> AgentBudgetReport {
+    let spec = ledger.map(|ledger| ledger.spec).or(launched);
+    let spend_usd = total_cost_usd(agent).map(|total| {
+        ledger
+            .cloned()
+            .or_else(|| spec.map(BudgetLedger::new))
+            .map_or(total, |ledger| ledger.spend_usd(total))
+    });
+    let cap_usd = match ledger {
+        Some(ledger) => ledger.effective_cap_usd(),
+        None => launched.map(|spec| spec.cap_usd),
+    };
+    let source = match ledger {
+        Some(ledger) if ledger.disabled => "cleared",
+        Some(ledger) if ledger.raised_cap_usd.is_some() => "override",
+        _ if spec.is_some() => "launch",
+        _ => "none",
+    };
+    AgentBudgetReport {
+        agent: target_handle(agent, peers),
+        spend_usd,
+        cap_usd,
+        window: spec.map(|spec| spec.window.label()),
+        source,
+        parked: ledger.is_some_and(|ledger| ledger.parked.is_some()),
+    }
+}
+
+/// The handle a tune report names `agent` by: its session id once it has ended or when it is
+/// a provider subagent, which no handle reaches.
+pub fn target_handle(agent: &AgentState, peers: &[&AgentState]) -> String {
+    if agent.ended_at.is_some() || agent.is_provider_subagent() {
+        return format!("@{}", agent.agent_id);
+    }
+    crate::address::agent_handle(agent, peers, true)
 }
