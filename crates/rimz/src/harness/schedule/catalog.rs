@@ -469,6 +469,49 @@ impl TaskCatalog {
     }
 
     pub fn remove(&self, name: &str) -> Result<TaskMutation> {
+        self.remove_with(name, |paths, root, id| {
+            cancel_unacted_runs(paths, root, id, "loop task removed")
+        })
+    }
+
+    /// Removes the task as [`Self::remove`] does while its booking is still `booked_by`, the one
+    /// the caller was checked against, and else leaves it and changes nothing. It cancels none
+    /// of the task's runs, unacted ones included, and starts no process: each live run is
+    /// released from the task and keeps going. Returns what the task fired that is still alive
+    /// (`agents` are the room's audit rows, read for the agents it launched), each by its fire
+    /// and the launch's own id, read before the removal so a failed read leaves the task booked.
+    pub fn remove_keeping_runs<'a>(
+        &self,
+        name: &str,
+        booked_by: &[crate::agents::LaunchedBy],
+        agents: impl IntoIterator<Item = &'a crate::agents::AgentState> + Clone,
+    ) -> Result<(TaskMutation, Vec<super::launches::AliveLaunch>)> {
+        let Some(task) = self
+            .visible
+            .get(name)
+            .filter(|task| task.entry().booked_by == booked_by)
+        else {
+            return Ok((TaskMutation::default(), Vec::new()));
+        };
+        let records = super::task_record::load()?;
+        let alive = match records.live(&task.binding(name).key()) {
+            Some((id, _)) => {
+                let paths = StatePaths::for_project_root(&task.entry().resolved_root())?;
+                super::launches::alive(id, &paths, agents)?
+            }
+            None => Vec::new(),
+        };
+        let mutation = self.remove_with(name, |_, _, _| Ok(()))?;
+        Ok((mutation, alive))
+    }
+
+    /// The removal both entries share; `settle_runs` acts on the task's runs once its
+    /// definition is gone and before its backlog and runs are released.
+    fn remove_with(
+        &self,
+        name: &str,
+        settle_runs: impl FnOnce(&StatePaths, &Path, &TaskId) -> Result<()>,
+    ) -> Result<TaskMutation> {
         let Some(task) = self.visible.get(name) else {
             let Some(entry) = self.skipped_machine.0.get(name) else {
                 return Ok(TaskMutation::default());
@@ -489,7 +532,7 @@ impl TaskCatalog {
         let changed = remove_definition(name, task)?;
         if changed && let Some(id) = &id {
             let paths = StatePaths::for_project_root(&root)?;
-            cancel_unacted_runs(&paths, &root, id, "loop task removed")?;
+            settle_runs(&paths, &root, id)?;
             super::backlog_store::remove(&paths, id.as_str())?;
             crate::harness::workflow::reassign_task(&paths, id)?;
         }
@@ -1015,460 +1058,4 @@ pub(super) fn delivery_holder(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn room_reaping_preserves_other_rooms() {
-        let dir = tempfile::tempdir().unwrap();
-        let root_a = dir.path().join("a");
-        let root_b = dir.path().join("b");
-        std::fs::create_dir_all(&root_a).unwrap();
-        std::fs::create_dir_all(&root_b).unwrap();
-        let paths_a = StatePaths::for_project_root(&root_a).unwrap();
-        let paths_b = StatePaths::for_project_root(&root_b).unwrap();
-        for (root, paths) in [(&root_a, &paths_a), (&root_b, &paths_b)] {
-            let workspace = crate::workspace::WorkspaceResolver::resolve(root, None).unwrap();
-            crate::workspace::record::write(
-                paths,
-                &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
-            )
-            .unwrap();
-            instances::insert(
-                paths,
-                "actionless",
-                &TaskEntry {
-                    root: root.clone(),
-                    signal: Some("ci.failed".into()),
-                    ..TaskEntry::default()
-                },
-            )
-            .unwrap();
-        }
-        let before_b = std::fs::read(instances::path(&paths_b.root)).unwrap();
-        assert_eq!(TaskCatalog::reap_dead_deliveries_for(&root_a).unwrap(), 1);
-        assert!(instances::load_from(&paths_a.root).0.is_empty());
-        assert_eq!(
-            std::fs::read(instances::path(&paths_b.root)).unwrap(),
-            before_b
-        );
-        assert_eq!(TaskCatalog::reap_dead_deliveries_for(&root_a).unwrap(), 0);
-    }
-
-    fn task(label: &str) -> TaskEntry {
-        TaskEntry {
-            args: vec!["true".to_owned()],
-            timeout: Some("1m".to_owned()),
-            label: Some(label.to_owned()),
-            root: PathBuf::from("/repo"),
-            every: Some("1h".to_owned()),
-            ..TaskEntry::default()
-        }
-    }
-
-    #[test]
-    fn pending_deliveries_filter_scope_and_sort_one_shot_triggers() {
-        use super::super::pending::{pending_waits_by_session, session_deliveries};
-        use crate::config::TaskTarget;
-        use crate::ids::{AgentKind, AgentSessionId};
-
-        let target = TaskTarget {
-            kind: AgentKind::new_unchecked("claude"),
-            session: AgentSessionId::from("session"),
-            handle: "coder".into(),
-        };
-        let command = TaskEntry {
-            root: PathBuf::from("/repo"),
-            wait: Some(target.clone()),
-            watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
-            ..TaskEntry::default()
-        };
-        let signal = TaskEntry {
-            watch: None,
-            signal: Some("pr.merged".into()),
-            ..command.clone()
-        };
-        let timer = TaskEntry {
-            watch: None,
-            fire_at: Some("2026-06-01T12:00:00Z".parse().unwrap()),
-            wait_meta: Some(crate::config::WaitMeta {
-                armed_at: "2026-06-01T10:00:00Z".parse().unwrap(),
-                delay: None,
-                reader: None,
-            }),
-            ..command.clone()
-        };
-        let catalog = TaskCatalog::from_layers(
-            Tasks(BTreeMap::from([
-                ("z-command".into(), command.clone()),
-                ("a-command".into(), command.clone()),
-                (
-                    "m-pid".into(),
-                    TaskEntry {
-                        watch: Some(crate::config::WatchSpec::Pid { pid: 16776 }),
-                        ..command.clone()
-                    },
-                ),
-                ("a-later-timer".into(), timer.clone()),
-                (
-                    "z-sooner-timer".into(),
-                    TaskEntry {
-                        fire_at: Some("2026-06-01T11:00:00Z".parse().unwrap()),
-                        ..timer
-                    },
-                ),
-                ("signal".into(), signal.clone()),
-                (
-                    "standing".into(),
-                    TaskEntry {
-                        repeat: true,
-                        ..signal
-                    },
-                ),
-                (
-                    "other-root".into(),
-                    TaskEntry {
-                        root: PathBuf::from("/elsewhere"),
-                        ..command.clone()
-                    },
-                ),
-                (
-                    "other-session".into(),
-                    TaskEntry {
-                        wait: Some(TaskTarget {
-                            session: AgentSessionId::from("other"),
-                            ..target.clone()
-                        }),
-                        ..command.clone()
-                    },
-                ),
-                (
-                    "no-delivery".into(),
-                    TaskEntry {
-                        wait: None,
-                        args: vec!["true".to_owned()],
-                        timeout: Some("1m".to_owned()),
-                        ..command.clone()
-                    },
-                ),
-            ])),
-            Tasks(BTreeMap::from([("machine".into(), command)])),
-            None,
-            Some(Path::new("/repo")),
-        );
-        let agent = crate::testkit::agent_state(
-            target.kind.as_str(),
-            target.session.as_str(),
-            jiff::Timestamp::UNIX_EPOCH,
-        );
-        let session = (target.kind, target.session);
-        assert_eq!(
-            session_deliveries(&catalog, Path::new("/repo"), Some(&agent), &[])
-                .map(|(name, _)| name)
-                .collect::<Vec<_>>(),
-            vec![
-                "a-command",
-                "a-later-timer",
-                "m-pid",
-                "signal",
-                "standing",
-                "z-command",
-                "z-sooner-timer"
-            ]
-        );
-        let waits = pending_waits_by_session(&catalog, Path::new("/repo"));
-        assert_eq!(
-            waits[&session]
-                .iter()
-                .map(|wait| wait.name.as_str())
-                .collect::<Vec<_>>(),
-            vec![
-                "z-sooner-timer",
-                "a-later-timer",
-                "a-command",
-                "m-pid",
-                "z-command",
-                "signal"
-            ]
-        );
-        assert_eq!(waits.len(), 2);
-    }
-
-    #[test]
-    fn foreign_machine_preserves_instance_and_both_bindings() {
-        let instance = task("instance");
-        let mut machine = task("machine");
-        machine.root = PathBuf::from("/other");
-        let catalog = TaskCatalog::from_layers(
-            Tasks(BTreeMap::from([("same".to_owned(), instance.clone())])),
-            Tasks(BTreeMap::from([("same".to_owned(), machine.clone())])),
-            None,
-            Some(Path::new("/repo")),
-        );
-
-        for loaded in [&catalog.visible()["same"], catalog.for_run("same").unwrap()] {
-            assert_eq!(loaded.source(), TaskSource::Instance);
-            assert_eq!(loaded.entry(), &instance);
-        }
-        for (source, entry) in [
-            (TaskSource::Instance, instance),
-            (TaskSource::Config, machine),
-        ] {
-            assert!(catalog.row_bindings.contains(&Binding::for_task(
-                "same",
-                source,
-                &entry.resolved_root(),
-            )));
-        }
-    }
-
-    #[test]
-    fn skipped_machine_rows_keep_their_bindings_for_gc() {
-        let skipped = Tasks(BTreeMap::from([
-            ("bare".to_owned(), TaskEntry::default()),
-            (
-                "relative".to_owned(),
-                TaskEntry {
-                    root: PathBuf::from("nowhere/x"),
-                    ..TaskEntry::default()
-                },
-            ),
-        ]));
-        let catalog = TaskCatalog::from_layers(
-            Tasks::default(),
-            Tasks::default(),
-            None,
-            Some(Path::new("/repo")),
-        )
-        .with_skipped_machine(skipped);
-
-        for name in ["bare", "relative"] {
-            assert!(
-                catalog.row_bindings.contains(&Binding::for_task(
-                    name,
-                    TaskSource::Config,
-                    Path::new("/repo"),
-                )),
-                "{name}: gc would prune the record it keeps once its root is fixed"
-            );
-        }
-    }
-
-    #[test]
-    fn visible_and_runnable_precedence_diverge_for_untrusted_project() {
-        let catalog = TaskCatalog::from_layers(
-            Tasks(BTreeMap::from([("same".to_owned(), task("instance"))])),
-            Tasks(BTreeMap::from([("same".to_owned(), task("machine"))])),
-            Some((
-                Tasks(BTreeMap::from([
-                    ("same".to_owned(), task("project")),
-                    ("blocked".to_owned(), task("blocked")),
-                ])),
-                TrustState::Untrusted,
-            )),
-            Some(Path::new("/repo")),
-        );
-
-        assert_eq!(
-            catalog.visible()["same"].entry.label.as_deref(),
-            Some("project")
-        );
-        assert_eq!(
-            catalog.for_run("same").unwrap().entry.label.as_deref(),
-            Some("machine")
-        );
-        assert!(matches!(
-            catalog.for_run("blocked").unwrap().source,
-            TaskSource::Project {
-                state: TrustState::Untrusted
-            }
-        ));
-    }
-
-    #[test]
-    fn trusted_project_wins_both_merges() {
-        let catalog = TaskCatalog::from_layers(
-            Tasks(BTreeMap::from([("same".to_owned(), task("instance"))])),
-            Tasks(BTreeMap::from([("same".to_owned(), task("machine"))])),
-            Some((
-                Tasks(BTreeMap::from([("same".to_owned(), task("project"))])),
-                TrustState::Trusted,
-            )),
-            Some(Path::new("/repo")),
-        );
-
-        assert_eq!(
-            catalog.visible()["same"].entry.label.as_deref(),
-            Some("project")
-        );
-        assert_eq!(
-            catalog.for_run("same").unwrap().entry.label.as_deref(),
-            Some("project")
-        );
-        assert!(
-            catalog
-                .row_bindings
-                .iter()
-                .any(|binding| binding.key() == "machine::same")
-        );
-        assert!(catalog.row_bindings.contains(&Binding::for_task(
-            "same",
-            TaskSource::Project {
-                state: TrustState::Trusted,
-            },
-            Path::new("/repo"),
-        )));
-    }
-
-    #[test]
-    fn empty_project_layer_keeps_its_project_root() {
-        let catalog = TaskCatalog::from_layers(
-            Tasks::default(),
-            Tasks::default(),
-            Some((Tasks::default(), TrustState::Trusted)),
-            Some(Path::new("/repo")),
-        );
-
-        assert_eq!(catalog.project_root.as_deref(), Some(Path::new("/repo")));
-    }
-
-    #[test]
-    fn malformed_schedule_stays_visible_with_valid_action() {
-        let mut entry = task("still runnable manually");
-        entry.cron = Some("0 7 * * *".to_owned());
-        let catalog = TaskCatalog::from_layers(
-            Tasks::default(),
-            Tasks(BTreeMap::from([("broken".to_owned(), entry)])),
-            None,
-            None,
-        );
-        let loaded = &catalog.visible()["broken"];
-
-        assert!(matches!(loaded.action(), Ok(TaskAction::Shell(_))));
-        assert!(matches!(
-            loaded.trigger(),
-            Err(ScheduleErr::TimeConflict { .. })
-        ));
-        assert!(catalog.for_run("broken").is_some());
-    }
-
-    #[test]
-    fn ephemeral_tasks_are_one_shot_or_deadline_bound() {
-        let mut entry = task("wait");
-        assert!(!super::super::TaskShape::compile("task", &entry).is_ephemeral());
-
-        entry.every = None;
-        assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
-
-        entry.every = Some("15m".to_owned());
-        entry.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
-        assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
-
-        entry.every = None;
-        entry.signal = Some("ci.failed".to_owned());
-        entry.wait_meta = Some(crate::config::WaitMeta {
-            armed_at: jiff::Timestamp::UNIX_EPOCH,
-            delay: None,
-            reader: None,
-        });
-        assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
-        assert_eq!(TaskSource::from_entry(&entry), TaskSource::Instance);
-
-        entry.signal = None;
-        entry.deadline = None;
-        entry.when = Some(vec!["team.stage=Done".to_owned()]);
-        assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
-        entry.repeat = true;
-        assert!(!super::super::TaskShape::compile("task", &entry).is_ephemeral());
-    }
-
-    #[test]
-    fn when_and_signal_rows_fire_once_unless_repeat_and_clocks_always_repeat() {
-        let base = TaskEntry {
-            every: None,
-            ..task("row")
-        };
-        let rows = [
-            (
-                "every",
-                TaskEntry {
-                    every: Some("1h".into()),
-                    ..base.clone()
-                },
-                false,
-            ),
-            (
-                "cron",
-                TaskEntry {
-                    cron: Some("0 * * * *".into()),
-                    ..base.clone()
-                },
-                false,
-            ),
-            (
-                "signal",
-                TaskEntry {
-                    signal: Some("ci.failed".into()),
-                    ..base.clone()
-                },
-                true,
-            ),
-            (
-                "when",
-                TaskEntry {
-                    when: Some(vec!["pr=open".into()]),
-                    ..base.clone()
-                },
-                true,
-            ),
-        ];
-        for (trigger, entry, spent) in rows {
-            let once = super::super::TaskShape::compile("row", &entry).is_ephemeral();
-            assert_eq!(once, spent, "{trigger} without repeat");
-            let repeating = TaskEntry {
-                repeat: true,
-                ..entry
-            };
-            assert!(
-                !super::super::TaskShape::compile("row", &repeating).is_ephemeral(),
-                "{trigger} with repeat"
-            );
-        }
-    }
-
-    #[test]
-    fn a_team_binding_is_standing_without_repeat() {
-        let entry: TaskEntry = serde_json::from_value(serde_json::json!({
-            "wait": {"kind": "claude", "session": "s", "handle": "@coder"},
-            "team": "forge#feature",
-            "signal": "ci.failed",
-            "match": {"path": "/r/feature"},
-            "root": "/r",
-            "dir": "/r/feature",
-        }))
-        .unwrap();
-        let shape = super::super::TaskShape::compile("binding", &entry);
-        assert!(!shape.is_ephemeral());
-        assert!(!shape.trigger().as_ref().unwrap().once);
-    }
-
-    #[test]
-    fn vanished_delivery_root_is_not_alive() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let entry = TaskEntry {
-            root: dir.path().join("vanished"),
-            ..TaskEntry::default()
-        };
-        let target = crate::config::TaskTarget {
-            kind: crate::ids::AgentKind::new_unchecked("claude"),
-            session: "missing-session".into(),
-            handle: "@claude".to_owned(),
-        };
-
-        assert!(
-            delivery_holder(&entry.resolved_root(), &target)
-                .expect("check vanished target")
-                .is_none()
-        );
-    }
-}
+mod tests;
