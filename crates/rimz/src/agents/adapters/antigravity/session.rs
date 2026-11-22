@@ -870,6 +870,11 @@ fn fold(lines: &str) -> FoldedSession {
                     folded.phase = TurnPhase::Idle;
                     folded.native_prompt_detail = Some(question);
                     folded.waiting_since = Some(at);
+                } else if !record.tool_calls.is_empty() {
+                    folded.status = AgentStatus::Running;
+                    folded.phase = TurnPhase::Reasoning;
+                    folded.native_prompt_detail = None;
+                    folded.waiting_since = None;
                 } else {
                     folded.status = AgentStatus::Success;
                     folded.phase = TurnPhase::Idle;
