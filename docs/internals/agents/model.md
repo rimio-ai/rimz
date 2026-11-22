@@ -129,7 +129,7 @@ ended                 running or waiting ──► failed (a reaped end rests at
 
 ### State snapshots
 
-An observation with `state_snapshot: true` reports current state, not an edge. OpenCode's `client_idle` carries `registered`, and `client_running` carries `turn_started`, both without a submitted prompt. No new lifecycle signal variant is needed.
+An observation with `state_snapshot: true` reports current state, not an edge. OpenCode's `client_idle` carries `registered`, and `client_running` carries `turn_started`, both without a submitted prompt. Antigravity's `PostInvocation` carries `turn_started` with the prompt agy took in during the running turn, which confirms its message ([adapter_antigravity.md](./adapter_antigravity.md#steering)). No new lifecycle signal variant is needed.
 
 | Prior status | Idle snapshot | Running snapshot |
 | --- | --- | --- |
