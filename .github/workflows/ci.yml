@@ -47,9 +47,52 @@ env:
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
-  checks:
+  # How much of the suite this event runs:
+  # - `pr`: a pull request runs formatting, the invariants check, and the
+  #   supply-chain gates. Everything else waits for the merge queue.
+  # - `full`: the merge queue and a manual dispatch run every job.
+  # - `warm`: a push to main whose commit already has a green `merge_group`
+  #   run compiles what the queue's runs read from main's sccache entries (the
+  #   test build, `cargo xtask checks`, the cross-target checks) and runs no
+  #   tests. The queue fast-forwards main to the commit it tested, and both runs
+  #   share the workflow concurrency group keyed on the SHA, so the push run
+  #   starts only once the queue's run has finished. A push that bypassed the
+  #   queue finds no such run and runs `full`.
+  scope:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      suite: ${{ steps.suite.outputs.suite }}
+    steps:
+      - name: Choose the suite
+        id: suite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          case "$EVENT" in
+            pull_request) suite=pr ;;
+            push)
+              # A failed lookup runs the full suite: it costs time, never coverage.
+              green="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${HEAD_SHA}&event=merge_group&status=success" \
+                --jq '.total_count')" || {
+                echo "::warning::could not read this commit's merge_group runs; running the full suite"
+                green=0
+              }
+              if [ "$green" -gt 0 ]; then suite=warm; else suite=full; fi
+              ;;
+            *) suite=full ;;
+          esac
+          echo "suite=$suite" | tee -a "$GITHUB_OUTPUT"
+
+  pr-checks:
+    needs: scope
+    if: needs.scope.outputs.suite == 'pr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     # The rimz-ci image keeps the no-persistence job container model while
     # starting warm: Rust, cargo plugins, cargo-vet, the cargo registry, tmux,
     # Zellij, mold, sccache, and the release toolchain are baked once by
@@ -64,7 +107,57 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ github.token }}
     concurrency:
-      group: ci-commit-${{ github.sha }}-checks
+      group: ci-commit-${{ github.sha }}-pr-checks
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image - dispatch ci-image.yml to build/push ghcr.io/${GITHUB_REPOSITORY_OWNER}/rimz-ci:latest"
+            exit 1
+          }
+          command -v sccache >/dev/null || {
+            echo "::error::sccache missing from rimz-ci image - dispatch ci-image.yml to rebuild/push it"
+            exit 1
+          }
+
+      - uses: actions/checkout@v7
+
+      - name: Trust checkout for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: cargo xtask fmt
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          cargo xtask fmt
+
+      - name: cargo xtask invariants
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          cargo xtask invariants
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+  xtask-checks:
+    needs: scope
+    if: needs.scope.outputs.suite != 'pr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:${{ inputs.image_tag || 'latest' }}
+      options: --init
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-xtask-checks
       cancel-in-progress: ${{ github.event_name == 'push' }}
     steps:
       - name: Assert running in the rimz-ci image
@@ -93,10 +186,50 @@ jobs:
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           mold -run cargo xtask checks
 
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+  cross-targets:
+    needs: scope
+    if: needs.scope.outputs.suite != 'pr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:${{ inputs.image_tag || 'latest' }}
+      options: --init
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-cross-targets
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image - dispatch ci-image.yml to build/push ghcr.io/${GITHUB_REPOSITORY_OWNER}/rimz-ci:latest"
+            exit 1
+          }
+          command -v sccache >/dev/null || {
+            echo "::error::sccache missing from rimz-ci image - dispatch ci-image.yml to rebuild/push it"
+            exit 1
+          }
+
+      - uses: actions/checkout@v7
+
+      - name: Trust checkout for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
       # The Release cross-build is the only other Darwin compile, and it runs
-      # after merge; this type-checks the macOS target on every PR. Both runs
-      # are needed: the plain one checks the shipped library and binary, and
-      # `--tests` checks the test targets, which the crate's self
+      # after merge; this type-checks the macOS target in the merge queue. Both
+      # runs are needed: the plain one checks the shipped library and binary,
+      # and `--tests` checks the test targets, which the crate's self
       # dev-dependency builds with `testkit` on, so it never sees the install
       # shape.
       - name: darwin check
@@ -106,9 +239,9 @@ jobs:
           cargo-zigbuild check -p rimz --tests --target aarch64-apple-darwin --locked
 
       # The installer sends musl and ARM Linux users to cargo install. No other
-      # PR job compiles these targets, and the only other aarch64 Linux compile
-      # is GitHub's arm64 Docker image build at release; this type-checks both
-      # on every PR.
+      # queue job compiles these targets, and the only other aarch64 Linux
+      # compile is GitHub's arm64 Docker image build at release; this
+      # type-checks both in the merge queue.
       - name: musl linux check
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
@@ -122,6 +255,19 @@ jobs:
       - name: sccache stats
         if: always()
         run: sccache --show-stats
+
+  checks:
+    needs: [scope, pr-checks, xtask-checks, cross-targets]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Roll up the checks jobs
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
+          jq -e '.scope.result == "success" and all(.[]; .result == "success" or .result == "skipped")' <<<"$NEEDS" >/dev/null
 
   externals:
     runs-on: ubuntu-latest
@@ -214,13 +360,15 @@ jobs:
       # binary, tests, and benches can link the domain modules. It fires on
       # internal refactors and is blind to the flags, output, exit codes,
       # config keys, and persisted formats callers depend on. Those are gated
-      # by the CLI surface snapshot in the `tests` job.
+      # by the CLI surface snapshot in the `gate-tests` job.
 
       - name: sccache stats
         if: always()
         run: sccache --show-stats
 
-  tests:
+  gate-tests:
+    needs: scope
+    if: needs.scope.outputs.suite != 'pr'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     container:
@@ -230,7 +378,95 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ github.token }}
     concurrency:
-      group: ci-commit-${{ github.sha }}-tests
+      group: ci-commit-${{ github.sha }}-gate-tests
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image - dispatch ci-image.yml to build/push ghcr.io/${GITHUB_REPOSITORY_OWNER}/rimz-ci:latest"
+            exit 1
+          }
+          command -v sccache >/dev/null || {
+            echo "::error::sccache missing from rimz-ci image - dispatch ci-image.yml to rebuild/push it"
+            exit 1
+          }
+
+      - uses: actions/checkout@v7
+
+      - name: Trust checkout for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      # A version stamp that moves with every commit would change the `rimz`
+      # crate's inputs, so no commit could reuse an earlier commit's `rimz`
+      # build from sccache. The crate version keeps the stamp's prefix, which
+      # `build_id` tests assert.
+      - name: Fix the build version stamp
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          version="$(cargo metadata --no-deps --format-version 1 --locked \
+            | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "rimz"))')"
+          echo "RIMZ_BUILD_VERSION_OVERRIDE=${version}+ci" >> "$GITHUB_ENV"
+
+      - name: cargo xtask test (compile)
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          mold -run cargo xtask test --no-run
+
+      # The gate tier runs as two nextest runs of one profile: a filter and its
+      # negation. Every binary but the integration one keeps nextest's default of
+      # one test per core. Each run writes target/nextest/gate/junit.xml, so the
+      # first run's report moves aside before the second starts.
+      - name: cargo xtask test (gate, unit binaries)
+        if: needs.scope.outputs.suite == 'full'
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          mold -run cargo xtask test --deny-skips --profile gate -E 'not binary_id(=rimz::integration)'
+          mkdir -p target/nextest/gate-units
+          mv target/nextest/gate/junit.xml target/nextest/gate-units/junit.xml
+
+      # At one test per core the integration binary leaves the 4-vCPU runner
+      # about half idle, its tests waiting on child processes and deadlines, so
+      # they overlap: 16 slots is four tests per core.
+      - name: cargo xtask test (gate, integration)
+        if: needs.scope.outputs.suite == 'full'
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          mold -run cargo xtask test --deny-skips --profile gate -E 'binary_id(=rimz::integration)' --test-threads 16
+
+      # A green run still carries each flaky test's failed first attempt here.
+      # When compile fails, no report exists, so this step fails too with
+      # "No files were found": the earlier failed step is the cause.
+      - name: Upload nextest JUnit reports
+        if: always() && needs.scope.outputs.suite == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-junit-gate
+          path: target/nextest/*/junit.xml
+          if-no-files-found: error
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+  live-tests:
+    needs: scope
+    if: needs.scope.outputs.suite == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:${{ inputs.image_tag || 'latest' }}
+      options: --init
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-live-tests
       cancel-in-progress: ${{ github.event_name == 'push' }}
     steps:
       - name: Assert running in the rimz-ci image
@@ -259,29 +495,21 @@ jobs:
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           cargo xtask loop-tests
 
+      # A version stamp that moves with every commit would change the `rimz`
+      # crate's inputs, so no commit could reuse an earlier commit's `rimz`
+      # build from sccache. The crate version keeps the stamp's prefix, which
+      # `build_id` tests assert.
+      - name: Fix the build version stamp
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          version="$(cargo metadata --no-deps --format-version 1 --locked \
+            | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "rimz"))')"
+          echo "RIMZ_BUILD_VERSION_OVERRIDE=${version}+ci" >> "$GITHUB_ENV"
+
       - name: cargo xtask test (compile)
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           mold -run cargo xtask test --no-run
-
-      # The gate tier runs as two nextest runs of one profile: a filter and its
-      # negation. Every binary but the integration one keeps nextest's default of
-      # one test per core. Each run writes target/nextest/gate/junit.xml, so the
-      # first run's report moves aside before the second starts.
-      - name: cargo xtask test (gate, unit binaries)
-        run: |
-          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --deny-skips --profile gate -E 'not binary_id(=rimz::integration)'
-          mkdir -p target/nextest/gate-units
-          mv target/nextest/gate/junit.xml target/nextest/gate-units/junit.xml
-
-      # At one test per core the integration binary leaves the 4-vCPU runner
-      # about half idle, its tests waiting on child processes and deadlines, so
-      # they overlap: 16 slots is four tests per core.
-      - name: cargo xtask test (gate, integration)
-        run: |
-          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --deny-skips --profile gate -E 'binary_id(=rimz::integration)' --test-threads 16
 
       - name: cargo xtask test (live)
         run: |
@@ -300,10 +528,23 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: nextest-junit
+          name: nextest-junit-live
           path: target/nextest/*/junit.xml
           if-no-files-found: error
 
       - name: sccache stats
         if: always()
         run: sccache --show-stats
+
+  tests:
+    needs: [scope, gate-tests, live-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Roll up the test jobs
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
+          jq -e '.scope.result == "success" and all(.[]; .result == "success" or .result == "skipped")' <<<"$NEEDS" >/dev/null

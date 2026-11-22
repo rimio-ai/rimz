@@ -74,7 +74,7 @@ A test that returns early because the host lacks a capability records the skip t
 ### Durations
 
 - Locally, `--no-capture` prints each test's duration ([the test runner](#the-test-runner)).
-- CI's `gate` profile prints only failures and retries. Like `live` and `journey`, it writes a JUnit report (`[profile.gate.junit]` in `.config/nextest.toml`), so a gate test's CI duration is in the run's `nextest-junit` artifact: `gate/junit.xml`, which on GitHub holds the integration binary alone, with every other binary in `gate-units/junit.xml` (`gh run download <id> -R rimio-ai/rimz -n nextest-junit`).
+- CI's `gate` profile prints only failures and retries. Like `live` and `journey`, it writes a JUnit report (`[profile.gate.junit]` in `.config/nextest.toml`), so a gate test's CI duration is in the run's JUnit artifact: `gate/junit.xml`, which on GitHub holds the integration binary alone, with every other binary in `gate-units/junit.xml` (`gh run download <id> -R rimio-ai/rimz -n nextest-junit-gate`).
 
 ## Tests outside the change
 
@@ -255,4 +255,4 @@ This holds for a bench that stays in process. A bench that spawns `rimz` (`hook_
 
 - A CI timing comparison pairs runs whose compile step took about the same time: GitHub runners fall into two speed classes about 40% apart.
 - To repeat a CI measurement in parallel, dispatch `ci.yml` on throwaway branches that each carry one distinct commit. Dispatches of the same commit share a concurrency group and run one at a time.
-- Read step times with `gh run view <id> --json jobs`, and per-test times from the run's `nextest-junit` artifact.
+- Read step times with `gh run view <id> --json jobs`, and per-test times from the run's JUnit artifacts (`nextest-junit-gate` and `nextest-junit-live` on GitHub).
