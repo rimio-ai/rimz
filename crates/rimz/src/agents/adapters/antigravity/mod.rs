@@ -312,7 +312,7 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     permission: ConcernCoverage::Partial {
         via: "statusline tool_confirmation_pending routes the card to the native pane",
-        gap: "PreToolUse has no behavior-preserving observer decision, so there is no durable ask or permission detail",
+        gap: "PreToolUse stays unregistered, since an empty or failed reply denies the tool (a late reply is uncaptured), so there is no durable ask or permission detail",
     },
     plan_approval: ConcernCoverage::Unsupported {
         reason: "artifact status enums and review transitions remain uncaptured",
@@ -402,7 +402,7 @@ const ANTIGRAVITY_USER_COVERAGE: UserCoverage = UserCoverage {
 const ANTIGRAVITY_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     registered: HookCoverage::Derived {
         via: "first PreInvocation create-on-miss + validated local conversation discovery",
-        gap: "upstream documents SessionStart, but registration stays unwired until a live capture",
+        gap: "SessionStart stays unregistered: on agy 1.5.14 it fires on no resume and carries no source",
     },
     turn_started: HookCoverage::Native {
         event: "PreInvocation",
@@ -695,8 +695,9 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
     }
 
     /// The global root agy's own built-in skills name. agy also reads
-    /// `~/.gemini/antigravity-cli/skills`, a plugin's `skills/`, and the workspace
-    /// `.agents/skills`, which the scoped view leaves native.
+    /// `~/.gemini/antigravity-cli/skills` (above this root on a duplicate name), `~/.gemini/skills`
+    /// (below it, agy 1.5.14), a plugin's `skills/`, and the workspace `.agents/skills`, which
+    /// the scoped view leaves native.
     fn skills_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         env.get("HOME")
             .filter(|home| !home.is_empty())

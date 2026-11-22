@@ -3,8 +3,8 @@
 //! RimZ's hooks live in a plugin directory it owns, `~/.gemini/config/plugins/rimz/`,
 //! written as whole embedded files that agy discovers and enables by default
 //! (observed on agy 1.5.12). The hook file holds only events with a documented
-//! observer-neutral response; `PreToolUse` stays untouched because every
-//! documented result changes native permission policy. Earlier releases merged
+//! observer-neutral response; `PreToolUse` stays out because an empty or failed
+//! reply denies the tool (agy 1.5.14; a late reply is uncaptured). Earlier releases merged
 //! the same hook into the global `hooks.json`, which install and uninstall now
 //! only strip: a hook name loaded from both files runs twice. agy rewrites
 //! `settings.json` and drops unknown `statusLine` keys, so the statusline is
