@@ -168,7 +168,7 @@ impl AttemptHost for FakeHost {
         if let Some(arrived) = self.arrives_at_launch.borrow_mut().take() {
             *self.occupancy.borrow_mut() = arrived;
         }
-        // As the CLI host does: read the checkout again once the launch is prepared.
+        // As the production host does: read the checkout again once the launch is prepared.
         if step.evict.is_some() {
             match self.current_occupancy() {
                 Occupancy::Free => {}

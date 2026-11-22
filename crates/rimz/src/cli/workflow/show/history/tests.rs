@@ -135,7 +135,7 @@ fn cancellation_history_prints_the_recorded_reason() {
         workflow::cancel(
             &state,
             &record.id,
-            &Host::new(&state, &globals, None),
+            &super::super::super::host::new(&state, &globals, None),
             reason,
         )
         .unwrap();

@@ -9,6 +9,7 @@ pub mod placement;
 mod reconcile;
 pub mod stop;
 mod supervised;
+pub mod workflow_host;
 use execute::{FreshLaunch, PreparedState, SettledLayout};
 pub use execute::{
     LeaderRun, OpenedRun, PreparedLaunch, RunCompletion, SupervisedContext, execute,
@@ -160,6 +161,8 @@ pub enum Notice<'a> {
     LspRefused(&'a str),
     LspWait(&'a crate::lsp::admission::Wait),
     Reconcile(&'a str),
+    /// A backend notice from reading the room's multiplexer.
+    Room(&'a str),
     Dispatch {
         target: &'a str,
         result: &'a crate::message::dispatch::DispatchResult,

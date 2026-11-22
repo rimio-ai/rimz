@@ -76,7 +76,7 @@ pub(super) fn cancel(
     let changed = workflow::cancel(
         &run.state,
         &run.record.id,
-        &Host::new(&run.state, globals, None),
+        &host::new(&run.state, globals, None),
         reason,
     );
     run_log::collect_run(&run.state, &run.record.id);
@@ -86,28 +86,10 @@ pub(super) fn cancel(
     let mut out = render::out();
     if changed {
         writeln!(out, "canceled {address}")?;
-        // A cancel stops only the step's waiting: the runs it started go on. A run the step
-        // reserved but never started has no home and is not named, nor is one whose record cannot
-        // be read: the cancel is already committed, so the receipt does not fail on it.
-        let mut running = Vec::new();
-        for started in run
-            .record
-            .attempt
-            .iter()
-            .flat_map(|attempt| &attempt.runs)
-            .flat_map(|started| &started.runs)
-            .filter(|started| started.ended.is_none())
-        {
-            if let Some(records::RunClass::Current(child)) = records::find(&run.state, &started.id)
-                .ok()
-                .flatten()
-                .map(|found| found.class)
-                && !child.state.is_terminal()
-            {
-                running.push(started.id.to_string());
-            }
-        }
+        // The cancel is already committed, so the receipt does not fail on a run it cannot read.
+        let running = workflow::started_runs_running(&run.state, &run.record);
         if !running.is_empty() {
+            let running = running.iter().map(|id| id.as_str()).collect::<Vec<_>>();
             writeln!(
                 out,
                 "its started runs were left running: {}",
@@ -189,7 +171,7 @@ pub(super) fn resume(
     let record = match workflow::resume(
         &run.state,
         &run.record.id,
-        &Host::new(&run.state, globals, None),
+        &host::new(&run.state, globals, None),
         at,
     ) {
         Err(workflow::WorkflowErr::SpentVisits { step, used, max }) => {
@@ -264,7 +246,7 @@ pub(super) fn extend(
     let workflow::Extension { record, step } = workflow::extend(
         &run.state,
         &run.record.id,
-        &Host::new(&run.state, globals, None),
+        &host::new(&run.state, globals, None),
         visits.map(|count| (step, count)),
         when,
     )?;
@@ -343,7 +325,7 @@ pub(in crate::cli) fn restart(
         None
     };
     let session = resume.as_ref().map(|(_, session)| session.clone());
-    let host = Host::new(&run.state, globals, None);
+    let host = host::new(&run.state, globals, None);
     let restarted = workflow::restart(&run.state, &run.record.id, resume, &host);
     run_log::collect_run(&run.state, &run.record.id);
     let (restarted, advance) = restarted?;

@@ -2512,7 +2512,8 @@ path = "crates/rimz/src/harness"
 # The task label rule moves from the CLI so the MCP wait tool holds it too (+1).
 # report::defers_to_report is the one rule for whether an agent's join defers to its report, and
 # FleetRuns::reports_to_launcher the detached rule it reads (+2).
-surface-budget = 1340
+# workflow::started_runs_running gives the cancel receipt and the MCP stop the runs a cancel leaves going (+1).
+surface-budget = 1341
 
 [[verdict]]
 kind = "item"
@@ -2983,7 +2984,9 @@ path = "crates/rimz/src/launcher"
 # `@me` resolution and its refusal move from the CLI so the MCP self tools resolve the caller (+2).
 # The agent tree stop, its run lookups, and the subagent stop move out of the CLI so the MCP
 # stop ends what an agent started in process (+24).
-surface-budget = 132
+# The production workflow attempt host moves here so a stop can cancel a workflow run in process,
+# and the Room notice carries the host's backend notices to its interaction (+3).
+surface-budget = 135
 
 [[verdict]]
 kind = "item"
@@ -6055,7 +6058,8 @@ allowed-dependencies = [
 # Deployed resolves a workflow name across the home and installed packs for every reader (+1).
 # refuse_overlap lets a start name the run holding its slot before its trust read (+1).
 # extend and Extension record a `rimz workflow extend` grant and name the step it raised (+2).
-surface-budget = 109
+# started_runs_running names the runs a cancel leaves going, for the CLI receipt and the MCP stop (+1).
+surface-budget = 110
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
@@ -13079,13 +13083,13 @@ reason = "All agent end causes share the off-lock stop and locked settlement pat
 
 [[verdict]]
 kind = "item"
-key = "cli::workflow::host::Host"
-reason = "Workflow handlers bind the harness attempt seam to existing CLI launch and stop operations."
+key = "launcher::workflow_host::Host"
+reason = "The production attempt host binds the harness attempt seam to the library launcher and tree stop, for the CLI and the MCP stop alike."
 
 [[verdict]]
 kind = "item"
-key = "cli::workflow::host::Host::new"
-reason = "Only workflow dispatch constructs the CLI-private attempt host."
+key = "launcher::workflow_host::Host::new"
+reason = "A caller constructs the attempt host with the interaction its launches ask through."
 
 [[verdict]]
 kind = "item"

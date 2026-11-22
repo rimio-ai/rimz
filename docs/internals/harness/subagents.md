@@ -302,7 +302,7 @@ It then drops each selected run whose `report_to` is `nobody`, and deduplicates 
 
 A selected run is held when it is open with a stored `limit_hold` ([a child parked on a provider limit](#a-child-parked-on-a-provider-limit)). `run::claim_limit_hold` writes the hold; the child's next turn (`run::end_limit_hold`) and a reopen in the lifecycle fold clear it, and a terminal write keeps it, which `FleetRuns` ignores. The digest gate (`FleetRuns::any_working`) and the orphan sweep's fleet branch pass over a held run; the owed-wake fleet term, the sweep's parked-peer branch, and `FleetRuns::unsettled` still count it as open, so a parent whose only open child is held stays owed and parked.
 
-`RunRecord.report_to` is the policy of the answer that the launch prompt opens: `launcher`, or `nobody`. Its producers are `rimz agents` and `rimz teams` with `--detach`, and workflow agent steps (`cli/workflow/host.rs`). A subagent record carries `nobody` only when the retired `rimz subagents --detach` wrote it. Two source rules carry the policy, so no consumer needs its own guard:
+`RunRecord.report_to` is the policy of the answer that the launch prompt opens: `launcher`, or `nobody`. Its producers are `rimz agents` and `rimz teams` with `--detach`, and workflow agent steps (`launcher/workflow_host.rs`). A subagent record carries `nobody` only when the retired `rimz subagents --detach` wrote it. Two source rules carry the policy, so no consumer needs its own guard:
 
 - `RunRecord::answer_claims` never marks an answer on a `nobody` run as owed, so no digest row is built from it.
 - `FleetRuns::of` drops a `nobody` run after the newest-run pick, so an older attached run of the same member does not resurface.

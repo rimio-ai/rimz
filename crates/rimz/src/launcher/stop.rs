@@ -407,7 +407,7 @@ pub fn stop_run_tree(
     Ok(stop_with_read(stopper, &[&agent])?.remove(0))
 }
 
-fn cancel_run(store: &Store, run: &RunRecord) -> Result<()> {
+pub(super) fn cancel_run(store: &Store, run: &RunRecord) -> Result<()> {
     if !run.status.is_terminal() {
         crate::harness::run::cancel_and_wake(store, &run.run_id)?;
     }

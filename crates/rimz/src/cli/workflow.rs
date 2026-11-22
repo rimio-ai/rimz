@@ -23,7 +23,6 @@ mod reconcile;
 mod show;
 mod wait;
 
-use host::Host;
 pub(super) use receipt::restart;
 
 /// The current step's agent while it is still in the room, by its card address.
@@ -501,7 +500,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
                 };
             }
             // A terminal write can precede a later error, so the run is collected either way.
-            let advanced = workflow::advance(&state, &id, &Host::new(&state, globals, woken_by));
+            let advanced = workflow::advance(&state, &id, &host::new(&state, globals, woken_by));
             run_log::collect_run(&state, &id);
             advanced?;
             finish_run(&state, &id)?;
@@ -516,7 +515,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             Ok(workflow::wake(
                 state,
                 &signal,
-                &Host::new(state, globals, None),
+                &host::new(state, globals, None),
             )?)
         }
         Command::Advance { .. } => unreachable!("clap requires a run id or wake signal"),

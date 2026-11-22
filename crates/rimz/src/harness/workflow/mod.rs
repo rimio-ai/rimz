@@ -32,7 +32,7 @@ pub(crate) use engine::join_report;
 pub use engine::{
     Advance, DefinitionSource, Extension, InlineDefinition, StartArgs, Starting, TaskStart,
     WorkflowErr, advance, budget_refusal, cancel, create, extend, launch_groups, refuse_overlap,
-    restart, resume, starting, submit, wake, wake_run,
+    restart, resume, started_runs_running, starting, submit, wake, wake_run,
 };
 pub(crate) use engine::{reassign_task, unacted_task_runs};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
