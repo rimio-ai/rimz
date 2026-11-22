@@ -265,7 +265,7 @@ jobs:
           mold -run cargo xtask test --no-run
 
       # The gate tier runs as two nextest runs of one profile: a filter and its
-      # negation. The unit binaries are CPU-bound and keep nextest's default of
+      # negation. Every binary but the integration one keeps nextest's default of
       # one test per core. Each run writes target/nextest/gate/junit.xml, so the
       # first run's report moves aside before the second starts.
       - name: cargo xtask test (gate, unit binaries)
@@ -275,8 +275,9 @@ jobs:
           mkdir -p target/nextest/gate-units
           mv target/nextest/gate/junit.xml target/nextest/gate-units/junit.xml
 
-      # Integration tests mostly wait on child processes and deadlines, so they
-      # overlap: 16 slots on the 4-vCPU runner is four tests per core.
+      # At one test per core the integration binary leaves the 4-vCPU runner
+      # about half idle, its tests waiting on child processes and deadlines, so
+      # they overlap: 16 slots is four tests per core.
       - name: cargo xtask test (gate, integration)
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
