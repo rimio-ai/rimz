@@ -19,8 +19,11 @@
 # — each spawns a `zellij`/`tmux` CLI client that must round-trip to its server
 # within a deadline — so the CI layout matters too. Each CI job runs on its own
 # runner (`ubuntu-latest` on GitHub), and workflows leave nextest's global
-# thread count uncapped. The binding concurrency control is the per-run live
-# server caps in `[test-groups]`, not `NEXTEST_TEST_THREADS`.
+# thread count uncapped for the live tiers. The binding concurrency control
+# there is the per-run live server caps in `[test-groups]`, not
+# `NEXTEST_TEST_THREADS`. No profile here sets a thread count: GitHub's gate
+# step splits off the integration binary and runs it with `--test-threads 16`
+# (`.github/workflows/ci.yml`), while every other gate run keeps one per core.
 #
 # Retries absorb the startup races that slip through under load (a different
 # test each time — momentary contention, not a real failure): a starved runner

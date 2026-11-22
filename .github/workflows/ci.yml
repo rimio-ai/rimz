@@ -264,10 +264,23 @@ jobs:
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           mold -run cargo xtask test --no-run
 
-      - name: cargo xtask test (gate)
+      # The gate tier runs as two nextest runs of one profile: a filter and its
+      # negation. The unit binaries are CPU-bound and keep nextest's default of
+      # one test per core. Each run writes target/nextest/gate/junit.xml, so the
+      # first run's report moves aside before the second starts.
+      - name: cargo xtask test (gate, unit binaries)
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --deny-skips --profile gate
+          mold -run cargo xtask test --deny-skips --profile gate -E 'not binary_id(=rimz::integration)'
+          mkdir -p target/nextest/gate-units
+          mv target/nextest/gate/junit.xml target/nextest/gate-units/junit.xml
+
+      # Integration tests mostly wait on child processes and deadlines, so they
+      # overlap: 16 slots on the 4-vCPU runner is four tests per core.
+      - name: cargo xtask test (gate, integration)
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          mold -run cargo xtask test --deny-skips --profile gate -E 'binary_id(=rimz::integration)' --test-threads 16
 
       - name: cargo xtask test (live)
         run: |
