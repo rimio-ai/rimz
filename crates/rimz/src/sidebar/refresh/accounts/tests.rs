@@ -2885,6 +2885,62 @@ fn a_switch_probe_never_lowers_an_earlier_logouts_floor() {
 }
 
 #[test]
+fn a_stale_credential_file_leaves_a_newer_unmetered_fact() {
+    let unmetered = AgentAccount {
+        metered: Some(false),
+        ..Default::default()
+    };
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("claude"), stamped(unmetered, 3_000))]),
+    };
+    let merged = probe_merge(
+        &previous,
+        "claude",
+        AccountProbe::Found(AgentAccount {
+            metered: Some(true),
+            credentials_updated_at_ms: Some(1_000),
+            ..Default::default()
+        }),
+        4_000,
+    );
+    let account = merged.logins[&key("claude")].account.as_ref().unwrap();
+    assert_eq!(account.metered, Some(false));
+}
+
+#[test]
+fn an_api_key_probe_replaces_the_oauth_logins_display_facts() {
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("antigravity"), stamped(AgentAccount::default(), 1_000))]),
+    };
+    let oauth = probe_merge(
+        &previous,
+        "antigravity",
+        AccountProbe::Found(AgentAccount {
+            account_id: Some("a@example.com".to_owned()),
+            metered: Some(true),
+            ..Default::default()
+        }),
+        2_000,
+    );
+    let api_key = probe_merge(
+        &oauth,
+        "antigravity",
+        AccountProbe::Found(AgentAccount {
+            plan: Some("API key".to_owned()),
+            metered: Some(false),
+            ..Default::default()
+        }),
+        3_000,
+    );
+    let record = &api_key.logins[&key("antigravity")];
+    let account = record.account.as_ref().unwrap();
+    assert_eq!(record.login, Some(RecordedLogin::LoggedIn));
+    assert_eq!(account.account_id, None);
+    assert_eq!(account.plan.as_deref(), Some("API key"));
+    assert_eq!(account.metered, Some(false));
+}
+
+#[test]
 fn a_pre_logout_session_with_windows_infers_no_metering() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = shared_runtime(&dir);

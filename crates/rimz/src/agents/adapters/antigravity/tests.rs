@@ -3206,6 +3206,17 @@ mod usage_probe {
             r#"{"status":"ERROR","error":"Authentication failed or timed out","num_turns":0}"#;
         let offline = r#"{"status":"ERROR","error":"/usage failed: retrieving quota summary"}"#;
         let credits = r#"{"status":"SUCCESS","command":{"name":"credits","data":{}}}"#;
+        // agy 1.5.14 under GEMINI_API_KEY with modelProvider "gemini", verbatim.
+        let api_key = r#"{"conversation_id":"","status":"ERROR","response":"","error":"/usage failed: not available with a Gemini API key; see https://aistudio.google.com/usage for the key's usage","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}"#;
+        let signed_out = r#"{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}"#;
+        let api_key_account = format!(
+            "{:?}",
+            AccountProbe::Found(AgentAccount {
+                plan: Some("API key".to_owned()),
+                metered: Some(false),
+                ..AgentAccount::default()
+            })
+        );
         let no_data = r#"{"status":"SUCCESS","command":{"name":"usage"}}"#;
         let unavailable = |cause| format!("{:?}", AccountProbe::Unavailable(cause));
         for (case, code, stdout, account, usage) in [
@@ -3242,7 +3253,35 @@ mod usage_probe {
                 Some(1),
                 auth.to_owned(),
                 format!("{:?}", AccountProbe::LoggedOut),
+                no_credentials.clone(),
+            ),
+            (
+                "an API key",
+                Some(2),
+                api_key.to_owned(),
+                api_key_account.clone(),
+                no_credentials.clone(),
+            ),
+            (
+                "an API key at another exit",
+                Some(0),
+                api_key.to_owned(),
+                api_key_account,
+                no_credentials.clone(),
+            ),
+            (
+                "signed out on 1.5.14",
+                Some(1),
+                signed_out.to_owned(),
+                format!("{:?}", AccountProbe::LoggedOut),
                 no_credentials,
+            ),
+            (
+                "another error at exit 2",
+                Some(2),
+                offline.to_owned(),
+                unavailable(AccountProbeError::SourceUnavailable),
+                failed.clone(),
             ),
             (
                 "offline",
@@ -3333,6 +3372,16 @@ mod usage_probe {
                 Some("user@example.com".to_owned()),
                 crate::agents::account::file_mtime_ms(&token)
             )
+        );
+        let api_key = usage::classify(
+            Some(2),
+            br#"{"status":"ERROR","error":"/usage failed: not available with a Gemini API key; see https://aistudio.google.com/usage for the key's usage"}"#,
+            observed_at(),
+        );
+        assert_eq!(
+            found(api_key.account(Some(dir.path()))),
+            (None, None),
+            "a key session is not the login the token names"
         );
         std::fs::write(&token, r#"{"id_token_email":""}"#).unwrap();
         assert_eq!(found(read.account(Some(dir.path()))), (None, None));
