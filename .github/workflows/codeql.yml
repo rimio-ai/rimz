@@ -4,17 +4,17 @@ name: CodeQL
 # stay disabled: GitHub rejects a workflow's SARIF upload while it is on.
 on:
   workflow_dispatch:
-  pull_request:
   push:
     branches: [main]
   schedule:
     - cron: "0 6 * * 1"
 
-# PRs key on the PR ref, so a newer push cancels stale work. Every other event
-# keys on the commit, so each landed default-branch commit is scanned.
+# Pull requests are not scanned: the Rust analysis takes about half an hour,
+# and CodeQL is not a required check. Every event keys on the commit, so each
+# landed default-branch commit is scanned.
 concurrency:
-  group: codeql-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: codeql-${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
