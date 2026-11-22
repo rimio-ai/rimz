@@ -1090,7 +1090,8 @@ path = "crates/rimz/src/child_process.rs"
 # Detached helper callers share the cwd anchor (+1).
 # Hook env rebuilds share clear_env_preserving_coverage (+1).
 # Hook drainer spawning requests its own weighted scope from every spawner (+1).
-surface-budget = 30
+# The MCP server reaps the children an earlier image of it left after following a build (+1).
+surface-budget = 31
 
 [[module]]
 path = "crates/rimz/src/cli"
