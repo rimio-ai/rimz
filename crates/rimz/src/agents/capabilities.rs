@@ -813,8 +813,10 @@ pub trait LaunchCapability: CoreCapability {
     }
 
     /// Fold a permission mode's own settings document, which the mode's arguments carry as a
-    /// `--settings` of their own, into the launch's one settings document, before any other
-    /// settings mutation. The default leaves argv alone.
+    /// `--settings` of their own, into the launch's one settings document. The launch calls it
+    /// after the host-skill view and before every other settings contribution, so an adapter
+    /// whose host-skill view merges settings cannot rely on the fold running first. The default
+    /// leaves argv alone.
     fn fold_permission_settings(
         &self,
         _paths: (&Path, &Path),
