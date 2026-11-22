@@ -527,6 +527,11 @@ pub enum Premise {
     ProviderPark { parked_since: Timestamp },
     /// Holds while the message `message_id` is still waiting to be typed (queued or claimed).
     StillQueued { message_id: MessageId },
+    /// Holds while the receiver's occupied context reads at or over `threshold` tokens and
+    /// its prompt cache has not gone cold: a stage hand-off's compaction, judged only on a row
+    /// at rest (`message::premise::broken`); it holds while the receiver's turn is open. It
+    /// leaves the record out of the command-validity window.
+    OverHandOffLimit { threshold: u64 },
     /// A premise a newer binary wrote, kept verbatim through queue rewrites; it holds.
     #[serde(untagged)]
     Other(serde_json::Value),
@@ -1151,6 +1156,43 @@ impl MessageRecord {
         })
     }
 
+    /// The withdrawal reason when this record compacts for a hand-off that `row` no longer
+    /// needs: no reading at or over the threshold (an unknown one included), or a known cache
+    /// lifetime elapsed since the row's last request. An unknown lifetime or request holds, and
+    /// so does an open turn (`AgentState::holds_open_turn`), whose end is the reading that
+    /// counts: a sweep judges a queue head every delivery window, mid-turn included.
+    pub(crate) fn lapsed_hand_off(
+        &self,
+        row: &AgentState,
+        cache_lifetime: impl FnOnce(&AgentState) -> Option<std::time::Duration>,
+        now: Timestamp,
+    ) -> Option<String> {
+        let threshold = self.hand_off_threshold()?;
+        if row.holds_open_turn() {
+            return None;
+        }
+        // As idle compaction reads it: a reading the last typed compaction left is stuck.
+        let over = row.occupied_context_tokens().is_some_and(|tokens| {
+            tokens >= threshold && row.last_compact_command_tokens != Some(tokens)
+        });
+        if !over {
+            return Some("agent is no longer over the hand-off limit".to_owned());
+        }
+        let cold_at = cache_lifetime(row)
+            .zip(row.last_request_at())
+            .and_then(|(lifetime, request)| request.checked_add(lifetime).ok());
+        cold_at
+            .is_some_and(|cold_at| now >= cold_at)
+            .then(|| "agent's prompt cache went cold before the compaction was typed".to_owned())
+    }
+
+    fn hand_off_threshold(&self) -> Option<u64> {
+        self.premises.iter().find_map(|premise| match premise {
+            Premise::OverHandOffLimit { threshold } => Some(*threshold),
+            _ => None,
+        })
+    }
+
     /// Whether the record holds only while some premise does, in the new field or in one of the
     /// older fields that store a premise.
     pub(crate) fn carries_premise(&self) -> bool {
@@ -1207,7 +1249,7 @@ impl MessageRecord {
     }
 
     pub fn perishable(&self) -> bool {
-        self.body == MessageBody::Command && self.automated
+        self.body == MessageBody::Command && self.automated && self.hand_off_threshold().is_none()
     }
 
     pub fn expires_at(&self) -> Option<Timestamp> {

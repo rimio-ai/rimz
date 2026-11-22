@@ -310,6 +310,9 @@ fn premise_label(premise: &rimz::store::message::Premise, now: Timestamp) -> Str
             time_with_absolute(*parked_since, now)
         ),
         Premise::StillQueued { message_id } => format!("{message_id} still queued"),
+        Premise::OverHandOffLimit { threshold } => {
+            format!("still over the {threshold}-token hand-off limit, cache warm")
+        }
         Premise::Other(_) => "a premise a newer RimZ wrote".to_owned(),
     }
 }
@@ -1079,9 +1082,12 @@ mod tests {
         message.sender = MessageSender::Harness {
             notice: HarnessNotice::TeamReport,
         };
-        message.premises = vec![Premise::StillQueued {
-            message_id: MessageId::parse("msg_0000000000000001").unwrap(),
-        }];
+        message.premises = vec![
+            Premise::StillQueued {
+                message_id: MessageId::parse("msg_0000000000000001").unwrap(),
+            },
+            Premise::OverHandOffLimit { threshold: 160_000 },
+        ];
         assert_eq!(
             premise_labels(&MessageListRow::from_record(message), now),
             [
@@ -1090,6 +1096,7 @@ mod tests {
                 "compaction continue still owed".to_owned(),
                 "linked runs not all joined".to_owned(),
                 "msg_0000000000000001 still queued".to_owned(),
+                "still over the 160000-token hand-off limit, cache warm".to_owned(),
             ]
         );
     }

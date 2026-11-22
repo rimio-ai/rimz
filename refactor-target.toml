@@ -4673,7 +4673,8 @@ path = "crates/rimz/src/store"
 # grant and both receipts (+1).
 # The open-runs listing serves harness::run's open team and peer run lookups (+1).
 # ingress::drain_lag and HookDrainLag carry the oldest unapplied hook frame to the sidebar fold (+2).
-surface-budget = 689
+# The hand-off compaction premise is judged by message::premise through the record.
+surface-budget = 690
 
 [[verdict]]
 kind = "item"
