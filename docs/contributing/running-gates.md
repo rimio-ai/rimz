@@ -214,7 +214,7 @@ They need `cargo-zigbuild` and `zig` on `PATH` ([setup](./build-and-ci.md#releas
 
 ## Timing comparisons
 
-A single perf run on a shared host is no evidence of a regression or of its absence. Every comparison here runs the merge base and the head back to back, in the order base, head, head, base.
+A single perf run on a shared host is no evidence of a regression or of its absence. Every comparison on a local host runs the merge base and the head back to back, in the order base, head, head, base.
 
 ### Which bench a change times
 
@@ -250,3 +250,9 @@ This holds for a bench that stays in process. A bench that spawns `rimz` (`hook_
 
 - A live timing probe judged against a target (a tmux or Zellij room, a sidebar latency) runs its controls (the stock mode, the off mode) in the same session, in the same order, before you call a miss. A miss whose controls moved with it is host load.
 - A live base-versus-head comparison runs both trees from checkouts whose paths have the same length. A pane's shell prompt carries the cwd, and its wrap can change what a capture shows.
+
+### CI step times
+
+- A CI timing comparison pairs runs whose compile step took about the same time: GitHub runners fall into two speed classes about 40% apart.
+- To repeat a CI measurement in parallel, dispatch `ci.yml` on throwaway branches that each carry one distinct commit. Dispatches of the same commit share a concurrency group and run one at a time.
+- Read step times with `gh run view <id> --json jobs`, and per-test times from the run's `nextest-junit` artifact.
