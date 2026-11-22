@@ -7831,9 +7831,18 @@ fn completed_subagent_wait_prints_the_durable_result_after_the_child_ends() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout),
-        "durable child answer\n"
+    // The parent gets the report's row for the answer, not the answer itself.
+    let response = rimz::harness::run::response_path(store.paths(), &record).unwrap();
+    let summary = rimz::disk::summary::FileSummary::measure(&response).unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.starts_with("- @quiet-fox: completed in ")
+            && stdout.ends_with(&format!(
+                ", task: \"inspect the wait path\", response: {} ({})\n",
+                response.display(),
+                summary.label()
+            )),
+        "{stdout}"
     );
     assert!(out.stderr.is_empty());
 
@@ -7850,7 +7859,8 @@ fn completed_subagent_wait_prints_the_durable_result_after_the_child_ends() {
 
     assert!(out.status.success());
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("subagent wait map");
-    assert_eq!(json["quiet-fox"]["last_message"], "durable child answer\n");
+    assert!(json["quiet-fox"].get("last_message").is_none(), "{json}");
+    assert_eq!(json["quiet-fox"]["response_path"], json!(response));
     assert_eq!(json["quiet-fox"]["status"], "completed");
 
     for args in [
@@ -7875,6 +7885,274 @@ fn completed_subagent_wait_prints_the_durable_result_after_the_child_ends() {
         assert!(stderr.contains("quiet-fox"), "{stderr}");
         assert!(stderr.contains("rimz subagents list"), "{stderr}");
     }
+}
+
+/// A launch's `--wait` is the launcher's join: it prints the petname, then a still-running
+/// line for the child, still at work, and exits 75 at once instead of blocking.
+#[cfg(unix)]
+#[test]
+fn a_launch_wait_prints_the_petname_then_a_still_running_line() {
+    let (output, env) = launch_waiting_subagents(false);
+    assert_launch_wait_defers(&output, &env, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fanout_wait_prints_each_petname_then_a_still_running_line_per_child() {
+    let (output, env) = launch_waiting_subagents(true);
+    assert_launch_wait_defers(&output, &env, 2);
+}
+
+#[cfg(unix)]
+fn launch_waiting_subagents(fanout: bool) -> (std::process::Output, Env) {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    std::fs::write(
+        env.project_root.join("tasks.json"),
+        r#"[{"profile":"codex","prompt":"audit the parser"},{"profile":"codex","prompt":"audit the lexer"}]"#,
+    )
+    .expect("write fanout tasks");
+    let agent_bin = write_failing_agent_shim(&env, "codex", 1);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store.record_workspace(&workspace).expect("record room");
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: AgentSessionId::from("parent-session"),
+                launch_id: Some(AgentSessionId::from("parent-launch")),
+                agent_name: "parent".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_2")),
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed the parent");
+    seed_live_zellij_room(
+        store.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_str(crate::common::room::MATERIALIZED_ROOM_PANES).unwrap(),
+    );
+    let presence = env.project_root.join("presence.wasm");
+    std::fs::write(&presence, b"test-presence").expect("write presence fixture");
+    let trace = env.project_root.join("launch-wait.log");
+    let mut command = env.rimz();
+    command.args(["--mux", "zellij", "subagents"]);
+    if fanout {
+        command.args(["fanout", "tasks.json", "--wait=1m"]);
+    } else {
+        command.args(["codex", "audit the parser", "--wait=1m"]);
+    }
+    command
+        .current_dir(&env.project_root)
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch")
+        .env("SHELL", shell)
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .env("RIMZ_PRESENCE_PLUGIN", presence)
+        .env("ZELLIJ_PANE_ID", "2")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            crate::common::room::MATERIALIZED_ROOM_PANES,
+        );
+    let launched = std::sync::atomic::AtomicBool::new(false);
+    let output = std::thread::scope(|scope| {
+        scope.spawn(|| bind_child_panes(&store, &trace, &workspace.session_name, &launched));
+        let output = command.bounded_output();
+        launched.store(true, std::sync::atomic::Ordering::Relaxed);
+        output
+    })
+    .expect("launch with --wait");
+    (output, env)
+}
+
+#[cfg(unix)]
+fn assert_launch_wait_defers(output: &std::process::Output, env: &Env, children: usize) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(75), "{stdout}{stderr}");
+    let mut records = rimz::harness::run::list(env.store().paths()).expect("list child runs");
+    records.sort_by_key(|record| record.started_at);
+    assert_eq!(records.len(), children, "{records:?}");
+    let names = records
+        .iter()
+        .map(|record| record.agent_name.clone().expect("a minted petname"))
+        .collect::<Vec<_>>();
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2 * children, "{stdout}");
+    assert_eq!(lines[..children], names, "{stdout}");
+    for (line, name) in lines[children..].iter().zip(&names) {
+        let rest = line
+            .strip_prefix(&format!("- @{name}: still running ("))
+            .unwrap_or_else(|| panic!("{line}"));
+        assert!(
+            rest.ends_with(" so far); it will be in your report"),
+            "{line}"
+        );
+    }
+    assert!(!stderr.contains("timed out"), "{stderr}");
+    for record in &records {
+        assert!(!record.status.is_terminal(), "{record:?}");
+        assert!(record.joined_at.is_none(), "{record:?}");
+    }
+}
+
+/// A launcher's join on a settled `-p --bg` run that reports to it, after the run's session
+/// ended and its row left the live snapshot, prints the report row and claims the answer, as
+/// the join did while the run ran.
+#[test]
+fn a_launchers_join_on_an_ended_background_run_prints_its_report_row() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let (finished, parent_kind, parent_launch_id) = create_finished_subagent(&env, &store);
+    let workspace = env.resolve_workspace(&env.project_root);
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            parent_kind.as_str(),
+            "UserPromptSubmit",
+            &AgentLifecycleObservation::new(
+                Some(AgentSessionId::from("parent-session")),
+                LifecycleSignal::TurnStarted { turn_id: None },
+            ),
+        ))
+        .expect("start parent turn");
+    let kind = AgentKind::new_unchecked("codex");
+    let session = AgentSessionId::from("bg-session");
+    let launch = AgentSessionId::from("bg-launch");
+    let mut record = RunRecord::new(
+        workspace.workspace_id.clone(),
+        kind.clone(),
+        PermissionMode::Auto,
+        "audit the migration".to_owned(),
+        env.project_root.clone(),
+    );
+    record.agent_name = Some("calm-otter".to_owned());
+    record.launch_id = Some(launch.clone());
+    record.last_message = Some("background answer\n".to_owned());
+    rimz::harness::run::create(store.paths(), &record).expect("create background run");
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &kind,
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: session.clone(),
+                launch_id: Some(launch),
+                agent_name: "calm-otter".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    launched_by: Some(Box::new(rimz::agents::LaunchedBy {
+                        kind: parent_kind.clone(),
+                        agent_id: parent_launch_id.clone(),
+                    })),
+                    ..LaunchParams::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: Some(record.run_id.clone()),
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: Some(record.prompt.clone()),
+                description: None,
+            },
+        ))
+        .expect("seed background run's agent");
+    let join = || {
+        env.rimz()
+            .args(["agents", "wait", "calm-otter"])
+            .env(rimz::harness::launch::ENV_AGENT_KIND, parent_kind.as_str())
+            .env(
+                rimz::harness::launch::ENV_AGENT_ID,
+                parent_launch_id.as_str(),
+            )
+            .output()
+            .expect("join the background run")
+    };
+    let running = join();
+    assert_eq!(running.status.code(), Some(75), "{running:?}");
+    for event in ["UserPromptSubmit", "Stop", "SessionEnd"] {
+        let mut hook = env.hook_command("codex");
+        hook.env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str());
+        let output = env.spawn_payload(hook, &json!({"hook_event_name": event, "session_id": "bg-session", "prompt": "audit the migration"}).to_string()).wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        env.drain_hooks();
+    }
+    let record = rimz::harness::run::load(store.paths(), &record.run_id).expect("reload run");
+    assert!(record.status.is_terminal(), "{:?}", record.status);
+    // The wrapper closes a settled run's pane, and its row ends and leaves the live snapshot.
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            kind.as_str(),
+            "SessionEnd",
+            &AgentLifecycleObservation::new(Some(session.clone()), LifecycleSignal::Ended),
+        ))
+        .expect("end the background run's session");
+    assert!(
+        !store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id == session)
+    );
+
+    let out = join();
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.starts_with("- @calm-otter: completed in "),
+        "a settled run joins like a running one, as a report row: {stdout}"
+    );
+    let response = rimz::harness::run::response_path(store.paths(), &record).unwrap();
+    let summary = rimz::disk::summary::FileSummary::measure(&response).unwrap();
+    assert!(
+        stdout.starts_with("- @calm-otter: completed in ")
+            && stdout.ends_with(&format!(
+                ", task: \"audit the migration\", response: {} ({})\n",
+                response.display(),
+                summary.label()
+            )),
+        "{stdout}"
+    );
+    assert!(out.stderr.is_empty(), "{out:?}");
+    let record = rimz::harness::run::load(store.paths(), &record.run_id).expect("reload run");
+    assert!(
+        record.joined_at.is_some(),
+        "the launcher's join claims the printed row"
+    );
+    assert!(
+        rimz::harness::run::load(store.paths(), &finished.run_id)
+            .expect("reload subagent run")
+            .joined_at
+            .is_none()
+    );
 }
 
 #[test]

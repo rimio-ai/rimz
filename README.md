@@ -231,10 +231,10 @@ rimz agents wait otter fox --any
 ```sh
 # From inside an agent's turn
 rimz subagents codex "review this diff for correctness; report concrete findings"
-rimz subagents wait @otter @fox      # collect named children's results
+rimz subagents wait @otter @fox      # see where named children stand
 rimz subagents stop --all            # stop every live child
 
-# Fan one audit across providers, then join all of it
+# Fan one audit across providers; the join prints a row per child at once
 rimz subagents fanout --wait <<'JSON'
 [
   {"profile":"codex","prompt":"review correctness; report concrete findings"},

@@ -1,6 +1,8 @@
 //! A wait that starts after a launched peer's run ended reads that run while
 //! it still describes the peer's latest turn. A wait marks the answer it
-//! prints read only for the run's launcher or a person at a shell.
+//! prints read only for the run's launcher or a person at a shell. The
+//! launcher's own join on runs that report to it returns at once with the
+//! report's rows and leaves the rest to the report.
 
 use super::*;
 use crate::common::wait::{register_agent, register_calling_agent};
@@ -137,6 +139,47 @@ fn wait_as_launcher(env: &Env, args: &[&str]) -> std::process::Output {
         .expect("run agents wait")
 }
 
+/// Reopen the peer's run as still running.
+fn reopen(env: &Env, peer: &mut EndedPeer) {
+    let paths = env.store().paths().clone();
+    peer.run = rimz::harness::run::load(&paths, &peer.run.run_id).expect("reload peer run");
+    peer.run.status = RunStatus::Running;
+    peer.run.completed_at = None;
+    rimz::harness::run::create(&paths, &peer.run).expect("reopen peer run");
+}
+
+/// The report row for the peer's settled answer, as the fleet report composes it, minus its
+/// clock: the text before ` in ` and the text from the task on.
+fn report_row(env: &Env, peer: &EndedPeer, status: &str) -> (String, String) {
+    let path = rimz::harness::run::response_path(env.store().paths(), &peer.run)
+        .expect("a named run has a response path");
+    let summary = rimz::disk::summary::FileSummary::measure(&path).expect("published response");
+    let name = peer.run.agent_name.as_deref().expect("named run");
+    (
+        format!("- @{name}: {status} in "),
+        format!(
+            ", task: \"task for {name}\", response: {} ({})",
+            path.display(),
+            summary.label()
+        ),
+    )
+}
+
+fn assert_row(line: &str, (head, tail): &(String, String)) {
+    assert!(
+        line.starts_with(head.as_str()) && line.ends_with(tail.as_str()),
+        "{line}"
+    );
+}
+
+fn assert_still_running(line: &str, name: &str) {
+    let head = format!("- @{name}: still running (");
+    assert!(
+        line.starts_with(&head) && line.ends_with(" so far); it will be in your report"),
+        "{line}"
+    );
+}
+
 fn joined(env: &Env, peer: &EndedPeer) -> bool {
     rimz::harness::run::load(env.store().paths(), &peer.run.run_id)
         .expect("reload peer run")
@@ -215,12 +258,17 @@ fn record_turn_message(env: &Env, session: &str, text: &str) {
 }
 
 #[test]
-fn late_wait_by_the_launcher_prints_and_marks_the_ended_peer_run() {
+fn late_wait_by_the_launcher_prints_the_report_row_and_marks_the_ended_peer_run() {
     let env = launcher_room();
     let peer = ended_peer(&env, "alpha", false);
     let out = wait_as_launcher(&env, &["@alpha", "--timeout", "10s"]);
     assert!(out.status.success(), "{out:?}");
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "alpha run answer\n");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("alpha run answer"), "{stdout}");
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    assert_row(stdout.trim_end(), &report_row(&env, &peer, "completed"));
+    let path = rimz::harness::run::response_path(env.store().paths(), &peer.run).unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "alpha run answer\n");
     assert_read(&env, &peer);
     let digest = env
         .store()
@@ -246,12 +294,14 @@ fn late_wait_by_the_launcher_prints_and_marks_the_ended_peer_run() {
 }
 
 #[test]
-fn late_json_wait_by_the_launcher_reports_the_run_record() {
+fn late_json_wait_by_the_launcher_reports_the_response_file_not_the_answer() {
     let env = launcher_room();
     let peer = ended_peer(&env, "alpha", false);
     let out = wait_as_launcher(&env, &["@alpha", "--json", "--timeout", "10s"]);
     assert!(out.status.success(), "{out:?}");
     let entries: serde_json::Value = serde_json::from_slice(&out.stdout).expect("wait JSON");
+    let path = rimz::harness::run::response_path(env.store().paths(), &peer.run).unwrap();
+    let summary = rimz::disk::summary::FileSummary::measure(&path).unwrap();
     assert_eq!(
         entries,
         json!({"@alpha": {
@@ -259,7 +309,9 @@ fn late_json_wait_by_the_launcher_reports_the_run_record() {
             "status": "completed",
             "exit": 0,
             "cost": 0.25,
-            "last_message": "alpha run answer",
+            "response_path": path,
+            "response_tokens": summary.tokens,
+            "response_lines": summary.lines,
         }})
     );
     assert_read(&env, &peer);
@@ -270,11 +322,13 @@ fn late_wait_on_two_ended_peers_marks_both_runs() {
     let env = launcher_room();
     let alpha = ended_peer(&env, "alpha", false);
     let beta = ended_peer(&env, "beta", false);
-    let out = wait_as_launcher(&env, &["@alpha", "@beta", "--timeout", "10s"]);
+    let out = wait_as_launcher(&env, &["@beta", "@alpha", "--timeout", "10s"]);
     assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("alpha run answer"), "{stdout}");
-    assert!(stdout.contains("beta run answer"), "{stdout}");
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert_row(lines[0], &report_row(&env, &beta, "completed"));
+    assert_row(lines[1], &report_row(&env, &alpha, "completed"));
     assert_read(&env, &alpha);
     assert_read(&env, &beta);
 }
@@ -356,10 +410,10 @@ fn late_wait_reads_the_run_a_restart_failed() {
             Some(RunStatus::Failed.exit_code()),
             "mid_turn {mid_turn}: {out:?}"
         );
-        assert_eq!(
-            String::from_utf8_lossy(&out.stdout),
-            "alpha run answer\n",
-            "mid_turn {mid_turn}"
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.starts_with("- @alpha: failed in ") && !stdout.contains("alpha run answer"),
+            "mid_turn {mid_turn}: {stdout}"
         );
         let stored = rimz::harness::run::load(store.paths(), &failed.run_id).expect("reload");
         assert_eq!(stored.status, RunStatus::Failed, "mid_turn {mid_turn}");
@@ -375,7 +429,11 @@ fn late_stream_on_an_ended_peer_ends_with_the_run_record() {
     peer.run = rimz::harness::run::load(env.store().paths(), &peer.run.run_id).expect("reload");
     peer.run.status = RunStatus::Failed;
     rimz::harness::run::create(env.store().paths(), &peer.run).expect("fail peer run");
-    let out = wait_as_launcher(&env, &["@alpha", "--stream", "--timeout", "10s"]);
+    let out = env
+        .rimz()
+        .args(["agents", "wait", "@alpha", "--stream", "--timeout", "10s"])
+        .output()
+        .expect("run a person's stream");
     assert_eq!(
         out.status.code(),
         Some(RunStatus::Failed.exit_code()),
@@ -384,12 +442,135 @@ fn late_stream_on_an_ended_peer_ends_with_the_run_record() {
     assert_unread(&env, &peer);
 }
 
+#[test]
+fn the_launchers_stream_on_a_reporting_peer_is_refused_before_it_streams() {
+    let env = launcher_room();
+    let mut peer = ended_peer(&env, "alpha", false);
+    reopen(&env, &mut peer);
+    let out = wait_as_launcher(&env, &["@alpha", "--stream", "--timeout", "10s"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.ends_with(
+            "--stream does not follow a run you launched that reports to you: its answer \
+             reaches you in your report; drop --stream to see where it stands\n"
+        ),
+        "{stderr}"
+    );
+    assert_unread(&env, &peer);
+}
+
+#[test]
+fn the_launchers_join_on_a_running_peer_returns_at_once_and_leaves_it_to_the_report() {
+    let env = launcher_room();
+    let mut peer = ended_peer(&env, "alpha", false);
+    reopen(&env, &mut peer);
+    let started = std::time::Instant::now();
+    let out = wait_as_launcher(&env, &["@alpha", "--timeout", "60s"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(out.status.code(), Some(75), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    assert_still_running(stdout.trim_end(), "alpha");
+    assert!(out.stderr.is_empty(), "{out:?}");
+    assert_unread(&env, &peer);
+}
+
+#[test]
+fn the_launchers_join_on_a_mix_prints_rows_and_running_lines_in_order() {
+    let env = launcher_room();
+    let alpha = ended_peer(&env, "alpha", false);
+    let mut beta = ended_peer(&env, "beta", false);
+    reopen(&env, &mut beta);
+    let out = wait_as_launcher(&env, &["@beta", "@alpha", "--timeout", "60s"]);
+    assert_eq!(out.status.code(), Some(75), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert_still_running(lines[0], "beta");
+    assert_row(lines[1], &report_row(&env, &alpha, "completed"));
+    assert_read(&env, &alpha);
+    assert_unread(&env, &beta);
+
+    let out = wait_as_launcher(&env, &["@beta", "@alpha", "--json", "--timeout", "60s"]);
+    assert_eq!(out.status.code(), Some(75), "{out:?}");
+    let entries: serde_json::Value = serde_json::from_slice(&out.stdout).expect("wait JSON");
+    assert_eq!(
+        entries["@beta"],
+        json!({"name": "beta", "status": "running", "exit": 75})
+    );
+    assert_eq!(entries["@alpha"]["status"], "completed", "{entries}");
+    assert!(entries["@alpha"].get("last_message").is_none(), "{entries}");
+    assert!(entries["@alpha"]["response_path"].is_string(), "{entries}");
+    assert_unread(&env, &beta);
+}
+
+#[test]
+fn the_launchers_any_join_is_met_by_a_settled_peer_and_exits_75_with_none() {
+    let env = launcher_room();
+    let alpha = ended_peer(&env, "alpha", false);
+    let mut beta = ended_peer(&env, "beta", false);
+    reopen(&env, &mut beta);
+    let out = wait_as_launcher(&env, &["@beta", "@alpha", "--any", "--timeout", "60s"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert_still_running(lines[0], "beta");
+    assert_row(lines[1], &report_row(&env, &alpha, "completed"));
+    assert_read(&env, &alpha);
+
+    let out = wait_as_launcher(&env, &["@beta", "--any", "--timeout", "60s"]);
+    assert_eq!(out.status.code(), Some(75), "{out:?}");
+    assert_still_running(String::from_utf8_lossy(&out.stdout).trim_end(), "beta");
+    assert_unread(&env, &beta);
+}
+
+/// A detached run reports to nobody, so its launcher's join is the only way to its answer and
+/// blocks for it as before.
+#[test]
+fn the_launchers_join_on_a_detached_peer_blocks_and_prints_the_answer() {
+    let env = launcher_room();
+    let mut peer = ended_peer(&env, "alpha", false);
+    reopen(&env, &mut peer);
+    peer.run.report_to = rimz::store::run::ReportTo::Nobody;
+    let paths = env.store().paths().clone();
+    rimz::harness::run::create(&paths, &peer.run).expect("detach peer run");
+    let mut wait = env.rimz();
+    wait.args(["agents", "wait", "@alpha", "--timeout", "20s"])
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, LAUNCHER_LAUNCH);
+    let mut child = wait
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn wait");
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(
+        child.try_wait().expect("poll wait").is_none(),
+        "the join returned early"
+    );
+    peer.run.status = RunStatus::Completed;
+    peer.run.completed_at = Some(Timestamp::now());
+    rimz::harness::run::create(&paths, &peer.run).expect("settle peer run");
+    let out = child.wait_with_output().expect("collect wait");
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "alpha run answer\n");
+}
+
 /// Who runs a wait on a peer run that settles while it waits, and whether the
-/// printed answer is theirs to mark read.
+/// printed answer is theirs to mark read. The launcher's own join does not wait
+/// (`the_launchers_join_on_a_running_peer_returns_at_once_and_leaves_it_to_the_report`)
+/// and marks the row it prints
+/// (`late_wait_by_the_launcher_prints_the_report_row_and_marks_the_ended_peer_run`).
 #[test]
 fn a_settled_wait_marks_the_answer_only_for_its_launcher_or_a_person() {
     for (caller, marks) in [
-        (Some(LAUNCHER_LAUNCH), true),
         (None, true),
         (Some("stranger-launch"), false),
         (Some("missing-launch"), false),

@@ -119,31 +119,174 @@ pub(in crate::cli) fn wait_agent(
     if stream_output && references.len() > 1 {
         bail!("--stream tails one target; wait on a single reference");
     }
+    let ctx = &Ctx::open(globals)?;
+    let store = &ctx.store;
+    let snapshot = ctx.cached_snapshot()?;
+    let current_channel = &ctx.address_context();
+    let targets = references
+        .iter()
+        .map(|(typed, reference)| {
+            resolve_wait_target(store, &snapshot, typed, reference, current_channel)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let deferring = defers_to_report(store, &snapshot, &targets)?;
     if stream_output {
-        let ctx = Ctx::open(globals)?;
-        let store = &ctx.store;
-        let snapshot = ctx.cached_snapshot()?;
-        let current_channel = &ctx.address_context();
+        if deferring {
+            bail!(
+                "--stream does not follow a run you launched that reports to you: its answer \
+                 reaches you in your report; drop --stream to see where it stands"
+            );
+        }
         let options = WaitStreamOptions {
             timeout,
             from_start,
             json,
         };
-        let (typed_reference, reference) =
-            references.first().context("wait requires a reference")?;
+        let target = targets.first().context("wait requires a reference")?;
         return wait_stream_request(
             (store, &ctx.workspace.session_name),
-            snapshot,
-            typed_reference,
-            reference,
+            target,
             current_channel,
             options,
             caller,
         );
     }
+    if deferring {
+        return wait_deferred(ctx, targets, any, json, caller);
+    }
 
-    let style = WaitStyle::new(references.len(), any, json);
-    wait_non_stream(references, any, timeout, style, globals, caller)
+    let style = WaitStyle::new(targets.len(), any, json);
+    wait_non_stream(ctx, targets, any, timeout, style, caller)
+}
+
+/// Whether this join leaves its answers to the caller's fleet report: every target is a run
+/// the calling agent launched that reports to it
+/// (`rimz::harness::run::report::defers_to_report`). One target outside that rule, an
+/// interactive turn included, makes the whole join block as it would for anyone.
+fn defers_to_report(
+    store: &rimz::Store,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    targets: &[WaitTarget],
+) -> Result<bool> {
+    let caller = rimz::harness::ancestry::resolve_caller(&snapshot.agents);
+    if caller.is_none() || targets.is_empty() {
+        return Ok(false);
+    }
+    let audit = store.runtime_projection(rimz::RuntimeScope::Audit)?.agents;
+    for target in targets {
+        let WaitTarget::Run { run_id, .. } = target else {
+            return Ok(false);
+        };
+        let record = rimz::harness::run::load(store.paths(), run_id)?;
+        if !rimz::harness::run::report::defers_to_report(
+            &snapshot.agents,
+            &audit,
+            caller.as_ref(),
+            &record,
+        ) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// A join that leaves its answers to the caller's fleet report: it polls once and prints, in
+/// the order the targets were named, the report's row for each settled run (claimed as any
+/// printed answer is) and a still-running line for each open one. Its exit is a settled join's
+/// when the join is met, else `MESSAGE_STOP_EXIT`; `--timeout` has no effect.
+fn wait_deferred(
+    ctx: &Ctx,
+    targets: Vec<WaitTarget>,
+    any: bool,
+    json: bool,
+    caller: WaitCaller,
+) -> Result<()> {
+    let store = &ctx.store;
+    let session_name = &ctx.workspace.session_name;
+    let mode = if any { JoinMode::Any } else { JoinMode::All };
+    let mut waits = WaitSet::once(targets, mode, caller);
+    let (exit, announcement) = match waits.poll(store, session_name, &ctx.address_context())? {
+        WaitPoll::Settled { selected, .. } => (
+            if any {
+                settled_outcome(&waits, selected)?.exit_code()
+            } else {
+                waits.all_exit_code()
+            },
+            None,
+        ),
+        WaitPoll::Pending { .. } | WaitPoll::TimedOut { .. } => (MESSAGE_STOP_EXIT, None),
+        WaitPoll::Announced { announcement, .. } => (MESSAGE_STOP_EXIT, Some(announcement)),
+    };
+    let audit = store.runtime_projection(rimz::RuntimeScope::Audit)?.agents;
+    let mut rows = Vec::new();
+    let mut entries = BTreeMap::new();
+    let mut printed = Vec::new();
+    for (target, outcome) in waits.targets.iter().zip(&waits.outcomes) {
+        let WaitTarget::Run { run_id, name, .. } = target else {
+            bail!("a deferring join waits only on runs");
+        };
+        let Some(outcome) = outcome else {
+            let record = rimz::harness::run::load(store.paths(), run_id)?;
+            let secs = jiff::Timestamp::now()
+                .duration_since(record.answer_started_at())
+                .as_secs()
+                .max(0) as u64;
+            rows.push(format!(
+                "- @{name}: still running ({} so far); it will be in your report",
+                render::format_compact_duration(secs)
+            ));
+            entries.insert(
+                target.typed_reference(),
+                target.unfinished_entry(Unfinished::Running),
+            );
+            continue;
+        };
+        let TerminalPayload::Run(record) = &outcome.payload else {
+            bail!("a deferring join settles only runs");
+        };
+        let child = audit
+            .iter()
+            .find(|agent| record.matches_agent(agent))
+            .context("the run's agent row is gone")?;
+        let response = match rimz::harness::run::publish_response(store.paths(), record)? {
+            Some(path) => Some(super::subagent_report::ResponseFile {
+                summary: rimz::disk::summary::FileSummary::measure(&path)
+                    .with_context(|| format!("measuring {}", path.display()))?,
+                path,
+            }),
+            None => None,
+        };
+        rows.push(super::subagent_report::compose_digest_row(
+            child,
+            record,
+            response.as_ref(),
+        ));
+        let mut entry = outcome.entry();
+        entry.last_message = None;
+        if let Some(response) = response {
+            entry.response_path = Some(response.path);
+            entry.response_tokens = Some(response.summary.tokens);
+            entry.response_lines = Some(response.summary.lines);
+        }
+        entries.insert(target.typed_reference(), entry);
+        printed.push(outcome);
+    }
+    if json {
+        render::json(&entries)?;
+    } else {
+        let mut out = render::out();
+        for row in rows {
+            writeln!(out, "{row}")?;
+        }
+        out.flush()?;
+    }
+    // Claimed only once printed: a row that failed to compose leaves every answer to the report.
+    mark_joined(store, session_name, printed);
+    if let Some(announcement) = &announcement {
+        write_message_stop(&mut render::err(), announcement)?;
+    }
+    render::err().flush()?;
+    std::process::exit(exit);
 }
 
 #[derive(Clone, Copy)]
@@ -155,16 +298,15 @@ struct WaitStreamOptions {
 
 fn wait_stream_request(
     (store, session_name): (&rimz::Store, &str),
-    snapshot: rimz::store::snapshot::SidebarSnapshot,
-    typed_reference: &str,
-    reference: &str,
+    target: &WaitTarget,
     current_channel: &rimz::address::AddressContext,
     options: WaitStreamOptions,
     caller: WaitCaller,
 ) -> Result<()> {
-    match resolve_wait_target(store, &snapshot, reference, reference, current_channel)? {
+    let typed_reference = target.typed_reference();
+    match target {
         WaitTarget::Run { run_id, .. } => {
-            let run = rimz::harness::run::load(store.paths(), &run_id)?;
+            let run = rimz::harness::run::load(store.paths(), run_id)?;
             wait_run_stream(
                 (store, session_name),
                 &run,
@@ -179,8 +321,8 @@ fn wait_stream_request(
         } => wait_interactive_agent_stream(
             (store, session_name),
             typed_reference,
-            &reference,
-            &kind,
+            reference,
+            kind,
             current_channel,
             options,
             caller,
@@ -189,24 +331,16 @@ fn wait_stream_request(
 }
 
 fn wait_non_stream(
-    references: Vec<(String, String)>,
+    ctx: &Ctx,
+    targets: Vec<WaitTarget>,
     any: bool,
     timeout: Option<Duration>,
     style: WaitStyle,
-    globals: &GlobalFlags,
     caller: WaitCaller,
 ) -> Result<()> {
-    let ctx = &Ctx::open(globals)?;
-    let snapshot = &ctx.cached_snapshot()?;
     let current_channel = &ctx.address_context();
     let store = &ctx.store;
     let session_name = &ctx.workspace.session_name;
-    let targets = references
-        .iter()
-        .map(|(typed, reference)| {
-            resolve_wait_target(store, snapshot, typed, reference, current_channel)
-        })
-        .collect::<Result<Vec<_>>>()?;
     let mut waits = WaitSet::new(
         targets,
         if any { JoinMode::Any } else { JoinMode::All },
@@ -427,13 +561,29 @@ fn mark_joined<'a>(
             .as_ref()
             .and_then(|snapshot| rimz::harness::ancestry::resolve_caller(&snapshot.agents))
     });
+    let audit = std::cell::LazyCell::new(|| {
+        store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .inspect_err(|err| {
+                tracing::warn!(error = %err, "could not read the joined run's agent rows");
+            })
+            .ok()
+    });
     for outcome in outcomes {
         let TerminalPayload::Run(record) = &outcome.payload else {
             continue;
         };
-        let claims = snapshot.as_ref().is_some_and(|snapshot| {
-            rimz::harness::run::report::may_claim(snapshot, caller.as_ref(), record)
-        });
+        let claims = snapshot
+            .as_ref()
+            .zip(audit.as_ref())
+            .is_some_and(|(snapshot, audit)| {
+                rimz::harness::run::report::may_claim(
+                    snapshot,
+                    &audit.agents,
+                    caller.as_ref(),
+                    record,
+                )
+            });
         if !claims {
             tracing::debug!(
                 run_id = %record.run_id,
@@ -584,6 +734,13 @@ pub(super) struct WaitEntryJson {
     transcript_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_message: Option<String>,
+    /// A deferring join's answer file, carried in place of `last_message`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_path: Option<std::path::PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_lines: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -608,6 +765,9 @@ impl WaitEntryJson {
             cost,
             transcript_path,
             last_message,
+            response_path: None,
+            response_tokens: None,
+            response_lines: None,
             error,
             reason: None,
             cancel_reason: None,
@@ -840,6 +1000,8 @@ struct WaitSet {
     deadline: Option<Instant>,
     mode: JoinMode,
     caller: WaitCaller,
+    /// Polls every target once and stops, as a deferring join does.
+    once: bool,
 }
 
 enum WaitPoll {
@@ -899,6 +1061,16 @@ impl WaitSet {
             deadline: timeout.map(|duration| Instant::now() + duration),
             mode,
             caller,
+            once: false,
+        }
+    }
+
+    /// A set polled once: every target is read, `--any` is met by the first settled one in
+    /// order, and an unmet join ends as `TimedOut` unless a message stop is due.
+    fn once(targets: Vec<WaitTarget>, mode: JoinMode, caller: WaitCaller) -> Self {
+        Self {
+            once: true,
+            ..Self::new(targets, mode, None, caller)
         }
     }
 
@@ -940,7 +1112,7 @@ impl WaitSet {
             };
             self.outcomes[index] = Some(outcome);
             settled.push(index);
-            if self.mode == JoinMode::Any {
+            if self.mode == JoinMode::Any && !self.once {
                 return Ok(WaitPoll::Settled {
                     selected: index,
                     settled,
@@ -948,6 +1120,11 @@ impl WaitSet {
             }
         }
 
+        if self.mode == JoinMode::Any
+            && let Some(selected) = self.outcomes.iter().position(Option::is_some)
+        {
+            return Ok(WaitPoll::Settled { selected, settled });
+        }
         if self.outcomes.iter().all(Option::is_some) {
             return Ok(WaitPoll::Settled {
                 selected: 0,
@@ -960,9 +1137,10 @@ impl WaitSet {
                 announcement,
             });
         }
-        if self
-            .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
+        if self.once
+            || self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
         {
             return Ok(WaitPoll::TimedOut { settled });
         }

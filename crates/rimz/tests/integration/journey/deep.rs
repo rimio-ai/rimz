@@ -2320,7 +2320,7 @@ fn tmux_settled_subagent_reports_to_parent() {
 
     for (key, value) in [
         ("RIMZ_TEST_AGENT_SESSION", "sess-report-waited"),
-        ("RIMZ_TEST_AGENT_SLEEP_MS", "0"),
+        ("RIMZ_TEST_AGENT_SLEEP_MS", "2500"),
     ] {
         tmux(&socket, &["set-environment", "-t", &session, key, value]);
     }
@@ -2378,7 +2378,7 @@ fn tmux_settled_subagent_reports_to_parent() {
             parent_launch_id.as_str(),
         )
         .env("RIMZ_TEST_AGENT_SESSION", "sess-report-waited")
-        .env("RIMZ_TEST_AGENT_SLEEP_MS", "0")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "2500")
         .args([
             "--mux",
             "tmux",
@@ -2391,18 +2391,23 @@ fn tmux_settled_subagent_reports_to_parent() {
         ])
         .bounded_output_within(Duration::from_secs(45))
         .expect("launch waited subagent");
-    assert!(
-        waited.status.success(),
-        "waited launch failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&waited.stdout),
-        String::from_utf8_lossy(&waited.stderr)
-    );
-    assert!(String::from_utf8_lossy(&waited.stdout).contains("stub done"));
+    // The parent's own join returns at once: the child reports to it.
+    assert_still_running_join(&waited);
     let waited_name = launched_subagent_name(&waited);
     let waited_run = wait_for_named_terminal_run(&env, &waited_name, CAPTURE_BUDGET);
+    let joined = join_as_parent(&env, &agent_path, parent_launch_id.as_str(), &waited_name);
+    assert!(joined.status.success(), "join waited child: {joined:?}");
+    let row = String::from_utf8_lossy(&joined.stdout);
     assert!(
-        waited_run.joined_at.is_some(),
-        "--wait must mark the printed result joined: {waited_run:?}"
+        row.starts_with(&format!("- @{waited_name}: completed in ")) && !row.contains("stub done"),
+        "the join prints the report row, not the answer: {row}"
+    );
+    assert!(
+        rimz::harness::run::load(env.store().paths(), &waited_run.run_id)
+            .expect("reload waited run")
+            .joined_at
+            .is_some(),
+        "a join in the parent's turn must mark the row it printed joined"
     );
     assert_eq!(
         env.store()
@@ -2493,7 +2498,7 @@ fn tmux_settled_subagent_reports_to_parent() {
 
     for (key, value) in [
         ("RIMZ_TEST_AGENT_SESSION", "sess-report-unattended"),
-        ("RIMZ_TEST_AGENT_SLEEP_MS", "0"),
+        ("RIMZ_TEST_AGENT_SLEEP_MS", "2500"),
     ] {
         tmux(&socket, &["set-environment", "-t", &session, key, value]);
     }
@@ -2508,7 +2513,7 @@ fn tmux_settled_subagent_reports_to_parent() {
             parent_launch_id.as_str(),
         )
         .env("RIMZ_TEST_AGENT_SESSION", "sess-report-unattended")
-        .env("RIMZ_TEST_AGENT_SLEEP_MS", "0")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "2500")
         .args([
             "--mux",
             "tmux",
@@ -2521,16 +2526,27 @@ fn tmux_settled_subagent_reports_to_parent() {
         ])
         .bounded_output_within(Duration::from_secs(45))
         .expect("launch unattended waited subagent");
-    assert!(
-        unattended.status.success(),
-        "unattended wait failed: {unattended:?}"
-    );
-    assert!(String::from_utf8_lossy(&unattended.stdout).contains("stub done"));
+    assert_still_running_join(&unattended);
     let unattended_name = launched_subagent_name(&unattended);
     let unattended_run = wait_for_named_terminal_run(&env, &unattended_name, CAPTURE_BUDGET);
+    let joined = join_as_parent(
+        &env,
+        &agent_path,
+        parent_launch_id.as_str(),
+        &unattended_name,
+    );
+    assert!(joined.status.success(), "join unattended child: {joined:?}");
+    assert!(
+        String::from_utf8_lossy(&joined.stdout)
+            .starts_with(&format!("- @{unattended_name}: completed in ")),
+        "{joined:?}"
+    );
     assert_eq!(
-        unattended_run.joined_at, None,
-        "a printed result after the parent's turn must remain unjoined: {unattended_run:?}"
+        rimz::harness::run::load(env.store().paths(), &unattended_run.run_id)
+            .expect("reload unattended run")
+            .joined_at,
+        None,
+        "a row printed after the parent's turn must remain unjoined: {unattended_run:?}"
     );
     let unattended_digest_line = format!("@{unattended_name}: completed");
     let unattended_frame = capture_joined_until(
@@ -2582,18 +2598,13 @@ fn tmux_settled_subagent_reports_to_parent() {
         ])
         .bounded_output_within(Duration::from_secs(45))
         .expect("launch deadline-limited subagent");
-    assert_eq!(
-        timed.status.code(),
-        Some(rimz::store::run::RunStatus::TimedOut.exit_code()),
-        "deadline-limited join should time out\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&timed.stdout),
-        String::from_utf8_lossy(&timed.stderr)
-    );
+    // A join duration has no effect on the parent's own join.
+    assert_still_running_join(&timed);
     let timed_name = launched_subagent_name(&timed);
     let timed_run = wait_for_named_terminal_run(&env, &timed_name, CAPTURE_BUDGET);
     assert_eq!(
         timed_run.joined_at, None,
-        "a join deadline must not claim an unprinted result"
+        "a still-running join must not claim the later result"
     );
     let deadline = Instant::now() + CAPTURE_BUDGET;
     let timed_report = loop {
@@ -2647,6 +2658,38 @@ fn tmux_settled_subagent_reports_to_parent() {
         "parent pane did not receive status-only digests; timed report: {timed_report:?}\n{parent_frame}"
     );
     receive_and_finish(&timed_run);
+}
+
+/// A `--wait` launch by the parent, which returns while its child runs.
+fn assert_still_running_join(launched: &std::process::Output) {
+    let stdout = String::from_utf8_lossy(&launched.stdout);
+    assert_eq!(
+        launched.status.code(),
+        Some(75),
+        "the parent's join must return at once\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&launched.stderr)
+    );
+    assert!(
+        stdout.contains(": still running (") && stdout.contains("it will be in your report"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("stub done"), "{stdout}");
+}
+
+/// `rimz subagents wait <name>` run by the report parent.
+fn join_as_parent(
+    env: &Env,
+    agent_path: &std::ffi::OsStr,
+    parent_launch_id: &str,
+    name: &str,
+) -> std::process::Output {
+    env.rimz()
+        .env("PATH", agent_path)
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(rimz::harness::launch::ENV_AGENT_ID, parent_launch_id)
+        .args(["subagents", "wait", name])
+        .bounded_output_within(Duration::from_secs(20))
+        .expect("join as the report parent")
 }
 
 #[test]

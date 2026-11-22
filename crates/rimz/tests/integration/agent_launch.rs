@@ -1968,7 +1968,7 @@ fn receipt_wait_target_finds_the_pending_run(env: &Env, out: &std::process::Outp
     assert!(!receipt.contains("Reach:"), "{receipt}");
     let target = receipt
         .lines()
-        .find_map(|line| line.split_once("To block instead: rimz agents wait "))
+        .find_map(|line| line.split_once("To check on it: rimz agents wait "))
         .map(|(_, target)| target.to_owned())
         .unwrap_or_else(|| panic!("receipt names no wait target: {receipt}"));
     let pending_wait = env
@@ -2066,15 +2066,15 @@ fn peer_launch_reports_only_launcher_opened_turns() {
             );
             assert!(out.stdout.is_empty(), "hook stdout stays neutral");
         };
-    let mut waiter = env
-        .rimz()
-        .args(["agents", "wait", first.run_id.as_str(), "--timeout", "10s"])
-        .env("RIMZ_AGENT_KIND", "claude")
-        .env("RIMZ_AGENT_ID", "launch-session")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    // The launcher's join returns at once, the report carrying the answer.
+    let launcher_wait = || {
+        env.rimz()
+            .args(["agents", "wait", first.run_id.as_str(), "--timeout", "10s"])
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "launch-session")
+            .bounded_output()
+            .unwrap()
+    };
     hook("SessionStart", "", "");
     hook("UserPromptSubmit", "first task", "");
     let running = run::load(store.paths(), &first.run_id).unwrap();
@@ -2083,15 +2083,24 @@ fn peer_launch_reports_only_launcher_opened_turns() {
         running.agent_id.as_ref().map(AgentSessionId::as_str),
         Some("peer-session")
     );
-    assert!(waiter.try_wait().unwrap().is_none());
+    let early = launcher_wait();
+    assert_eq!(early.status.code(), Some(75), "{early:?}");
+    assert!(
+        String::from_utf8_lossy(&early.stdout).starts_with("- @peer: still running ("),
+        "{early:?}"
+    );
     hook("Stop", "", "first answer");
-    let wait_output = waiter.wait_with_output().unwrap();
+    let wait_output = launcher_wait();
     assert!(
         wait_output.status.success(),
         "{}",
         String::from_utf8_lossy(&wait_output.stderr)
     );
-    assert!(String::from_utf8_lossy(&wait_output.stdout).contains("first answer"));
+    let waited = String::from_utf8_lossy(&wait_output.stdout);
+    assert!(
+        waited.starts_with("- @peer: completed in ") && !waited.contains("first answer"),
+        "{waited}"
+    );
     assert!(
         run::load(store.paths(), &first.run_id)
             .unwrap()

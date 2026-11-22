@@ -824,6 +824,12 @@ enum AgentsSubcmd {
     )]
     Molt(MoltArgs),
     /// Wait for supervised runs or interactive agents; several references join.
+    ///
+    /// An agent joining only runs it launched that report to it is not held: the join returns at
+    /// once with a report row (status, elapsed, response file) for each settled run and a
+    /// still-running line for each other, exiting 75 while any runs, and the answers arrive in
+    /// its AGENT_REPORT or SUBAGENT_REPORT. There `--timeout` has no effect and `--stream` is
+    /// refused. Any other join blocks and prints the answers.
     Wait {
         /// Agents or runs to wait for: @handle, @handle#lane, pet name, pane id (tmux:%12), or
         /// run id; `-` reads one address per line from stdin.

@@ -261,7 +261,7 @@ fn write_peer_receipt(
             )?;
             writeln!(
                 w,
-                "Its response lands at {response} when this turn settles. To block instead: rimz agents wait {handle}"
+                "Its response lands at {response} when this turn settles. To check on it: rimz agents wait {handle}"
             )?;
             writeln!(
                 w,

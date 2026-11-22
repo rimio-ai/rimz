@@ -32,8 +32,9 @@ pub(crate) fn print_run_output(
 
 /// Tell the launcher of background runs what happens next, one line per
 /// step: an agent learns that one fleet report will reach it (or, detached,
-/// that none will), then where each response lands and the wait command; a
-/// shell learns how to print the answers. Every target is a bare name.
+/// that none will), then where each response lands and the wait command, which
+/// checks on a reporting run and collects a detached one; a shell learns how
+/// to print the answers. Every target is a bare name.
 /// `response_path` is the first name's path as the launching agent sees it,
 /// `None` for a shell launch.
 pub(crate) fn write_background_receipt(
@@ -60,13 +61,14 @@ pub(crate) fn write_background_receipt(
     } else {
         ("agent", "AGENT_REPORT", "rimz agents wait")
     };
-    let (lands, collect) = match names {
+    let (lands, collect, check) = match names {
         [_] => (
             format!(
                 "Its response lands at {} when it settles.",
                 response_path.display()
             ),
             "To collect it",
+            "To check on it",
         ),
         _ => (
             format!(
@@ -74,6 +76,7 @@ pub(crate) fn write_background_receipt(
                 response_path.with_file_name("<name>.output").display()
             ),
             "To collect them",
+            "To check on them",
         ),
     };
     if report_to == ReportTo::Nobody {
@@ -85,7 +88,7 @@ pub(crate) fn write_background_receipt(
         err,
         "Running in the background. Keep working or end your turn: one {report} reaches you once every {noun} you launched has settled."
     )?;
-    writeln!(err, "{lands} To block instead: {wait} {names_list}")?;
+    writeln!(err, "{lands} {check}: {wait} {names_list}")?;
     Ok(())
 }
 

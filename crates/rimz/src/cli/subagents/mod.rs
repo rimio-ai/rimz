@@ -66,20 +66,25 @@ enum SubagentsSubcmd {
         path: bool,
     },
     /// Wait for this agent's supervised children.
+    ///
+    /// The children report to you, so the join returns at once: a report row (status,
+    /// elapsed, response file) for each settled child and a still-running line for each other,
+    /// exiting 75 while any runs; their answers arrive in your SUBAGENT_REPORT. `--timeout` has
+    /// no effect and `--stream` is refused.
     Wait {
         /// Child names; at least one.
         #[arg(value_name = "NAME")]
         names: Vec<String>,
-        /// Return when the first named child finishes; print its result block, or a one-entry map with `--json`.
+        /// Exit by the first named child that has settled, or 75 when none has, instead of by them all.
         #[arg(long, conflicts_with = "stream")]
         any: bool,
-        /// Stop waiting after this duration.
+        /// No effect: the join returns at once.
         #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
         timeout: Option<Duration>,
-        /// Tail one child's transcript while waiting.
+        /// Refused: a child's answer reaches you in your report.
         #[arg(long)]
         stream: bool,
-        /// Emit a labeled result map for joins; with `--stream`, emit NDJSON events.
+        /// Emit a labeled result map.
         #[arg(long)]
         json: bool,
     },
@@ -107,7 +112,9 @@ struct FanoutArgs {
     /// Tasks JSON; stdin when omitted.
     #[arg(value_name = "FILE")]
     file: Option<PathBuf>,
-    /// Wait for every launched child and print its result; use `--wait=5m` for a deadline.
+    /// Join every launched child: a report row for each settled one and a still-running line
+    /// for each other (exit 75), at once; the answers arrive in your SUBAGENT_REPORT. A
+    /// duration has no effect.
     #[arg(
         long,
         value_name = "DURATION",
@@ -219,7 +226,8 @@ struct SubagentLaunchArgs {
     /// Time to report after the deadline; `0s` kills at the deadline.
     #[arg(long, value_name = "DURATION", value_parser = crate::cli::supervised::parse_timeout)]
     grace: Option<Duration>,
-    /// Wait for the child and print its result; use `--wait=5m` for a deadline.
+    /// Join the child: its report row once settled, else a still-running line (exit 75), at
+    /// once; the answer arrives in your SUBAGENT_REPORT. A duration has no effect.
     #[arg(
         long,
         value_name = "DURATION",
