@@ -1583,7 +1583,8 @@ fn statusline_payloads_carry_no_cost_and_keep_the_turn_end_total() {
         let payload = json!({
             "conversation_id": SESSION_ID,
             "model": {"id": id, "display_name": id},
-            "context_window": {"current_usage": {"input_tokens": 10, "output_tokens": 20}}
+            "context_window": {"current_usage": {"input_tokens": 10, "output_tokens": 20}},
+            "cost": {"total_usd": 0.07, "subagent_usd": 0.02, "estimated": true}
         });
         assert!(
             AntigravityAdapter
