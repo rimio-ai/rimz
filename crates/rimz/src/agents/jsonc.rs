@@ -2,7 +2,10 @@
 
 use serde::de::DeserializeOwned;
 
+/// Parses `bytes` after one leading UTF-8 byte order mark, which some editors write and no
+/// valid JSON begins with.
 pub(super) fn from_slice<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, serde_json::Error> {
+    let bytes = bytes.strip_prefix("\u{feff}".as_bytes()).unwrap_or(bytes);
     serde_json::from_slice(&normalize(bytes))
 }
 
@@ -138,6 +141,14 @@ mod tests {
         let input = [b'{', b'/', b'/', 0xff, b'\n', b'}'];
 
         assert_eq!(from_slice::<serde_json::Value>(&input).unwrap(), json!({}));
+    }
+
+    #[test]
+    fn one_leading_bom_is_skipped_and_malformed_json_behind_it_still_errors() {
+        let value: serde_json::Value = from_slice("\u{feff}{\"a\": 1, // c\n}".as_bytes()).unwrap();
+        assert_eq!(value, json!({"a": 1}));
+        assert!(from_slice::<serde_json::Value>("\u{feff}{\"a\": [1,,]}".as_bytes()).is_err());
+        assert!(from_slice::<serde_json::Value>("\u{feff}\u{feff}{}".as_bytes()).is_err());
     }
 
     #[test]
