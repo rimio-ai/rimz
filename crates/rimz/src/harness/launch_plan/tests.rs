@@ -1964,12 +1964,6 @@ fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch(
             for isolation in [Isolation::Host, Isolation::Sandbox] {
                 for yolo in [false, true] {
                     let mut args = Vec::new();
-                    if kind == "antigravity" {
-                        args.extend([
-                            "--settings".to_owned(),
-                            r#"{"permissions":{"deny":["command(rm)"]}}"#.to_owned(),
-                        ]);
-                    }
                     if yolo {
                         args.extend(
                             adapter
@@ -1977,6 +1971,21 @@ fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch(
                                 .launch
                                 .permission_args(crate::agents::PermissionMode::Yolo),
                         );
+                    }
+                    if kind == "antigravity" {
+                        if !yolo {
+                            args.extend(
+                                adapter
+                                    .spec()
+                                    .launch
+                                    .permission_args(crate::agents::PermissionMode::Ask),
+                            );
+                        }
+                        args.extend([
+                            "--settings".to_owned(),
+                            r#"{"agentMode":"auto","permissions":{"deny":["command(rm)"]}}"#
+                                .to_owned(),
+                        ]);
                     }
                     let mut request = request(kind, action_with_args(action, args));
                     request.identity.params =
@@ -2039,12 +2048,17 @@ fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch(
                         .map(|pair| pair[1].clone())
                         .collect();
                     assert_eq!(settings.len(), 1, "{case}: {argv:?}");
+                    // An ask launch pins agy's Default over the passthrough's own mode; yolo
+                    // writes no mode, so the passthrough's stays.
                     assert_eq!(
                         serde_json::from_str::<serde_json::Value>(&settings[0]).unwrap(),
-                        serde_json::json!({"permissions": {
-                            "deny": ["command(rm)"],
-                            "allow": ["command(git status)", "mcp(rimz_tools/*)"]
-                        }}),
+                        serde_json::json!({
+                            "agentMode": if yolo { "auto" } else { "" },
+                            "permissions": {
+                                "deny": ["command(rm)"],
+                                "allow": ["command(git status)", "mcp(rimz_tools/*)"]
+                            }
+                        }),
                         "{case}"
                     );
                     let sandbox = argv.iter().filter(|arg| *arg == "--sandbox").count();
@@ -2060,6 +2074,74 @@ fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch(
                         .collect();
                     assert_eq!(dirs, added, "{case}: {argv:?}");
                 }
+            }
+        }
+    }
+}
+
+/// The ask pin is agy's one settings document on every ask launch, with no allowed-tools list
+/// and whether or not a passthrough `--settings` follows it; no other mode writes it.
+#[test]
+fn antigravity_ask_pins_default_mode_in_the_one_settings_document() {
+    use crate::agents::PermissionMode;
+    let project = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let ambient = BTreeMap::from([("HOME".into(), project.path().display().to_string())]);
+    let adapter = crate::agents::find_definition("antigravity").unwrap();
+    let passthrough = r#"{"agentMode":"auto","model":{"name":"flash"}}"#;
+    for action in ["launch", "resume"] {
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::Auto,
+            PermissionMode::Plan,
+            PermissionMode::Yolo,
+        ] {
+            for user_settings in [false, true] {
+                let mut args = adapter.spec().launch.permission_args(mode);
+                if user_settings {
+                    args.extend(["--settings".to_owned(), passthrough.to_owned()]);
+                }
+                let request = request("antigravity", action_with_args(action, args));
+                let plan = compile(LaunchPlanInputs {
+                    recorded_system_prompt_digest: None,
+                    request: &request,
+                    cwd: project.path(),
+                    project_root: project.path(),
+                    rimz_bin: Path::new("/bin/rimz"),
+                    runtime: &runtime,
+                    state: &state,
+                    effective: None,
+                    machine: &machine,
+                    commands: &machine.agents.commands,
+                    accounts: &machine.accounts,
+                    isolation: Isolation::Host,
+                    bwrap: None,
+                    agents: Ok(&[]),
+                    ambient_env: &ambient,
+                    agent_shell: None,
+                    hibernate: false,
+                })
+                .unwrap();
+                let case = format!("{action} {mode:?} passthrough={user_settings}");
+                let argv = &plan.process().provider_argv;
+                let settings: Vec<serde_json::Value> = argv
+                    .windows(2)
+                    .filter(|pair| pair[0] == "--settings")
+                    .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+                    .collect();
+                let expected = match (mode, user_settings) {
+                    (PermissionMode::Ask, false) => vec![serde_json::json!({"agentMode": ""})],
+                    (PermissionMode::Ask, true) => vec![serde_json::json!({
+                        "agentMode": "",
+                        "model": {"name": "flash"}
+                    })],
+                    (_, false) => vec![],
+                    (_, true) => vec![serde_json::from_str(passthrough).unwrap()],
+                };
+                assert_eq!(settings, expected, "{case}: {argv:?}");
             }
         }
     }

@@ -60,6 +60,11 @@ const MCP_SERVER_NAME: &str = "rimz_tools";
 const ADD_DIR_FLAG: &str = "--add-dir";
 const SANDBOX_FLAG: &str = "--sandbox";
 const SKIP_PERMISSIONS_FLAG: &str = "--dangerously-skip-permissions";
+/// The settings document an ask launch passes: an empty `agentMode` starts agy in its Default
+/// mode, which asks before a write or a command, and wins over `--mode` in either order without
+/// being saved (agy 1.5.14). With no mode flag agy 1.5.7 and later start in Auto instead.
+/// `fold_permission_settings` folds it into the launch's one `--settings`.
+const ASK_SETTINGS: [&str; 2] = ["--settings", r#"{"agentMode":""}"#];
 struct AntigravityHook {
     pub(super) hook: HookEventSpec,
     pub(super) config_event: &'static str,
@@ -230,9 +235,9 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         resume: None,
         fork: None,
         permission: super::LaunchPermissionArgs {
-            ask: &[],
-            auto: &["--mode", "accept-edits"],
-            yolo: &[SKIP_PERMISSIONS_FLAG, "--mode", "accept-edits"],
+            ask: &ASK_SETTINGS,
+            auto: &["--mode", "auto"],
+            yolo: &[SKIP_PERMISSIONS_FLAG],
             plan: &["--mode", "plan"],
             ..super::LaunchPermissionArgs::EMPTY
         },
@@ -622,6 +627,15 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
             extra_args.extend([ADD_DIR_FLAG.to_owned(), dir.clone()]);
         }
         Ok(())
+    }
+
+    fn fold_permission_settings(
+        &self,
+        paths: (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        permissions::pin_ask_mode(&ASK_SETTINGS, paths, extra_args, artifact)
     }
 
     /// `--sandbox` confines agy's terminal commands to the workspace and added dirs, with no

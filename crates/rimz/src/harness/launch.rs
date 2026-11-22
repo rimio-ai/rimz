@@ -1267,6 +1267,17 @@ fn compile_agent_process_with_extra_env(
     } else {
         (None, None)
     };
+    adapter.fold_permission_settings(
+        (
+            cwd,
+            reminders
+                .settings
+                .as_ref()
+                .map_or(cwd, |(dir, _)| dir.as_path()),
+        ),
+        action.extra_args_mut(),
+        &mut settings_artifact,
+    )?;
     if let (Some(listed), Some((artifact_dir, _))) = (&listed, &reminders.settings) {
         adapter.allow_listed_skill_args(
             listed,

@@ -3025,11 +3025,15 @@ fn launch_resume_permissions_and_model_preset_match_agy() {
         ["agy", "--conversation", SESSION_ID]
     );
     for (mode, expected) in [
-        (PermissionMode::Auto, &["--mode", "accept-edits"][..]),
+        (
+            PermissionMode::Ask,
+            &["--settings", r#"{"agentMode":""}"#][..],
+        ),
+        (PermissionMode::Auto, &["--mode", "auto"][..]),
         (PermissionMode::Plan, &["--mode", "plan"][..]),
         (
             PermissionMode::Yolo,
-            &["--dangerously-skip-permissions", "--mode", "accept-edits"][..],
+            &["--dangerously-skip-permissions"][..],
         ),
     ] {
         assert_eq!(

@@ -28,10 +28,10 @@ The launch spec maps RimZ's launch inputs onto `agy` flags:
 | startup prompt | `agy --prompt-interactive <prompt>` |
 | profile `model` | `--model <model>`, a catalog short name as its `gemini-` ID |
 | profile `effort` | `--effort <effort>`, from `low`, `medium`, `high`, and `xhigh` |
-| permission `ask` | none (the native default) |
-| permission `auto` | `--mode accept-edits` |
+| permission `ask` | `--settings {"agentMode":""}`, merged into the launch's one `--settings` |
+| permission `auto` | `--mode auto` |
 | permission `plan` | `--mode plan` |
-| permission `yolo` | `--dangerously-skip-permissions --mode accept-edits` |
+| permission `yolo` | `--dangerously-skip-permissions` |
 | exact resume | `agy --conversation <id>` |
 | definition `allowed-tools` | one `--settings` whose `permissions.allow` holds the [translated rules](#permission-rules-sandbox-and-added-dirs) |
 | `sandbox` isolation | `--sandbox` |
@@ -53,6 +53,8 @@ Some launch inputs have no Antigravity channel:
 ### Permission rules, sandbox, and added dirs
 
 `permissions.rs::translate` maps each `allowed-tools` rule into agy's grammar by the table in [definitions.md](../../reference/definitions.md#tools-to-provider-arguments), and `permissions.rs::render` unions the results into `permissions.allow` through `crates/rimz/src/agents/launch_settings.rs::merge_settings`, the merge Claude uses. agy keeps only the last `--settings` ([reference](../../externals/agent-adapter/antigravity-reference.md#permission-resources)), so a profile's own `--settings`, inline or a file, merges into the one RimZ emits; a file source becomes a private `settings.<digest>.json` artifact, and a malformed or non-object source fails the launch. The emitted `permissions.allow` replaces the account's saved global allow list for the session, as a passthrough `--settings` does, while saved global and project deny rules stay in force; RimZ does not copy the saved allow rules in. A list with no translatable rule emits no `--settings`, which leaves the saved lists alone. A rule with no translation never reaches agy, which accepts any rule string and matches nothing; `rimz agents validate` and the launch both name it, because both ask `ToolRules::untranslated` the same `translate`. The argv is recompiled on every launch, so a resume carries the rules again, which agy needs.
+
+The modes rest on a capture of agy 1.5.14 ([reference](../../externals/agent-adapter/antigravity-reference.md#execution-modes)). With no mode argument agy starts in Auto, so `ask` pins Default, which asks before a write or a command, with an empty `agentMode`. `crates/rimz/src/agents/adapters/antigravity/permissions.rs::pin_ask_mode`, through `LaunchCapability::fold_permission_settings`, takes the pin's own `--settings` out of argv and merges `"agentMode": ""` into the last remaining `--settings` (a profile's own, or an empty object) before any other settings contribution, so the ask launch carries one document and the pin wins over a profile's `agentMode`. The pin wins over `--mode` too, and a resume recompiles it, which agy needs since a resumed conversation takes its mode from the new argv. `auto`, `plan`, and `yolo` write no `agentMode`. `yolo` passes the skip flag alone: beside it a `--mode` changed nothing observed. Under `auto`, agy's reviewer model can clear a command to run outside agy's terminal sandbox without asking, also under `--sandbox`. Sandbox isolation adds no RimZ mount view, so there nothing bounds a command the reviewer cleared; under scoped isolation RimZ's view still confines it. Where agy offers no Auto, `--mode auto` falls back to Default. A saved `toolPermission: strict` outranks Auto and still asks before edits, and RimZ reads no saved agy setting to say so.
 
 `configure_room_permissions` appends `--sandbox` at sandbox isolation unless the argv already has it. Yolo keeps `--dangerously-skip-permissions`, which agy lets override its sandbox, so `native_sandbox_overridden` reports that flag in the compiled argv and the launch and `rimz agents validate` warn that sandbox isolation is not in effect. RimZ never writes `toolPermission`.
 
