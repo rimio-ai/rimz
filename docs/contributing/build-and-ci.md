@@ -82,7 +82,7 @@ GitHub's `main` ruleset requires `checks`, `externals`, and `tests`. On Gitea, t
 
 The `live` profile runs both mux backends in one nextest process, so tmux and Zellij co-schedule, while the per-backend `[test-groups]` in `.config/nextest.toml` bound concurrency. Workflows leave nextest's global thread count uncapped on both forges, so those test-group caps are the concurrency control. GitHub jobs run on `ubuntu-latest` and Gitea jobs on the mirror's own runners.
 
-The `live` and `journey` tiers retry, so a green run can hide a flaky test's failed attempts. Each tier writes a JUnit report that keeps every failed attempt's output, and the job uploads the reports as the `nextest-junit` artifact on both forges even when it passes ([reading CI evidence](./flakes.md#reading-ci-evidence)). nextest writes each report to `target/nextest/<profile>/junit.xml` under the workspace root, not under `CARGO_TARGET_DIR`, so the upload reads from there although CI builds into `target/ci`.
+The `live` and `journey` tiers retry, so a green run can hide a flaky test's failed attempts. Each tier, `gate` included, writes a JUnit report that keeps every failed attempt's output and every test's duration, and the job uploads the reports as the `nextest-junit` artifact on both forges even when it passes ([reading CI evidence](./flakes.md#reading-ci-evidence)). nextest writes each report to `target/nextest/<profile>/junit.xml` under the workspace root, not under `CARGO_TARGET_DIR`, so the upload reads from there although CI builds into `target/ci`.
 
 Every tier runs against a checkout at the same container path the suite was compiled from, so fixtures referenced through `env!("CARGO_MANIFEST_DIR")` resolve.
 
