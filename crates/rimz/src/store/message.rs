@@ -1081,8 +1081,9 @@ impl MessageRecord {
     }
 
     /// The first premise `row`, the receiver's live row, shows broken, as the withdrawal reason:
-    /// a lifespan past `now`, a prompt later than the sender's copy, a turn edge after an idle
-    /// compaction's decision, or a compaction continue its row no longer owes. The harness
+    /// a lifespan past `now`, a compaction command the row has compacted since it was queued, a
+    /// prompt later than the sender's copy, a turn edge after an idle compaction's decision, or a
+    /// compaction continue its row no longer owes. The harness
     /// subjects (`about_run`, a fleet digest's joins, a stage visit) are judged on the
     /// `message` side, which calls this first.
     pub(crate) fn broken_row_premise(
@@ -1099,6 +1100,13 @@ impl MessageRecord {
             return Some("compaction continue cleared before delivery".to_owned());
         }
         let row = row?;
+        if self.body == MessageBody::Command
+            && row
+                .compacted_at
+                .is_some_and(|compacted_at| compacted_at > self.enqueued_at)
+        {
+            return Some("agent compacted before this compaction was typed".to_owned());
+        }
         if row.ended_at.is_none() && self.idle_compaction_lapsed(row) {
             return Some("agent took a turn after this idle compaction was queued".to_owned());
         }
@@ -1200,6 +1208,7 @@ impl MessageRecord {
             || self.idle_since.is_some()
             || self.about_run.is_some()
             || self.soft_compact == Some(SoftCompactStep::Continue)
+            || self.body == MessageBody::Command
             || matches!(&self.sender, MessageSender::Harness { notice } if notice.awaits_join())
     }
 

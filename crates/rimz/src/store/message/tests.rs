@@ -3142,7 +3142,14 @@ fn row_premises_break_on_lifespan_prompt_idle_turn_and_cleared_continue() {
         compactions: Some(1),
         continue_owed: None,
     });
-    let cases: [(&MessageRecord, Option<AgentState>, Timestamp, Option<&str>); 14] = [
+    let mut compact = plain.clone().with_body(MessageBody::Command);
+    compact.enqueued_at = at;
+    let compacted = |stamp: Option<Timestamp>| {
+        let mut row = receiver.clone();
+        row.compacted_at = stamp;
+        row
+    };
+    let cases: [(&MessageRecord, Option<AgentState>, Timestamp, Option<&str>); 18] = [
         (&plain, Some(prompted(Some(later))), later, None),
         (&lifespan, Some(receiver.clone()), at, None),
         (
@@ -3192,6 +3199,15 @@ fn row_premises_break_on_lifespan_prompt_idle_turn_and_cleared_continue() {
             later,
             Some("compaction continue cleared before delivery"),
         ),
+        (&compact, Some(compacted(None)), later, None),
+        (&compact, Some(compacted(Some(at))), later, None),
+        (
+            &compact,
+            Some(compacted(Some(later))),
+            later,
+            Some("agent compacted before this compaction was typed"),
+        ),
+        (&plain, Some(compacted(Some(later))), later, None),
     ];
     let actual = cases
         .iter()

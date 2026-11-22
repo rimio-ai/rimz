@@ -801,6 +801,86 @@ fn owed_continue_survives_a_harness_notice_and_is_withdrawn_with_an_unsent_comma
     );
 }
 
+/// A compaction the agent ran itself inside its open turn reaches the goal of the command
+/// still queued for it and of the continue behind it: both are withdrawn, neither typed.
+#[test]
+fn a_queued_compaction_and_its_continue_are_withdrawn_once_the_agent_compacts_on_its_own() {
+    let fixture = Fixture::new("claude");
+    fixture.compact(&[]);
+    let (command, continuation) = fixture.command_and_continue();
+    fixture.lifecycle(LifecycleSignal::Compacting);
+    fixture.lifecycle(LifecycleSignal::CompactionEnded {
+        auto: Some(true),
+        failed: false,
+    });
+    fixture.context(20_000);
+    fixture.end_turn();
+    for id in [&command.message_id, &continuation.message_id] {
+        if fixture.status_of(id) == MessageStatus::Queued {
+            fixture.deliver(id);
+        }
+    }
+    fixture.assert_canceled_with(
+        &command.message_id,
+        "agent compacted before this compaction was typed",
+    );
+    fixture.assert_canceled_with(
+        &continuation.message_id,
+        "compaction continue cleared before delivery",
+    );
+    let trace = fixture.trace();
+    assert!(
+        !trace
+            .iter()
+            .any(|line| is_compact_command(line) || is_paste(line, "keep going")),
+        "{trace:?}"
+    );
+}
+
+/// A continue, joined to its command or queued with it, is withdrawn once a delivered prompt
+/// starts a turn after the compaction; a keepalive ping is not the agent working.
+#[test]
+fn a_turn_started_after_the_compaction_withdraws_its_continue_and_a_keepalive_does_not() {
+    for keepalive in [false, true] {
+        let fixture = Fixture::new("claude");
+        fixture.compact(&["--no-continue"]);
+        fixture.compact(&[]);
+        let (command, continuation) = fixture.command_and_continue();
+        fixture.end_turn();
+        fixture.deliver(&command.message_id);
+        fixture.lifecycle(LifecycleSignal::Compacting);
+        fixture.lifecycle(compaction_end());
+        fixture.context(20_000);
+        let prompt = if keepalive {
+            "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nKeep warm."
+        } else {
+            "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nthe review is in"
+        };
+        fixture.lifecycle_with_prompt(LifecycleSignal::TurnStarted { turn_id: None }, prompt);
+        fixture.end_turn();
+        if fixture.status_of(&continuation.message_id) == MessageStatus::Queued {
+            fixture.deliver(&continuation.message_id);
+        }
+        let pastes = fixture
+            .trace()
+            .iter()
+            .filter(|line| is_paste(line, "keep going"))
+            .count();
+        if keepalive {
+            assert_eq!(
+                (fixture.status_of(&continuation.message_id), pastes),
+                (MessageStatus::Sent, 1)
+            );
+        } else {
+            fixture.assert_canceled_with(
+                &continuation.message_id,
+                "compaction continue cleared before delivery",
+            );
+            assert_eq!(pastes, 0);
+        }
+    }
+}
+
 #[test]
 fn supervised_run_parks_until_the_compaction_continue_turn_finishes() {
     use rimz::harness::run;

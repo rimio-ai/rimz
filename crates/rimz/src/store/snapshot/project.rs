@@ -1018,6 +1018,7 @@ fn carried_base(
         state.tune.clone_from(&prior.tune);
         state.usage = prior.usage.clone();
         state.compaction_count = prior.compaction_count;
+        state.compacted_at = prior.compacted_at;
         state.soft_compact = prior.soft_compact.clone();
         state.tool_calls = prior.tool_calls.clone();
         state.background_shells = prior.background_shells.clone();
@@ -1642,11 +1643,18 @@ fn fold_lifecycle(
     if turn_started && !keepalive_turn {
         state.last_prompt_at = Some(timestamp);
     }
-    // A turn the user opened takes over from the compaction's owed continue; a harness
-    // notice landing first leaves it owed.
+    // A turn the user opened takes over from the compaction's owed continue, and so does any
+    // turn that starts after a compaction that followed the continue's enqueue: the agent is
+    // working again. A harness notice landing before that compaction leaves it owed.
+    let compacted_since_owed = state
+        .soft_compact
+        .as_ref()
+        .and_then(|mark| mark.continue_owed.as_ref())
+        .zip(state.compacted_at)
+        .is_some_and(|(owed, compacted_at)| compacted_at > owed.queued_at);
     if turn_started
         && !keepalive_turn
-        && !harness_prompt
+        && (!harness_prompt || compacted_since_owed)
         && !matches!(kind, lifecycle::TransitionKind::Ignored { .. })
     {
         clear_owed_continue(state);
@@ -1739,6 +1747,18 @@ fn fold_lifecycle(
     state.compaction_retired = retires_usage
         || (already_retired
             && matches!(signal, lifecycle::LifecycleSignal::CompactionEnded { .. }));
+    if retires_usage {
+        state.compacted_at = Some(timestamp);
+        // An automatic compaction that ends inside the open turn leaves the agent working on by
+        // itself: the continue owed from before it has nothing left to bring about.
+        let automatic = matches!(
+            signal,
+            lifecycle::LifecycleSignal::CompactionEnded { auto, .. } if auto != Some(false)
+        );
+        if automatic && matches!(next.status, AgentStatus::Running | AgentStatus::Waiting) {
+            clear_owed_continue(state);
+        }
+    }
     retires_usage
 }
 
