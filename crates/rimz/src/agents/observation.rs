@@ -557,6 +557,8 @@ pub struct AgentLifecycleObservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_screen: Option<bool>,
     /// `Some(true)` reports current state through `Registered` or `TurnStarted`, not an edge.
+    /// A snapshot `TurnStarted` with a prompt reports one the agent took in mid-turn: it
+    /// confirms the matching sent message without opening a turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_snapshot: Option<bool>,
     /// Agent-supplied session/process identifier (e.g. Claude `session_id`,
