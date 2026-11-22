@@ -40,6 +40,9 @@ pub(super) struct LaunchReminders {
     /// The launch argument, as `(flag, value)`, that switches the handed-over
     /// server off, so the launch serves none of its tools.
     pub mcp_switched_off: Option<(String, String)>,
+    /// The launch directory as the agent sees it, on a kind whose provider starts RimZ's
+    /// server itself and takes the launch's selection from its env.
+    pub mcp_cwd: Option<PathBuf>,
     /// Room-root write grants; absent in preflight compiles.
     pub permission_roots: Option<[PathBuf; 3]>,
     /// The canonical automation and team notes runs; empty in preflight compiles.
@@ -83,6 +86,7 @@ impl Default for LaunchReminders {
             routine_rimz: None,
             mcp_server: None,
             mcp_switched_off: None,
+            mcp_cwd: None,
             permission_roots: None,
             notes_runs: Vec::new(),
             notes_store: None,
@@ -109,18 +113,45 @@ impl LaunchReminders {
         crate::config::mcp_capabilities(request.mcps.as_deref())
     }
 
+    /// The variables that hand the launch's selection to a server its provider starts itself
+    /// (`crate::mcp::launch_env`); `None` when the launch serves nothing that way.
+    pub(super) fn mcp_launch_env(
+        &self,
+        request: &ExecRequest,
+    ) -> Option<[(&'static str, String); 2]> {
+        use crate::mcp::launch_env;
+        let cwd = self.mcp_cwd.as_ref()?;
+        let served = self.mcp_capabilities(request);
+        if served.is_empty() {
+            return None;
+        }
+        let marks: Vec<_> = crate::config::served_marks(request.mcps.as_deref())
+            .into_iter()
+            .filter(|(capability, _)| served.contains(capability))
+            .collect();
+        Some([
+            (launch_env::ENV_SERVE, launch_env::render(&marks)),
+            (launch_env::ENV_CWD, cwd.display().to_string()),
+        ])
+    }
+
     /// The `lsp` tool of RimZ's MCP server is live for the launch.
     pub(super) fn lsp_tool(&self, request: &ExecRequest) -> bool {
         self.mcp_capabilities(request).contains(&Capability::Lsp)
     }
 
     /// The rimz skills hidden from the model because the launch registers the
-    /// MCP tools of the same name; none on a kind whose tools arrive after the
-    /// first turn, where the skill is the way in on that turn.
+    /// MCP tools of the same name: none where the launch cannot withhold a skill,
+    /// on the host of a kind with no per-launch skill switch.
     pub(super) fn hidden_skills(&self, request: &ExecRequest) -> Vec<&'static str> {
-        if crate::agents::find_definition(request.kind.as_str())
-            .is_some_and(|adapter| !adapter.mcp_tools_on_first_turn())
-        {
+        let withholds = self.sandbox
+            || crate::agents::find_definition(request.kind.as_str()).is_some_and(|adapter| {
+                matches!(
+                    adapter.spec().host_skills,
+                    crate::agents::skills::HostSkills::Switch { .. }
+                )
+            });
+        if !withholds {
             return Vec::new();
         }
         self.mcp_capabilities(request)
@@ -207,13 +238,14 @@ pub(super) fn render(
     } else {
         &[]
     };
-    let lsp_via = if reminders.lsp_tool(request)
-        && (reminders.hidden_skills(request).contains(&"rimz-lsp")
-            || !skill_is_callable(reminders.callable_skills(request).as_deref(), "rimz-lsp"))
-    {
-        "via the `lsp` tool of the `rimz` MCP server"
+    let lsp_via = if reminders.lsp_tool(request) {
+        let server = crate::agents::find_definition(request.kind.as_str())
+            .map_or(crate::mcp::catalog::SERVER_NAME, |adapter| {
+                adapter.mcp_server_name()
+            });
+        format!("via the `lsp` tool of the `{server}` MCP server")
     } else {
-        "via Skill(rimz-lsp)"
+        "via Skill(rimz-lsp)".to_owned()
     };
     if reminders.env
         || !lsp_servers.is_empty()
@@ -224,7 +256,7 @@ pub(super) fn render(
     {
         paragraphs.push(env_paragraph(
             reminders,
-            (lsp_servers, lsp_via),
+            (lsp_servers, &lsp_via),
             reminders.env.then_some(shell).flatten(),
             cwd,
             team_context.as_ref(),

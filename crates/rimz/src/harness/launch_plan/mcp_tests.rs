@@ -50,6 +50,10 @@ impl Room {
     }
 
     fn compile(&self, machine: &str, request: &ExecRequest) -> LaunchPlan {
+        self.compile_at(machine, request, Isolation::Host)
+    }
+
+    fn compile_at(&self, machine: &str, request: &ExecRequest, isolation: Isolation) -> LaunchPlan {
         let machine: crate::config::MachineConfig = toml::from_str(machine).unwrap();
         let effective = crate::config::effective::load_with_roots(
             &machine,
@@ -69,7 +73,7 @@ impl Room {
             machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
-            isolation: Isolation::Host,
+            isolation,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &self.ambient,
@@ -418,12 +422,17 @@ fn other_kinds_get_no_entry_and_a_warning_for_a_list() {
     }
 }
 
-/// Antigravity takes the server and the list through the agent file a fresh launch with a
-/// system prompt writes, never through argv; a launch that writes no file hands over no
-/// server and warns nothing, and its conversation keeps the servers it started with.
+/// Antigravity takes RimZ's server from the plugin's entry, so every launch that serves sets
+/// `RIMZ_MCP_SERVE` and `RIMZ_MCP_CWD`, a fresh launch with or without a system prompt and
+/// a resume alike, and its agent file carries only the list over the user's servers. A launch
+/// that serves nothing, on any provider, removes and unsets both even when its caller's
+/// environment carries them.
 #[test]
-fn antigravity_writes_the_server_and_the_list_into_its_agent_file() {
-    let room = Room::new();
+fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_servers() {
+    let mut room = Room::new();
+    room.ambient
+        .insert("RIMZ_MCP_SERVE".into(), "rimz-notes:always".into());
+    room.ambient.insert("RIMZ_MCP_CWD".into(), "/caller".into());
     let prompted = |mut request: ExecRequest| {
         request.system_prompt_file = Some(crate::config::PromptSource::Text {
             origin: room.project.path().join("antigravity.md"),
@@ -448,17 +457,33 @@ fn antigravity_writes_the_server_and_the_list_into_its_agent_file() {
         let argv = &plan.process().provider_argv;
         assert!(!argv.iter().any(|arg| arg.contains("mcp")), "{argv:?}");
     };
-    let rimz = r#"{"name": "rimz", "command": "/bin/rimz", "args": ["mcp", "serve"#;
+    let cwd = room.project.path().display().to_string();
+    let serves = |plan: &LaunchPlan, value: &str| {
+        let process = plan.process();
+        assert_eq!(
+            process.env.get("RIMZ_MCP_SERVE").map(String::as_str),
+            Some(value)
+        );
+        assert_eq!(process.env.get("RIMZ_MCP_CWD"), Some(&cwd));
+        assert!(!process.unset.contains("RIMZ_MCP_SERVE"));
+        assert!(!process.unset.contains("RIMZ_MCP_CWD"));
+    };
+    let serves_nothing = |plan: &LaunchPlan| {
+        let process = plan.process();
+        for key in ["RIMZ_MCP_SERVE", "RIMZ_MCP_CWD"] {
+            assert!(!process.env.contains_key(key), "{key}: {:?}", process.env);
+            assert!(process.unset.contains(key), "{key}: {:?}", process.unset);
+        }
+    };
+    let all = "rimz-lsp,rimz-wait,rimz-control,rimz-notes";
 
     let limited = prompted(launch("antigravity", Some(&["rimz-lsp", "github"]), &[]));
     let plan = room.compile(&switches(true, true), &limited);
     assert_eq!(
         mcp_lines(&plan),
-        [
-            "inheritMcp: false".to_owned(),
-            format!(r#"mcpServers: [{rimz}", "--only", "rimz-lsp"]}}, {{"name": "github"}}]"#),
-        ]
+        ["inheritMcp: false", r#"mcpServers: [{"name": "github"}]"#]
     );
+    serves(&plan, "rimz-lsp");
     assert_eq!(
         plan.mcp_capabilities,
         [crate::mcp::catalog::Capability::Lsp]
@@ -470,13 +495,8 @@ fn antigravity_writes_the_server_and_the_list_into_its_agent_file() {
         &switches(true, true),
         &prompted(launch("antigravity", None, &[])),
     );
-    assert_eq!(
-        mcp_lines(&plan),
-        [
-            "inheritMcp: true".to_owned(),
-            format!(r#"mcpServers: [{rimz}"]}}]"#),
-        ]
-    );
+    assert_eq!(mcp_lines(&plan), Vec::<String>::new());
+    serves(&plan, all);
     assert_eq!(
         plan.mcp_capabilities,
         crate::mcp::catalog::Capability::ALL.to_vec()
@@ -488,33 +508,26 @@ fn antigravity_writes_the_server_and_the_list_into_its_agent_file() {
         ["inheritMcp: false", r#"mcpServers: [{"name": "github"}]"#]
     );
     assert!(plan.mcp_capabilities.is_empty());
+    serves_nothing(&plan);
 
-    // A capability's own mark wins over the `rimz` mark, which agy, having no server-level
-    // key, takes as a flag for every other served capability. A marked user server warns
-    // and keeps its name-only item.
+    // A capability's own mark wins over the `rimz` mark, which every other served capability
+    // takes. A marked user server warns and keeps its name-only item.
     let marked = prompted(launch(
         "antigravity",
         Some(&["rimz:deferred", "rimz-lsp:always", "github:always"]),
         &[],
     ));
+    let marks = "rimz-lsp:always,rimz-wait:deferred,rimz-control:deferred,rimz-notes:deferred";
     let plan = room.compile(&switches(true, true), &marked);
-    assert_eq!(
-        mcp_lines(&plan),
-        [
-            "inheritMcp: false".to_owned(),
-            format!(
-                r#"mcpServers: [{rimz}", "--always", "rimz-lsp", "--deferred", "rimz-wait", "--deferred", "rimz-control", "--deferred", "rimz-notes"]}}, {{"name": "github"}}]"#
-            ),
-        ]
-    );
-    let github = "the mcps entry `github:always` is not applied: Antigravity takes a load mode only for RimZ's capabilities";
-    assert_eq!(mcps_warnings(&plan), [github]);
-    assert_eq!(plan.process().mcp_warnings, [github]);
-    let plan = room.compile(&switches(true, false), &marked);
     assert_eq!(
         mcp_lines(&plan),
         ["inheritMcp: false", r#"mcpServers: [{"name": "github"}]"#]
     );
+    serves(&plan, marks);
+    let github = "the mcps entry `github:always` is not applied: Antigravity takes a load mode only for RimZ's capabilities";
+    assert_eq!(mcps_warnings(&plan), [github]);
+    assert_eq!(plan.process().mcp_warnings, [github]);
+    let plan = room.compile(&switches(true, false), &marked);
     assert_eq!(
         mcps_warnings(&plan),
         [
@@ -523,6 +536,7 @@ fn antigravity_writes_the_server_and_the_list_into_its_agent_file() {
             github,
         ]
     );
+    serves_nothing(&plan);
 
     let mut resumed = marked.clone();
     resumed.action = ExecAction::Resume {
@@ -531,16 +545,36 @@ fn antigravity_writes_the_server_and_the_list_into_its_agent_file() {
     };
     let plan = room.compile(&switches(true, true), &resumed);
     assert_eq!(plan.agent_file, None);
-    assert!(plan.mcp_capabilities.is_empty());
-    assert_eq!(mcps_warnings(&plan), Vec::<String>::new());
+    serves(&plan, marks);
+    assert_eq!(
+        plan.mcp_capabilities,
+        crate::mcp::catalog::Capability::ALL.to_vec()
+    );
     no_mcp_argv(&plan);
 
-    for mcps in [None, Some(&["*"][..]), Some(&["*", "rimz-lsp:always"])] {
+    for (mcps, value) in [
+        (None, all),
+        (Some(&["*"][..]), all),
+        (
+            Some(&["*", "rimz-lsp:always"]),
+            "rimz-lsp:always,rimz-wait,rimz-control,rimz-notes",
+        ),
+    ] {
         let plan = room.compile(&switches(true, true), &launch("antigravity", mcps, &[]));
         assert_eq!(plan.agent_file, None);
-        assert!(plan.mcp_capabilities.is_empty(), "{mcps:?}");
+        serves(&plan, value);
         assert_eq!(mcps_warnings(&plan), Vec::<String>::new());
         no_mcp_argv(&plan);
+    }
+
+    let plan = room.compile(
+        &switches(true, true),
+        &launch("antigravity", Some(&[]), &[]),
+    );
+    serves_nothing(&plan);
+    for kind in ["claude", "codex", "opencode"] {
+        let plan = room.compile(&switches(true, true), &launch(kind, None, &[]));
+        serves_nothing(&plan);
     }
 }
 
@@ -776,22 +810,35 @@ fn a_kind_without_mcp_servers_takes_a_bare_star_silently() {
 /// A launch that registers a capability's tools hides the rimz skill of the
 /// same name from the model, on Claude and Codex, with a profile list and
 /// without one; a launch that registers nothing hides nothing.
-/// Antigravity binds an inline server's tools only from the second TUI turn, so serving a
-/// capability hides no skill there: the skill is the agent's way in on the first turn.
+/// Antigravity hides the skills of the capabilities it serves only in the scoped view, on a
+/// launch with no agent file and on a resume too: on the host agy has no per-launch skill
+/// switch, so the launch hides none and reports none hidden.
 #[test]
-fn antigravity_serves_its_capabilities_and_hides_no_skill() {
+fn antigravity_hides_the_skills_of_the_capabilities_it_serves_only_when_scoped() {
     let room = Room::new();
-    let mut request = launch("antigravity", None, &[]);
-    request.system_prompt_file = Some(crate::config::PromptSource::Text {
-        origin: room.project.path().join("antigravity.md"),
-        text: "Base.\n".to_owned(),
-    });
-    let plan = room.compile(&switches(true, true), &request);
+    let mut request = launch("antigravity", Some(&["rimz-lsp", "rimz-wait"]), &[]);
+    let hidden = |request: &ExecRequest, tools: bool, isolation| {
+        room.compile_at(&switches(true, tools), request, isolation)
+            .hidden_skills
+    };
     assert_eq!(
-        plan.mcp_capabilities,
-        crate::mcp::catalog::Capability::ALL.to_vec()
+        hidden(&request, true, Isolation::Scoped),
+        ["rimz-lsp", "rimz-wait"]
     );
-    assert_eq!(plan.hidden_skills, Vec::<&str>::new());
+    assert_eq!(hidden(&request, true, Isolation::Host), Vec::<&str>::new());
+    request.action = ExecAction::Resume {
+        session_id: "conversation".to_owned(),
+        extra_args: Vec::new(),
+    };
+    assert_eq!(
+        hidden(&request, true, Isolation::Scoped),
+        ["rimz-lsp", "rimz-wait"]
+    );
+    assert_eq!(hidden(&request, true, Isolation::Host), Vec::<&str>::new());
+    assert_eq!(
+        hidden(&request, false, Isolation::Scoped),
+        Vec::<&str>::new()
+    );
 }
 
 #[test]
@@ -872,4 +919,50 @@ fn a_registered_capability_hides_its_skill_from_the_host_view() {
         }
     }
     assert_eq!(actual, expected);
+}
+
+/// agy reads its own server's tools under the adapter's name, and an `allowed-tools` launch
+/// that serves them allows them while the routine switch is on. A launch with no list, or a
+/// list agy cannot read a rule of, emits none, so the account's saved allows stay in force.
+#[test]
+fn an_antigravity_allow_list_carries_the_served_tools_while_routine_is_on() {
+    let room = Room::new();
+    let allow = |routine: bool, mcps: Option<&[&str]>, rules: Option<&[&str]>| {
+        let mut request = launch("antigravity", mcps, &[]);
+        request.allowed_tools =
+            rules.map(|rules| rules.iter().map(|rule| rule.parse().unwrap()).collect());
+        let plan = room.compile(&switches(routine, true), &request);
+        flag_values(&plan.process().provider_argv, "--settings")
+            .last()
+            .map(|value| serde_json::from_str::<serde_json::Value>(value).unwrap())
+            .and_then(|settings| settings.pointer("/permissions/allow").cloned())
+    };
+    let read = Some(&["Read"][..]);
+    assert_eq!(
+        allow(true, None, read),
+        Some(serde_json::json!(["read_file(*)", "mcp(rimz_tools/*)"]))
+    );
+    assert_eq!(
+        allow(
+            true,
+            Some(&["rimz-lsp", "github"]),
+            Some(&["Read", "mcp__github"])
+        ),
+        Some(serde_json::json!([
+            "read_file(*)",
+            "mcp(github/*)",
+            "mcp(rimz_tools/*)"
+        ]))
+    );
+    assert_eq!(
+        allow(false, None, read),
+        Some(serde_json::json!(["read_file(*)"]))
+    );
+    assert_eq!(
+        allow(true, Some(&[]), read),
+        Some(serde_json::json!(["read_file(*)"]))
+    );
+    assert_eq!(allow(true, None, None), None);
+    assert_eq!(allow(true, None, Some(&["Glob"])), None);
+    assert_eq!(allow(true, None, Some(&[])), None);
 }

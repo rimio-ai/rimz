@@ -200,20 +200,21 @@ fn lsp_bullet_names_the_mcp_tool_when_live_and_the_skill_when_only_it_is_callabl
         }
     }
     let tool = Some("- lsp: rust, via the `lsp` tool of the `rimz` MCP server".to_owned());
+    let agy_tool =
+        Some("- lsp: rust, via the `lsp` tool of the `rimz_tools` MCP server".to_owned());
     let skill = Some("- lsp: rust, via Skill(rimz-lsp)".to_owned());
-    // Antigravity keeps the skill beside its late-bound tool, so the bullet names the skill
-    // while it is callable.
+    // Antigravity knows the server by the plugin's name for it.
     assert_eq!(
         actual,
         [
             ("claude", false, true, skill.clone()),
             ("claude", false, false, None),
             ("claude", true, true, tool.clone()),
-            ("claude", true, false, tool.clone()),
-            ("antigravity", false, true, skill.clone()),
+            ("claude", true, false, tool),
+            ("antigravity", false, true, skill),
             ("antigravity", false, false, None),
-            ("antigravity", true, true, skill),
-            ("antigravity", true, false, tool),
+            ("antigravity", true, true, agy_tool.clone()),
+            ("antigravity", true, false, agy_tool),
         ]
     );
 }

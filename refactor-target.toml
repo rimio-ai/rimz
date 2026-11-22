@@ -443,13 +443,17 @@ upward-dependencies = ["address"]
 # launch's own arguments switch RimZ's MCP server off (+1).
 # keeps_model decides whether an agent: kind keeps a model whose id routes elsewhere (+1).
 # pinned_definition_defaults keeps a cataloged name's effort over a pin to an unlisted id (+1).
-# LaunchCapability::mcp_tools_on_first_turn: an adapter whose served tools arrive after the
-# first turn keeps the matching rimz skills (+1).
+# LaunchCapability::serves_mcp_from_launch_env and mcp_server_name: an adapter whose provider
+# starts RimZ's server from its own config takes the launch's selection from the launch env,
+# under the name the provider gives it (+2).
+# ManagedIntegration::shipped_mcp_server with ShippedMcpServer and ShippedMcpState let doctor
+# read RimZ's server from the provider config an integration ships it in (+3, less the deleted
+# mcp_tools_on_first_turn).
 # Whether a kind's prompt rides an agent file is read by plan, launch_plan and explain (+1).
 # HookCapability::queued_hook_payload lets the feed queue a payload cut of unread tool output (+1).
 # AddedDirs and ToolRules::untranslated let launch, validate and supervised readers agree on
 # added-dir and tool-rule handling across kinds (+2).
-surface-budget = 1325
+surface-budget = 1328
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -1198,7 +1202,8 @@ upward-dependencies = [
 # RemoteConfig carries the laptop's `[remote]` paste settings to `remote connect` (+1).
 # mcps_limit tells both MCP adapters whether a profile's `mcps` list limits the launch (+1).
 # The [harness.auto_redeem] table exports its config, level, and resolved policy to every ladder reader.
-surface-budget = 302
+# served_marks gives the launch env and explain each served capability's load mark (+1).
+surface-budget = 303
 
 [[verdict]]
 kind = "item"
@@ -5696,6 +5701,8 @@ allowed-dependencies = [
     "harness::spec",
     "harness::team_prompt",
     "ids",
+    # The provider-env compiler sets or clears the launch's MCP selection variables.
+    "mcp::launch_env",
     "proc",
     "sandbox",
     "trust",

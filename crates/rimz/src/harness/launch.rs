@@ -1276,10 +1276,20 @@ fn compile_agent_process_with_extra_env(
         )?;
     }
     if let (Some(rules), Some((artifact_dir, _))) = (&request.allowed_tools, &reminders.settings)
-        && let crate::agents::skills::ToolRules::Settings { render, .. } = adapter.spec().tool_rules
+        && let crate::agents::skills::ToolRules::Settings { render, translate } =
+            adapter.spec().tool_rules
     {
+        // A list the provider reads replaces the account's saved allows, the install's rule for
+        // the tools of a provider-started server among them, so it carries that rule while
+        // routine is on. A list it reads none of emits nothing and leaves the saved allows.
+        let served_rule = (reminders.routine_rimz.is_some()
+            && reminders.mcp_launch_env(request).is_some()
+            && rules.iter().any(|rule| translate(rule).is_some()))
+        .then(|| format!("mcp__{}", crate::mcp::catalog::SERVER_NAME))
+        .and_then(|rule| rule.parse::<crate::config::ToolRule>().ok());
+        let rules: Vec<_> = rules.iter().cloned().chain(served_rule).collect();
         render(
-            rules,
+            &rules,
             (cwd, artifact_dir),
             action.extra_args_mut(),
             &mut settings_artifact,
@@ -1432,6 +1442,24 @@ fn compile_agent_process_with_extra_env(
         if absent {
             env.remove(key);
             unset.insert(key.to_owned());
+        }
+    }
+    // A launch hands its own MCP selection to a provider-started server, never its caller's.
+    match reminders.mcp_launch_env(request) {
+        Some(vars) => {
+            for (key, value) in vars {
+                unset.remove(key);
+                env.insert(key.to_owned(), value);
+            }
+        }
+        None => {
+            for key in [
+                crate::mcp::launch_env::ENV_SERVE,
+                crate::mcp::launch_env::ENV_CWD,
+            ] {
+                env.remove(key);
+                unset.insert(key.to_owned());
+            }
         }
     }
     let mut mcp_warnings = Vec::new();

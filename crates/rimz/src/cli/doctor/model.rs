@@ -48,6 +48,7 @@ pub(super) struct DoctorReport {
     pub(super) hooks: Vec<HookRow>,
     pub(super) prompt_cache_fallback: PromptCacheFallback,
     pub(super) soft_compact_skips: Vec<SoftCompactSkipRow>,
+    pub(super) mcp_servers: Vec<McpServerRow>,
     pub(super) accounts: Probe<Accounts>,
     pub(super) plugins: Vec<PluginRow>,
     pub(super) loop_tasks: LoopTasks,
@@ -630,6 +631,19 @@ pub(super) struct PromptCacheFallback {
 pub(super) struct SoftCompactSkipRow {
     pub(super) kind: String,
     pub(super) reason: rimz::agents::SoftCompactSkip,
+}
+
+/// RimZ's MCP server as a detected provider's own config ships it.
+#[derive(Debug, Serialize)]
+pub(super) struct McpServerRow {
+    pub(super) kind: String,
+    /// The name the provider knows the server by.
+    pub(super) name: &'static str,
+    pub(super) config: PathBuf,
+    /// `current`, `missing`, `drifted`, or `disabled`.
+    pub(super) status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) fix: Option<String>,
 }
 
 /// One adapter's RimZ-hook wiring state, with the fix to advance it.

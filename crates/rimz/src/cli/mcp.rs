@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
 use rimz::mcp::catalog::{Capability, LoadMode, Tool, tools_for, tools_list};
+use rimz::mcp::launch_env;
 use rimz::mcp::wording::Wording;
 
 use crate::cli::render::{self, Table, cell};
@@ -34,6 +35,10 @@ enum McpSubcmd {
         /// server's own, for a provider that starts the server with a reduced one.
         #[arg(long)]
         parent_env: bool,
+        /// Serve what the launch names in RIMZ_MCP_SERVE, running each one-shot in
+        /// RIMZ_MCP_CWD, for a provider that starts one fixed server for every session.
+        #[arg(long, conflicts_with_all = ["only", "always", "deferred"])]
+        launch_env: bool,
     },
     /// List the tools the server offers, each with its estimated size in tokens.
     Tools {
@@ -53,6 +58,11 @@ The provider starts it over stdio, so there is nothing to serve here.
 To see its tools and their sizes: rimz mcp tools
 To see what one launch passes it and the text of each tool: rimz agents explain <profile> --mcps";
 
+/// What `serve --launch-env` writes before it exits when the launch serves nothing. agy shows
+/// it in `/mcp` as the server's error.
+const NOTHING_SERVED: &str = "rimz mcp serve: RimZ serves no tools in this session, as expected \
+in an Antigravity session RimZ did not launch or a launch whose profile serves none";
+
 pub fn run(args: McpArgs) -> Result<()> {
     match args.command {
         McpSubcmd::Serve { .. } if std::io::stdin().is_terminal() => {
@@ -63,7 +73,29 @@ pub fn run(args: McpArgs) -> Result<()> {
             always,
             deferred,
             parent_env,
+            launch_env,
         } => {
+            if launch_env {
+                let Some(selection) = launch_env::read(|name| std::env::var(name).ok())
+                    .context("rimz mcp serve --launch-env")?
+                else {
+                    return render::finish(writeln!(render::err(), "{NOTHING_SERVED}"));
+                };
+                let (only, modes): (Vec<Capability>, Vec<(Capability, LoadMode)>) = (
+                    selection
+                        .served
+                        .iter()
+                        .map(|(capability, _)| *capability)
+                        .collect(),
+                    selection
+                        .served
+                        .iter()
+                        .filter_map(|(capability, mode)| Some((*capability, (*mode)?)))
+                        .collect(),
+                );
+                return rimz::mcp::serve(&only, &modes, parent_env, selection.cwd)
+                    .context("rimz mcp serve");
+            }
             if let Some(both) = always
                 .iter()
                 .find(|capability| deferred.contains(capability))
@@ -82,7 +114,7 @@ pub fn run(args: McpArgs) -> Result<()> {
                         .map(|capability| (capability, LoadMode::Deferred)),
                 )
                 .collect();
-            rimz::mcp::serve(&only, &modes, parent_env).context("rimz mcp serve")
+            rimz::mcp::serve(&only, &modes, parent_env, None).context("rimz mcp serve")
         }
         McpSubcmd::Tools { only, json } => {
             let wording = Wording::read_home();

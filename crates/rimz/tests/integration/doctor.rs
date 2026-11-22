@@ -446,6 +446,67 @@ fn doctor_reports_installed_but_disabled_copilot_hooks() {
     assert!(rendered.contains("installed, disabled"), "{rendered}");
 }
 
+/// The shipped-server rows come from each detected kind's installed server file: agy's plugin
+/// `mcp_config.json` reads current, then drifted, missing, and disabled by its `config.json`.
+#[test]
+fn doctor_reports_the_shipped_antigravity_mcp_server() {
+    let env = Env::new();
+    let bin = crate::common::write_failing_agent_shim(&env, "agy", 0);
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let install = env
+        .rimz()
+        .args(["hooks", "install", "antigravity"])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(install.status.success(), "{install:?}");
+    let config = env.home_root.join(".gemini/config");
+    let server = config.join("plugins/rimz/mcp_config.json");
+    let row = || {
+        let report = doctor_json(
+            &env.rimz()
+                .args(["doctor", "--json"])
+                .env("PATH", &path)
+                .output()
+                .unwrap(),
+        );
+        let rows = report["mcp_servers"].as_array().unwrap().clone();
+        let mut rows = rows.into_iter().filter(|row| row["kind"] == "antigravity");
+        let row = rows.next().expect("an antigravity row");
+        assert!(rows.next().is_none(), "one row per kind");
+        row
+    };
+    let fix = json!("run `rimz hooks install antigravity`");
+    let current = row();
+    assert_eq!(current["status"], "current", "{current}");
+    assert_eq!(current["config"], json!(server), "{current}");
+    assert!(current.get("fix").is_none(), "{current}");
+    std::fs::write(&server, r#"{"mcpServers": {}}"#).unwrap();
+    let drifted = row();
+    assert_eq!(
+        (&drifted["status"], &drifted["fix"]),
+        (&json!("drifted"), &fix)
+    );
+    std::fs::remove_file(&server).unwrap();
+    let missing = row();
+    assert_eq!(
+        (&missing["status"], &missing["fix"]),
+        (&json!("missing"), &fix)
+    );
+    env.install_agent_hooks("antigravity");
+    std::fs::write(
+        config.join("config.json"),
+        r#"{"plugins": {"rimz": {"enabled": false}}}"#,
+    )
+    .unwrap();
+    let disabled = row();
+    assert_eq!(disabled["status"], "disabled", "{disabled}");
+}
+
 #[test]
 fn doctor_reports_saved_untrusted_without_a_grant_fix() {
     let env = Env::new();

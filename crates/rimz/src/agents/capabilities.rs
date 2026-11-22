@@ -682,7 +682,8 @@ pub trait LaunchCapability: CoreCapability {
 
     /// Whether a launch hands this agent RimZ's MCP server and applies a
     /// profile's `mcps` list. A kind whose system prompt rides an agent file
-    /// takes both only in that file, so only on a launch that writes one.
+    /// takes a limiting list only in that file, so only on a launch that writes
+    /// one, and the server there too unless it serves from the launch env.
     fn takes_mcp_servers(&self) -> bool {
         false
     }
@@ -697,11 +698,16 @@ pub trait LaunchCapability: CoreCapability {
         None
     }
 
-    /// Whether a handed-over server's tools are there from the conversation's first turn. A
-    /// kind whose tools arrive later keeps the skills of the capabilities it serves, so the
-    /// agent can reach them on that turn.
-    fn mcp_tools_on_first_turn(&self) -> bool {
-        true
+    /// Whether this agent starts RimZ's MCP server from a fixed entry of its own, which
+    /// takes each launch's selection from the launch env (`crates/rimz/src/mcp/launch_env.rs`),
+    /// instead of an entry the launch passes it.
+    fn serves_mcp_from_launch_env(&self) -> bool {
+        false
+    }
+
+    /// The name this agent knows RimZ's MCP server by, in its tool names and permission rules.
+    fn mcp_server_name(&self) -> &'static str {
+        crate::mcp::catalog::SERVER_NAME
     }
 
     /// Register RimZ's MCP server and keep only the user's servers a `mcps`

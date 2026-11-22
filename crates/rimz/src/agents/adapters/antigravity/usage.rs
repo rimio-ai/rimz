@@ -141,17 +141,7 @@ pub(super) fn run(binary: Option<PathBuf>, login_home: Option<&str>, deadline: D
     let Some(binary) = binary else {
         return Read::Failed(AccountProbeError::SpawnFailed);
     };
-    let mut command = Command::new(binary);
-    command
-        .args(ARGS)
-        .env(SSH_SESSION_VAR, SSH_SESSION_VALUE)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    if let Some(home) = login_home {
-        command.env("HOME", home);
-    }
+    let mut command = command(binary, login_home);
     let observed_at = Timestamp::now();
     crate::proc::testkit::count_spawn();
     let Ok(child) = command.spawn() else {
@@ -169,6 +159,25 @@ pub(super) fn run(binary: Option<PathBuf>, login_home: Option<&str>, deadline: D
         return Read::Failed(AccountProbeError::TimedOut);
     }
     classify(output.status.code(), &output.stdout, observed_at)
+}
+
+/// The read's child. agy starts the rimz plugin's MCP server for this print run too, so the
+/// child drops the selection of any launch the read runs inside.
+pub(super) fn command(binary: PathBuf, login_home: Option<&str>) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .args(ARGS)
+        .env(SSH_SESSION_VAR, SSH_SESSION_VALUE)
+        .env_remove(crate::mcp::launch_env::ENV_SERVE)
+        .env_remove(crate::mcp::launch_env::ENV_CWD)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    if let Some(home) = login_home {
+        command.env("HOME", home);
+    }
+    command
 }
 
 #[derive(Deserialize)]

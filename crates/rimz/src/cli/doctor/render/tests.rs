@@ -857,6 +857,7 @@ fn report_fixture() -> DoctorReport {
             kinds: Vec::new(),
         },
         soft_compact_skips: Vec::new(),
+        mcp_servers: Vec::new(),
         accounts: Probe::Ready(Accounts { rows: Vec::new() }),
         plugins: Vec::new(),
         loop_tasks: LoopTasks {
@@ -1404,6 +1405,43 @@ fn soft_compact_skips_are_json_and_uncounted_context_only_when_detected() {
     assert_eq!(
         serde_json::to_value(&report).unwrap()["soft_compact_skips"],
         serde_json::json!([{"kind": "amp", "reason": "no_compact_command"}])
+    );
+    assert!(tally.warns.is_empty() && tally.alarms.is_empty());
+}
+
+#[test]
+fn a_shipped_mcp_server_is_json_and_an_uncounted_note() {
+    let mut report = report_fixture();
+    let mut tally = Tally::default();
+    assert!(!strip(|w| render_hooks(w, &report, &mut tally)).contains("MCP server"));
+    report.mcp_servers = vec![
+        super::super::model::McpServerRow {
+            kind: "antigravity".into(),
+            name: "rimz_tools",
+            config: "/h/.gemini/config/plugins/rimz/mcp_config.json".into(),
+            status: "current",
+            fix: None,
+        },
+        super::super::model::McpServerRow {
+            kind: "antigravity".into(),
+            name: "rimz_tools",
+            config: "/g/mcp_config.json".into(),
+            status: "missing",
+            fix: Some("run `rimz hooks install antigravity`".into()),
+        },
+    ];
+    let text = strip(|w| render_hooks(w, &report, &mut tally));
+    for expected in [
+        "antigravity: RimZ's MCP server ships as `rimz_tools` in /h/.gemini/config/plugins/rimz/mcp_config.json\n",
+        "antigravity: RimZ's MCP server `rimz_tools` is missing in /g/mcp_config.json\n      run `rimz hooks install antigravity`\n",
+    ] {
+        assert!(text.contains(expected), "missing {expected}:\n{text}");
+    }
+    assert_eq!(
+        serde_json::to_value(&report).unwrap()["mcp_servers"][1],
+        serde_json::json!({"kind": "antigravity", "name": "rimz_tools",
+            "config": "/g/mcp_config.json", "status": "missing",
+            "fix": "run `rimz hooks install antigravity`"})
     );
     assert!(tally.warns.is_empty() && tally.alarms.is_empty());
 }

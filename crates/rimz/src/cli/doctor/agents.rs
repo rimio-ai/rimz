@@ -1051,6 +1051,37 @@ pub(super) fn collect_soft_compact_skips(
     rows
 }
 
+pub(super) fn collect_mcp_servers(hooks: &[HookRow]) -> Vec<super::model::McpServerRow> {
+    use rimz::agents::ShippedMcpState;
+
+    let login_env = rimz::agents::ambient_env();
+    hooks
+        .iter()
+        .filter(|row| row.detected)
+        .filter_map(|row| {
+            let server = rimz::agents::find_definition(&row.kind)?
+                .managed_integration()?
+                .shipped_mcp_server(&login_env)?;
+            let install = format!("run `rimz hooks install {}`", row.kind);
+            let (status, fix) = match server.state {
+                ShippedMcpState::Current => ("current", None),
+                ShippedMcpState::Missing => ("missing", Some(install)),
+                ShippedMcpState::Drifted => ("drifted", Some(install)),
+                ShippedMcpState::Disabled { reason, fix } => {
+                    ("disabled", Some(format!("{reason}; run `{fix}`")))
+                }
+            };
+            Some(super::model::McpServerRow {
+                kind: row.kind.clone(),
+                name: server.name,
+                config: server.config,
+                status,
+                fix,
+            })
+        })
+        .collect()
+}
+
 pub(super) fn collect_plugins() -> Vec<PluginRow> {
     rimz::agents::plugins::loaded()
         .diagnostics

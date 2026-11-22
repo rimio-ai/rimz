@@ -305,6 +305,57 @@ fn antigravity_windows_come_from_one_usage_print_per_list() {
 }
 
 #[test]
+fn an_antigravity_plugin_without_its_server_file_is_missing_hooks_until_reinstalled() {
+    let env = Env::new();
+    crate::common::write_path_shim(&provider_bin(&env), "agy", "exit 1");
+    let install = || {
+        succeeded(
+            &hermetic(&env, &mut env.rimz())
+                .args(["hooks", "install", "antigravity"])
+                .output()
+                .unwrap(),
+        )
+    };
+    let agy_row = || {
+        let rows: Value =
+            serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| {
+                row["account"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("antigravity"))
+            })
+            .cloned()
+            .unwrap_or_else(|| panic!("no antigravity row in {rows}"))
+    };
+    install();
+    let server_file = env
+        .home_root
+        .join(".gemini/config/plugins/rimz/mcp_config.json");
+    assert!(server_file.is_file());
+    assert_ne!(agy_row()["status"], "hooks_missing");
+    for stale in [None, Some("{}")] {
+        match stale {
+            None => std::fs::remove_file(&server_file).unwrap(),
+            Some(bytes) => std::fs::write(&server_file, bytes).unwrap(),
+        }
+        let row = agy_row();
+        assert_eq!(row["status"], "hooks_missing", "{stale:?}: {row}");
+        let problem = row["problem"].as_str().unwrap_or_default();
+        assert!(
+            problem.starts_with("RimZ hooks are missing for antigravity account `default` at `")
+                && problem.ends_with("`; run `rimz hooks install antigravity`"),
+            "{stale:?}: {problem}"
+        );
+        install();
+        let row = agy_row();
+        assert_ne!(row["status"], "hooks_missing", "{stale:?}: {row}");
+    }
+}
+
+#[test]
 fn single_markers_disappear_but_filtered_multi_account_markers_remain() {
     let env = Env::new();
     crate::common::write_path_shim(
