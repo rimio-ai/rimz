@@ -4,6 +4,7 @@ use clap::Parser;
 use jiff::Timestamp;
 
 use super::*;
+use rimz::launcher::stop::prepare_children_for_stop;
 
 fn address_context() -> rimz::address::AddressContext {
     rimz::address::AddressContext {

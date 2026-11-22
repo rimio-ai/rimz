@@ -171,7 +171,7 @@ pub(super) fn stop(
     let mut failed = false;
     for (agent, stop) in cohort.members.iter().copied().zip(stops) {
         let label = rimz::address::agent_handle(agent, &peers, true);
-        failed |= stop.report(&mut out, &label)?;
+        failed |= agents_cmd::report_stop(&stop, &mut out, &label)?;
     }
     if failed {
         std::process::exit(1);

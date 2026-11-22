@@ -2981,7 +2981,9 @@ path = "crates/rimz/src/launcher"
 # agent_pane::open_writer hands the commands that type the writer of the pane the lookup answers (+1).
 # trust::TrustRefusal with detail and clearable, and trust::workflow_start_problems (+4).
 # `@me` resolution and its refusal move from the CLI so the MCP self tools resolve the caller (+2).
-surface-budget = 108
+# The agent tree stop, its run lookups, and the subagent stop move out of the CLI so the MCP
+# stop ends what an agent started in process (+24).
+surface-budget = 132
 
 [[verdict]]
 kind = "item"
@@ -5208,6 +5210,7 @@ path = "crates/rimz/src/cli/supervised"
 # Placement, binding and selection now belong to the library launcher (-7).
 # The run_exit_policy re-export moves to harness::plan (-1).
 # STOP_BACKSTOP_GRACE and stamp_stopped_subagent_end serve the agent stop's live lookup (+2).
+# stamp_stopped_subagent_end moves with the tree stop to launcher::stop (-1).
 surface-budget = 33
 
 [[module]]
@@ -5227,7 +5230,9 @@ path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # Command::is_launch, check_loop_launch and cohort_place_flag let `loop add` check an agent or team tail through the launch's own parser (+3).
 # stop_run_agent stops a run's agent for `loop stop`, the workflow host and the run-id stop (+1).
 # TabClose is the tab close a sidebar card key sets on StopTerms (+1).
-surface-budget = 36
+# The tree stop moved to launcher::stop: report_stop renders a member's stop for teams and
+# subagents, and stop_room hands the subagent stop its room (+2).
+surface-budget = 38
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"

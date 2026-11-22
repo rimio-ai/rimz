@@ -1068,56 +1068,30 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
     if children.is_empty() {
         bail!("this agent has no live subagents to stop");
     }
-    let runs = rimz::harness::run::list(ctx.store.paths())?;
     let peers = rimz::address::addressable_agents(&snapshot);
+    let mut notices = Vec::new();
+    let stopped = rimz::launcher::stop::stop_subagents(
+        agents_cmd::stop_room(&ctx, globals),
+        &snapshot,
+        children,
+        &mut notices,
+    );
+    render::room::print_notices(notices)?;
+    let stopped = stopped?;
     let mut out = render::out();
-    // Prepare the whole fleet before any cancellation wakes a child reporter.
-    let (children, errors) =
-        prepare_children_for_stop(&ctx.store, &ctx.workspace.session_name, &runs, children);
-    let mut failed = !errors.is_empty();
-    for (child, err) in errors {
+    let mut failed = !stopped.unsettled.is_empty();
+    for (child, err) in stopped.unsettled {
         let label = rimz::address::agent_handle(child, &peers, true);
         writeln!(out, "error {label}: {err:#}")?;
     }
-    let stops = agents_cmd::stop_resolved(&ctx, globals, &snapshot, &children)?;
-    for (child, stop) in children.into_iter().zip(stops) {
+    for (child, stop) in stopped.stops {
         let label = rimz::address::agent_handle(child, &peers, true);
-        failed |= stop.report(&mut out, &label)?;
+        failed |= agents_cmd::report_stop(&stop, &mut out, &label)?;
     }
     if failed {
         std::process::exit(1);
     }
     Ok(())
-}
-
-fn prepare_children_for_stop<'a>(
-    store: &rimz::Store,
-    session_name: &str,
-    runs: &[rimz::store::run::RunRecord],
-    children: Vec<&'a AgentState>,
-) -> (
-    Vec<&'a AgentState>,
-    Vec<(&'a AgentState, rimz::store::StoreErr)>,
-) {
-    let mut prepared = Vec::with_capacity(children.len());
-    let mut errors = Vec::new();
-    for child in children {
-        let Some(run) = newest_run_for_child(runs, child) else {
-            prepared.push(child);
-            continue;
-        };
-        match rimz::harness::run::report::join_and_settle_digest(
-            store,
-            session_name,
-            &run.run_id,
-            None,
-            "stopped by parent",
-        ) {
-            Ok(()) => prepared.push(child),
-            Err(err) => errors.push((child, err)),
-        }
-    }
-    (prepared, errors)
 }
 
 fn resolve_child_names<'a>(

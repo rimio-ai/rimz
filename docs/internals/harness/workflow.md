@@ -639,11 +639,11 @@ At the project root, owned nested worktrees are excluded. A step with a `worktre
 
 Eviction is part of the launch (`StepLaunch.evict`). The CLI host prepares the launch first, so a launch its preparation refuses (a saved-untrusted folder, untrusted hooks) stops no one. Then `crates/rimz/src/cli/workflow/host.rs::Host::evict` reads the checkout again, even when the first read found it free, and finds it free only by a read taken after the last stop it issued:
 
-1. A read that finds settled occupants stops them through `agents_cmd::stop_resolved`, and reads again. This repeats up to `EVICT_STOP_ROUNDS` (3) rounds, so an occupant that arrived while the launch was prepared is stopped too.
+1. A read that finds settled occupants stops them through `launcher::stop::stop_resolved`, and reads again. This repeats up to `EVICT_STOP_ROUNDS` (3) rounds, so an occupant that arrived while the launch was prepared is stopped too.
 2. A read that finds any other occupancy (a working occupant), or occupants still there once the rounds are spent, returns that occupancy. The engine takes back the attempt and the visit it counted (`Transition::withdraw_attempt`) and waits `takeover` or `occupied` as the first read would, with no failure and no strike.
 3. A free read executes the prepared launch.
 
-`crates/rimz/src/cli/agents_cmd/stop.rs::stop_resolved` attempts the whole set, waits for the closed rows' processes, sends SIGTERM to eligible survivors, and waits again (`Stopper::judge`). An occupant counts as stopped only when a read after those waits finds no pane hosting it and its process gone. A failed close with no hosting pane counts as stopped when a fresh read finds the owner `Dead`, or `Unknown` with an end stamp or a failed unbound launch (`stop::unhosted_verdict`). [Stopping an agent tree](./fleet.md#stopping-an-agent-tree) owns the cascade. Any other failed stop fails the eviction, and the step launches nothing.
+`crates/rimz/src/launcher/stop.rs::stop_resolved` attempts the whole set, waits for the closed rows' processes, sends SIGTERM to eligible survivors, and waits again (`Stopper::judge`). An occupant counts as stopped only when a read after those waits finds no pane hosting it and its process gone. A failed close with no hosting pane counts as stopped when a fresh read finds the owner `Dead`, or `Unknown` with an end stamp or a failed unbound launch (`stop::unhosted_verdict`). [Stopping an agent tree](./fleet.md#stopping-an-agent-tree) owns the cascade. Any other failed stop fails the eviction, and the step launches nothing.
 
 Nothing makes the occupancy read and the pane closes atomic, which is why the host reads again after every stop round.
 

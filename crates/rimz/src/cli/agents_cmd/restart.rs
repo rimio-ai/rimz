@@ -1120,24 +1120,6 @@ fn handle(agent: &AgentState) -> String {
         .map_or_else(|| agent.agent_id.to_string(), |name| format!("@{name}"))
 }
 
-/// The newest supervised run recorded for `child`, the run the resume doorway reopens.
-pub(in crate::cli) fn newest_run_for_child<'a>(
-    runs: &'a [rimz::store::run::RunRecord],
-    child: &AgentState,
-) -> Option<&'a rimz::store::run::RunRecord> {
-    runs.iter()
-        .filter(|run| {
-            run.kind == child.kind
-                && (run.agent_id.as_ref() == Some(&child.agent_id)
-                    || run
-                        .agent_name
-                        .as_ref()
-                        .zip(child.name.as_ref())
-                        .is_some_and(|(run, child)| run == child))
-        })
-        .max_by_key(|run| run.started_at)
-}
-
 /// The open workflow session run `agent` leads. A restart or molt hands it to the replacement,
 /// so only the agent's holder session settles it, and a replaced session's exit never does.
 pub(super) fn open_session_run<'a>(
