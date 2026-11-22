@@ -49,11 +49,11 @@ fn capability_names_round_trip_and_become_only_arguments() {
     let names = |only: &[Capability]| tools_for(only).map(|tool| tool.name).collect::<Vec<_>>();
     assert_eq!(
         names(&[Capability::Wait]),
-        ["wait", "wait_list", "wait_cancel", "guide"]
+        ["wait", "tasks", "join", "stop", "guide"]
     );
     assert_eq!(
         names(&[Capability::Lsp, Capability::Notes]),
-        ["lsp", "notes_add", "notes_list"]
+        ["lsp", "notes"]
     );
     assert_eq!(tools_for(&[]).count(), TOOLS.len());
     assert_eq!(served_groups(&[]), Capability::ALL);
@@ -86,10 +86,21 @@ fn calls_carry_their_arguments_as_data() {
     assert_eq!(wait.trigger, WaitTrigger::Run);
     assert_eq!(wait.value, "--version; echo $(id)");
     assert_eq!(wait.check_in.as_deref(), Some("5m"));
-    let Call::WaitCancel(cancel) = call("wait_cancel", json!({"name": "--all"})) else {
-        panic!("a wait_cancel call");
+    let Call::Stop(stop) = call("stop", json!({"id": "--all"})) else {
+        panic!("a stop call");
     };
-    assert_eq!((cancel.name.as_deref(), cancel.all), (Some("--all"), false));
+    assert_eq!(stop.id, "--all");
+    let Call::Join(join) = call("join", json!({"id": "wait:$(id)", "timeout": "-1s"})) else {
+        panic!("a join call");
+    };
+    assert_eq!(
+        (join.id.as_str(), join.timeout.as_deref()),
+        ("wait:$(id)", Some("-1s"))
+    );
+    let Call::Tasks(tasks) = call("tasks", json!({"kind": "schedule"})) else {
+        panic!("a tasks call");
+    };
+    assert_eq!(tasks.kind, Some(StartedKind::Schedule));
     let Call::SelfCompact(compact) = call(
         "self_compact",
         json!({"instruction": "-keep the plan", "no_continue": true}),
@@ -98,8 +109,8 @@ fn calls_carry_their_arguments_as_data() {
     };
     assert_eq!(compact.instruction.as_deref(), Some("-keep the plan"));
     assert!(compact.no_continue);
-    let Call::NotesAdd(note) = call(
-        "notes_add",
+    let Call::Notes(note) = call(
+        "notes",
         json!({
             "kind": "handoff",
             "title": "--force",
@@ -107,16 +118,11 @@ fn calls_carry_their_arguments_as_data() {
             "meta": {"ticket": "42"},
         }),
     ) else {
-        panic!("a notes_add call");
+        panic!("a notes call");
     };
     assert_eq!(note.title, "--force");
     assert_eq!(note.body.as_deref(), Some("say \"hi\"\n$(rm -rf /)\n"));
     assert_eq!(note.meta["ticket"], "42");
-    let Call::NotesList(list) = call("notes_list", json!({"filter": ["kind=handoff", "age<2d"]}))
-    else {
-        panic!("a notes_list call");
-    };
-    assert_eq!(list.filter, ["kind=handoff", "age<2d"]);
 }
 
 /// Every tool but `lsp` and `guide` answers data and lists the object
@@ -181,16 +187,14 @@ fn arguments_outside_the_schema_shape_are_refused() {
             "wait",
             json!({"trigger": "in", "value": "5m", "timeout": "5m"}),
         ),
-        ("wait_list", json!({"all": true})),
+        ("tasks", json!({"kind": "native"})),
+        ("tasks", json!({"all": true})),
+        ("join", json!({"timeout": "4m"})),
+        ("stop", json!({"id": "wait:a", "all": true})),
         ("self_tune", json!({"setting": "budget"})),
-        ("notes_add", json!({"kind": "log", "title": 7})),
-        ("notes_list", json!("kind=handoff")),
+        ("notes", json!({"kind": "log", "title": 7})),
         ("wait", json!({"trigger": "run", "value": "x", "on": "any"})),
-        (
-            "notes_add",
-            json!({"kind": "k", "title": "t", "cwd": "/src"}),
-        ),
-        ("notes_list", json!({"limit": 5})),
+        ("notes", json!({"kind": "k", "title": "t", "cwd": "/src"})),
         ("lsp", json!({"verb": "refs", "targets": []})),
         (
             "lsp",
@@ -274,7 +278,13 @@ fn the_text_fits_what_providers_keep() {
     assert_eq!(wording.breaches(), Vec::<String>::new());
     let instructions = wording.instructions(&Capability::ALL);
     let first = instructions.lines().next().unwrap_or_default();
-    for group in ["`lsp`", "`wait`", "`notes_", "`self_*` when the user asks"] {
+    for group in [
+        "`lsp`",
+        "`wait`",
+        "`tasks`, `join`, and `stop`",
+        "`notes`",
+        "`self_tune` to",
+    ] {
         assert!(first.contains(group), "{group} missing from {first:?}");
     }
     for tool in TOOLS
@@ -308,11 +318,11 @@ fn the_full_listing_is_the_served_text() {
     assert!(text.contains(&instructions), "{text}");
     let first = instructions.lines().next().unwrap();
     assert!(
-        first.contains("`lsp`") && first.contains("`self_*`"),
+        first.contains("`lsp`") && first.contains("`self_stop`"),
         "{first}"
     );
     assert!(
-        !first.contains("`wait`") && !first.contains("`notes_"),
+        !first.contains("`wait`") && !first.contains("`notes`"),
         "{first}"
     );
     assert!(!text.contains("only some of these tools"), "{text}");
@@ -387,11 +397,11 @@ fn ambiguous_tune_and_note_arguments_are_refused() {
     for (name, arguments) in [
         ("self_tune", json!({"value": "budget"})),
         (
-            "notes_add",
+            "notes",
             json!({"kind": "k", "title": "t", "body": "b", "file": "/f"}),
         ),
         (
-            "notes_add",
+            "notes",
             json!({"kind": "k", "title": "t", "meta": {"a=b": "c"}}),
         ),
     ] {
@@ -407,10 +417,7 @@ fn ambiguous_tune_and_note_arguments_are_refused() {
         (tune.setting, tune.value),
         (Some(TuneSetting::KeepWarm), None)
     );
-    for arguments in [json!({}), json!({"name": "w", "all": true})] {
-        assert!(
-            tool("wait_cancel").call(arguments.clone()).is_err(),
-            "{arguments}"
-        );
+    for arguments in [json!({}), json!({"id": "wait:w", "timeout": 5})] {
+        assert!(tool("join").call(arguments.clone()).is_err(), "{arguments}");
     }
 }

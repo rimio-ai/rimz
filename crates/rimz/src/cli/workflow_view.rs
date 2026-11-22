@@ -403,11 +403,7 @@ pub(super) fn with_you_suffix(
 
 /// The word a run's state is shown by: `tried` for a try that ended done, else the state's own.
 pub(super) fn state_word(state: RunState, ending: Option<&RunEnding>) -> &'static str {
-    if ending == Some(&RunEnding::Tried) {
-        "tried"
-    } else {
-        state.as_str()
-    }
+    rimz::store::workflow::state_word(state, ending)
 }
 
 /// The glyph of a run in a state that ends it; any other state reads as failed.

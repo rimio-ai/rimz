@@ -31,9 +31,12 @@ pub(super) fn stop(tools: &Tools, args: &SelfStopArgs) -> Result<Answer, Failure
         resolve_caller(&room.store)
     })?;
     let started = matches!(booking, StopBooking::Booked { .. }).then(|| {
-        started(&room, agent).unwrap_or_else(|err| StartedRead::Unread {
-            unread: format!("{err:#}"),
-        })
+        started(&room, agent).map_or_else(
+            |err| StartedRead::Unread {
+                unread: format!("{err:#}"),
+            },
+            StartedRead::Read,
+        )
     });
     Ok(Answer::data(&Stop { booking, started }))
 }
@@ -60,7 +63,7 @@ enum StartedRead {
 
 /// What `agent` started, read from the room snapshot the sidebar published, as
 /// `rimz agents stop @me --when-idle` reads it for its receipt.
-fn started(room: &Room, agent: &AgentState) -> anyhow::Result<StartedRead> {
+pub(super) fn started(room: &Room, agent: &AgentState) -> anyhow::Result<Started> {
     let booked = room.published_snapshot()?;
     let shown = session_row(&booked.agents, agent).context("the agent left the room snapshot")?;
     let reader = current_channel(&room.workspace, Some(&room.store)).address_context();
@@ -70,15 +73,13 @@ fn started(room: &Room, agent: &AgentState) -> anyhow::Result<StartedRead> {
         you: true,
         rimz: "rimz",
     };
-    Ok(StartedRead::Read(
-        crate::harness::idle_stop::started::started(
-            &room.store,
-            &booked,
-            shown,
-            &seat,
-            booked.now,
-        )?,
-    ))
+    Ok(crate::harness::idle_stop::started::started(
+        &room.store,
+        &booked,
+        shown,
+        &seat,
+        booked.now,
+    )?)
 }
 
 pub(super) fn compact(tools: &Tools, args: &SelfCompactArgs) -> Result<Answer, Failure> {

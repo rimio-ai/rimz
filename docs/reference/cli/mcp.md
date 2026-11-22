@@ -17,21 +17,23 @@ rimz mcp serve --launch-env [--parent-env]
 
 ## Tools
 
-Each tool call but `guide`'s does the job of one `rimz` command, inside the server, as the agent that started the server, in that agent's home and room, and answers with what the job returns ([calls](#calls)). A capability shares its name with the skill that teaches the same commands, a launch that serves the capability withholds that skill from the model, on Antigravity only under scoped isolation ([configuration](../../guide/configuration.md#rimz-tools-over-mcp)), and its tools' descriptions carry that skill's usage knowledge for the options the tools expose: the `lsp` target forms and result cap, the `wait` triggers, the `notes_list` filter fields, and when to book a stop. Material few calls need is a guide the agent loads on demand: the `wait` description points to `rimz-wait/conditions`, the `when` condition grammar. The server's `instructions` say, on their first line, when to reach for each capability the launch serves, then how a call runs. `rimz agents explain <profile> --mcps` prints all of that text as one launch is served it.
+Each tool call but `guide`'s does the job of one `rimz` command, inside the server, as the agent that started the server, in that agent's home and room, and answers with what the job returns ([calls](#calls)). A capability shares its name with the skill that teaches the same commands, a launch that serves the capability withholds that skill from the model, on Antigravity only under scoped isolation ([configuration](../../guide/configuration.md#rimz-tools-over-mcp)), and its tools' descriptions carry that skill's usage knowledge for the options the tools expose: the `lsp` target forms and result cap, the `wait` triggers, the `tasks`, `join`, and `stop` id forms, and when to book a stop. Material few calls need is a guide the agent loads on demand: the `wait` description points to `rimz-wait/conditions`, the `when` condition grammar. The server's `instructions` name, on their first line, each tool the launch serves with what it is for, a line RimZ builds from the served tools and no file replaces; then one line per served capability says when to reach for it, then how a call runs. `rimz agents explain <profile> --mcps` prints all of that text as one launch is served it.
 
 `guide` belongs to no capability. The server lists it when it serves a capability that has a guide (today only `rimz-wait`), gives it no load mode of its own, and answers a call itself: the text of the named guide, or, for a name of a guide the launch does not serve, an error result whose `error` is `no guide "<name>"` and whose `hint` is `this launch has: <names>`.
+
+`tasks`, `join`, and `stop` belong to no capability either. The server lists them when it serves `rimz-wait`, gives them no load mode of their own, and they act on what the agent started through RimZ, each named by an id `<kind>:<name>`: `subagent:` or `agent:` and the handle, `team:` and the team instance (`team#lane`), `workflow:` and the `wf_` run id, `schedule:` or `wait:` and the task name. `tasks` lists those ids. `stop` and `join` act on a thing the agent started, or that an agent it started started; any other id is refused. Cancelling a workflow run is the user's call, and the `stop` description says so.
 
 | Capability | Tool | Arguments | Command |
 | --- | --- | --- | --- |
 | `rimz-lsp` | `lsp` | `verb` (`def`, `hover`, `refs`, `callers`, `callees`, `impl`, `symbols`, `find`, `show`, `check`), `targets[]`; optional `all`, `no_tests`, `external`, `limit`, `full`, `fix`, `hints`, `server` (ignored by `check`), `cwd` | `rimz lsp <verb> [flags] -- <targets>` |
 | `rimz-wait` | `wait` | `trigger` (`run`, `check`, `file`, `pid`, `when`, `in`, `at`) and its `value`, a string; optional `grep`, `every`, `on` (`fail`, `success`), `label`, `check_in`, `cwd` | `rimz wait --<trigger>=<value> ...` |
-| `rimz-wait` | `wait_list` | none | `rimz wait list` |
-| `rimz-wait` | `wait_cancel` | `name`, or `all` | `rimz wait cancel -- <name>`, or `rimz wait cancel --all` |
+| - | `tasks` | optional `kind` (`subagent`, `agent`, `team`, `workflow`, `schedule`, `wait`) | The rows `rimz agents show -- @me` prints under what it started |
+| - | `join` | `id`; optional `timeout` (a duration, default `4m`, at most `9m`) | `rimz agents wait`, `rimz subagents wait`, `rimz teams wait`, or `rimz workflow wait`, by kind |
+| - | `stop` | `id` | `rimz agents stop`, `rimz subagents stop`, `rimz teams stop`, `rimz workflow cancel`, or `rimz wait cancel`, by kind; for a schedule, the removal of its booking |
 | `rimz-control` | `self_stop` | optional `when_idle` (a duration, or `off`) | `rimz agents stop --when-idle[=<value>] -- @me` |
 | `rimz-control` | `self_compact` | optional `instruction`, `no_continue` | `rimz agents compact [--no-continue] -- @me [instruction]` |
 | `rimz-control` | `self_tune` | optional `setting` (`keep-warm`, `idle-compact`, `smart-compact`), optional `value` (only with `setting`) | `rimz agents tune -- @me [setting] [value]` |
-| `rimz-notes` | `notes_add` | `kind`, `title`, and `body` or `file`, not both; optional `fence`, `meta{}` (keys without `=`) | `rimz notes add [flags] -- <kind> <title>` |
-| `rimz-notes` | `notes_list` | optional `filter[]` | `rimz notes list [flags]` |
+| `rimz-notes` | `notes` | `kind`, `title`, and `body` or `file`, not both; optional `fence`, `meta{}` (keys without `=`) | `rimz notes add [flags] -- <kind> <title>` |
 | - | `guide` | `name`, `<capability>/<guide>` | None: the server answers from the guide files it read at its start |
 
 ## List the tools
@@ -40,25 +42,25 @@ Each tool call but `guide`'s does the job of one `rimz` command, inside the serv
 rimz mcp tools [--only <capability>]... [--json]
 ```
 
-`rimz mcp tools` prints each tool the server offers with its capability (`-` for `guide`) and the estimated tokens of its `tools/list` entry (compact JSON, counted with the `o200k_base` tokenizer, so Claude's own count runs somewhat higher), then the total. That entry is what a provider puts in the agent's context for the tool when it loads it up front. `--only` takes the same values as `serve --only` and refuses any other the same way. `--json` prints the server's `tools/list` result for the same `--only`, unchanged. Both read the [replacement files](#replace-the-wording) as the server does, and print a warning on stderr for each one that is not used.
+`rimz mcp tools` prints each tool the server offers with its capability (`-` for `guide`, `tasks`, `join`, and `stop`) and the estimated tokens of its `tools/list` entry (compact JSON, counted with the `o200k_base` tokenizer, so Claude's own count runs somewhat higher), then the total. That entry is what a provider puts in the agent's context for the tool when it loads it up front. `--only` takes the same values as `serve --only` and refuses any other the same way. `--json` prints the server's `tools/list` result for the same `--only`, unchanged. Both read the [replacement files](#replace-the-wording) as the server does, and print a warning on stderr for each one that is not used.
 
 ```console
 $ rimz mcp tools
 CAPABILITY    TOOL          TOKENS
-rimz-lsp      lsp            ~1218
+rimz-lsp      lsp            ~1223
 rimz-wait     wait           ~1095
-rimz-wait     wait_list        ~77
-rimz-wait     wait_cancel     ~181
-rimz-control  self_stop       ~359
-rimz-control  self_compact    ~193
-rimz-control  self_tune       ~299
-rimz-notes    notes_add       ~463
-rimz-notes    notes_list      ~398
+-             tasks           ~371
+-             join            ~419
+-             stop            ~364
+rimz-control  self_stop       ~430
+rimz-control  self_compact    ~208
+rimz-control  self_tune       ~310
+rimz-notes    notes           ~464
 -             guide           ~120
-total: ~4403 tokens in 10 tools
+total: ~5004 tokens in 10 tools
 ```
 
-Every command a tool stands for is on the [routine list](../agent-support.md) an installed agent runs without asking, so a tool does nothing such an agent may not do unasked. The commands themselves are documented on their own pages: [Language servers](./lsp.md), [Wait](./wait.md), [Agents](./agents.md), and [Notes](./notes.md).
+Every command a tool stands for is on the [routine list](../agent-support.md) an installed agent runs without asking, so a tool does nothing such an agent may not do unasked, with one exception: a `stop` of a schedule removes its booking, which no routine command does, and runs unasked all the same. The commands themselves are documented on their own pages: [Language servers](./lsp.md), [Wait](./wait.md), [Agents](./agents.md), and [Notes](./notes.md).
 
 ## Replace the wording
 
@@ -66,9 +68,9 @@ Each text the server sends is a Markdown file built into `rimz`, and a file at t
 
 | Path under `~/.rimz/mcps/` | Text |
 | --- | --- |
-| `instructions.md` | The instructions after their first line: how a call runs and what its result holds |
+| `instructions.md` | The instructions' last part: how a call runs and what its result holds |
 | `guide.md` | The `guide` description |
-| `<capability>/instructions.md` | The capability's sentence on the instructions' first line, one line |
+| `<capability>/instructions.md` | The capability's line in the instructions, below the first line |
 | `<capability>/<tool>.md` | The tool's description (`rimz-wait/wait.md`) |
 | `<capability>/guides/<guide>.md` | A guide `guide` loads (`rimz-wait/guides/conditions.md`) |
 
@@ -78,7 +80,6 @@ A replacement never switches a tool off. RimZ serves the built-in text in its pl
 
 - a tool's description and its arguments' descriptions over 4,096 characters;
 - a capability's sentence on more than one line;
-- the instructions' first line, every capability's sentence joined, over 250 characters: each replaced sentence falls back;
 - the instructions with every capability over 4,096 characters: a replaced `instructions.md` falls back.
 
 The limits are checked with every capability, so a file passes or fails the same way in every launch. A `.md` file at any other path is ignored with a warning, which names the path it belongs at when exactly one built-in file has its name (`rimz-lsp/wait.md` belongs at `rimz-wait/wait.md`); a file cannot add a tool or a guide. Files that do not end in `.md` are not read.
@@ -87,13 +88,13 @@ A launch that hands the server over carries the warnings of the capabilities it 
 
 ## Calls
 
-- Each call but `guide`'s runs inside the server, on a thread of its own, through the library function its command calls. No `rimz` process starts for a call, except the watcher a `wait` detaches, as `rimz wait` does, and the language-server broker (`rimz lsp serve`) an `lsp` call starts again when the checkout's has died, as `rimz lsp` does. Every argument reaches that function as a value, so no string an agent passes is read as a flag.
+- Each call but `guide`'s runs inside the server, on a thread of its own, through the library function its command calls. No `rimz` process starts for a call, except the watcher a `wait` detaches, as `rimz wait` does, the language-server broker (`rimz lsp serve`) an `lsp` call starts again when the checkout's has died, as `rimz lsp` does, and what a `stop` of a workflow run starts as `rimz workflow cancel` does: the loop runs subscribed to the run's signals, the advance of the run whose `runs` step started it, and the next waiting fire of the schedule that fired it. Every argument reaches that function as a value, so no string an agent passes is read as a flag.
 - `cwd`, on `lsp` and `wait`, names the directory the call acts on, relative to the directory the agent launched in unless it is absolute; without it the call acts on that directory: the server's own directory, or on Antigravity, whose server runs in the plugin directory, `RIMZ_MCP_CWD`. A `cwd` that is not a directory returns an error result.
-- `lsp` answers the text `rimz lsp` prints, and `guide` the guide's text. Every other tool answers a JSON object in the shape of its `outputSchema`, as the result's `structuredContent` and, the same JSON, as its one text item: `wait` `{id, status, stop, report}` (`id` is `wait:<name>`, `status` is `running`, `stop` is the `wait_cancel` call that cancels it, and `report` says how its result arrives); `wait_list` `{waits}`; `wait_cancel` `{canceled, pending}`; `self_stop` `{booking}` (`withdrawn`, `none_pending`, or `booked` with `after_secs`, `replaces_after_secs`, and `started`, which holds the rows the command's receipt prints under `holding`, `closing`, and `outliving`: what holds the stop, what closes with the agent, and what outlives it, or `unread` with why they could not be read); `self_compact` `{message_id, status, continues}` (`status` is `sent`, `queued`, or `joined` when the call joined the compaction already queued for the agent, which `message_id` names); `self_tune` `{agent, settings}`, with `keep_warm_while` when one is set and `budget` when no setting is named; `notes_add` `{path, dropped_meta, unresolved_project}`; `notes_list` `{notes, hidden, unknown_keys, skipped}`, or `{fields, grammar}` for the filter `help`.
-- A call that cannot do its job returns an error result whose text is a JSON object `{"error": ..., "hint": ...}`, with `hint` only where RimZ knows the fix, and which carries the same object as `structuredContent`: arguments that do not fit, no room at the call's directory, a refusal of the job (a duration that does not parse, a `wait` `label` that is not one line of 1 to 60 characters, a `when` condition that cannot be read in the checkout), or an `lsp` call on one target that fails. A verdict is an answer, not a failure: an `lsp check` that flags anchors, `no results`, and a failed target among several `lsp` targets come back as text. `show` is stricter on one target: any outcome that shows no code is an error result, an unknown or ambiguous name included, which `def` answers as text; the candidates are in `error`.
-- The server checks the shape of the arguments (their types, required fields, and enum values), so a `wait` without its `trigger` or its `value` never runs. It also refuses what `rimz` would refuse in the command's flags: a `self_tune` `value` without a `setting`, a `notes_add` with both `body` and `file`, a `notes_add` `meta` key containing `=`, a `wait_cancel` with both `name` and `all`, or neither, and an `lsp` call with no `targets`, `hints` without `fix`, `limit` with `all`, a `limit` of 0, or a field the verb's command has no flag for (`all`, `limit`, and `external` off `refs`, `callers`, `callees`, `impl`, and `find`; `no_tests` off `refs` and `callers`; `full` off `show`; `fix` and `hints` off `check`). Such arguments return an error result whose `error` starts `invalid arguments:`, and nothing runs.
-- Calls run at the same time, so a later call can answer first. A cancelled call gets no reply, and its work runs to its end. A call that panics returns an error result, and the server goes on answering.
-- The server adds no timeout and no output cap.
+- `lsp` answers the text `rimz lsp` prints, and `guide` the guide's text. Every other tool answers a JSON object in the shape of its `outputSchema`, as the result's `structuredContent` and, the same JSON, as its one text item: `wait` `{id, status, stop, report}` (`id` is `wait:<name>`, `status` is `running`, `stop` is the `stop` call that cancels it, and `report` says how its result arrives); `tasks` `{tasks}`, a row per thing with `id`, `kind`, `status` (`running`, `done`, or `disabled`), `on_your_stop` (`holds`, `closes`, or `outlives`), and when known `age`, `about`, and `detail`; `join` `{id, status}` with `status` `done` and the `result` and any `detail` (for a workflow run, `result` is its notes path, absent when it has none, and `detail` its end state and checkout), `running` at its timeout or with a `report` for a schedule or a wait, whose outcome comes as a message, `disabled` for a schedule switched off, or `ended` with a `hint` for a wait, schedule, or team RimZ holds no record of; `stop` `{id, status}` with `status` `stopped`, plus `still_running`, a list that may be empty, of the ids a stopped schedule or workflow run leaves running, or `ended` for a thing that had ended, with a `hint` when RimZ holds no record of it; `self_stop` `{booking}` (`withdrawn`, `none_pending`, or `booked` with `after_secs`, `replaces_after_secs`, and `started`, which holds the rows the command's receipt prints under `holding`, `closing`, and `outliving`: what holds the stop, what closes with the agent, and what outlives it, or `unread` with why they could not be read); `self_compact` `{message_id, status, continues}` (`status` is `sent`, `queued`, or `joined` when the call joined the compaction already queued for the agent, which `message_id` names); `self_tune` `{agent, settings}`, with `keep_warm_while` when one is set and `budget` when no setting is named; `notes` `{path, dropped_meta, unresolved_project}`.
+- A call that cannot do its job returns an error result whose text is a JSON object `{"error": ..., "hint": ...}`, with `hint` only where RimZ knows the fix, and which carries the same object as `structuredContent`: arguments that do not fit, no room at the call's directory, a refusal of the job (an id that is not `<kind>:<name>`, a thing another agent started, a duration that does not parse, a `wait` `label` that is not one line of 1 to 60 characters, a `when` condition that cannot be read in the checkout), or an `lsp` call on one target that fails. A verdict is an answer, not a failure: an `lsp check` that flags anchors, `no results`, and a failed target among several `lsp` targets come back as text. `show` is stricter on one target: any outcome that shows no code is an error result, an unknown or ambiguous name included, which `def` answers as text; the candidates are in `error`.
+- The server checks the shape of the arguments (their types, required fields, and enum values), so a `wait` without its `trigger` or its `value` never runs. It also refuses what `rimz` would refuse in the command's flags: a `self_tune` `value` without a `setting`, a `notes` with both `body` and `file`, a `notes` `meta` key containing `=`, and an `lsp` call with no `targets`, `hints` without `fix`, `limit` with `all`, a `limit` of 0, or a field the verb's command has no flag for (`all`, `limit`, and `external` off `refs`, `callers`, `callees`, `impl`, and `find`; `no_tests` off `refs` and `callers`; `full` off `show`; `fix` and `hints` off `check`). Such arguments return an error result whose `error` starts `invalid arguments:`, and nothing runs.
+- Calls run at the same time, so a later call can answer first. A cancelled call gets no reply, and its work runs to its end, except a `join`, which stops waiting within half a second. A `join` that finds a message queued for the agent answers `running` with a hint to read it. A call that panics returns an error result, and the server goes on answering.
+- The server adds no timeout and no output cap beyond `join`'s own.
 
 ## Protocol
 
@@ -101,11 +102,11 @@ The server speaks newline-delimited JSON-RPC 2.0 on stdin and stdout, and writes
 
 | Method | Reply |
 | --- | --- |
-| `initialize` | The tools capability with `listChanged`, `serverInfo` named `rimz`, `instructions` whose first line says when to reach for each capability the server serves and whose other lines say how a call runs and what its result holds, and the client's protocol version when it is `2025-06-18` or `2025-11-25`, else `2025-11-25` |
+| `initialize` | The tools capability with `listChanged`, `serverInfo` named `rimz`, `instructions` whose first line names each served tool with what it is for, then a line per served capability saying when to reach for it, then how a call runs and what its result holds, and the client's protocol version when it is `2025-06-18` or `2025-11-25`, else `2025-11-25` |
 | `ping` | `{}` |
 | `tools/list` | The served tools, each with its JSON Schema, an `outputSchema` on each tool that answers data, and `_meta` on the tools of a capability `--always` or `--deferred` names |
 | `tools/call` | The call's result, which for `guide` the server writes itself; an unknown or unserved tool is error `-32602` |
-| `notifications/cancelled` | No reply; the named call gets no reply, and its work runs to its end |
+| `notifications/cancelled` | No reply; the named call gets no reply, and its work runs to its end, except a `join`'s, which stops waiting |
 | Any other request, `server/discover` included | Error `-32601` |
 
 A line that is not JSON gets error `-32700`, and the server goes on reading. The server exits 0 when stdin ends or on SIGINT or SIGTERM, and a call still running ends with it. A watcher that a `wait` call detached keeps running.

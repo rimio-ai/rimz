@@ -345,7 +345,8 @@ fn call(id: Value, mut params: Value, server: &Arc<Server>) {
         .spawn({
             let (id, server) = (id.clone(), Arc::clone(server));
             move || {
-                let answer = run_isolated(server.runner.as_ref(), call);
+                let cancelled = || !server.calls.answerable(seq);
+                let answer = run_isolated(server.runner.as_ref(), call, &cancelled);
                 if server.calls.answerable(seq) {
                     server.send_result(&id, tool_result(answer));
                 }
@@ -363,17 +364,16 @@ fn call(id: Value, mut params: Value, server: &Arc<Server>) {
 
 /// The answer `runner` gives `call`, or a failure when it panics, so one
 /// call's panic leaves the server and every other call running.
-fn run_isolated(runner: &dyn Runner, call: Call) -> Answer {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runner.run(call))).unwrap_or_else(
-        |panic| {
+fn run_isolated(runner: &dyn Runner, call: Call, cancelled: &dyn Fn() -> bool) -> Answer {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runner.run(call, cancelled)))
+        .unwrap_or_else(|panic| {
             let reason = panic
                 .downcast_ref::<&str>()
                 .map(|reason| (*reason).to_owned())
                 .or_else(|| panic.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "no message".to_owned());
             Answer::Failure(Failure::new(format!("the call panicked: {reason}")))
-        },
-    )
+        })
 }
 
 /// The answer to a `guide` call for the guide `name`.
@@ -468,8 +468,9 @@ impl Calls {
         self.lock().live.is_empty()
     }
 
-    /// Withhold the reply of the call `id` names; its work runs to its end,
-    /// since a thread cannot be stopped from outside.
+    /// Withhold the reply of the call `id` names; its work runs until it next
+    /// reads that it is cancelled, since a thread cannot be stopped from
+    /// outside.
     fn cancel(&self, id: &Value) {
         let mut state = self.lock();
         for call in state.live.values_mut().filter(|call| &call.id == id) {

@@ -1,1 +1,0 @@
-Drop one of your waits by name, as `wait_list` shows it, and stop the command its `run` or `check` started; a `pid` process keeps running. `all` drops every wait you armed. Cancel the waits finished work no longer needs: an armed wait holds a booked `self_stop`.

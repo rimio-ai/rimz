@@ -56,6 +56,29 @@ impl Room {
             )))
     }
 
+    /// The cached rollup with the daemon-mode reap applied, the roster a stop or join of the
+    /// command of the same job reads.
+    pub(super) fn alive_snapshot(&self) -> anyhow::Result<SidebarSnapshot> {
+        let base = self
+            .store
+            .snapshot_cached()
+            .context("reading agent snapshot")?;
+        Ok(crate::sidebar::consumer::cached_alive_snapshot(
+            base,
+            self.store.runtime_paths(),
+            &self.workspace.session_name,
+        ))
+    }
+
+    /// The room a stop acts in, on the backend the room's own pin names.
+    pub(super) fn stop_room(&self) -> crate::launcher::stop::StopRoom<'_> {
+        crate::launcher::stop::StopRoom {
+            workspace: &self.workspace,
+            store: &self.store,
+            mux: None,
+        }
+    }
+
     /// The room snapshot the sidebar host published.
     pub(super) fn published_snapshot(&self) -> anyhow::Result<SidebarSnapshot> {
         crate::sidebar::consumer::PublishedSnapshotReader::new(

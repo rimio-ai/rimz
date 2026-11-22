@@ -1210,7 +1210,8 @@ upward-dependencies = [
 # mcps_limit tells both MCP adapters whether a profile's `mcps` list limits the launch (+1).
 # The [harness.auto_redeem] table exports its config, level, and resolved policy to every ladder reader.
 # served_marks gives the launch env and explain each served capability's load mark (+1).
-surface-budget = 303
+# forget_loop_memos lets a loop.toml writer drop the memos of it in its own process (+1).
+surface-budget = 304
 
 [[verdict]]
 kind = "item"
@@ -4703,7 +4704,8 @@ path = "crates/rimz/src/store"
 # The open-runs listing serves harness::run's open team and peer run lookups (+1).
 # ingress::drain_lag and HookDrainLag carry the oldest unapplied hook frame to the sidebar fold (+2).
 # The hand-off compaction premise is judged by message::premise through the record.
-surface-budget = 690
+# store::workflow::state_word is the one state word of a workflow run, for the CLI and the MCP join.
+surface-budget = 691
 
 [[verdict]]
 kind = "item"

@@ -282,6 +282,17 @@ static LOAD_MEMO: OnceLock<Mutex<Option<LoadMemo>>> = OnceLock::new();
 static CORE_MEMO: OnceLock<Mutex<Option<FileMemo<CoreConfig>>>> = OnceLock::new();
 static LOOP_MEMO: OnceLock<Mutex<Option<FileMemo<LoopConfig>>>> = OnceLock::new();
 
+/// Drop the memos that hold `loop.toml`, the loop memo and the full machine load, so a read
+/// after this process's own write of it sees the write within their TTL too.
+pub(crate) fn forget_loop_memos() {
+    if let Ok(mut memo) = LOOP_MEMO.get_or_init(|| Mutex::new(None)).lock() {
+        *memo = None;
+    }
+    if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
+        *memo = None;
+    }
+}
+
 #[derive(Debug)]
 struct LoadMemo {
     stamp: ConfigStamp,

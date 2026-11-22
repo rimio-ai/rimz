@@ -1,7 +1,7 @@
 use serde_json::{Map, json};
 
 use super::*;
-use crate::mcp::catalog::{NotesListArgs, WaitListArgs};
+use crate::mcp::catalog::{StopArgs, TasksArgs};
 
 #[test]
 fn data_and_failures_repeat_their_json_as_text_and_text_stays_text() {
@@ -31,12 +31,12 @@ fn data_and_failures_repeat_their_json_as_text_and_text_stays_text() {
     );
 }
 
-/// Panics on a `wait_list` call and answers every other call.
+/// Panics on a `tasks` call and answers every other call.
 struct Flaky;
 
 impl Runner for Flaky {
-    fn run(&self, call: Call) -> Answer {
-        if let Call::WaitList(_) = call {
+    fn run(&self, call: Call, _cancelled: &dyn Fn() -> bool) -> Answer {
+        if let Call::Tasks(_) = call {
             panic!("boom");
         }
         Answer::data(&json!({"notes": []}))
@@ -47,7 +47,7 @@ impl Runner for Flaky {
 fn a_call_that_panics_answers_a_failure_and_the_next_call_succeeds() {
     let runner = Flaky;
     assert_eq!(
-        run_isolated(&runner, Call::WaitList(WaitListArgs {})),
+        run_isolated(&runner, Call::Tasks(TasksArgs { kind: None }), &|| false),
         Answer::Failure(Failure::new("the call panicked: boom"))
     );
     let mut notes = Map::new();
@@ -55,7 +55,10 @@ fn a_call_that_panics_answers_a_failure_and_the_next_call_succeeds() {
     assert_eq!(
         run_isolated(
             &runner,
-            Call::NotesList(NotesListArgs { filter: Vec::new() })
+            Call::Stop(StopArgs {
+                id: "wait:nightly".to_owned()
+            }),
+            &|| false
         ),
         Answer::Data(notes)
     );
