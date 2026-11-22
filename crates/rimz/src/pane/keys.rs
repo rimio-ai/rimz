@@ -80,6 +80,7 @@ named_keys! {
     CtrlA: "ctrl-a" | "control-a" | "c-a" => "C-a", b"\x01";
     CtrlE: "ctrl-e" | "control-e" | "c-e" => "C-e", b"\x05";
     CtrlL: "ctrl-l" | "control-l" | "c-l" => "C-l", b"\x0c";
+    AltM: "alt-m" | "meta-m" | "m-m" => "M-m", b"\x1bm";
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -95,6 +96,7 @@ mod tests {
         assert_eq!("Esc".parse::<NamedKey>().unwrap(), NamedKey::Escape);
         assert_eq!("ctrl_c".parse::<NamedKey>().unwrap(), NamedKey::CtrlC);
         assert_eq!("control+d".parse::<NamedKey>().unwrap(), NamedKey::CtrlD);
+        assert_eq!("Alt+M".parse::<NamedKey>().unwrap(), NamedKey::AltM);
 
         assert_eq!(NamedKey::Up.tmux_name(), "Up");
         assert_eq!(NamedKey::CtrlC.tmux_name(), "C-c");
@@ -116,6 +118,7 @@ mod tests {
             ("ctrl-a control-a c-a", "C-a", &b"\x01"[..]),
             ("ctrl-e control-e c-e", "C-e", &b"\x05"[..]),
             ("ctrl-l control-l c-l", "C-l", &b"\x0c"[..]),
+            ("alt-m meta-m m-m", "M-m", &b"\x1bm"[..]),
         ] {
             for name in names.split_whitespace() {
                 let key = name.parse::<NamedKey>();
@@ -135,7 +138,7 @@ mod tests {
             assert!(error.contains(name), "{name}: {error}");
             assert!(!key.tmux_name().is_empty() && !key.write_bytes().is_empty());
         }
-        for name in "enter escape tab shift-tab backspace up down left right ctrl-c ctrl-d ctrl-u space delete home end page-up page-down ctrl-a ctrl-e ctrl-l".split_whitespace() {
+        for name in "enter escape tab shift-tab backspace up down left right ctrl-c ctrl-d ctrl-u space delete home end page-up page-down ctrl-a ctrl-e ctrl-l alt-m".split_whitespace() {
             assert!(error.contains(name), "{name}: {error}");
         }
     }

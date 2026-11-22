@@ -78,7 +78,7 @@ fn send_help_explains_order_and_keys() {
         help.contains("rimz message") && help.contains("rimz answer"),
         "{help}"
     );
-    for key in "enter escape tab shift-tab backspace up down left right ctrl-c ctrl-d ctrl-u space delete home end page-up page-down ctrl-a ctrl-e ctrl-l".split_whitespace() {
+    for key in "enter escape tab shift-tab backspace up down left right ctrl-c ctrl-d ctrl-u space delete home end page-up page-down ctrl-a ctrl-e ctrl-l alt-m".split_whitespace() {
         assert!(help.contains(key), "{key}: {help}");
     }
     for key in NamedKey::NAMES {
