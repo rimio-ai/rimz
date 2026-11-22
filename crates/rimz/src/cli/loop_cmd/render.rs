@@ -1487,7 +1487,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             &specs,
             now_zoned.timestamp(),
         );
-        name_workflow_runs(&mut rows, &records, &root, globals);
+        name_workflow_runs(&mut rows, &records, &ended, &root, globals);
         // LAST RUN reads its run's checks and attempts from the journal.
         let detail = detail_index(&history.fires, history.quiet.as_ref())
             .and_then(|index| history.fires[index].run_id.as_deref());
@@ -1743,7 +1743,7 @@ fn write_verdict(
 ) -> std::io::Result<()> {
     let verdict = verdict_line(records, quiet, in_progress.is_some(), now)
         .map(|(verdict, style)| ui::paint(style, &verdict));
-    let stale = stale_clause(records, attribution, in_progress)
+    let stale = stale_clause(records, attribution, quiet, in_progress)
         .map(|clause| ui::paint(ui::palette::warn(), &clause));
     match (verdict, stale) {
         (Some(verdict), Some(stale)) => writeln!(out, "  {verdict} · {stale}")?,
@@ -1787,26 +1787,39 @@ fn is_refused_fire(record: &LoopRunRecord) -> bool {
     )
 }
 
+/// Where a refused at-lock fire is counted: on a row, nowhere because later evidence answers it
+/// (`Spent`), or as a fire nothing has answered (`Trailing`).
 #[derive(Clone, Copy)]
 enum FireAttribution {
     Trailing,
     Recorded(usize),
-    NoRecord(usize, RunLockInfo),
+    Spent,
 }
 
-/// Exact tenure joins span the window. Unmatched holders use checkout-local evidence within
-/// legacy record boundaries, so a later tenure cannot reach back past an unstamped run.
+/// Exact tenure joins span the window. A fire without a holder joins the row of the run its
+/// `blocking_run` names; with no such row it is spent once a later run of its checkout exists.
+/// A fire with neither falls back to its checkout's next run. Unmatched holders use
+/// checkout-local evidence within legacy record boundaries, so a later tenure cannot reach back
+/// past an unstamped run, and a holder that evidence proves gone leaves its fires spent.
 /// At-lock records with matched fires take their own row, not another record's fire count.
 /// Records are in append order; a run appends its terminal record before releasing its lock,
 /// so a fire refused in that gap follows its holder's record.
 fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
     let mut recorded_by_lock = BTreeMap::new();
+    let mut row_by_run = BTreeMap::new();
     let mut newest_by_checkout = BTreeMap::new();
     let mut newest_at_record = Vec::with_capacity(records.len());
     for (index, record) in records.iter().enumerate() {
         let checkout = record.checkout.as_deref();
         if let Some(info) = record.run_lock {
             recorded_by_lock.insert((info.pid, info.started_at), index);
+        }
+        if let Some(run) = record
+            .run_id
+            .as_deref()
+            .filter(|_| !is_refused_fire(record))
+        {
+            row_by_run.insert(run, index);
         }
         if let Some(info) = record
             .run_lock
@@ -1827,7 +1840,6 @@ fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
     let mut attribution = vec![FireAttribution::Trailing; records.len()];
     let mut next_run_by_checkout = BTreeMap::new();
     let mut next_legacy_by_checkout = BTreeMap::new();
-    let mut missing_by_lock = BTreeMap::new();
     for (index, record) in records.iter().enumerate().rev() {
         let checkout = record.checkout.as_deref();
         if !is_refused_fire(record) {
@@ -1840,9 +1852,15 @@ fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
             continue;
         }
         let Some(holder) = record.holder else {
-            if let Some(&run_index) = next_run_by_checkout.get(&checkout) {
-                attribution[index] = FireAttribution::Recorded(run_index);
-            }
+            let next_run = next_run_by_checkout.get(&checkout).copied();
+            attribution[index] = match &record.blocking_run {
+                Some(run) => match row_by_run.get(run.as_str()) {
+                    Some(&run_index) => FireAttribution::Recorded(run_index),
+                    None if next_run.is_some() => FireAttribution::Spent,
+                    None => FireAttribution::Trailing,
+                },
+                None => next_run.map_or(FireAttribution::Trailing, FireAttribution::Recorded),
+            };
             continue;
         };
         let key = (holder.pid, holder.started_at);
@@ -1856,8 +1874,7 @@ fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
             None => newest_by_checkout.get(&checkout).copied(),
         };
         if newest.is_some_and(|started_at| started_at > holder.started_at) {
-            let latest_fire = *missing_by_lock.entry(key).or_insert(index);
-            attribution[index] = FireAttribution::NoRecord(latest_fire, holder);
+            attribution[index] = FireAttribution::Spent;
         } else if let Some(run_index) = fallback {
             attribution[index] = FireAttribution::Recorded(run_index);
         }
@@ -1881,7 +1898,8 @@ fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
 /// after the newest run started after every one of them, and answers them.
 /// Fires refused at the other gates ran nothing, so they neither bound the
 /// newest run nor end a count of overlaps.
-/// Fires on a `no record` row are excluded: a later tenure already proves their holder gone.
+/// Spent fires are excluded, since later evidence answers them, and so are fires the last quiet
+/// fire followed: that fire ran and found nothing to do.
 /// Counts on recorded rows stay on those rows; the warning names them without a number.
 /// With a run in progress, only rowless fires remain in the warning, which names the lock only
 /// when that run holds it.
@@ -1891,14 +1909,19 @@ fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
 fn stale_clause<H>(
     records: &[LoopRunRecord],
     attribution: &[FireAttribution],
+    quiet: Option<&run_log::QuietFires>,
     in_progress: Option<&InProgress<H>>,
 ) -> Option<String> {
+    let unanswered = |(record, destination): &(&LoopRunRecord, &FireAttribution)| {
+        !matches!(destination, FireAttribution::Spent)
+            && quiet.is_none_or(|quiet| record.at > quiet.last.at)
+    };
     let newest_run = records.iter().rposition(|record| !is_refused_fire(record));
     let start = newest_run.map_or(0, |idx| idx + 1);
     let tail = records[start..]
         .iter()
         .zip(&attribution[start..])
-        .filter(|(_, destination)| !matches!(destination, FireAttribution::NoRecord(..)));
+        .filter(unanswered);
     if let Some(in_progress) = in_progress {
         let after = tail
             .filter(|(record, destination)| {
@@ -1940,11 +1963,12 @@ fn stale_clause<H>(
         .zip(&attribution[..newest_run])
         .rev()
         .take_while(|(record, _)| is_refused_fire(record))
+        .filter(unanswered)
         .filter(|(record, destination)| {
             is_overlap(record)
                 && match **destination {
                     FireAttribution::Recorded(index) => index == newest_run,
-                    FireAttribution::NoRecord(..) => false,
+                    FireAttribution::Spent => false,
                     FireAttribution::Trailing => record.run_lock.is_none(),
                 }
         })
@@ -2251,6 +2275,7 @@ fn launched_run_failed(record: &LoopRunRecord, runs: &[list::WorkflowRunRow]) ->
 fn name_workflow_runs(
     rows: &mut [list::WorkflowRunRow],
     records: &[rimz::store::workflow::RunRecord],
+    ended: &[(rimz::ids::WorkflowRunId, rimz::store::workflow::RunHeader)],
     root: &Path,
     globals: &GlobalFlags,
 ) {
@@ -2268,7 +2293,7 @@ fn name_workflow_runs(
                 commands.target().to_owned(),
                 commands.command("show", None, None, &[]),
             );
-        } else if row.state != "gone" {
+        } else if ended.iter().any(|(id, _)| *id == row.id) {
             let command = crate::cli::workflow_view::resolve::command(
                 "show",
                 &[row.id.as_str()],
@@ -2379,7 +2404,7 @@ fn workflow_log_runs(
             list::WorkflowRunRow::of_header(id, header, root, Timestamp::now())
         }))
         .collect::<Vec<_>>();
-    name_workflow_runs(&mut rows, &records, root, globals);
+    name_workflow_runs(&mut rows, &records, &ended, root, globals);
     rows
 }
 
@@ -2461,47 +2486,32 @@ fn write_log_records(
         }
         let record = row.latest;
         let status = run_status(record);
-        let (label, style) = if row.is_no_record() {
-            ("○ no record".to_owned(), ui::palette::warn())
-        } else {
-            let mut label = format!("{} {}", status.glyph, status.label);
-            if row.count > 1 {
-                label.push_str(&format!(" ×{}", row.count));
-            }
-            (label, status.style)
-        };
+        let mut label = format!("{} {}", status.glyph, status.label);
+        if row.count > 1 {
+            label.push_str(&format!(" ×{}", row.count));
+        }
         write!(
             out,
             "{} · {}",
-            ui::paint(style, &label),
+            ui::paint(status.style, &label),
             ui::rel_age(record.at, now)
         )?;
-        if row.is_no_record() {
-            if let Some(checkout) = checkout_note(row.key.checkout, None) {
-                write!(out, " · {checkout}")?;
-            }
-        } else {
-            if let Some(span) = row.span_note() {
-                write!(out, " · {span}")?;
-            }
-            write!(out, " · {}", fire_cause(record))?;
-            if let Some(exit) = run_report::detail_exit_segment(record) {
-                write!(out, " · {exit}")?;
-            }
-            if let Some(late) = late_note(record) {
-                write!(out, " · {late}")?;
-            }
+        if let Some(span) = row.span_note() {
+            write!(out, " · {span}")?;
+        }
+        write!(out, " · {}", fire_cause(record))?;
+        if let Some(exit) = run_report::detail_exit_segment(record) {
+            write!(out, " · {exit}")?;
+        }
+        if let Some(late) = late_note(record) {
+            write!(out, " · {late}")?;
         }
         for note in row.fire_notes() {
             write!(out, " · {note}")?;
         }
         writeln!(out)?;
-        let detail = match (row.kind, record.holder) {
-            (RunRowKind::NoRecord(holder), _) => run_report::Forensics::Folded {
-                holder,
-                count: row.skipped + row.waited,
-            },
-            (_, Some(holder)) if row.count > 1 => run_report::Forensics::Folded {
+        let detail = match record.holder {
+            Some(holder) if row.count > 1 => run_report::Forensics::Folded {
                 holder,
                 count: row.count,
             },
@@ -2854,10 +2864,7 @@ fn write_runs_table(
     };
     writeln!(out)?;
     writeln!(out, "{}", ui::paint(ui::palette::header(), &heading))?;
-    let mut modes = visible_rows
-        .iter()
-        .filter(|row| !row.is_no_record())
-        .map(|row| row.key.mode);
+    let mut modes = visible_rows.iter().map(|row| row.key.mode);
     let first_mode = modes.next().flatten();
     let show_mode = modes.any(|mode| mode != first_mode);
     let show_cost = visible_rows.iter().any(|row| row.cost_usd.is_some());
@@ -2888,21 +2895,9 @@ fn write_runs_table(
         let record = row.latest;
         let mut cells = vec![ui::cell(ui::rel_age(record.at, now))];
         if show_mode {
-            cells.push(
-                ui::cell(
-                    row.key
-                        .mode
-                        .filter(|_| !row.is_no_record())
-                        .map_or("-", LoopRunMode::label),
-                )
-                .dash(),
-            );
+            cells.push(ui::cell(row.key.mode.map_or("-", LoopRunMode::label)).dash());
         }
-        cells.push(if row.is_no_record() {
-            ui::cell("○ no record").fg(ui::palette::warn())
-        } else {
-            run_status_cell(record, row.count)
-        });
+        cells.push(run_status_cell(record, row.count));
         cells.push(ui::cell(row.took().as_deref().unwrap_or("-")).dash());
         if show_cost {
             cells.push(ui::cell(row.cost_usd.map(run_cost).as_deref().unwrap_or("-")).dash());
@@ -3033,7 +3028,6 @@ impl<'a> RunRowKey<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RunRowKind {
     Recorded,
-    NoRecord(RunLockInfo),
     Trailing,
 }
 
@@ -3049,7 +3043,7 @@ struct CollapsedRunRow<'a> {
     cost_usd: Option<f64>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
-    /// Overlapped fires attributed to the recorded or unrecorded lock tenures in this row.
+    /// Overlapped fires attributed to the runs in this row.
     skipped: usize,
     waited: usize,
 }
@@ -3075,10 +3069,6 @@ impl<'a> CollapsedRunRow<'a> {
             skipped,
             waited,
         }
-    }
-
-    fn is_no_record(&self) -> bool {
-        matches!(self.kind, RunRowKind::NoRecord(_))
     }
 
     fn merge(&mut self, previous: Self) {
@@ -3125,12 +3115,7 @@ impl<'a> CollapsedRunRow<'a> {
 
     fn note(&self, now: Timestamp) -> Option<String> {
         let mut parts = Vec::new();
-        if let RunRowKind::NoRecord(holder) = self.kind {
-            parts.extend(checkout_note(
-                self.key.checkout,
-                Some(format!("pid {}", holder.pid)),
-            ));
-        } else if self.key.result == LoopRunResult::TakeoverBlocked
+        if self.key.result == LoopRunResult::TakeoverBlocked
             && let Some(checkout) = self.key.checkout
         {
             parts.push(format!(
@@ -3168,24 +3153,21 @@ impl<'a> CollapsedRunRow<'a> {
     }
 }
 
-/// Rows for both history views. Lock refusals follow their attributed record or their holder's
-/// `no record` row. Exact tenure joins outrank checkout and result. `for_show` merges equal
-/// adjacent runs and drops trailing lock refusals; `loop logs` keeps a block for each.
+/// Rows for both history views. Lock refusals follow their attributed record. Exact tenure joins
+/// outrank checkout and result. `for_show` merges equal adjacent runs and drops trailing and spent
+/// lock refusals; `loop logs` keeps a block for each.
 /// A lock-holding at-lock record with matched fires keeps its own status, note and record count.
 fn collapsed_run_rows<'a>(
     records: &'a [LoopRunRecord],
     attribution: &[FireAttribution],
     for_show: bool,
 ) -> Vec<CollapsedRunRow<'a>> {
-    let mut folded = vec![(0, 0, None); records.len()];
+    let mut folded = vec![(0, 0); records.len()];
     for (record, destination) in records.iter().zip(attribution) {
-        let (index, no_record_holder) = match *destination {
-            FireAttribution::Recorded(index) => (index, None),
-            FireAttribution::NoRecord(index, holder) => (index, Some(holder)),
-            FireAttribution::Trailing => continue,
+        let FireAttribution::Recorded(index) = *destination else {
+            continue;
         };
-        let (skipped, waited, holder) = &mut folded[index];
-        *holder = no_record_holder;
+        let (skipped, waited) = &mut folded[index];
         if is_overlap(record) {
             *skipped += 1;
         } else {
@@ -3200,25 +3182,14 @@ fn collapsed_run_rows<'a>(
         {
             by_checkout.remove(checkout);
         }
-        let (skipped, waited, no_record_holder) = folded[index];
+        let (skipped, waited) = folded[index];
         let mut row = CollapsedRunRow::new(record, index, skipped, waited);
         if is_at_lock_fire(record) {
             if skipped > 0 || waited > 0 {
-                rows.push(Some(match no_record_holder {
-                    Some(holder) => CollapsedRunRow {
-                        kind: RunRowKind::NoRecord(holder),
-                        count: 0,
-                        duration: None,
-                        cost_usd: None,
-                        input_tokens: None,
-                        output_tokens: None,
-                        ..row
-                    },
-                    None => row,
-                }));
+                rows.push(Some(row));
                 continue;
             }
-            if for_show || !matches!(attribution[index], FireAttribution::Trailing) {
+            if for_show || matches!(attribution[index], FireAttribution::Recorded(_)) {
                 continue;
             }
             row.kind = RunRowKind::Trailing;

@@ -1186,6 +1186,18 @@ fn launched_count(entry: &TaskEntry, record: Option<&task_record::TaskRecord>) -
     })
 }
 
+/// A finished fire's result as a run state: the state's own word where one says the same thing,
+/// else the result's label.
+fn result_state(result: LoopRunResult) -> &'static str {
+    use rimz::store::workflow::RunState;
+    match result {
+        LoopRunResult::Completed => RunState::Done.as_str(),
+        LoopRunResult::Failed => RunState::Failed.as_str(),
+        LoopRunResult::Canceled => RunState::Canceled.as_str(),
+        result => result.label(),
+    }
+}
+
 /// One ledgered or live workflow run, shared by list, show, and checkout joins.
 #[derive(Serialize)]
 pub(super) struct WorkflowRunRow {
@@ -1256,7 +1268,7 @@ impl WorkflowRunRow {
                         id: run.clone(),
                         address: None,
                         checkout: checkout.clone(),
-                        state: "gone",
+                        state: launch.result.map_or("gone", result_state),
                         node: String::new(),
                         since: launch.at,
                         reason: None,

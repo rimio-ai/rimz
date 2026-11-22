@@ -8,7 +8,12 @@ fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
 /// `has_active_run` is a run that holds the run lock.
 fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<String> {
     let holder = has_active_run.then_some(InProgress::Locked(()));
-    super::stale_clause(records, &refused_fire_attribution(records), holder.as_ref())
+    super::stale_clause(
+        records,
+        &refused_fire_attribution(records),
+        None,
+        holder.as_ref(),
+    )
 }
 
 fn write_runs_table(
@@ -275,6 +280,98 @@ fn workflow_worktrees_json_joins_the_same_run_projection() {
             assert!(row.get(key).is_none(), "{row}");
         }
     }
+}
+
+#[test]
+fn marks_with_a_result_show_it_as_their_run_state() {
+    use rimz::harness::schedule::task_record::FireMark;
+    let mut view = workflow_view();
+    let task = sweep_id();
+    let mut record = sweep_record();
+    let results = [
+        Some(LoopRunResult::Completed),
+        Some(LoopRunResult::Failed),
+        Some(LoopRunResult::Canceled),
+        Some(LoopRunResult::VerifyFailed),
+        None,
+    ];
+    for (index, result) in results.into_iter().enumerate() {
+        let at = Timestamp::from_second(20 + index as i64).unwrap();
+        let checkout = PathBuf::from(format!("/repo/mark{index}"));
+        let run = rimz::ids::WorkflowRunId::new();
+        record.marks.insert(
+            checkout.clone(),
+            FireMark {
+                fire: rimz::ids::FireId::new(task),
+                at,
+                booked_by: Vec::new(),
+                once: false,
+                run: Some(run.clone()),
+                scope: rimz::store::workflow::ScopeKind::Worktree,
+                result,
+                kind: None,
+                target: None,
+                manual: false,
+                opener: None,
+                child: None,
+            },
+        );
+        view.worktrees.push(CheckoutCondition {
+            checkout,
+            name: format!("mark{index}"),
+            state: CheckoutState::Workflow { run, at },
+        });
+    }
+    let mut rows = list::WorkflowRunRow::for_show(
+        &[],
+        &[],
+        Some((task, &record)),
+        Path::new("/repo"),
+        &BTreeMap::new(),
+        view.now_zoned.timestamp(),
+    );
+    assert_eq!(
+        rows.iter().map(|row| row.state).collect::<Vec<_>>(),
+        ["done", "failed", "canceled", "verify failed", "gone"]
+    );
+    let json = serde_json::to_value(&rows).unwrap();
+    assert_eq!(json[0]["state"], "done", "{json}");
+    let ended = rimz::ids::WorkflowRunId::new();
+    let header = rimz::store::workflow::RunHeader {
+        state: Some(rimz::store::workflow::RunState::Done),
+        ..Default::default()
+    };
+    rows.push(list::WorkflowRunRow::of_header(
+        &ended,
+        &header,
+        Path::new("/repo"),
+        view.now_zoned.timestamp(),
+    ));
+    #[derive(clap::Parser)]
+    struct Flags {
+        #[command(flatten)]
+        globals: GlobalFlags,
+    }
+    let globals = <Flags as clap::Parser>::parse_from(["rimz"]).globals;
+    let ended = [(ended, header)];
+    name_workflow_runs(&mut rows, &[], &ended, Path::new("/repo"), &globals);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.command.is_some())
+            .collect::<Vec<_>>(),
+        [false, false, false, false, false, true]
+    );
+    rows.pop();
+    view.workflow_runs.extend(rows);
+    let text = show_text(&view);
+    for count in ["2 done", "2 canceled", "2 gone", "1 verify failed"] {
+        assert!(text.contains(count), "{text}");
+    }
+    assert!(!text.contains("completed"), "{text}");
+    let CheckoutState::Workflow { run, .. } = &view.worktrees[7].state else {
+        panic!("workflow fixture");
+    };
+    assert!(text.contains(&format!("{run}  failed")), "{text}");
 }
 
 #[test]
@@ -1847,7 +1944,7 @@ fn logs_fold_legacy_fires_past_gates_and_onto_takeover_refusals() {
 }
 
 #[test]
-fn logs_no_record_blocks_keep_the_newest_fire_position_and_forensics() {
+fn logs_keep_spent_fires_as_plain_refusal_blocks() {
     let gone = run_lock_info(11, 0);
     let next = run_lock_info(22, 50);
     let mut records = [
@@ -1860,30 +1957,24 @@ fn logs_no_record_blocks_keep_the_newest_fire_position_and_forensics() {
         row.checkout = Some("/repo/alpha".into());
     }
     let text = logs_text(&records, 10, false);
-    assert_eq!(text.matches("○ no record").count(), 1, "{text}");
-    assert!(
-        text.find("○ budget skipped").unwrap() < text.find("○ no record").unwrap()
-            && text.find("○ no record").unwrap() < text.find("✓ completed").unwrap(),
-        "{text}"
-    );
-    let header = text
+    let headers = text
         .lines()
-        .find(|line| line.starts_with("○ no record"))
-        .unwrap();
+        .filter(|line| line.contains(" · "))
+        .filter(|line| !line.starts_with(' '))
+        .collect::<Vec<_>>();
+    assert_eq!(headers.len(), 4, "{text}");
+    for (header, label) in
+        headers
+            .iter()
+            .zip(["deferred", "budget skipped", "overlapped", "completed"])
+    {
+        assert!(header.contains(&format!(" {label} · ")), "{text}");
+    }
     assert!(
-        header.ends_with(" · alpha · 1 fire waited on it · 1 fire skipped, run already active"),
+        !text.contains("waited on it") && !text.contains("run already active"),
         "{text}"
     );
-    assert!(!header.contains("pid") && !header.contains('×'), "{text}");
-    assert!(
-        text.contains("holder: pid 11 · started 30s before the newest fire"),
-        "{text}"
-    );
-    assert_eq!(text.matches("pid 11").count(), 1, "{text}");
-    assert!(
-        !text.contains("○ deferred") && !text.contains("○ overlapped"),
-        "{text}"
-    );
+    assert!(!text.contains('×'), "{text}");
 }
 
 #[test]
@@ -3037,11 +3128,10 @@ fn refused_fires_stay_with_the_holder_that_refused_them() {
             lines.iter().position(|line| line.contains("✓ completed")
                 && line.contains("47s")
                 && line.ends_with("1 fire waited on it")),
-            lines.iter().position(|line| line.contains("○ no record")
-                && line.ends_with("pid 3003569 · 6 fires waited on it")),
+            lines.len(),
             table.contains("RECENT RUNS (newest first)"),
         ),
-        (Some(3), Some(4), true),
+        (Some(3), 4, true),
         "{table}"
     );
 }
@@ -3078,9 +3168,10 @@ fn an_uncontended_run_does_not_take_an_unrecorded_holders_fires() {
             .iter()
             .map(|row| (row.count, row.waited))
             .collect::<Vec<_>>(),
-        [(0, 6), (1, 0)],
+        [(1, 0)],
         "{table}"
     );
+    assert!(!table.contains("waited on it"), "{table}");
     assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
 }
 
@@ -3102,7 +3193,7 @@ fn a_new_holder_separates_old_fires_even_when_its_record_has_no_stamp() {
             .iter()
             .map(|row| (row.count, row.waited))
             .collect::<Vec<_>>(),
-        [(0, 6), (1, 1)],
+        [(1, 1)],
         "{table}"
     );
     assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
@@ -3123,7 +3214,7 @@ fn stamped_runs_take_holderless_fires_but_not_another_tenures_fires() {
             .iter()
             .map(|row| (row.count, row.waited))
             .collect::<Vec<_>>(),
-        [(0, 1), (1, 1)],
+        [(1, 1)],
         "{table}"
     );
     assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
@@ -3366,9 +3457,8 @@ fn lock_holding_at_lock_records_keep_their_own_row_and_matched_fires() {
                     && line.contains("2.0s")
                     && line.ends_with(&format!("{detail} · 1 fire waited on it"))),
                 table.contains("RECENT RUNS (newest first)"),
-                table.contains("○ no record"),
             ),
-            (Some(3), Some(4), true, false),
+            (Some(3), Some(4), true),
             "{table}"
         );
         let rows = collapsed_run_rows(&records);
@@ -3417,7 +3507,7 @@ fn late_refusals_of_unrecorded_holders_keep_the_already_observed_new_tenure() {
             .iter()
             .map(|row| (row.count, row.skipped))
             .collect::<Vec<_>>(),
-        [(1, 0), (0, 1), (1, 0)],
+        [(2, 0)],
         "{table}"
     );
     assert_eq!(stale_clause(&records, false), None);
@@ -3444,10 +3534,7 @@ fn legacy_run_boundaries_preserve_single_holder_gaps_even_for_late_refusals() {
         [(3, 3)],
         "{table}"
     );
-    assert!(
-        table.contains("RECENT RUNS (newest first)") && !table.contains("no record"),
-        "{table}"
-    );
+    assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
 }
 
 #[test]
@@ -3463,7 +3550,7 @@ fn unrecorded_holders_do_not_make_a_later_run_stale() {
 }
 
 #[test]
-fn stale_clause_excludes_fires_on_a_no_record_row_from_its_tail() {
+fn stale_clause_excludes_spent_fires_from_its_tail() {
     let gone = run_lock_info(11, 11);
     let next = run_lock_info(22, 31);
     let records = [
@@ -3482,7 +3569,7 @@ fn stale_clause_excludes_fires_on_a_no_record_row_from_its_tail() {
 }
 
 #[test]
-fn no_record_rows_keep_their_position_counts_and_empty_measurements() {
+fn spent_fires_take_no_row_and_no_count() {
     let first = run_lock_info(11, 0);
     let second = run_lock_info(22, 30);
     let third = run_lock_info(33, 50);
@@ -3504,55 +3591,107 @@ fn no_record_rows_keep_their_position_counts_and_empty_measurements() {
             .iter()
             .map(|row| (row.latest.at.as_second(), row.count, row.waited))
             .collect::<Vec<_>>(),
-        [(20, 0, 2), (40, 0, 1), (90, 1, 0)],
+        [(90, 1, 0)],
         "{table}"
     );
-    assert!(!table.contains("MODE"), "{table}");
-    assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
-    assert!(runs_table(&records, 2).contains("RECENT RUNS (newest first · 2 of 3 rows)"));
-    let missing = table
-        .lines()
-        .filter(|line| line.contains("○ no record"))
-        .collect::<Vec<_>>();
-    assert_eq!(missing.len(), 2, "{table}");
-    assert!(
-        missing[0].ends_with("alpha pid 22 · 1 fire waited on it"),
-        "{table}"
-    );
-    assert!(
-        missing[1].ends_with("alpha pid 11 · 2 fires waited on it"),
-        "{table}"
-    );
-    for line in missing {
-        assert!(!line.contains('×'), "{table}");
-        assert_eq!(
-            line.split_once("○ no record")
-                .unwrap()
-                .1
-                .split_whitespace()
-                .take(3)
-                .collect::<Vec<_>>(),
-            ["-", "-", "-"],
-            "{table}"
-        );
-    }
+    assert!(!table.contains("MODE") && !table.contains("pid"), "{table}");
+    assert!(!table.contains("waited on it"), "{table}");
+    assert!(runs_table(&records, 1).contains("RECENT RUNS (newest first)\n"));
+    assert_eq!(stale_clause(&records, false), None, "{table}");
 
     let mut manual = record(95, LoopRunResult::Completed);
     manual.mode = Some(LoopRunMode::Manual);
     records.push(manual);
     let table = runs_table(&records, 10);
     assert!(table.contains("MODE"), "{table}");
-    for line in table.lines().filter(|line| line.contains("○ no record")) {
-        assert_eq!(
-            line.split_once("○ no record")
-                .unwrap()
-                .0
-                .split_whitespace()
-                .last(),
-            Some("-"),
-            "{table}"
+    assert_eq!(collapsed_run_rows(&records).len(), 2, "{table}");
+}
+
+#[test]
+fn holderless_fires_join_only_the_run_their_blocking_run_names() {
+    let named = rimz::ids::WorkflowRunId::new();
+    let blocked_by = |mut record: LoopRunRecord, run: &rimz::ids::WorkflowRunId| {
+        record.holder = None;
+        record.blocking_run = Some(run.clone());
+        record
+    };
+    let mut named_row = scheduled(25, LoopRunResult::Completed);
+    named_row.run_id = Some(named.to_string());
+    let mut error = scheduled(50, LoopRunResult::Errored);
+    error.error = Some("the fire ended before it published a run".into());
+    let mut records = vec![
+        blocked_by(overlap(20), &rimz::ids::WorkflowRunId::new()),
+        blocked_by(deferred(21), &named),
+        named_row,
+        blocked_by(overlap(30), &rimz::ids::WorkflowRunId::new()),
+        blocked_by(deferred(40), &rimz::ids::WorkflowRunId::new()),
+        error,
+    ];
+    for record in &mut records {
+        record.checkout = Some("/repo".into());
+    }
+    let table = runs_table(&records, 10);
+    assert_eq!(
+        collapsed_run_rows(&records)
+            .iter()
+            .map(|row| (row.latest.result, row.skipped, row.waited))
+            .collect::<Vec<_>>(),
+        [
+            (LoopRunResult::Completed, 0, 1),
+            (LoopRunResult::Errored, 0, 0),
+        ],
+        "{table}"
+    );
+    assert!(
+        table.matches("waited on it").count() == 1 && !table.contains("run already active"),
+        "{table}"
+    );
+    assert_eq!(stale_clause(&records, false), None, "{table}");
+    let logs = logs_text(&records, 10, false);
+    assert_eq!(
+        (
+            logs.matches(" overlapped · ").count(),
+            logs.matches(" deferred · ").count(),
+            logs.matches("waited on it").count(),
+            logs.contains("run already active"),
+        ),
+        (2, 1, 1, false),
+        "{logs}"
+    );
+}
+
+#[test]
+fn a_quiet_fire_answers_the_refusals_before_it() {
+    let mut refused = scheduled(20, LoopRunResult::Overlapped);
+    refused.blocking_run = Some(rimz::ids::WorkflowRunId::new());
+    let records = [scheduled(10, LoopRunResult::Completed), refused];
+    let verdict = |quiet_at: Option<i64>| {
+        let quiet = quiet_at.map(|second| run_log::QuietFires {
+            count: 3,
+            streak: 3,
+            last: scheduled(second, LoopRunResult::Completed),
+        });
+        let mut out = Vec::new();
+        write_verdict(
+            &mut out,
+            &records,
+            quiet.as_ref(),
+            &refused_fire_attribution(&records),
+            None,
+            Timestamp::from_second(100).unwrap(),
+        )
+        .unwrap();
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+    };
+    for quiet_at in [None, Some(15)] {
+        let line = verdict(quiet_at);
+        assert!(
+            line.contains("last fire skipped, nothing has run since"),
+            "{quiet_at:?}: {line}"
         );
     }
+    let line = verdict(Some(30));
+    assert!(!line.contains("skipped"), "{line}");
 }
 
 #[test]
