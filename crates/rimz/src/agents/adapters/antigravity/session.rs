@@ -833,7 +833,16 @@ fn fold(lines: &str) -> FoldedSession {
         native_prompt_detail: None,
         waiting_since: None,
     };
+    let mut background_tasks = Vec::new();
     for record in parse_records(lines) {
+        if let Some(task) = background_task_started(&record) {
+            background_tasks.push(task.to_owned());
+            continue;
+        }
+        if let Some(task) = background_task_finished(&record) {
+            background_tasks.retain(|running: &String| running != task);
+            continue;
+        }
         let Some(role) = visible_role(&record) else {
             continue;
         };
@@ -858,6 +867,7 @@ fn fold(lines: &str) -> FoldedSession {
         match role {
             TranscriptRole::Steering => continue,
             TranscriptRole::User => {
+                background_tasks.clear();
                 folded.native_prompt_detail = None;
                 folded.waiting_since = None;
                 folded.status = AgentStatus::Running;
@@ -875,6 +885,11 @@ fn fold(lines: &str) -> FoldedSession {
                     folded.phase = TurnPhase::Reasoning;
                     folded.native_prompt_detail = None;
                     folded.waiting_since = None;
+                } else if !background_tasks.is_empty() {
+                    folded.status = AgentStatus::Running;
+                    folded.phase = TurnPhase::Parked;
+                    folded.native_prompt_detail = None;
+                    folded.waiting_since = None;
                 } else {
                     folded.status = AgentStatus::Success;
                     folded.phase = TurnPhase::Idle;
@@ -885,6 +900,31 @@ fn fold(lines: &str) -> FoldedSession {
         }
     }
     folded
+}
+
+/// The task id of a `MODEL` / `GENERIC` row that moved a tool to the background (agy 1.5.14).
+/// The row keeps its `RUNNING` status after the task ends.
+fn background_task_started(record: &TranscriptRecord) -> Option<&str> {
+    if (record.source.as_str(), record.record_type.as_str()) != ("MODEL", "GENERIC")
+        || record.status != "RUNNING"
+    {
+        return None;
+    }
+    let (_, rest) = record
+        .content
+        .as_deref()?
+        .split_once("running as a background task with task id: ")?;
+    rest.split_whitespace().next()
+}
+
+/// The task id a `SYSTEM` / `SYSTEM_MESSAGE` row reports ended, whatever word follows it
+/// (agy 1.5.14).
+fn background_task_finished(record: &TranscriptRecord) -> Option<&str> {
+    if (record.source.as_str(), record.record_type.as_str()) != ("SYSTEM", "SYSTEM_MESSAGE") {
+        return None;
+    }
+    let (_, rest) = record.content.as_deref()?.split_once("Task id \"")?;
+    rest.split_once('"').map(|(task, _)| task)
 }
 
 fn is_turn_start(record: &TranscriptRecord) -> bool {

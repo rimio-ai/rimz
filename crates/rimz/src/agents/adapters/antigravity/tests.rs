@@ -2113,6 +2113,109 @@ fn a_pending_tool_call_reads_running_and_its_native_prompt_reads_waiting() {
     );
 }
 
+/// agy 1.5.14 (c7 capture): a `run_command` that becomes a background task leaves a
+/// `MODEL` / `GENERIC` row `RUNNING` and a no-tool planner `DONE`; the task's end appends
+/// `SYSTEM` / `SYSTEM_MESSAGE` rows and a woken planner row, with no `USER_INPUT`.
+#[test]
+fn a_running_background_task_parks_the_turn_until_its_completion_wakes_the_planner() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = Path::new("/workspace/project");
+    let task = format!("{SESSION_ID}/task-10");
+    let started = record(
+        2,
+        "MODEL",
+        "GENERIC",
+        "RUNNING",
+        AT_10,
+        &format!(
+            "Created At: {AT_10}\nTool is running as a background task with task id: {task}\n\
+             Task Description: sleep 30 && echo SLEPT\n"
+        ),
+    )
+    .to_string();
+    let ended = |id: &str, outcome: &str| {
+        record(
+            4,
+            "SYSTEM",
+            "SYSTEM_MESSAGE",
+            "DONE",
+            AT_12,
+            &format!(
+                "<SYSTEM_MESSAGE>\n[Message] timestamp={AT_12} sender={id} \
+                 priority=MESSAGE_PRIORITY_HIGH content=Task id \"{id}\" {outcome}:\n\
+                 Command exited with code 0.\n</SYSTEM_MESSAGE>"
+            ),
+        )
+        .to_string()
+    };
+    let reminder = record(
+        5,
+        "SYSTEM",
+        "SYSTEM_MESSAGE",
+        "DONE",
+        AT_12,
+        "<SYSTEM_MESSAGE>\nReminder: work efficiently.\n</SYSTEM_MESSAGE>",
+    )
+    .to_string();
+    let command = json_value(r#"[{"name":"run_command","args":{"CommandLine":"sleep 30"}}]"#);
+    let parked = vec![
+        planner_record(1, AT_10, Some(command)),
+        started,
+        planner_record(3, AT_11, None),
+    ];
+    let phase = |ending: Vec<String>| {
+        let local = state_after(dir.path(), workspace, ending);
+        (local.status, local.phase)
+    };
+    assert_eq!(
+        phase(parked.clone()),
+        (AgentStatus::Running, TurnPhase::Parked),
+        "the foreground reply does not end a turn whose task still runs"
+    );
+    let other = format!("{SESSION_ID}/task-99");
+    let mut ending = parked.clone();
+    ending.extend([
+        ended(&other, "finished with result"),
+        planner_record(6, AT_12, None),
+    ]);
+    assert_eq!(
+        phase(ending),
+        (AgentStatus::Running, TurnPhase::Parked),
+        "another task's completion leaves this one running"
+    );
+    let mut ending = parked.clone();
+    ending.extend([
+        ended(&task, "finished with result"),
+        reminder,
+        planner_record(6, AT_12, None),
+    ]);
+    assert_eq!(
+        phase(ending),
+        (AgentStatus::Success, TurnPhase::Idle),
+        "the planner row the completion wakes is the turn's result"
+    );
+    let mut ending = parked.clone();
+    ending.extend([
+        ended(&task, "failed with error"),
+        planner_record(6, AT_12, None),
+    ]);
+    assert_eq!(
+        phase(ending),
+        (AgentStatus::Success, TurnPhase::Idle),
+        "a task that ends any other way ends too"
+    );
+    let mut ending = parked;
+    ending.extend([
+        user_record(6, AT_12, "next"),
+        planner_record(7, AT_12, None),
+    ]);
+    assert_eq!(
+        phase(ending),
+        (AgentStatus::Success, TurnPhase::Idle),
+        "a task with no completion row parks only the turn it started in"
+    );
+}
+
 #[test]
 fn transcript_questions_project_and_clear_native_waits() {
     let dir = tempfile::tempdir().unwrap();
