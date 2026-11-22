@@ -232,6 +232,13 @@ pub(super) fn send_batch_to_live_pane(
         }
         DeliveryKind::Boundary | DeliveryKind::Steer => None,
     };
+    let steer_key = (matches!(send.kind, DeliveryKind::Steer) && head.enter)
+        .then(|| {
+            crate::agents::spec_by_kind(head.kind.as_str())?
+                .launch
+                .steer_key
+        })
+        .flatten();
     crate::harness::hibernate::wake_pane(store, &target.pane_id)?;
     let writer = PaneWriter::open(
         Some(store.runtime_paths()),
@@ -249,6 +256,18 @@ pub(super) fn send_batch_to_live_pane(
         send,
         &writer,
     )?;
+    if let (Some(steer_key), Receipt::Sent { .. }) = (steer_key, &receipt)
+        && row.as_ref().is_some_and(|agent| {
+            matches!(
+                agent.effective_status(Timestamp::now()),
+                AgentStatus::Running | AgentStatus::Waiting
+            )
+        })
+    {
+        // A resting receiver opened a turn on the Enter; only a running one queued the text.
+        sleep(STEER_KEY_DELAY);
+        writer.press(steer_key)?;
+    }
     let (Some(key), &Receipt::Sent { compacted, .. }) = (key, &receipt) else {
         return Ok(receipt);
     };
@@ -324,6 +343,11 @@ pub(super) fn send_batch_to_live_pane(
 /// waits before the Enter that submits it: agy submitted it once at 100 ms and at 500 ms,
 /// and nothing when both keys went together (probe link 5, P9).
 const INTERRUPT_RESUBMIT_DELAY: Duration = Duration::from_millis(500);
+
+/// How long after a steer's Enter its kind's steer key waits: agy queues the submitted text
+/// first, and took it into the running turn on Alt+M 0.5 s later on both backends
+/// (`zellij-alt-m.md`, `send-immediately.md` probes of the agy-steer design).
+const STEER_KEY_DELAY: Duration = Duration::from_millis(500);
 
 fn confirm_interrupt(
     mut follower: EventFollower,

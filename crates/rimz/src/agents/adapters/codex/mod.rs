@@ -294,6 +294,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         interrupt_key: Some(crate::pane::keys::NamedKey::Escape),
         confirm_interrupt: true,
         interrupt_returns_queued_text: false,
+        steer_key: None,
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Unsupported,

@@ -244,6 +244,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         max_turn_flag: None,
         interrupt_key: Some(crate::pane::keys::NamedKey::Escape),
         interrupt_returns_queued_text: true,
+        steer_key: Some(crate::pane::keys::NamedKey::AltM),
         compact_command: Some(super::CompactCommand {
             command: COMPACT_COMMAND,
             instruction: super::CompactInstruction::Unsupported,

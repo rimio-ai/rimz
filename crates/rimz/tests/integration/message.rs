@@ -338,6 +338,7 @@ fn interrupt_order_case(kind: &str, queued_agent_id: Option<&str>, force: bool) 
     }
     let lines = trace_lines(&trace);
     assert_eq!(lines.iter().filter(|line| is_escape_key(line)).count(), 1);
+    assert!(!lines.iter().any(|line| is_alt_m_key(line)), "{lines:?}");
     let paste = lines
         .iter()
         .position(|line| is_paste(line, &user_message("new direction")))
@@ -693,6 +694,83 @@ fn interrupt_antigravity_spares_the_turn_its_paste_opened() {
         env.store().list_messages().unwrap()[0].status,
         MessageStatus::Sent
     );
+}
+
+fn is_alt_m_key(line: &str) -> bool {
+    line.ends_with(&format!(
+        "\taction\twrite\t--pane-id\t{TRACE_PANE}\t27\t109"
+    ))
+}
+
+/// One send to a fresh `interrupt_fixture` receiver, resting first when `resting`; returns
+/// its trace.
+fn steer_key_case(kind: &str, resting: bool, args: &[&str]) -> Vec<String> {
+    let (env, panes) = interrupt_fixture(kind);
+    if resting {
+        append_lifecycle(
+            &env,
+            kind,
+            "Stop",
+            "sess-interrupt",
+            LifecycleSignal::TurnInterrupted { turn_id: None },
+            |_| {},
+        );
+    }
+    let trace = env.project_root.join("steer-key.log");
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", panes)
+            .args(["message"])
+            .args(args)
+            .args([&format!("@{kind}"), "--", "new direction"]),
+        "steer",
+    );
+    trace_lines(&trace)
+}
+
+/// agy queues a message typed during a running turn and takes it into that turn on Alt+M,
+/// so a steer to a running Antigravity receiver presses Enter, then Alt+M. No other send,
+/// receiver, or kind gets the key.
+#[test]
+fn steer_antigravity_presses_alt_m_after_enter_only_into_a_running_turn() {
+    let lines = steer_key_case("antigravity", false, &["--steer"]);
+    let enter = lines.iter().position(|line| is_enter_key(line));
+    let alt_m = lines.iter().position(|line| is_alt_m_key(line));
+    assert!(
+        enter.is_some() && alt_m.is_some() && enter < alt_m,
+        "{lines:?}"
+    );
+    assert_eq!(
+        lines.iter().filter(|line| is_alt_m_key(line)).count(),
+        1,
+        "{lines:?}"
+    );
+
+    let lines = steer_key_case("antigravity", false, &["--steer", "--no-enter"]);
+    assert!(
+        !lines
+            .iter()
+            .any(|line| is_enter_key(line) || is_alt_m_key(line)),
+        "{lines:?}"
+    );
+
+    for (kind, resting, args) in [
+        ("antigravity", true, &["--steer"][..]),
+        ("antigravity", true, &[][..]),
+        ("claude", false, &["--steer"][..]),
+        ("codex", false, &["--steer"][..]),
+    ] {
+        let lines = steer_key_case(kind, resting, args);
+        assert!(
+            !lines.iter().any(|line| is_alt_m_key(line)),
+            "{kind} {args:?}: {lines:?}"
+        );
+        assert_eq!(
+            lines.iter().filter(|line| is_enter_key(line)).count(),
+            1,
+            "{kind} {args:?}: {lines:?}"
+        );
+    }
 }
 
 #[test]
