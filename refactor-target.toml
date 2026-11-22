@@ -2505,7 +2505,9 @@ path = "crates/rimz/src/harness"
 # The tune budget report and its handle move from the CLI so the MCP self_tune tool answers it (+4).
 # The idle-rest parser and default, and the notes list default and filter help, move from the CLI so the MCP tools share them (+7).
 # The task label rule moves from the CLI so the MCP wait tool holds it too (+1).
-surface-budget = 1338
+# report::defers_to_report is the one rule for whether an agent's join defers to its report, and
+# FleetRuns::reports_to_launcher the detached rule it reads (+2).
+surface-budget = 1340
 
 [[verdict]]
 kind = "item"
@@ -5932,11 +5934,13 @@ allowed-dependencies = [
     "disk::lock",
     "disk::paths",
     "harness::ancestry",
+    "harness::fleet",
     "harness::run",
     "ids",
     "store",
 ]
 # may_claim holds the person-or-launcher read-mark rule `agents wait` applies.
+# defers_to_report reads the detached rule from `harness::fleet`, its one home.
 surface-budget = 5
 
 [[module]]

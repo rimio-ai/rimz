@@ -5,7 +5,9 @@
 //! is excluded from a digest that has not been composed. Any other agent that
 //! prints an answer leaves it to the digest. Once a digest exists, it
 //! may be canceled only after every listed answer has been claimed this way,
-//! preserving the notice while any row remains unread.
+//! preserving the notice while any row remains unread. A launcher's join on
+//! runs that report to it is not held: it prints report rows and leaves an
+//! answer still running to the digest.
 
 use crate::agents::AgentState;
 use crate::disk::paths::StatePaths;
@@ -18,14 +20,41 @@ use super::{RecordMutation, Result, RunRecord, update_record};
 
 /// Whether a join that printed `record` to `caller` claims it: a person at a
 /// shell (`caller` None) does, and an agent does only once it resolves to a row
-/// that holds an open turn and launched an agent row the record matches.
+/// that holds an open turn and launched an agent row the record matches. `audit`
+/// holds every durable row, as the fleet digest reads them (`RuntimeScope::Audit`).
 pub fn may_claim(
     snapshot: &SidebarSnapshot,
+    audit: &[AgentState],
     caller: Option<&CallerIdentity>,
     record: &RunRecord,
 ) -> bool {
-    Claimant::resolve(&snapshot.agents, caller)
-        .is_some_and(|claimant| claimant.owns(&snapshot.agents, record))
+    Claimant::resolve(&snapshot.agents, caller).is_some_and(|claimant| claimant.owns(audit, record))
+}
+
+/// Whether a join by `caller` on `record` leaves the answer to the fleet report that will
+/// carry it: the run reports to its launcher, and `caller` resolves to a live row that
+/// launched an agent row the record matches. Unlike a claim, it needs no open turn. `audit`
+/// holds every durable row, as for [`may_claim`].
+pub fn defers_to_report(
+    agents: &[AgentState],
+    audit: &[AgentState],
+    caller: Option<&CallerIdentity>,
+    record: &RunRecord,
+) -> bool {
+    crate::harness::fleet::FleetRuns::reports_to_launcher(record)
+        && caller
+            .and_then(|caller| resolve_launch_caller(agents, caller).ok())
+            .filter(|launcher| launcher.ended_at.is_none())
+            .is_some_and(|launcher| launched(audit, launcher, record))
+}
+
+/// Whether `launcher` launched an agent row `record` matches, searched among every durable
+/// row: a `-p --bg` run's row leaves the live snapshot once its session ends, while the fleet
+/// digest still reports the run from it.
+fn launched(audit: &[AgentState], launcher: &AgentState, record: &RunRecord) -> bool {
+    audit
+        .iter()
+        .any(|child| record.matches_agent(child) && child.launcher_is(launcher))
 }
 
 /// Who a printed answer is claimed for; an unresolved or unattended agent
@@ -46,12 +75,10 @@ impl<'a> Claimant<'a> {
             .map(Self::Launcher)
     }
 
-    fn owns(&self, agents: &[AgentState], record: &RunRecord) -> bool {
+    fn owns(&self, audit: &[AgentState], record: &RunRecord) -> bool {
         match self {
             Self::Person => true,
-            Self::Launcher(parent) => agents
-                .iter()
-                .any(|child| record.matches_agent(child) && child.launcher_is(parent)),
+            Self::Launcher(parent) => launched(audit, parent, record),
         }
     }
 }
@@ -362,11 +389,18 @@ mod tests {
     }
 
     #[test]
-    fn may_claim_only_for_a_person_or_the_attended_launcher() {
-        use crate::store::run::PeerRun;
+    fn may_claim_only_for_a_person_or_the_attended_launcher_and_defer_only_for_the_launcher() {
+        use crate::store::run::{PeerRun, ReportTo};
 
         for answer in ["subagent", "peer"] {
-            for caller_kind in ["parent", "human", "stranger", "unattended", "missing"] {
+            for caller_kind in [
+                "parent",
+                "human",
+                "stranger",
+                "unattended",
+                "ended",
+                "missing",
+            ] {
                 let (_dir, store, mut record, _) = claim_fixture();
                 if answer == "peer" {
                     record.subagent = false;
@@ -392,6 +426,9 @@ mod tests {
                         None,
                     );
                 }
+                if caller_kind == "ended" {
+                    append_claim_agent(&store, "parent", LifecycleSignal::Ended, None);
+                }
                 let caller = (caller_kind != "human").then(|| CallerIdentity {
                     kind: AgentKind::new_unchecked("claude"),
                     launch_id: Some(caller_name.into()),
@@ -401,10 +438,24 @@ mod tests {
                     role: None,
                 });
                 let snapshot = store.snapshot_cached().unwrap();
+                let audit = store
+                    .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+                    .unwrap()
+                    .agents;
                 assert_eq!(
-                    may_claim(&snapshot, caller.as_ref(), &record),
+                    may_claim(&snapshot, &audit, caller.as_ref(), &record),
                     matches!(caller_kind, "parent" | "human"),
                     "{answer}/{caller_kind}"
+                );
+                assert_eq!(
+                    defers_to_report(&snapshot.agents, &audit, caller.as_ref(), &record),
+                    matches!(caller_kind, "parent" | "unattended"),
+                    "{answer}/{caller_kind} defers"
+                );
+                record.report_to = ReportTo::Nobody;
+                assert!(
+                    !defers_to_report(&snapshot.agents, &audit, caller.as_ref(), &record),
+                    "{answer}/{caller_kind}: a detached run reports to nobody"
                 );
             }
         }

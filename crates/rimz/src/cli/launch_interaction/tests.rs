@@ -118,7 +118,7 @@ fn peer_receipt_names_the_host_out_path_under_its_reader() {
     assert_eq!(
         receipt(&run, Some("auth")),
         format!(
-            "Running in its own pane. Keep working or end your turn: one AGENT_REPORT reaches you once every agent you launched has settled, and another after each turn a message of yours opens.\nIts response lands at {} when this turn settles. To block instead: rimz agents wait @peer#auth\nIt stays open after this turn. To follow up: rimz message @peer#auth '<text>'\n",
+            "Running in its own pane. Keep working or end your turn: one AGENT_REPORT reaches you once every agent you launched has settled, and another after each turn a message of yours opens.\nIts response lands at {} when this turn settles. To check on it: rimz agents wait @peer#auth\nIt stays open after this turn. To follow up: rimz message @peer#auth '<text>'\n",
             expected.display()
         )
     );
@@ -210,7 +210,7 @@ fn launch_receipt_carries_either_the_hints_or_the_peer_lines() {
     assert!(!prompted.contains("Wait:"), "{prompted}");
     assert!(
         prompted.contains("\n\nRunning in its own pane. ")
-            && prompted.contains("To block instead: rimz agents wait @peer#auth\n")
+            && prompted.contains("To check on it: rimz agents wait @peer#auth\n")
             && prompted.ends_with("To follow up: rimz message @peer#auth '<text>'\n"),
         "{prompted}"
     );

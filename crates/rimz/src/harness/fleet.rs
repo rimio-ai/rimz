@@ -398,6 +398,11 @@ impl<'a> FleetRuns<'a> {
         !run.status.is_terminal() && run.limit_hold.is_some()
     }
 
+    /// A run whose answers its launcher's report carries; a detached run reports to nobody.
+    pub(crate) fn reports_to_launcher(run: &RunRecord) -> bool {
+        run.report_to == ReportTo::Launcher
+    }
+
     pub fn of(
         agents: impl IntoIterator<Item = &'a AgentState> + Clone,
         runs: &'a [RunRecord],
@@ -421,7 +426,7 @@ impl<'a> FleetRuns<'a> {
                         }))
                         .map(move |run| (child, run))
                 })
-                .filter(|(_, run)| run.report_to == ReportTo::Launcher && seen.insert(&run.run_id))
+                .filter(|(_, run)| Self::reports_to_launcher(run) && seen.insert(&run.run_id))
                 .collect(),
         )
     }

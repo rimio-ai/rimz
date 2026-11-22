@@ -680,13 +680,13 @@ fn background_receipt_names_the_report_or_the_wait_command() {
         assert_eq!(
             receipt_for(one, path, subagent, ReportTo::Launcher),
             format!(
-                "Running in the background. Keep working or end your turn: one {report} reaches you once {settled} has settled.\nIts response lands at /state/out/planner/calm-fox.output when it settles. To block instead: {wait} calm-fox\n"
+                "Running in the background. Keep working or end your turn: one {report} reaches you once {settled} has settled.\nIts response lands at /state/out/planner/calm-fox.output when it settles. To check on it: {wait} calm-fox\n"
             )
         );
         assert_eq!(
             receipt_for(several, path, subagent, ReportTo::Launcher),
             format!(
-                "Running in the background. Keep working or end your turn: one {report} reaches you once {settled} has settled.\nEach response lands at /state/out/planner/<name>.output when its {noun} settles. To block instead: {wait} calm-fox bold-owl shy-elk\n"
+                "Running in the background. Keep working or end your turn: one {report} reaches you once {settled} has settled.\nEach response lands at /state/out/planner/<name>.output when its {noun} settles. To check on them: {wait} calm-fox bold-owl shy-elk\n"
             )
         );
         assert_eq!(

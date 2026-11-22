@@ -8,7 +8,7 @@ Launching, joining, and stopping need a calling agent that RimZ can identify, th
 | --- | --- | --- |
 | `rimz subagents <PROFILE> <PROMPT>`, `launch` | an agent | [Launch one child](#launch-one-child) |
 | `fanout [FILE]` | an agent | [Launch one child per task](#fan-out-a-task-list) in a JSON array |
-| `wait <NAME>...` | an agent | [Join](#join-results-with-wait) the named children and print their answers |
+| `wait <NAME>...` | an agent | [Join](#join-results-with-wait) the named children: a report row for each settled one, a still-running line for each other |
 | `stop <NAME>...`, `stop --all` | an agent | [Stop](#stop-children) live children |
 | `list` (alias `ls`) | any shell | [List](#list-children) children |
 | `profiles` | any shell | [List the profiles](#discover-profiles) a child can launch from |
@@ -22,14 +22,14 @@ In both the bare and `launch` forms, `PROMPT` may start with `-`; a value that i
 ```sh
 rimz subagents claude "trace the authentication call path" --description "trace auth path"
 rimz subagents launch reviewer --prompt-file /tmp/review-brief.md
-rimz subagents codex "find the smallest safe fix" --wait=10m
+rimz subagents codex "find the smallest safe fix" --wait
 ```
 
-The bare form and `launch` are the same command. `PROFILE` is a `subagents/<name>.md` profile (or trusted project child profile), an agent kind (`claude`, `codex`, ...), or an `[agents.commands]` command. The launch prints the child's petname on stdout and returns at once, with a receipt on stderr that names the coming fleet report, its response file, and the `wait` command that blocks instead, so a parent can start several children in a row and keep working. A later `rimz subagents wait <petname>` or the [fleet report](#the-fleet-report) delivers the result.
+The bare form and `launch` are the same command. `PROFILE` is a `subagents/<name>.md` profile (or trusted project child profile), an agent kind (`claude`, `codex`, ...), or an `[agents.commands]` command. The launch prints the child's petname on stdout and returns at once, with a receipt on stderr that names the coming fleet report, its response file, and the `wait` command that checks on it, so a parent can start several children in a row and keep working. The [fleet report](#the-fleet-report) delivers the result, and `rimz subagents wait <petname>` says where the child stands.
 
 If tier routing moves the child, one stderr warning names its profile, tier, chosen model and every passed entry with its reason, including full build errors. Inspect the recorded tier and passes with [`rimz agents show`](./agents.md#show--inspect). A follow-up that resumes the child prints no new routing warning.
 
-The child is supervised until the work ends, not just its first clean turn end. If it arms a wait or [compacts itself](./agents.md#compact) and ends its turn, or ends it with a message from you or another agent queued for it, its run stays `running` and the fleet report waits too. A lost wake with nothing else left to wake the child fails its run with exit `1` and a reason beginning `parked on a wake that never arrived`; its timeout still applies. A child held only for a message that is then canceled completes with the answer it had. The turn a message opens gets the child's whole `--timeout` again. The report it wrote before parking stays in its answer: the turn that resumes work adds its final message after it, separated by a `---` line, so the response file and `subagents wait` carry both. This includes a wake turn and a turn in which the child cancels its wait or otherwise works after a cache keepalive.
+The child is supervised until the work ends, not just its first clean turn end. If it arms a wait or [compacts itself](./agents.md#compact) and ends its turn, or ends it with a message from you or another agent queued for it, its run stays `running` and the fleet report waits too. A lost wake with nothing else left to wake the child fails its run with exit `1` and a reason beginning `parked on a wake that never arrived`; its timeout still applies. A child held only for a message that is then canceled completes with the answer it had. The turn a message opens gets the child's whole `--timeout` again. The report it wrote before parking stays in its answer: the turn that resumes work adds its final message after it, separated by a `---` line, so the response file carries both. This includes a wake turn and a turn in which the child cancels its wait or otherwise works after a cache keepalive.
 
 After reporting, an interactive child stays alive until the parent ends the turn that received its result. The parent can send a follow-up with `rimz message @<petname>` in that window; a child turn or pending message delays cleanup. One-shot providers exit after answering. A parent's message to an ended child resumes its session when supported ([follow-ups](#follow-up-messages)). A terminal child awaiting receipt is not bounded by the run timeout; parent loss or an explicit stop reclaims it.
 
@@ -45,8 +45,8 @@ rimz subagents wait "$first" "$second"
 | `--cwd <DIR>` | parent's checkout | Working directory for the child; the room stays the caller's. Uses the same [path resolution as agent launches](./agents.md#channel-worktree-and-placement). |
 | `--add-dir <DIR>` | none | Repeatable additional working directory. Resolved like `--cwd`, canonicalized and deduplicated in flag order. Claude and Codex grant file access without loading its configuration. Antigravity passes it as agy's `--add-dir`, which loads the directory's configuration and runs its hooks, and warns; other kinds warn and launch without the grant. A Codex directory saved untrusted refuses. |
 | `--empty-dir` | off | Require a private empty working directory, whatever the profile says. With `--cwd X`, records X as the checkout and keeps its lane; X is not added unless `--add-dir X` is also passed. |
-| `--wait[=DURATION]` | return at launch | Print the petname, then join the child like `subagents wait <name>`. The duration caps the join only; the child keeps its own deadline. Write `--wait=5m`: with a bare `--wait`, a prompt that parses as a duration is refused with that hint. |
-| `--json` | off | With `--wait`, print a one-entry result map keyed by the child's petname instead of the petname and answer. The full run record is under `run` in `rimz agents show <ref> --json`. Refused without `--wait`. |
+| `--wait[=DURATION]` | return at launch | Print the petname, then join the child like `subagents wait <name>`: its report row once it has settled, else a still-running line and exit `75`. The join returns at once, so a duration has no effect. With a bare `--wait`, a prompt that parses as a duration is refused with a hint to write `--wait=5m`. |
+| `--json` | off | With `--wait`, print a one-entry result map keyed by the child's petname instead of the petname and row. The full run record is under `run` in `rimz agents show <ref> --json`. Refused without `--wait`. |
 | `--timeout <DURATION>` | the profile's [`timeout:`](../definitions.md), then `[agents.subagents] timeout`, `30m` | Tell pending or running children to stop at this deadline; kill them `grace` later. Does not bound a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
 | `--warn <OFFSETS>` | `[agents.subagents] warn`, `10m,5m` | Comma-separated warning offsets before the deadline; `none` disables warnings. |
 | `--grace <DURATION>` | `[agents.subagents] grace`, `5m` | Time to finish reporting after the deadline; `0s` kills at the deadline. |
@@ -87,8 +87,8 @@ A launch refuses before it writes a run record or opens a pane when:
 | `1` | The launch was refused or failed. With `--wait`, the child failed. |
 | `2` | Usage error: a flag clap rejects, bare `rimz subagents`, or the retired `--detach`. |
 | `125` | A room or account cap, or a Qwen quota window, refused the launch. With `--wait`, the child's run ended `budget_exceeded`. |
-| `123`, `124`, `130` | With `--wait` only: the run's status, or `124` when the `--wait` deadline expired ([exit codes](./agents.md#supervised-runs--p)). |
-| `75` | With `--wait` only: a prompt for the calling agent was queued, and the child keeps running ([the message stop](./agents.md#wait)). |
+| `123`, `124`, `130` | With `--wait` only: the run's status ([exit codes](./agents.md#supervised-runs--p)). |
+| `75` | With `--wait` only: the child is still running, and its answer comes in the fleet report, or a prompt for the calling agent was queued ([the message stop](./agents.md#wait)). |
 
 `rimz subagents` has no `--ask`, `--budget`, `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output or input formats, `--retries`, or `--verify`. `--detach` on `launch` or `fanout` is refused with exit 2, because a subagent ends with its parent; for a run that outlives the caller, launch a peer with `rimz agents <spec> "<prompt>" -p --bg --detach`. Use `rimz agents` when a launch needs one of those; from an agent, that starts an independent peer that counts against `[agents] max-chain-length`. Use `rimz teams` when the workers are peers rather than children.
 
@@ -131,10 +131,10 @@ For each of `timeout`, `warn`, and `grace`, the task value wins over the fanout 
 | --- | --- |
 | default | Each petname as its child launches; the launch receipt goes to stderr |
 | `--json` | One object mapping each petname to `{"run_id": "..."}` |
-| `--wait[=DURATION]` | Each answer as it finishes, under a `--- <petname> (<outcome>) ---` header; the exit code follows [`agents wait`](./agents.md#wait) |
-| `--wait --json` | The labeled result map of [`agents wait --json`](./agents.md#wait) |
+| `--wait[=DURATION]` | Each petname as its child launches, then at once, in launch order, a report row for each settled child and a still-running line for each other; the exit code follows [`subagents wait`](#join-results-with-wait) |
+| `--wait --json` | The labeled result map of [`subagents wait --json`](#join-results-with-wait) |
 
-A fanout of one task under `--wait` behaves like a single join: the bare answer without a header, or a one-entry result map with `--json`. For the full run record, use `rimz agents show <ref> --json` and read `run`.
+A fanout of one task under `--wait` behaves like a single join: the petname, then one row or line, or a one-entry result map with `--json`. For the full run record, use `rimz agents show <ref> --json` and read `run`.
 
 A launch that fails partway stops the remaining launches. The error names the children already started; they keep running under their normal deadline and stay reachable through `subagents wait` and `subagents stop --all`. A cap refusal partway exits `125` with the same message.
 
@@ -152,7 +152,7 @@ All 3 subagents settled, responses total ~5.1k tokens, 96 lines:
 - @slow-reviewer: timed out after 33m; provider did not stop, task: "review correctness", partial response: /home/me/.rimz/ws/myrepo-f89e/out/planner/slow-reviewer.output (<1k tokens, 12 lines)
 ```
 
-The report lists status and where each answer is, and asks for nothing: reading the response files is the parent's call. It never carries a child's answer text; `rimz subagents wait <names>` prints the answers, and `--json` gives structured results.
+The report lists status and where each answer is, and asks for nothing: reading the response files is the parent's call. It never carries a child's answer text, and neither does `rimz subagents wait`, which prints the same rows.
 
 | Part | Format |
 | --- | --- |
@@ -176,12 +176,12 @@ A supervised parent can end its turn while children run without ending its own r
 
 An answer drops out of a report that has not been composed yet when:
 
-- a join (`subagents wait`, `fanout --wait`, or `--wait` on a launch) printed its result while the parent's turn was open;
-- a [`rimz agents wait`](./agents.md#wait) printed its result from a user shell or to its launcher while the launcher's turn was open, which is how a `-p --bg` run is joined;
+- a join (`subagents wait`, `fanout --wait`, or `--wait` on a launch) printed its row while the parent's turn was open;
+- a [`rimz agents wait`](./agents.md#wait) printed its result from a user shell, or its row to its launcher while the launcher's turn was open, which is how a `-p --bg` run is joined;
 - it is a `-p` run the parent launched without `--bg`, which prints its own result;
 - the parent stopped it with `rimz subagents stop`.
 
-A join claims only the answer it prints, leaving earlier unread answers for the report. Stopping a child dismisses all its answers. A join that finishes after the parent's turn has ended still prints, but its rows stay in the report, so the parent is woken with them at its next boundary. A report already queued is canceled only when every answer it lists has been read or stopped, even if a listed child has since answered again; a delivered report cannot be recalled. A child stopped by someone else with `rimz agents stop @child` still appears as `canceled`. A child canceled because its parent agent ended reads `canceled …; its parent agent ended`, here and in the run status line `rimz subagents wait` prints, whose `--json` entry carries `cancel_reason: "parent_ended"`. If the normal report is missed, the room's sidebar producer rebuilds it from the run records within about a minute ([backstops](../../internals/harness/subagents.md#backstops)).
+A join claims only the answer its row names, leaving earlier unread answers for the report, and a still-running line claims nothing. Stopping a child dismisses all its answers. A join that finishes after the parent's turn has ended still prints, but its rows stay in the report, so the parent is woken with them at its next boundary. A report already queued is canceled only when every answer it lists has been read or stopped, even if a listed child has since answered again; a delivered report cannot be recalled. A child stopped by someone else with `rimz agents stop @child` still appears as `canceled`. A child canceled because its parent agent ended reads `canceled …; its parent agent ended`, here and in the run status line `rimz subagents wait` prints, whose `--json` entry carries `cancel_reason: "parent_ended"`. If the normal report is missed, the room's sidebar producer rebuilds it from the run records within about a minute ([backstops](../../internals/harness/subagents.md#backstops)).
 
 ## Join results with wait
 
@@ -189,15 +189,14 @@ A join claims only the answer it prints, leaving earlier unread answers for the 
 rimz subagents wait calm-fox
 rimz subagents wait calm-fox bright-owl
 rimz subagents wait calm-fox bright-owl --any
-rimz subagents wait calm-fox --stream
-rimz subagents wait calm-fox bright-owl --json --timeout 10m
+rimz subagents wait calm-fox bright-owl --json
 ```
 
-`subagents wait` is [`rimz agents wait`](./agents.md#wait) restricted to the caller's own children: the same output, `--any`, `--stream`, `--timeout`, JSON map, and exit codes. `--any` and `--stream` conflict, `--stream` takes exactly one name (`--stream --json` emits NDJSON run events), and there is no `--from-start`. Use it when the next step needs a child's text before the fleet settles, or to reread a result after its pane and response file are gone; results stay readable from the durable run record.
+`subagents wait` is [`rimz agents wait`](./agents.md#wait) restricted to the caller's own children, and since every child reports to its parent, it is always the launcher's join, which returns at once. In the order named, it prints a settled child's row in the [fleet report's format](#the-fleet-report) and `- @<name>: still running (<elapsed> so far); it will be in your report` for each other child. It exits with the code `agents wait` gives when every named child has settled, and `75` while any runs; with `--any`, by the first named child that has settled, or `75` when none has. `--timeout` has no effect, `--stream` is refused with a pointer to the report, and there is no `--from-start`. Use it to see where children stand before the fleet settles, or to find a result again after its pane is gone: the row's response file is written again from the durable run record when it is missing.
 
-Headers and JSON map keys preserve the reference as typed, including an `@` prefix or lane qualifier. Each summary entry carries the pet `name` separately. Identical typed references are deduplicated. `--json` prints the same compact keyed map for one target or several, settled or timed out. For the full run record, use `rimz agents show <ref> --json` and read `run`. Blocking reasons go to stderr even in JSON mode and appear in timed-out entries when the target is not running.
+JSON map keys preserve the reference as typed, including an `@` prefix or lane qualifier. Each entry carries the pet `name` separately. Identical typed references are deduplicated. `--json` prints the same compact keyed map for one target or several: a settled child's entry carries `response_path`, `response_tokens`, and `response_lines` in place of `last_message`, and a running child's entry is `status: "running"` with `exit: 75`. For the full run record, use `rimz agents show <ref> --json` and read `run`.
 
-`wait` keeps blocking on a child that is [paused on a provider limit](#a-child-paused-on-a-provider-limit): the run has no answer yet and may still resume, or fail by the pause rule. Bound the join with `--timeout`, then read `subagents list`.
+`wait` reads a child that is [paused on a provider limit](#a-child-paused-on-a-provider-limit) as still running: the run has no answer yet and may still resume, or fail by the pause rule. Read `subagents list` for the pause.
 
 At least one name is required. A bare `wait` fails and lists the caller's children, so a copied command never joins an older fleet by accident; with no children it fails with `this agent has no supervised subagents to wait for`. A name that is not one of the caller's children fails with ``` `<name>` is not one of this agent's subagents ```.
 
@@ -395,4 +394,4 @@ grace = "5m"
 
 Claude, Codex, Copilot, Cursor, Droid, Grok, and Qwen receive warning and stop context through post-tool hooks. Qwen's async hook delivers context on the next turn. A Claude or Codex child that makes no tool call within 10 seconds of the deadline (half the grace when the grace is under 20 seconds) gets the stop typed into its pane followed by Escape, so a child stuck in one long command still has the rest of the grace to report; a child waiting on your answer in its pane, or whose permission is under automatic review, gets neither, and its stop arrives through the hook on its first tool call after the answer. Other providers receive only the stop instruction through pane steering, at the deadline. A typed stop held while you type in the child's pane waits in the queue, and is withdrawn if the child's run ends, or ends and reopens with a follow-up, before it is typed. A Copilot, Cursor, Droid, Grok, or Qwen child making no tool calls receives no stop context before the kill bound. A late hook gets only the latest crossed warning, with actual remaining time, rounded down to minutes or to seconds below a minute. The last warning asks the child to wrap up; the deadline asks it to stop and report.
 
-At `timeout + grace`, a still-running child becomes `timed_out`. RimZ preserves an existing response or harvests the last non-empty assistant text from its provider transcript. The fleet report labels a harvested result `partial response:`. `subagents wait` prints that text with `rimz: run timed out (exit 124)` on stderr; JSON retains `status: "timed_out"` and `last_message`.
+At `timeout + grace`, a still-running child becomes `timed_out`. RimZ preserves an existing response or harvests the last non-empty assistant text from its provider transcript. The fleet report labels a harvested result `partial response:`. `subagents wait` prints its `partial response:` row and exits `124`; its JSON entry keeps `status: "timed_out"` and names the response file.
