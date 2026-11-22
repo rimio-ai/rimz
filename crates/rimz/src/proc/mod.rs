@@ -798,15 +798,25 @@ enum StdioTerminal {
     Unreadable,
 }
 
-/// Whether fd 0 and fd 1 of `pid` are a terminal, decided from the metadata the
-/// `/proc/<pid>/fd` links resolve to. It never opens a descriptor's target: opening
-/// another process's pty or pipe has side effects and can block.
+/// Whether fd 0 and fd 1 of `pid` are a terminal, decided from the file type and
+/// device major the `/proc/<pid>/fd` links resolve to. It never opens a descriptor's
+/// target, since opening another process's pty or pipe has side effects and can
+/// block, and it asks no filesystem server: `AT_STATX_DONT_SYNC` has NFS and FUSE
+/// answer from cached attributes, so a hung mount behind a redirect cannot stall it.
 #[cfg(target_os = "linux")]
 fn stdio_terminal(pid: u32) -> StdioTerminal {
     memo::stdio_terminal(pid, || {
         #[cfg(any(test, feature = "testkit"))]
         count(Counter::ProcStdio);
-        let reads = [0, 1].map(|fd| std::fs::metadata(format!("/proc/{pid}/fd/{fd}")).ok());
+        let reads = [0, 1].map(|fd| {
+            rustix::fs::statx(
+                rustix::fs::CWD,
+                format!("/proc/{pid}/fd/{fd}"),
+                rustix::fs::AtFlags::STATX_DONT_SYNC,
+                rustix::fs::StatxFlags::TYPE,
+            )
+            .ok()
+        });
         if reads
             .iter()
             .flatten()
@@ -823,11 +833,10 @@ fn stdio_terminal(pid: u32) -> StdioTerminal {
 
 /// A tty (major 4), `/dev/tty` or the console (major 5), or a pty slave (136-143).
 #[cfg(target_os = "linux")]
-fn is_terminal_device(target: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::{FileTypeExt, MetadataExt};
-
-    target.file_type().is_char_device()
-        && matches!(nix::sys::stat::major(target.rdev()), 4 | 5 | 136..=143)
+fn is_terminal_device(target: &rustix::fs::Statx) -> bool {
+    let file_type = rustix::fs::FileType::from_raw_mode(u32::from(target.stx_mode));
+    file_type == rustix::fs::FileType::CharacterDevice
+        && matches!(target.stx_rdev_major, 4 | 5 | 136..=143)
 }
 
 /// macOS has no descriptor reader without a new unsafe site, so its walks keep
