@@ -102,6 +102,13 @@ status-level = "retry"
 failure-output = "immediate-final"
 fail-fast = { max-fail = 3 }
 
+# The gate tier keeps a JUnit report too, so CI records every gate test's
+# duration alongside its failures.
+[profile.gate.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
 # `live` runs both mux backends in one nextest process, letting tmux and Zellij
 # co-schedule in CI while each stays bounded by its per-backend group.
 # Together, `live` and `journey` are the exact complement of `gate`.
@@ -121,8 +128,9 @@ success-output = "final"
 
 # A retried pass hides its failed attempts from the console summary, so the
 # retrying tiers keep a JUnit report that records every failed attempt with its
-# output. nextest writes it to `target/nextest/<profile>/junit.xml` under the
-# workspace root, whatever `CARGO_TARGET_DIR` is. CI uploads it as an artifact.
+# output, as `gate` does. nextest writes it to
+# `target/nextest/<profile>/junit.xml` under the workspace root, whatever
+# `CARGO_TARGET_DIR` is. CI uploads it as an artifact.
 [profile.live.junit]
 path = "junit.xml"
 store-success-output = false
