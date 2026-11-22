@@ -1176,6 +1176,12 @@ fn parse_test_command(args: &[String]) -> Result<TestCommand> {
     if list && !names.is_empty() {
         bail!("cargo xtask test does not combine `--list` with `--name`");
     }
+    if !names.is_empty() && nextest_archive_file(&forwarded).is_some() {
+        bail!(
+            "cargo xtask test does not combine `--archive-file` with `--name`; select the test \
+             with `-E 'test(=<name>)'` instead"
+        );
+    }
     Ok(TestCommand {
         names,
         forwarded,
