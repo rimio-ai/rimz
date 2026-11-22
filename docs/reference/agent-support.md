@@ -459,6 +459,15 @@ OpenCode's project instructions and RimZ's launch reminder still follow the repl
 | Antigravity | Esc | Supported, without stop confirmation. Escape returns the typed text to the composer, so RimZ presses Enter half a second later to send it |
 | Every other agent and process plugins | none | `--interrupt` refused. Use `--steer` or park |
 
+### Steer key
+
+[`rimz message --steer`](./cli/message.md#when-a-message-lands) types a prompt and presses Enter. An agent that queues text submitted during a running turn also declares a steer key, which RimZ presses after the Enter so the text joins that turn.
+
+| Agent | Steer key | Behaviour |
+| --- | :--: | --- |
+| Antigravity | Alt+M | Pressed half a second after Enter when the agent is mid-turn. Not pressed with `--no-enter` or for a resting agent |
+| Every other agent and process plugins | none | Enter only |
+
 ### Auto-compaction window
 
 The `auto-compact` field on a profile, kind base, or team role sets the agent's native auto-compaction window, as a token count from 100k through 1M inclusive: `"200k"`, `"200000"`, or `"1m"`. RimZ rejects anything outside that range before launch, so `"200"` fails instead of meaning something different to each CLI. This is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction), which uses a seat line for a mid-turn reminder to compact and for compact-first delivery without changing the native window. Reminder participation derives from compact-command, context, and compaction coverage, and a native turn-start hook. The configuration guide lists skipped kinds, and `rimz doctor` reports detected skips. Which agents accept a trailing instruction when you compact by hand is in [`rimz agents compact`](./cli/agents.md#compact).

@@ -128,7 +128,7 @@ The catalog holds four native events, with `PostToolUse` split by three disjoint
 | `PostToolUse:edit` | `PostToolUse`, `write_file`, `edit_file`, and the legacy `write_to_file`, `replace_file_content`, `multi_replace_file_content` | `ToolUsed`, mutating and editing | `{}` |
 | `PostToolUse:mutating` | `PostToolUse`, `run_command`, `run_workflow`, `call_mcp_tool` | `ToolUsed`, mutating | `{}` |
 | `PostToolUse:observed` | `PostToolUse`, the remaining known tools (`view_file`, `read_file` through `browser_.*`) | `ToolUsed` | `{}` |
-| `PostInvocation` | `PostInvocation` | routing only | `{}` |
+| `PostInvocation` | `PostInvocation` | a `TurnStarted` state snapshot with the prompt when the transcript holds a user turn at or past the payload's `initialNumSteps` ([Steering](#steering)); routing only otherwise, for a bare `/compact`, or when the transcript cannot be read | `{}` |
 | `Stop` | `Stop` | `CompactionEnded` for a bare `/compact`, `TurnEnded` otherwise | `{"decision":""}` |
 
 Hook stdout is Antigravity's decision channel, and every wired event must answer with JSON. `{}` is the documented no-op, and `{"decision":""}` is a `Stop` decision other than `continue`, so the stop proceeds ([reference](../../externals/agent-adapter/antigravity-reference.md#events)). Any other event name, such as a hand-fed `PreToolUse` or `SessionStart`, gets no output and records nothing. For every Antigravity event the feed waits up to 1.2 s for the drainer to apply the frame and prints the drainer's reply ([adapter.md](./adapter.md#the-feed)). That early return also skips the deadline rung a `PostToolUse` could otherwise carry.
@@ -149,6 +149,12 @@ The compact command is a bare `/compact`, and Antigravity takes no compaction in
 Two cases leave the bracket without a closer. An Escape during the compaction fires only the opener, so the compacting head stays until the next lifecycle signal. A `/compact` in a conversation with nothing to compact fires no hook, so a sent command times out unconfirmed. A user's own `/compact <message>` stays a turn, though agy compacts before it answers.
 
 The transcript is append-only across a compaction: a `USER_INPUT` row for `/compact`, then a `SYSTEM` / `CHECKPOINT` row with the summarizing call's tokens. History drops a user row whose request is exactly `/compact`, so a sent command never shows as the user's words. The statusline keeps its pre-compaction context reading until the next turn ends, and RimZ's compacted-at guards (the command's recorded token count and the compacted-awaiting-prompt mark) keep idle compaction and compact-first from firing again on it. agy compacts on its own near the context limit by its docs, but no hook for that was observed, so `auto-compact` stays unsupported.
+
+### Steering
+
+agy queues a message submitted during a running turn until the turn ends, and Alt+M takes it into the running turn instead. The descriptor declares Alt+M as its `steer_key`, so a steer into a running turn presses it after the Enter ([the steer key](../harness/messaging.md#the-steer-key)).
+
+The model invocation that takes the message in writes its user row at the `step_index` equal to its `initialNumSteps`; the row is absent at that invocation's `PreInvocation` and present at its `PostInvocation`, and every later invocation begins past it (1.5.14 capture, [antigravity-reference.md](../../externals/agent-adapter/antigravity-reference.md#interrupt-and-queued-messages)). So `PostInvocation` reports every user turn at or past `initialNumSteps`, in step order and joined by a blank line, as one `TurnStarted` state snapshot, once per message. The snapshot confirms the `Sent` record of each message it carries and records each prompt without opening a turn or moving `turn_started_at` ([Confirmation and retry](../harness/messaging.md#confirmation-and-retry)). A turn's first prompt and a message agy drains at the turn's end sit below that bound, so the `invocationNum: 0` opener keeps them. A `PostToolUse` can show the row half a second earlier, but carries no step bound. Two steers taken in by one invocation (one row each in live run 1) arrive in one report, and each confirms its own record. The invocation-0 opener that continues a turn after a background command reads the latest prompt again, so a steer before it is recorded a second time as the user's text.
 
 ### Interrupt
 
@@ -198,7 +204,7 @@ Four readers use the transcript:
 | Reader | Path source | Read | Rule |
 | --- | --- | --- | --- |
 | history (`session.rs::messages`) | `session_transcript`, validated | the lines the shared transcript reader supplies | `DONE` visible records with content, user text normalized as above, less a user request that is exactly `/compact` |
-| first prompt (`session.rs::latest_prompt`) | hook `transcriptPath`, validated | 64 KiB tail | on `TurnStarted` only. The latest completed visible user prompt. Other hooks read no prompt |
+| first prompt (`session.rs::latest_prompt`) | hook `transcriptPath`, validated | 64 KiB tail | on `TurnStarted` only. The latest completed visible user prompt, or on `PostInvocation` every one at or past `initialNumSteps`, joined by a blank line (`session.rs::prompt_taken_in_under`). Other hooks read no prompt |
 | final message (`session.rs::last_assistant_message`) | hook `transcriptPath`, not validated | 64 KiB tail, then whole file | on every `Stop` that decodes to `TurnEnded`. The newest `DONE` planner text after the last turn start. When the tail holds neither a turn start nor an answer, it reads the whole file without a bound, and a file without a turn start counts as one turn |
 | subagent join | parent row's path, or rebuilt from the parent id | 64 KiB tail | [Subagents](#subagents) |
 
