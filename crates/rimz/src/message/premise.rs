@@ -27,10 +27,14 @@ pub(super) fn withdraw_before_candidacy(
     }
     let rows = store.audit_rows()?;
     let holders = crate::agents::state::LaunchHolders::new(rows.iter());
-    let row = rows.iter().find(|agent| {
-        message.same_agent_card(agent) && agent.ended_at.is_none() && !holders.replaced(agent)
-    });
-    let Some(reason) = broken(store, message, row, Timestamp::now())? else {
+    // With its context, as the write check reads it: the hand-off premise reads occupancy.
+    let row = store
+        .rows_with_live_context(rows.iter().find(|agent| {
+            message.same_agent_card(agent) && agent.ended_at.is_none() && !holders.replaced(agent)
+        }))
+        .into_iter()
+        .next();
+    let Some(reason) = broken(store, message, row.as_deref(), Timestamp::now())? else {
         return Ok(false);
     };
     let withdrawn = store.withdraw_messages(&workspace.session_name, |live| {
@@ -48,6 +52,14 @@ pub(super) fn broken(
     now: Timestamp,
 ) -> crate::store::Result<Option<String>> {
     if let Some(reason) = message.broken_row_premise(row, now) {
+        return Ok(Some(reason));
+    }
+    let cache_lifetime = |row: &AgentState| {
+        crate::config::MachineConfig::load_lenient()
+            .harness
+            .prompt_cache_lifetime(row)
+    };
+    if let Some(reason) = row.and_then(|row| message.lapsed_hand_off(row, cache_lifetime, now)) {
         return Ok(Some(reason));
     }
     if matches!(&message.sender, MessageSender::Harness { notice } if notice.awaits_join())

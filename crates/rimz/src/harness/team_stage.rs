@@ -1148,11 +1148,9 @@ fn compact_flipper(
             request.workspace,
             request.store,
             CompactRequest {
-                // The flipper's own turn end follows this decision, so a turn edge cannot
-                // judge it; a new prompt means it went back to work.
-                premises: vec![Premise::NotPromptedSince {
-                    last_prompt_at: agent.last_prompt_at,
-                }],
+                // A prompt typed first leaves the hand-off owed; only the row at typing,
+                // under the limit or past its cache, withdraws it.
+                premises: vec![Premise::OverHandOffLimit { threshold }],
                 idle: false,
                 message_id: message_id.clone(),
                 agent,

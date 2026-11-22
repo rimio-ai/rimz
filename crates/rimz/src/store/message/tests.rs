@@ -1094,6 +1094,15 @@ fn prompts_and_operator_commands_never_expire() {
         assert_eq!(record.expires_at(), None);
         assert!(!record.expired(now));
     }
+    // A hand-off compaction's expiry is its cold cache, judged at typing.
+    let mut hand_off = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
+        .with_body(MessageBody::Command)
+        .with_automated(true)
+        .with_premises(vec![Premise::OverHandOffLimit { threshold: 100 }]);
+    hand_off.enqueued_at = now - DEFAULT_COMMAND_VALIDITY * 10;
+    assert!(hand_off.is_deliverable(now));
+    assert!(!hand_off.perishable());
+    assert_eq!(hand_off.expires_at(), None);
 }
 
 #[test]
@@ -2980,6 +2989,115 @@ fn unknown_premise_round_trips_and_holds() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     assert_eq!(unknown_only.broken_row_premise(Some(&receiver), now), None);
     assert_eq!(unknown_only.broken_row_premise(None, now), None);
+}
+
+/// An older binary, whose `Premise` lacks the hand-off variant, keeps it verbatim and holds it.
+#[test]
+fn hand_off_premise_reads_as_unknown_to_an_older_binary() {
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case", tag = "premise")]
+    enum OlderPremise {
+        Lifespan {
+            until: Timestamp,
+        },
+        #[serde(untagged)]
+        Other(serde_json::Value),
+    }
+    let encoded = serde_json::to_value(Premise::OverHandOffLimit { threshold: 160_000 }).unwrap();
+    let older: OlderPremise = serde_json::from_value(encoded.clone()).unwrap();
+    assert!(matches!(older, OlderPremise::Other(_)), "{older:?}");
+    assert_eq!(serde_json::to_value(&older).unwrap(), encoded);
+}
+
+#[test]
+fn hand_off_premise_withdraws_below_the_limit_or_on_a_cold_cache() {
+    let at = Timestamp::from_second(10_000).unwrap();
+    let lifetime = Duration::from_secs(300);
+    let record = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
+        .with_body(MessageBody::Command)
+        .with_automated(true)
+        .with_premises(vec![Premise::OverHandOffLimit { threshold: 100 }]);
+    let row = |occupied: Option<u64>, baseline: Option<u64>, request: Option<Timestamp>| {
+        let mut row = agent("sess", None);
+        row.usage.total_tokens = occupied;
+        row.last_compact_command_tokens = baseline;
+        row.pinged_at = request;
+        row
+    };
+    let below = Some("agent is no longer over the hand-off limit".to_owned());
+    let cold = Some("agent's prompt cache went cold before the compaction was typed".to_owned());
+    let warm = at + lifetime - Duration::from_secs(1);
+    let judge =
+        |row: &AgentState, ttl: Option<Duration>, now| record.lapsed_hand_off(row, |_| ttl, now);
+    assert_eq!(
+        judge(&row(Some(100), None, Some(at)), Some(lifetime), warm),
+        None
+    );
+    assert_eq!(
+        judge(&row(Some(99), None, Some(at)), Some(lifetime), warm),
+        below
+    );
+    assert_eq!(
+        judge(&row(None, None, Some(at)), Some(lifetime), warm),
+        below
+    );
+    assert_eq!(
+        judge(&row(Some(150), Some(150), Some(at)), Some(lifetime), warm),
+        below
+    );
+    assert_eq!(
+        judge(&row(Some(150), Some(120), Some(at)), Some(lifetime), warm),
+        None
+    );
+    assert_eq!(
+        judge(
+            &row(Some(150), None, Some(at)),
+            Some(lifetime),
+            at + lifetime
+        ),
+        cold
+    );
+    assert_eq!(
+        judge(&row(Some(150), None, Some(at)), None, at + lifetime * 100),
+        None
+    );
+    assert_eq!(
+        judge(
+            &row(Some(150), None, None),
+            Some(lifetime),
+            at + lifetime * 100
+        ),
+        None
+    );
+    // An open turn holds whatever it reads; a row that asks keeps its turn open, and a row
+    // parked on background work or on a provider limit is at rest and judged.
+    let mut open = row(Some(50), None, Some(at));
+    open.status = AgentStatus::Running;
+    assert_eq!(judge(&open, Some(lifetime), at + lifetime * 100), None);
+    let mut asking = open.clone();
+    asking.status = AgentStatus::Waiting;
+    assert_eq!(judge(&asking, Some(lifetime), at + lifetime * 100), None);
+    let mut background = open.clone();
+    background.phase = crate::agents::TurnPhase::Parked;
+    assert_eq!(judge(&background, Some(lifetime), warm), below);
+    let mut limited = open.clone();
+    limited.last_activity = at;
+    let mut context = crate::agents::AgentContext::new("claude", at);
+    context.turn_error = Some(crate::agents::context::AgentTurnError {
+        at: at + Duration::from_secs(1),
+        ..Default::default()
+    });
+    limited.context = Some(context);
+    assert_eq!(judge(&limited, Some(lifetime), warm), below);
+    let plain = record.clone().with_premises(Premise::NONE);
+    assert_eq!(
+        plain.lapsed_hand_off(
+            &row(None, None, Some(at)),
+            |_| Some(lifetime),
+            at + lifetime
+        ),
+        None
+    );
 }
 
 #[test]

@@ -1766,7 +1766,18 @@ impl Fixture {
     }
 
     fn context_tokens(&self, role: &str, used: u64) {
+        self.context_reading(role, used, None);
+    }
+
+    /// The context sidecar's reading for `role`, with the retention of its newest cache write.
+    fn context_reading(
+        &self,
+        role: &str,
+        used: u64,
+        cache_write: Option<rimz::agents::context::CacheWriteRetention>,
+    ) {
         let mut context = rimz::agents::AgentContext::new("claude", jiff::Timestamp::now());
+        context.last_cache_write = cache_write;
         context.tokens = Some(rimz::agents::AgentTokenUsage {
             context_window_size: Some(200_000),
             current_usage: Some(rimz::agents::AgentCurrentUsage {
@@ -1778,6 +1789,98 @@ impl Fixture {
         let record =
             rimz::agents::context::record::AgentContextRecord::new("claude", role, context);
         rimz::store::agent_context::write_record(&self.env.runtime_paths(), &record).unwrap();
+    }
+
+    /// Flip coder's Build to Review mid-turn, over the limit, and return the queued command.
+    fn queued_flip_compaction(&self) -> rimz::store::message::MessageRecord {
+        let output = success(self.flip("Review", Some("coder"), Some("handoff")));
+        assert!(output.contains("compact  queued"), "{output}");
+        let command = self
+            .env
+            .store()
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .find(|message| message.body == MessageBody::Command)
+            .unwrap();
+        assert_eq!(command.idle_since, None);
+        command
+    }
+
+    /// Close `role`'s turn without running boundary delivery before its next prompt.
+    fn end_turn_without_boundary(&self, role: &str) {
+        self.end_turn_without_boundary_at(role, jiff::Timestamp::now());
+    }
+
+    fn end_turn_without_boundary_at(&self, role: &str, at: jiff::Timestamp) {
+        let mut event = EventEnvelope::agent_lifecycle(
+            self.env.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "test",
+            &AgentLifecycleObservation::new(
+                Some(role.into()),
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ),
+        );
+        event.timestamp = at;
+        self.env.store().append_event(&event).unwrap();
+    }
+
+    /// Waits for a detached `message deliver` to type the compact command and press its Enter.
+    fn wait_for_compact_then_enter(&self) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let lines = crate::common::trace_lines(&self.trace);
+            if lines
+                .iter()
+                .position(|line| line.ends_with("\t/compact "))
+                .is_some_and(|at| {
+                    lines[at..]
+                        .iter()
+                        .any(|line| crate::common::is_enter_key(line))
+                })
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for /compact and its Enter; trace: {lines:?}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn sweep(&self) {
+        success(self.command().args(["message", "sweep"]).output().unwrap());
+    }
+
+    fn row(&self, role: &str) -> rimz::agents::AgentState {
+        self.env
+            .store()
+            .audit_rows()
+            .unwrap()
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == role)
+            .unwrap()
+            .clone()
+    }
+
+    /// The status of message `id`, live or in history.
+    fn message_status(&self, id: &rimz::ids::MessageId) -> MessageStatus {
+        let store = self.env.store();
+        store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .chain(store.list_message_history().unwrap())
+            .find(|message| message.message_id == *id)
+            .unwrap_or_else(|| panic!("no message {id}"))
+            .status
     }
 }
 
@@ -2735,67 +2838,165 @@ fn same_role_and_foreign_stage_do_not_compact_or_enqueue() {
     assert!(fixture.env.store().list_messages().unwrap().is_empty());
 }
 
+/// A prompt the member takes after the flip does not withdraw its hand-off compaction: the
+/// command is typed at the next turn end.
 #[test]
-fn queued_flip_compaction_is_withdrawn_by_a_later_turn() {
+fn queued_flip_compaction_survives_a_later_turn() {
     let fixture = Fixture::new();
     fixture.running("coder", Some("terminal_3"));
     fixture.running("reviewer", None);
     fixture.live_panes(&["terminal_3"]);
     std::fs::write(fixture.board(), BOARD).unwrap();
     fixture.context_tokens("coder", 150_000);
-    let output = success(fixture.flip("Review", Some("coder"), Some("handoff")));
-    assert!(output.contains("compact  queued"), "{output}");
-    let store = fixture.env.store();
-    let command = store
-        .list_messages()
-        .unwrap()
-        .into_iter()
-        .find(|message| message.body == MessageBody::Command)
-        .unwrap();
-    assert_eq!(command.idle_since, None);
-    // Close the original turn without running boundary delivery before the next prompt.
-    store
-        .append_event(&EventEnvelope::agent_lifecycle(
-            fixture.env.workspace_id.clone(),
-            "rimz-test",
-            "claude",
-            "test",
-            &AgentLifecycleObservation::new(
-                Some("coder".into()),
-                LifecycleSignal::TurnEnded {
-                    errored: false,
-                    parked_on_background: false,
-                    turn_id: None,
-                },
-            ),
-        ))
-        .unwrap();
+    let command = fixture.queued_flip_compaction();
+    fixture.end_turn_without_boundary("coder");
     fixture.hook("coder", "UserPromptSubmit", Some("terminal_3"));
-    let receiver = store
-        .audit_rows()
-        .unwrap()
-        .iter()
-        .find(|agent| agent.agent_id.as_str() == "coder")
-        .unwrap()
-        .clone();
+    let receiver = fixture.row("coder");
     assert!(receiver.turn_started_at > Some(command.enqueued_at));
+    // The Stop hook's own deliverer types the command; the test only waits for it.
     fixture.hook("coder", "Stop", Some("terminal_3"));
+    fixture.wait_for_compact_then_enter();
+    assert_ne!(
+        fixture.message_status(&command.message_id),
+        MessageStatus::Canceled
+    );
+}
+
+/// The incident: a message waits for the member mid-turn, the member flips over its limit, the
+/// waiting message is typed at the turn end, and the compaction at the next one.
+#[test]
+fn flip_compaction_is_typed_after_a_message_waiting_ahead_of_it() {
+    let fixture = Fixture::new();
+    fixture.running("coder", Some("terminal_3"));
+    fixture.running("reviewer", None);
+    fixture.live_panes(&["terminal_3"]);
+    std::fs::write(fixture.board(), BOARD).unwrap();
     success(
         fixture
             .command()
-            .args(["message", "sweep"])
+            .args(["message", "@coder", "--", "Check the subagent report."])
             .output()
             .unwrap(),
     );
-    let history = store.list_message_history().unwrap();
+    let waiting = fixture.env.store().list_messages().unwrap()[0]
+        .message_id
+        .clone();
+    fixture.context_tokens("coder", 150_000);
+    let command = fixture.queued_flip_compaction();
+    fixture.hook("coder", "Stop", Some("terminal_3"));
+    wait_for_text_then_enter(&fixture.trace, "Check the subagent report.");
+    assert_eq!(fixture.message_status(&waiting), MessageStatus::Sent);
+    let lines = crate::common::trace_lines(&fixture.trace);
+    assert!(
+        !lines.iter().any(|line| line.ends_with("\t/compact ")),
+        "trace={lines:?}"
+    );
+    fixture.feed_from(
+        "claude",
+        "coder",
+        "coder",
+        "UserPromptSubmit",
+        Some("terminal_3"),
+        None,
+        "Check the subagent report.",
+    );
+    assert_eq!(fixture.message_status(&waiting), MessageStatus::Delivered);
+    fixture.hook("coder", "Stop", Some("terminal_3"));
+    fixture.wait_for_compact_then_enter();
+    assert_ne!(
+        fixture.message_status(&command.message_id),
+        MessageStatus::Canceled
+    );
+}
+
+/// A turn that outlives the cache lifetime (from a five-minute cache write) holds the command:
+/// a sweep mid-turn leaves it queued, and the turn's end, whose requests rewrote the cache,
+/// types it.
+#[test]
+fn flip_compaction_holds_through_a_turn_that_outlives_the_cache() {
+    let fixture = Fixture::new();
+    fixture.running("coder", Some("terminal_3"));
+    fixture.running("reviewer", None);
+    fixture.live_panes(&["terminal_3"]);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    // The last request closed ten minutes ago, and the open turn has made none since.
+    fixture
+        .end_turn_without_boundary_at("coder", jiff::Timestamp::now() - Duration::from_secs(600));
+    fixture.hook("coder", "UserPromptSubmit", Some("terminal_3"));
+    fixture.context_reading(
+        "coder",
+        150_000,
+        Some(rimz::agents::context::CacheWriteRetention::FiveMinutes),
+    );
+    let command = fixture.queued_flip_compaction();
+    fixture.sweep();
+    assert_eq!(
+        fixture.message_status(&command.message_id),
+        MessageStatus::Queued
+    );
+    fixture.hook("coder", "Stop", Some("terminal_3"));
+    fixture.wait_for_compact_then_enter();
+    assert_ne!(
+        fixture.message_status(&command.message_id),
+        MessageStatus::Canceled
+    );
+}
+
+/// The reading is judged at the turn end: a mid-turn drop under the limit (an auto-compaction
+/// the turn then outgrew) leaves the command queued, and it is typed once the turn ends over it.
+#[test]
+fn flip_compaction_judges_the_reading_at_the_turn_end() {
+    let fixture = Fixture::new();
+    fixture.running("coder", Some("terminal_3"));
+    fixture.running("reviewer", None);
+    fixture.live_panes(&["terminal_3"]);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    fixture.context_tokens("coder", 150_000);
+    let command = fixture.queued_flip_compaction();
+    fixture.context_tokens("coder", 20_000);
+    fixture.sweep();
+    assert_eq!(
+        fixture.message_status(&command.message_id),
+        MessageStatus::Queued
+    );
+    fixture.context_tokens("coder", 150_000);
+    fixture.hook("coder", "Stop", Some("terminal_3"));
+    fixture.wait_for_compact_then_enter();
+    assert_ne!(
+        fixture.message_status(&command.message_id),
+        MessageStatus::Canceled
+    );
+}
+
+/// A compaction that lands between the flip and the command, followed by a turn, leaves the
+/// member under its limit: the command is withdrawn, never typed.
+#[test]
+fn queued_flip_compaction_is_withdrawn_once_under_the_limit() {
+    let fixture = Fixture::new();
+    fixture.running("coder", Some("terminal_3"));
+    fixture.running("reviewer", None);
+    fixture.live_panes(&["terminal_3"]);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    fixture.context_tokens("coder", 150_000);
+    let command = fixture.queued_flip_compaction();
+    fixture.end_turn_without_boundary("coder");
+    fixture.context_tokens("coder", 20_000);
+    fixture.hook("coder", "UserPromptSubmit", Some("terminal_3"));
+    // The Stop hook's own deliverer withdraws the command; the test only waits for it.
+    fixture.hook("coder", "Stop", Some("terminal_3"));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while fixture.message_status(&command.message_id) != MessageStatus::Canceled {
+        assert!(Instant::now() < deadline, "compaction never withdrawn");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let history = fixture.env.store().list_message_history().unwrap();
     let withdrawn = history
         .iter()
         .find(|message| message.message_id == command.message_id)
-        .unwrap_or_else(|| panic!("compaction withdrawn into history: {history:?}"));
-    assert_eq!(withdrawn.status, MessageStatus::Canceled);
+        .unwrap();
     assert_eq!(
         withdrawn.last_error.as_deref(),
-        Some("agent was prompted after this message was queued")
+        Some("agent is no longer over the hand-off limit")
     );
     let lines = crate::common::trace_lines(&fixture.trace);
     assert!(
