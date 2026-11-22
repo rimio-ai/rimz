@@ -62,6 +62,12 @@ live-web = { max-threads = 1 }
 # remote badge, and resume paths, so cap this tier like the live-mux tier instead
 # of starting every renderer at once.
 rendered-journey = { max-threads = 4 }
+# GitHub runs the gate tier's integration binary 16 wide on a 4-vCPU runner
+# (see the header). Every `start::` test runs a full `rimz start` under the
+# harness's 30s child deadline, and 16 of them at once starved each other past
+# it in two CI runs of three. One per core keeps them inside it there, and is
+# no cap at all on a run that already keeps one test per core.
+gate-overlap-capped = { max-threads = "num-cpus" }
 
 [[profile.default.overrides]]
 filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^backend::single_backend_room::/) | test(/^journey::deep::(room_host::)?zellij/))'
@@ -104,6 +110,18 @@ default-filter = 'not (package(rimz) & (test(/^backend::tmux::/) | test(/^backen
 status-level = "retry"
 failure-output = "immediate-final"
 fail-fast = { max-fail = 3 }
+
+[[profile.gate.overrides]]
+filter = 'binary_id(=rimz::integration) & test(/^start::/)'
+test-group = 'gate-overlap-capped'
+
+# These two each failed one overlapped CI run on a short wall-clock wait (a
+# PTY `rimz start` that must exit, a one-shot loop's preflight boundary), so
+# they take every slot and run alone. The gate tier has no retries on purpose:
+# a test that flakes under load is isolated here, not retried.
+[[profile.gate.overrides]]
+filter = 'binary_id(=rimz::integration) & (test(=zellij_socket::terminal_stuck_room_resets_without_second_prompt) | test(=loop_schedule::loop_scheduled_one_shot_consumption_follows_preflight_boundary))'
+threads-required = "num-test-threads"
 
 # The gate tier keeps a JUnit report too, so CI records every gate test's
 # duration alongside its failures.
