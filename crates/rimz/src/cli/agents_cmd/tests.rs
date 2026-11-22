@@ -3226,6 +3226,7 @@ fn idle_stop_receipt_names_the_person_and_prints_the_groups_after_the_booking() 
         since: Some(jiff::Timestamp::from_second(3_480).unwrap()),
         due: None,
         detail: Vec::new(),
+        key: None,
         command: None,
     };
     let started = Started {

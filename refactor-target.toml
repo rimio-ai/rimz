@@ -2512,7 +2512,8 @@ path = "crates/rimz/src/harness"
 # workflow::started_runs_running gives the cancel receipt and the MCP stop the runs a cancel leaves going (+1).
 # workflow::join moves the workflow wait's look and poll from the CLI so the MCP join shares them (+9).
 # TaskCatalog::remove_keeping_runs is the schedule stop that leaves the task's runs going (+1).
-surface-budget = 1351
+# idle_stop::started::RowKey keys each started row so the MCP task tools find its thing (+1).
+surface-budget = 1352
 
 [[verdict]]
 kind = "item"

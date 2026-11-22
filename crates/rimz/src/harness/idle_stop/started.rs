@@ -88,9 +88,31 @@ pub struct StartedRow {
     pub due: Option<Timestamp>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub detail: Vec<String>,
+    /// The thing the row names, by its stable key, where the row names a thing a caller can
+    /// stop or join; the list's own words stay as they print.
+    #[serde(skip)]
+    pub key: Option<RowKey>,
     /// The existing command that ends the row, run from the reader's seat.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+}
+
+/// What a row names by its stable key: never a display name, which a reader's seat and the path
+/// a row was reached through shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RowKey {
+    /// An agent or subagent, by its launch.
+    Agent {
+        kind: AgentKind,
+        launch: crate::ids::AgentSessionId,
+    },
+    Team(TeamInstanceId),
+    /// A workflow run, by its id.
+    Workflow(String),
+    /// A loop task, by its name.
+    Task(String),
+    /// A wait, by its name.
+    Wait(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -267,6 +289,10 @@ impl<'a> List<'a> {
             since: since.or(Some(row.last_activity)),
             due: None,
             detail: row.profile.iter().cloned().collect(),
+            key: Some(RowKey::Agent {
+                kind: row.kind.clone(),
+                launch: row.launch_key().clone(),
+            }),
             command: (stop && !ended)
                 .then(|| format!("{} agents stop {}", self.seat.rimz, self.handle(row))),
         }
@@ -296,6 +322,7 @@ impl<'a> List<'a> {
             since: None,
             due: None,
             detail: Vec::new(),
+            key: Some(RowKey::Team(instance.clone())),
             command: instance
                 .lane()
                 .is_some()
@@ -348,6 +375,7 @@ impl<'a> List<'a> {
                 since: agent.waiting_since,
                 due: None,
                 detail: Vec::new(),
+                key: None,
                 command: None,
             });
         }
@@ -362,6 +390,7 @@ impl<'a> List<'a> {
                 since: Some(park.at),
                 due: park.resets_at,
                 detail: vec![park.label()],
+                key: None,
                 command: None,
             });
         }
@@ -382,6 +411,7 @@ impl<'a> List<'a> {
                     .chain(&shell.description)
                     .cloned()
                     .collect(),
+                key: None,
                 command: None,
             });
         }
@@ -408,6 +438,7 @@ impl<'a> List<'a> {
                 due: message.not_before,
                 detail: Vec::new(),
                 // A message on its way into the pane is past canceling.
+                key: None,
                 command: message
                     .status
                     .is_open()
@@ -427,6 +458,7 @@ impl<'a> List<'a> {
                 since: Some(first),
                 due: None,
                 detail: Vec::new(),
+                key: None,
                 command: None,
             });
         }
@@ -441,6 +473,7 @@ impl<'a> List<'a> {
                 since: Some(run.started_at),
                 due: None,
                 detail: Vec::new(),
+                key: None,
                 command: None,
             });
         }
@@ -463,6 +496,7 @@ impl<'a> List<'a> {
                 .unwrap_or_else(|| "no board".to_owned());
             // A seat's own board ends at Done; stopping its team is no way to release it.
             let row = StartedRow {
+                key: None,
                 command: None,
                 ..self.team_row(&instance, status, RowKind::Board)
             };
@@ -519,6 +553,14 @@ impl<'a> List<'a> {
                 since: wait.armed_at,
                 due: None,
                 detail: vec![wait.label(self.now)],
+                // A subagent, team, or workflow run named here is no wait of its own.
+                key: (!matches!(
+                    wait.trigger,
+                    PendingWaitTrigger::Subagent { .. }
+                        | PendingWaitTrigger::Team { .. }
+                        | PendingWaitTrigger::Workflow { .. }
+                ))
+                .then(|| RowKey::Wait(wait.name.clone())),
                 command: self
                     .seat
                     .you
@@ -547,6 +589,7 @@ impl<'a> List<'a> {
             since: agent.turn_ended_at,
             due: None,
             detail: class.into_iter().map(str::to_owned).collect(),
+            key: None,
             command: None,
         });
     }
@@ -574,6 +617,7 @@ impl<'a> List<'a> {
                 since: row.turn_started_at.or(Some(row.last_activity)),
                 due: None,
                 detail: Vec::new(),
+                key: None,
                 command: None,
             })
             .collect();
@@ -629,6 +673,7 @@ impl<'a> List<'a> {
                 .cloned()
                 .chain(ended.then(|| "report owed".to_owned()))
                 .collect(),
+            key: Some(RowKey::Workflow(id.to_owned())),
             command: (!ended).then(|| format!("{} workflow cancel {id}", self.seat.rimz)),
         };
         self.group(group).push(row);
@@ -815,6 +860,7 @@ impl<'a> List<'a> {
                     .chain(action)
                     .chain(own.iter().map(|(run, _)| format!("run {}", run.id)))
                     .collect(),
+                key: Some(RowKey::Task(name.clone())),
                 command: Some(format!("{} loop remove {name}", self.seat.rimz)),
             });
         }
@@ -829,6 +875,7 @@ impl<'a> List<'a> {
                 provider: None,
                 since: Some(run.created_at),
                 due: None,
+                key: Some(RowKey::Workflow(run.id.to_string())),
                 detail: run.task.into_iter().collect(),
                 command: Some(format!("{} workflow cancel {}", self.seat.rimz, run.id)),
             });
