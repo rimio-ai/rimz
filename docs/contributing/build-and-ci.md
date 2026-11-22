@@ -96,6 +96,8 @@ Compile jobs route through `sccache`. On GitHub the backend is the Actions cache
 
 A PR's `sccache` entries are written on its merge ref, which no other ref can read, so they count against the repository's Actions cache quota until evicted. `.github/workflows/cache-cleanup.yml` deletes them when the PR closes: it runs on `pull_request_target` so a fork PR's run holds a token that can delete, with `actions: write` as its only permission, no checkout, and the PR number as the only event data it reads. It deletes exactly the entries on `refs/pull/<number>/merge`; a PR with none succeeds, and a failed list or delete fails the run. That event runs the workflow from the base branch, so a change to the file takes effect for PRs closed after it merges.
 
+The merge queue's runs write their entries on their `gh-readonly-queue/main/pr-<number>-<sha>` branches, which GitHub deletes once the group merges or leaves the queue. An hourly schedule in the same workflow lists the cache entries on `gh-readonly-queue/` refs, then the queue branches that still exist, and deletes the entries of each branch that is gone. It lists the entries first, so an entry it deletes belonged to a branch that had already been created and was gone by the second read.
+
 ### GitHub suites
 
 GitHub's `ci.yml` starts with a `scope` job that picks how much of the suite the run takes, by event:
