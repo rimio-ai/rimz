@@ -8,8 +8,14 @@ use crate::disk::atomic;
 
 use super::{AgentErr, Result, provider_file};
 
+/// Reads the object at `path`, after one leading UTF-8 byte order mark; a rewrite through
+/// `render_json` writes none.
 pub(super) fn read_json_object(agent: &'static str, path: &Path) -> Result<Map<String, Value>> {
-    match std::fs::read_to_string(path) {
+    let text = std::fs::read_to_string(path).map(|text| match text.strip_prefix('\u{feff}') {
+        Some(rest) => rest.to_owned(),
+        None => text,
+    });
+    match text {
         Ok(text) if text.trim().is_empty() => Ok(Map::new()),
         Ok(text) => {
             let value: Value =

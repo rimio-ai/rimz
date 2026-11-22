@@ -966,6 +966,7 @@ fn a_disabled_plugin_is_reported_and_preflight_returns_it_before_reinstalling() 
         Some("{\"plugins\":{\"rimz\":{\"enabled\":true}}}"),
         Some("{\"plugins\":{\"other\":{\"enabled\":false}}}"),
         Some("not json"),
+        Some("\u{feff}{\"plugins\":{\"rimz\":{\"enabled\":false}},,}"),
         Some("{\"plugins\":{\"rimz\":{\"enabled\":\"false\"}}}"),
     ] {
         if let Some(config) = config {
@@ -975,7 +976,7 @@ fn a_disabled_plugin_is_reported_and_preflight_returns_it_before_reinstalling() 
     }
     std::fs::write(
         &home.config,
-        "{\n  // agy writes this file\n  \"plugins\": {\"rimz\": {\"enabled\": false}},\n}\n",
+        "\u{feff}{\n  // agy writes this file\n  \"plugins\": {\"rimz\": {\"enabled\": false}},\n}\n",
     )
     .unwrap();
     for installed in [false, true] {
@@ -1209,6 +1210,46 @@ fn a_settings_file_install_leaves_alone_previews_without_a_diff() {
     assert_eq!(
         std::fs::read_to_string(&home.paths.settings).unwrap(),
         agy_formatted
+    );
+}
+
+#[test]
+fn a_bom_led_settings_file_reads_installed_and_a_rewrite_drops_the_bom() {
+    let home = AgyHome::new();
+    let managed = home.integration();
+    managed.install(&env(), Default::default()).unwrap();
+    let written = std::fs::read_to_string(&home.paths.settings).unwrap();
+    std::fs::write(&home.paths.settings, format!("\u{feff}{written}")).unwrap();
+    assert!(managed.installed(&env()));
+    assert!(managed.managed_artifacts_present(&env()));
+    assert!(
+        managed
+            .outdated_files(&env(), Default::default())
+            .is_empty()
+    );
+
+    write_json(&home.paths.settings, &json!({"colorScheme": "tokyo night"}));
+    let unowned = std::fs::read_to_string(&home.paths.settings).unwrap();
+    std::fs::write(&home.paths.settings, format!("\u{feff}{unowned}")).unwrap();
+    assert!(!managed.installed(&env()));
+    managed.install(&env(), Default::default()).unwrap();
+    let rewritten = std::fs::read_to_string(&home.paths.settings).unwrap();
+    assert!(!rewritten.starts_with('\u{feff}'), "{rewritten:?}");
+    assert_eq!(
+        read_json(&home.paths.settings)["colorScheme"],
+        "tokyo night"
+    );
+    assert!(managed.installed(&env()));
+
+    std::fs::write(&home.paths.settings, "\u{feff}{\"statusLine\": ").unwrap();
+    assert!(!managed.installed(&env()));
+    let error = managed
+        .install(&env(), Default::default())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(&home.paths.settings.display().to_string()),
+        "{error}"
     );
 }
 
@@ -2928,9 +2969,39 @@ fn allowed_tools_merge_into_the_one_settings_document() {
         }})
     );
 
+    let mut args = vec![
+        "--settings".to_owned(),
+        "\u{feff}{\"enableTerminalSandbox\":true}".to_owned(),
+    ];
+    let mut artifact = None;
+    permissions::render(&rules, paths, &mut args, &mut artifact).unwrap();
+    assert!(artifact.is_none(), "a BOM before the brace is still inline");
+    let [inline] = settings(&args).try_into().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&inline).unwrap(),
+        json!({
+            "permissions": {"allow": ["command(git status)", "read_file(*)"]},
+            "enableTerminalSandbox": true
+        })
+    );
+
+    std::fs::write(
+        root.path().join("bom.json"),
+        "\u{feff}{\"permissions\":{\"deny\":[\"command(rm)\"]}}",
+    )
+    .unwrap();
+    let mut args = vec!["--settings".to_owned(), "bom.json".to_owned()];
+    let mut artifact = None;
+    permissions::render(&rules, paths, &mut args, &mut artifact).unwrap();
+    let (_, value, _) = artifact.expect("a file source becomes a private artifact");
+    assert_eq!(value["permissions"]["deny"], json!(["command(rm)"]));
+
     std::fs::write(root.path().join("list.json"), "[1]").unwrap();
+    std::fs::write(root.path().join("bad-bom.json"), "\u{feff}{oops").unwrap();
     for (source, reason) in [
         ("{oops", "invalid JSON"),
+        ("\u{feff}{oops", "invalid JSON"),
+        ("bad-bom.json", "invalid JSON"),
         ("list.json", "expected a JSON object"),
     ] {
         let mut args = vec!["--settings".to_owned(), source.to_owned()];

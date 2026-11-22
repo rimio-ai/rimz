@@ -27,9 +27,13 @@ pub(in crate::agents) fn merge_settings(
         .into_iter()
         .last()
         .map(|item| item.value);
+    let inline = |value: &str| {
+        let value = value.strip_prefix('\u{feff}').unwrap_or(value);
+        value.trim_start().starts_with('{')
+    };
     let path = value
         .as_deref()
-        .filter(|value| !value.trim_start().starts_with('{'))
+        .filter(|value| !inline(value))
         .map(|value| cwd.join(value))
         .unwrap_or_else(|| PathBuf::from("--settings"));
     let source_path = pending
@@ -43,11 +47,11 @@ pub(in crate::agents) fn merge_settings(
     };
     let private = value
         .as_ref()
-        .is_some_and(|value| private_inline || !value.trim_start().starts_with('{'));
+        .is_some_and(|value| private_inline || !inline(value));
     let mut settings: serde_json::Value = match (value, pending) {
         (Some(value), Some((path, settings, _))) if path == Path::new(&value) => settings.clone(),
         (Some(value), _) => {
-            let bytes = if value.trim_start().starts_with('{') {
+            let bytes = if inline(&value) {
                 value.into_bytes()
             } else {
                 std::fs::read(&path).map_err(|error| invalid(error.to_string()))?
