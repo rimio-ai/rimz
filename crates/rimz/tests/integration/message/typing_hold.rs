@@ -662,8 +662,8 @@ impl Fixture {
     }
 
     fn pings(&self) -> Vec<MessageRecord> {
-        let mut messages = self.env.store().list_messages().unwrap();
-        messages.extend(self.env.store().list_message_history().unwrap());
+        let (mut messages, history) = self.env.store().list_messages_and_history().unwrap();
+        messages.extend(history);
         messages.retain(|r| {
             matches!(
                 r.sender,
@@ -926,9 +926,9 @@ fn a_cold_ping_at_a_batch_head_releases_the_messages_batched_behind_it() {
     );
     queue_messages(&fixture.env, &[&ping, &human, &digest]);
     let by_id = |record: &MessageRecord| {
-        let mut rows = fixture.env.store().list_messages().unwrap();
-        rows.extend(fixture.env.store().list_message_history().unwrap());
-        rows.into_iter()
+        let (live, history) = fixture.env.store().list_messages_and_history().unwrap();
+        live.into_iter()
+            .chain(history)
             .find(|row| row.message_id == record.message_id)
             .unwrap()
     };

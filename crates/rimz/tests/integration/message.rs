@@ -412,8 +412,8 @@ fn deadline_stop_trace(kind: &str, waiting: bool) -> (Env, Vec<String>) {
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let loaded = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
-    let mut messages = store.list_messages().unwrap();
-    messages.extend(store.list_message_history().unwrap());
+    let (mut messages, history) = store.list_messages_and_history().unwrap();
+    messages.extend(history);
     if waiting {
         assert_eq!(
             loaded.deadline_notice_at, None,
@@ -2159,8 +2159,11 @@ fn message_when_latches_met_dwell_and_schedules_future_trip() {
             .args(["message", "@coder", "--when", "@coder idle 1m", "ping"]),
         "queue self when",
     );
-    let mut messages = env.store().list_messages().expect("messages");
-    messages.extend(env.store().list_message_history().expect("history"));
+    let (mut messages, history) = env
+        .store()
+        .list_messages_and_history()
+        .expect("messages or history");
+    messages.extend(history);
     assert_eq!(
         messages.len(),
         1,
@@ -6969,8 +6972,8 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
             std::fs::write(&fixture, "not a listing").unwrap();
         }
         send(&request);
-        let mut messages = store.list_messages().unwrap();
-        messages.extend(store.list_message_history().unwrap());
+        let (mut messages, history) = store.list_messages_and_history().unwrap();
+        messages.extend(history);
         let ping = messages
             .iter()
             .find(|message| {
