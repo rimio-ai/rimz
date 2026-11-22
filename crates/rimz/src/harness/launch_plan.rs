@@ -976,15 +976,16 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         reminders.routine_rimz = Some((inputs.runtime.prompt_dir(), [tmp.clone(), shared.clone()]));
     }
     let capabilities = crate::config::mcp_capabilities(request.mcps.as_deref());
-    // A kind whose prompt rides an agent file takes the server only inside the file, which
-    // only a fresh launch with a composed prompt writes.
+    // A kind whose prompt rides an agent file takes a passed server only inside the file,
+    // which only a fresh launch with a composed prompt writes; a kind that serves from the
+    // launch env takes it on every launch.
     let rides_agent_file = adapter.rides_agent_file();
     let plans_agent_file =
         agent_file_flag.is_some() && matches!(request.action, launch::ExecAction::Launch { .. });
     if inputs.machine.agents.rimz_mcp_server
         && adapter.takes_mcp_servers()
         && !capabilities.is_empty()
-        && (plans_agent_file || !rides_agent_file)
+        && (plans_agent_file || !rides_agent_file || adapter.serves_mcp_from_launch_env())
     {
         let program = if inputs.state.room_bin.is_file() {
             inputs.state.room_bin.clone()
@@ -997,6 +998,9 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             &[]
         };
         reminders.mcp_server = Some((program, crate::mcp::catalog::serve_args(only)));
+        if adapter.serves_mcp_from_launch_env() {
+            reminders.mcp_cwd = Some(view.agent_path(inputs.cwd));
+        }
         reminders.mcp_switched_off = adapter
             .rimz_server_switched_off(request.action.extra_args())
             .map(|(flag, value)| (flag.to_owned(), value.to_owned()));

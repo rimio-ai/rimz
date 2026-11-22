@@ -16,6 +16,29 @@ use super::{
 
 pub(crate) const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
 
+/// RimZ's MCP server as a managed integration ships it in the provider's own config, read
+/// from that config, never from the provider's CLI.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShippedMcpServer {
+    /// The name the provider knows the server by.
+    pub name: &'static str,
+    pub config: PathBuf,
+    pub state: ShippedMcpState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShippedMcpState {
+    Current,
+    Missing,
+    /// The file holds other bytes than install writes.
+    Drifted,
+    /// The provider keeps the config that ships it off.
+    Disabled {
+        reason: String,
+        fix: String,
+    },
+}
+
 /// Provider-owned file transaction behind the adapter's managed integration seam.
 pub trait ManagedIntegration: Sync {
     fn install(
@@ -79,6 +102,14 @@ pub trait ManagedIntegration: Sync {
         _login_env: &BTreeMap<String, String>,
     ) -> Vec<PathBuf> {
         Vec::new()
+    }
+
+    /// RimZ's MCP server as this integration ships it; `None` when it ships none.
+    fn shipped_mcp_server(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<ShippedMcpServer> {
+        None
     }
 
     fn wrapped_status_line_command(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {

@@ -154,6 +154,7 @@ fn collect_report(
         let prompt_cache_fallback =
             agents::collect_prompt_cache_fallback(&hooks, &crate::cli::machine_config().harness);
         let soft_compact_skips = agents::collect_soft_compact_skips(&hooks);
+        let mcp_servers = agents::collect_mcp_servers(&hooks);
         DoctorReport {
             schema: "rimz.doctor.v1",
             audit,
@@ -176,6 +177,7 @@ fn collect_report(
             hooks,
             prompt_cache_fallback,
             soft_compact_skips,
+            mcp_servers,
             accounts,
             plugins: collected(plugins),
             loop_tasks: collected(loop_tasks),

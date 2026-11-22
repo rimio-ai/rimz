@@ -132,7 +132,7 @@ pub use login::{
     provider_home_logins, resolve_room_accounts, room_account, room_accounts, session_login,
     session_login_env,
 };
-pub use managed_source::ManagedIntegration;
+pub use managed_source::{ManagedIntegration, ShippedMcpServer, ShippedMcpState};
 pub use observation::{
     AgentLifecycleObservation, AgentUsageSummary, AnsweredQuestion, AskQueueEdit, Automation,
     LaunchParams, LaunchRecord, LaunchedBy, QueuedQuestion, SessionOrigin, SpawnedSubagent,

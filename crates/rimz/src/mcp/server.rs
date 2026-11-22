@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Read, Write};
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -36,11 +37,13 @@ pub enum ServeErr {
 /// With `parent_env`, each one-shot also gets every variable of the parent
 /// process's environment that the server's own lacks, and the wording is read
 /// from the RimZ home that environment names. The wording is read once, here,
-/// so a session keeps the text its server started with.
+/// so a session keeps the text its server started with. With `cwd`, each
+/// one-shot runs there, or in its tool's own directory resolved under it.
 pub fn serve(
     only: &[Capability],
     modes: &[(Capability, LoadMode)],
     parent_env: bool,
+    cwd: Option<PathBuf>,
 ) -> Result<(), ServeErr> {
     let inherited = if parent_env {
         #[cfg(unix)]
@@ -72,6 +75,7 @@ pub fn serve(
     };
     let calls = Arc::new(Calls {
         inherited,
+        cwd,
         state: Mutex::default(),
     });
     #[cfg(unix)]
@@ -262,7 +266,11 @@ fn run_one_shot(id: &Value, seq: u64, invocation: Invocation, calls: &Calls) {
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(cwd) = &invocation.cwd {
+    let cwd = match (&calls.cwd, &invocation.cwd) {
+        (Some(base), Some(cwd)) => Some(base.join(cwd)),
+        (base, cwd) => cwd.clone().or_else(|| base.clone()),
+    };
+    if let Some(cwd) = &cwd {
         command.current_dir(cwd);
     }
     let mut child = match command.spawn() {
@@ -347,6 +355,9 @@ fn tool_result(text: &str, is_error: bool) -> Value {
 struct Calls {
     /// The parent's variables a one-shot adds under `--parent-env`.
     inherited: Vec<(String, String)>,
+    /// The launch directory: a one-shot runs there, or in its tool's directory resolved
+    /// under it.
+    cwd: Option<PathBuf>,
     state: Mutex<CallsState>,
 }
 

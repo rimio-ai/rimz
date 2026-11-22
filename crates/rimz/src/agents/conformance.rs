@@ -1406,7 +1406,7 @@ fn wiring_inputs_cover_every_provider_file_used_for_admission() {
                 paths.is_empty(),
                 "{kind} local discovery needs no provider wiring input"
             ),
-            "antigravity" => assert_eq!(paths.len(), 6, "Antigravity plugin, hooks and settings"),
+            "antigravity" => assert_eq!(paths.len(), 7, "Antigravity plugin, hooks and settings"),
             "codex" => assert_eq!(paths.len(), 1, "Codex model config input"),
             "copilot" => assert_eq!(paths.len(), 2, "Copilot hook and settings inputs"),
             "grok" => assert_eq!(paths.len(), 6, "Grok hooks and managed-policy inputs"),

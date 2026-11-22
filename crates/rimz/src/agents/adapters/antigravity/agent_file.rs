@@ -1,9 +1,9 @@
 //! The agy custom-agent file that carries a fresh launch's composed system prompt, launch
-//! reminder, tools, and MCP servers. agy reads a plugin-shipped agent selected by
-//! `--agent <name>` once at conversation start, and a resume keeps what it read. Its `tools` key
-//! is an allowlist, and a name agy does not register stops agy before its first turn, so one
-//! mapping decides both the layout notices and the file. Its `mcpServers` items limit the
-//! account's servers only beside `inheritMcp: false`. Observed on agy 1.5.13.
+//! reminder, tools, and the limit on the account's MCP servers. agy reads a plugin-shipped
+//! agent selected by `--agent <name>` once at conversation start, and a resume keeps what it
+//! read. Its `tools` key is an allowlist, and a name agy does not register stops agy before its
+//! first turn, so one mapping decides both the layout notices and the file. Its `mcpServers`
+//! items limit the account's servers only beside `inheritMcp: false`. Observed on agy 1.5.13.
 
 use sha2::{Digest, Sha256};
 
@@ -113,56 +113,25 @@ fn file_tools(tools: Option<&[String]>, native_subagents: bool) -> Vec<&'static 
     names
 }
 
-/// The `inheritMcp` and `mcpServers` lines: RimZ's server as an inline item, then a name-only
-/// item for each of the user's servers a limiting list keeps. An agent that lists any item and
-/// omits `inheritMcp` loses the account's servers, so the key is written whenever a line is;
-/// with neither a server nor a limit the file names no MCP key and agy loads every server.
-/// The list is one line of JSON flow style, the form agy 1.5.13 was observed to accept. A
-/// capability's mark becomes its `rimz mcp serve` flag, and agy has no server-level key, so a
-/// mark on `rimz` becomes the flag of every served capability that has no mark of its own.
+/// The `inheritMcp` and `mcpServers` lines: a name-only item for each of the user's servers a
+/// limiting list keeps. RimZ's own server is the rimz plugin's entry, which every session of
+/// the account loads, so the file never names it: on agy 1.5.14 `inheritMcp: false` with
+/// name-only user items still loads and calls it. An agent that lists any item and omits
+/// `inheritMcp` loses the account's servers, so the key is written whenever a line is; with no
+/// limit the file names no MCP key and agy loads every server.
+/// The list is one line of JSON flow style, the form agy 1.5.13 was observed to accept.
 fn mcp_lines(mcp: &McpLaunch<'_>) -> String {
-    let json = |text: &str| serde_json::Value::from(text).to_string();
-    let limits = crate::config::mcps_limit(mcp.mcps);
-    let server = mcp.server.as_ref().map(|server| {
-        let mut args = server.args.clone();
-        args.extend(mcp.capability_mark_args());
-        let entries = mcp.mcps.unwrap_or_default();
-        let rimz_mode = entries
-            .iter()
-            .find(|entry| entry.name() == crate::mcp::catalog::SERVER_NAME)
-            .and_then(crate::config::McpName::mode);
-        if let Some(mode) = rimz_mode {
-            let unmarked = crate::config::mcp_capabilities(mcp.mcps)
-                .into_iter()
-                .filter(|capability| {
-                    !entries.iter().any(|entry| {
-                        entry.capability() == Some(*capability) && entry.mode().is_some()
-                    })
-                });
-            for capability in unmarked {
-                args.extend([format!("--{}", mode.name()), capability.name().to_owned()]);
-            }
-        }
-        let args: Vec<String> = args.iter().map(|arg| json(arg)).collect();
-        format!(
-            "{{\"name\": {}, \"command\": {}, \"args\": [{}]}}",
-            json(crate::mcp::catalog::SERVER_NAME),
-            json(&server.command.to_string_lossy()),
-            args.join(", ")
-        )
-    });
-    if server.is_none() && !limits {
+    if !crate::config::mcps_limit(mcp.mcps) {
         return String::new();
     }
-    let named = mcp
+    let items: Vec<String> = mcp
         .mcps
-        .filter(|_| limits)
         .unwrap_or_default()
         .iter()
         .filter_map(crate::config::McpName::user_server)
-        .map(|name| format!("{{\"name\": {}}}", json(name)));
-    let items: Vec<String> = server.into_iter().chain(named).collect();
-    let mut lines = format!("inheritMcp: {}\n", !limits);
+        .map(|name| format!("{{\"name\": {}}}", serde_json::Value::from(name)))
+        .collect();
+    let mut lines = "inheritMcp: false\n".to_owned();
     if !items.is_empty() {
         lines.push_str(&format!("mcpServers: [{}]\n", items.join(", ")));
     }
@@ -275,8 +244,9 @@ mod tests {
         }
     }
 
-    /// The two MCP keys for each pairing of RimZ's server and a limiting list, inside the
-    /// hashed part; with neither, the file is byte for byte what it was before the keys.
+    /// The two MCP keys for each limiting list, inside the hashed part, whether or not the
+    /// launch serves RimZ's server, which the plugin's entry carries and the file never does;
+    /// with no limit, the file is byte for byte what it was before the keys.
     #[test]
     fn mcp_lines_follow_the_server_and_the_list() {
         let home = tempfile::tempdir().unwrap();
@@ -328,27 +298,18 @@ mod tests {
             rest
         };
         let head = "description: \"Written by RimZ for an antigravity launch\"\nmainAgent: true\ntools: []\n";
-        let rimz = r#"{"name": "rimz", "command": "/room dir/rimz", "args": ["mcp", "serve"]}"#;
-        let cases: [(bool, Option<&[&str]>, String); 7] = [
+        let cases: [(bool, Option<&[&str]>, String); 8] = [
             (false, None, String::new()),
             (false, Some(&["*", "github"]), String::new()),
-            (
-                true,
-                None,
-                format!("inheritMcp: true\nmcpServers: [{rimz}]\n"),
-            ),
-            (
-                true,
-                Some(&["*"]),
-                format!("inheritMcp: true\nmcpServers: [{rimz}]\n"),
-            ),
+            (true, None, String::new()),
+            (true, Some(&["*"]), String::new()),
             (
                 true,
                 Some(&["rimz-lsp", "github", "notion"]),
-                format!(
-                    "inheritMcp: false\nmcpServers: [{rimz}, {{\"name\": \"github\"}}, {{\"name\": \"notion\"}}]\n"
-                ),
+                "inheritMcp: false\nmcpServers: [{\"name\": \"github\"}, {\"name\": \"notion\"}]\n"
+                    .to_owned(),
             ),
+            (true, Some(&["rimz-lsp"]), "inheritMcp: false\n".to_owned()),
             (
                 false,
                 Some(&["github"]),

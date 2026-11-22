@@ -54,6 +54,9 @@ const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source antigravity
 const STATUS_LINE_COMMAND: &str =
     "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source antigravity";
 const COMPACT_COMMAND: &str = "/compact";
+/// agy names a plugin's server `<plugin>_<server>`: the rimz plugin's `tools` entry
+/// (`install::plugin_files`).
+const MCP_SERVER_NAME: &str = "rimz_tools";
 const ADD_DIR_FLAG: &str = "--add-dir";
 const SANDBOX_FLAG: &str = "--sandbox";
 const SKIP_PERMISSIONS_FLAG: &str = "--dangerously-skip-permissions";
@@ -639,16 +642,18 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         }
     }
 
-    /// The server and the list ride the agent file (`agent_file`), never argv, so
-    /// `mcp_server_args` keeps its default.
+    /// The list rides the agent file (`agent_file`) and the server the rimz plugin's
+    /// `mcp_config.json` (`install`), never argv, so `mcp_server_args` keeps its default.
     fn takes_mcp_servers(&self) -> bool {
         true
     }
 
-    /// agy 1.5.13 binds an inline server's tools only from the second turn of a fresh or
-    /// resumed TUI conversation, so the matching skills stay callable.
-    fn mcp_tools_on_first_turn(&self) -> bool {
-        false
+    fn serves_mcp_from_launch_env(&self) -> bool {
+        true
+    }
+
+    fn mcp_server_name(&self) -> &'static str {
+        MCP_SERVER_NAME
     }
 
     /// The global root agy's own built-in skills name. agy also reads

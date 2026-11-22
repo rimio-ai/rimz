@@ -250,14 +250,23 @@ fn notes_written(env: &Env) -> Vec<std::path::PathBuf> {
 #[test]
 fn serve_in_a_terminal_prints_a_note_and_exits() {
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-    use std::io::Read;
 
     let env = Env::new();
-    let pair = native_pty_system().openpty(PtySize::default()).unwrap();
-    let mut command = CommandBuilder::new(env.rimz_bin());
-    env.pin_pty_command(&mut command);
-    command.cwd(&env.home_root);
-    command.args(["mcp", "serve"]);
+    // The note wins over `--launch-env`'s own early exit too.
+    for extra in [&[][..], &["--launch-env"]] {
+        let pair = native_pty_system().openpty(PtySize::default()).unwrap();
+        let mut command = CommandBuilder::new(env.rimz_bin());
+        env.pin_pty_command(&mut command);
+        command.cwd(&env.home_root);
+        command.args(["mcp", "serve"]);
+        command.args(extra);
+        assert_terminal_note(pair, command);
+    }
+}
+
+fn assert_terminal_note(pair: portable_pty::PtyPair, command: portable_pty::CommandBuilder) {
+    use std::io::Read;
+
     let mut child = pair.slave.spawn_command(command).unwrap();
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().unwrap();
@@ -289,6 +298,109 @@ fn serve_in_a_terminal_prints_a_note_and_exits() {
     );
     assert!(output.contains("rimz mcp tools"), "{output}");
     assert!(!output.contains("jsonrpc"), "{output}");
+}
+
+/// Under `--launch-env` the server serves what the launch's variables name, with their marks,
+/// and runs each one-shot in the launch's directory, not its own.
+#[test]
+fn launch_env_serves_the_launchs_selection_in_its_directory() {
+    let env = Env::new();
+    let launched = env.home_root.join("launched-here");
+    std::fs::create_dir_all(&launched).unwrap();
+    let launched = launched.canonicalize().unwrap();
+    let mut command = env.rimz();
+    command
+        .args(["mcp", "serve", "--launch-env"])
+        .env("RIMZ_MCP_SERVE", "rimz-wait:always,rimz-lsp")
+        .env("RIMZ_MCP_CWD", &launched);
+    let mut server = McpServer::spawn(command);
+    server.initialize();
+    let tools = server.request(1, "tools/list", json!({}));
+    let always = Some(json!({"anthropic/alwaysLoad": true, "antigravity/alwaysLoad": true}));
+    assert_eq!(
+        tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| (tool["name"].clone(), tool.get("_meta").cloned()))
+            .collect::<Vec<_>>(),
+        [
+            (json!("lsp"), None),
+            (json!("wait"), always.clone()),
+            (json!("wait_list"), always.clone()),
+            (json!("wait_cancel"), always),
+            (json!("guide"), None),
+        ]
+    );
+    let (text, is_error) = server.call(2, "wait_list", json!({}));
+    assert!(is_error, "{text}");
+    assert!(
+        text.contains(&format!("no room at {}", launched.display())),
+        "{text}"
+    );
+    server.close();
+}
+
+/// Under `--launch-env` with nothing named the server exits 0 before it reads a request,
+/// leaving one stderr line for agy's `/mcp` row; a value that does not parse is an error
+/// naming its entry, and the flag refuses the argv selection flags.
+#[test]
+fn launch_env_with_nothing_served_exits_at_once() {
+    let env = Env::new();
+    for value in [None, Some("")] {
+        let mut command = env.rimz();
+        command.args(["mcp", "serve", "--launch-env"]);
+        if let Some(value) = value {
+            command.env("RIMZ_MCP_SERVE", value);
+        }
+        let mut server = McpServer::spawn(command);
+        assert_eq!(server.wait_exit().code(), Some(0), "{value:?}");
+
+        let mut command = env.rimz();
+        command.args(["mcp", "serve", "--launch-env"]);
+        if let Some(value) = value {
+            command.env("RIMZ_MCP_SERVE", value);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "rimz mcp serve: RimZ serves no tools in this session, as expected in an Antigravity \
+             session RimZ did not launch or a launch whose profile serves none\n"
+        );
+    }
+
+    let output = env
+        .rimz()
+        .args(["mcp", "serve", "--launch-env"])
+        .env("RIMZ_MCP_SERVE", "rimz-wait,github")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "RIMZ_MCP_SERVE entry `github` is not a RimZ capability (rimz-lsp, rimz-wait, \
+             rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
+        ),
+        "{stderr}"
+    );
+    assert!(output.stdout.is_empty(), "{output:?}");
+
+    for flag in ["--only", "--always", "--deferred"] {
+        let output = env
+            .rimz()
+            .args(["mcp", "serve", "--launch-env", flag, "rimz-lsp"])
+            .env("RIMZ_MCP_SERVE", "rimz-lsp")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{flag}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("cannot be used with"),
+            "{flag}: {output:?}"
+        );
+    }
 }
 
 #[test]
@@ -998,9 +1110,9 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     );
 }
 
-/// On Antigravity `explain --mcps` reads the planned agent file: the inline `rimz` item, the
-/// servers `inheritMcp: false` keeps, and the file's two MCP lines; a launch that writes no
-/// file hands over no server and limits nothing.
+/// On Antigravity `explain --mcps` reads the planned agent file for the user's servers (the
+/// ones `inheritMcp: false` keeps, and the file's two MCP lines) and the launch env for RimZ's
+/// plugin server; a launch that writes no file still serves and limits nothing.
 #[test]
 fn explain_mcps_reads_the_antigravity_agent_file() {
     let explain = |env: &Env, target: &str, extra: &[&str]| {
@@ -1048,7 +1160,11 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     }
 
     let out = explain(&env, "glimit", &[]);
-    assert!(out.contains("serves rimz-lsp\n"), "{out}");
+    assert!(out.contains("serves rimz-lsp as `rimz_tools`\n"), "{out}");
+    assert!(
+        out.contains("\nLaunch environment\n  RIMZ_MCP_SERVE=rimz-lsp:always\n  RIMZ_MCP_CWD="),
+        "{out}"
+    );
     assert!(
         out.contains("only github, notion (inheritMcp: false)"),
         "{out}"
@@ -1066,29 +1182,27 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
 
     let out = explain(&env, "gopen", &[]);
     assert!(
-        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes"),
+        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes as `rimz_tools`\n"),
         "{out}"
     );
     assert!(
         out.contains("every server the account and project configure"),
         "{out}"
     );
-    assert!(out.contains("\n  inheritMcp: true\n"), "{out}");
+    assert!(!out.contains("inheritMcp"), "{out}");
 
+    // A launch that writes no agent file serves the same tools from the plugin's server.
     let bare = Env::new();
     let out = explain(&bare, "antigravity", &[]);
     assert!(
-        out.contains("not handed over: this launch writes no agent file"),
+        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes as `rimz_tools`\n"),
         "{out}"
     );
     assert!(
         out.contains("every server the account and project configure"),
         "{out}"
     );
-    assert!(
-        !out.contains("CAPABILITY") && !out.contains("inheritMcp"),
-        "{out}"
-    );
+    assert!(!out.contains("inheritMcp"), "{out}");
 
     // A raw `allowedMcpServers` setting is Claude's, never an Antigravity limit.
     let out = explain(
@@ -1102,7 +1216,8 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
         "{out}"
     );
 
-    // A resumed conversation keeps the servers it started with, whatever its profile lists now.
+    // A resumed conversation keeps the user servers it started with, whatever its profile lists
+    // now; RimZ's tools follow the profile, since the launch env names them on every launch.
     env.record(&env.project_root);
     let transcript = env.home_root.join("planner.jsonl");
     std::fs::write(&transcript, "{}\n").unwrap();
@@ -1113,7 +1228,34 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     crate::common::wait::register_seat(&env, "antigravity", launch, "terminal_1", &transcript);
     let out = explain(&env, "@planner", &[]);
     let kept = "kept from the conversation's start: a resume writes no agent file";
-    assert_eq!(out.matches(kept).count(), 2, "{out}");
+    assert_eq!(out.matches(kept).count(), 1, "{out}");
+    assert!(out.contains("serves rimz-lsp as `rimz_tools`\n"), "{out}");
+    assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
+
+    // A resume that serves nothing reports why, as a fresh launch does: the plugin's server
+    // follows the launch env, not the conversation's start.
+    let none = Env::new();
+    crate::common::write_definition(
+        &none,
+        "agents",
+        "gnone",
+        "description: gnone profile\nagent: antigravity\ntools: [Bash]\nmcps: []",
+        "",
+    );
+    none.record(&none.project_root);
+    let transcript = none.home_root.join("planner.jsonl");
+    std::fs::write(&transcript, "{}\n").unwrap();
+    let launch = rimz::agents::LaunchParams {
+        profile: Some("gnone".to_owned()),
+        ..Default::default()
+    };
+    crate::common::wait::register_seat(&none, "antigravity", launch, "terminal_1", &transcript);
+    let out = explain(&none, "@planner", &[]);
+    assert!(
+        out.contains("not handed over: the mcps list names no RimZ capability\n"),
+        "{out}"
+    );
+    assert_eq!(out.matches(kept).count(), 1, "{out}");
 }
 
 /// A profile's own Codex overrides sit in the argv beside RimZ's, and

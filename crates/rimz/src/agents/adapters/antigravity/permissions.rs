@@ -89,13 +89,19 @@ fn is_hostname(host: &str) -> bool {
 }
 
 /// `mcp__S__T` as `S/T`, and `mcp__S` or `mcp__S__*` as `S/*`. S is the server name agy
-/// knows: the name the agent file and the account's own config give it.
+/// knows: RimZ's own server, `rimz` in a rule, is the plugin's, and any other is the name
+/// the account's own config gives it.
 fn mcp_target(name: &str) -> Option<String> {
     let rest = name.strip_prefix("mcp__")?;
     let (server, tool) = rest.split_once("__").unwrap_or((rest, "*"));
     if server.is_empty() || server.contains('*') || tool.is_empty() {
         return None;
     }
+    let server = if server == crate::mcp::catalog::SERVER_NAME {
+        super::MCP_SERVER_NAME
+    } else {
+        server
+    };
     (tool == "*" || !tool.contains('*')).then(|| format!("{server}/{tool}"))
 }
 

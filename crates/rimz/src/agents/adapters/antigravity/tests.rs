@@ -447,9 +447,14 @@ impl AgyHome {
         self.plugin.join("plugin.json")
     }
 
+    fn mcp_config(&self) -> PathBuf {
+        self.plugin.join("mcp_config.json")
+    }
+
     fn snapshot(&self) -> Vec<Option<Vec<u8>>> {
         [
             self.plugin_hooks(),
+            self.mcp_config(),
             self.manifest(),
             self.paths.hooks.clone(),
             self.paths.settings.clone(),
@@ -517,6 +522,7 @@ fn fresh_install_writes_the_plugin_and_settings_and_no_global_hooks() {
         previewed,
         [
             home.plugin_hooks(),
+            home.mcp_config(),
             home.manifest(),
             home.paths.settings.clone()
         ]
@@ -527,11 +533,22 @@ fn fresh_install_writes_the_plugin_and_settings_and_no_global_hooks() {
         report_paths(&report.files),
         [
             (home.plugin_hooks(), false),
+            (home.mcp_config(), false),
             (home.manifest(), false),
             (home.paths.settings.clone(), false),
         ]
     );
     assert!(!home.paths.hooks.exists());
+    assert_eq!(
+        read_json(&home.mcp_config()),
+        json!({"mcpServers": {"tools": {
+            "command": "rimz", "args": ["mcp", "serve", "--launch-env"]
+        }}})
+    );
+    assert_eq!(
+        read_json(&home.paths.settings)["permissions"],
+        json!({"allow": ["mcp(rimz_tools/*)"]})
+    );
     assert!(!home.paths.state.exists());
     assert!(!home.config.exists());
     let manifest = read_json(&home.manifest());
@@ -565,7 +582,11 @@ fn a_legacy_install_agy_stripped_migrates_into_the_plugin() {
     );
     write_json(
         &home.paths.settings,
-        &json!({"colorScheme": "tokyo night", "statusLine": rimz_statusline(json!({"stack_with_default": true}))}),
+        &json!({
+            "colorScheme": "tokyo night",
+            "permissions": {"allow": ["mcp(rimz_tools/*)"]},
+            "statusLine": rimz_statusline(json!({"stack_with_default": true}))
+        }),
     );
     let settings_before = std::fs::read(&home.paths.settings).unwrap();
     let managed = home.integration();
@@ -718,6 +739,7 @@ fn a_plugin_path_rimz_does_not_own_is_refused_and_left() {
         "symlink",
         "foreign manifest",
         "manifest-less user hooks",
+        "manifest-less user server",
         "symlinked plugin file",
     ] {
         let home = AgyHome::new();
@@ -732,6 +754,10 @@ fn a_plugin_path_rimz_does_not_own_is_refused_and_left() {
             "manifest-less user hooks" => write_json(
                 &home.plugin_hooks(),
                 &json!({"mine": {"Stop": [{"type": "command", "command": "my-stop"}]}}),
+            ),
+            "manifest-less user server" => write_json(
+                &home.mcp_config(),
+                &json!({"mcpServers": {"mine": {"command": "my-server"}}}),
             ),
             "symlinked plugin file" => {
                 write_json(&home.manifest(), &json!({"name": "rimz", "author": "RimZ"}));
@@ -1083,6 +1109,150 @@ fn outdated_files_name_each_drifted_file() {
     );
     std::fs::write(&home.paths.hooks, "not json").unwrap();
     assert!(outdated().is_empty());
+}
+
+#[test]
+fn a_plugin_upgraded_from_one_without_its_mcp_config_is_missing_until_reinstalled() {
+    let home = AgyHome::new();
+    let managed = home.integration();
+    managed.install(&env(), Default::default()).unwrap();
+    let canonical = std::fs::read(home.mcp_config()).unwrap();
+    for stale in [None, Some(r#"{"mcpServers": {}}"#)] {
+        match stale {
+            None => std::fs::remove_file(home.mcp_config()).unwrap(),
+            Some(bytes) => std::fs::write(home.mcp_config(), bytes).unwrap(),
+        }
+        assert!(!managed.installed(&env()), "{stale:?}");
+        assert!(managed.managed_artifacts_present(&env()), "{stale:?}");
+        assert_eq!(
+            managed.outdated_files(&env(), Default::default()),
+            [home.mcp_config()],
+            "{stale:?}"
+        );
+        let state = managed.shipped_mcp_server(&env()).unwrap().state;
+        let expected = match stale {
+            None => crate::agents::ShippedMcpState::Missing,
+            Some(_) => crate::agents::ShippedMcpState::Drifted,
+        };
+        assert_eq!(state, expected);
+        managed.install(&env(), Default::default()).unwrap();
+        assert_eq!(std::fs::read(home.mcp_config()).unwrap(), canonical);
+        assert!(managed.installed(&env()), "{stale:?}");
+    }
+    let shipped = managed.shipped_mcp_server(&env()).unwrap();
+    assert_eq!(
+        (shipped.name, shipped.config, shipped.state),
+        (
+            "rimz_tools",
+            home.mcp_config(),
+            crate::agents::ShippedMcpState::Current
+        )
+    );
+    write_json(
+        &home.config,
+        &json!({"plugins": {"rimz": {"enabled": false}}}),
+    );
+    assert!(matches!(
+        managed.shipped_mcp_server(&env()).unwrap().state,
+        crate::agents::ShippedMcpState::Disabled { fix, .. } if fix == "agy plugin enable rimz"
+    ));
+    std::fs::remove_file(&home.config).unwrap();
+    // An install stopped before its manifest leaves the hook and server files, which
+    // are RimZ's to finish.
+    std::fs::remove_file(home.manifest()).unwrap();
+    assert!(managed.managed_artifacts_present(&env()));
+    managed.install(&env(), Default::default()).unwrap();
+    assert!(managed.installed(&env()));
+}
+
+#[test]
+fn the_saved_allow_rule_follows_the_switch_and_keeps_the_users_rules() {
+    const RULE: &str = "mcp(rimz_tools/*)";
+    let on = crate::agents::HookInstallOptions {
+        allow_routine_rimz: true,
+    };
+    let off = crate::agents::HookInstallOptions {
+        allow_routine_rimz: false,
+    };
+    let home = AgyHome::new();
+    let managed = home.integration();
+    let permissions = || read_json(&home.paths.settings)["permissions"].clone();
+    write_json(
+        &home.paths.settings,
+        &json!({"theme": "dark", "permissions": {"allow": ["command(ls)"], "deny": ["command(rm)"]}}),
+    );
+    let preview = managed.preview(&env(), on).unwrap();
+    let settings = preview
+        .files
+        .iter()
+        .find(|file| file.path == home.paths.settings)
+        .unwrap();
+    assert!(
+        settings.candidate.contains(RULE),
+        "the dry-run diff shows the rule"
+    );
+    managed.install(&env(), on).unwrap();
+    assert_eq!(
+        permissions(),
+        json!({"allow": ["command(ls)", RULE], "deny": ["command(rm)"]})
+    );
+    assert_eq!(read_json(&home.paths.settings)["theme"], "dark");
+    let once = home.snapshot();
+    managed.install(&env(), on).unwrap();
+    assert_eq!(home.snapshot(), once, "a reinstall writes no duplicate");
+
+    let preview = managed.preview(&env(), off).unwrap();
+    let settings = preview
+        .files
+        .iter()
+        .find(|file| file.path == home.paths.settings)
+        .unwrap();
+    assert!(!settings.candidate.contains(RULE));
+    managed.install(&env(), off).unwrap();
+    assert_eq!(
+        permissions(),
+        json!({"allow": ["command(ls)"], "deny": ["command(rm)"]})
+    );
+    assert!(
+        managed.installed(&env()),
+        "a missing rule leaves the hooks installed"
+    );
+    assert!(managed.outdated_files(&env(), on).is_empty());
+
+    managed.install(&env(), on).unwrap();
+    managed.uninstall(&env()).unwrap();
+    assert_eq!(
+        permissions(),
+        json!({"allow": ["command(ls)"], "deny": ["command(rm)"]})
+    );
+
+    for before in [
+        json!({"theme": "dark"}),
+        json!({"theme": "dark", "permissions": {"allow": [RULE]}}),
+    ] {
+        let home = AgyHome::new();
+        let managed = home.integration();
+        write_json(&home.paths.settings, &before);
+        managed.install(&env(), on).unwrap();
+        let mut installed = read_json(&home.paths.settings);
+        installed.as_object_mut().unwrap().remove("statusLine");
+        assert_eq!(
+            installed["permissions"],
+            json!({"allow": [RULE]}),
+            "{before}"
+        );
+        managed.install(&env(), off).unwrap();
+        let mut removed = read_json(&home.paths.settings);
+        removed.as_object_mut().unwrap().remove("statusLine");
+        assert_eq!(removed, json!({"theme": "dark"}), "{before}");
+        managed.install(&env(), on).unwrap();
+        managed.uninstall(&env()).unwrap();
+        assert_eq!(
+            read_json(&home.paths.settings),
+            json!({"theme": "dark"}),
+            "{before}"
+        );
+    }
 }
 
 #[test]
@@ -2501,7 +2671,11 @@ fn allowed_tools_translate_row_by_row_and_leave_the_rest_out() {
         ),
         ("mcp__github", Some("mcp(github/*)")),
         ("mcp__github__*", Some("mcp(github/*)")),
-        ("mcp__rimz__agents_list", Some("mcp(rimz/agents_list)")),
+        (
+            "mcp__rimz__agents_list",
+            Some("mcp(rimz_tools/agents_list)"),
+        ),
+        ("mcp__rimz", Some("mcp(rimz_tools/*)")),
         ("mcp__github__create_*", None),
         ("mcp__*", None),
         ("Glob", None),
@@ -2988,6 +3162,17 @@ mod usage_probe {
         assert_eq!(file("stdin"), "\n");
         assert_eq!(file("ssh"), usage::SSH_SESSION_VALUE);
         assert_eq!(file("home"), "/login/home");
+    }
+
+    #[test]
+    fn the_child_serves_no_rimz_tools_whatever_launch_it_runs_in() {
+        let command = usage::command("agy".into(), None);
+        let removed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_owned())
+            .collect();
+        assert_eq!(removed, ["RIMZ_MCP_CWD", "RIMZ_MCP_SERVE"]);
     }
     #[test]
     fn the_deadline_kills_and_reaps_the_process_group() {

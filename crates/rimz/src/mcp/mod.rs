@@ -7,6 +7,7 @@
 //! resolves no room; the one-shots do.
 
 pub mod catalog;
+pub mod launch_env;
 mod server;
 pub mod wording;
 

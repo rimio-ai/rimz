@@ -10,6 +10,11 @@
 //! `settings.json` and drops unknown `statusLine` keys, so the statusline is
 //! owned by its command and the displaced original lives in a RimZ-home record.
 //! Enablement lives in agy's `config.json`, which RimZ reads and never writes.
+//! The plugin also ships RimZ's MCP server (`mcp_config.json`), which agy names
+//! `rimz_tools`; with `allow-routine-rimz` on, install saves the rule that lets its
+//! tools run unasked in `settings.json`'s `permissions.allow`, and with it off, or on
+//! uninstall, removes that rule alone. A missing rule only makes agy ask, so it
+//! leaves the hooks installed and is not an outdated file.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,8 +23,8 @@ use serde_json::{Map, Value, json};
 
 use crate::agents::{
     AgentErr, AgentSpec, HookInstallFilePreview, HookInstallPreview, HookInstallReport,
-    HookPreflightErr, HookUninstallReport, ManagedIntegration, Result, agent_config_path, jsonc,
-    provider_file, read_optional_file,
+    HookPreflightErr, HookUninstallReport, ManagedIntegration, Result, ShippedMcpServer,
+    ShippedMcpState, agent_config_path, jsonc, provider_file, read_optional_file,
     settings_json::{self, PendingWrite},
 };
 
@@ -35,6 +40,7 @@ const PLUGIN_NAME: &str = "rimz";
 const PLUGIN_AUTHOR: &str = "RimZ";
 const MANIFEST: &str = "plugin.json";
 const PLUGIN_HOOKS: &str = "hooks.json";
+const PLUGIN_MCP: &str = "mcp_config.json";
 const ENABLE_FIX: &str = "agy plugin enable rimz";
 const INSTALL_FIX: &str = "rimz hooks install antigravity";
 const STACK_WITH_DEFAULT: &str = "stack_with_default";
@@ -106,17 +112,17 @@ impl ManagedIntegration for AntigravityManagedIntegration {
     fn install(
         &self,
         _login_env: &BTreeMap<String, String>,
-        _options: crate::agents::HookInstallOptions,
+        options: crate::agents::HookInstallOptions,
     ) -> Result<HookInstallReport> {
-        install(&self.paths()?)
+        install(&self.paths()?, options.allow_routine_rimz)
     }
 
     fn preview(
         &self,
         _login_env: &BTreeMap<String, String>,
-        _options: crate::agents::HookInstallOptions,
+        options: crate::agents::HookInstallOptions,
     ) -> Result<HookInstallPreview> {
-        preview(&self.paths()?)
+        preview(&self.paths()?, options.allow_routine_rimz)
     }
 
     fn uninstall(&self, _login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
@@ -166,6 +172,33 @@ impl ManagedIntegration for AntigravityManagedIntegration {
                 paths.state,
             ])
             .collect()
+    }
+
+    fn shipped_mcp_server(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<ShippedMcpServer> {
+        let paths = self.paths().ok()?;
+        let config = paths.plugin().join(PLUGIN_MCP);
+        let expected = plugin_files()
+            .into_iter()
+            .find_map(|(name, bytes)| (name == PLUGIN_MCP).then_some(bytes));
+        let state = match std::fs::read(&config) {
+            Err(_) => ShippedMcpState::Missing,
+            Ok(bytes) if expected.as_ref() != Some(&bytes) => ShippedMcpState::Drifted,
+            Ok(_) => match disabled_reason(&paths.config()) {
+                Some(reason) => ShippedMcpState::Disabled {
+                    reason,
+                    fix: ENABLE_FIX.to_owned(),
+                },
+                None => ShippedMcpState::Current,
+            },
+        };
+        Some(ShippedMcpServer {
+            name: super::MCP_SERVER_NAME,
+            config,
+            state,
+        })
     }
 
     fn wrapped_status_line_command(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
@@ -246,23 +279,33 @@ pub(super) fn settings_path() -> Result<PathBuf> {
     )
 }
 
-/// The plugin's files, hooks first so agy never discovers a manifest whose
-/// hooks are not yet on disk. The manifest's version moves only with the
-/// plugin's content.
-fn plugin_files() -> [(&'static str, Vec<u8>); 2] {
+/// The plugin's files, the manifest last so agy never discovers a manifest whose
+/// hooks and server are not yet on disk. The manifest's version moves only with
+/// the plugin's content. The server entry is the same for every session of the
+/// account: `--launch-env` takes each launch's selection from its env, and a
+/// session RimZ did not launch gets a server that exits at once.
+fn plugin_files() -> [(&'static str, Vec<u8>); 3] {
     let mut hooks = Map::new();
     hooks.insert(PLUGIN_NAME.to_owned(), Value::Object(rimz_hook()));
+    let server = json!({"mcpServers": {"tools": {
+        "command": "rimz",
+        "args": ["mcp", "serve", "--launch-env"],
+    }}});
     let manifest = json!({
         "name": PLUGIN_NAME,
         "version": "1.0.0",
         "description": "RimZ session and attention hooks",
         "author": PLUGIN_AUTHOR,
     });
-    // Both values hold only string keys and serializable primitives.
+    // Each value holds only string keys and serializable primitives.
     [
         (
             PLUGIN_HOOKS,
             serde_json::to_vec_pretty(&hooks).expect("embedded hooks serialize"),
+        ),
+        (
+            PLUGIN_MCP,
+            serde_json::to_vec_pretty(&server).expect("embedded server entry serializes"),
         ),
         (
             MANIFEST,
@@ -295,8 +338,10 @@ fn rimz_hook() -> Map<String, Value> {
 
 /// Refuses a plugin path RimZ does not own: a file, a symlink, a plugin file
 /// that is not a regular file, a manifest another author wrote, or a
-/// manifest-less directory holding anything but a hook file with RimZ's
-/// handlers. An absent or empty directory is RimZ's to fill.
+/// manifest-less directory holding anything but the files the installer writes
+/// before the manifest, its hook file holding RimZ's handlers and its server
+/// file the installer's exact entry. An absent or
+/// empty directory, or one an install left before its manifest, is RimZ's to fill.
 fn check_plugin(dir: &Path) -> Result<()> {
     let io_err = |source| AgentErr::InstallIo {
         agent: AGENT,
@@ -309,7 +354,8 @@ fn check_plugin(dir: &Path) -> Result<()> {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => return Err(not_owned(dir)),
     }
-    for name in [PLUGIN_HOOKS, MANIFEST] {
+    let files = plugin_files().map(|(name, _)| name);
+    for name in files {
         let file = dir.join(name);
         if std::fs::symlink_metadata(&file).is_ok_and(|metadata| !metadata.is_file()) {
             return Err(AgentErr::Install {
@@ -322,6 +368,7 @@ fn check_plugin(dir: &Path) -> Result<()> {
         }
     }
     let hooks = dir.join(PLUGIN_HOOKS);
+    let server = dir.join(PLUGIN_MCP);
     let owned = match settings_json::read_optional_bytes(AGENT, &dir.join(MANIFEST))? {
         Some(bytes) => jsonc::from_slice::<Value>(&bytes).is_ok_and(|manifest| {
             manifest["name"] == PLUGIN_NAME && manifest["author"] == PLUGIN_AUTHOR
@@ -329,10 +376,15 @@ fn check_plugin(dir: &Path) -> Result<()> {
         None => {
             std::fs::read_dir(dir).map_err(io_err)?.all(|entry| {
                 entry.is_ok_and(|entry| {
-                    entry.file_name() == PLUGIN_HOOKS
+                    files
+                        .iter()
+                        .any(|name| *name != MANIFEST && entry.file_name() == *name)
                         && entry.file_type().is_ok_and(|kind| kind.is_file())
                 })
             }) && (!hooks.exists() || holds_owned_hook(&hooks))
+                && (!server.exists()
+                    || std::fs::read(&server)
+                        .is_ok_and(|bytes| plugin_files().contains(&(PLUGIN_MCP, bytes))))
         }
     };
     if owned { Ok(()) } else { Err(not_owned(dir)) }
@@ -397,10 +449,10 @@ fn outdated_files(paths: &Paths) -> Vec<PathBuf> {
 
 /// The plugin is published last: a failed record or settings pair leaves any
 /// legacy global handlers as the one hook set, never beside the plugin.
-fn install(paths: &Paths) -> Result<HookInstallReport> {
+fn install(paths: &Paths, allow: bool) -> Result<HookInstallReport> {
     let plugin = paths.plugin();
     check_plugin(&plugin)?;
-    let settings = Settings::plan(paths)?;
+    let settings = Settings::plan(paths, allow)?;
     let global = stripped_global(&paths.hooks)?;
     let hooks_original = global
         .is_some()
@@ -448,10 +500,10 @@ fn install(paths: &Paths) -> Result<HookInstallReport> {
     })
 }
 
-fn preview(paths: &Paths) -> Result<HookInstallPreview> {
+fn preview(paths: &Paths, allow: bool) -> Result<HookInstallPreview> {
     let plugin = paths.plugin();
     check_plugin(&plugin)?;
-    let settings = Settings::plan(paths)?;
+    let settings = Settings::plan(paths, allow)?;
     let mut files = Vec::new();
     for (name, candidate) in plugin_files() {
         let file = plugin.join(name);
@@ -517,6 +569,7 @@ fn uninstall(paths: &Paths) -> Result<HookUninstallReport> {
         let mut root = settings_json::read_json_object(AGENT, &paths.settings)?;
         let before = root.clone();
         STATUS_LINE.strip(&mut root, &paths.state)?;
+        set_allow_rule(&mut root, false);
         if root != before {
             settings_json::write_json(AGENT, &paths.settings, &root)?;
             files.push((paths.settings.clone(), true));
@@ -551,7 +604,8 @@ struct Settings {
 }
 
 impl Settings {
-    fn plan(paths: &Paths) -> Result<Self> {
+    /// `allow` holds the saved rule that lets the plugin server's tools run unasked.
+    fn plan(paths: &Paths, allow: bool) -> Result<Self> {
         let path = &paths.settings;
         let existing = settings_json::read_json_object(AGENT, path)?;
         let (mut candidate, displaced) = STATUS_LINE.install_candidate(path)?;
@@ -560,6 +614,7 @@ impl Settings {
         {
             statusline.insert(STACK_WITH_DEFAULT.to_owned(), Value::Bool(true));
         }
+        set_allow_rule(&mut candidate, allow);
         let write = (candidate != existing)
             .then(|| settings_json::render_json(AGENT, &candidate))
             .transpose()?;
@@ -569,6 +624,42 @@ impl Settings {
             state: STATUS_LINE.state_change(path, &paths.state, displaced.as_ref())?,
             write,
         })
+    }
+}
+
+/// Adds or removes the saved `permissions.allow` rule for the plugin server's tools, keeping
+/// every other rule and dropping a container only that rule held. A `permissions` or
+/// `allow` value that is not a container is the user's and stays as it is.
+fn set_allow_rule(root: &mut Map<String, Value>, allow: bool) {
+    let rule = Value::from(format!("mcp({}/*)", super::MCP_SERVER_NAME));
+    if allow {
+        let permissions = root
+            .entry("permissions")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Some(Value::Array(rules)) = permissions
+            .as_object_mut()
+            .map(|permissions| permissions.entry("allow").or_insert_with(|| json!([])))
+            && !rules.contains(&rule)
+        {
+            rules.push(rule);
+        }
+        return;
+    }
+    let Some(Value::Object(permissions)) = root.get_mut("permissions") else {
+        return;
+    };
+    let Some(Value::Array(rules)) = permissions.get_mut("allow") else {
+        return;
+    };
+    if !rules.contains(&rule) {
+        return;
+    }
+    rules.retain(|held| *held != rule);
+    if rules.is_empty() {
+        permissions.remove("allow");
+    }
+    if permissions.is_empty() {
+        root.remove("permissions");
     }
 }
 

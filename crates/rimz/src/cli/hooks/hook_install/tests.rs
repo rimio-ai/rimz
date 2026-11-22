@@ -169,6 +169,48 @@ fn codex_rules_consent_and_dry_run_show_creation_and_removal() {
 }
 
 #[test]
+fn antigravity_consent_names_the_saved_mcp_grant_and_its_removal() {
+    let settings = |rule: bool| {
+        if rule {
+            "{\"permissions\": {\"allow\": [\"command(ls)\", \"mcp(rimz_tools/*)\"]}}\n"
+        } else {
+            "{\"permissions\": {\"allow\": [\"command(ls)\"]}}\n"
+        }
+    };
+    let granted = "Antigravity also gets a saved permission rule: RimZ's MCP tools run without a prompt in every agy session of the account, including outside RimZ. Turn it off with `[agents] allow-routine-rimz = false`.";
+    let removed = "Removing Antigravity's saved `mcp(rimz_tools/*)` rule ends prompt-free RimZ MCP tools in every agy session of the account, including outside RimZ (`[agents] allow-routine-rimz = false`).";
+    for (original, candidate, line) in [
+        (None, true, Some(granted)),
+        (Some(false), true, Some(granted)),
+        (Some(true), false, Some(removed)),
+        (Some(true), true, None),
+        (Some(false), false, None),
+    ] {
+        let mut agy = preview("antigravity", Some("{}\n"), "{}\n");
+        agy.files.push(HookInstallFilePreview {
+            path: "/h/.gemini/antigravity-cli/settings.json".into(),
+            original: original.map(|rule| settings(rule).into()),
+            candidate: settings(candidate).into(),
+            existed: original.is_some(),
+        });
+        let previews = [agy];
+        let (_, consent) = drive(&previews, b"n\n");
+        let notice = strip(|out| {
+            write_noninteractive_notice(out, &previews, HookInstallMode::NoTerminal, None)
+        });
+        for rendered in [&consent, &notice] {
+            for text in [granted, removed] {
+                assert_eq!(
+                    rendered.contains(text),
+                    line == Some(text),
+                    "{original:?} -> {candidate}: {rendered}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn hook_notices_cover_interactive_and_noninteractive_workflows() {
     let mut additive = preview("claude", Some("{}\n"), "{\"hooks\": []}\n");
     additive.status_line_change = Some(StatusLineChange::Wrapping {

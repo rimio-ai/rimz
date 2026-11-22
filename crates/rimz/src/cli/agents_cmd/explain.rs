@@ -17,6 +17,7 @@ use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
 use rimz::harness::launch_plan::{self, LaunchPlan, LaunchPlanInputs};
 use rimz::harness::team_prompt::{self, BUILT_IN_CONSENSUS, Consensus};
 use rimz::mcp::catalog::{Capability, LoadMode, SERVER_NAME, render_listing, tools_for};
+use rimz::mcp::launch_env;
 use rimz::mcp::wording::Wording;
 use rimz::sandbox::{EnvPin, Mount, SkippedSkill};
 
@@ -329,19 +330,32 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         mcp_arguments(&process.provider_argv)
     };
     let served = &plan.mcp_capabilities[..];
-    // A resume writes no agent file: the conversation keeps the servers it started with.
+    let launch_env: Vec<(&str, &str)> = if adapter.serves_mcp_from_launch_env() {
+        [launch_env::ENV_SERVE, launch_env::ENV_CWD]
+            .into_iter()
+            .filter_map(|key| Some((key, process.env.get(key)?.as_str())))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // A resume writes no agent file: the conversation keeps the servers it started with, except
+    // a server the provider starts from its own config, which follows each launch's env.
     let resumes = rides_agent_file && !matches!(plan.request.action, ExecAction::Launch { .. });
     let kept = "kept from the conversation's start: a resume writes no agent file";
     let rimz_line = if let Some((flag, value)) = &plan.mcp_switched_off {
         format!("off: {flag} {value}")
     } else if !served.is_empty() {
         let names: Vec<_> = served.iter().map(|c| c.name()).collect();
-        format!("serves {}", names.join(", "))
-    } else if resumes {
+        match adapter.mcp_server_name() {
+            SERVER_NAME => format!("serves {}", names.join(", ")),
+            name => format!("serves {} as `{name}`", names.join(", ")),
+        }
+    } else if resumes && !adapter.serves_mcp_from_launch_env() {
         kept.to_owned()
     } else if !server_on {
         "off: [agents] rimz-mcp-server = false".to_owned()
-    } else if rides_agent_file && plan.agent_file.is_none() {
+    } else if rides_agent_file && plan.agent_file.is_none() && !adapter.serves_mcp_from_launch_env()
+    {
         "not handed over: this launch writes no agent file".to_owned()
     } else {
         "not handed over: the mcps list names no RimZ capability".to_owned()
@@ -372,7 +386,7 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         for tool in &tools {
             let size = tool.tokens(&wording);
             total += size;
-            let load = load_mode(&arguments, tool.capability);
+            let load = load_mode(&arguments, &launch_env, tool.capability);
             table.row([
                 render::cell(tool.group_name()),
                 render::cell(tool.name),
@@ -401,6 +415,12 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
             writeln!(w, "  {flag} {value}")?;
         }
     }
+    if !launch_env.is_empty() {
+        writeln!(w, "\nLaunch environment")?;
+        for (key, value) in &launch_env {
+            writeln!(w, "  {key}={value}")?;
+        }
+    }
     let pointers: &[&str] = match kind {
         "claude" => &[
             "claude mcp list: the servers Claude connects for the account and project",
@@ -423,11 +443,11 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     let modes: Vec<_> = served
         .iter()
         .filter_map(|&capability| {
-            LoadMode::from_name(load_mode(&arguments, Some(capability)))
+            LoadMode::from_name(load_mode(&arguments, &launch_env, Some(capability)))
                 .map(|mode| (capability, mode))
         })
         .collect();
-    let server_wide = LoadMode::from_name(load_mode(&arguments, None));
+    let server_wide = LoadMode::from_name(load_mode(&arguments, &launch_env, None));
     writeln!(w, "\nServed text")?;
     writeln!(
         w,
@@ -514,29 +534,39 @@ fn user_servers(plan: &LaunchPlan, arguments: &[(&str, &str)], rides_agent_file:
 
 /// A capability's load mode as the launch passes it. On Claude, a
 /// `--always` or `--deferred` flag naming it in the `rimz` server's
-/// `--mcp-config` args, else that entry's `alwaysLoad`; on Antigravity, such a
-/// flag in the `rimz` item of the agent file's `mcpServers` line; on Codex, the
+/// `--mcp-config` args, else that entry's `alwaysLoad`; on Antigravity, its
+/// mark in the launch's `RIMZ_MCP_SERVE` (`launch_env`); on Codex, the
 /// server's `omit_tools_from` override, where `["deferred"]` loads its tools
 /// from the start and `[]` defers them; the last one passed wins, as in
 /// Codex. `default` when neither is passed. With no `capability`, as for
-/// `guide`, only the server-wide mode counts.
-fn load_mode(arguments: &[(&str, &str)], capability: Option<Capability>) -> &'static str {
+/// `guide`, only the server-wide mode counts, which the launch env never sets.
+fn load_mode(
+    arguments: &[(&str, &str)],
+    launch_env: &[(&str, &str)],
+    capability: Option<Capability>,
+) -> &'static str {
+    if let Some((_, value)) = launch_env
+        .iter()
+        .find(|(key, _)| *key == launch_env::ENV_SERVE)
+    {
+        return launch_env::parse(value)
+            .ok()
+            .and_then(|served| {
+                served
+                    .into_iter()
+                    .find(|(served, _)| Some(*served) == capability)?
+                    .1
+            })
+            .map_or("default", LoadMode::name);
+    }
     let omit_prefix = format!("mcp_servers.{SERVER_NAME}.omit_tools_from=");
     let mut load = None;
     for (flag, value) in arguments {
-        if *flag == "--mcp-config" || *flag == "mcpServers:" {
+        if *flag == "--mcp-config" {
             let Ok(config) = serde_json::from_str::<serde_json::Value>(value) else {
                 continue;
             };
-            let server = match *flag {
-                "--mcp-config" => config["mcpServers"].get(SERVER_NAME),
-                _ => config
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|item| item["name"] == SERVER_NAME),
-            };
-            let Some(server) = server else {
+            let Some(server) = config["mcpServers"].get(SERVER_NAME) else {
                 continue;
             };
             let args: Vec<&str> = server["args"]

@@ -2318,6 +2318,32 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
         )?;
     }
 
+    // Uncounted: a server entry that is not current leaves the hooks not installed or
+    // disabled, which the table above already counts.
+    for server in &report.mcp_servers {
+        let config = server.config.display();
+        let Some(fix) = &server.fix else {
+            note(
+                w,
+                Health::Neutral,
+                &format!(
+                    "{}: RimZ's MCP server ships as `{}` in {config}",
+                    server.kind, server.name
+                ),
+            )?;
+            continue;
+        };
+        note(
+            w,
+            Health::Neutral,
+            &format!(
+                "{}: RimZ's MCP server `{}` is {} in {config}",
+                server.kind, server.name, server.status
+            ),
+        )?;
+        detail(w, palette::faint(), fix)?;
+    }
+
     if !absent.is_empty() {
         absent.sort_unstable();
         note(

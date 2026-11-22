@@ -2043,7 +2043,7 @@ fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch(
                         serde_json::from_str::<serde_json::Value>(&settings[0]).unwrap(),
                         serde_json::json!({"permissions": {
                             "deny": ["command(rm)"],
-                            "allow": ["command(git status)"]
+                            "allow": ["command(git status)", "mcp(rimz_tools/*)"]
                         }}),
                         "{case}"
                     );
@@ -3737,6 +3737,8 @@ fn a_provider_temp_root_follows_tmpdir() {
                             | "RIMZ_LONG_CACHE_ENV"
                             | "RIMZ_CODE_MODE_ENV"
                             | "RIMZ_CODE_MODE_CONFIG"
+                            | "RIMZ_MCP_SERVE"
+                            | "RIMZ_MCP_CWD"
                     )
                         && *key != crate::harness::launch::ENV_RUNTIME_ENV
                         && *key != crate::harness::launch::ENV_AGENT_MODEL
