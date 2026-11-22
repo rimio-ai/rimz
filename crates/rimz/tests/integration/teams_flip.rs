@@ -1685,12 +1685,9 @@ impl Fixture {
     }
 
     fn stage_records(&self) -> Vec<rimz::store::message::MessageRecord> {
-        let store = self.env.store();
-        store
-            .list_messages()
-            .unwrap()
-            .into_iter()
-            .chain(store.list_message_history().unwrap())
+        let (live, history) = self.env.store().list_messages_and_history().unwrap();
+        live.into_iter()
+            .chain(history)
             .filter(|message| {
                 message.sender
                     == MessageSender::Harness {
@@ -1870,14 +1867,12 @@ impl Fixture {
             .clone()
     }
 
-    /// The status of message `id`, live or in history.
+    /// The status of message `id`, live or in history, read in one locked view: a terminal
+    /// transition removes the live row before it appends the history row.
     fn message_status(&self, id: &rimz::ids::MessageId) -> MessageStatus {
-        let store = self.env.store();
-        store
-            .list_messages()
-            .unwrap()
-            .into_iter()
-            .chain(store.list_message_history().unwrap())
+        let (live, history) = self.env.store().list_messages_and_history().unwrap();
+        live.into_iter()
+            .chain(history)
             .find(|message| message.message_id == *id)
             .unwrap_or_else(|| panic!("no message {id}"))
             .status
