@@ -248,14 +248,7 @@ fn apply_command(store: &Store, frame: &HookIngress) -> Result<std::process::Com
         std::env::current_exe()?
     });
     command.args(["hooks", "apply"]);
-    let log_path = store.paths().hook_drainer_log();
-    if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)?;
+    let log = rimz::disk::capped_log::open(store.paths(), &store.paths().hook_drainer_log())?;
     rimz::child_process::clear_env_preserving_coverage(&mut command);
     command.envs(&frame.env).current_dir(&frame.cwd).stderr(log);
     #[cfg(feature = "testkit")]
@@ -811,6 +804,7 @@ fn run_drain(project_root: PathBuf, once: bool) -> Result<()> {
         );
         rimz::harness::hook_drain::drain_through(&store, 0, None, wait)?;
     } else {
+        rimz::disk::capped_log::watch_own_stderr(store.paths(), &store.paths().hook_drainer_log());
         rimz::harness::hook_drain::run(&store)?;
     }
     Ok(())

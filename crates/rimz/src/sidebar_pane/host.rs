@@ -111,6 +111,10 @@ pub fn run(room: RoomConfig) -> Result<(), SidebarAppErr> {
     raise_open_file_limit();
     let runtime = RuntimePaths::for_workspace(room.workspace_id.clone())?;
     let state = crate::StatePaths::for_workspace(room.workspace_id.clone())?;
+    crate::disk::capped_log::watch_own_stderr(
+        &state,
+        &state.sidebar_host_log(room.mux, &room.session_name),
+    );
     if crate::Store::open_existing(state, runtime.clone()).is_none() {
         warn!(workspace = %room.workspace_id, "sidebar host: no room; run `rimz start` first");
         return Ok(());

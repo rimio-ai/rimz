@@ -66,6 +66,7 @@ The file primitives sit one level down, in `disk/`, which imports nothing from t
 | [`disk/retention.rs`](../../crates/rimz/src/disk/retention.rs) | The retention figures that state writers and the class sweeps share: archive retention, the rotation threshold, the owned and temp-unit graces, the audit age and size caps, and the transcript bucket width. |
 | [`disk/buckets.rs`](../../crates/rimz/src/disk/buckets.rs) | Date-bucket file names and listing for the append-only `audit/transcript/` and `audit/messages/` logs. |
 | [`disk/rotating.rs`](../../crates/rimz/src/disk/rotating.rs) | Best-effort rotating JSONL append and decoded visits. |
+| [`disk/capped_log.rs`](../../crates/rimz/src/disk/capped_log.rs) | The daemon stderr logs of `log/`: the open that hands a child its stderr, the trim at the cap into the one previous file, and the interval check a daemon runs on its own stderr file ([Daemon logs](./diagnostics.md#daemon-logs)). |
 | [`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs) | The per-thread parse memo ([Truth and cache](#truth-and-cache)). |
 | [`disk/single_flight.rs`](../../crates/rimz/src/disk/single_flight.rs) | Cross-process cache election: shared reuse, exclusive production, or local-only fallback. Sidebar heavy lanes and launch gating use it, and host-owned pane production does not. It stays free of every writer module, and callers own freshness and publication. |
 | [`disk/usage.rs`](../../crates/rimz/src/disk/usage.rs), [`disk/summary.rs`](../../crates/rimz/src/disk/summary.rs) | Symlink-safe, hardlink-aware byte walks for `doctor --audit`, `uninstall`, and `gc`, with entry counts and the room's per-folder breakdown in the home walk, and text-file measurement. |
@@ -78,7 +79,7 @@ Room files have one lifetime class per directory, and only `disk/paths.rs` const
 
 | Class directory | Tier | Reclamation rule |
 | --- | --- | --- |
-| `log/` | State | Event log: rotate at 64 MiB, with 14-day retention for archives and carryover. Hook ingress: truncate only after it is fully drained, with no age sweep or rotation. |
+| `log/` | State | Event log: rotate at 64 MiB, with 14-day retention for archives and carryover. Hook ingress: truncate only after it is fully drained, with no age sweep or rotation. Daemon logs: their writers empty each into its one previous file at 32 MiB, and GC never touches them ([Daemon logs](./diagnostics.md#daemon-logs)). |
 | `records/` | State | Standing records, with no age sweep. Both resets remove pending idle stops and raised attention. |
 | `audit/` | State | Except `transcript/` and `messages/`, remove files older than 30 days by mtime, then oldest first until at most 64 MiB remains per room. Those two subdirectories follow `gc.transcript_retention` (default `forever`) and report together as `transcript`. |
 | `cache/` | State | Rebuildable. Cleared on reset, with no age sweep. `rimz doctor --audit` warns above 150,000 entries. |
@@ -108,8 +109,10 @@ The directory is named by a `WorkspaceDirName`, never by the id. The name is `<b
 ```text
 log/events.log.jsonl                          framed event log
 log/hook-ingress.log.jsonl                    pending hook frames
-log/hook-drainer.log                          drainer diagnostics
+log/hook-drainer.log                          drainer and `hooks apply` diagnostics
 log/wait-watch.log                            wait watcher diagnostics
+log/sidebar-host.<session key>.log            room host diagnostics, one per mux session
+log/<daemon log stem>.1.log                   the one previous file of each daemon log
 log/archive/events.<uuidv7>.jsonl             rotated logs
 records/hook-drain.json                       applied/claimed cursor with boot-aware write classes, frame ids, claim extent, frame count
 records/agents-carryover.json                 agent rollup carried across rotation
@@ -157,8 +160,9 @@ locks/*.lock                                  room, workspace, publish, subagent
                                               topology-writer, authoritative-pane-probe, focus-anchor, typing,
                                               pr-state, diff-stats, budget.fleet, hook-drainer,
                                               hook-drainer-spawn, hook-ingress, lsp-usage, unread, sidecar locks,
-                                              and the per-session sidebar-host, sidebar-host-spawn,
-                                              and sidebar-reconcile locks
+                                              the per-session sidebar-host, sidebar-host-spawn,
+                                              and sidebar-reconcile locks, and <daemon log>.trim
+                                              for each daemon log
 locks/pane-write/                             per-pane write locks
 workspace.json                                room record, layout: 2
 rimz                                          stable room executable

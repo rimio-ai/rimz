@@ -55,8 +55,8 @@ pub(super) fn host_args(config: &SupervisorConfig) -> Vec<OsString> {
 }
 
 /// Start the session's host from `exe`, detached from this pane, its stderr
-/// appended to `log`. A host refused for want of a verified room pin leaves
-/// its reason there too.
+/// appended to the capped log `log`. A host refused for want of a verified
+/// room pin leaves its reason there too.
 pub(super) fn spawn_host(
     exe: &Path,
     config: &SupervisorConfig,
@@ -64,13 +64,7 @@ pub(super) fn spawn_host(
     state: &StatePaths,
     log: &Path,
 ) -> io::Result<()> {
-    if let Some(dir) = log.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut stderr = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log)?;
+    let mut stderr = crate::disk::capped_log::open(state, log)?;
     // A rendered pane's own log sink is off, so the host's log is where a
     // host that was never started says why. A pane waiting for a host asks again
     // on every retry, so each line says when.

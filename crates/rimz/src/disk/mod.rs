@@ -6,6 +6,7 @@
 
 pub mod atomic;
 pub(crate) mod buckets;
+pub mod capped_log;
 pub(crate) mod lease;
 pub mod lock;
 pub(crate) mod parse_cache;

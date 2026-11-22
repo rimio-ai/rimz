@@ -10,7 +10,11 @@
 
 mod cli;
 
+use std::ffi::OsString;
+use std::os::fd::{AsFd, BorrowedFd};
+
 use rimz::observability;
+use tracing_subscriber::filter::FilterExt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
@@ -92,11 +96,25 @@ fn install_tracing(report_to_sentry: bool) {
         .or_else(|_| EnvFilter::try_new(default_log_filter()))
         .unwrap_or_else(|_| EnvFilter::new("warn"));
     // The env filter is per-layer on the fmt sink, so rendered panes silence
-    // stderr without gating the Sentry layer's own `WARN` capture.
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(true)
-        .with_writer(rimz::tui::TuiLogWriter)
-        .with_filter(filter);
+    // stderr without gating the Sentry layer's own `WARN` capture. Repeat
+    // suppression rides the same per-layer filter, so Sentry sees every event.
+    let fmt_layer = tracing_subscriber::fmt::layer().with_ansi(true);
+    // Only a daemon whose stderr is its log file suppresses: the same command
+    // run in a terminal writes every line.
+    let suppress = suppresses_repeats_for(std::env::args_os().skip(1))
+        && is_regular_file(std::io::stderr().as_fd());
+    let fmt_layer = if suppress {
+        let repeats = observability::RepeatSuppression::default();
+        fmt_layer
+            .with_writer(repeats.writer(rimz::tui::TuiLogWriter))
+            .with_filter(filter.and(repeats.filter()))
+            .boxed()
+    } else {
+        fmt_layer
+            .with_writer(rimz::tui::TuiLogWriter)
+            .with_filter(filter)
+            .boxed()
+    };
     let sentry_layer = report_to_sentry.then(observability::sentry_tracing_layer);
     tracing_subscriber::registry()
         .with(fmt_layer)
@@ -104,14 +122,40 @@ fn install_tracing(report_to_sentry: bool) {
         .init();
 }
 
-fn default_log_filter() -> &'static str {
-    log_filter_for(std::env::args().skip(1))
+/// The long-lived commands whose stderr is a room log file.
+fn suppresses_repeats_for(args: impl Iterator<Item = OsString>) -> bool {
+    let mut previous = None;
+    for arg in args {
+        let arg = arg.into_string().ok();
+        if matches!(
+            (previous.as_deref(), arg.as_deref()),
+            (Some("sidebar"), Some("host"))
+                | (Some("hooks"), Some("drain"))
+                | (Some("wait"), Some("watch"))
+        ) {
+            return true;
+        }
+        previous = arg;
+    }
+    false
 }
 
-fn log_filter_for(args: impl Iterator<Item = String>) -> &'static str {
+/// Whether `fd` writes to a regular file rather than a terminal or a pipe.
+fn is_regular_file(fd: BorrowedFd<'_>) -> bool {
+    fd.try_clone_to_owned()
+        .and_then(|fd| std::fs::File::from(fd).metadata())
+        .is_ok_and(|metadata| metadata.is_file())
+}
+
+fn default_log_filter() -> &'static str {
+    log_filter_for(std::env::args_os().skip(1))
+}
+
+fn log_filter_for(args: impl Iterator<Item = OsString>) -> &'static str {
     let mut saw_sidebar = false;
     let mut saw_stats = false;
     for arg in args {
+        let arg = arg.to_str().unwrap_or_default();
         if saw_sidebar && arg == "serve" {
             return RENDERED_PANE_LOG_FILTER;
         }
@@ -142,7 +186,7 @@ mod tests {
     }
 
     fn filter(args: &[&str]) -> &'static str {
-        log_filter_for(args.iter().map(|arg| (*arg).to_owned()))
+        log_filter_for(args.iter().map(OsString::from))
     }
 
     #[test]
@@ -150,6 +194,56 @@ mod tests {
         assert_eq!(filter(&["sidebar", "serve"]), "off");
         assert_eq!(filter(&["stats", "--refresh"]), "off");
         assert_eq!(filter(&["stats", "--refresh", "--hold"]), "off");
+    }
+
+    fn suppresses(args: &[&str]) -> bool {
+        suppresses_repeats_for(args.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn daemons_logging_to_a_file_suppress_repeated_lines() {
+        assert!(suppresses(&[
+            "sidebar",
+            "host",
+            "--mux",
+            "tmux",
+            "--workspace-id",
+            "w",
+            "--session-name",
+            "s",
+        ]));
+        assert!(suppresses(&["hooks", "drain", "--project-root", "/r"]));
+        assert!(suppresses(&["--root", "/r", "wait", "watch", "build"]));
+    }
+
+    #[test]
+    fn ordinary_commands_write_every_line() {
+        assert!(!suppresses(&["hooks", "apply"]));
+        assert!(!suppresses(&["hooks"]));
+        assert!(!suppresses(&["sidebar", "serve"]));
+        assert!(!suppresses(&["wait", "--in", "5m"]));
+        assert!(!suppresses(&["wait", "list"]));
+        assert!(!suppresses(&["status"]));
+    }
+
+    #[test]
+    fn non_utf8_arguments_select_nothing_and_never_panic() {
+        use std::os::unix::ffi::OsStringExt;
+        let odd = || std::iter::once(OsString::from_vec(vec![0xff]));
+
+        assert!(!suppresses_repeats_for(odd()));
+        assert_eq!(log_filter_for(odd()), "warn");
+        let daemon = ["hooks", "drain"].map(OsString::from);
+        assert!(suppresses_repeats_for(odd().chain(daemon)));
+    }
+
+    #[test]
+    fn only_a_regular_file_as_stderr_selects_suppression() {
+        let file = tempfile::tempfile().unwrap();
+        let terminal_stand_in = std::fs::File::open("/dev/null").unwrap();
+
+        assert!(is_regular_file(file.as_fd()));
+        assert!(!is_regular_file(terminal_stand_in.as_fd()));
     }
 
     #[test]

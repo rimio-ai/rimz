@@ -214,6 +214,7 @@ anyhow.workspace = true
 # Stderr logger is installed in main.rs only; the library re-uses the
 # global `tracing` subscriber.
 tracing-subscriber.workspace = true
+tracing-log.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
@@ -241,6 +242,7 @@ assert_cmd.workspace = true
 divan.workspace = true
 headless_chrome = "1.0"
 insta.workspace = true
+log.workspace = true
 portable-pty.workspace = true
 predicates.workspace = true
 proptest.workspace = true
