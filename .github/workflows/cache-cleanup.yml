@@ -7,9 +7,17 @@ name: Cache cleanup
 # `pull_request` token is read-only there. The event is privileged, so this
 # workflow never checks out or runs anything from the PR: the one piece of
 # event data it uses is the PR number, passed through `env`.
+#
+# A merge-queue run writes its entries on its `gh-readonly-queue/...` branch,
+# which GitHub deletes once the group merges or leaves the queue. The hourly
+# sweep deletes the entries of every such branch that no longer exists. It
+# lists the entries before the branches, so an entry it deletes belonged to a
+# branch that had already been created and was gone by the second read.
 on:
   pull_request_target:
     types: [closed]
+  schedule:
+    - cron: "17 * * * *"
 
 permissions:
   actions: write
@@ -17,6 +25,7 @@ permissions:
 jobs:
   delete:
     name: delete the PR's cache entries
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -26,3 +35,28 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: gh cache delete --all --succeed-on-no-caches --ref "refs/pull/${PR_NUMBER}/merge"
+
+  sweep-queue:
+    name: delete dead merge-queue cache entries
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Delete the entries of merge-queue branches that are gone
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          queue_refs="$(gh cache list --limit 100000 --json ref \
+            --jq '[.[].ref | select(startswith("refs/heads/gh-readonly-queue/"))] | unique | .[]')"
+          live_refs="$(gh api --paginate "repos/${GH_REPO}/git/matching-refs/heads/gh-readonly-queue/" --jq '.[].ref')"
+          for ref in $queue_refs; do
+            if grep -qxF "$ref" <<<"$live_refs"; then
+              continue
+            fi
+            echo "deleting the entries of $ref"
+            gh cache delete --all --succeed-on-no-caches --ref "$ref"
+          done
