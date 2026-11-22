@@ -93,14 +93,17 @@ fn owner_sigkill_still_reaps_descendants_and_roots() {
         runtime_root: _runtime.path().to_path_buf(),
     };
     let encoded = serde_json::to_string(&spec).expect("serialize fake-owner spec");
-    let mut owner = Command::new(env!("CARGO_BIN_EXE_rimz-test-reaper"))
-        .arg("--fake-owner")
-        .arg(encoded)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn fake sandbox owner");
+    let mut owner = Command::new(crate::common::cargo_bin(
+        "rimz-test-reaper",
+        env!("CARGO_BIN_EXE_rimz-test-reaper"),
+    ))
+    .arg("--fake-owner")
+    .arg(encoded)
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .spawn()
+    .expect("spawn fake sandbox owner");
     let report: FakeOwnerReport = {
         let stdout = owner.stdout.take().expect("fake-owner stdout");
         let mut line = String::new();
