@@ -685,8 +685,23 @@ mod tests {
             ("gemini-3.8-flash", Some("antigravity")),
             ("gemini-4-hydrogen-high", Some("antigravity")),
             ("gemini-x", Some("antigravity")),
+            ("gemini-pro-orchestrator-neon", Some("antigravity")),
         ] {
             assert_eq!(definition_model_kind(model), kind, "{model}");
+        }
+        for id in [
+            "gemini-pro-orchestrator-neon",
+            "gemini-pro-orchestrator",
+            "gemini-pro-orchestrator-argon",
+        ] {
+            assert_eq!(definition_defaults("antigravity", Some(id)).effort, None);
+            assert!(
+                definitions("antigravity")
+                    .models
+                    .iter()
+                    .any(|entry| entry.name == id && entry.id == id && entry.max_effort.is_none()),
+                "{id}"
+            );
         }
         for (name, id) in [
             ("hydrogen", "gemini-4-hydrogen"),

@@ -459,7 +459,8 @@ upward-dependencies = ["address"]
 # added-dir and tool-rule handling across kinds (+2).
 # LaunchCapability::fold_permission_settings lets harness compile fold a permission mode's own
 # settings document into the launch's one --settings before other contributions (+1).
-surface-budget = 1329
+# drop_refused_effort runs only where the launch's final model is known (+1).
+surface-budget = 1330
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -5666,7 +5667,8 @@ allowed-dependencies = [
 # normalize_cell_preset shares tuning normalization with replay (+1).
 # LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
 # `resolve_agent_cells` lets loop surplus admission read every cell of a team or multi-cell step (+1).
-surface-budget = 56
+# settle_effort_arg also settles a relaunch posture rendered from a profile (+1).
+surface-budget = 57
 
 [[verdict]]
 kind = "item"

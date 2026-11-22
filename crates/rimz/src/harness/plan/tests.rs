@@ -221,6 +221,133 @@ fn antigravity_effort_settles_for_the_final_model() {
     }
 }
 
+/// An Orchestrator id takes no `--effort`: agy runs another model when given one, so a profile's
+/// effort, the max fallback, and a built-in default all launch without it.
+#[test]
+fn antigravity_orchestrator_launches_without_effort() {
+    for (id, effort, built_in) in [
+        ("gemini-pro-orchestrator-neon", "high", false),
+        ("gemini-pro-orchestrator", "max", false),
+        ("gemini-pro-orchestrator-argon", "high", true),
+    ] {
+        let rendered = if effort == "max" { "xhigh" } else { effort };
+        let mut layout = LayoutSpec::single(preset_cell(
+            "antigravity",
+            &["--model", "hydrogen", "--effort", rendered],
+            Some("hydrogen"),
+            Some(effort),
+        ));
+        if built_in {
+            for cell in layout.agent_cells_mut() {
+                cell.tuning.effort = Some(crate::harness::spec::TuningSource::BuiltIn);
+            }
+        }
+        let preset = crate::agents::LaunchPreset {
+            model: Some(id.to_owned()),
+            ..Default::default()
+        };
+        let warnings = finalize_launch_layout(
+            &mut layout,
+            LaunchFinalizeOptions {
+                smart_compact: None,
+                agent_base: None,
+                permission_mode: None,
+                isolation: None,
+                preset: &preset,
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+                machine_config: None,
+            },
+        )
+        .unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        let warnings: Vec<_> = warnings.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            (
+                cell.launch.effort.as_deref(),
+                cell.launch
+                    .record
+                    .as_deref()
+                    .and_then(|record| record.effort.as_deref()),
+                cell.args.clone(),
+            ),
+            (None, None, vec!["--model".to_owned(), id.to_owned()]),
+            "{id} {effort}"
+        );
+        let expected = if built_in {
+            Vec::new()
+        } else {
+            vec![format!(
+                "warning: `antigravity-coder` effort {effort} is unsupported on antigravity; launching without it"
+            )]
+        };
+        assert_eq!(warnings, expected, "{id} {effort}");
+    }
+}
+
+/// A profile's effort beside an Orchestrator id launches when `--model` moves the launch to a
+/// model that takes effort, and argv and the record agree on it.
+#[test]
+fn antigravity_orchestrator_profile_effort_follows_a_model_override() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "planner".to_owned(),
+        configured_profile(
+            "antigravity",
+            None,
+            Some("gemini-pro-orchestrator-neon"),
+            Some("low"),
+            None,
+            None,
+        ),
+    );
+    let launch = effective_launch(&machine, dir.path());
+    for (launched, args, effort) in [
+        (
+            Some("gemini-4-hydrogen"),
+            &["--effort", "low", "--model", "gemini-4-hydrogen"][..],
+            Some("low"),
+        ),
+        (None, &["--model", "gemini-pro-orchestrator-neon"][..], None),
+    ] {
+        let preset = crate::agents::LaunchPreset {
+            model: launched.map(str::to_owned),
+            ..Default::default()
+        };
+        let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
+            .expect("resolve launch");
+        finalize_launch_layout(
+            &mut resolved.layout,
+            LaunchFinalizeOptions {
+                smart_compact: None,
+                agent_base: None,
+                permission_mode: None,
+                isolation: None,
+                preset: &preset,
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+                machine_config: None,
+            },
+        )
+        .expect("finalize launch");
+        let cell = resolved.layout.agent_cells().next().unwrap();
+        assert_eq!(
+            (
+                cell.args.iter().map(String::as_str).collect::<Vec<_>>(),
+                cell.launch
+                    .record
+                    .as_deref()
+                    .and_then(|record| record.effort.as_deref()),
+            ),
+            (args.to_vec(), effort),
+            "{launched:?}"
+        );
+    }
+}
+
 #[test]
 fn a_pin_keeps_a_cataloged_names_built_in_effort_unless_its_id_is_listed() {
     let config = crate::config::MachineConfig {
