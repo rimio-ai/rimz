@@ -8,6 +8,8 @@ use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::StdioTerminal;
+
 type FileReads = HashMap<(Option<u32>, &'static str), Option<Arc<[u8]>>>;
 
 #[derive(Default)]
@@ -15,6 +17,7 @@ struct Reads {
     files: FileReads,
     cwds: HashMap<u32, Option<PathBuf>>,
     children: HashMap<u32, Vec<u32>>,
+    stdio: HashMap<u32, StdioTerminal>,
 }
 
 thread_local! {
@@ -97,6 +100,10 @@ pub(super) fn cwd(pid: u32, read: impl FnOnce() -> Option<PathBuf>) -> Option<Pa
 
 pub(super) fn children(pid: u32, read: impl FnOnce() -> Vec<u32>) -> Vec<u32> {
     cached(pid, |reads| &mut reads.children, read)
+}
+
+pub(super) fn stdio_terminal(pid: u32, read: impl FnOnce() -> StdioTerminal) -> StdioTerminal {
+    cached(pid, |reads| &mut reads.stdio, read)
 }
 
 #[cfg(test)]

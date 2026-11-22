@@ -16,6 +16,7 @@ pub enum Counter {
     ProcIo,
     ProcStatus,
     ProcBootStat,
+    ProcStdio,
     WakePublication,
     WakeRoomEvent,
     WakeInput,

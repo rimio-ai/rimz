@@ -31,6 +31,7 @@ fn production_memo_shares_primitive_and_composite_reads() {
             in_pane_agent_start_for_root("codex", pid);
             hosted_agent_absent_under_root("codex", pid);
             elevated_in_pane_agent(pid);
+            stdio_terminal(pid);
         }
     });
     for kind in [
@@ -41,10 +42,42 @@ fn production_memo_shares_primitive_and_composite_reads() {
         ProcCwd,
         ProcIo,
         ProcStatus,
+        ProcStdio,
     ] {
         assert_eq!(counts.get(kind), 1, "one open per production: {kind:?}");
     }
     assert_eq!(counts.get(ProcTaskDir), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn stdio_terminal_reads_a_live_childs_descriptors() {
+    use std::process::{Command, Stdio};
+
+    let pty = nix::pty::openpty(None, None).unwrap();
+    let _master = pty.master;
+    let tty = std::fs::File::from(pty.slave);
+    let on_tty = || Stdio::from(tty.try_clone().unwrap());
+    let cases = [
+        (on_tty(), on_tty(), StdioTerminal::Terminal),
+        (on_tty(), Stdio::piped(), StdioTerminal::NotTerminal),
+        (Stdio::null(), on_tty(), StdioTerminal::NotTerminal),
+        (Stdio::null(), Stdio::null(), StdioTerminal::NotTerminal),
+        (Stdio::piped(), Stdio::piped(), StdioTerminal::NotTerminal),
+    ];
+    for (index, (stdin, stdout, expected)) in cases.into_iter().enumerate() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .stdin(stdin)
+            .stdout(stdout)
+            .spawn()
+            .unwrap();
+        let actual = stdio_terminal(child.id());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(actual, expected, "case {index}");
+    }
+    assert_eq!(stdio_terminal(u32::MAX), StdioTerminal::Unreadable);
 }
 
 #[cfg(target_os = "linux")]

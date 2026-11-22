@@ -783,6 +783,60 @@ pub fn cwd(pid: u32) -> Option<std::path::PathBuf> {
     })
 }
 
+/// Whether a process's standard input and output are a terminal: the mark of a CLI a
+/// person drives, as against one a command runs for its output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StdioTerminal {
+    /// fd 0 and fd 1 are both a tty or a pty, whichever terminal that is. Only the
+    /// Linux reader can prove it.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Terminal,
+    /// fd 0 or fd 1 was read and is not a terminal: a pipe, a socket, a file, `/dev/null`.
+    NotTerminal,
+    /// Neither is proven: a descriptor cannot be read (another uid, another user
+    /// namespace, a process gone), or the platform has no reader.
+    Unreadable,
+}
+
+/// Whether fd 0 and fd 1 of `pid` are a terminal, decided from the metadata the
+/// `/proc/<pid>/fd` links resolve to. It never opens a descriptor's target: opening
+/// another process's pty or pipe has side effects and can block.
+#[cfg(target_os = "linux")]
+fn stdio_terminal(pid: u32) -> StdioTerminal {
+    memo::stdio_terminal(pid, || {
+        #[cfg(any(test, feature = "testkit"))]
+        count(Counter::ProcStdio);
+        let reads = [0, 1].map(|fd| std::fs::metadata(format!("/proc/{pid}/fd/{fd}")).ok());
+        if reads
+            .iter()
+            .flatten()
+            .any(|target| !is_terminal_device(target))
+        {
+            StdioTerminal::NotTerminal
+        } else if reads.iter().all(Option::is_some) {
+            StdioTerminal::Terminal
+        } else {
+            StdioTerminal::Unreadable
+        }
+    })
+}
+
+/// A tty (major 4), `/dev/tty` or the console (major 5), or a pty slave (136-143).
+#[cfg(target_os = "linux")]
+fn is_terminal_device(target: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    target.file_type().is_char_device()
+        && matches!(nix::sys::stat::major(target.rdev()), 4 | 5 | 136..=143)
+}
+
+/// macOS has no descriptor reader without a new unsafe site, so its walks keep
+/// deciding by command line alone.
+#[cfg(not(target_os = "linux"))]
+fn stdio_terminal(_pid: u32) -> StdioTerminal {
+    StdioTerminal::Unreadable
+}
+
 /// The `(dev, ino)` of what `pid` sees at the absolute `path` in its own root,
 /// read through `/proc/<pid>/root`. A bind mount keeps its source directory's
 /// identity, so this names the directory a mount view put there whatever host
