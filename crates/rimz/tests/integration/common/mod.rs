@@ -61,13 +61,23 @@ pub use zellij::ZellijNamespace;
 
 pub(crate) const ENV_PROBE_TIMEOUT_MS_ENV: &str = "RIMZ_TEST_ENV_PROBE_TIMEOUT_MS";
 
+/// The private memory a resident `rimz` process (a parked or command wrapper, an idle MCP
+/// server) may hold outside huge pages and its relocated image; docs/internals/performance.md
+/// records the measurements behind it.
+pub(crate) const WRAPPER_BUDGET_MIB: u64 = 4;
 const WRAPPER_HUGE_BUDGET_MIB: u64 = 16;
 
 /// One wrapper's private-memory figures, read from its `smaps_rollup` while it lives.
+///
+/// `relocated_kib` is the executable's read-only mappings the dynamic loader dirtied: its
+/// GNU_RELRO segment (`.data.rel.ro`, `.got`), which every `rimz` process carries and which
+/// grows with the code linked into the binary, not with the process measured, so the budgets
+/// bound the figure outside it.
 pub(crate) struct WrapperMemory {
     label: String,
     private_kib: u64,
     huge_kib: u64,
+    relocated_kib: u64,
     mode: String,
 }
 
@@ -96,10 +106,13 @@ pub(crate) fn measure_wrapper_memory(label: &str, wrapper: u32, budget_kib: u64)
     };
     let enabled =
         std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/enabled").unwrap_or_default();
+    let mappings =
+        std::fs::read_to_string(format!("/proc/{wrapper}/smaps")).expect("wrapper mappings");
     let memory = WrapperMemory {
         label: label.to_owned(),
         private_kib: field("Pss_Anon:"),
         huge_kib: field("AnonHugePages:"),
+        relocated_kib: relocated_image_kib(wrapper, &mappings),
         mode: enabled
             .split_whitespace()
             .find_map(|mode| mode.strip_prefix('[')?.strip_suffix(']'))
@@ -109,26 +122,54 @@ pub(crate) fn measure_wrapper_memory(label: &str, wrapper: u32, budget_kib: u64)
     let WrapperMemory {
         private_kib,
         huge_kib,
+        relocated_kib,
         ref mode,
         ..
     } = memory;
-    let outside_huge_kib = memory.outside_huge_kib();
+    let budgeted_kib = memory.budgeted_kib();
     println!(
-        "{label}: {private_kib} KiB Pss_Anon; {} KiB Pss; {outside_huge_kib} KiB outside huge \
-         pages; AnonHugePages {huge_kib} KiB; THP {mode}; threads [{}]",
+        "{label}: {private_kib} KiB Pss_Anon; {} KiB Pss; {budgeted_kib} KiB outside huge pages \
+         and the relocated image; relocated image {relocated_kib} KiB; AnonHugePages {huge_kib} \
+         KiB; THP {mode}; threads [{}]",
         field("Pss:"),
         wrapper_thread_names(wrapper).join(", ")
     );
-    if outside_huge_kib > budget_kib || huge_kib > WRAPPER_HUGE_BUDGET_MIB * 1024 {
+    if budgeted_kib > budget_kib || huge_kib > WRAPPER_HUGE_BUDGET_MIB * 1024 {
         println!(
-            "{label} mappings (load {}):\n{}",
+            "{label} mappings (load {}):\n{mappings}",
             std::fs::read_to_string("/proc/loadavg")
                 .unwrap_or_default()
                 .trim(),
-            std::fs::read_to_string(format!("/proc/{wrapper}/smaps")).expect("wrapper mappings")
         );
     }
     memory
+}
+
+/// The `Anonymous` KiB of the wrapper's non-writable mappings of its own executable.
+fn relocated_image_kib(wrapper: u32, mappings: &str) -> u64 {
+    let exe = std::fs::read_link(format!("/proc/{wrapper}/exe")).expect("wrapper executable");
+    let mut in_image = false;
+    let mut kib = 0;
+    for line in mappings.lines() {
+        let mut fields = line.split_whitespace();
+        if let Some(anonymous) = line.strip_prefix("Anonymous:") {
+            if in_image {
+                kib += anonymous
+                    .split_whitespace()
+                    .next()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .expect("smaps Anonymous field");
+            }
+        } else if fields.next().is_some_and(|range| range.contains('-'))
+            && let Some(perms) = fields.next()
+        {
+            in_image = !perms.contains('w')
+                && exe
+                    .to_str()
+                    .is_some_and(|exe| line.trim_end().ends_with(exe));
+        }
+    }
+    kib
 }
 
 /// The wrapper's thread names from `/proc/<pid>/task/*/comm`, sorted, so a figure that moves by
@@ -147,8 +188,10 @@ fn wrapper_thread_names(wrapper: u32) -> Vec<String> {
 }
 
 impl WrapperMemory {
-    fn outside_huge_kib(&self) -> u64 {
-        self.private_kib.saturating_sub(self.huge_kib)
+    fn budgeted_kib(&self) -> u64 {
+        self.private_kib
+            .saturating_sub(self.huge_kib)
+            .saturating_sub(self.relocated_kib)
     }
 
     pub(crate) fn assert_within(&self, budget_kib: u64) {
@@ -156,18 +199,21 @@ impl WrapperMemory {
             label,
             private_kib,
             huge_kib,
+            relocated_kib,
             mode,
         } = self;
-        let outside_huge_kib = self.outside_huge_kib();
+        let budgeted_kib = self.budgeted_kib();
         assert!(
-            outside_huge_kib <= budget_kib,
-            "{label} {outside_huge_kib} KiB outside huge pages exceeds its {budget_kib} KiB \
-             budget; private {private_kib} KiB; AnonHugePages {huge_kib} KiB; THP {mode}"
+            budgeted_kib <= budget_kib,
+            "{label} {budgeted_kib} KiB outside huge pages and the relocated image exceeds its \
+             {budget_kib} KiB budget; private {private_kib} KiB; relocated image \
+             {relocated_kib} KiB; AnonHugePages {huge_kib} KiB; THP {mode}"
         );
         assert!(
             *huge_kib <= WRAPPER_HUGE_BUDGET_MIB * 1024,
             "{label} AnonHugePages {huge_kib} KiB exceeds {WRAPPER_HUGE_BUDGET_MIB} MiB; \
-             private {private_kib} KiB; outside huge pages {outside_huge_kib} KiB; THP {mode}"
+             private {private_kib} KiB; outside huge pages and the relocated image \
+             {budgeted_kib} KiB; THP {mode}"
         );
     }
 }

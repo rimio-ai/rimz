@@ -41,7 +41,7 @@ fn terminal_run_closes_only_its_command_pane() {
 }
 
 #[test]
-fn command_wrapper_holds_under_8_mib() {
+fn command_wrapper_holds_under_4_mib() {
     if !cfg!(target_os = "linux") {
         crate::common::skip("Linux smaps_rollup not available");
         return;
@@ -139,7 +139,11 @@ fn check_command_pane(measure_memory: bool) {
             }
             candidates.extend(rimz::proc::children(pid));
         };
-        crate::common::assert_wrapper_memory_budget("command wrapper", wrapper, 8 * 1024);
+        crate::common::assert_wrapper_memory_budget(
+            "command wrapper",
+            wrapper,
+            crate::common::WRAPPER_BUDGET_MIB * 1024,
+        );
     }
     rimz::harness::run::cancel(store.paths(), store.runtime_paths(), &record.run_id).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
