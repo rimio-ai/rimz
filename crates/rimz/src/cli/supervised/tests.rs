@@ -6,6 +6,7 @@ use rimz::disk::paths::{RuntimePaths, StatePaths};
 use rimz::harness::run::RunCancellation;
 use rimz::harness::run_wake::{self, ExpectedRunFrame};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
+use rimz::launcher::stop::stamp_stopped_subagent_end;
 use rimz::pane::PaneRef;
 use rimz::store::run::{ReportTo, RunStatus, WakeupFrame};
 use std::path::Path;

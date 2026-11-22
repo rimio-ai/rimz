@@ -38,7 +38,6 @@ pub(in crate::cli) struct SupervisedPresentation {
 
 static RUN_INTERRUPT_SIGNAL_RECEIVED: OnceLock<RunCancellation> = OnceLock::new();
 static RUN_INTERRUPT_HANDLERS_INSTALLED: OnceLock<()> = OnceLock::new();
-const SUBAGENT_STOPPED_EVENT: &str = "rimz.subagent-stopped";
 
 #[cfg(test)]
 use output::RunStreamEvent;
@@ -52,44 +51,6 @@ pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Res
         rimz::harness::run::cancel_and_wake(store, &run.run_id)?;
     }
     Ok(())
-}
-
-/// Append the `Ended` lifecycle event for the card a stop of a subagent run stopped (the
-/// `stopped` kind and session), while that card is un-ended and still the run's; a run that
-/// is not a subagent's records nothing.
-pub(super) fn stamp_stopped_subagent_end(
-    store: &rimz::Store,
-    session_name: &str,
-    run: &RunRecord,
-    stopped: (&rimz::ids::AgentKind, &rimz::ids::AgentSessionId),
-) -> Result<()> {
-    if !run.subagent {
-        return Ok(());
-    }
-    let audit = store
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .context("reading stopped subagent card")?;
-    let Some(child) = audit.agents.iter().find(|agent| {
-        (&agent.kind, &agent.agent_id) == stopped
-            && agent.ended_at.is_none()
-            && run.matches_stopped_agent(agent)
-    }) else {
-        return Ok(());
-    };
-    let observation = rimz::agents::AgentLifecycleObservation::new(
-        Some(child.agent_id.clone()),
-        rimz::agents::LifecycleSignal::Ended,
-    );
-    let ended = rimz::EventEnvelope::agent_lifecycle(
-        run.workspace_id.clone(),
-        session_name,
-        child.kind.as_str(),
-        SUBAGENT_STOPPED_EVENT,
-        &observation,
-    );
-    store
-        .append_event(&ended)
-        .context("recording stopped subagent end")
 }
 
 pub(in crate::cli) fn note_isolation_clamp(

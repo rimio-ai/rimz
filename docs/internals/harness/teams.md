@@ -181,7 +181,7 @@ An agent-launched team reports its leader to the launcher once per `Done`, with 
 | A flip into `Done` from any other stage (`on_flip`) | Completed, with the report's message id | `TEAM_REPORT`, gate `Done`, to the launcher's current row |
 | A flip out of `Done` | `reopen_team_run` opens a fresh run with the previous run's task, leader, reader, and report policy, but only when the cohort's newest run is terminal | None now. The next `Done` reports. |
 | The cohort ends: no live members, or every member's recorded process dead (`fleet::ended_team_runs`) | Completed when the board reads `Done`, otherwise failed with `cohort ended before Done` | `TEAM_REPORT` as a success or a failure |
-| `agents stop` or `teams stop` reaches the leader | Canceled, as the leader's newest run (`crates/rimz/src/cli/agents_cmd/stop.rs::stop_run`) | None |
+| `agents stop` or `teams stop` reaches the leader | Canceled, as the leader's newest run (`crates/rimz/src/launcher/stop.rs::stop_run`) | None |
 | Rebirth of the leader, or a failed leader launch | Failed (`run::fail_peer_run`, which falls back to the open team run) | None |
 | Restart of the leader | Its open peer turn alone fails (`run::fail_peer_turn`); the team run stays open for the board's `Done` | None |
 | The launcher or the leader row is gone at settlement | Completed or failed by the board | None |

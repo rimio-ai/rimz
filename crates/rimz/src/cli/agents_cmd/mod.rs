@@ -109,16 +109,16 @@ use refresh_usage::run_refresh_usage;
 use register::{RegisterArgs, run_register};
 use restart::restart_agent;
 pub(in crate::cli) use restart::{
-    newest_run_for_child, relaunch_action, relaunch_identity_env, relaunch_request,
-    restart_resolved, with_run,
+    relaunch_action, relaunch_identity_env, relaunch_request, restart_resolved, with_run,
 };
 use resume::resume_lane;
+pub(in crate::cli) use rimz::launcher::stop::newest_run_for_child;
 use run_timeout::run_timeout;
 pub(in crate::cli) use show::focus_resolved;
 use show::{focus_agent, show_agent};
 pub(in crate::cli) use stop::{
-    StopTerms, TabClose, offers_resume, resume_command, resume_worktree_name, stop_resolved,
-    stop_resolved_with, stop_run_agent,
+    StopTerms, TabClose, offers_resume, report_stop, resume_command, resume_worktree_name,
+    stop_resolved, stop_resolved_with, stop_room, stop_run_agent,
 };
 use stop::{WhenIdle, parse_when_idle, stop_agent};
 use supervised::OutputFormat;

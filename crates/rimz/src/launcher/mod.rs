@@ -7,6 +7,7 @@ mod execute;
 pub mod lsp_admission;
 pub mod placement;
 mod reconcile;
+pub mod stop;
 mod supervised;
 use execute::{FreshLaunch, PreparedState, SettledLayout};
 pub use execute::{
