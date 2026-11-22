@@ -122,35 +122,54 @@ fn pane_writes_require_an_earlier_wake_in_the_same_function() {
 }
 
 #[test]
-fn thin_mcp_server_rejects_store_config_and_room_reaches_outside_tests() {
-    let root = temp_repo_root("thin-mcp");
+fn mcp_server_reaches_rimz_through_its_runner_and_its_tools_leave_stdout_and_the_process_alone() {
+    let root = temp_repo_root("mcp-in-process");
     let server = root.join("crates/rimz/src/mcp/server.rs");
     let cli = root.join("crates/rimz/src/cli/mcp.rs");
+    let tool = root.join("crates/rimz/src/mcp_tools/wait.rs");
     let elsewhere = root.join("crates/rimz/src/lsp/mod.rs");
-    for path in [&server, &cli, &elsewhere] {
+    for path in [&server, &cli, &tool, &elsewhere] {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "// clean\n").unwrap();
     }
-    let files = [server.clone(), cli.clone(), elsewhere.clone()];
-    std::fs::write(&elsewhere, format!("// {}\n", concat!("Store", "::open"))).unwrap();
-    for path in [&server, &cli] {
-        for entry in [
+    let files = [server.clone(), cli.clone(), tool.clone(), elsewhere.clone()];
+    std::fs::write(
+        &elsewhere,
+        format!(
+            "// {}\n{}0);\n",
             concat!("Store", "::open"),
-            concat!("crate::", "config::effective::load"),
-            concat!("rimz::", "workspace::WorkspaceResolver"),
-        ] {
-            std::fs::write(&server, "// thin\n").unwrap();
-            std::fs::write(&cli, "// thin\n").unwrap();
-            ensure_thin_mcp_server(&root, &files).unwrap();
-            std::fs::write(path, format!("// {entry}\n")).unwrap();
-            assert!(
-                ensure_thin_mcp_server(&root, &files).is_err(),
-                "{} admitted {entry}",
-                path.display()
-            );
-            std::fs::write(path, format!("// thin\nmod tests {{ {entry}(); }}\n")).unwrap();
-            ensure_thin_mcp_server(&root, &files).unwrap();
-        }
+            concat!("process::", "exit(")
+        ),
+    )
+    .unwrap();
+    let cases = [
+        (&server, concat!("Store", "::open")),
+        (&server, concat!("crate::", "config::effective::load")),
+        (&cli, concat!("rimz::", "workspace::WorkspaceResolver")),
+        (&tool, concat!("print", "ln!(\"x\")")),
+        (&tool, concat!("std::io::", "stdout()")),
+        (&tool, concat!("std::process::", "exit(1)")),
+        (&tool, concat!("std::process::", "abort()")),
+        (&tool, concat!("stdout", "().write_all(b\"x\")")),
+    ];
+    for (path, entry) in cases {
+        ensure_mcp_calls_run_in_process(&root, &files).unwrap();
+        std::fs::write(path, format!("{entry};\n")).unwrap();
+        assert!(
+            ensure_mcp_calls_run_in_process(&root, &files).is_err(),
+            "{} admitted {entry}",
+            path.display()
+        );
+        std::fs::write(path, format!("// clean\nmod tests {{ {entry}; }}\n")).unwrap();
+        ensure_mcp_calls_run_in_process(&root, &files).unwrap();
+        std::fs::write(path, "// clean\n").unwrap();
     }
+    std::fs::write(
+        &tool,
+        concat!("tracing::warn!(\"x\"); e", "println!(\"x\");\n"),
+    )
+    .unwrap();
+    ensure_mcp_calls_run_in_process(&root, &files).unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
 
