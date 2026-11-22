@@ -8,7 +8,6 @@ use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::harness::cache_keepalive::SeatPolicy;
 use rimz::harness::soft_compact::{SoftCompactRequest, reminder_due};
-use rimz::message::compact::CompactErr;
 use rimz::message::soft_compact::{self, ReminderOutcome};
 use rimz::message::synthetic::SyntheticMessage;
 use rimz::store::message::{DeliveryGate, MessageSender, SoftCompactStep};
@@ -46,13 +45,6 @@ pub(super) fn run(request: SoftCompactRequest) -> Result<()> {
         )
     {
         return Ok(());
-    }
-    match rimz::message::compact::refuse_repeat(&ctx.store, agent, now) {
-        Ok(()) => {}
-        Err(CompactErr::Store(error)) => {
-            return Err(error).context("reading the compaction queue");
-        }
-        Err(_) => return Ok(()),
     }
     let threshold = threshold.context("smart-compaction reminder has no threshold")?;
     let text = rimz::agents::compact_reminder(agent)

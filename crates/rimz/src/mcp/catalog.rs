@@ -808,7 +808,7 @@ fn self_compact_schema() -> Value {
     object(
         serde_json::json!({
             "message_id": string(),
-            "status": { "type": "string", "enum": ["sent", "queued"] },
+            "status": { "type": "string", "enum": ["sent", "queued", "joined"] },
             "continues": { "type": "boolean" },
         }),
         &["message_id", "status"],

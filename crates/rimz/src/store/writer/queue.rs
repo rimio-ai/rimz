@@ -919,6 +919,47 @@ impl Store {
         })
     }
 
+    /// Join the compaction command `command_id` in one commit that confirms it is still
+    /// `Queued`: queue `tail` at its card's FIFO tail behind it, with its ID assigned there,
+    /// unless a live record already follows the command. `None` when the command is no longer
+    /// `Queued`, else whether a record follows it.
+    #[must_use = "durability barrier; check the result"]
+    pub fn join_queued_command(
+        &self,
+        command_id: &MessageId,
+        tail: Option<&MessageRecord>,
+        session_name: &str,
+    ) -> Result<Option<bool>> {
+        self.commit_queue(|queue| {
+            if !queue
+                .live()
+                .iter()
+                .any(|live| live.message_id == *command_id && live.status == MessageStatus::Queued)
+            {
+                return Ok(None);
+            }
+            if queue
+                .live()
+                .iter()
+                .any(|live| live.follows_command.as_ref() == Some(command_id))
+            {
+                return Ok(Some(true));
+            }
+            let Some(tail) = tail else {
+                return Ok(Some(false));
+            };
+            let queued = queue.at_tail(tail);
+            queue.stage_event(EventEnvelope::message_event(
+                &queued,
+                session_name,
+                MessageEventMethod::Queued,
+                None,
+            ));
+            queue.upsert(queued);
+            Ok(Some(true))
+        })
+    }
+
     #[must_use = "durability barrier; check the result"]
     pub fn queue_boundary_message(
         &self,
