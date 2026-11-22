@@ -76,7 +76,7 @@ One test is bounded by `slow-timeout` in [.config/nextest.toml](../../.config/ne
 | `lint` | `cargo fmt --all -- --check`, then `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | Formatting and clippy, with `testkit` on |
 | `check` | `cargo check --workspace --all-targets --all-features --locked` | That the workspace compiles |
 | `test` | `cargo nextest run --workspace --all-features --locked` | The suite ([the test runner](./running-gates.md#the-test-runner)) |
-| `test-archive` | `cargo nextest archive --workspace --all-features --locked --archive-file <path>` | Packages the workspace test binaries for portable execution. Reserve it, with partitioned execution, for large CI suites |
+| `test-archive` | `cargo nextest archive --workspace --all-features --locked --archive-file <path>` | Packages the workspace test binaries for portable execution. GitHub CI builds the gate tier with it once, and `cargo xtask test --archive-file <path> --partition <spec>` runs a slice from it |
 | `docs-links` | (xtask) | Every relative inline link in a tracked Markdown file resolves to a file in the working tree, and its `#anchor` to a heading. Offline and deterministic. Reference-style links and external URLs are out of scope |
 | `loop-tests` | `uv run --script <file>` for each `loops/*/tests/test_*.py`, from the repository root | The repository loop tests. A failing file, no matching file, or a missing `uv` fails it |
 | `doc` | `cargo doc --no-deps --workspace --all-features --locked` with `RUSTDOCFLAGS="-D warnings"` | Rustdoc warnings, broken and private intra-doc links included |
