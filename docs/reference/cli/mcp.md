@@ -11,15 +11,15 @@ rimz mcp serve --launch-env [--parent-env]
 
 `--always` and `--deferred` repeat and take the same values as `--only`. Each adds `_meta: {"anthropic/alwaysLoad": true, "antigravity/alwaysLoad": true}` (`--always`), or both keys `false` (`--deferred`), to the `tools/list` entry of every tool of that capability. The first key tells Claude to load the tool into the agent's context up front or to leave it behind its tool search; the second tells Antigravity to bind the tool directly or to leave it behind its `call_mcp_tool` tool. A capability given to both refuses with exit 1.
 
-`--launch-env` serves what the launch that started the provider names in two variables of the server's environment, for a provider that starts one fixed server entry for every session of an account (Antigravity, through the rimz plugin). `RIMZ_MCP_SERVE` lists the served capabilities, comma-separated, each with an optional `:always` or `:deferred` that works as `--always` or `--deferred` does (`rimz-lsp:always,rimz-wait`). `RIMZ_MCP_CWD` is the directory the agent launched in: a tool's command runs there, and a relative `cwd` argument is read from there. An entry that is not a capability, carries any other mark, or names a capability a second time exits 1 with an error naming the entry. With `RIMZ_MCP_SERVE` unset or empty, the server writes `rimz mcp serve: RimZ serves no tools in this session, as expected in an Antigravity session RimZ did not launch or a launch whose profile serves none` to stderr and exits 0. `--launch-env` conflicts with `--only`, `--always`, and `--deferred`.
+`--launch-env` serves what the launch that started the provider names in two variables of the server's environment, for a provider that starts one fixed server entry for every session of an account (Antigravity, through the rimz plugin). `RIMZ_MCP_SERVE` lists the served capabilities, comma-separated, each with an optional `:always` or `:deferred` that works as `--always` or `--deferred` does (`rimz-lsp:always,rimz-wait`). `RIMZ_MCP_CWD` is the directory the agent launched in: a tool acts there, and a relative `cwd` argument is read from there. An entry that is not a capability, carries any other mark, or names a capability a second time exits 1 with an error naming the entry. With `RIMZ_MCP_SERVE` unset or empty, the server writes `rimz mcp serve: RimZ serves no tools in this session, as expected in an Antigravity session RimZ did not launch or a launch whose profile serves none` to stderr and exits 0. `--launch-env` conflicts with `--only`, `--always`, and `--deferred`.
 
-`--parent-env` gives each tool's command every variable of the parent process's environment that the server's own environment lacks; a name both hold keeps the server's value. The server reads the [replacement files](#replace-the-wording) from the RimZ home the same environment names, so it finds the home its commands use. It reads the parent's environment on Linux and macOS. Where that read fails, or on another platform, the server writes one line to stderr and the commands run with the server's own environment.
+`--parent-env` restarts the server once, at its start, with every variable of the parent process's environment that its own environment lacks; a name both hold keeps the server's value. Its tools then act as the agent, in the home and room, that this environment names, and the server reads the [replacement files](#replace-the-wording) from that home. It reads the parent's environment on Linux and macOS. Where that read or the restart fails, or on another platform, the server writes one line to stderr and runs with its own environment.
 
 ## Tools
 
-Each tool call but `guide`'s runs one `rimz` command as the agent that started the server, in that agent's home and room, and returns the command's output. A capability shares its name with the skill that teaches the same commands, a launch that serves the capability withholds that skill from the model, on Antigravity only under scoped isolation ([configuration](../../guide/configuration.md#rimz-tools-over-mcp)), and its tools' descriptions carry that skill's usage knowledge for the options the tools expose: the `lsp` target forms and result cap, the `wait` triggers, the `notes_list` filter fields, and when to book a stop. Material few calls need is a guide the agent loads on demand: the `wait` description points to `rimz-wait/conditions`, the `when` condition grammar. The server's `instructions` say, on their first line, when to reach for each capability the launch serves, then how a call runs. `rimz agents explain <profile> --mcps` prints all of that text as one launch is served it.
+Each tool call but `guide`'s does the job of one `rimz` command, inside the server, as the agent that started the server, in that agent's home and room, and answers with what the job returns ([calls](#calls)). A capability shares its name with the skill that teaches the same commands, a launch that serves the capability withholds that skill from the model, on Antigravity only under scoped isolation ([configuration](../../guide/configuration.md#rimz-tools-over-mcp)), and its tools' descriptions carry that skill's usage knowledge for the options the tools expose: the `lsp` target forms and result cap, the `wait` triggers, the `notes_list` filter fields, and when to book a stop. Material few calls need is a guide the agent loads on demand: the `wait` description points to `rimz-wait/conditions`, the `when` condition grammar. The server's `instructions` say, on their first line, when to reach for each capability the launch serves, then how a call runs. `rimz agents explain <profile> --mcps` prints all of that text as one launch is served it.
 
-`guide` belongs to no capability. The server lists it when it serves a capability that has a guide (today only `rimz-wait`), gives it no load mode of its own, and answers a call itself: the text of the named guide, or, for a name of a guide the launch does not serve, an error result `no guide "<name>"; this launch has: <names>`.
+`guide` belongs to no capability. The server lists it when it serves a capability that has a guide (today only `rimz-wait`), gives it no load mode of its own, and answers a call itself: the text of the named guide, or, for a name of a guide the launch does not serve, an error result whose `error` is `no guide "<name>"` and whose `hint` is `this launch has: <names>`.
 
 | Capability | Tool | Arguments | Command |
 | --- | --- | --- | --- |
@@ -30,7 +30,7 @@ Each tool call but `guide`'s runs one `rimz` command as the agent that started t
 | `rimz-control` | `self_stop` | optional `when_idle` (a duration, or `off`) | `rimz agents stop --when-idle[=<value>] -- @me` |
 | `rimz-control` | `self_compact` | optional `instruction`, `no_continue` | `rimz agents compact [--no-continue] -- @me [instruction]` |
 | `rimz-control` | `self_tune` | optional `setting` (`keep-warm`, `idle-compact`, `smart-compact`), optional `value` (only with `setting`) | `rimz agents tune -- @me [setting] [value]` |
-| `rimz-notes` | `notes_add` | `kind`, `title`, and `body` or `file`, not both; optional `fence`, `meta{}` (keys without `=`) | `rimz notes add [flags] -- <kind> <title>`, with `body` on stdin |
+| `rimz-notes` | `notes_add` | `kind`, `title`, and `body` or `file`, not both; optional `fence`, `meta{}` (keys without `=`) | `rimz notes add [flags] -- <kind> <title>` |
 | `rimz-notes` | `notes_list` | optional `filter[]` | `rimz notes list [flags]` |
 | - | `guide` | `name`, `<capability>/<guide>` | None: the server answers from the guide files it read at its start |
 
@@ -45,20 +45,20 @@ rimz mcp tools [--only <capability>]... [--json]
 ```console
 $ rimz mcp tools
 CAPABILITY    TOOL          TOKENS
-rimz-lsp      lsp            ~1234
-rimz-wait     wait           ~1042
-rimz-wait     wait_list        ~47
-rimz-wait     wait_cancel     ~135
-rimz-control  self_stop       ~305
-rimz-control  self_compact    ~146
-rimz-control  self_tune       ~255
-rimz-notes    notes_add       ~394
-rimz-notes    notes_list      ~337
+rimz-lsp      lsp            ~1218
+rimz-wait     wait           ~1095
+rimz-wait     wait_list        ~77
+rimz-wait     wait_cancel     ~181
+rimz-control  self_stop       ~359
+rimz-control  self_compact    ~193
+rimz-control  self_tune       ~299
+rimz-notes    notes_add       ~463
+rimz-notes    notes_list      ~398
 -             guide           ~120
-total: ~4015 tokens in 10 tools
+total: ~4403 tokens in 10 tools
 ```
 
-Every command a tool runs is on the [routine list](../agent-support.md) an installed agent runs without asking. The commands themselves are documented on their own pages: [Language servers](./lsp.md), [Wait](./wait.md), [Agents](./agents.md), and [Notes](./notes.md).
+Every command a tool stands for is on the [routine list](../agent-support.md) an installed agent runs without asking, so a tool does nothing such an agent may not do unasked. The commands themselves are documented on their own pages: [Language servers](./lsp.md), [Wait](./wait.md), [Agents](./agents.md), and [Notes](./notes.md).
 
 ## Replace the wording
 
@@ -87,35 +87,35 @@ A launch that hands the server over carries the warnings of the capabilities it 
 
 ## Calls
 
-- Each call but `guide`'s runs `rimz --color=never` with the command's words, flag values joined as `--flag=value`, and every positional after `--`, so no argument an agent passes is read as a flag. The command never gets `--root` or `--json`.
-- `cwd`, on `lsp` and `wait`, sets the command's working directory; without it the command runs in the directory the agent launched in: the server's own directory, or on Antigravity, whose server runs in the plugin directory, `RIMZ_MCP_CWD`.
-- The command's stdin is empty, except for `notes_add`, whose `body` reaches it byte for byte.
-- The result's text is the command's stdout, then, when the command wrote to stderr, a line `stderr:` and its stderr. A command that exits nonzero returns an error result whose last line is `exit code <N>`, since the [LSP exit codes](./lsp.md#exit-codes) carry meaning.
-- The server checks the shape of the arguments (their types, required fields, and enum values), so a `wait` without its `trigger` or its `value` never runs (without a trigger, the command would read the call as a listing). It also refuses three combinations the command would misread: a `self_tune` `value` without a `setting`, a `notes_add` with both `body` and `file`, and a `notes_add` `meta` key containing `=`. Such arguments return an error result starting `invalid arguments:` without running anything. Which flag fits which verb or trigger, and what a `value` must hold (a `pid` value that is not a number, say), are the command's own rules, and its usage error comes back as the error result.
-- Calls run at the same time, so a later call can answer first. A cancelled call's command is killed and the call gets no reply.
+- Each call but `guide`'s runs inside the server, on a thread of its own, through the library function its command calls. No `rimz` process starts for a call, except the watcher a `wait` detaches, as `rimz wait` does, and the language-server broker (`rimz lsp serve`) an `lsp` call starts again when the checkout's has died, as `rimz lsp` does. Every argument reaches that function as a value, so no string an agent passes is read as a flag.
+- `cwd`, on `lsp` and `wait`, names the directory the call acts on, relative to the directory the agent launched in unless it is absolute; without it the call acts on that directory: the server's own directory, or on Antigravity, whose server runs in the plugin directory, `RIMZ_MCP_CWD`. A `cwd` that is not a directory returns an error result.
+- `lsp` answers the text `rimz lsp` prints, and `guide` the guide's text. Every other tool answers a JSON object in the shape of its `outputSchema`, as the result's `structuredContent` and, the same JSON, as its one text item: `wait` `{id, status, stop, report}` (`id` is `wait:<name>`, `status` is `running`, `stop` is the `wait_cancel` call that cancels it, and `report` says how its result arrives); `wait_list` `{waits}`; `wait_cancel` `{canceled, pending}`; `self_stop` `{booking}` (`withdrawn`, `none_pending`, or `booked` with `after_secs`, `replaces_after_secs`, and `started`, which holds the rows the command's receipt prints under `holding`, `closing`, and `outliving`: what holds the stop, what closes with the agent, and what outlives it, or `unread` with why they could not be read); `self_compact` `{message_id, status, continues}`; `self_tune` `{agent, settings}`, with `keep_warm_while` when one is set and `budget` when no setting is named; `notes_add` `{path, dropped_meta, unresolved_project}`; `notes_list` `{notes, hidden, unknown_keys, skipped}`, or `{fields, grammar}` for the filter `help`.
+- A call that cannot do its job returns an error result whose text is a JSON object `{"error": ..., "hint": ...}`, with `hint` only where RimZ knows the fix, and which carries the same object as `structuredContent`: arguments that do not fit, no room at the call's directory, a refusal of the job (a duration that does not parse, a `wait` `label` that is not one line of 1 to 60 characters, a `when` condition that cannot be read in the checkout), or an `lsp` call on one target that fails. A verdict is an answer, not a failure: an `lsp check` that flags anchors, `no results`, and a failed target among several `lsp` targets come back as text.
+- The server checks the shape of the arguments (their types, required fields, and enum values), so a `wait` without its `trigger` or its `value` never runs. It also refuses what `rimz` would refuse in the command's flags: a `self_tune` `value` without a `setting`, a `notes_add` with both `body` and `file`, a `notes_add` `meta` key containing `=`, a `wait_cancel` with both `name` and `all`, or neither, and an `lsp` call with no `targets`, `hints` without `fix`, `limit` with `all`, a `limit` of 0, or a field the verb's command has no flag for (`all`, `limit`, and `external` off `refs`, `callers`, `callees`, `impl`, and `find`; `no_tests` off `refs` and `callers`; `full` off `show`; `fix` and `hints` off `check`). Such arguments return an error result whose `error` starts `invalid arguments:`, and nothing runs.
+- Calls run at the same time, so a later call can answer first. A cancelled call gets no reply, and its work runs to its end. A call that panics returns an error result, and the server goes on answering.
 - The server adds no timeout and no output cap.
 
 ## Protocol
 
-The server speaks newline-delimited JSON-RPC 2.0 on stdin and stdout, and writes its logs to stderr.
+The server speaks newline-delimited JSON-RPC 2.0 on stdin and stdout, and writes its logs to stderr. Anything else written to its stdout, by a tool's path, lands on stderr, so the protocol carries only its own lines.
 
 | Method | Reply |
 | --- | --- |
 | `initialize` | The tools capability, `serverInfo` named `rimz`, `instructions` whose first line says when to reach for each capability the server serves and whose other lines say how a call runs and what its result holds, and the client's protocol version when it is `2025-06-18` or `2025-11-25`, else `2025-11-25` |
 | `ping` | `{}` |
-| `tools/list` | The served tools, each with its JSON Schema, and `_meta` on the tools of a capability `--always` or `--deferred` names |
+| `tools/list` | The served tools, each with its JSON Schema, an `outputSchema` on each tool that answers data, and `_meta` on the tools of a capability `--always` or `--deferred` names |
 | `tools/call` | The call's result, which for `guide` the server writes itself; an unknown or unserved tool is error `-32602` |
-| `notifications/cancelled` | No reply; the named call's command is killed |
+| `notifications/cancelled` | No reply; the named call gets no reply, and its work runs to its end |
 | Any other request, `server/discover` included | Error `-32601` |
 
-A line that is not JSON gets error `-32700`, and the server goes on reading. The server exits 0 when stdin ends or on SIGINT or SIGTERM, after killing the commands still running. A watcher that a `wait` call detached keeps running.
+A line that is not JSON gets error `-32700`, and the server goes on reading. The server exits 0 when stdin ends or on SIGINT or SIGTERM, and a call still running ends with it. A watcher that a `wait` call detached keeps running.
 
 ## Launch registration
 
 RimZ hands its server to a Claude, Codex, or Antigravity launch when `[agents] rimz-mcp-server` is on (the default, set in the [machine config](../../guide/configuration.md#rimz-tools-over-mcp)) and the profile's `mcps` list is absent or holds `*`, `rimz`, or at least one capability. On Claude and Codex the server's command is the room's `rimz` link, so it survives `rimz update`. Every spawn path does the same, and `rimz agents explain <profile> --mcps` prints the servers, tools, load modes, and arguments one launch gets, then the instructions and each tool's description and schema as the server sends them ([explain a launch](./agents.md#explain-a-launch)).
 
 - **Claude** gets one `--mcp-config` holding the `rimz` server, after every other provider argument and before the `--` that precedes a prompt, since the flag takes several values. With [`allow-routine-rimz`](../../guide/configuration.md#routine-rimz-commands) on, `mcp__rimz__*` joins `permissions.allow` in the launch's `--settings`, so the tools run without asking; with it off, Claude asks before each call.
-- **Codex** gets `-c mcp_servers.rimz.*` overrides: the command and its arguments, `--parent-env` among them, `env_vars` naming every variable RimZ spawns Codex with (Codex clears a server's environment to a few names otherwise), `tool_timeout_sec=600`, and `default_tools_approval_mode` set to `"approve"` with `allow-routine-rimz` on and `"prompt"` with it off. The `env_vars` names are collected before the user's login shell runs its startup files, so on Linux and macOS `--parent-env` takes what those files export from Codex's own environment; elsewhere the commands see the `env_vars` set alone.
+- **Codex** gets `-c mcp_servers.rimz.*` overrides: the command and its arguments, `--parent-env` among them, `env_vars` naming every variable RimZ spawns Codex with (Codex clears a server's environment to a few names otherwise), `tool_timeout_sec=600`, and `default_tools_approval_mode` set to `"approve"` with `allow-routine-rimz` on and `"prompt"` with it off. The `env_vars` names are collected before the user's login shell runs its startup files, so on Linux and macOS `--parent-env` takes what those files export from Codex's own environment; elsewhere the server has the `env_vars` set alone.
 
 - **Antigravity** starts the server itself, from the `tools` entry of the rimz plugin's `mcp_config.json` that `rimz hooks install antigravity` writes, which agy shows as `rimz_tools` (it names a plugin's server `<plugin directory>_<server>`): `rimz mcp serve --launch-env`, never in argv or the agent file. Every launch that hands the server over, a resume included, sets `RIMZ_MCP_SERVE` to the served capabilities with their marks and `RIMZ_MCP_CWD` to the launch directory in agy's environment, and every other launch of any kind removes both, so a session RimZ did not launch serves nothing. agy binds the tools from a conversation's first turn, so a scoped Antigravity launch withholds the `rimz-*` skill of each capability it serves, as Claude and Codex do; a host launch keeps the skills callable, since agy has no per-launch skill switch on the host. With `allow-routine-rimz` on, install saves `mcp(rimz_tools/*)` in `permissions.allow` of `~/.gemini/antigravity-cli/settings.json`, so the tools run without asking, and a definition's [`allowed-tools`](../definitions.md#tools-to-provider-arguments) entry `mcp__rimz` or one of its tools reaches agy as an `mcp(rimz_tools/...)` rule; with the switch off, install removes that one rule and agy asks before each call. An account whose plugin lacks the current `mcp_config.json` reads as missing its hooks, so its launches refuse until `rimz hooks install antigravity` runs again.
 
@@ -147,8 +147,8 @@ In each case, `[agents] rimz-mcp-server = false` keeps RimZ's server out of ever
 - A user's own server whose name holds a `:`: an entry naming it reads the text after the last colon as a mark, and refuses the entry unless that text is `always` or `deferred`.
 - A `--strict-mcp-config` in a profile's or launch's arguments: RimZ passes it to Claude, which then ignores the account's and project's servers whatever the `mcps` list names.
 - A user's own Codex `-c mcp_servers={...}` table in a profile's or launch's arguments: it replaces the table RimZ places first, so the switch-offs a `mcps` list adds are lost. The `rimz` server stays: its dotted keys follow every user argument, and Codex merges dotted keys given after a table.
-- A user's Codex `shell_environment_policy`: it filters what Codex's shell commands see, not what the tools' commands see, so a `wait` command armed through the tool can read a variable the policy withholds from the shell.
-- Variables Codex sets for itself after it starts, such as those in the `.env` file of its home: a tool's command gets one only when the `env_vars` list names it, since `--parent-env` reads the environment Codex was started with.
+- A user's Codex `shell_environment_policy`: it filters what Codex's shell commands see, not what the server sees, so a `wait` command armed through the tool can read a variable the policy withholds from the shell.
+- Variables Codex sets for itself after it starts, such as those in the `.env` file of its home: the server gets one only when the `env_vars` list names it, since `--parent-env` reads the environment Codex was started with.
 - Claude run with `CLAUDE_CODE_MCP_ALLOWLIST_ENV=1`, which keeps the room pin out of the server's environment.
 - Claude under a managed MCP policy.
 - A user's own Claude settings file that sets `allowedMcpServers`: how Claude combines it with the launch's list is untested.

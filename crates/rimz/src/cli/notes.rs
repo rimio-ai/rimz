@@ -45,7 +45,7 @@ enum NotesSubcmd {
         #[arg(short = 'q', long, conflicts_with = "json")]
         quiet: bool,
         /// Show the newest N matches; 0 shows every match.
-        #[arg(short = 'n', long, value_name = "N", default_value_t = 20)]
+        #[arg(short = 'n', long, value_name = "N", default_value_t = notes::LIST_DEFAULT)]
         limit: usize,
         /// Print a JSON array instead of the table.
         #[arg(long)]
@@ -112,7 +112,7 @@ fn add(mut request: AddRequest, file: Option<PathBuf>) -> Result<()> {
 }
 
 fn list(request: ListRequest, json: bool, quiet: bool) -> Result<()> {
-    if request.filters.iter().any(|filter| filter.trim() == "help") {
+    if notes::asks_filter_help(&request.filters) {
         return render::finish(render_filter_help(&mut render::out()));
     }
     let listing = notes::list(&request).map_err(usage_or_error)?;
@@ -176,26 +176,12 @@ fn list(request: ListRequest, json: bool, quiet: bool) -> Result<()> {
 /// `--filter help`: every field a note filter names, then the grammar in brief.
 fn render_filter_help(w: &mut impl Write) -> std::io::Result<()> {
     let mut table = Table::new(["FIELD", "TYPE", "VALUES"]);
-    for key in notes::RIMZ_KEYS.into_iter().chain(["age"]) {
-        let (kind, values) = match key {
-            "kind" => ("text", "a kind as add slugs it, * wildcard"),
-            "title" => ("text", "words in any case, * wildcard"),
-            "written" => ("instant", "RFC 3339, such as 2026-11-12T09:00:00Z"),
-            "author" => ("text", "an agent name, @ optional, * wildcard"),
-            "project" => ("path", "a project root, * wildcard"),
-            "age" => ("duration", "30s, 5m, 1h, 2d"),
-            _ => ("text", "words, * wildcard"),
-        };
-        table.row([cell(key), cell(kind), cell(values)]);
+    for field in notes::filter_fields() {
+        table.row([cell(field.field), cell(field.kind), cell(field.values)]);
     }
     table.render(w)?;
     writeln!(w)?;
-    for line in [
-        "term: <field><op><value>[,<value>...]; ops: = != and, on age and written, > >= < <=",
-        "every term and every --filter must match; under = any value matches, under != none may",
-        "none matches a missing value and * any present one; quote a value holding spaces or commas",
-        "any other field is a --meta key, matched as written; a key no note carries matches nothing",
-    ] {
+    for line in notes::FILTER_GRAMMAR {
         writeln!(w, "{line}")?;
     }
     Ok(())

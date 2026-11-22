@@ -1,6 +1,6 @@
 //! The one table of RimZ MCP tools: each tool's capability, argument schema,
-//! and the `rimz` command its call runs; `super::wording` holds what each
-//! tool and the server's instructions say. `rimz mcp serve`, `rimz mcp tools`,
+//! answer schema, and the `rimz` command it stands for; `super::wording` holds
+//! what each tool and the server's instructions say. `rimz mcp serve`, `rimz mcp tools`,
 //! their `--only` values, the profile `mcps` capability names, the reference
 //! page's tool table, and the routine-command check all read this table.
 
@@ -81,13 +81,20 @@ pub fn serve_args(only: &[Capability]) -> Vec<String> {
     args
 }
 
-/// One `rimz` one-shot: its arguments after the program and the global
-/// `--color` flag, the directory it runs in, and the bytes its stdin carries.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Invocation {
-    pub args: Vec<String>,
-    pub cwd: Option<PathBuf>,
-    pub stdin: Option<Vec<u8>>,
+/// A tool call whose arguments fit its tool's schema, as the runner `serve`
+/// is handed receives it.
+#[derive(Debug)]
+pub enum Call {
+    Lsp(LspArgs),
+    Wait(WaitArgs),
+    WaitList(WaitListArgs),
+    WaitCancel(WaitCancelArgs),
+    SelfStop(SelfStopArgs),
+    SelfCompact(SelfCompactArgs),
+    SelfTune(SelfTuneArgs),
+    NotesAdd(NotesAddArgs),
+    NotesList(NotesListArgs),
+    Guide(GuideArgs),
 }
 
 pub struct Tool {
@@ -96,11 +103,14 @@ pub struct Tool {
     /// answers itself and serves beside any group that has a guide.
     pub capability: Option<Capability>,
     read_only: bool,
-    /// The command words after `rimz`; with `verbs`, one command per verb.
+    /// The command words after `rimz` of the command the tool stands for; with
+    /// `verbs`, one command per verb.
     command: &'static str,
     verbs: &'static [LspVerb],
     schema: fn() -> Value,
-    invoke: fn(Value) -> Result<Invocation, serde_json::Error>,
+    /// The schema of a data answer; `None` for a tool that answers text.
+    output: Option<fn() -> Value>,
+    parse: fn(Value) -> Result<Call, serde_json::Error>,
 }
 
 impl Tool {
@@ -111,10 +121,19 @@ impl Tool {
             "description": wording.description(self).text(),
             "inputSchema": (self.schema)(),
         });
+        if let Some(output) = self.output_schema() {
+            entry["outputSchema"] = output;
+        }
         if self.read_only {
             entry["annotations"] = serde_json::json!({ "readOnlyHint": true });
         }
         entry
+    }
+
+    /// The schema every data answer of the tool fits; `None` for `lsp` and
+    /// `guide`, which answer text.
+    pub fn output_schema(&self) -> Option<Value> {
+        self.output.map(|output| output())
     }
 
     /// The listing entry's estimated size in tokens, as `rimz mcp tools` and
@@ -149,14 +168,15 @@ impl Tool {
             .sum()
     }
 
-    /// The one-shot a call runs, or the error naming the argument that does
-    /// not fit the schema's shape.
-    pub fn invocation(&self, arguments: Value) -> Result<Invocation, serde_json::Error> {
-        (self.invoke)(arguments)
+    /// The call the arguments make, or the error naming the argument that
+    /// does not fit the schema's shape.
+    pub fn call(&self, arguments: Value) -> Result<Call, serde_json::Error> {
+        (self.parse)(arguments)
     }
 
-    /// Every `rimz ...` command the tool can run, without flags or values;
-    /// none for `guide`, which the server answers itself.
+    /// Every `rimz ...` command the tool stands for, without flags or values,
+    /// so an agent may do through the tool only what it may run unasked; none
+    /// for `guide`, which the server answers itself.
     pub fn commands(&self) -> Vec<String> {
         if self.capability.is_none() {
             return Vec::new();
@@ -179,7 +199,8 @@ pub static TOOLS: [Tool; 10] = [
         command: "lsp",
         verbs: &LspVerb::ALL,
         schema: schema::<LspArgs>,
-        invoke: invoke::<LspArgs>,
+        output: None,
+        parse: |arguments| parse::<LspArgs>(arguments).map(Call::Lsp),
     },
     Tool {
         name: "wait",
@@ -188,7 +209,8 @@ pub static TOOLS: [Tool; 10] = [
         command: "wait",
         verbs: &[],
         schema: schema::<WaitArgs>,
-        invoke: invoke::<WaitArgs>,
+        output: Some(start_schema),
+        parse: |arguments| parse::<WaitArgs>(arguments).map(Call::Wait),
     },
     Tool {
         name: "wait_list",
@@ -197,7 +219,8 @@ pub static TOOLS: [Tool; 10] = [
         command: "wait list",
         verbs: &[],
         schema: schema::<WaitListArgs>,
-        invoke: invoke::<WaitListArgs>,
+        output: Some(wait_list_schema),
+        parse: |arguments| parse::<WaitListArgs>(arguments).map(Call::WaitList),
     },
     Tool {
         name: "wait_cancel",
@@ -206,7 +229,8 @@ pub static TOOLS: [Tool; 10] = [
         command: "wait cancel",
         verbs: &[],
         schema: schema::<WaitCancelArgs>,
-        invoke: invoke::<WaitCancelArgs>,
+        output: Some(wait_cancel_schema),
+        parse: |arguments| parse::<WaitCancelArgs>(arguments).map(Call::WaitCancel),
     },
     Tool {
         name: "self_stop",
@@ -215,7 +239,8 @@ pub static TOOLS: [Tool; 10] = [
         command: "agents stop",
         verbs: &[],
         schema: schema::<SelfStopArgs>,
-        invoke: invoke::<SelfStopArgs>,
+        output: Some(self_stop_schema),
+        parse: |arguments| parse::<SelfStopArgs>(arguments).map(Call::SelfStop),
     },
     Tool {
         name: "self_compact",
@@ -224,7 +249,8 @@ pub static TOOLS: [Tool; 10] = [
         command: "agents compact",
         verbs: &[],
         schema: schema::<SelfCompactArgs>,
-        invoke: invoke::<SelfCompactArgs>,
+        output: Some(self_compact_schema),
+        parse: |arguments| parse::<SelfCompactArgs>(arguments).map(Call::SelfCompact),
     },
     Tool {
         name: "self_tune",
@@ -233,7 +259,8 @@ pub static TOOLS: [Tool; 10] = [
         command: "agents tune",
         verbs: &[],
         schema: schema::<SelfTuneArgs>,
-        invoke: invoke::<SelfTuneArgs>,
+        output: Some(self_tune_schema),
+        parse: |arguments| parse::<SelfTuneArgs>(arguments).map(Call::SelfTune),
     },
     Tool {
         name: "notes_add",
@@ -242,7 +269,8 @@ pub static TOOLS: [Tool; 10] = [
         command: "notes add",
         verbs: &[],
         schema: schema::<NotesAddArgs>,
-        invoke: invoke::<NotesAddArgs>,
+        output: Some(notes_add_schema),
+        parse: |arguments| parse::<NotesAddArgs>(arguments).map(Call::NotesAdd),
     },
     Tool {
         name: "notes_list",
@@ -251,7 +279,8 @@ pub static TOOLS: [Tool; 10] = [
         command: "notes list",
         verbs: &[],
         schema: schema::<NotesListArgs>,
-        invoke: invoke::<NotesListArgs>,
+        output: Some(notes_list_schema),
+        parse: |arguments| parse::<NotesListArgs>(arguments).map(Call::NotesList),
     },
     Tool {
         name: GUIDE,
@@ -260,7 +289,8 @@ pub static TOOLS: [Tool; 10] = [
         command: "",
         verbs: &[],
         schema: schema::<GuideArgs>,
-        invoke: invoke::<GuideArgs>,
+        output: None,
+        parse: |arguments| parse::<GuideArgs>(arguments).map(Call::Guide),
     },
 ];
 
@@ -374,15 +404,13 @@ trait ToolArgs: DeserializeOwned + JsonSchema {
     fn refusal(&self) -> Option<String> {
         None
     }
-
-    fn invocation(self) -> Invocation;
 }
 
-fn invoke<T: ToolArgs>(arguments: Value) -> Result<Invocation, serde_json::Error> {
+fn parse<T: ToolArgs>(arguments: Value) -> Result<T, serde_json::Error> {
     let arguments = serde_json::from_value::<T>(arguments)?;
     match arguments.refusal() {
         Some(reason) => Err(serde::de::Error::custom(reason)),
-        None => Ok(arguments.invocation()),
+        None => Ok(arguments),
     }
 }
 
@@ -424,66 +452,7 @@ fn drop_null(value: &mut Value) {
     }
 }
 
-/// Arguments for a one-shot: flags first, each value joined to its flag with
-/// `=`, then `--`, then positionals, so no value is read as a flag.
-struct Argv {
-    flags: Vec<String>,
-    positionals: Vec<String>,
-}
-
-impl Argv {
-    fn new(command: &str) -> Self {
-        Self {
-            flags: command.split(' ').map(ToOwned::to_owned).collect(),
-            positionals: Vec::new(),
-        }
-    }
-
-    fn switch(mut self, flag: &str, on: bool) -> Self {
-        if on {
-            self.flags.push(format!("--{flag}"));
-        }
-        self
-    }
-
-    fn value(mut self, flag: &str, value: Option<impl std::fmt::Display>) -> Self {
-        if let Some(value) = value {
-            self.flags.push(format!("--{flag}={value}"));
-        }
-        self
-    }
-
-    fn values<T: std::fmt::Display>(self, flag: &str, values: impl IntoIterator<Item = T>) -> Self {
-        values
-            .into_iter()
-            .fold(self, |argv, value| argv.value(flag, Some(value)))
-    }
-
-    fn positional(mut self, value: impl Into<String>) -> Self {
-        self.positionals.push(value.into());
-        self
-    }
-
-    fn positionals(mut self, values: Vec<String>) -> Self {
-        self.positionals.extend(values);
-        self
-    }
-
-    fn invocation(self, cwd: Option<PathBuf>) -> Invocation {
-        let mut args = self.flags;
-        if !self.positionals.is_empty() {
-            args.push("--".to_owned());
-            args.extend(self.positionals);
-        }
-        Invocation {
-            args,
-            cwd,
-            stdin: None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum LspVerb {
     Def,
@@ -528,75 +497,96 @@ impl LspVerb {
     }
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct LspArgs {
+pub struct LspArgs {
     /// The query.
-    verb: LspVerb,
+    pub verb: LspVerb,
     /// Every target of the question.
-    targets: Vec<String>,
+    pub targets: Vec<String>,
     /// Show every location in scope.
     #[serde(default)]
-    all: bool,
+    pub all: bool,
     /// Hide results in test files and test modules.
     #[serde(default)]
-    no_tests: bool,
+    pub no_tests: bool,
     /// Include results outside the checkout.
     #[serde(default)]
-    external: bool,
+    pub external: bool,
     /// The most locations to show.
-    limit: Option<u32>,
+    pub limit: Option<u32>,
     /// `show`: print the full body of a large item.
     #[serde(default)]
-    full: bool,
+    pub full: bool,
     /// `check`: complete and rewrite the anchors it can resolve.
     #[serde(default)]
-    fix: bool,
+    pub fix: bool,
     /// `check` with `fix`: add a hint to every anchor that names one item.
     #[serde(default)]
-    hints: bool,
+    pub hints: bool,
     /// Which language server to ask, where the checkout has several.
     server: Option<String>,
     /// The directory to run in; defaults to where the session started.
-    cwd: Option<PathBuf>,
+    pub cwd: Option<PathBuf>,
 }
 
 impl ToolArgs for LspArgs {
-    fn invocation(self) -> Invocation {
-        let server = self.server.filter(|_| !matches!(self.verb, LspVerb::Check));
-        Argv::new(&format!("lsp {}", self.verb.as_str()))
-            .value("server", server)
-            .switch("all", self.all)
-            .switch("no-tests", self.no_tests)
-            .switch("external", self.external)
-            .value("limit", self.limit)
-            .switch("full", self.full)
-            .switch("fix", self.fix)
-            .switch("hints", self.hints)
-            .positionals(self.targets)
-            .invocation(self.cwd)
+    /// The rules `rimz lsp` holds in its flags: a target, `hints` only with
+    /// `fix`, `limit` of at least 1 and not with `all`, and each field only on
+    /// the verbs whose command takes its flag.
+    fn refusal(&self) -> Option<String> {
+        if self.targets.is_empty() {
+            return Some("give at least one target".to_owned());
+        }
+        if self.hints && !self.fix {
+            return Some("`hints` needs `fix`".to_owned());
+        }
+        if self.all && self.limit.is_some() {
+            return Some("give `limit` or `all`, not both".to_owned());
+        }
+        if self.limit == Some(0) {
+            return Some("`limit` is at least 1".to_owned());
+        }
+        let verb = self.verb;
+        let listing = matches!(
+            verb,
+            LspVerb::Refs | LspVerb::Callers | LspVerb::Impl | LspVerb::Callees | LspVerb::Find
+        );
+        let references = matches!(verb, LspVerb::Refs | LspVerb::Callers);
+        [
+            ("all", self.all, listing),
+            ("limit", self.limit.is_some(), listing),
+            ("external", self.external, listing),
+            ("no_tests", self.no_tests, references),
+            ("full", self.full, verb == LspVerb::Show),
+            ("fix", self.fix, verb == LspVerb::Check),
+            ("hints", self.hints, verb == LspVerb::Check),
+        ]
+        .into_iter()
+        .find(|(_, given, taken)| *given && !*taken)
+        .map(|(field, ..)| format!("`{}` does not take `{field}`", verb.as_str()))
+    }
+}
+
+impl LspArgs {
+    /// The language server the call names, which `check` ignores.
+    pub fn server(&self) -> Option<&str> {
+        self.server
+            .as_deref()
+            .filter(|_| self.verb != LspVerb::Check)
     }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-enum WaitOn {
+pub enum WaitOn {
     Fail,
     Success,
 }
 
-impl std::fmt::Display for WaitOn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Fail => "fail",
-            Self::Success => "success",
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-enum WaitTrigger {
+pub enum WaitTrigger {
     Run,
     Check,
     File,
@@ -606,156 +596,89 @@ enum WaitTrigger {
     At,
 }
 
-impl WaitTrigger {
-    fn flag(self) -> &'static str {
-        match self {
-            Self::Run => "run",
-            Self::Check => "check",
-            Self::File => "file",
-            Self::Pid => "pid",
-            Self::When => "when",
-            Self::In => "in",
-            Self::At => "at",
-        }
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct WaitArgs {
+pub struct WaitArgs {
     /// What fires the wait.
-    trigger: WaitTrigger,
+    pub trigger: WaitTrigger,
     /// The trigger's argument: a command, path, PID, expression, duration, or time.
-    value: String,
+    pub value: String,
     /// `file` only: fire on a new line holding this literal text.
-    grep: Option<String>,
+    pub grep: Option<String>,
     /// `check` only: the sleep between runs (default `1s`).
-    every: Option<String>,
+    pub every: Option<String>,
     /// `run`: wake only on this outcome, not either. `check`: `fail` polls until it fails.
-    on: Option<WaitOn>,
+    pub on: Option<WaitOn>,
     /// What you will do on waking, 1 to 60 characters.
-    label: Option<String>,
+    pub label: Option<String>,
     /// `run`, `check`, `file`, or `pid`: one still-running notice after this long.
-    check_in: Option<String>,
+    pub check_in: Option<String>,
     /// Where to run; defaults to the session's start directory.
-    cwd: Option<PathBuf>,
+    pub cwd: Option<PathBuf>,
 }
 
-impl ToolArgs for WaitArgs {
-    fn invocation(self) -> Invocation {
-        Argv::new("wait")
-            .value(self.trigger.flag(), Some(self.value))
-            .value("grep", self.grep)
-            .value("every", self.every)
-            .value("on", self.on)
-            .value("label", self.label)
-            .value("check-in", self.check_in)
-            .invocation(self.cwd)
-    }
-}
+impl ToolArgs for WaitArgs {}
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct WaitListArgs {}
+pub struct WaitListArgs {}
 
-impl ToolArgs for WaitListArgs {
-    fn invocation(self) -> Invocation {
-        Argv::new("wait list").invocation(None)
-    }
-}
+impl ToolArgs for WaitListArgs {}
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct WaitCancelArgs {
+pub struct WaitCancelArgs {
     /// The wait's name, as `wait_list` prints it.
-    name: Option<String>,
+    pub name: Option<String>,
     /// Cancel every wait you armed, leaving subscriptions intact.
     #[serde(default)]
-    all: bool,
+    pub all: bool,
 }
 
 impl ToolArgs for WaitCancelArgs {
-    fn invocation(self) -> Invocation {
-        let argv = Argv::new("wait cancel").switch("all", self.all);
-        match self.name {
-            Some(name) => argv.positional(name),
-            None => argv,
-        }
-        .invocation(None)
+    fn refusal(&self) -> Option<String> {
+        (self.name.is_some() == self.all)
+            .then(|| "give a wait's name or `all`, and only one of them".to_owned())
     }
 }
 
-/// The address every self-control tool acts on: the calling agent.
-const SELF: &str = "@me";
-
-#[derive(Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SelfStopArgs {
+pub struct SelfStopArgs {
     /// How long to rest before the pane closes (`s`/`m`/`h`/`d`), or `off` to withdraw the
     /// booking; 3m when absent.
-    when_idle: Option<String>,
+    pub when_idle: Option<String>,
 }
 
-impl ToolArgs for SelfStopArgs {
-    fn invocation(self) -> Invocation {
-        let argv = Argv::new("agents stop");
-        match self.when_idle {
-            Some(rest) => argv.value("when-idle", Some(rest)),
-            None => argv.switch("when-idle", true),
-        }
-        .positional(SELF)
-        .invocation(None)
-    }
-}
+impl ToolArgs for SelfStopArgs {}
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SelfCompactArgs {
+pub struct SelfCompactArgs {
     /// Replaces the configured compaction brief; an empty string sends the bare command.
-    instruction: Option<String>,
+    pub instruction: Option<String>,
     /// Leave yourself at rest after a compaction that waited for this turn to end.
     #[serde(default)]
-    no_continue: bool,
+    pub no_continue: bool,
 }
 
-impl ToolArgs for SelfCompactArgs {
-    fn invocation(self) -> Invocation {
-        let argv = Argv::new("agents compact")
-            .switch("no-continue", self.no_continue)
-            .positional(SELF);
-        match self.instruction {
-            Some(instruction) => argv.positional(instruction),
-            None => argv,
-        }
-        .invocation(None)
-    }
-}
+impl ToolArgs for SelfCompactArgs {}
 
-#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-enum TuneSetting {
+pub enum TuneSetting {
     KeepWarm,
     IdleCompact,
     SmartCompact,
 }
 
-impl TuneSetting {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::KeepWarm => "keep-warm",
-            Self::IdleCompact => "idle-compact",
-            Self::SmartCompact => "smart-compact",
-        }
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SelfTuneArgs {
+pub struct SelfTuneArgs {
     /// The setting to report or change; absent reports every setting.
-    setting: Option<TuneSetting>,
+    pub setting: Option<TuneSetting>,
     /// The new value (`2h`, `120k`, `70%`), `off`, or `reset`; absent reports the setting.
-    value: Option<String>,
+    pub value: Option<String>,
 }
 
 impl ToolArgs for SelfTuneArgs {
@@ -763,38 +686,25 @@ impl ToolArgs for SelfTuneArgs {
         (self.setting.is_none() && self.value.is_some())
             .then(|| "a value needs the setting it changes".to_owned())
     }
-
-    fn invocation(self) -> Invocation {
-        let argv = Argv::new("agents tune").positional(SELF);
-        let argv = match self.setting {
-            Some(setting) => argv.positional(setting.as_str()),
-            None => argv,
-        };
-        match self.value {
-            Some(value) => argv.positional(value),
-            None => argv,
-        }
-        .invocation(None)
-    }
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct NotesAddArgs {
+pub struct NotesAddArgs {
     /// The note's kind, which names its folder (handoff, reflection, ...).
-    kind: String,
+    pub kind: String,
     /// The note's title, which names its file.
-    title: String,
+    pub title: String,
     /// The note's Markdown body.
-    body: Option<String>,
+    pub body: Option<String>,
     /// Read the body from this file instead.
-    file: Option<String>,
+    pub file: Option<String>,
     /// Wrap the body in one fenced code block, for a log or other text.
     #[serde(default)]
-    fence: bool,
+    pub fence: bool,
     /// Header keys of your own; RimZ's own keys win.
     #[serde(default)]
-    meta: BTreeMap<String, String>,
+    pub meta: BTreeMap<String, String>,
 }
 
 impl ToolArgs for NotesAddArgs {
@@ -807,58 +717,138 @@ impl ToolArgs for NotesAddArgs {
             .find(|key| key.contains('='))
             .map(|key| format!("meta key {key:?} contains `=`"))
     }
-
-    fn invocation(self) -> Invocation {
-        let mut invocation = Argv::new("notes add")
-            .value("file", self.file)
-            .switch("fence", self.fence)
-            .values(
-                "meta",
-                self.meta
-                    .into_iter()
-                    .map(|(key, value)| format!("{key}={value}")),
-            )
-            .positional(self.kind)
-            .positional(self.title)
-            .invocation(None);
-        invocation.stdin = self.body.map(String::into_bytes);
-        invocation
-    }
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct NotesListArgs {
+pub struct NotesListArgs {
     /// Keep notes matching every `field=value` term; `help` lists the fields.
     #[serde(default)]
-    filter: Vec<String>,
+    pub filter: Vec<String>,
 }
 
-impl ToolArgs for NotesListArgs {
-    fn invocation(self) -> Invocation {
-        Argv::new("notes list")
-            .values("filter", self.filter)
-            .invocation(None)
-    }
-}
+impl ToolArgs for NotesListArgs {}
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct GuideArgs {
+pub struct GuideArgs {
     /// The guide, as `<group>/<guide>`.
-    name: String,
+    pub name: String,
 }
 
-impl ToolArgs for GuideArgs {
-    /// The guide's name alone: the server answers a `guide` call itself, and
-    /// runs no command.
-    fn invocation(self) -> Invocation {
-        Invocation {
-            args: vec![self.name],
-            cwd: None,
-            stdin: None,
-        }
-    }
+impl ToolArgs for GuideArgs {}
+
+/// An object schema holding `properties`, of which `required` must be present.
+fn object(properties: Value, required: &[&str]) -> Value {
+    serde_json::json!({ "type": "object", "properties": properties, "required": required })
+}
+
+fn array_of(items: Value) -> Value {
+    serde_json::json!({ "type": "array", "items": items })
+}
+
+fn string() -> Value {
+    serde_json::json!({ "type": "string" })
+}
+
+fn any_object() -> Value {
+    serde_json::json!({ "type": "object" })
+}
+
+/// The answer of a tool that starts something: its `id`, `status`, the
+/// exact call that stops it, and how its result reaches the caller.
+fn start_schema() -> Value {
+    object(
+        serde_json::json!({
+            "id": string(), "status": string(), "stop": string(), "report": string(),
+        }),
+        &["id", "status", "stop", "report"],
+    )
+}
+
+fn wait_list_schema() -> Value {
+    object(
+        serde_json::json!({ "waits": array_of(any_object()) }),
+        &["waits"],
+    )
+}
+
+fn wait_cancel_schema() -> Value {
+    object(
+        serde_json::json!({
+            "canceled": array_of(string()), "pending": array_of(any_object()),
+        }),
+        &["canceled", "pending"],
+    )
+}
+
+fn self_stop_schema() -> Value {
+    object(
+        serde_json::json!({
+            "booking": { "type": "string", "enum": ["withdrawn", "none_pending", "booked"] },
+            "after_secs": { "type": "integer" },
+            "replaces_after_secs": { "type": ["integer", "null"] },
+            "started": object(
+                serde_json::json!({
+                    "holding": array_of(any_object()),
+                    "closing": array_of(any_object()),
+                    "outliving": array_of(any_object()),
+                    "unread": string(),
+                }),
+                &[],
+            ),
+        }),
+        &["booking"],
+    )
+}
+
+fn self_compact_schema() -> Value {
+    object(
+        serde_json::json!({
+            "message_id": string(),
+            "status": { "type": "string", "enum": ["sent", "queued"] },
+            "continues": { "type": "boolean" },
+        }),
+        &["message_id", "status"],
+    )
+}
+
+fn self_tune_schema() -> Value {
+    object(
+        serde_json::json!({
+            "agent": string(),
+            "settings": array_of(any_object()),
+            "keep_warm_while": string(),
+            "budget": any_object(),
+        }),
+        &["agent", "settings"],
+    )
+}
+
+fn notes_add_schema() -> Value {
+    object(
+        serde_json::json!({
+            "path": string(),
+            "dropped_meta": array_of(string()),
+            "unresolved_project": { "type": ["string", "null"] },
+        }),
+        &["path", "dropped_meta"],
+    )
+}
+
+/// A listing, or for the filter `help` the fields a filter names and its grammar.
+fn notes_list_schema() -> Value {
+    object(
+        serde_json::json!({
+            "notes": array_of(any_object()),
+            "hidden": { "type": "integer" },
+            "unknown_keys": array_of(string()),
+            "skipped": array_of(serde_json::json!({ "type": "array" })),
+            "fields": array_of(any_object()),
+            "grammar": array_of(string()),
+        }),
+        &[],
+    )
 }
 
 #[cfg(test)]

@@ -208,13 +208,14 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             context
                 .validate_server(server.as_deref())
                 .map_err(usage_error)?;
-            let (text, code) = match invoke::show(&context, &anchors, full, server.as_deref()) {
-                Ok(shown) => shown,
-                Err(error) => {
-                    writeln!(render::err(), "{error}")?;
-                    std::process::exit(2);
-                }
-            };
+            let invoke::Shown { text, code, .. } =
+                match invoke::show(&context, &anchors, full, server.as_deref()) {
+                    Ok(shown) => shown,
+                    Err(error) => {
+                        writeln!(render::err(), "{error}")?;
+                        std::process::exit(2);
+                    }
+                };
             let mut out = render::out();
             write!(out, "{text}")?;
             out.flush()?;

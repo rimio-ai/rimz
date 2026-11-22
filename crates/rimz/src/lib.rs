@@ -39,6 +39,7 @@ pub mod lane;
 pub mod launcher;
 pub mod lsp;
 pub mod mcp;
+pub mod mcp_tools;
 pub mod message;
 pub mod mux;
 pub mod observability;

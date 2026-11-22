@@ -376,14 +376,22 @@ pub fn check(
     Ok(Answered { code, error: None })
 }
 
-/// Show the code each of `anchors` names, as one text with a blank line between blocks, and
-/// the exit code the blocks rank to.
+/// What `show` read: its blocks as one text, the exit code they rank to, and, when one anchor
+/// gave one block that shows no code (a nonzero exit), that block as the error, as `query`
+/// and `check` answer one target that fails.
+pub struct Shown {
+    pub text: String,
+    pub code: i32,
+    pub error: Option<String>,
+}
+
+/// Show the code each of `anchors` names, as one text with a blank line between blocks.
 pub fn show(
     context: &QueryContext,
     anchors: &[String],
     full: bool,
     server: Option<&str>,
-) -> super::Result<(String, i32)> {
+) -> super::Result<Shown> {
     let blocks = check::show(
         anchors,
         full,
@@ -403,7 +411,11 @@ pub fn show(
         text.push_str(block);
         code = exit_rank(code, *exit);
     }
-    Ok((text, code))
+    let error = match (anchors, blocks.as_slice()) {
+        ([_], [(block, 1..)]) => Some(block.trim_end().to_owned()),
+        _ => None,
+    };
+    Ok(Shown { text, code, error })
 }
 
 #[cfg(test)]

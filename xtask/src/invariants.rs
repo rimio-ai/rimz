@@ -130,6 +130,15 @@ fn ensure_mcp_calls_run_in_process(root: &Path, files: &[PathBuf]) -> Result<()>
         };
         let source = fs::read_to_string(path)
             .with_context(|| format!("read MCP server source {}", path.display()))?;
+        // A call starts no process: only the server's own restarts, each named here, exec.
+        let spawns_checked = **path != cli;
+        let admitted = [
+            ("crates/rimz/src/mcp/server.rs", "replace"),
+            ("crates/rimz/src/mcp_tools/mod.rs", "restore_parent_env"),
+        ]
+        .into_iter()
+        .find(|(file, _)| root.join(file) == **path)
+        .and_then(|(_, name)| function_lines(&source, name));
         for (line_number, line) in lines_outside_inline_tests(&source) {
             let line = format!(" {line}");
             if let Some(entry) = banned.iter().find(|entry| line.contains(*entry)) {
@@ -140,9 +149,48 @@ fn ensure_mcp_calls_run_in_process(root: &Path, files: &[PathBuf]) -> Result<()>
                     entry.trim_start_matches([' ', '('])
                 );
             }
+            if !spawns_checked
+                || admitted
+                    .as_ref()
+                    .is_some_and(|lines| lines.contains(&line_number))
+            {
+                continue;
+            }
+            if let Some(entry) = [
+                concat!("Command", "::new("),
+                concat!("rimz", "_exe("),
+                concat!("current", "_exe("),
+                concat!(".ex", "ec("),
+            ]
+            .iter()
+            .find(|entry| line.contains(*entry))
+            {
+                bail!(
+                    "{}:{line_number}: a tool call runs in the MCP server's process and starts \
+                     no `rimz` process; only `Server::replace` and `restore_parent_env` \
+                     exec, and `{entry}` is neither",
+                    path.display()
+                );
+            }
         }
     }
     Ok(())
+}
+
+/// The lines of the function or method `name` in `source`, when it parses and has one.
+fn function_lines(source: &str, name: &str) -> Option<std::ops::RangeInclusive<usize>> {
+    use syn::spanned::Spanned;
+
+    let file = syn::parse_file(source).ok()?;
+    let span = file.items.iter().find_map(|item| match item {
+        syn::Item::Fn(function) if function.sig.ident == name => Some(function.span()),
+        syn::Item::Impl(block) => block.items.iter().find_map(|method| match method {
+            syn::ImplItem::Fn(method) if method.sig.ident == name => Some(method.span()),
+            _ => None,
+        }),
+        _ => None,
+    })?;
+    Some(span.start().line..=span.end().line)
 }
 
 fn ensure_thin_park_image(root: &Path) -> Result<()> {

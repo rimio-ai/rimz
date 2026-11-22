@@ -85,18 +85,19 @@ pub(super) enum WhenIdle {
 }
 
 /// The rest a bare `--when-idle` waits for.
-pub(super) const WHEN_IDLE_DEFAULT: &str = "3m";
+pub(super) const WHEN_IDLE_DEFAULT: &str = rimz::harness::stop_booking::IDLE_REST_DEFAULT;
 
 pub(super) fn parse_when_idle(raw: &str) -> std::result::Result<WhenIdle, String> {
     if raw.starts_with('@') {
         return Ok(WhenIdle::Reference(raw.to_owned()));
     }
-    if raw == "off" {
-        return Ok(WhenIdle::Off);
+    match rimz::harness::stop_booking::parse_idle_rest(raw) {
+        Ok(Some(after)) => Ok(WhenIdle::After(after)),
+        Ok(None) => Ok(WhenIdle::Off),
+        Err(err) => Err(format!(
+            "{err}; use `rimz agents stop <ref> --when-idle <duration>`"
+        )),
     }
-    supervised::parse_timeout(raw)
-        .map(WhenIdle::After)
-        .map_err(|err| format!("{err}; use `rimz agents stop <ref> --when-idle <duration>`"))
 }
 
 pub(super) fn normalize_stop(

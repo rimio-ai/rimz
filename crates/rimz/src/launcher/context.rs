@@ -174,6 +174,36 @@ pub fn resolve_caller(
     Ok(resolve_caller_from(&projection.agents, caller))
 }
 
+/// The live, registered agent `@me` names: the caller `store` resolves.
+pub fn resolve_me<'a>(
+    store: &crate::Store,
+    snapshot: &'a crate::store::snapshot::SidebarSnapshot,
+) -> anyhow::Result<&'a AgentState> {
+    let caller = resolve_caller(store)?.ok_or_else(me_unidentified)?;
+    let resolved = crate::harness::ancestry::resolve_launch_caller(&snapshot.agents, &caller);
+    if resolved.is_err() {
+        let audit = store.runtime_projection(crate::RuntimeScope::Audit)?;
+        if let Ok(agent) = crate::harness::ancestry::resolve_launch_caller(&audit.agents, &caller)
+            && agent.ended_at.is_some()
+        {
+            anyhow::bail!("@me requires a live agent; the calling agent has ended");
+        }
+    }
+    let agent = resolved.map_err(|_| me_unidentified())?;
+    if agent.ended_at.is_some() {
+        anyhow::bail!("@me requires a live agent; the calling agent has ended");
+    }
+    if agent.agent_id.is_provisional() {
+        anyhow::bail!("@me requires a registered session; the calling agent is still starting");
+    }
+    Ok(agent)
+}
+
+/// Why `@me` names no agent: the caller is none RimZ can identify.
+pub fn me_unidentified() -> anyhow::Error {
+    anyhow::anyhow!("@me requires an agent RimZ can identify; run this command from an agent pane")
+}
+
 pub fn resolve_caller_from(
     agents: &[crate::agents::AgentState],
     caller: Option<crate::harness::ancestry::CallerIdentity>,
