@@ -18,3 +18,5 @@ pub(crate) const ROTATING_LOG_MAX_BYTES: u64 = 1_048_576;
 pub(crate) const TRANSCRIPT_FILE_DAYS: u32 = 7;
 pub(crate) const RESUME_OUTCOME_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 pub(crate) const TRACE_MAX_BYTES: u64 = 1_048_576;
+/// A daemon's stderr log is emptied into its one previous file at this size.
+pub(super) const DAEMON_LOG_MAX_BYTES: u64 = 32 * 1024 * 1024;

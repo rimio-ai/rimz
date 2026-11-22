@@ -198,6 +198,16 @@ pub(crate) fn write_cache_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<
     })
 }
 
+/// Copy what `source` reads to `path` through temp+rename without fsync: a
+/// reader sees the old file or the whole copy, never a partial one.
+pub(super) fn copy_cache_atomically(path: &Path, source: &mut impl io::Read) -> Result<()> {
+    replace_whole_file(path, Fsync::Skip, None, |writer, tmp| {
+        io::copy(source, writer)
+            .map(drop)
+            .map_err(AtomicErr::io(tmp))
+    })
+}
+
 /// Write executable bytes through a mode-0755 temp file and atomically rename
 /// it into place. The executable mode is present as soon as the destination
 /// becomes visible.

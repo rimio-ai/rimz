@@ -630,6 +630,15 @@ impl StatePaths {
         Class::Log.path_under(&self.root).join("wait-watch.log")
     }
 
+    /// The lock every trimmer of the capped daemon log `live` takes.
+    pub(super) fn log_trim_lock(&self, live: &Path) -> PathBuf {
+        let name = live
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("log");
+        self.lock_path(&format!("{name}.trim.lock"))
+    }
+
     pub fn ensure_dirs(&self) -> Result<()> {
         mkdir_p(&self.runs_dir)?;
         mkdir_p(&self.cache_dir)?;
@@ -2241,6 +2250,16 @@ pub fn env_path(key: &str) -> Option<PathBuf> {
     env::var_os(key)
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
+}
+
+/// The one previous file a capped daemon log keeps beside it: `<stem>.1.log`.
+pub(super) fn previous_log(live: &Path) -> PathBuf {
+    let name = live
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("log");
+    let stem = name.strip_suffix(".log").unwrap_or(name);
+    live.with_file_name(format!("{stem}.1.log"))
 }
 
 /// One room host per mux session: the key every host path of a session shares.

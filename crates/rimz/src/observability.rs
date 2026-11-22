@@ -7,6 +7,8 @@
 //! sidebar health warnings, and command scope need no `#[cfg]`. With the
 //! feature on, `reporting` is the live impl; off, `disabled` is a no-op with
 //! the same surface, so `main.rs` and `cli/mod.rs` are identical in both builds.
+//! [`RepeatSuppression`] limits the stderr lines of the daemons whose stderr is
+//! a log file, in every build.
 
 /// The target a deliberate breadcrumb seed emits under. Only an `info!` on this
 /// target becomes a Sentry breadcrumb, so the trail is the curated set of
@@ -30,6 +32,9 @@ pub struct ScopeFacts<'a> {
     /// The agent kind the process serves, when the command implies one.
     pub agent: Option<&'a str>,
 }
+
+mod repeats;
+pub use repeats::RepeatSuppression;
 
 #[cfg(feature = "sentry")]
 mod reporting;

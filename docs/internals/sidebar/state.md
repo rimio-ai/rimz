@@ -187,7 +187,7 @@ Terminal modes survive every exit except a confirmed self-close. Self-close rest
 
 ### Host lifetime and reload
 
-The supervisor that finds no host takes the session's spawn lock and starts one. It runs the room's verified recorded build, or its own executable when no verified target is available. The host's stderr is appended to `log/sidebar-host.<session key>.log` under the room's state directory, so a host that fails at startup leaves its error there.
+The supervisor that finds no host takes the session's spawn lock and starts one. It runs the room's verified recorded build, or its own executable when no verified target is available. The host's stderr is appended to `log/sidebar-host.<session key>.log` under the room's state directory, so a host that fails at startup leaves its error there. That log is capped and keeps one previous file ([Daemon logs](../diagnostics.md#daemon-logs)).
 
 At startup the host calls `setsid` and raises its open-file soft limit toward the hard limit (`crates/rimz/src/sidebar_pane/host.rs::raise_open_file_limit`). The target is 65,536, retried at macOS's 10,240, and a refusal warns in the host log. The sizing reason is on `OPEN_FILE_TARGET`. The host then holds the session's host lock for life. A second host for the same session waits out its predecessor (`SUCCESSION_WAIT`, 12 seconds) and exits if that one stays.
 

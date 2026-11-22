@@ -32,6 +32,13 @@ tikv-jemallocator = { version = "0.7", features = ["override_allocator_on_suppor
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Names the place a `log` crate record came from, which the bridge hides behind
+# one call site per level. Already in the tree through tracing-subscriber's
+# default `tracing-log` feature, with the same features.
+tracing-log = { version = "0.2", default-features = false, features = ["log-tracer", "std"] }
+# Test-only: drives the `log` macros through the tracing-log bridge. Already in
+# the tree through tracing-log.
+log = "0.4"
 
 # Serialization
 serde = { version = "1", features = ["derive", "rc"] }

@@ -172,14 +172,7 @@ pub fn arm_delivery(
                 .open(path)?;
             // The output file holds only what the watch writes; the watcher's
             // own diagnostics go to the room's shared watcher log.
-            let log_path = paths.wait_watch_log();
-            if let Some(parent) = log_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let log = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(log_path)?;
+            let log = crate::disk::capped_log::open(&paths, &paths.wait_watch_log())?;
             let mut command = Command::new(crate::proc::rimz_exe());
             command
                 .arg("--root")

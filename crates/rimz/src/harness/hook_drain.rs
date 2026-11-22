@@ -527,14 +527,7 @@ fn spawn(store: &Store) -> Result<(), HookDrainErr> {
             record.rimz_bin.as_deref(),
         )
     });
-    let log_path = store.paths().hook_drainer_log();
-    if let Some(parent) = log_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let log = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)?;
+    let log = crate::disk::capped_log::open(store.paths(), &store.paths().hook_drainer_log())?;
     crate::child_process::spawn_hook_drainer(binary, |command| {
         crate::child_process::anchor_detached_command(command, runtime)
             .args(["hooks", "drain", "--project-root"])

@@ -1684,7 +1684,10 @@ allowed-dependencies = [
 # The model refusal record's path and lock are built here (+2).
 # paths::claude_mod_dir_in places the RimZ Claude mod folder every account lists (+1).
 # RuntimePaths::shared_accounts_write_lock serializes every accounts.json read-modify-write (+1).
-surface-budget = 347
+# The daemon stderr logs share one capped open for the spawn sites and one own-stderr
+# check for the daemons, both called from the binary crate (`capped_log`, `open`,
+# `watch_own_stderr`) (+3).
+surface-budget = 350
 
 [[verdict]]
 kind = "item"
@@ -3805,7 +3808,8 @@ reason = "The public wake-ingestion error preserves typed client-input lock and 
 
 [[module]]
 path = "crates/rimz/src/observability"
-surface-budget = 11
+# RepeatSuppression is built by main.rs, the binary crate, for the daemons' formatting layer (+1).
+surface-budget = 12
 
 [[module]]
 path = "crates/rimz/src/osc.rs"
@@ -5443,7 +5447,8 @@ allowed-dependencies = []
 # publish_staged_no_replace publishes complete staged files and directories without replacement (+1).
 # publish_staged_replace syncs complete price tables before replacing the published inode (+1).
 # write_bytes_new_mode publishes complete bytes under a new name and reports a taken one, which write_bytes_if_absent_mode treats as done (+1).
-surface-budget = 30
+# copy_cache_atomically publishes a daemon log's previous file whole, without fsync (+1).
+surface-budget = 31
 
 [[verdict]]
 kind = "item"
