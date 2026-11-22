@@ -839,8 +839,8 @@ fn decode_lifecycle_fields(
             };
             (invocation.common, signal)
         }
-        // A user row at or past the invocation's first step was taken in while it ran: a
-        // steer. Later invocations begin past it, so each steer is reported once.
+        // A user row between the invocation's first step and its answer was taken in while it
+        // ran: a steer. Later invocations begin past it, so each steer is reported once.
         "PostInvocation" => {
             let Some(invocation) = payloads::parse_invocation(payload) else {
                 return DecodedLifecycleFields::default();
