@@ -4,13 +4,13 @@ use std::io::Write;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
 
 use super::{Ctx, TuneArgs};
 use rimz::agents::BudgetWindow;
 use rimz::harness::budget::{
     BudgetLedger, BudgetSpec, DayBaseline, read_ledger, remove_ledger, total_cost_usd, write_ledger,
 };
+use rimz::harness::tune::budget_report;
 use rimz::message::synthetic::SyntheticMessage;
 use rimz::store::event::AgentTunePayload;
 use rimz::store::message::{DeliveryGate, MessageSender};
@@ -164,49 +164,6 @@ pub(super) fn run_budget(
     )
 }
 
-#[derive(Serialize)]
-pub(super) struct AgentBudgetReport {
-    agent: String,
-    spend_usd: Option<f64>,
-    cap_usd: Option<f64>,
-    window: Option<&'static str>,
-    source: &'static str,
-    parked: bool,
-}
-
-pub(super) fn report(
-    agent: &rimz::agents::AgentState,
-    peers: &[&rimz::agents::AgentState],
-    ledger: Option<&BudgetLedger>,
-    launched: Option<BudgetSpec>,
-) -> AgentBudgetReport {
-    let spec = ledger.map(|ledger| ledger.spec).or(launched);
-    let spend_usd = total_cost_usd(agent).map(|total| {
-        ledger
-            .cloned()
-            .or_else(|| spec.map(BudgetLedger::new))
-            .map_or(total, |ledger| ledger.spend_usd(total))
-    });
-    let cap_usd = match ledger {
-        Some(ledger) => ledger.effective_cap_usd(),
-        None => launched.map(|spec| spec.cap_usd),
-    };
-    let source = match ledger {
-        Some(ledger) if ledger.disabled => "cleared",
-        Some(ledger) if ledger.raised_cap_usd.is_some() => "override",
-        _ if spec.is_some() => "launch",
-        _ => "none",
-    };
-    AgentBudgetReport {
-        agent: super::target_handle(agent, peers),
-        spend_usd,
-        cap_usd,
-        window: spec.map(|spec| spec.window.label()),
-        source,
-        parked: ledger.is_some_and(|ledger| ledger.parked.is_some()),
-    }
-}
-
 fn render_budget(
     agent: &rimz::agents::AgentState,
     peers: &[&rimz::agents::AgentState],
@@ -214,7 +171,7 @@ fn render_budget(
     launched: Option<BudgetSpec>,
     json: bool,
 ) -> Result<()> {
-    let report = report(agent, peers, ledger, launched);
+    let report = budget_report(agent, peers, ledger, launched);
     if json {
         return crate::cli::render::json(&report);
     }
