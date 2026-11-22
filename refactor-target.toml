@@ -2510,7 +2510,9 @@ path = "crates/rimz/src/harness"
 # report::defers_to_report is the one rule for whether an agent's join defers to its report, and
 # FleetRuns::reports_to_launcher the detached rule it reads (+2).
 # workflow::started_runs_running gives the cancel receipt and the MCP stop the runs a cancel leaves going (+1).
-surface-budget = 1341
+# workflow::join moves the workflow wait's look and poll from the CLI so the MCP join shares them (+9).
+# TaskCatalog::remove_keeping_runs is the schedule stop that leaves the task's runs going (+1).
+surface-budget = 1351
 
 [[verdict]]
 kind = "item"
@@ -2983,7 +2985,8 @@ path = "crates/rimz/src/launcher"
 # stop ends what an agent started in process (+24).
 # The production workflow attempt host moves here so a stop can cancel a workflow run in process,
 # and the Room notice carries the host's backend notices to its interaction (+3).
-surface-budget = 135
+# The agent and team waits move here as agent_join and team_join so the MCP join shares them (+22).
+surface-budget = 157
 
 [[verdict]]
 kind = "item"
@@ -6054,7 +6057,8 @@ allowed-dependencies = [
 # refuse_overlap lets a start name the run holding its slot before its trust read (+1).
 # extend and Extension record a `rimz workflow extend` grant and name the step it raised (+2).
 # started_runs_running names the runs a cancel leaves going, for the CLI receipt and the MCP stop (+1).
-surface-budget = 110
+# join moves the workflow wait's look and poll from the CLI so the MCP join shares them (+9).
+surface-budget = 119
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
