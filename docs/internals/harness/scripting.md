@@ -42,7 +42,8 @@ The rule that resolves this is that the durable run record is the run, and the p
 | [`cli/agents_cmd/run_timeout.rs`](../../../crates/rimz/src/cli/agents_cmd/run_timeout.rs) | The hidden `agents run-timeout` helper that settles an overdue run or an expired interrupt hold, and opens a hold from a child's interrupt marker. |
 | [`cli/agents_cmd/park_notice.rs`](../../../crates/rimz/src/cli/agents_cmd/park_notice.rs), [`stall_notice.rs`](../../../crates/rimz/src/cli/agents_cmd/stall_notice.rs) | The hidden `agents park-notice` and `agents stall-notice` helpers: `park-notice` claims a limit park on the child's run record and holds the run to the refill, or fails it with its typed cause; `stall-notice` claims a silent or stopped child's notice and tells its parent. |
 | [`cli/agents_cmd/stall_nudge.rs`](../../../crates/rimz/src/cli/agents_cmd/stall_nudge.rs) | The hidden `agents stall-nudge` helper: call the locked harness enqueue, attempt boundary delivery, and append the assist. |
-| [`cli/agents_cmd/wait.rs`](../../../crates/rimz/src/cli/agents_cmd/wait.rs), [`stop.rs`](../../../crates/rimz/src/cli/agents_cmd/stop.rs) | Joining on runs started elsewhere, and cancelling them. |
+| [`cli/agents_cmd/wait.rs`](../../../crates/rimz/src/cli/agents_cmd/wait.rs), [`stop.rs`](../../../crates/rimz/src/cli/agents_cmd/stop.rs) | The `agents wait` and `agents stop` verbs: resolving their targets and rendering what the join and the stop return. |
+| [`launcher/agent_join.rs`](../../../crates/rimz/src/launcher/agent_join.rs) | Joining on runs and agent turns started elsewhere: the poll that settles each target, and the joined mark on a printed run result. |
 | [`launcher/stop.rs`](../../../crates/rimz/src/launcher/stop.rs) | The agent tree stop every stop command runs, a stopped subagent's recorded end (`stamp_stopped_subagent_end`), and the run lookups a stop reads. |
 
 ## The record

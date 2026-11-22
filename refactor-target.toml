@@ -2986,7 +2986,8 @@ path = "crates/rimz/src/launcher"
 # The production workflow attempt host moves here so a stop can cancel a workflow run in process,
 # and the Room notice carries the host's backend notices to its interaction (+3).
 # The agent and team waits move here as agent_join and team_join so the MCP join shares them (+22).
-surface-budget = 157
+# agent_join::WaitSet::once is the one-poll join the CLI's join deferring to the caller's report runs (+1).
+surface-budget = 158
 
 [[verdict]]
 kind = "item"
