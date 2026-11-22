@@ -19,6 +19,7 @@ mod deployed;
 mod engine;
 mod graph;
 mod inspect;
+pub mod join;
 mod observe;
 mod script;
 mod spec;

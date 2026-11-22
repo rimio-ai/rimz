@@ -1,63 +1,26 @@
 //! `rimz workflow wait`: block until named workflow runs end, or one needs a person.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use rimz::store::workflow::{RunClass, RunEnding, RunState};
+use rimz::harness::workflow::join::{self, Ended, JoinTarget, Joined, Reading};
+use rimz::store::workflow::{RunClass, RunState};
 
 use super::*;
 use crate::cli::render::announce::{MESSAGE_STOP_EXIT, write_message_stop};
 use crate::cli::usage::UsageError;
 use rimz::message::announce::WaitCaller;
 
-const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// The exit of a wait that returned because an awaited run needs a person.
 const NEEDS_YOU_EXIT: i32 = 3;
 const TIMED_OUT_EXIT: i32 = 124;
 
 struct Target {
-    id: WorkflowRunId,
     address: String,
-    reading: Reading,
+    join: JoinTarget,
 }
 
-/// What one look at a run's home found.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Reading {
-    Running {
-        state: RunState,
-        node: Option<String>,
-    },
-    NeedsYou {
-        why: String,
-    },
-    Ended(Ended),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Ended {
-    state: RunState,
-    ending: Option<RunEnding>,
-    checkout: Option<PathBuf>,
-    notes: Option<PathBuf>,
-    terminal_at: Option<jiff::Timestamp>,
-}
-
-impl Ended {
-    /// A run whose home was deleted after the wait first found it: only a quiet task run's
-    /// home is deleted at its end, and only after it ended done.
-    fn quiet() -> Self {
-        Self {
-            state: RunState::Done,
-            ending: None,
-            checkout: None,
-            notes: None,
-            terminal_at: None,
-        }
-    }
-
-    fn exit(&self) -> i32 {
-        i32::from(self.state != RunState::Done)
-    }
+fn ended_exit(ended: &Ended) -> i32 {
+    i32::from(ended.state != RunState::Done)
 }
 
 pub(super) fn run(
@@ -73,29 +36,24 @@ pub(super) fn run(
         .iter()
         .map(|raw| target(raw, globals))
         .collect::<Result<Vec<_>>>()?;
-    let started = Instant::now();
-    loop {
-        for target in &mut targets {
-            if !matches!(target.reading, Reading::Ended(_)) {
-                target.reading =
-                    look(&target.id)?.unwrap_or_else(|| Reading::Ended(Ended::quiet()));
-            }
-        }
-        let first_ended = targets
-            .iter()
-            .filter_map(|target| match &target.reading {
-                Reading::Ended(ended) => Some((target, ended.terminal_at)),
-                _ => None,
-            })
-            .min_by_key(|(_, terminal_at)| (terminal_at.is_none(), *terminal_at));
-        if any && let Some((target, _)) = first_ended {
+    let mut joins = targets
+        .iter()
+        .map(|target| target.join.clone())
+        .collect::<Vec<_>>();
+    let joined = join::join(&mut joins, any, timeout, &mut || {
+        let ctx = ctx.as_ref()?;
+        caller.queued(&ctx.store, &ctx.workspace.session_name)
+    })?;
+    for (target, join) in targets.iter_mut().zip(joins) {
+        target.join = join;
+    }
+    match joined {
+        Joined::Ended { first: Some(index) } => {
+            let target = &targets[index];
             report(std::slice::from_ref(target), json, 0)?;
             std::process::exit(exit_of(target, 0));
         }
-        if targets
-            .iter()
-            .all(|target| matches!(target.reading, Reading::Ended(_)))
-        {
+        Joined::Ended { first: None } => {
             report(&targets, json, 0)?;
             std::process::exit(
                 targets
@@ -105,24 +63,18 @@ pub(super) fn run(
                     .unwrap_or(0),
             );
         }
-        if targets
-            .iter()
-            .any(|target| matches!(target.reading, Reading::NeedsYou { .. }))
-        {
+        Joined::NeedsYou => {
             report(&targets, json, NEEDS_YOU_EXIT)?;
             std::process::exit(NEEDS_YOU_EXIT);
         }
-        if let Some(ctx) = &ctx
-            && let Some(announcement) = caller.queued(&ctx.store, &ctx.workspace.session_name)
-        {
+        Joined::Interrupted(announcement) => {
             report(&targets, json, MESSAGE_STOP_EXIT)?;
             write_message_stop(&mut render::err(), &announcement)?;
             std::process::exit(MESSAGE_STOP_EXIT);
         }
-        if let Some(timeout) = timeout
-            && started.elapsed() >= timeout
-        {
+        Joined::StillRunning => {
             report(&targets, json, TIMED_OUT_EXIT)?;
+            let timeout = timeout.unwrap_or_default();
             writeln!(
                 render::err(),
                 "timed out after {}; the runs still going are left running",
@@ -130,14 +82,14 @@ pub(super) fn run(
             )?;
             std::process::exit(TIMED_OUT_EXIT);
         }
-        std::thread::sleep(POLL_INTERVAL);
+        Joined::Unreadable(unreadable) => Err(refusal(*unreadable)),
     }
 }
 
 /// A target's exit under a wait that stops with `stop`: a run still going carries the stop's.
 fn exit_of(target: &Target, stop: i32) -> i32 {
-    match &target.reading {
-        Reading::Ended(ended) => ended.exit(),
+    match &target.join.reading {
+        Reading::Ended(ended) => ended_exit(ended),
         Reading::NeedsYou { .. } => NEEDS_YOU_EXIT,
         Reading::Running { .. } => stop,
     }
@@ -150,7 +102,7 @@ fn target(raw: &str, globals: &super::super::GlobalFlags) -> Result<Target> {
         if records::find_under(&paths::rimz_home(), &id)?.is_none() {
             return Err(UsageError::new(format!("unknown workflow run {id}")).into());
         }
-        let reading = look(&id)?.unwrap_or_else(|| Reading::Ended(Ended::quiet()));
+        let reading = look(&id)?;
         let address = match records::find_under(&paths::rimz_home(), &id)? {
             Some((_, found)) => match found.class {
                 RunClass::Current(record) => record.address().to_string(),
@@ -159,9 +111,8 @@ fn target(raw: &str, globals: &super::super::GlobalFlags) -> Result<Target> {
             None => id.to_string(),
         };
         return Ok(Target {
-            id,
             address,
-            reading,
+            join: JoinTarget { id, reading },
         });
     }
     if resolve::names_workflow(raw) {
@@ -176,93 +127,62 @@ fn target(raw: &str, globals: &super::super::GlobalFlags) -> Result<Target> {
         resolve::Selection::Other(other) => other.id,
         resolve::Selection::Workflow(_) => unreachable!("an address selects one run"),
     };
-    let reading = look(&id)?.unwrap_or_else(|| Reading::Ended(Ended::quiet()));
+    let reading = look(&id)?;
     Ok(Target {
-        id,
         address: raw.to_owned(),
-        reading,
+        join: JoinTarget { id, reading },
     })
 }
 
-/// One look at a run's home, or none once the home is gone. A record this RimZ cannot read
-/// refuses rather than guess an ending; a stranded run waits for the pass that ends it.
-fn look(id: &WorkflowRunId) -> Result<Option<Reading>> {
-    let Some((state, found)) = records::find_under(&paths::rimz_home(), id)? else {
-        return Ok(None);
-    };
-    let notes = |relative: Option<&PathBuf>| {
-        relative.map(|relative| state.notes_run(paths::Class::AutomationNotes, relative))
-    };
-    Ok(Some(match found.class {
-        RunClass::Current(record) if found.finished || record.state.is_terminal() => {
-            Reading::Ended(Ended {
-                state: record.state,
-                ending: record
-                    .outcome
-                    .as_ref()
-                    .map(|outcome| outcome.ending.clone()),
-                checkout: Some(record.scope.path.clone()),
-                notes: notes(record.notes.as_ref()),
-                terminal_at: record.terminal_at,
-            })
+/// One look at a run's home; a home gone after it was found reads as a quiet ending.
+fn look(id: &WorkflowRunId) -> Result<Reading> {
+    match join::look(id)? {
+        None => Ok(Reading::Ended(Ended::quiet())),
+        Some(Ok(reading)) => Ok(reading),
+        Some(Err(unreadable)) => Err(refusal(*unreadable)),
+    }
+}
+
+/// Why a home this RimZ cannot read refuses the wait.
+fn refusal(unreadable: join::Unreadable) -> anyhow::Error {
+    let id = unreadable.id.clone();
+    anyhow::anyhow!(
+        "{}",
+        resolve::Other {
+            state: unreadable.state,
+            id: unreadable.id,
+            found: unreadable.found,
         }
-        RunClass::Current(record) if workflow_view::needs_you(&record) => {
-            let spec = workflow::load(&record.definition_dir(&found.paths)).ok();
-            Reading::NeedsYou {
-                why: workflow_view::detail(&record, spec.as_ref(), jiff::Timestamp::now(), None),
-            }
-        }
-        RunClass::Current(record) => Reading::Running {
-            state: record.state,
-            node: Some(record.node.clone()),
-        },
-        RunClass::Ended(header) => {
-            let Some(state) = header.state.filter(|state| state.is_terminal()) else {
-                bail!("workflow run {id} has ended, and this RimZ cannot read how");
-            };
-            Reading::Ended(Ended {
-                state,
-                ending: header.ending.clone(),
-                checkout: header.scope_path.clone(),
-                notes: notes(header.notes.as_ref()),
-                terminal_at: header.terminal_at,
-            })
-        }
-        RunClass::Stranded { header, .. } => Reading::Running {
-            state: header.state.unwrap_or(RunState::Active),
-            node: header.node.clone(),
-        },
-        RunClass::Recordless => Reading::Running {
-            state: RunState::Active,
-            node: None,
-        },
-        RunClass::Newer { .. } | RunClass::NotObject => {
-            bail!(
-                "{}",
-                resolve::Other {
-                    state,
-                    id: id.clone(),
-                    found,
-                }
-                .refusal()
-                .unwrap_or_else(|| format!("this RimZ cannot read workflow run {id}"))
-            );
-        }
-    }))
+        .refusal()
+        .unwrap_or_else(|| format!("this RimZ cannot read workflow run {id}"))
+    )
+}
+
+/// Why a run waits on a person, worded from its record.
+fn needs_you_why(record: &RunRecord, definition_dir: &std::path::Path) -> String {
+    let spec = workflow::load(definition_dir).ok();
+    workflow_view::detail(record, spec.as_ref(), jiff::Timestamp::now(), None)
 }
 
 fn line(target: &Target) -> String {
-    let name = if target.address == target.id.as_str() {
-        target.id.to_string()
+    let id = &target.join.id;
+    let name = if target.address == id.as_str() {
+        id.to_string()
     } else {
-        format!("{} ({})", target.address, target.id)
+        format!("{} ({id})", target.address)
     };
-    match &target.reading {
+    match &target.join.reading {
         Reading::Running { state, node } => match node {
             Some(node) => format!("{name}: still {} at {node}", state.as_str()),
             None => format!("{name}: still {}", state.as_str()),
         },
-        Reading::NeedsYou { why } => format!("{name}: needs you: {}", render::one_line(why)),
+        Reading::NeedsYou {
+            record,
+            definition_dir,
+        } => format!(
+            "{name}: needs you: {}",
+            render::one_line(&needs_you_why(record, definition_dir))
+        ),
         Reading::Ended(ended) => {
             let mut line = format!(
                 "{name}: {}",
@@ -292,16 +212,19 @@ fn report(targets: &[Target], json: bool, stop: i32) -> Result<()> {
 }
 
 fn entry(target: &Target, stop: i32) -> serde_json::Value {
-    let mut entry = serde_json::json!({ "id": target.id, "address": target.address });
-    match &target.reading {
+    let mut entry = serde_json::json!({ "id": target.join.id, "address": target.address });
+    match &target.join.reading {
         Reading::Running { state, node } => {
             entry["outcome"] = serde_json::json!("running");
             entry["state"] = serde_json::json!(state);
             entry["node"] = serde_json::json!(node);
         }
-        Reading::NeedsYou { why } => {
+        Reading::NeedsYou {
+            record,
+            definition_dir,
+        } => {
             entry["outcome"] = serde_json::json!("needs_you");
-            entry["reason"] = serde_json::json!(why);
+            entry["reason"] = serde_json::json!(needs_you_why(record, definition_dir));
         }
         Reading::Ended(ended) => {
             entry["outcome"] = serde_json::json!("ended");
