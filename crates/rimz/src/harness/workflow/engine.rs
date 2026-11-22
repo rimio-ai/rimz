@@ -2198,6 +2198,29 @@ pub fn cancel(
     Ok(true)
 }
 
+/// The runs `record`'s current attempt started that are still running: a cancel stops only the
+/// step's waiting, so these go on. A run the step reserved but never started has no home and is
+/// left out, as is one whose record cannot be read.
+pub fn started_runs_running(
+    state: &StatePaths,
+    record: &crate::store::workflow::RunRecord,
+) -> Vec<WorkflowRunId> {
+    record
+        .attempt
+        .iter()
+        .flat_map(|attempt| &attempt.runs)
+        .flat_map(|started| &started.runs)
+        .filter(|started| started.ended.is_none())
+        .filter(|started| {
+            matches!(
+                crate::store::workflow::find(state, &started.id).ok().flatten().map(|found| found.class),
+                Some(crate::store::workflow::RunClass::Current(child)) if !child.state.is_terminal()
+            )
+        })
+        .map(|started| started.id.clone())
+        .collect()
+}
+
 pub fn restart(
     state: &StatePaths,
     id: &WorkflowRunId,

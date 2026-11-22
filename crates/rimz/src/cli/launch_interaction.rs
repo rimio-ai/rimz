@@ -49,6 +49,7 @@ impl Interaction for CliInteraction {
             Notice::Config(config) => report_unknown_config_keys(config)?,
             Notice::LaunchWarning(warning) => writeln!(render::err(), "{warning}")?,
             Notice::Warning(line) | Notice::Reconcile(line) => writeln!(render::err(), "{line}")?,
+            Notice::Room(notice) => writeln!(render::err(), "note: {notice}")?,
             Notice::Trust(notice) => writeln!(render::err(), "{notice}")?,
             Notice::LspIgnored(message) => writeln!(render::err(), "rimz: {message}")?,
             Notice::LspRefused(message) => {

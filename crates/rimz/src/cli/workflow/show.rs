@@ -849,7 +849,7 @@ fn takeover(
         return Ok(());
     }
     match workflow::AttemptHost::occupancy(
-        &Host::new(&run.state, globals, None),
+        &host::new(&run.state, globals, None),
         &run.record.scope.path,
         &run.record.project_root,
         run.record.owed_starter(),

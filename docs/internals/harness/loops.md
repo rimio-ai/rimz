@@ -615,7 +615,7 @@ A signal is a name, a JSON object payload, a source, and, for watched commands, 
 | `Git` | the sidebar's project-root trunk lane | `trunk.moved` |
 | `Worktree` | successful managed worktree operations, appended and fired in-process | `worktree.created`, `worktree.removed` |
 | `Lifecycle` | the elected hook drainer, from the lifecycle events it applies | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended`. `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
-| `Lifecycle` | the workflow engine's CLI host after a committed run write, and the room's workflow pass for a stranded run ([run signals](./workflow.md#run-signals)) | `workflow.moved`, `workflow.waiting`, `workflow.failed`, `workflow.ended` |
+| `Lifecycle` | the workflow engine's production host after a committed run write, and the room's workflow pass for a stranded run ([run signals](./workflow.md#run-signals)) | `workflow.moved`, `workflow.waiting`, `workflow.failed`, `workflow.ended` |
 | `Team` | `rimz teams flip` and the stage owner's [resume re-wake](./teams.md#resume-re-wake) | `team.stage` |
 | `Watch` | `rimz wait watch <name>` at a check-in or terminal command, PID, check, or file outcome, and the host's watch-lost rule | `wait.<task-name>` |
 
