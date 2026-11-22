@@ -93,6 +93,17 @@ pub(super) struct StopPayload {
     pub fully_idle: Option<bool>,
 }
 
+/// The `terminationReason` values that end a turn failed, compared without case: 1.5.14 sends
+/// the uppercase enum names, and `max_steps_exceeded` is the 1.3.3 limit. Every other reason,
+/// `USER_CANCELED` included, is a clean end.
+const FAILED_REASONS: [&str; 5] = [
+    "ERROR",
+    "MAX_INVOCATIONS",
+    "MAX_FORCED_INVOCATIONS",
+    "MAX_TOKEN_BUDGET_EXCEEDED",
+    "max_steps_exceeded",
+];
+
 impl StopPayload {
     pub(super) fn failed(&self) -> bool {
         let reason = self
@@ -100,7 +111,10 @@ impl StopPayload {
             .as_deref()
             .map(str::trim)
             .unwrap_or_default();
-        matches!(reason, "error" | "max_steps_exceeded") || value_is_error(self.error.as_ref())
+        FAILED_REASONS
+            .iter()
+            .any(|failed| failed.eq_ignore_ascii_case(reason))
+            || value_is_error(self.error.as_ref())
     }
 }
 
