@@ -151,6 +151,8 @@ fn mcp_server_reaches_rimz_through_its_runner_and_its_tools_leave_stdout_and_the
         (&tool, concat!("std::process::", "exit(1)")),
         (&tool, concat!("std::process::", "abort()")),
         (&tool, concat!("stdout", "().write_all(b\"x\")")),
+        (&tool, concat!("crate::child_process::rimz", "_exe()")),
+        (&server, concat!("std::process::Command", "::new(\"rimz\")")),
     ];
     for (path, entry) in cases {
         ensure_mcp_calls_run_in_process(&root, &files).unwrap();
@@ -170,6 +172,19 @@ fn mcp_server_reaches_rimz_through_its_runner_and_its_tools_leave_stdout_and_the
     )
     .unwrap();
     ensure_mcp_calls_run_in_process(&root, &files).unwrap();
+    let exec = |name: &str| {
+        format!(
+            "impl Server {{ fn {name}(&self) {{ let _ = std::process::Command{}(\"x\").{}(); }} }}\n",
+            "::new", "exec"
+        )
+    };
+    std::fs::write(&server, exec("replace")).unwrap();
+    ensure_mcp_calls_run_in_process(&root, &files).unwrap();
+    std::fs::write(&server, exec("call")).unwrap();
+    assert!(
+        ensure_mcp_calls_run_in_process(&root, &files).is_err(),
+        "an exec outside `replace`"
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 

@@ -10,11 +10,8 @@ fn tool(name: &str) -> &'static Tool {
         .unwrap_or_else(|| panic!("no tool {name}"))
 }
 
-fn args(name: &str, arguments: Value) -> Vec<String> {
-    tool(name)
-        .invocation(arguments)
-        .expect("arguments fit")
-        .args
+fn call(name: &str, arguments: Value) -> Call {
+    tool(name).call(arguments).expect("arguments fit")
 }
 
 #[test]
@@ -66,109 +63,79 @@ fn capability_names_round_trip_and_become_only_arguments() {
     );
 }
 
+/// Arguments reach the runner as typed values, so a value that looks like a
+/// flag or shell text stays data.
 #[test]
-fn values_join_their_flags_and_positionals_follow_the_terminator() {
-    assert_eq!(
-        args(
-            "lsp",
-            json!({"verb": "refs", "targets": ["--help", "Store"], "no_tests": true, "limit": 5}),
-        ),
-        [
-            "lsp",
-            "refs",
-            "--no-tests",
-            "--limit=5",
-            "--",
-            "--help",
-            "Store"
-        ]
-    );
-    assert_eq!(
-        args(
-            "wait",
-            json!({"trigger": "run", "value": "--version; echo $(id)", "on": "fail", "check_in": "5m"}),
-        ),
-        [
-            "wait",
-            "--run=--version; echo $(id)",
-            "--on=fail",
-            "--check-in=5m",
-        ]
-    );
-    assert_eq!(
-        args("wait_cancel", json!({"name": "--all"})),
-        ["wait", "cancel", "--", "--all"]
-    );
-    assert_eq!(
-        args("wait_cancel", json!({"all": true})),
-        ["wait", "cancel", "--all"]
-    );
-    assert_eq!(args("wait_list", json!({})), ["wait", "list"]);
-    assert_eq!(
-        args("self_stop", json!({})),
-        ["agents", "stop", "--when-idle", "--", "@me"]
-    );
-    assert_eq!(
-        args("self_stop", json!({"when_idle": "off"})),
-        ["agents", "stop", "--when-idle=off", "--", "@me"]
-    );
-    assert_eq!(
-        args("self_compact", json!({"instruction": "-keep the plan"})),
-        ["agents", "compact", "--", "@me", "-keep the plan"]
-    );
-    assert_eq!(
-        args(
-            "self_compact",
-            json!({"instruction": "-keep the plan", "no_continue": true})
-        ),
-        [
-            "agents",
-            "compact",
-            "--no-continue",
-            "--",
-            "@me",
-            "-keep the plan"
-        ]
-    );
-    assert_eq!(
-        args(
-            "self_tune",
-            json!({"setting": "idle-compact", "value": "120k"})
-        ),
-        ["agents", "tune", "--", "@me", "idle-compact", "120k"]
-    );
-    assert_eq!(
-        args("notes_list", json!({"filter": ["kind=handoff", "age<2d"]})),
-        ["notes", "list", "--filter=kind=handoff", "--filter=age<2d"]
-    );
-}
-
-#[test]
-fn a_notes_body_travels_on_stdin() {
-    let invocation = tool("notes_add")
-        .invocation(json!({
+fn calls_carry_their_arguments_as_data() {
+    let Call::Lsp(lsp) = call(
+        "lsp",
+        json!({"verb": "refs", "targets": ["--help", "Store"], "no_tests": true, "limit": 5}),
+    ) else {
+        panic!("an lsp call");
+    };
+    assert_eq!(lsp.verb, LspVerb::Refs);
+    assert_eq!(lsp.targets, ["--help", "Store"]);
+    assert!(lsp.no_tests && !lsp.all);
+    assert_eq!(lsp.limit, Some(5));
+    let Call::Wait(wait) = call(
+        "wait",
+        json!({"trigger": "run", "value": "--version; echo $(id)", "on": "fail", "check_in": "5m"}),
+    ) else {
+        panic!("a wait call");
+    };
+    assert_eq!(wait.trigger, WaitTrigger::Run);
+    assert_eq!(wait.value, "--version; echo $(id)");
+    assert_eq!(wait.check_in.as_deref(), Some("5m"));
+    let Call::WaitCancel(cancel) = call("wait_cancel", json!({"name": "--all"})) else {
+        panic!("a wait_cancel call");
+    };
+    assert_eq!((cancel.name.as_deref(), cancel.all), (Some("--all"), false));
+    let Call::SelfCompact(compact) = call(
+        "self_compact",
+        json!({"instruction": "-keep the plan", "no_continue": true}),
+    ) else {
+        panic!("a self_compact call");
+    };
+    assert_eq!(compact.instruction.as_deref(), Some("-keep the plan"));
+    assert!(compact.no_continue);
+    let Call::NotesAdd(note) = call(
+        "notes_add",
+        json!({
             "kind": "handoff",
             "title": "--force",
             "body": "say \"hi\"\n$(rm -rf /)\n",
             "meta": {"ticket": "42"},
-        }))
-        .expect("arguments fit");
-    assert_eq!(
-        invocation,
-        Invocation {
-            args: [
-                "notes",
-                "add",
-                "--meta=ticket=42",
-                "--",
-                "handoff",
-                "--force"
-            ]
-            .map(String::from)
-            .to_vec(),
-            cwd: None,
-            stdin: Some(b"say \"hi\"\n$(rm -rf /)\n".to_vec()),
+        }),
+    ) else {
+        panic!("a notes_add call");
+    };
+    assert_eq!(note.title, "--force");
+    assert_eq!(note.body.as_deref(), Some("say \"hi\"\n$(rm -rf /)\n"));
+    assert_eq!(note.meta["ticket"], "42");
+    let Call::NotesList(list) = call("notes_list", json!({"filter": ["kind=handoff", "age<2d"]}))
+    else {
+        panic!("a notes_list call");
+    };
+    assert_eq!(list.filter, ["kind=handoff", "age<2d"]);
+}
+
+/// Every tool but `lsp` and `guide` answers data and lists the object
+/// schema it fits; those two answer text and list none.
+#[test]
+fn data_tools_list_an_object_output_schema() {
+    for tool in &TOOLS {
+        let listed = tool.listing(&Wording::built_in());
+        match tool.name {
+            "lsp" | GUIDE => assert!(listed.get("outputSchema").is_none(), "{}", tool.name),
+            _ => {
+                assert_eq!(listed["outputSchema"]["type"], "object", "{}", tool.name);
+                assert_eq!(Some(&listed["outputSchema"]), tool.output_schema().as_ref());
+            }
         }
+    }
+    assert_eq!(
+        tool("wait").output_schema().unwrap()["required"],
+        json!(["id", "status", "stop", "report"])
     );
 }
 
@@ -193,9 +160,40 @@ fn arguments_outside_the_schema_shape_are_refused() {
             json!({"kind": "k", "title": "t", "cwd": "/src"}),
         ),
         ("notes_list", json!({"limit": 5})),
+        ("lsp", json!({"verb": "refs", "targets": []})),
+        (
+            "lsp",
+            json!({"verb": "check", "targets": ["a.md"], "hints": true}),
+        ),
+        (
+            "lsp",
+            json!({"verb": "refs", "targets": ["X"], "all": true, "limit": 1}),
+        ),
+        ("lsp", json!({"verb": "refs", "targets": ["X"], "limit": 0})),
+        ("lsp", json!({"verb": "def", "targets": ["X"], "limit": 5})),
+        (
+            "lsp",
+            json!({"verb": "hover", "targets": ["X"], "all": true}),
+        ),
+        (
+            "lsp",
+            json!({"verb": "symbols", "targets": ["a.rs"], "external": true}),
+        ),
+        (
+            "lsp",
+            json!({"verb": "find", "targets": ["X"], "no_tests": true}),
+        ),
+        (
+            "lsp",
+            json!({"verb": "refs", "targets": ["X"], "full": true}),
+        ),
+        (
+            "lsp",
+            json!({"verb": "show", "targets": ["X"], "fix": true}),
+        ),
     ] {
         assert!(
-            tool(name).invocation(arguments.clone()).is_err(),
+            tool(name).call(arguments.clone()).is_err(),
             "{name} took {arguments}"
         );
     }
@@ -320,42 +318,30 @@ fn a_wait_needs_one_trigger_and_its_value() {
         ),
         (json!({"when": ["pr=merged"]}), "when"),
     ] {
-        let err = tool("wait")
-            .invocation(arguments.clone())
-            .expect_err("refused");
+        let err = tool("wait").call(arguments.clone()).expect_err("refused");
         assert!(err.to_string().contains(missing), "{arguments}: {err}");
     }
     for trigger in ["run", "check", "file", "pid", "when", "in", "at"] {
-        assert_eq!(
-            args("wait", json!({"trigger": trigger, "value": "v"})),
-            ["wait".to_owned(), format!("--{trigger}=v")]
-        );
+        let Call::Wait(wait) = call("wait", json!({"trigger": trigger, "value": "v"})) else {
+            panic!("a wait call");
+        };
+        let parsed: WaitTrigger = serde_json::from_value(json!(trigger)).unwrap();
+        assert_eq!(wait.trigger, parsed);
+        assert_eq!(wait.value, "v");
     }
-    assert_eq!(
-        args(
-            "wait",
-            json!({"trigger": "when", "value": "pr=merged && !ci=failed", "label": "x"})
-        ),
-        ["wait", "--when=pr=merged && !ci=failed", "--label=x"]
-    );
 }
 
 #[test]
 fn lsp_passes_a_server_except_to_check() {
-    assert_eq!(
-        args(
-            "lsp",
-            json!({"verb": "refs", "targets": ["Store"], "server": "ra"})
-        ),
-        ["lsp", "refs", "--server=ra", "--", "Store"]
-    );
-    assert_eq!(
-        args(
-            "lsp",
-            json!({"verb": "check", "targets": ["a.md"], "server": "ra"})
-        ),
-        ["lsp", "check", "--", "a.md"]
-    );
+    let server = |verb: &str| match call(
+        "lsp",
+        json!({"verb": verb, "targets": ["Store"], "server": "ra"}),
+    ) {
+        Call::Lsp(lsp) => lsp.server().map(str::to_owned),
+        other => panic!("an lsp call: {other:?}"),
+    };
+    assert_eq!(server("refs").as_deref(), Some("ra"));
+    assert_eq!(server("check"), None);
     let description = Wording::built_in()
         .description(tool("lsp"))
         .text()
@@ -377,12 +363,21 @@ fn ambiguous_tune_and_note_arguments_are_refused() {
         ),
     ] {
         assert!(
-            tool(name).invocation(arguments.clone()).is_err(),
+            tool(name).call(arguments.clone()).is_err(),
             "{name} took {arguments}"
         );
     }
+    let Call::SelfTune(tune) = call("self_tune", json!({"setting": "keep-warm"})) else {
+        panic!("a self_tune call");
+    };
     assert_eq!(
-        args("self_tune", json!({"setting": "keep-warm"})),
-        ["agents", "tune", "--", "@me", "keep-warm"]
+        (tune.setting, tune.value),
+        (Some(TuneSetting::KeepWarm), None)
     );
+    for arguments in [json!({}), json!({"name": "w", "all": true})] {
+        assert!(
+            tool("wait_cancel").call(arguments.clone()).is_err(),
+            "{arguments}"
+        );
+    }
 }

@@ -737,6 +737,15 @@ fn build_entry(
     Ok((spec.name, task))
 }
 
+/// A task's label as `--label` takes it: one line of 1 to 60 characters, trimmed.
+pub fn task_label(value: &str) -> Result<String, &'static str> {
+    let label = value.trim();
+    if value.contains(['\n', '\r']) || !(1..=60).contains(&label.chars().count()) {
+        return Err("label must be one line of 1 to 60 characters");
+    }
+    Ok(label.to_owned())
+}
+
 pub fn duration_label(duration: Duration) -> String {
     let seconds = duration.as_secs();
     for (unit, suffix) in [(86_400, "d"), (3_600, "h"), (60, "m")] {

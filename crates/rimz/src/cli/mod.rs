@@ -449,31 +449,8 @@ fn resolve_agent_one_unhinted<'a>(
     current_channel: &rimz::address::AddressContext,
 ) -> Result<&'a AgentState> {
     if raw == "@me" {
-        let unidentified = || {
-            anyhow::anyhow!(
-                "@me requires an agent RimZ can identify; run this command from an agent pane"
-            )
-        };
-        let store = store.ok_or_else(unidentified)?;
-        let caller = send::resolve_caller(store)?.ok_or_else(unidentified)?;
-        let resolved = rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, &caller);
-        if resolved.is_err() {
-            let audit = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-            if let Ok(agent) =
-                rimz::harness::ancestry::resolve_launch_caller(&audit.agents, &caller)
-                && agent.ended_at.is_some()
-            {
-                anyhow::bail!("@me requires a live agent; the calling agent has ended");
-            }
-        }
-        let agent = resolved.map_err(|_| unidentified())?;
-        if agent.ended_at.is_some() {
-            anyhow::bail!("@me requires a live agent; the calling agent has ended");
-        }
-        if agent.agent_id.is_provisional() {
-            anyhow::bail!("@me requires a registered session; the calling agent is still starting");
-        }
-        return Ok(agent);
+        let store = store.ok_or_else(rimz::launcher::context::me_unidentified)?;
+        return rimz::launcher::context::resolve_me(store, snapshot);
     }
     let matches = rimz::address::resolve_many(snapshot, raw, worktree_flag, current_channel)?;
     if let [agent] = matches.as_slice() {
@@ -900,11 +877,7 @@ fn parse_mux(value: &str) -> std::result::Result<MuxName, String> {
 }
 
 fn parse_task_label(value: &str) -> std::result::Result<String, &'static str> {
-    let label = value.trim();
-    if value.contains(['\n', '\r']) || !(1..=60).contains(&label.chars().count()) {
-        return Err("label must be one line of 1 to 60 characters");
-    }
-    Ok(label.to_owned())
+    rimz::harness::schedule::arm::task_label(value)
 }
 
 pub(crate) fn confirm(prompt: &str) -> Result<bool> {

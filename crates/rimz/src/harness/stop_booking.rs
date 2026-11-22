@@ -13,6 +13,18 @@ use crate::harness::ancestry::{CallerIdentity, resolve_launch_caller};
 use crate::store::idle_stop::{self, IdleStopRequest};
 use crate::store::snapshot::SidebarSnapshot;
 
+/// The rest a soft stop waits for when its request names none.
+pub const IDLE_REST_DEFAULT: &str = "3m";
+
+/// The rest a soft-stop request names: a duration, or `None` for `off`, which
+/// withdraws a pending request.
+pub fn parse_idle_rest(raw: &str) -> Result<Option<Duration>> {
+    if raw == "off" {
+        return Ok(None);
+    }
+    Ok(Some(crate::utils::time::parse_compact_duration(raw)?))
+}
+
 /// What a soft-stop request did.
 #[derive(Debug, Serialize)]
 #[serde(tag = "booking", rename_all = "snake_case")]

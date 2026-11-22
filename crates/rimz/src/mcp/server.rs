@@ -1,20 +1,21 @@
 //! Newline-delimited JSON-RPC 2.0 over stdio. The main thread reads requests
 //! and answers each inline, a `tools/call` of `guide` included; a call of any
-//! other tool runs its one-shot on a thread of its own, so calls overlap and a
-//! later one may answer first.
-//! Stdout carries protocol lines only; logs go to stderr.
+//! other tool runs in this process on a thread of its own, through the runner
+//! `serve` was handed, so calls overlap and a later one may answer first.
+//! The protocol goes out on a private copy of stdout taken at the start, and
+//! descriptor 1 then points at stderr, so a stray write under a tool path
+//! lands in the logs, not in the protocol.
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, Read, Write};
-use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::io::{self, BufRead, Write};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde_json::{Value, json};
 
 use super::catalog::{
-    Capability, Invocation, LoadMode, SERVER_NAME, Tool, served_groups, tools_for, tools_list,
+    Call, Capability, LoadMode, SERVER_NAME, Tool, served_groups, tools_for, tools_list,
 };
+use super::runner::{Answer, Failure, Runner};
 use super::wording::Wording;
 
 const PROTOCOL_VERSIONS: [&str; 2] = ["2025-06-18", "2025-11-25"];
@@ -32,66 +33,56 @@ pub enum ServeErr {
 }
 
 /// Serve `only`'s tools (every tool when empty) until stdin ends, SIGINT, or
-/// SIGTERM, then kill the one-shots still running and return. `modes` gives
-/// the tools of each capability it names that load mode in their listing.
-/// With `parent_env`, each one-shot also gets every variable of the parent
-/// process's environment that the server's own lacks, and the wording is read
-/// from the RimZ home that environment names. The wording is read once, here,
-/// so a session keeps the text its server started with. With `cwd`, each
-/// one-shot runs there, or in its tool's own directory resolved under it.
+/// SIGTERM, carrying out each call through `runner`. `modes` gives the tools
+/// of each capability it names that load mode in their listing. The wording is
+/// read once, here, from the RimZ home, so a session keeps the text its server
+/// started with.
 pub fn serve(
     only: &[Capability],
     modes: &[(Capability, LoadMode)],
-    parent_env: bool,
-    cwd: Option<PathBuf>,
+    runner: Arc<dyn Runner>,
 ) -> Result<(), ServeErr> {
-    let inherited = if parent_env {
-        #[cfg(unix)]
-        let parent = crate::proc::environ(std::os::unix::process::parent_id());
-        #[cfg(not(unix))]
-        let parent = None;
-        inherited_from(parent).unwrap_or_else(|| {
-            tracing::warn!(
-                "rimz mcp serve: the parent's environment is unreadable; one-shots run with \
-                 the server's own"
-            );
-            Vec::new()
-        })
-    } else {
-        Vec::new()
-    };
-    let wording = Wording::read(&crate::disk::paths::mcps_dir_under(&rimz_home(&inherited)));
+    let out = protocol_out();
+    let wording = Wording::read_home();
     for warning in wording.warnings() {
         tracing::warn!("rimz mcp serve: {warning}");
     }
     let tools: Vec<&'static Tool> = tools_for(only).collect();
     let groups = served_groups(only);
-    let served = Served {
-        listing: tools_list(&tools, modes, &wording),
-        instructions: wording.instructions(&groups),
-        tools,
-        groups,
-        wording,
-    };
-    let calls = Arc::new(Calls {
-        inherited,
-        cwd,
-        state: Mutex::default(),
+    let server = Arc::new(Server {
+        served: Served {
+            listing: tools_list(&tools, modes, &wording),
+            instructions: wording.instructions(&groups),
+            tools,
+            groups,
+            wording,
+        },
+        calls: Calls::default(),
+        out: Mutex::new(out),
+        runner,
     });
     #[cfg(unix)]
     {
-        let calls = Arc::clone(&calls);
+        let server = Arc::clone(&server);
         let signals = vec![signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM];
         if let Err(err) = crate::child_process::register_signal_wake(signals, move |_| {
-            calls.close();
+            server.calls.close();
             std::process::exit(0);
         }) {
-            tracing::warn!(%err, "rimz mcp serve: SIGINT and SIGTERM will not stop one-shots");
+            tracing::warn!(%err, "rimz mcp serve: SIGINT and SIGTERM will not end the server");
         }
     }
-    let result = read_requests(&served, &calls);
-    calls.close();
+    let result = read_requests(&server);
+    server.calls.close();
     result
+}
+
+/// The server's state, shared with the thread of each call.
+struct Server {
+    served: Served,
+    calls: Calls,
+    out: Mutex<Box<dyn Write + Send>>,
+    runner: Arc<dyn Runner>,
 }
 
 /// What the server answers with, resolved once at its start.
@@ -103,40 +94,34 @@ struct Served {
     wording: Wording,
 }
 
-/// The RimZ home the one-shots resolve: the server's own `RIMZ_HOME` and
-/// `HOME`, each filled from `inherited` where the server's environment lacks
-/// it, as a one-shot's environment is.
-fn rimz_home(inherited: &[(String, String)]) -> std::path::PathBuf {
-    let var = |name: &str| {
-        std::env::var_os(name)
-            .or_else(|| {
-                inherited
-                    .iter()
-                    .find(|(key, _)| key == name)
-                    .map(|(_, value)| value.into())
-            })
-            .filter(|value| !value.is_empty())
-            .map(std::path::PathBuf::from)
-    };
-    crate::disk::paths::rimz_home_from(
-        var("RIMZ_HOME").as_deref(),
-        var("HOME").as_deref(),
-        &std::env::temp_dir(),
-    )
+/// The protocol's channel: a private copy of stdout, with descriptor 1 then
+/// pointed at stderr; stdout itself when that cannot be done.
+fn protocol_out() -> Box<dyn Write + Send> {
+    #[cfg(unix)]
+    match take_stdout() {
+        Ok(private) => return Box::new(private),
+        Err(err) => tracing::warn!(
+            %err,
+            "rimz mcp serve: the protocol shares stdout; a stray write can break it"
+        ),
+    }
+    Box::new(io::stdout())
 }
 
-/// The parent's variables the server's own environment lacks; `None` when
-/// the parent's environment is unreadable.
-fn inherited_from(parent: Option<Vec<(String, String)>>) -> Option<Vec<(String, String)>> {
-    Some(
-        parent?
-            .into_iter()
-            .filter(|(name, _)| std::env::var_os(name).is_none())
-            .collect(),
-    )
+/// Copy stdout to a new descriptor that a child does not inherit, then point
+/// descriptor 1 at stderr.
+#[cfg(unix)]
+fn take_stdout() -> io::Result<std::fs::File> {
+    use std::os::fd::AsFd;
+
+    let mut stdout = io::stdout().lock();
+    stdout.flush()?;
+    let private = stdout.as_fd().try_clone_to_owned()?;
+    nix::unistd::dup2_stdout(io::stderr()).map_err(io::Error::from)?;
+    Ok(std::fs::File::from(private))
 }
 
-fn read_requests(served: &Served, calls: &Arc<Calls>) -> Result<(), ServeErr> {
+fn read_requests(server: &Arc<Server>) -> Result<(), ServeErr> {
     let mut stdin = io::stdin().lock();
     let mut line = Vec::new();
     loop {
@@ -148,15 +133,17 @@ fn read_requests(served: &Served, calls: &Arc<Calls>) -> Result<(), ServeErr> {
             continue;
         }
         match serde_json::from_slice::<Value>(&line) {
-            Ok(message) => handle(message, served, calls),
-            Err(err) => send_error(&Value::Null, PARSE_ERROR, &format!("parse error: {err}")),
+            Ok(message) => handle(message, server),
+            Err(err) => {
+                server.send_error(&Value::Null, PARSE_ERROR, &format!("parse error: {err}"))
+            }
         }
     }
 }
 
-fn handle(message: Value, served: &Served, calls: &Arc<Calls>) {
+fn handle(message: Value, server: &Arc<Server>) {
     let Value::Object(mut message) = message else {
-        return send_error(&Value::Null, INVALID_REQUEST, "a request is a JSON object");
+        return server.send_error(&Value::Null, INVALID_REQUEST, "a request is a JSON object");
     };
     let id = message.remove("id");
     let params = message.remove("params").unwrap_or(Value::Null);
@@ -166,16 +153,17 @@ fn handle(message: Value, served: &Served, calls: &Arc<Calls>) {
     };
     let Some(id) = id else {
         if method == "notifications/cancelled" {
-            calls.cancel(&params["requestId"]);
+            server.calls.cancel(&params["requestId"]);
         }
         return;
     };
+    let served = &server.served;
     match method {
-        "initialize" => send_result(&id, initialize(&params, &served.instructions)),
-        "ping" => send_result(&id, json!({})),
-        "tools/list" => send_result(&id, served.listing.clone()),
-        "tools/call" => call(id, params, served, calls),
-        _ => send_error(
+        "initialize" => server.send_result(&id, initialize(&params, &served.instructions)),
+        "ping" => server.send_result(&id, json!({})),
+        "tools/list" => server.send_result(&id, served.listing.clone()),
+        "tools/call" => call(id, params, server),
+        _ => server.send_error(
             &id,
             METHOD_NOT_FOUND,
             &format!("method not found: {method}"),
@@ -196,168 +184,98 @@ fn initialize(params: &Value, instructions: &str) -> Value {
     })
 }
 
-fn call(id: Value, mut params: Value, served: &Served, calls: &Arc<Calls>) {
+fn call(id: Value, mut params: Value, server: &Arc<Server>) {
     let name = params["name"].as_str().unwrap_or_default();
-    let Some(tool) = served.tools.iter().find(|tool| tool.name == name) else {
-        return send_error(&id, INVALID_PARAMS, &format!("unknown tool: {name:?}"));
+    let Some(tool) = server.served.tools.iter().find(|tool| tool.name == name) else {
+        return server.send_error(&id, INVALID_PARAMS, &format!("unknown tool: {name:?}"));
     };
     let arguments = match params["arguments"].take() {
         Value::Null => json!({}),
         arguments => arguments,
     };
-    let invocation = match tool.invocation(arguments) {
-        Ok(invocation) => invocation,
+    let call = match tool.call(arguments) {
+        Ok(call) => call,
         Err(err) => {
-            return send_result(&id, tool_result(&format!("invalid arguments: {err}"), true));
+            let failure = Failure::new(format!("invalid arguments: {err}"));
+            return server.send_result(&id, tool_result(Answer::Failure(failure)));
         }
     };
-    if tool.capability.is_none() {
-        return send_result(&id, guide(served, &invocation));
+    if let Call::Guide(guide_args) = call {
+        return server.send_result(&id, tool_result(guide(&server.served, &guide_args.name)));
     }
     // Listed here, on the thread that reads requests, so a cancel read after
     // this call, or the server's end, always finds it.
-    let Some(seq) = calls.begin(id.clone()) else {
+    let Some(seq) = server.calls.begin(id.clone()) else {
         return;
     };
     let spawned = std::thread::Builder::new()
         .name("rimz-mcp-call".to_owned())
         .spawn({
-            let (id, calls) = (id.clone(), Arc::clone(calls));
-            move || run_one_shot(&id, seq, invocation, &calls)
+            let (id, server) = (id.clone(), Arc::clone(server));
+            move || {
+                let answer = run_isolated(server.runner.as_ref(), call);
+                if server.calls.finish(seq) {
+                    server.send_result(&id, tool_result(answer));
+                }
+            }
         });
     if let Err(err) = spawned
-        && calls.abandon(seq)
+        && server.calls.finish(seq)
     {
-        send_result(
-            &id,
-            tool_result(&format!("could not start the call: {err}"), true),
-        );
+        let failure = Failure::new(format!("could not start the call: {err}"));
+        server.send_result(&id, tool_result(Answer::Failure(failure)));
     }
 }
 
-/// The result of a `guide` call, whose invocation holds the guide's name.
-fn guide(served: &Served, invocation: &Invocation) -> Value {
-    let name = invocation
-        .args
-        .first()
-        .map(String::as_str)
-        .unwrap_or_default();
+/// The answer `runner` gives `call`, or a failure when it panics, so one
+/// call's panic leaves the server and every other call running.
+fn run_isolated(runner: &dyn Runner, call: Call) -> Answer {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runner.run(call))).unwrap_or_else(
+        |panic| {
+            let reason = panic
+                .downcast_ref::<&str>()
+                .map(|reason| (*reason).to_owned())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "no message".to_owned());
+            Answer::Failure(Failure::new(format!("the call panicked: {reason}")))
+        },
+    )
+}
+
+/// The answer to a `guide` call for the guide `name`.
+fn guide(served: &Served, name: &str) -> Answer {
     match served.wording.guide(&served.groups, name) {
-        Ok(text) => tool_result(text, false),
-        Err(guides) => tool_result(
-            &format!("no guide {name:?}; this launch has: {}", guides.join(", ")),
-            true,
+        Ok(text) => Answer::Text(text.to_owned()),
+        Err(guides) => Answer::Failure(
+            Failure::new(format!("no guide {name:?}"))
+                .with_hint(format!("this launch has: {}", guides.join(", "))),
         ),
     }
 }
 
-/// Run the call's one-shot and answer with its output, unless a cancel or
-/// the server's end killed it first.
-fn run_one_shot(id: &Value, seq: u64, invocation: Invocation, calls: &Calls) {
-    let mut command = Command::new(crate::proc::rimz_exe());
-    command
-        .arg("--color=never")
-        .args(&invocation.args)
-        .envs(calls.inherited.iter().map(|(name, value)| (name, value)))
-        .stdin(if invocation.stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let cwd = match (&calls.cwd, &invocation.cwd) {
-        (Some(base), Some(cwd)) => Some(base.join(cwd)),
-        (base, cwd) => cwd.clone().or_else(|| base.clone()),
-    };
-    if let Some(cwd) = &cwd {
-        command.current_dir(cwd);
-    }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            if calls.abandon(seq) {
-                send_result(id, tool_result(&format!("could not run rimz: {err}"), true));
-            }
-            return;
+/// The result a call's answer makes: data as structured content with the
+/// same JSON as its text item, text as the text item, and a failure as an
+/// error whose text item is its JSON, which it also carries as structured
+/// content.
+fn tool_result(answer: Answer) -> Value {
+    let (structured, is_error) = match answer {
+        Answer::Text(text) => {
+            return json!({ "content": [{ "type": "text", "text": text }], "isError": false });
         }
+        Answer::Data(map) => (Value::Object(map), false),
+        Answer::Failure(failure) => (failure.into_value(), true),
     };
-    let body = child.stdin.take().zip(invocation.stdin);
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    if !calls.attach(seq, child) {
-        return;
-    }
-    if let Some((mut pipe, body)) = body {
-        // A one-shot that exits without reading its stdin closes the pipe;
-        // its exit status is what the result reports.
-        std::thread::spawn(move || drop(pipe.write_all(&body)));
-    }
-    let stderr = std::thread::spawn(move || read_all(stderr));
-    let stdout = read_all(stdout);
-    let mut text = result_text(stdout, &stderr.join().unwrap_or_default());
-    let Some(status) = calls.finish(seq) else {
-        return;
-    };
-    match status {
-        Ok(status) if status.success() => send_result(id, tool_result(&text, false)),
-        Ok(status) => {
-            append_line(&mut text, &exit_line(status));
-            send_result(id, tool_result(&text, true));
-        }
-        Err(err) => {
-            append_line(&mut text, &format!("waiting for rimz: {err}"));
-            send_result(id, tool_result(&text, true));
-        }
-    }
-}
-
-fn read_all(pipe: Option<impl Read>) -> String {
-    let mut bytes = Vec::new();
-    if let Some(mut pipe) = pipe {
-        let _ = pipe.read_to_end(&mut bytes);
-    }
-    String::from_utf8_lossy(&bytes).into_owned()
-}
-
-/// A one-shot's stdout, then its stderr under a `stderr:` line when it
-/// wrote any.
-fn result_text(mut stdout: String, stderr: &str) -> String {
-    if !stderr.is_empty() {
-        append_line(&mut stdout, "stderr:\n");
-        stdout.push_str(stderr);
-    }
-    stdout
-}
-
-fn exit_line(status: ExitStatus) -> String {
-    match status.code() {
-        Some(code) => format!("exit code {code}"),
-        None => format!("no exit code: {status}"),
-    }
-}
-
-fn append_line(text: &mut String, line: &str) {
-    if !text.is_empty() && !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text.push_str(line);
-}
-
-fn tool_result(text: &str, is_error: bool) -> Value {
-    json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+    json!({
+        "content": [{ "type": "text", "text": structured.to_string() }],
+        "structuredContent": structured,
+        "isError": is_error,
+    })
 }
 
 /// The calls in flight, each under the request id that started it, from
-/// before its one-shot spawns until it is reaped. A listed child is never
-/// waited on, so its pid cannot be reused while a cancel or the server's end
-/// may still kill it.
+/// before its thread starts until it answers.
+#[derive(Default)]
 struct Calls {
-    /// The parent's variables a one-shot adds under `--parent-env`.
-    inherited: Vec<(String, String)>,
-    /// The launch directory: a one-shot runs there, or in its tool's directory resolved
-    /// under it.
-    cwd: Option<PathBuf>,
     state: Mutex<CallsState>,
 }
 
@@ -370,8 +288,6 @@ struct CallsState {
 
 struct LiveCall {
     id: Value,
-    /// `None` until the one-shot has spawned.
-    child: Option<Child>,
     cancelled: bool,
 }
 
@@ -382,8 +298,8 @@ impl Calls {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// List a call about to spawn; `None` once the server is ending, when it
-    /// must spawn nothing.
+    /// List a call about to start; `None` once the server is ending, when it
+    /// must start nothing.
     fn begin(&self, id: Value) -> Option<u64> {
         let mut state = self.lock();
         if state.closed {
@@ -395,116 +311,61 @@ impl Calls {
             seq,
             LiveCall {
                 id,
-                child: None,
                 cancelled: false,
             },
         );
         Some(seq)
     }
 
-    /// Hand a listed call its spawned one-shot; `false`, with the one-shot
-    /// killed and reaped, when a cancel or the server's end came first.
-    fn attach(&self, seq: u64, mut child: Child) -> bool {
-        let mut state = self.lock();
-        let Some(call) = state.live.get_mut(&seq).filter(|call| !call.cancelled) else {
-            state.live.remove(&seq);
-            drop(state);
-            let _ = child.kill();
-            let _ = child.wait();
-            return false;
-        };
-        call.child = Some(child);
-        true
-    }
-
-    /// Unlist a call whose spawn failed; `false` when a cancel or the
+    /// Unlist a call that has its answer; `false` when a cancel or the
     /// server's end withholds its reply.
-    fn abandon(&self, seq: u64) -> bool {
-        self.lock()
+    fn finish(&self, seq: u64) -> bool {
+        let mut state = self.lock();
+        let closed = state.closed;
+        state
             .live
             .remove(&seq)
-            .is_some_and(|call| !call.cancelled)
+            .is_some_and(|call| !call.cancelled && !closed)
     }
 
-    /// Reap a call's one-shot; `None` when a cancel or the server's end
-    /// killed it, which withholds its reply.
-    fn finish(&self, seq: u64) -> Option<io::Result<ExitStatus>> {
-        let call = self.lock().live.remove(&seq)?;
-        let status = call.child?.wait();
-        (!call.cancelled).then_some(status)
-    }
-
+    /// Withhold the reply of the call `id` names; its work runs to its end,
+    /// since a thread cannot be stopped from outside.
     fn cancel(&self, id: &Value) {
         let mut state = self.lock();
         for call in state.live.values_mut().filter(|call| &call.id == id) {
-            call.kill();
+            call.cancelled = true;
         }
     }
 
     fn close(&self) {
-        let mut state = self.lock();
-        state.closed = true;
-        state.live.values_mut().for_each(LiveCall::kill);
+        self.lock().closed = true;
     }
 }
 
-impl LiveCall {
-    fn kill(&mut self) {
-        self.cancelled = true;
-        if let Some(child) = &mut self.child {
-            let _ = child.kill();
+impl Server {
+    fn send_result(&self, id: &Value, result: Value) {
+        self.send(&json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+    }
+
+    fn send_error(&self, id: &Value, code: i64, message: &str) {
+        self.send(
+            &json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }),
+        );
+    }
+
+    fn send(&self, message: &Value) {
+        let mut line = message.to_string();
+        line.push('\n');
+        let mut out = self
+            .out
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Err(err) = out.write_all(line.as_bytes()).and_then(|()| out.flush()) {
+            tracing::debug!(%err, "rimz mcp serve: the client stopped reading");
         }
     }
 }
 
-fn send_result(id: &Value, result: Value) {
-    send(&json!({ "jsonrpc": "2.0", "id": id, "result": result }));
-}
-
-fn send_error(id: &Value, code: i64, message: &str) {
-    send(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }));
-}
-
-fn send(message: &Value) {
-    let mut line = message.to_string();
-    line.push('\n');
-    let mut stdout = io::stdout().lock();
-    if let Err(err) = stdout
-        .write_all(line.as_bytes())
-        .and_then(|()| stdout.flush())
-    {
-        tracing::debug!(%err, "rimz mcp serve: the client stopped reading");
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stderr_follows_stdout_under_its_label() {
-        assert_eq!(
-            result_text("out\n".into(), "warn\n"),
-            "out\nstderr:\nwarn\n"
-        );
-        assert_eq!(result_text("out".into(), "warn"), "out\nstderr:\nwarn");
-        assert_eq!(result_text(String::new(), "err\n"), "stderr:\nerr\n");
-        assert_eq!(result_text("out\n".into(), ""), "out\n");
-    }
-
-    #[test]
-    fn the_parent_fills_only_names_the_server_lacks_and_unreadable_falls_back() {
-        assert_eq!(inherited_from(None), None);
-        let parent = vec![
-            ("PATH".to_owned(), "/parent/bin".to_owned()),
-            ("RIMZ_MCP_PARENT_ONLY_7c2e".to_owned(), "v".to_owned()),
-        ];
-        assert_eq!(
-            inherited_from(Some(parent)),
-            Some(vec![(
-                "RIMZ_MCP_PARENT_ONLY_7c2e".to_owned(),
-                "v".to_owned()
-            )])
-        );
-    }
-}
+#[path = "server_tests.rs"]
+mod tests;

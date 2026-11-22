@@ -31,7 +31,7 @@ enum McpSubcmd {
         /// finds them (repeatable).
         #[arg(long, value_name = "CAPABILITY", value_parser = parse_capability)]
         deferred: Vec<Capability>,
-        /// Give each one-shot the parent process's environment beneath this
+        /// Restart once with the parent process's environment beneath this
         /// server's own, for a provider that starts the server with a reduced one.
         #[arg(long)]
         parent_env: bool,
@@ -75,6 +75,9 @@ pub fn run(args: McpArgs) -> Result<()> {
             parent_env,
             launch_env,
         } => {
+            if parent_env {
+                rimz::mcp_tools::restore_parent_env();
+            }
             if launch_env {
                 let Some(selection) = launch_env::read(|name| std::env::var(name).ok())
                     .context("rimz mcp serve --launch-env")?
@@ -93,7 +96,7 @@ pub fn run(args: McpArgs) -> Result<()> {
                         .filter_map(|(capability, mode)| Some((*capability, (*mode)?)))
                         .collect(),
                 );
-                return rimz::mcp::serve(&only, &modes, parent_env, selection.cwd)
+                return rimz::mcp::serve(&only, &modes, rimz::mcp_tools::Tools::new(selection.cwd))
                     .context("rimz mcp serve");
             }
             if let Some(both) = always
@@ -114,7 +117,7 @@ pub fn run(args: McpArgs) -> Result<()> {
                         .map(|capability| (capability, LoadMode::Deferred)),
                 )
                 .collect();
-            rimz::mcp::serve(&only, &modes, parent_env, None).context("rimz mcp serve")
+            rimz::mcp::serve(&only, &modes, rimz::mcp_tools::Tools::new(None)).context("rimz mcp serve")
         }
         McpSubcmd::Tools { only, json } => {
             let wording = Wording::read_home();

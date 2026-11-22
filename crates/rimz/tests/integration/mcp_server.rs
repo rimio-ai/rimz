@@ -1,5 +1,5 @@
 //! `rimz mcp serve` integration tests: the stdio protocol a provider speaks to
-//! a spawned server, and the `rimz` one-shots its tool calls run.
+//! a spawned server, and the tool calls it runs in its own process.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
@@ -159,6 +159,12 @@ impl McpServer {
         tool_result(&self.reply(&json!(id)))
     }
 
+    /// A tool call's answer, read as `tool_answer` reads it.
+    fn answer(&mut self, id: i64, tool: &str, arguments: Value) -> (Value, bool) {
+        self.start_call(id, tool, arguments);
+        tool_answer(tool, &self.reply(&json!(id)))
+    }
+
     fn assert_silent_for(&mut self, wait: Duration) {
         if let Some(line) = self.next_line(Instant::now() + wait) {
             panic!("unexpected output: {line}");
@@ -205,6 +211,81 @@ fn tool_result(reply: &Value) -> (String, bool) {
         .unwrap_or_else(|| panic!("text content: {reply}"))
         .to_owned();
     (text, result["isError"] == json!(true))
+}
+
+/// A tool call's answer and whether it is a failure: the structured value of a
+/// data answer or a failure, which its text item repeats as JSON, or a text
+/// answer's text as a string. A data answer fits the output schema its tool
+/// lists, and a failure names its error.
+fn tool_answer(tool: &str, reply: &Value) -> (Value, bool) {
+    let (text, is_error) = tool_result(reply);
+    let schema = rimz::mcp::catalog::TOOLS
+        .iter()
+        .find(|entry| entry.name == tool)
+        .and_then(rimz::mcp::catalog::Tool::output_schema);
+    let Some(structured) = reply["result"].get("structuredContent") else {
+        assert!(!is_error, "a failure carries structured content: {reply}");
+        assert!(schema.is_none(), "{tool} lists an output schema: {reply}");
+        return (Value::String(text), false);
+    };
+    let parsed: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|err| panic!("the text item is the structured JSON ({err}): {reply}"));
+    assert_eq!(&parsed, structured, "{reply}");
+    if is_error {
+        assert!(structured["error"].is_string(), "{reply}");
+        return (parsed, true);
+    }
+    let schema =
+        schema.unwrap_or_else(|| panic!("{tool} answers data without an output schema: {reply}"));
+    assert_fits(&schema, &parsed, tool);
+    for key in parsed
+        .as_object()
+        .into_iter()
+        .flat_map(serde_json::Map::keys)
+    {
+        assert!(
+            schema["properties"].get(key).is_some(),
+            "{tool}'s output schema lacks {key}: {reply}"
+        );
+    }
+    (parsed, false)
+}
+
+/// `value` fits `schema` in the keywords the catalog's output schemas use:
+/// `type`, `required`, `properties`, and `items`.
+fn assert_fits(schema: &Value, value: &Value, at: &str) {
+    let kind = match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(number) if number.is_i64() || number.is_u64() => "integer",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    };
+    let fits = |expected: &Value| expected == kind || (expected == "number" && kind == "integer");
+    match &schema["type"] {
+        Value::Null => {}
+        Value::Array(kinds) => assert!(kinds.iter().any(fits), "{at}: {value} is not {schema}"),
+        expected => assert!(fits(expected), "{at}: {value} is not {expected}"),
+    }
+    for key in schema["required"].as_array().into_iter().flatten() {
+        let key = key.as_str().unwrap();
+        assert!(value.get(key).is_some(), "{at}: {value} lacks {key}");
+    }
+    if let (Some(properties), Some(object)) = (schema["properties"].as_object(), value.as_object())
+    {
+        for (key, property) in properties {
+            if let Some(field) = object.get(key) {
+                assert_fits(property, field, &format!("{at}.{key}"));
+            }
+        }
+    }
+    if let Some(items) = value.as_array().filter(|_| schema.get("items").is_some()) {
+        for item in items {
+            assert_fits(&schema["items"], item, &format!("{at}[]"));
+        }
+    }
 }
 
 fn serve(env: &Env, args: &[&str]) -> McpServer {
@@ -635,17 +716,24 @@ fn guide_answers_a_served_guide_and_lists_the_served_guides_for_any_other() {
         Wording::built_in().guide(&[Capability::Wait], "rimz-wait/conditions")
     );
     for (id, name) in [(3, "rimz-wait/none"), (4, "rimz-lsp/conditions")] {
-        let (text, is_error) = server.call(id, "guide", json!({"name": name}));
-        assert!(is_error, "{text}");
+        let (failure, is_error) = server.answer(id, "guide", json!({"name": name}));
+        assert!(is_error, "{failure}");
         assert_eq!(
-            text,
-            format!("no guide {name:?}; this launch has: rimz-wait/conditions"),
+            failure,
+            json!({
+                "error": format!("no guide {name:?}"),
+                "hint": "this launch has: rimz-wait/conditions",
+            }),
         );
     }
-    let (text, is_error) = server.call(5, "guide", json!({}));
+    let (failure, is_error) = server.answer(5, "guide", json!({}));
     assert!(
-        is_error && text.starts_with("invalid arguments: "),
-        "{text}"
+        is_error
+            && failure["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("invalid arguments: "),
+        "{failure}"
     );
     let (status, lines) = server.close();
     assert_eq!(status.code(), Some(0), "{status:?}");
@@ -823,16 +911,16 @@ fn signals_end_the_server_cleanly() {
     }
 }
 
-/// The body crosses as bytes on the one-shot's stdin, the title and an LSP
-/// target that begin with `--` stay data, and the one-shot's stderr comes back
-/// in the result rather than on the server's stdout.
+/// The body, a title and an LSP target that begin with `--`, and the meta
+/// keys stay data; a warning the command would print is a field of the answer,
+/// and a call that cannot do its job answers a failure naming why.
 #[test]
 fn notes_add_keeps_the_body_bytes_and_the_server_keeps_parsing() {
     let env = Env::new();
     let mut server = serve(&env, &[]);
     server.initialize();
     let body = "say \"hi\" and 'bye'\n$(touch pwned) `id`\n\n\\n not a newline\n";
-    let (text, is_error) = server.call(
+    let (added, is_error) = server.answer(
         1,
         "notes_add",
         json!({
@@ -842,13 +930,9 @@ fn notes_add_keeps_the_body_bytes_and_the_server_keeps_parsing() {
             "meta": {"author": "mallory", "ticket": "42"},
         }),
     );
-    assert!(!is_error, "{text}");
-    let label = text.find("\nstderr:\n").unwrap_or_else(|| panic!("{text}"));
-    let warning = text
-        .find("--meta author dropped: RimZ writes that header key itself")
-        .unwrap_or_else(|| panic!("the one-shot's stderr is in the result: {text}"));
-    assert!(label < warning, "stderr follows its label: {text}");
-    let path = std::path::PathBuf::from(text.lines().next().expect("the note's path"));
+    assert!(!is_error, "{added}");
+    assert_eq!(added["dropped_meta"], json!(["author"]), "{added}");
+    let path = std::path::PathBuf::from(added["path"].as_str().expect("the note's path"));
     let note = std::fs::read_to_string(&path).expect("read note");
     assert!(note.ends_with(&format!("\n---\n{body}")), "{note}");
     assert!(note.contains("title: \"--force\"\n"), "{note}");
@@ -856,38 +940,37 @@ fn notes_add_keeps_the_body_bytes_and_the_server_keeps_parsing() {
     assert!(!env.project_root.join("pwned").exists());
     assert_eq!(server.request(2, "ping", json!({}))["result"], json!({}));
 
-    let (text, is_error) = server.call(3, "notes_add", json!({"kind": "log", "title": 7}));
-    assert!(is_error, "{text}");
-    let (text, is_error) = server.call(
+    let (failure, is_error) = server.answer(3, "notes_add", json!({"kind": "log", "title": 7}));
+    assert!(is_error, "{failure}");
+    assert!(
+        failure["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("invalid arguments: "),
+        "{failure}"
+    );
+    let (failure, is_error) = server.answer(
         4,
         "lsp",
         json!({"verb": "find", "targets": ["x"], "cwd": "/no/such/dir"}),
     );
-    assert!(is_error, "{text}");
+    assert!(is_error, "{failure}");
     assert_eq!(notes_written(&env), [path]);
 
-    let (text, is_error) = server.call(5, "lsp", json!({"verb": "find", "targets": ["--help"]}));
-    assert!(!text.contains("Usage:"), "{text}");
-    assert!(!text.contains("unexpected argument"), "{text}");
-    assert!(is_error, "{text}");
-    let label = text
-        .lines()
-        .position(|line| line == "stderr:")
-        .unwrap_or_else(|| panic!("{text}"));
-    let reason = text
-        .lines()
-        .position(|line| line.contains("no language server"))
-        .unwrap_or_else(|| panic!("{text}"));
-    assert!(label < reason, "stderr follows its label: {text}");
-    assert_eq!(text.lines().last(), Some("exit code 3"), "{text}");
+    let (failure, is_error) =
+        server.answer(5, "lsp", json!({"verb": "find", "targets": ["--help"]}));
+    assert!(is_error, "{failure}");
+    let error = failure["error"].as_str().unwrap();
+    assert!(error.contains("no language server"), "{failure}");
+    assert!(!error.contains("Usage:"), "{failure}");
 
-    let (text, is_error) = server.call(6, "wait", json!({"trigger": "pid", "value": "one"}));
-    assert!(is_error, "{text}");
-    let usage = text
-        .find("stderr:\nerror: invalid value 'one' for '--pid <PID>'")
-        .unwrap_or_else(|| panic!("the CLI's usage error under stderr: {text}"));
-    assert!(!text[..usage].contains("invalid arguments"), "{text}");
-    assert_eq!(text.lines().last(), Some("exit code 2"), "{text}");
+    let (failure, is_error) = server.answer(6, "wait", json!({"trigger": "pid", "value": "one"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure["error"],
+        json!("invalid pid `one`: a process id from 1 to 2147483647"),
+        "{failure}"
+    );
 
     let (_, lines) = server.close();
     assert_protocol_lines(&lines);
@@ -902,28 +985,174 @@ fn a_call_as_an_agent_resolves_its_home_room_and_caller() {
     crate::common::wait::register_calling_agent(&env);
     let mut server = serve_as_agent(&env);
     server.initialize();
-    let (text, is_error) = server.call(
+    let (start, is_error) = server.answer(
         1,
         "wait",
         json!({"trigger": "in", "value": "1h", "label": "via mcp"}),
     );
-    assert!(!is_error, "{text}");
-    let (text, is_error) = server.call(2, "wait_list", json!({}));
-    assert!(!is_error, "{text}");
-    assert!(text.contains("via mcp"), "{text}");
-    let (text, is_error) = server.call(
+    assert!(!is_error, "{start}");
+    let (waits, is_error) = server.answer(2, "wait_list", json!({}));
+    assert!(!is_error, "{waits}");
+    let rows = waits["waits"].as_array().expect("the wait rows");
+    let [row] = rows.as_slice() else {
+        panic!("one wait: {waits}");
+    };
+    assert!(row.to_string().contains("via mcp"), "{waits}");
+    let name = row["name"].as_str().expect("the wait's name");
+    assert_eq!(
+        start,
+        json!({
+            "id": format!("wait:{name}"),
+            "status": "running",
+            "stop": format!("wait_cancel({{name: \"{name}\"}})"),
+            "report": "a message to you when the wait fires",
+        })
+    );
+    let (added, is_error) = server.answer(
         3,
         "notes_add",
         json!({"kind": "diary", "title": "Day", "body": "text\n"}),
     );
-    assert!(!is_error, "{text}");
-    let note = std::fs::read_to_string(text.lines().next().unwrap()).expect("read note");
+    assert!(!is_error, "{added}");
+    let path = added["path"].as_str().unwrap();
+    let note = std::fs::read_to_string(path).expect("read note");
     assert!(note.contains("author: \"planner\"\n"), "{note}");
     assert!(
-        note.starts_with(&env.rimz_home().display().to_string())
-            || text.starts_with(&env.rimz_home().display().to_string()),
-        "{text}"
+        path.starts_with(&env.rimz_home().display().to_string()),
+        "{path}"
     );
+}
+
+/// A `wait` label is one line of 1 to 60 characters, trimmed, as `rimz wait
+/// --label` takes it: any other label fails the call and arms nothing.
+#[test]
+fn a_wait_label_is_one_trimmed_line_as_the_command_takes_it() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let long = "x".repeat(61);
+    for (id, label) in [(1, "first\nsecond"), (2, long.as_str()), (3, "   ")] {
+        let (failure, is_error) = server.answer(
+            id,
+            "wait",
+            json!({"trigger": "in", "value": "1h", "label": label}),
+        );
+        assert!(is_error, "{failure}");
+        assert_eq!(
+            failure["error"],
+            json!(format!(
+                "invalid label {label:?}: label must be one line of 1 to 60 characters"
+            )),
+            "{failure}"
+        );
+    }
+    let (waits, _) = server.answer(4, "wait_list", json!({}));
+    assert_eq!(waits["waits"], json!([]), "a refused label arms nothing");
+    let (start, is_error) = server.answer(
+        5,
+        "wait",
+        json!({"trigger": "in", "value": "1h", "label": "  fix it  "}),
+    );
+    assert!(!is_error, "{start}");
+    let (waits, _) = server.answer(6, "wait_list", json!({}));
+    assert_eq!(waits["waits"][0]["label"], json!("fix it"), "{waits}");
+}
+
+/// A booked `self_stop` answers what holds the stop, as the command's receipt
+/// prints it; the control and wait tools answer data for the inputs the
+/// command's flags took (`off`, a tuned value, `all`).
+#[test]
+fn self_stop_answers_what_holds_it_and_control_calls_answer_data() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (start, is_error) = server.answer(1, "wait", json!({"trigger": "in", "value": "2h"}));
+    assert!(!is_error, "{start}");
+    let name = start["id"].as_str().unwrap().trim_start_matches("wait:");
+    let (booked, is_error) = server.answer(2, "self_stop", json!({}));
+    assert!(!is_error, "{booked}");
+    assert_eq!(booked["booking"], json!("booked"), "{booked}");
+    assert_eq!(booked["after_secs"], json!(180), "{booked}");
+    let holding = booked["started"]["holding"]
+        .as_array()
+        .unwrap_or_else(|| panic!("what holds the stop: {booked}"));
+    assert!(
+        holding
+            .iter()
+            .any(|row| row["name"].as_str().is_some_and(|row| row.contains(name))),
+        "the wait {name} holds the stop: {booked}"
+    );
+    let (withdrawn, is_error) = server.answer(3, "self_stop", json!({"when_idle": "off"}));
+    assert!(!is_error, "{withdrawn}");
+    assert_eq!(withdrawn, json!({"booking": "withdrawn"}));
+    let (tuned, is_error) = server.answer(
+        4,
+        "self_tune",
+        json!({"setting": "keep-warm", "value": "2h"}),
+    );
+    assert!(!is_error, "{tuned}");
+    let (canceled, is_error) = server.answer(5, "wait_cancel", json!({"all": true}));
+    assert!(!is_error, "{canceled}");
+    assert_eq!(canceled["canceled"], json!([name]), "{canceled}");
+    let (listed, is_error) = server.answer(6, "notes_list", json!({}));
+    assert!(!is_error, "{listed}");
+}
+
+/// `lsp show` on one target that shows no code fails the call, as `query` and
+/// `check` do; several targets stay text.
+#[test]
+fn lsp_show_on_one_target_that_fails_is_a_failure() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.project_root.join("src")).unwrap();
+    std::fs::write(env.project_root.join("src/x.rs"), "fn x() {}\n").unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&env.project_root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut server = serve(&env, &[]);
+    server.initialize();
+    let cwd = &env.project_root;
+    let (failure, is_error) = server.answer(
+        1,
+        "lsp",
+        json!({"verb": "show", "targets": ["src/x.rs::Missing"], "cwd": cwd}),
+    );
+    assert!(is_error, "{failure}");
+    assert!(
+        failure["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("src/x.rs::Missing  "),
+        "{failure}"
+    );
+    let (missing, is_error) = server.answer(
+        2,
+        "lsp",
+        json!({"verb": "show", "targets": ["src/none.rs:1"], "cwd": cwd}),
+    );
+    assert!(is_error, "{missing}");
+    assert!(
+        missing["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("src/none.rs:1  missing-path  "),
+        "{missing}"
+    );
+    let (several, is_error) = server.answer(
+        3,
+        "lsp",
+        json!({"verb": "show", "targets": ["src/x.rs::Missing", "src/x.rs:1"], "cwd": cwd}),
+    );
+    assert!(!is_error, "{several}");
+    assert!(several.as_str().unwrap().contains("fn x() {}"), "{several}");
 }
 
 /// `rimz agents explain <profile> --mcps` shows what each launch hands over:
@@ -1424,22 +1653,22 @@ fn a_call_under_the_codex_entrys_env_vars_resolves_the_same_agent() {
     command.env_clear().envs(kept);
     let mut server = McpServer::spawn(command);
     server.initialize();
-    let (text, is_error) = server.call(
+    let (start, is_error) = server.answer(
         1,
         "wait",
         json!({"trigger": "in", "value": "1h", "label": "cleared"}),
     );
-    assert!(!is_error, "{text}");
-    let (text, is_error) = server.call(2, "wait_list", json!({}));
-    assert!(!is_error, "{text}");
-    assert!(text.contains("cleared"), "{text}");
-    let (text, is_error) = server.call(
+    assert!(!is_error, "{start}");
+    let (waits, is_error) = server.answer(2, "wait_list", json!({}));
+    assert!(!is_error, "{waits}");
+    assert!(waits.to_string().contains("cleared"), "{waits}");
+    let (added, is_error) = server.answer(
         3,
         "notes_add",
         json!({"kind": "diary", "title": "Day", "body": "text\n"}),
     );
-    assert!(!is_error, "{text}");
-    let note = std::fs::read_to_string(text.lines().next().unwrap()).expect("read note");
+    assert!(!is_error, "{added}");
+    let note = std::fs::read_to_string(added["path"].as_str().unwrap()).expect("read note");
     assert!(note.contains("author: \"planner\"\n"), "{note}");
 }
 
@@ -1456,7 +1685,7 @@ fn serve_under_parent(env: &Env, own: &[(&str, &std::path::Path)]) -> McpServer 
             None => shell.env_remove(key),
         };
     }
-    // A one-shot without a home falls back under `TMPDIR`: keep it in the fixture.
+    // A server without a home falls back under `TMPDIR`: keep it in the fixture.
     let tmp = env.home_root.join("own-tmp");
     let own: Vec<String> = [("TMPDIR", tmp.as_path())]
         .iter()
@@ -1476,16 +1705,16 @@ fn serve_under_parent(env: &Env, own: &[(&str, &std::path::Path)]) -> McpServer 
 
 #[cfg(unix)]
 fn note_home(server: &mut McpServer, id: i64) -> String {
-    let (text, is_error) = server.call(
+    let (added, is_error) = server.answer(
         id,
         "notes_add",
         json!({"kind": "diary", "title": format!("Day {id}"), "body": "text\n"}),
     );
-    assert!(!is_error, "{text}");
-    text.lines().next().expect("the note's path").to_owned()
+    assert!(!is_error, "{added}");
+    added["path"].as_str().expect("the note's path").to_owned()
 }
 
-/// A one-shot sees what only the parent's environment holds (the fixture's
+/// A call sees what only the parent's environment holds (the fixture's
 /// `RIMZ_HOME`), while a name the server's own environment holds keeps the
 /// server's value.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1510,7 +1739,7 @@ fn parent_env_fills_the_names_the_servers_own_environment_lacks() {
 
 /// A server started, as Codex starts it, without the fixture's `RIMZ_HOME`
 /// or `HOME` reads its wording from the home its parent names, as its
-/// one-shots resolve it.
+/// calls resolve it.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn parent_env_names_the_home_the_wording_is_read_from() {
@@ -1542,8 +1771,8 @@ fn parent_env_names_the_home_the_wording_is_read_from() {
     );
 }
 
-/// The watcher a `rimz wait` one-shot detached outlives the provider ending
-/// the server's whole process group.
+/// The watcher a wait detached outlives the provider ending the server's
+/// whole process group.
 #[cfg(unix)]
 #[test]
 fn a_wait_armed_through_the_server_fires_after_its_group_is_terminated() {
@@ -1589,56 +1818,146 @@ fn a_wait_armed_through_the_server_fires_after_its_group_is_terminated() {
     );
 }
 
-/// Calls run concurrently, so a later call may answer first, and a cancel
-/// kills that call's one-shot and withholds its reply.
+/// A git checkout under the fixture holding a FIFO, `held.md`, that blocks a
+/// reader until `HeldFifo::release`.
+#[cfg(target_os = "linux")]
+fn checkout_with_fifo(env: &Env, name: &str) -> std::path::PathBuf {
+    let dir = env.home_root.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let status = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&dir)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    nix::unistd::mkfifo(&dir.join("held.md"), nix::sys::stat::Mode::S_IRWXU).unwrap();
+    dir
+}
+
+/// The write end of a checkout's FIFO, opened once a reader blocks in it.
+#[cfg(target_os = "linux")]
+struct HeldFifo(std::fs::File);
+
+#[cfg(target_os = "linux")]
+impl HeldFifo {
+    /// Open the FIFO's write end as soon as a reader holds its read end, which
+    /// leaves that reader blocked until `release`.
+    fn when_read(checkout: &std::path::Path) -> Self {
+        use std::os::unix::fs::OpenOptionsExt;
+        let deadline = Instant::now() + REPLY_DEADLINE;
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(nix::libc::O_NONBLOCK)
+                .open(checkout.join("held.md"))
+            {
+                Ok(file) => return Self(file),
+                Err(err) if err.raw_os_error() == Some(nix::libc::ENXIO) => {
+                    assert!(Instant::now() < deadline, "no call read the FIFO");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(err) => panic!("open the FIFO: {err}"),
+            }
+        }
+    }
+
+    fn release(mut self, text: &str) {
+        self.0.write_all(text.as_bytes()).unwrap();
+    }
+}
+
+/// Every child process of `pid`, from each of its threads.
+#[cfg(target_os = "linux")]
+fn children(pid: u32) -> Vec<String> {
+    std::fs::read_dir(format!("/proc/{pid}/task"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|task| std::fs::read_to_string(task.path().join("children")).ok())
+        .flat_map(|children| {
+            children
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Two overlapping calls with their own `cwd` each act on their own checkout,
+/// a later call answers while an earlier one still runs, and neither starts a
+/// process: the first blocks reading a FIFO in its checkout while the second
+/// checks a note in another.
 #[cfg(target_os = "linux")]
 #[test]
-fn calls_run_concurrently_and_a_cancel_kills_its_one_shot() {
+fn overlapping_calls_act_on_their_own_checkouts_inside_the_server() {
     let env = Env::new();
-    let fifo = env.home_root.join("mcp-body-fifo-5b1e");
-    nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
-    let marker = fifo.to_str().unwrap().to_owned();
-    let one_shots = || -> Vec<u32> {
-        std::fs::read_dir("/proc")
+    let first = checkout_with_fifo(&env, "first-5b1e");
+    let second = env.home_root.join("second-5b1e");
+    std::fs::create_dir_all(&second).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&second)
+            .status()
             .unwrap()
-            .filter_map(Result::ok)
-            .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
-            .filter(|pid| {
-                std::fs::read(format!("/proc/{pid}/cmdline"))
-                    .is_ok_and(|cmdline| String::from_utf8_lossy(&cmdline).contains(&marker))
-            })
-            .collect()
-    };
-
+            .success()
+    );
+    std::fs::write(second.join("free.md"), "see `src/gone.rs::Gone`\n").unwrap();
     let mut server = serve(&env, &[]);
     server.initialize();
     server.start_call(
         1,
-        "notes_add",
-        json!({"kind": "log", "title": "Blocked", "file": marker}),
+        "lsp",
+        json!({"verb": "check", "targets": ["held.md"], "cwd": first}),
     );
-    let deadline = Instant::now() + REPLY_DEADLINE;
-    while one_shots().is_empty() {
-        assert!(
-            Instant::now() < deadline,
-            "the blocked one-shot never started"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let (text, is_error) = server.call(2, "notes_list", json!({}));
+    let held = HeldFifo::when_read(&first);
+    let (text, is_error) = server.answer(
+        2,
+        "lsp",
+        json!({"verb": "check", "targets": ["free.md"], "cwd": second}),
+    );
     assert!(!is_error, "{text}");
+    let text = text.as_str().unwrap();
+    assert!(
+        text.contains("free.md:1  missing-path  src/gone.rs::Gone"),
+        "{text}"
+    );
     assert!(server.unclaimed.is_empty(), "{:?}", server.unclaimed);
+    assert_eq!(children(server.pid()), Vec::<String>::new());
 
+    held.release("see `src/held.rs::Held`\n");
+    let (text, is_error) = tool_answer("lsp", &server.reply(&json!(1)));
+    assert!(!is_error, "{text}");
+    assert!(
+        text.as_str()
+            .unwrap()
+            .contains("held.md:1  missing-path  src/held.rs::Held"),
+        "{text}"
+    );
+}
+
+/// A cancelled call gets no reply, even once its work ends, and the server
+/// keeps answering.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_cancelled_call_gets_no_reply_and_the_server_keeps_answering() {
+    let env = Env::new();
+    let checkout = checkout_with_fifo(&env, "cancelled-5b1e");
+    let mut server = serve(&env, &[]);
+    server.initialize();
+    server.start_call(
+        1,
+        "lsp",
+        json!({"verb": "check", "targets": ["held.md"], "cwd": checkout}),
+    );
+    let held = HeldFifo::when_read(&checkout);
     server.send(&json!({
         "jsonrpc": "2.0",
         "method": "notifications/cancelled",
         "params": {"requestId": 1, "reason": "test"},
     }));
-    let deadline = Instant::now() + REPLY_DEADLINE;
-    while !one_shots().is_empty() {
-        assert!(Instant::now() < deadline, "the cancelled one-shot lives on");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    assert_eq!(server.request(2, "ping", json!({}))["result"], json!({}));
+    held.release("no anchors\n");
+    server.assert_silent_for(Duration::from_secs(2));
     assert_eq!(server.request(3, "ping", json!({}))["result"], json!({}));
     let (status, lines) = server.close();
     assert_eq!(status.code(), Some(0));

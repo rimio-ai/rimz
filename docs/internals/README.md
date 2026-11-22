@@ -66,7 +66,7 @@ Each of these subsystems is one page at the top of `docs/internals/`.
 | [web.md](./web.md) | Browser access: the writable and broadcast daemons, the token gate, room attach and the session picker, sharing a room, the token store, the browser client, configuration, remote rooms, and the security boundaries. |
 | [stats.md](./stats.md) | The `rimz stats` surfaces (one-shot report, held dashboard, JSON): where the figures come from, windows, the heatmap, breakdowns, insights, terminal fitting, and the assist rollup. |
 | [lsp.md](./lsp.md) | Shared language servers: lifecycle and stop reasons, memory pressure, learned cost, the broker, freshness, editors, state and query usage, configuration, what agents see, the query surface, anchor checks, and the status commands. |
-| [mcp.md](./mcp.md) | The MCP server: the thin front over `rimz` one-shots, the tool catalog and its argument schemas, argv that keeps agent strings as data, the serve loop, cancellation, and shutdown. |
+| [mcp.md](./mcp.md) | The MCP server: tool calls run in the server's process through its runner, the tool catalog with its argument and output schemas, the serve loop and what a call answers, panic isolation, cancellation, `--parent-env`, and shutdown. |
 
 ## Debugging and performance
 

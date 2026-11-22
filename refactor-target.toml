@@ -55,6 +55,7 @@ layers = [
     "uninstall",
     "daemon_content",
     "launcher",
+    "mcp_tools",
 ],
     [
     "bin",
@@ -158,7 +159,8 @@ path = "crates/rimz/src/lsp"
 # query::json_targets annotates JSON answers with the positions the text prints (+1).
 # lsp::invoke carries the query, check, and show verbs out of the CLI handler
 # so the MCP server can run them in-process.
-surface-budget = 121
+# invoke::Shown tells the MCP server which one-anchor show failed (+1).
+surface-budget = 122
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -2500,7 +2502,9 @@ path = "crates/rimz/src/harness"
 # Booking a soft stop (`stop_booking`) and retuning a session (`tune`) return values the CLI
 # and the MCP server present (+7).
 # The tune budget report and its handle move from the CLI so the MCP self_tune tool answers it (+4).
-surface-budget = 1330
+# The idle-rest parser and default, and the notes list default and filter help, move from the CLI so the MCP tools share them (+7).
+# The task label rule moves from the CLI so the MCP wait tool holds it too (+1).
+surface-budget = 1338
 
 [[verdict]]
 kind = "item"
@@ -2951,7 +2955,8 @@ path = "crates/rimz/src/lib.rs"
 # The library launcher owns checkout creation (+1).
 # The packs module shares Git and linked sources below config and skill consumers (+1).
 # command_is_launch_chrome lets the CLI's clap inventory pin the shared classifier (+1).
-surface-budget = 74
+# `mcp_tools` runs the MCP tool calls in the server's process (+1).
+surface-budget = 75
 
 [[module]]
 path = "crates/rimz/src/launcher"
@@ -2967,7 +2972,8 @@ path = "crates/rimz/src/launcher"
 # worktree_entry::occupancy_protections keeps landing separate from removal's workflow pins (+1).
 # agent_pane::open_writer hands the commands that type the writer of the pane the lookup answers (+1).
 # trust::TrustRefusal with detail and clearable, and trust::workflow_start_problems (+4).
-surface-budget = 106
+# `@me` resolution and its refusal move from the CLI so the MCP self tools resolve the caller (+2).
+surface-budget = 108
 
 [[verdict]]
 kind = "item"
