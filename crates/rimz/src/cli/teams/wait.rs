@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 use serde::Serialize;
@@ -11,21 +11,13 @@ use serde::Serialize;
 use super::super::{Ctx, GlobalFlags, render};
 use super::WaitArgs;
 use crate::cli::render::announce::{MESSAGE_STOP_EXIT, write_message_stop};
-use rimz::harness::scratch::{BoardStage, board_section, board_stage};
+use rimz::harness::scratch::board_section;
+use rimz::launcher::team_join::{self, Joined, Polled, Progress, Seen, TeamTarget as Target};
 use rimz::message::announce::WaitCaller;
 use rimz::store::run::RunStatus;
 use rimz::utils::path::normalize_path_lexical;
 
-const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const ENDED_BEFORE_DONE: &str = "cohort ended before Done";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Progress {
-    stage: Option<String>,
-    owner: Option<String>,
-    owner_live: Option<bool>,
-    needs_you: Vec<(String, rimz::agents::AgentStatus)>,
-}
 
 fn diagnostic_line(
     instance: &str,
@@ -116,7 +108,7 @@ impl Unfinished {
 
     /// The entry of a cohort still pending when the wait stops.
     fn entry(&self, target: &Target) -> EntryJson {
-        let mut entry = target.entry();
+        let mut entry = entry(target);
         if target.outcome.is_none()
             && let Self::Message = self
         {
@@ -127,39 +119,21 @@ impl Unfinished {
     }
 }
 
-struct Target {
-    cohort: rimz::ids::TeamInstanceId,
-    worktree: PathBuf,
-    stage: Option<String>,
-    progress: Option<Progress>,
-    outcome: Option<RunStatus>,
+fn instance(target: &Target) -> String {
+    target.cohort.to_string()
 }
 
-impl Target {
-    fn instance(&self) -> String {
-        self.cohort.to_string()
-    }
-
-    fn board(&self) -> PathBuf {
-        rimz::harness::scratch::board_path(&self.worktree)
-    }
-
-    fn status(&self) -> RunStatus {
-        self.outcome.unwrap_or(RunStatus::TimedOut)
-    }
-
-    fn entry(&self) -> EntryJson {
-        let status = self.status();
-        EntryJson {
-            status,
-            exit: status.exit_code(),
-            stage: self.stage.clone(),
-            board: self.board(),
-            result: (status == RunStatus::Completed)
-                .then(|| board_section(&self.worktree, "Result"))
-                .flatten(),
-            error: (status == RunStatus::Failed).then_some(ENDED_BEFORE_DONE),
-        }
+fn entry(target: &Target) -> EntryJson {
+    let status = target.status();
+    EntryJson {
+        status,
+        exit: status.exit_code(),
+        stage: target.stage.clone(),
+        board: rimz::harness::scratch::board_path(&target.worktree),
+        result: (status == RunStatus::Completed)
+            .then(|| board_section(&target.worktree, "Result"))
+            .flatten(),
+        error: (status == RunStatus::Failed).then_some(ENDED_BEFORE_DONE),
     }
 }
 
@@ -174,35 +148,6 @@ struct EntryJson {
     error: Option<&'static str>,
 }
 
-/// A target's last board stage and outcome at one poll: `Done` completes it,
-/// and anything else (a missing board included) stays pending while the cohort
-/// lives. A gone cohort fails only on a board read taken after the liveness
-/// check, so a flip to `Done` that races the members' exit still completes.
-fn settle(
-    mut read_board: impl FnMut() -> Option<BoardStage>,
-    cohort_live: impl FnOnce() -> Result<bool>,
-) -> Result<(Option<BoardStage>, Option<RunStatus>)> {
-    let is_done = |stage: &Option<BoardStage>| {
-        stage
-            .as_ref()
-            .is_some_and(|stage| stage.name == rimz::config::DONE_STAGE)
-    };
-    let stage = read_board();
-    if is_done(&stage) {
-        return Ok((stage, Some(RunStatus::Completed)));
-    }
-    if cohort_live()? {
-        return Ok((stage, None));
-    }
-    let stage = read_board();
-    let status = if is_done(&stage) {
-        RunStatus::Completed
-    } else {
-        RunStatus::Failed
-    };
-    Ok((stage, Some(status)))
-}
-
 pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     let mut caller = WaitCaller::starting_now();
     if args.worktree.is_some() && args.references.len() > 1 {
@@ -211,53 +156,73 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let mut targets = resolve_targets(&ctx, args.references, args.worktree, globals)?;
     let single = targets.len() == 1 && !args.any;
-    let started = Instant::now();
     let machine = crate::cli::machine_config();
-    loop {
-        let settled = poll(&ctx, &mut targets, &machine)?;
-        let selected = settled.first().copied();
-        if !args.json && !single {
-            let settled = if args.any {
-                &settled[..settled.len().min(1)]
-            } else {
-                &settled
-            };
-            for &index in settled {
-                print_block(&targets[index])?;
+    let joined = team_join::join(
+        &ctx.workspace,
+        &ctx.store,
+        &machine,
+        &mut targets,
+        args.any,
+        args.timeout,
+        &mut || caller.queued(&ctx.store, &ctx.workspace.session_name),
+        &mut |polled| match polled {
+            // A settling target's outcome follows at once, so it gets no progress line.
+            Polled::Seen(seen) if seen.outcome.is_none() => progress_line(&seen),
+            Polled::Seen(_) => Ok(()),
+            Polled::Settled { targets, settled } if !args.json && !single => {
+                let settled = if args.any {
+                    &settled[..settled.len().min(1)]
+                } else {
+                    settled
+                };
+                for &index in settled {
+                    print_block(&targets[index])?;
+                }
+                Ok(())
             }
-        }
-        let finished = match selected {
-            Some(index) if args.any => Some(targets[index].status()),
-            _ if targets.iter().all(|target| target.outcome.is_some()) => Some(
-                targets
-                    .iter()
-                    .map(Target::status)
-                    .find(|status| *status != RunStatus::Completed)
-                    .unwrap_or(RunStatus::Completed),
-            ),
-            _ => None,
-        };
-        if let Some(status) = finished {
-            let reported = match selected {
-                Some(index) if args.any => std::slice::from_ref(&targets[index]),
-                _ => &targets[..],
+            Polled::Settled { .. } => Ok(()),
+        },
+    )?;
+    match joined {
+        Joined::Finished { status, first } => {
+            let reported = match first {
+                Some(index) => std::slice::from_ref(&targets[index]),
+                None => &targets[..],
             };
             report_finished(reported, single, args.json)?;
             std::process::exit(status.exit_code());
         }
-        if let Some(announcement) = caller.queued(&ctx.store, &ctx.workspace.session_name) {
+        Joined::Interrupted(announcement) => {
             report_unfinished(&targets, single, args.json, &Unfinished::Message)?;
             write_message_stop(&mut render::err(), &announcement)?;
             std::process::exit(MESSAGE_STOP_EXIT);
         }
-        if let Some(timeout) = args.timeout
-            && started.elapsed() >= timeout
-        {
+        Joined::StillRunning => {
+            let timeout = args.timeout.unwrap_or_default();
             report_unfinished(&targets, single, args.json, &Unfinished::TimedOut(timeout))?;
             std::process::exit(RunStatus::TimedOut.exit_code());
         }
-        std::thread::sleep(POLL_INTERVAL);
     }
+}
+
+/// The stderr line for a pending cohort whose progress changed since the last poll.
+fn progress_line(seen: &Seen<'_>) -> Result<()> {
+    let state = seen.snapshot.zip(seen.members).map_or(
+        super::list::CohortState::Idle,
+        |(snapshot, cohort)| {
+            super::list::CohortState::for_cohort(snapshot, cohort, seen.statuses.iter().copied())
+        },
+    );
+    let state = super::show::state_with_age(state, seen.idle_since, seen.now);
+    if let Some(line) = diagnostic_line(
+        &instance(seen.target),
+        seen.target.progress.as_ref(),
+        seen.progress,
+        &state,
+    ) {
+        writeln!(render::err(), "{line}")?;
+    }
+    Ok(())
 }
 
 fn resolve_targets(
@@ -293,136 +258,16 @@ fn resolve_targets(
                     cohort.instance
                 );
             };
-            Ok(Target {
-                cohort: cohort.instance,
-                worktree,
-                stage: None,
-                progress: None,
-                outcome: None,
-            })
+            Ok(Target::new(cohort.instance, worktree))
         })
         .collect()
 }
 
-/// Settle every pending target that can settle now, returning their indices in
-/// argument order. The snapshot is read only when some board is not yet `Done`.
-fn poll(
-    ctx: &Ctx,
-    targets: &mut [Target],
-    machine: &rimz::config::MachineConfig,
-) -> Result<Vec<usize>> {
-    let mut snapshot = None;
-    let mut demotion = None;
-    let no_demotion = rimz::agents::ParkDemotion::default();
-    let mut settled = Vec::new();
-    for (index, target) in targets.iter_mut().enumerate() {
-        if target.outcome.is_some() {
-            continue;
-        }
-        let (stage, outcome) = settle(
-            || board_stage(&target.worktree),
-            || {
-                let snapshot = match &mut snapshot {
-                    Some(snapshot) => snapshot,
-                    None => snapshot.insert(ctx.published_snapshot()?),
-                };
-                Ok(rimz::address::team_cohorts(snapshot.agents.iter())
-                    .iter()
-                    .any(|cohort| cohort.instance == target.cohort))
-            },
-        )?;
-        let now = jiff::Timestamp::now();
-        let mut progress = Progress {
-            stage: stage.as_ref().map(|stage| stage.name.clone()),
-            owner: stage.as_ref().and_then(|stage| stage.owner.clone()),
-            owner_live: None,
-            needs_you: Vec::new(),
-        };
-        let mut statuses = Vec::new();
-        let mut idle_since = None;
-        let cohort = snapshot.as_ref().and_then(|snapshot| {
-            rimz::address::team_cohorts(snapshot.agents.iter())
-                .into_iter()
-                .find(|cohort| cohort.instance == target.cohort)
-        });
-        if let Some(snapshot) = &snapshot
-            && let Some(cohort) = &cohort
-        {
-            let peers = rimz::address::addressable_agents(snapshot);
-            progress.owner_live = progress.owner.as_deref().map(|owner| {
-                !rimz::address::role_holders(cohort.members.iter().copied(), owner).is_empty()
-            });
-            for agent in &cohort.members {
-                let row = snapshot
-                    .rows()
-                    .find(|row| row.is_agent() && row.id == agent.agent_id.as_str());
-                // Park demotion reads logins, capacity files, and the message queue,
-                // and only a member without a row status consults it.
-                let demotion = match row.and_then(|row| row.status()) {
-                    Some(_) => &no_demotion,
-                    None => &*demotion.get_or_insert_with(|| {
-                        rimz::harness::park_demotion(
-                            Some(&ctx.store),
-                            ctx.store.paths(),
-                            ctx.runtime(),
-                            machine,
-                            &snapshot.agents,
-                            snapshot.resume_outcomes.as_deref().unwrap_or_default(),
-                            now,
-                        )
-                    }),
-                };
-                let attention = rimz::store::snapshot::needs_you(agent, row, None, demotion, now);
-                let status = row
-                    .and_then(|row| row.status())
-                    .unwrap_or_else(|| agent.rowless_status(demotion, snapshot.now).0);
-                statuses.push(status);
-                idle_since =
-                    idle_since.max(Some(rimz::store::snapshot::agent_idle_since(agent, row)));
-                if let Some(attention) = attention {
-                    progress.needs_you.push((
-                        rimz::address::agent_handle(agent, &peers, false),
-                        attention.status,
-                    ));
-                }
-            }
-        }
-        progress
-            .needs_you
-            .sort_by(|left, right| left.0.cmp(&right.0));
-        let state = snapshot
-            .as_ref()
-            .zip(cohort.as_ref())
-            .map_or(super::list::CohortState::Idle, |(snapshot, cohort)| {
-                super::list::CohortState::for_cohort(snapshot, cohort, statuses)
-            });
-        let state = super::show::state_with_age(state, idle_since, now);
-        // A settling target's outcome follows at once, so it gets no progress line.
-        if outcome.is_none()
-            && let Some(line) = diagnostic_line(
-                &target.instance(),
-                target.progress.as_ref(),
-                &progress,
-                &state,
-            )
-        {
-            writeln!(render::err(), "{line}")?;
-        }
-        target.progress = Some(progress);
-        target.stage = stage.map(|stage| stage.name);
-        target.outcome = outcome;
-        if target.outcome.is_some() {
-            settled.push(index);
-        }
-    }
-    Ok(settled)
-}
-
 fn report_finished(targets: &[Target], single: bool, json: bool) -> Result<()> {
     match (single, json) {
-        (true, true) => render::json_pretty(&targets[0].entry()),
+        (true, true) => render::json_pretty(&entry(&targets[0])),
         (true, false) => print_outcome(&targets[0], &mut render::err()),
-        (false, true) => print_json(targets, Target::entry),
+        (false, true) => print_json(targets, entry),
         (false, false) => Ok(()),
     }
 }
@@ -440,7 +285,7 @@ fn report_unfinished(
             .progress
             .as_ref()
             .expect("polled target has progress");
-        writeln!(err, "{}", ending.line(&target.instance(), progress))?;
+        writeln!(err, "{}", ending.line(&instance(target), progress))?;
     }
     if json {
         return if single {
@@ -455,7 +300,7 @@ fn report_unfinished(
 fn print_json(targets: &[Target], entry: impl Fn(&Target) -> EntryJson) -> Result<()> {
     let entries = targets
         .iter()
-        .map(|target| (target.instance(), entry(target)))
+        .map(|target| (instance(target), entry(target)))
         .collect::<BTreeMap<_, _>>();
     render::json(&entries)
 }
@@ -476,7 +321,7 @@ fn print_block(target: &Target) -> Result<()> {
 
 /// The Result section on stdout, or the reason there is none on `err`.
 fn print_outcome(target: &Target, err: &mut impl Write) -> Result<()> {
-    let instance = target.instance();
+    let instance = instance(target);
     if target.status() == RunStatus::Failed {
         let stage = target.stage.as_deref().unwrap_or("no board");
         writeln!(
@@ -500,7 +345,7 @@ fn print_outcome(target: &Target, err: &mut impl Write) -> Result<()> {
 }
 
 fn write_header(out: &mut impl Write, target: &Target) -> Result<()> {
-    let instance = render::paint(render::palette::body(), &target.instance());
+    let instance = render::paint(render::palette::body(), &instance(target));
     let status = target.status();
     if status == RunStatus::Completed {
         writeln!(out, "--- {instance} ---")?;
@@ -573,54 +418,6 @@ mod tests {
         assert_eq!(
             timeout_line("forge#a", &progress(), Duration::from_secs(2)),
             "forge#a: timed out after 2s at Build (@coder); cohort left running"
-        );
-    }
-
-    fn settle_over(
-        boards: &[Option<&str>],
-        live: bool,
-    ) -> (Option<String>, Option<RunStatus>, usize) {
-        let mut reads = boards.iter().map(|board| {
-            board.map(|name| BoardStage {
-                name: name.to_owned(),
-                owner: None,
-            })
-        });
-        let mut count = 0;
-        let (last, status) = settle(
-            || {
-                count += 1;
-                reads.next().expect("no extra board read")
-            },
-            || Ok(live),
-        )
-        .expect("settle");
-        (last.map(|stage| stage.name), status, count)
-    }
-
-    #[test]
-    fn settle_completes_on_exact_done_and_fails_only_a_dissolved_cohort() {
-        for live in [true, false] {
-            assert_eq!(
-                settle_over(&[Some("Done")], live),
-                (Some("Done".into()), Some(RunStatus::Completed), 1)
-            );
-        }
-        for board in [None, Some("Review"), Some("Done (delta)")] {
-            let name = board.map(str::to_owned);
-            assert_eq!(settle_over(&[board], true), (name.clone(), None, 1));
-            assert_eq!(
-                settle_over(&[board, board], false),
-                (name, Some(RunStatus::Failed), 2)
-            );
-        }
-    }
-
-    #[test]
-    fn settle_rereads_the_board_before_failing_a_dissolved_cohort() {
-        assert_eq!(
-            settle_over(&[Some("Reflect"), Some("Done")], false),
-            (Some("Done".into()), Some(RunStatus::Completed), 2)
         );
     }
 }

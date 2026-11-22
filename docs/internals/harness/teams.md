@@ -18,6 +18,7 @@ A team is staged when it declares `stages` or any role `owns` a stage (`config::
 | `cli/agents_cmd/team_report.rs` | `on_flip` and `settle_ended_teams`: composing, queueing, and settling the `TEAM_REPORT` |
 | `cli/teams/board_context.rs` | Worktree and caller resolution shared by `flip` and `record` |
 | `cli/teams/list.rs`, `cli/teams/show.rs`, `cli/teams/wait.rs` | The board's CLI readers |
+| `launcher/team_join.rs` | The team join `rimz teams wait` renders: the board poll and its settle rule |
 
 ## The run archive
 
@@ -97,7 +98,7 @@ The board is `blackboard.md` in the run directory, reached as `<checkout>/.rimz/
 |---|---|
 | `teams list`, `teams show` (`cli/teams/list.rs`) | The stage and owner. The stage's age is the `at` of the newest `team.stage` flip in `stage_flips` for this instance whose destination is the board's stage. A flip rotated out of the active event log leaves the age unknown, and a hand edit back to a stage the cohort once flipped to shows that older flip's age. |
 | `CohortState::for_cohort` (`cli/teams/list.rs`) | Only `done` reads the board: a Success headline maps to `done` only when the unit's board is at `Done` (below) |
-| `rimz teams wait` (`cli/teams/wait.rs`) | `Done` settles the wait, and the `Result` section is the JSON `result` (below) |
+| `rimz teams wait` (`launcher/team_join.rs`) | `Done` settles the wait, and the `Result` section is the JSON `result` (below) |
 | The sidebar's pipeline line | `scratch::board_run` folds the ledger into run and stage times ([sidebar.md § Team units and pipelines](../sidebar/sidebar.md#team-units-and-pipelines)) |
 | The launcher's owed wake and `Team` pending wait | The stage of each open team run's worktree. `Done` ends both ([Launcher debt and the team wait](#launcher-debt-and-the-team-wait)) |
 | `scratch::holding_team` | Automatic worktree removal ([worktrees.md § Protection facts](./worktrees.md#protection-facts)) |

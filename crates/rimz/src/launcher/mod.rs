@@ -9,6 +9,7 @@ pub mod placement;
 mod reconcile;
 pub mod stop;
 mod supervised;
+pub mod team_join;
 pub mod workflow_host;
 use execute::{FreshLaunch, PreparedState, SettledLayout};
 pub use execute::{
