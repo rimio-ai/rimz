@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::ids::AgentKind;
 use crate::pane::ElevatedAgent;
+use crate::proc::StdioTerminal;
 use crate::proc::command::basename;
 
 /// Maximum process-tree depth walked below a pane root when looking for an
@@ -134,7 +135,8 @@ pub(crate) fn in_pane_agent_start_for_root(kind: &str, root_pid: u32) -> Option<
 /// when readable. RimZ walks only a single-child chain from the pane root:
 /// direct agent launches, shell-hosted agents, and wrapper-spawned subshells
 /// such as `chezmoi cd -> zsh -> codex` are unambiguous, while a branching
-/// process tree abstains.
+/// process tree abstains. A CLI whose stdio is proven off the terminal is an
+/// ordinary process here, as in [`hosted_agent_process_for_root`].
 pub fn in_pane_agent_process_for_root(kind: &str, root_pid: u32) -> Option<InPaneAgentProcess> {
     in_pane_agent_process_for_root_with(
         kind,
@@ -143,12 +145,14 @@ pub fn in_pane_agent_process_for_root(kind: &str, root_pid: u32) -> Option<InPan
         &crate::proc::children,
         &crate::proc::process_start,
         &crate::proc::cwd,
+        &crate::proc::stdio_terminal,
     )
 }
 
 /// The outermost known agent CLI hosted below a pane root. RimZ classifies the
-/// full command line at each node on one single-child walk, and abstains when
-/// the tree cannot prove one unambiguous live CLI.
+/// full command line at each node on one single-child walk, passes over a CLI
+/// whose stdio is proven off the terminal, and abstains when the tree cannot
+/// prove one unambiguous live CLI.
 pub fn hosted_agent_process_for_root(root_pid: u32) -> Option<HostedAgentProcess> {
     hosted_agent_process_for_root_with(
         root_pid,
@@ -156,19 +160,22 @@ pub fn hosted_agent_process_for_root(root_pid: u32) -> Option<HostedAgentProcess
         &crate::proc::children,
         &crate::proc::process_start,
         &crate::proc::cwd,
+        &crate::proc::stdio_terminal,
     )
 }
 
 /// Whether an agent of the requested kind is authoritatively absent below a pane root.
 /// This is stricter than [`in_pane_agent_process_for_root`]: unreadable or
 /// empty cmdlines, branching trees, and depth exhaustion are indeterminate, so they
-/// return `false` and keep callers on their transient-miss path.
+/// return `false` and keep callers on their transient-miss path. A matching CLI
+/// whose stdio is proven off the terminal is no match, so both walks agree on it.
 pub(crate) fn hosted_agent_absent_under_root(kind: &str, root_pid: u32) -> bool {
     hosted_agent_absent_under_root_with(
         kind,
         root_pid,
         &crate::proc::cmdline,
         &crate::proc::children,
+        &crate::proc::stdio_terminal,
     )
 }
 
@@ -179,6 +186,7 @@ fn in_pane_agent_process_for_root_with(
     children: &dyn Fn(u32) -> Vec<u32>,
     process_start: &dyn Fn(u32) -> Option<jiff::Timestamp>,
     cwd: &dyn Fn(u32) -> Option<PathBuf>,
+    stdio: &dyn Fn(u32) -> StdioTerminal,
 ) -> Option<InPaneAgentProcess> {
     if !in_pane_agent_probe_supported(kind) {
         return None;
@@ -193,6 +201,7 @@ fn in_pane_agent_process_for_root_with(
         children,
         process_start,
         cwd,
+        stdio,
     )
     .map(|process| InPaneAgentProcess {
         pid: process.pid,
@@ -207,6 +216,7 @@ fn hosted_agent_process_for_root_with(
     children: &dyn Fn(u32) -> Vec<u32>,
     process_start: &dyn Fn(u32) -> Option<jiff::Timestamp>,
     cwd: &dyn Fn(u32) -> Option<PathBuf>,
+    stdio: &dyn Fn(u32) -> StdioTerminal,
 ) -> Option<HostedAgentProcess> {
     pane_agent_process_for_root_with(
         root_pid,
@@ -217,9 +227,14 @@ fn hosted_agent_process_for_root_with(
         children,
         process_start,
         cwd,
+        stdio,
     )
 }
 
+/// The single-child walk both hosted-agent questions share. A node counts only
+/// when its command line classifies and its stdio is not proven off the terminal
+/// (see [`StdioTerminal`]): a CLI another command runs with piped or null stdio,
+/// such as a version probe, is an ordinary process the walk goes on past.
 fn pane_agent_process_for_root_with(
     root_pid: u32,
     classify: &dyn Fn(&str) -> Option<AgentKind>,
@@ -227,11 +242,14 @@ fn pane_agent_process_for_root_with(
     children: &dyn Fn(u32) -> Vec<u32>,
     process_start: &dyn Fn(u32) -> Option<jiff::Timestamp>,
     cwd: &dyn Fn(u32) -> Option<PathBuf>,
+    stdio: &dyn Fn(u32) -> StdioTerminal,
 ) -> Option<HostedAgentProcess> {
     let mut pid = root_pid;
     for _ in 0..=PANE_AGENT_DESCENT_DEPTH {
         let command = proven_cmdline(cmdline, pid)?;
-        if let Some(kind) = classify(&command) {
+        if let Some(kind) = classify(&command)
+            && stdio(pid) != StdioTerminal::NotTerminal
+        {
             return Some(HostedAgentProcess {
                 kind,
                 pid,
@@ -253,6 +271,7 @@ fn hosted_agent_absent_under_root_with(
     root_pid: u32,
     cmdline: &dyn Fn(u32) -> Option<String>,
     children: &dyn Fn(u32) -> Vec<u32>,
+    stdio: &dyn Fn(u32) -> StdioTerminal,
 ) -> bool {
     if !in_pane_agent_probe_supported(kind) {
         return false;
@@ -262,7 +281,8 @@ fn hosted_agent_absent_under_root_with(
         let Some(cmdline) = proven_cmdline(cmdline, pid) else {
             return false;
         };
-        if in_pane_agent_cmdline_matches(kind, &cmdline) {
+        if in_pane_agent_cmdline_matches(kind, &cmdline) && stdio(pid) != StdioTerminal::NotTerminal
+        {
             return false;
         }
         let children = children(pid);
@@ -298,6 +318,7 @@ fn in_pane_agent_probe_supported(kind: &str) -> bool {
 mod tests {
     use super::*;
 
+    use std::cell::RefCell;
     use std::collections::BTreeMap;
 
     #[test]
@@ -529,6 +550,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hosted_agent_is_a_cli_whose_stdio_is_not_proven_off_the_terminal() {
+        let start = timestamp("2026-11-22T06:00:00Z");
+        let probes = [
+            ("kimi", "kimi --version"),
+            ("qoder", "node /usr/local/bin/qodercli --version"),
+        ];
+        let outcomes = [
+            (StdioTerminal::Terminal, true),
+            (StdioTerminal::Unreadable, true),
+            (StdioTerminal::NotTerminal, false),
+        ];
+        for (kind, probe) in probes {
+            for (stdio, hosted) in outcomes {
+                let fixture = chain([(10, "zsh"), (20, "rimz hooks install"), (30, probe)])
+                    .live(30, start, None)
+                    .stdio(30, stdio);
+                let case = format!("{probe} with {stdio:?} stdio");
+                let found = fixture.hosted_agent(10);
+                assert_eq!(
+                    found
+                        .as_ref()
+                        .map(|process| (process.kind.as_str(), process.pid)),
+                    hosted.then_some((kind, 30)),
+                    "{case}"
+                );
+                assert_eq!(
+                    fixture.in_pane_agent(kind, 10).map(|process| process.pid),
+                    hosted.then_some(30),
+                    "{case}"
+                );
+                assert_eq!(fixture.hosted_absent(kind, 10), !hosted, "{case}");
+                assert_eq!(*fixture.stdio_asked.borrow(), [30, 30, 30], "{case}");
+            }
+        }
+    }
+
     fn timestamp(value: &str) -> jiff::Timestamp {
         value.parse().unwrap()
     }
@@ -545,10 +603,12 @@ mod tests {
         children: Vec<u32>,
         started_at: Option<jiff::Timestamp>,
         cwd: Option<PathBuf>,
+        stdio: Option<StdioTerminal>,
     }
 
     struct ProcFixture {
         nodes: BTreeMap<u32, ProcNode>,
+        stdio_asked: RefCell<Vec<u32>>,
     }
 
     impl ProcFixture {
@@ -570,7 +630,10 @@ mod tests {
             for pair in entries.windows(2) {
                 nodes.get_mut(&pair[0].0).unwrap().children.push(pair[1].0);
             }
-            Self { nodes }
+            Self {
+                nodes,
+                stdio_asked: RefCell::default(),
+            }
         }
 
         fn depth_bound() -> Self {
@@ -598,6 +661,11 @@ mod tests {
             self
         }
 
+        fn stdio(mut self, pid: u32, stdio: StdioTerminal) -> Self {
+            self.nodes.get_mut(&pid).unwrap().stdio = Some(stdio);
+            self
+        }
+
         fn branch(mut self, pid: u32, children: impl IntoIterator<Item = u32>) -> Self {
             self.nodes.get_mut(&pid).unwrap().children = children.into_iter().collect();
             self
@@ -620,6 +688,14 @@ mod tests {
                 .map_or_else(Vec::new, |node| node.children.clone())
         }
 
+        fn stdio_terminal(&self, pid: u32) -> StdioTerminal {
+            self.stdio_asked.borrow_mut().push(pid);
+            self.nodes
+                .get(&pid)
+                .and_then(|node| node.stdio)
+                .unwrap_or(StdioTerminal::Terminal)
+        }
+
         fn in_pane_agent(&self, kind: &str, root: u32) -> Option<InPaneAgentProcess> {
             in_pane_agent_process_for_root_with(
                 kind,
@@ -628,6 +704,7 @@ mod tests {
                 &|pid| self.children(pid),
                 &|pid| self.nodes.get(&pid)?.started_at,
                 &|pid| self.nodes.get(&pid)?.cwd.clone(),
+                &|pid| self.stdio_terminal(pid),
             )
         }
 
@@ -638,13 +715,18 @@ mod tests {
                 &|pid| self.children(pid),
                 &|pid| self.nodes.get(&pid)?.started_at,
                 &|pid| self.nodes.get(&pid)?.cwd.clone(),
+                &|pid| self.stdio_terminal(pid),
             )
         }
 
         fn hosted_absent(&self, kind: &str, root: u32) -> bool {
-            hosted_agent_absent_under_root_with(kind, root, &|pid| self.cmdline(pid), &|pid| {
-                self.children(pid)
-            })
+            hosted_agent_absent_under_root_with(
+                kind,
+                root,
+                &|pid| self.cmdline(pid),
+                &|pid| self.children(pid),
+                &|pid| self.stdio_terminal(pid),
+            )
         }
 
         fn elevated_agent(&self, root: u32, own_uid: u32) -> Option<ElevatedAgent> {
