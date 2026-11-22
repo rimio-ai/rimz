@@ -1910,6 +1910,38 @@ fn planner_error_recovery_and_tool_error_keep_existing_semantics() {
 }
 
 #[test]
+fn a_pending_tool_call_reads_running_and_its_native_prompt_reads_waiting() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = Path::new("/workspace/project");
+    let command = json_value(r#"[{"name":"run_command","args":{"CommandLine":"cargo test"}}]"#);
+    let local = state_after(
+        dir.path(),
+        workspace,
+        vec![planner_record(1, AT_10, Some(command))],
+    );
+    assert_eq!(
+        (local.status, local.phase),
+        (AgentStatus::Running, TurnPhase::Reasoning),
+        "a requested tool with no later row keeps the turn open"
+    );
+    let mut agent = crate::testkit::agent_state("antigravity", SESSION_ID, AT_10.parse().unwrap());
+    (agent.status, agent.phase) = (local.status, local.phase);
+    let now = AT_12.parse().unwrap();
+    assert_eq!(agent.effective_status(now), AgentStatus::Running);
+    agent.context = Some(
+        statusline_fixture(
+            &json!({"conversation_id": SESSION_ID, "tool_confirmation_pending": true}).to_string(),
+        )
+        .into_context("antigravity", AT_11.parse().unwrap()),
+    );
+    assert_eq!(
+        agent.effective_status(now),
+        AgentStatus::Waiting,
+        "a later native permission prompt raises the card"
+    );
+}
+
+#[test]
 fn transcript_questions_project_and_clear_native_waits() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = Path::new("/workspace/project");
@@ -1969,16 +2001,24 @@ fn transcript_questions_project_and_clear_native_waits() {
             )
         );
     }
-    for calls in [
-        r#""not-an-array""#,
-        r#"[{"name":"ask_question","args":{"questions":"not-json"}}]"#,
-        r#"[{"name":"ask_question","args":{"questions":[]}}]"#,
-        r#"[{"name":"another_tool","args":{"questions":[{"question":"ignored"}]}}]"#,
+    for (calls, expected) in [
+        (r#""not-an-array""#, (AgentStatus::Success, TurnPhase::Idle)),
+        (
+            r#"[{"name":"ask_question","args":{"questions":"not-json"}}]"#,
+            (AgentStatus::Running, TurnPhase::Reasoning),
+        ),
+        (
+            r#"[{"name":"ask_question","args":{"questions":[]}}]"#,
+            (AgentStatus::Running, TurnPhase::Reasoning),
+        ),
+        (
+            r#"[{"name":"another_tool","args":{"questions":[{"question":"ignored"}]}}]"#,
+            (AgentStatus::Running, TurnPhase::Reasoning),
+        ),
     ] {
         let ending = vec![planner_record(1, AT_10, Some(json_value(calls)))];
         let state = state_after(dir.path(), workspace, ending);
-        assert_eq!(state.status, AgentStatus::Success);
-        assert_eq!(state.phase, TurnPhase::Idle);
+        assert_eq!((state.status, state.phase), expected, "{calls}");
         assert!(state.native_prompt_detail.is_none() && state.waiting_since.is_none());
     }
 }
