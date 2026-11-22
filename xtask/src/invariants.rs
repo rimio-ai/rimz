@@ -41,7 +41,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_banned_imports(root, &files)?;
     ensure_classed_paths(root, &files)?;
     ensure_thin_park_image(root)?;
-    ensure_thin_mcp_server(root, &files)?;
+    ensure_mcp_calls_run_in_process(root, &files)?;
     ensure_hook_stdio(root, &files)?;
     ensure_child_env_resets(root, &files)?;
     ensure_normalized_agent_process_decisions(root, &files)?;
@@ -89,21 +89,21 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `rimz mcp serve` runs every tool call but `guide`'s as a `rimz` one-shot,
-/// and answers `guide` from wording it read at its start, so its own modules
-/// never open a store, load config, or resolve a room.
-fn ensure_thin_mcp_server(root: &Path, files: &[PathBuf]) -> Result<()> {
+/// `rimz mcp serve` runs each tool call in its own process: `mcp` speaks the
+/// protocol and reaches RimZ code only through the runner it is handed, so it
+/// and its CLI entry never open a store, load config, or resolve a room; and
+/// `mcp_tools`, which runs the calls, never writes stdout, the protocol
+/// channel, and never ends the process.
+fn ensure_mcp_calls_run_in_process(root: &Path, files: &[PathBuf]) -> Result<()> {
     let module = root.join("crates/rimz/src/mcp");
     let cli = root.join("crates/rimz/src/cli/mcp.rs");
+    let tools = root.join("crates/rimz/src/mcp_tools");
     for path in files
         .iter()
-        .filter(|path| path.starts_with(&module) || **path == cli)
         .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
     {
-        let source = fs::read_to_string(path)
-            .with_context(|| format!("read MCP server source {}", path.display()))?;
-        for (line_number, line) in lines_outside_inline_tests(&source) {
-            if let Some(entry) = [
+        let banned: &[&str] = if path.starts_with(&module) || **path == cli {
+            &[
                 concat!("Store", "::"),
                 concat!("open_", "store("),
                 concat!("crate::", "store"),
@@ -115,13 +115,29 @@ fn ensure_thin_mcp_server(root: &Path, files: &[PathBuf]) -> Result<()> {
                 concat!("rimz::", "workspace"),
                 concat!("Workspace", "Resolver"),
             ]
-            .iter()
-            .find(|entry| line.contains(*entry))
-            {
+        } else if path.starts_with(&tools) {
+            &[
+                concat!(" print", "!("),
+                concat!("(print", "!("),
+                concat!(" println", "!("),
+                concat!("(println", "!("),
+                concat!("stdout", "("),
+                concat!("process::", "exit("),
+                concat!("process::", "abort("),
+            ]
+        } else {
+            continue;
+        };
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("read MCP server source {}", path.display()))?;
+        for (line_number, line) in lines_outside_inline_tests(&source) {
+            let line = format!(" {line}");
+            if let Some(entry) = banned.iter().find(|entry| line.contains(*entry)) {
                 bail!(
-                    "{}:{line_number}: the MCP server runs tool calls as one-shots and must not \
-                     reach `{entry}`",
-                    path.display()
+                    "{}:{line_number}: the MCP server runs tool calls in its own process, \
+                     through the runner alone, and must not reach `{}`",
+                    path.display(),
+                    entry.trim_start_matches([' ', '('])
                 );
             }
         }

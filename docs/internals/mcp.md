@@ -2,13 +2,13 @@
 
 `rimz mcp serve` gives a Claude, Codex, or Antigravity agent RimZ's own commands as MCP tools. Its user-facing contract (the tools, their arguments, the protocol methods) is the [`rimz mcp` reference](../reference/cli/mcp.md). This page covers how it is built and what it must keep true.
 
-## A thin front over one-shots
+## Calls run in the server's process
 
-The server runs no RimZ logic itself. Each tool call but `guide`'s becomes one `rimz` child process, a one-shot, with an argv built from the call's arguments, and the result is that child's output. So a tool behaves exactly as its command does, under the agent's own environment, and a server started before `rimz update` drives the new binary, since `crates/rimz/src/proc/mod.rs::rimz_exe` resolves the room's link at each spawn.
+The server runs each tool call in its own process, on a thread of the call's own. `crates/rimz/src/mcp/` speaks the protocol and holds the catalog and the wording, and it reaches RimZ code only through the `crates/rimz/src/mcp/runner.rs::Runner` it is handed. `crates/rimz/src/cli/mcp.rs::run` hands it `crates/rimz/src/mcp_tools/mod.rs::Tools`, which has one function per tool: each calls the library function the tool's command calls and answers with the value that function returns. So a tool does what its command does, with no process started per call, and its answer is that value rather than the command's printed text.
 
-`guide` is the one tool the server answers itself, from the wording it read at its start (below): a one-shot would need a routine-command prefix of its own (Claude allow rules, Codex install prefixes, the published list), the served capabilities on its argv, and a read of the files at every call.
+`guide` is the one tool the server answers itself, from the wording it read at its start (below), so it opens no room.
 
-Because the one-shot does the work, the server's modules open no store, load no config, and resolve no room. `cargo xtask invariants` holds that boundary with a textual guard over `crates/rimz/src/mcp/` and `crates/rimz/src/cli/mcp.rs` (`ensure_thin_mcp_server` in `xtask/src/invariants.rs`). The process stays small: an idle server holds the parked wrapper's 8 MiB private-memory budget (`mcp_server::an_idle_server_stays_inside_its_memory_budget` in the integration suite).
+`cargo xtask invariants` holds that boundary with a textual guard (`ensure_mcp_calls_run_in_process` in `xtask/src/invariants.rs`). Over `crates/rimz/src/mcp/` and `crates/rimz/src/cli/mcp.rs`, it refuses a store, config, or room reach, which only the runner may make. Over `crates/rimz/src/mcp_tools/`, it refuses a stdout write, since stdout is the protocol channel, and an exit, since one call must not end the server that answers the others. The process stays small: an idle server holds the parked wrapper's 8 MiB private-memory budget (`mcp_server::an_idle_server_stays_inside_its_memory_budget` in the integration suite).
 
 ## The catalog
 
