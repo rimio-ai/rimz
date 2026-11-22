@@ -229,6 +229,18 @@ fn interrupt_keys_are_declared_only_for_verified_builtins() {
 }
 
 #[test]
+fn steer_keys_are_declared_only_for_antigravity() {
+    use crate::pane::keys::NamedKey;
+
+    assert_eq!(super::LaunchSpec::EMPTY.steer_key, None);
+    for adapter in BUILTINS {
+        let spec = adapter.spec();
+        let expected = (spec.kind == "antigravity").then_some(NamedKey::AltM);
+        assert_eq!(spec.launch.steer_key, expected, "{}", spec.kind);
+    }
+}
+
+#[test]
 fn builtin_host_skill_switches_are_declared() {
     for adapter in BUILTINS {
         let spec = adapter.spec();

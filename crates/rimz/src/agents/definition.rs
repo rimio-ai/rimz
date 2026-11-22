@@ -259,6 +259,9 @@ pub struct LaunchSpec {
     /// for queued text until the running one ends, so an interrupt also withholds both keys
     /// when the receiver's turn start moved during the delay: that turn is the paste's own.
     pub interrupt_returns_queued_text: bool,
+    /// The key that takes a message typed behind a running turn into that turn. A steer
+    /// presses it after its Enter when the receiver is mid-turn.
+    pub steer_key: Option<crate::pane::keys::NamedKey>,
     pub presets: PresetMatchers,
     /// Provider env pair requesting long prompt-cache retention for a keep-warm launch.
     pub long_cache_env: Option<(&'static str, &'static str)>,
@@ -282,6 +285,7 @@ impl LaunchSpec {
         interrupt_key: None,
         confirm_interrupt: false,
         interrupt_returns_queued_text: false,
+        steer_key: None,
         presets: PresetMatchers::EMPTY,
         long_cache_env: None,
     };
