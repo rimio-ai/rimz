@@ -1070,7 +1070,7 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
     };
 
     if command.list {
-        let mut cargo_args = nextest_args("list");
+        let mut cargo_args = nextest_command("list", &command.forwarded);
         cargo_args.extend(command.forwarded);
         let captured = capture_cargo_task(root, "test list", cargo_args, &env, &removed)?;
         if !captured.status.success() {
@@ -1084,7 +1084,7 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
     }
 
     if command.names.is_empty() {
-        let mut cargo_args = nextest_args("run");
+        let mut cargo_args = nextest_command("run", &command.forwarded);
         let streams_output = requests_no_capture(&command.forwarded);
         cargo_args.extend(command.forwarded);
         if streams_output {
@@ -1195,6 +1195,15 @@ fn nextest_args(subcommand: &str) -> Vec<String> {
     .into_iter()
     .map(str::to_owned)
     .collect()
+}
+
+/// A run from `--archive-file` builds nothing, and nextest refuses the build
+/// flags beside it.
+fn nextest_command(subcommand: &str, forwarded: &[String]) -> Vec<String> {
+    if nextest_archive_file(forwarded).is_some() {
+        return vec!["nextest".to_owned(), subcommand.to_owned()];
+    }
+    nextest_args(subcommand)
 }
 
 fn run_named_tests(

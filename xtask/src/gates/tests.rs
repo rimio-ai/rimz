@@ -791,3 +791,12 @@ fn nextest_archive_file_reads_split_and_equals_forms() {
     );
     assert_eq!(nextest_archive_file(&[]), None);
 }
+
+#[test]
+fn nextest_command_drops_build_flags_only_for_an_archive() {
+    let archive = ["--archive-file".to_owned(), "tests.tar.zst".to_owned()];
+    let profile = ["--profile".to_owned(), "gate".to_owned()];
+
+    assert_eq!(nextest_command("run", &archive), ["nextest", "run"]);
+    assert_eq!(nextest_command("list", &profile), nextest_args("list"));
+}
