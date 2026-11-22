@@ -366,7 +366,10 @@ jobs:
         if: always()
         run: sccache --show-stats
 
-  gate-tests:
+  # The gate tier compiles once: this job archives the test binaries, and
+  # `gate-tests` runs one slice of the tier per job from that archive. `warm`
+  # compiles here and uploads nothing.
+  gate-archive:
     needs: scope
     if: needs.scope.outputs.suite != 'pr'
     runs-on: ubuntu-latest
@@ -378,7 +381,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ github.token }}
     concurrency:
-      group: ci-commit-${{ github.sha }}-gate-tests
+      group: ci-commit-${{ github.sha }}-gate-archive
       cancel-in-progress: ${{ github.event_name == 'push' }}
     steps:
       - name: Assert running in the rimz-ci image
@@ -413,20 +416,82 @@ jobs:
             | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "rimz"))')"
           echo "RIMZ_BUILD_VERSION_OVERRIDE=${version}+ci" >> "$GITHUB_ENV"
 
-      - name: cargo xtask test (compile)
+      - name: cargo xtask test-archive
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --no-run
+          mold -run cargo xtask test-archive --archive-file target/ci/nextest-archive.tar.zst
+          ls -l target/ci/nextest-archive.tar.zst
 
-      # The gate tier runs as two nextest runs of one profile: a filter and its
-      # negation. Every binary but the integration one keeps nextest's default of
-      # one test per core. Each run writes target/nextest/gate/junit.xml, so the
-      # first run's report moves aside before the second starts.
-      - name: cargo xtask test (gate, unit binaries)
+      # The archive is zstd already, so the upload stores it as is.
+      - name: Upload nextest archive
         if: needs.scope.outputs.suite == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive
+          path: target/ci/nextest-archive.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+  gate-tests:
+    needs: [scope, gate-archive]
+    if: needs.scope.outputs.suite == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        partition: [1, 2, 3]
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:${{ inputs.image_tag || 'latest' }}
+      options: --init
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-gate-tests-${{ matrix.partition }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    env:
+      PARTITION: count:${{ matrix.partition }}/3
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image - dispatch ci-image.yml to build/push ghcr.io/${GITHUB_REPOSITORY_OWNER}/rimz-ci:latest"
+            exit 1
+          }
+          command -v sccache >/dev/null || {
+            echo "::error::sccache missing from rimz-ci image - dispatch ci-image.yml to rebuild/push it"
+            exit 1
+          }
+
+      - uses: actions/checkout@v7
+
+      - name: Trust checkout for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Download nextest archive
+        uses: actions/download-artifact@v8
+        with:
+          name: nextest-archive
+
+      # Each job runs its slice of the gate tier as two nextest runs of one
+      # profile: a filter and its negation. Every binary but the integration one
+      # keeps nextest's default of one test per core. Each run writes
+      # target/nextest/gate/junit.xml, so the first run's report moves aside
+      # before the second starts.
+      - name: cargo xtask test (gate, unit binaries)
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --deny-skips --profile gate -E 'not binary_id(=rimz::integration)'
+          mold -run cargo xtask test --deny-skips --profile gate --archive-file nextest-archive.tar.zst --partition "$PARTITION" -E 'not binary_id(=rimz::integration)'
           mkdir -p target/nextest/gate-units
           mv target/nextest/gate/junit.xml target/nextest/gate-units/junit.xml
 
@@ -434,19 +499,19 @@ jobs:
       # about half idle, its tests waiting on child processes and deadlines, so
       # they overlap: 16 slots is four tests per core.
       - name: cargo xtask test (gate, integration)
-        if: needs.scope.outputs.suite == 'full'
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --deny-skips --profile gate -E 'binary_id(=rimz::integration)' --test-threads 16
+          mold -run cargo xtask test --deny-skips --profile gate --archive-file nextest-archive.tar.zst --partition "$PARTITION" -E 'binary_id(=rimz::integration)' --test-threads 16
 
       # A green run still carries each flaky test's failed first attempt here.
-      # When compile fails, no report exists, so this step fails too with
-      # "No files were found": the earlier failed step is the cause.
+      # When a run fails before nextest starts, no report exists, so this step
+      # fails too with "No files were found": the earlier failed step is the
+      # cause.
       - name: Upload nextest JUnit reports
-        if: always() && needs.scope.outputs.suite == 'full'
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: nextest-junit-gate
+          name: nextest-junit-gate-${{ matrix.partition }}
           path: target/nextest/*/junit.xml
           if-no-files-found: error
 
@@ -537,7 +602,7 @@ jobs:
         run: sccache --show-stats
 
   tests:
-    needs: [scope, gate-tests, live-tests]
+    needs: [scope, gate-archive, gate-tests, live-tests]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

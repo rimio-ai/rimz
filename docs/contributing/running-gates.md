@@ -12,7 +12,7 @@ How the gates and the test runner behave in practice: what each command shows an
 
 ## The test runner
 
-`cargo xtask test` wraps `cargo nextest run --workspace --all-features --locked`. Trailing arguments forward to nextest as filters and profiles (`cargo xtask test auth`, `cargo xtask test -P live`). nextest is the only suite runner. Install it with `cargo install cargo-nextest --locked`.
+`cargo xtask test` wraps `cargo nextest run --workspace --all-features --locked`, or a bare `cargo nextest run` when it forwards `--archive-file`, which builds nothing. Trailing arguments forward to nextest as filters and profiles (`cargo xtask test auth`, `cargo xtask test -P live`). nextest is the only suite runner. Install it with `cargo install cargo-nextest --locked`.
 
 - Drive the suite through `cargo xtask test`. xtask supplies the disposable host-state roots ([test environment](./gates.md#test-environment)) and the suite's feature set.
 - nextest runs each test in its own process, and the suite relies on that. A unit-test binary run directly runs every selected test in one libtest process, where tests that share process-wide state fail each other. A direct run (a `TZ` reproduction, say) names one test with `--exact` per call.
@@ -74,7 +74,7 @@ A test that returns early because the host lacks a capability records the skip t
 ### Durations
 
 - Locally, `--no-capture` prints each test's duration ([the test runner](#the-test-runner)).
-- CI's `gate` profile prints only failures and retries. Like `live` and `journey`, it writes a JUnit report (`[profile.gate.junit]` in `.config/nextest.toml`), so a gate test's CI duration is in the run's JUnit artifact: `gate/junit.xml`, which on GitHub holds the integration binary alone, with every other binary in `gate-units/junit.xml` (`gh run download <id> -R rimio-ai/rimz -n nextest-junit-gate`).
+- CI's `gate` profile prints only failures and retries. Like `live` and `journey`, it writes a JUnit report (`[profile.gate.junit]` in `.config/nextest.toml`), so a gate test's CI duration is in the run's JUnit artifact: `gate/junit.xml`, which on GitHub holds the integration binary alone, with every other binary in `gate-units/junit.xml`, one artifact per slice (`gh run download <id> -R rimio-ai/rimz -p 'nextest-junit-gate-*'`).
 
 ## Tests outside the change
 
@@ -255,4 +255,4 @@ This holds for a bench that stays in process. A bench that spawns `rimz` (`hook_
 
 - A CI timing comparison pairs runs whose compile step took about the same time: GitHub runners fall into two speed classes about 40% apart.
 - To repeat a CI measurement in parallel, dispatch `ci.yml` on throwaway branches that each carry one distinct commit. Dispatches of the same commit share a concurrency group and run one at a time.
-- Read step times with `gh run view <id> --json jobs`, and per-test times from the run's JUnit artifacts (`nextest-junit-gate` and `nextest-junit-live` on GitHub).
+- Read step times with `gh run view <id> --json jobs`, and per-test times from the run's JUnit artifacts (the `nextest-junit-gate-<k>` slices and `nextest-junit-live` on GitHub).
