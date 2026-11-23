@@ -116,14 +116,12 @@ pub(super) fn push_queued_message(
     let delivered =
         deliver::deliver_one_report(workspace, store, &message_id, globals.mux, policy)?;
     if let deliver::DeliveryReport::Sent { interrupt } = delivered {
+        let named = rimz::address::handle_with_name(&label, record.agent_name.as_deref());
         #[expect(clippy::print_stdout, reason = "command result")]
         {
-            println!(
-                "sent to {} ({message_id})",
-                rimz::address::handle_with_name(&label, record.agent_name.as_deref())
-            );
+            println!("sent to {named} ({message_id})");
         }
-        send::report_interrupt_confirmation(&label, interrupt);
+        send::report_interrupt_confirmation(&label, &named, interrupt);
         return Ok(());
     }
     if let deliver::DeliveryReport::Refused(deliver::DeliveryVerdict::TypingHeld { until }) =

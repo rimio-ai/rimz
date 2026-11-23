@@ -253,11 +253,16 @@ pub(crate) fn render_dispatch_outcome(
 
 /// The target as a reader sees it: its address with a differing name beside it.
 fn named_target(outcome: &DispatchOutcome) -> String {
+    let (label, name) = named_target_parts(outcome);
+    rimz::address::handle_with_name(label, name)
+}
+
+fn named_target_parts(outcome: &DispatchOutcome) -> (&str, Option<&str>) {
     let (DispatchOutcome::Sent { label, name, .. }
     | DispatchOutcome::Queued { label, name, .. }
     | DispatchOutcome::CompactionPending { label, name, .. }
     | DispatchOutcome::SkippedWaiting { label, name, .. }) = outcome;
-    rimz::address::handle_with_name(label, name.as_deref())
+    (label, name.as_deref())
 }
 
 fn typing_hold_detail(until: jiff::Timestamp) -> String {
@@ -291,8 +296,8 @@ fn report_interrupt(outcomes: &[DispatchOutcome], compacted: &[String]) -> Resul
             DispatchOutcome::Sent {
                 label, interrupt, ..
             } => {
-                print_compacted_if_needed(label, compacted);
-                report_interrupt_confirmation(label, *interrupt);
+                print_compacted_if_needed(label, &named_target(outcome), compacted);
+                report_interrupt_confirmation(label, &named_target(outcome), *interrupt);
                 render_dispatch_outcome(DeliveryKind::Interrupt, outcome)
             }
             _ => render_dispatch_outcome(DeliveryKind::Interrupt, outcome),
@@ -307,19 +312,25 @@ fn report_interrupt(outcomes: &[DispatchOutcome], compacted: &[String]) -> Resul
     Ok(())
 }
 
-pub(crate) fn report_interrupt_confirmation(label: &str, confirmation: InterruptConfirmation) {
+/// Warn on stderr that an interrupt did not land: `named` is the target in prose, `label` its
+/// address in the command to copy.
+pub(crate) fn report_interrupt_confirmation(
+    label: &str,
+    named: &str,
+    confirmation: InterruptConfirmation,
+) {
     use std::io::Write as _;
 
     let warning = super::render::paint(super::render::palette::warn().bold(), "warning:");
     let _ = match confirmation {
         InterruptConfirmation::NotConfirmed { window } => writeln!(
             super::render::err(),
-            "{warning} {label}: interrupt not confirmed within {} ms; its turn may still be running (rimz pane capture {label}), or Codex's Interrupt hook may not be trusted (rimz doctor)",
+            "{warning} {named}: interrupt not confirmed within {} ms; its turn may still be running (rimz pane capture {label}), or Codex's Interrupt hook may not be trusted (rimz doctor)",
             window.as_millis(),
         ),
         InterruptConfirmation::NotSent { cause } => writeln!(
             super::render::err(),
-            "{warning} {label}: the message was sent, but its interrupt key was not: {cause}"
+            "{warning} {named}: the message was sent, but its interrupt key was not: {cause}"
         ),
         InterruptConfirmation::NotChecked | InterruptConfirmation::Confirmed => Ok(()),
     };
@@ -329,7 +340,7 @@ fn report_boundary(outcomes: &[DispatchOutcome], compacted: &[String]) -> Result
     for label in compacted {
         #[expect(clippy::print_stdout, reason = "command result")]
         {
-            println!("compacted {label}");
+            println!("compacted {}", compacted_named(label, outcomes));
         }
     }
     for outcome in outcomes {
@@ -358,28 +369,21 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
                 sent_labels.push(label.as_str());
             }
             DispatchOutcome::Queued {
-                label,
-                message_id,
-                reason,
-                ..
+                message_id, reason, ..
             } => {
                 queued.push(match reason {
                     Some(ParkReason::TypingHeld { until }) => format!(
-                        "{label} ({message_id}; held: {})",
+                        "{named} ({message_id}; held: {})",
                         typing_hold_detail(*until)
                     ),
-                    _ => format!("{label} ({message_id})"),
+                    _ => format!("{named} ({message_id})"),
                 });
             }
-            DispatchOutcome::CompactionPending {
-                label, message_id, ..
-            } => {
-                queued.push(format!("{label} ({message_id}; waiting for compaction)"));
+            DispatchOutcome::CompactionPending { message_id, .. } => {
+                queued.push(format!("{named} ({message_id}; waiting for compaction)"));
             }
-            DispatchOutcome::SkippedWaiting {
-                label, message_id, ..
-            } => {
-                pending.push(format!("{label} ({message_id})"));
+            DispatchOutcome::SkippedWaiting { message_id, .. } => {
+                pending.push(format!("{named} ({message_id})"));
             }
         }
     }
@@ -393,7 +397,7 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
         }
         if !sent.is_empty() {
             let label = sent_labels[0];
-            print_compacted_if_needed(label, compacted);
+            print_compacted_if_needed(label, &named_target(&outcomes[0]), compacted);
             #[expect(clippy::print_stdout, reason = "message confirmation")]
             {
                 println!("sent to {}", sent[0]);
@@ -429,6 +433,10 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
         line.push_str(&format!("; queued: {}", queued.join(", ")));
     }
     if !compacted.is_empty() {
+        let compacted: Vec<String> = compacted
+            .iter()
+            .map(|label| compacted_named(label, outcomes))
+            .collect();
         line.push_str(&format!("; compacted: {}", compacted.join(", ")));
     }
     if !pending.is_empty() {
@@ -441,13 +449,25 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
     Ok(())
 }
 
-fn print_compacted_if_needed(label: &str, compacted: &[String]) {
+fn print_compacted_if_needed(label: &str, named: &str, compacted: &[String]) {
     if compacted.iter().any(|compacted| compacted == label) {
         #[expect(clippy::print_stdout, reason = "message compact confirmation")]
         {
-            println!("compacted {label}");
+            println!("compacted {named}");
         }
     }
+}
+
+/// A compacted target in prose: its address, named as the outcome for that address names it.
+fn compacted_named(label: &str, outcomes: &[DispatchOutcome]) -> String {
+    outcomes
+        .iter()
+        .map(named_target_parts)
+        .find(|(outcome_label, _)| *outcome_label == label)
+        .map_or_else(
+            || label.to_owned(),
+            |(label, name)| rimz::address::handle_with_name(label, name),
+        )
 }
 
 /// Read a prompt file as-is, trimming only the trailing newline an editor adds so
@@ -708,6 +728,12 @@ mod tests {
             }),
             "compacting @coder#auth (@round-binder); queued msg_0123456789abcdef (delivers when compaction completes)"
         );
+        let outcomes = [outcome("round-binder", None)];
+        assert_eq!(
+            compacted_named("@coder#auth", &outcomes),
+            "@coder#auth (@round-binder)"
+        );
+        assert_eq!(compacted_named("@other", &outcomes), "@other");
     }
 
     #[test]

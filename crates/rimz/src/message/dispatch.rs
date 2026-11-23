@@ -829,7 +829,7 @@ fn prepare_mode(
                     || agent.is_reviewing_permission(resolution.snapshot.now))
             {
                 return Err(DispatchErr::WaitingOnInput {
-                    label,
+                    label: crate::address::handle_with_name(&label, agent.name.as_deref()),
                     reason: super::InputWait::for_agent(agent, resolution.snapshot.now),
                 });
             }
