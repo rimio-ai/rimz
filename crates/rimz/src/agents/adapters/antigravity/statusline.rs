@@ -25,6 +25,8 @@ pub(super) struct StatuslinePayload {
     plan_tier: Option<String>,
     email: Option<String>,
     tool_confirmation_pending: Option<bool>,
+    agent_state: Option<String>,
+    task_count: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -124,6 +126,16 @@ fn normalize_model_display(
 }
 
 impl StatuslinePayload {
+    /// agy reads `idle` with no background task and no pending tool confirmation.
+    /// `task_count` is absent after an Escape with nothing in the background.
+    pub(super) fn at_rest(&self) -> bool {
+        self.agent_state
+            .as_deref()
+            .is_some_and(|state| state.trim().eq_ignore_ascii_case("idle"))
+            && self.task_count.unwrap_or(0) == 0
+            && self.tool_confirmation_pending != Some(true)
+    }
+
     pub(super) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
         let (model_display_name, mut label_effort, mut thinking_enabled) =
             normalize_model_display(self.model.display_name);

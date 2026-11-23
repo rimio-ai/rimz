@@ -778,7 +778,13 @@ impl crate::agents::capabilities::ContextCapability for AntigravityAdapter {
         }
         let parsed = statusline::StatuslinePayload::deserialize(payload).ok()?;
         let agent_id = parsed.conversation_id.clone()?;
-        super::ContextObservation::new(agent_id, parsed.into_context(source, Timestamp::now()))
+        let at_rest = parsed.at_rest();
+        let mut observation = super::ContextObservation::new(
+            agent_id,
+            parsed.into_context(source, Timestamp::now()),
+        )?;
+        observation.provider_at_rest = at_rest;
+        Some(observation)
     }
 
     fn local_context_refresh(

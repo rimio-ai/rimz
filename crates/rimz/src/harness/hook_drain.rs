@@ -29,12 +29,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Store;
+use crate::agents::context::TurnSettle;
 use crate::agents::hook_types::HOOK_ENV_EXTRA_NAMES;
 use crate::agents::{HookIngressOwner, HookReply};
 use crate::disk::lock::WorkspaceLock;
-use crate::ids::EventId;
+use crate::ids::{AgentKind, AgentSessionId, EventId};
 use crate::store::event_log::LogExtent;
 use crate::store::ingress::{self, HookIngress};
+use crate::store::runtime::RuntimeScope;
 
 use super::drainer_outage::LeaseRefresh;
 
@@ -353,14 +355,18 @@ impl Connection {
         )
     }
 
-    pub fn reply(mut self, through: u64, reply_for: EventId, wait: Duration) -> DrainOutcome {
+    pub fn reply(self, through: u64, reply_for: EventId, wait: Duration) -> DrainOutcome {
+        self.receipt(through, Some(reply_for), wait)
+    }
+
+    fn receipt(mut self, through: u64, reply_for: Option<EventId>, wait: Duration) -> DrainOutcome {
         self.stream.set_write_timeout(Some(wait))?;
         self.stream.set_read_timeout(Some(wait))?;
         write_line(
             &mut self.stream,
             &Request {
                 through,
-                reply_for: Some(reply_for),
+                reply_for,
                 epoch: None,
                 stop: false,
                 lease: false,
@@ -543,6 +549,72 @@ fn spawn(store: &Store) -> Result<(), HookDrainErr> {
         Ok(())
     })?;
     Ok(())
+}
+
+/// How long a provider's rest report waits for the hooks fed before it.
+const PROVIDER_REST_DRAIN_WAIT: Duration = Duration::from_millis(500);
+
+/// The settle a provider's rest report observed at `observed_at` writes for
+/// `kind`/`agent_id`: asks a drainer to apply the hooks fed before it through the
+/// ingress log's current end, then decides on the hook-folded row (the audit scope, without
+/// the transcript overlay, which can open a turn before its hook) through
+/// `agents::state::provider_rest_settle`. It never drains inline and takes no workspace
+/// lock, since its caller runs inside an agent's sandbox view on a short bound. Inside a
+/// scoped view (`env`) it reaches the host drainer as the hook path does and never spawns
+/// one. A drain that fails or outruns its wait is an error, so a `Stop` still in flight
+/// never reads as an interrupt.
+pub fn provider_rest_settle(
+    store: &Store,
+    kind: &str,
+    agent_id: &AgentSessionId,
+    observed_at: jiff::Timestamp,
+    env: &BTreeMap<String, String>,
+) -> anyhow::Result<Option<TurnSettle>> {
+    let through = match fs::metadata(&store.paths().hook_ingress_log) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(error.into()),
+    };
+    if ingress::read_cursor(store.paths())?.applied < through {
+        let scoped =
+            crate::config::Isolation::ambient(env).is_some_and(crate::config::Isolation::is_scoped);
+        ask_drainer(store, through, !scoped)?;
+    }
+    let row = store.agent_with_context(
+        &AgentKind::new_unchecked(kind),
+        agent_id,
+        RuntimeScope::Audit,
+    )?;
+    Ok(crate::agents::state::provider_rest_settle(
+        row.as_ref(),
+        observed_at,
+    ))
+}
+
+/// Wait up to `PROVIDER_REST_DRAIN_WAIT` for a drainer's receipt through `through`,
+/// spawning one at most once when `may_spawn`.
+fn ask_drainer(store: &Store, through: u64, may_spawn: bool) -> DrainOutcome {
+    let wait = PROVIDER_REST_DRAIN_WAIT;
+    let deadline = Instant::now() + wait;
+    let mut may_spawn = may_spawn;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(HookDrainErr::Unanswered {
+                waited: wait,
+                path: store.runtime_paths().hook_drainer_lock(),
+            });
+        }
+        if let Ok(connection) = Connection::connect(store) {
+            return connection
+                .receipt(through, None, remaining)
+                .map_err(|_| HookDrainErr::NoReceipt { waited: wait });
+        }
+        if std::mem::take(&mut may_spawn) {
+            let _ = spawn(store);
+        }
+        std::thread::sleep(RETRY.min(remaining));
+    }
 }
 
 pub fn drain_through(

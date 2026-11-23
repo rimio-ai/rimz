@@ -6,7 +6,10 @@
 //!
 //! Context persistence opens an existing room's Store handle for runtime paths,
 //! then uses short sidecar locks and atomic writes. A wrapped command adds one
-//! child. This path never blocks on the workspace lock or opens the event log.
+//! child. A payload whose adapter reports the agent at rest also asks a hook
+//! drainer to apply the pending hooks, for up to 500 ms, and reads the event log.
+//! No payload drains inline or takes the workspace lock, and no other payload
+//! opens the event log.
 //! Main-session prices load only when the adapter needs token pricing.
 //!
 //! Stdio discipline: stdout is reserved for the wrapped command's output (what
@@ -25,6 +28,7 @@
 //! forwards nothing and prints nothing; every failure warns on stderr and exits
 //! 0, so a report never reaches the session that sent it.
 
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -35,7 +39,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::GlobalFlags;
-use rimz::agents::context::SubagentObservation;
+use rimz::agents::context::{ContextObservation, SubagentObservation};
 use rimz::agents::{
     AgentContext, AgentCost, AgentDefinition, PriceBook, StatusLineInvocation, SubagentContext,
     SubagentUsageCursor, definition_by_kind, pricing,
@@ -182,21 +186,55 @@ fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()>
 }
 
 /// Parse the payload, normalize it via the agent adapter, and write the sidecar.
-/// Opens an existing Store handle for runtime paths, without reading the event
-/// log or taking the workspace lock.
+/// Opens an existing Store handle for runtime paths. Only an observation the
+/// adapter reports at rest (`ContextObservation::provider_at_rest`) asks a drainer to
+/// apply the pending hooks and reads the row from the event log, to store the settle
+/// `rimz::harness::hook_drain::provider_rest_settle` decides; a drain no drainer
+/// confirms in time, or a failed read, stores the context without one.
 fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<()> {
     let payload: Value = serde_json::from_slice(stdin).context("parsing statusline payload")?;
     let agent = definition_by_kind(source)?;
-    let Some(mut observation) = agent.observe_context(source, &payload) else {
+    let Some(observation) = agent.observe_context(source, &payload) else {
         // The adapter has no rich-context source (e.g. codex): nothing to store.
         return Ok(());
     };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let runtime = runtime_paths_for_root(&workspace.project_root)?;
+    let store = store_for_root(&workspace.project_root)?;
+    persist_observation(
+        &store,
+        agent,
+        &payload,
+        observation,
+        &rimz::harness::hook_drain::capture_env(),
+    )
+}
+
+/// Write one observation to its sidecar, with the settle a rested turn gets.
+pub(super) fn persist_observation(
+    store: &rimz::Store,
+    agent: &AgentDefinition,
+    payload: &Value,
+    mut observation: ContextObservation,
+    env: &BTreeMap<String, String>,
+) -> Result<()> {
+    let runtime = store.runtime_paths();
     let prices = || pricing::cached_book(&runtime.shared_pricing_table_path());
-    attach_context_cost(agent, &payload, &prices, &mut observation.context);
+    attach_context_cost(agent, payload, &prices, &mut observation.context);
+    if observation.provider_at_rest {
+        observation.context.settle = rimz::harness::hook_drain::provider_rest_settle(
+            store,
+            agent.spec().kind,
+            &observation.agent_id,
+            observation.context.observed_at,
+            env,
+        )
+        .unwrap_or_else(|error| {
+            warn!(%error, "statusline: reading the rested turn failed; storing no settle");
+            None
+        });
+    }
     rimz::store::agent_context::write(
-        &runtime,
+        runtime,
         agent.spec().kind,
         observation.agent_id.as_str(),
         &observation.context,
@@ -206,7 +244,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     // Push the update so the `$`/token figure repaints within a wakeup rather
     // than waiting for the sidebar's next poll tick. Best-effort, like every
     // other wakeup: a send failure never fails the statusline render.
-    let _ = rimz::wakeup::wake_store_delta(&runtime, None, None);
+    let _ = rimz::wakeup::wake_store_delta(runtime, None, None);
     Ok(())
 }
 
@@ -228,12 +266,20 @@ fn with_cursor(
 
 /// Runtime paths for an existing room, without opening the event log or taking its lock.
 fn runtime_paths_for_root(project_root: &std::path::Path) -> Result<rimz::RuntimePaths> {
+    Ok(store_for_root(project_root)?.runtime_paths().clone())
+}
+
+/// An existing room's Store handle with its runtime dirs prepared, without opening the event
+/// log or taking its lock.
+fn store_for_root(project_root: &std::path::Path) -> Result<rimz::Store> {
     let state = rimz::StatePaths::for_project_root(project_root)?;
     let store = super::open_existing_store_at(state)?
         .with_context(|| super::no_room(format_args!("at {}", project_root.display())))?;
-    let runtime = store.runtime_paths().clone();
-    runtime.ensure_dirs().context("preparing runtime dirs")?;
-    Ok(runtime)
+    store
+        .runtime_paths()
+        .ensure_dirs()
+        .context("preparing runtime dirs")?;
+    Ok(store)
 }
 
 fn attach_context_cost(
@@ -252,10 +298,9 @@ fn attach_context_cost(
 /// Parse a `subagentStatusLine` payload, harvest its `tasks`, and write one
 /// per-child sidecar keyed by `(kind, task id)` — the same id the child's
 /// `SubagentStart` lifecycle row is keyed under, so the snapshot fold attaches
-/// it. Like [`persist_context`] this opens an existing Store handle for runtime
-/// paths without reading the event log or taking the workspace lock. Nothing to
-/// persist (a non-Claude source, or a payload with no attributable task) is
-/// success, not an error.
+/// it. This opens an existing Store handle for runtime paths without reading the
+/// event log or taking the workspace lock. Nothing to persist (a non-Claude
+/// source, or a payload with no attributable task) is success, not an error.
 fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<()> {
     let payload: Value =
         serde_json::from_slice(stdin).context("parsing subagent statusline payload")?;
