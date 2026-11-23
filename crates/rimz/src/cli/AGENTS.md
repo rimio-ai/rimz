@@ -4,7 +4,7 @@ Local contract for `crates/rimz/src/cli/`: argv to typed requests, the process e
 
 ## What a handler owns
 
-- A handler parses, calls the domain, and presents. A multi-step workflow with decisions, retries, settlement, or recovery belongs to the library module that owns the concept; a straight-line sequence of library calls stays here. Handlers that orchestrate today (`rimz start`, gc sweeps) are debt for rehome passes, not a shape to copy.
+- A handler parses, calls the domain, and presents. A multi-step workflow with decisions, retries, settlement, or recovery belongs to the library module that owns the concept; a straight-line sequence of library calls stays here. Handlers that orchestrate today (`rimz start`, gc sweeps) are debt, not a shape to copy.
 - Domain code reports warnings as returned values and the handler prints them: the CLI owns every write to stdout and stderr.
 - Concrete typed structs and functions are the default shape here. A generic service trait earns its place once a second real caller needs the seam, never in anticipation of one.
 
@@ -21,8 +21,7 @@ Local contract for `crates/rimz/src/cli/`: argv to typed requests, the process e
 
 - The CLI is a module of the binary, declared in `main.rs`, not of the library: it calls the library as `rimz::` and reaches only `pub` items.
 - A command module's internals are private: one command never imports another command's functions or types. Shared logic moves to the domain module that owns the knowledge, or, when it is pure presentation, to a shared CLI-layer module: `ctx`, `render/`, `usage`, `send`, `address`, `spinner`, `wake_view`, `workflow_view`, `ask_commands`, `launch_interaction`, `worktree_entry`, `worktree_protection`, `profile_report`, `loop_timer`, and the target-resolution helpers in `mod.rs`.
-- One parse entry is admitted across commands: `loop_launch.rs`, through which `rimz loop add` hands a task's parsed launch tail to the `check_loop_launch` of the command it names.
-- The orchestration entries one command already publishes to another are migration debt: `room` attach execution (used by `remote`), `hooks` install UX (used by `room` start and `setup`), the `supervised` run driver (used by `agents_cmd`, `subagents`, and `loop_cmd`), and `agents_cmd` resolved lifecycle operations and resume preconditions (used by `teams`, `subagents`, `workflow`, and `loop_cmd`). Add no other. Rehome passes move these workflows to their library owners; rendering stays here, and `supervised` keeps publishing run rendering (used by `subagents`) as a sanctioned cross-command entry.
+- The entries one command publishes to another are a closed list; add no other. Admitted: `loop_launch.rs`, through which `rimz loop add` hands a task's parsed launch tail to the `check_loop_launch` of the command it names, and `supervised` run rendering (used by `subagents`). Migration debt, not a shape to copy: `room` attach execution (used by `remote`), `hooks` install UX (used by `room` start and `setup`), the `supervised` run driver (used by `agents_cmd`, `subagents`, and `loop_cmd`), and `agents_cmd` resolved lifecycle operations and resume preconditions (used by `teams`, `subagents`, `workflow`, and `loop_cmd`).
 
 ## Before a CLI change
 
