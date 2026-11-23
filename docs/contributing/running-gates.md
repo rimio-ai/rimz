@@ -144,6 +144,7 @@ The ratchet indexes the worktree's untracked `.rs` files too, whether a module d
 
 A rebase runs no hook, and the gate builds only the head. Each case below names what to run by hand.
 
+- Before you move items between modules: fetch, rebase, and read `git log HEAD..origin/main -- <the files you move>`. A parallel move of the same items on trunk lands as whole-file conflicts, cheaper to avoid than to resolve.
 - Every rebase: run `cargo xtask atlas conform --ratchet` and `cargo xtask invariants` afterwards.
 - A rebase onto a trunk that moved, on a loaded host: the gate's build alone can use its budget, so run it as `RIMZ_XTASK_TIMEOUT=90m cargo xtask gate`.
 - A conflict resolved in a Rust file: check formatting at every commit whose conflict you resolved. `git rebase --exec 'cargo fmt --all --check' "$(git merge-base HEAD origin/main)"` checks each commit in place. A resolution left unformatted passes `check`, and the next commit that formats the file carries the churn in its diff. Name the merge base, since `origin/main` would replay the branch onto a trunk that moved. The command checks out each commit, so never run it alongside a build or gate in the same checkout.
