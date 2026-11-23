@@ -1,6 +1,9 @@
 //! Machine-tier Markdown definitions, resolved into the existing profile schema.
 //! Errors without a `failed` owner refuse every launch; pack-scoped diagnostics use
 //! `DefinitionCause::PackProblem` to retain reporting without failing the definition set.
+//!
+//! A Markdown profile merges in `frontmatter.rs` (`AgentFrontmatter::inherit` and
+//! `inherit_base`), then resolves and lowers in `agent.rs` (`Resolver::finish`).
 
 mod agent;
 mod catalog;

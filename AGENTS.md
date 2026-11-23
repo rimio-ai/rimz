@@ -80,7 +80,7 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 - `sidebar_pane/`: native renderer: per-pane supervisor, per-session host, attach wire, pets, ratatui edge.
 - `remote/`: SSH grammar, reconnect policy, link health, `remote.toml`.
 - `diag/`: diagnostic-only JSONL append surfaces.
-- `config/`: machine settings, profile and team definitions, `rimz config` editing, and the config templates. Markdown profiles merge in `definitions/` (`frontmatter.rs`, `AgentFrontmatter::inherit` and `inherit_base`) and resolve and lower in `agent.rs` (`Resolver::finish`).
+- `config/`: machine settings, profile and team definitions, `rimz config` editing, and the config templates.
 
 **Top-level modules** in `crates/rimz/src/`:
 
