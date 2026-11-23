@@ -311,14 +311,10 @@ fn run_start(source: &DefinitionSource<'_>) -> Result<RunStart> {
             fire,
             fire_facts,
         } => {
-            // The name is the real directory's; the recorded path keeps the links it was given
-            // through, so a pack workflow's stays on the pack's entry link across its updates.
-            let name = dir
-                .canonicalize()?
-                .file_name()
-                .and_then(|s| s.to_str())
-                .ok_or_else(|| WorkflowErr::Refused("workflow directory needs a name".into()))?
-                .to_owned();
+            // The recorded path keeps the links it was given through, so a pack workflow's stays
+            // on the pack's entry link across its updates.
+            let name = super::directory_name(dir)
+                .ok_or_else(|| WorkflowErr::Refused("workflow directory needs a name".into()))?;
             RunStart {
                 origin: RunOrigin::Deployed,
                 name,
@@ -364,6 +360,7 @@ impl RunStart {
             state,
             self.origin,
             &self.name,
+            (self.origin == RunOrigin::Deployed).then_some(self.spec_dir.as_path()),
             self.loop_fire
                 .as_ref()
                 .filter(|_| self.task.is_some())
@@ -512,6 +509,7 @@ fn publish(
         state,
         record.origin,
         &record.workflow,
+        record.spec_dir.as_deref(),
         task.as_ref(),
         &roots,
         record.once,
@@ -553,13 +551,15 @@ fn agent_definitions() -> crate::config::definitions::LoadedDefinitions {
     )
 }
 
-/// A live run blocks a new one on the same scope when it shares the new run's origin and name,
+/// A live run blocks a new one on the same scope when it shares the new run's origin and either
+/// its name or its real definition directory, so two links to one directory are one workflow,
 /// or its task, so a task cannot dodge overlap by changing what it runs. A try (`once`) never
 /// blocks and is never blocked.
 fn refuse_existing(
     state: &StatePaths,
     origin: RunOrigin,
     name: &str,
+    definition: Option<&Path>,
     task: Option<&crate::ids::TaskId>,
     roots: &ScopeRoots,
     once: bool,
@@ -571,7 +571,11 @@ fn refuse_existing(
         !r.state.is_terminal()
             && !r.once
             && r.scope.path == roots.path(r.scope.kind)
-            && ((r.origin == origin && r.workflow == name)
+            && ((r.origin == origin
+                && (r.workflow == name
+                    || definition
+                        .zip(r.spec_dir.as_deref())
+                        .is_some_and(|(new, live)| super::deployed::same_directory(new, live))))
                 || task.is_some_and(|task| r.ran_for(task)))
     }) {
         Some(existing) => Err(WorkflowErr::Exists {

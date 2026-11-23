@@ -2521,7 +2521,8 @@ path = "crates/rimz/src/harness"
 # SupervisedRunRequest::subagent is the one subagent request the CLI and the MCP subagent tool
 # build (+1).
 # plan::check_subagent_profile_spec is the one --subagent-profile refusal for launch, explain, and loop add (+1).
-surface-budget = 1354
+# +1: workflow::directory_name, the one run-name rule the CLI's show and validate share.
+surface-budget = 1355
 
 [[verdict]]
 kind = "item"
@@ -6187,7 +6188,8 @@ allowed-dependencies = [
 # started_runs_running names the runs a cancel leaves going, for the CLI receipt and the MCP stop (+1).
 # join moves the workflow wait's look and poll from the CLI so the MCP join shares them (+9).
 # session_waits_for_user lets the limit census ask whether a session step waits for the user (+1).
-surface-budget = 120
+# +1: workflow::directory_name, the one run-name rule the CLI's show and validate share.
+surface-budget = 121
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"

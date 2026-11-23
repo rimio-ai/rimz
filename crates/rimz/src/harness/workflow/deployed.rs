@@ -150,8 +150,12 @@ impl Deployed {
     }
 
     /// `dir` as its claim spells it, links followed: the directory a deployed name leads to, or
-    /// one nested in the home's workflows directory, under the home; `None` for any other.
+    /// one nested in the home's workflows directory, under the home; `None` for any other. A
+    /// claim's own path stays itself when another name leads to the same directory.
     pub fn claim(&self, dir: &Path) -> Option<PathBuf> {
+        if self.every().any(|(_, found)| found == Ok(dir)) {
+            return Some(dir.to_owned());
+        }
         let dir = dir.canonicalize().ok()?;
         let named = self.every().find_map(|(_, found)| {
             let found = found.ok()?;
@@ -188,6 +192,26 @@ fn workflow_name(path: &Path) -> Option<String> {
     (!name.starts_with('.')).then(|| name.to_owned())
 }
 
+/// The name a run of the workflow at `dir` carries: the path's last component, so a link is known
+/// by its own name, or the real directory's for a spelling that ends without one (`.`, `..`).
+/// None for the filesystem root or a name that is not UTF-8.
+pub fn directory_name(dir: &Path) -> Option<String> {
+    let real;
+    let name = match dir.file_name() {
+        Some(name) => name,
+        None => {
+            real = dir.canonicalize().ok()?;
+            real.file_name()?
+        }
+    };
+    name.to_str().map(str::to_owned)
+}
+
+/// Whether two spellings lead to one real directory; a path that does not resolve matches none.
+pub(super) fn same_directory(a: &Path, b: &Path) -> bool {
+    matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+}
+
 fn problem(path: &Path, error: &std::io::Error) -> Problem {
     Problem {
         path: path.to_owned(),
@@ -206,6 +230,35 @@ mod tests {
     fn write(path: &Path) {
         std::fs::create_dir_all(path).unwrap();
         std::fs::write(path.join("workflow.toml"), SPEC).unwrap();
+    }
+
+    #[test]
+    fn a_directory_is_named_as_spelled_and_each_link_claims_itself() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let target = root.path().join("elsewhere/nightly");
+        write(&target);
+        std::fs::create_dir_all(target.join("prompts")).unwrap();
+        let workflows = home.join("workflows");
+        std::fs::create_dir_all(&workflows).unwrap();
+        for link in ["first", "second"] {
+            std::os::unix::fs::symlink(&target, workflows.join(link)).unwrap();
+        }
+        let deployed = Deployed::load(&home).unwrap();
+        let second = workflows.join("second");
+        assert_eq!(deployed.claim(&second), Some(second.clone()));
+        assert_eq!(directory_name(&second).as_deref(), Some("second"));
+        // A spelling that ends without a name takes the real directory's.
+        assert_eq!(
+            directory_name(&second.join("prompts/..")).as_deref(),
+            Some("nightly")
+        );
+        let here = std::env::current_dir().unwrap().canonicalize().unwrap();
+        assert_eq!(
+            directory_name(Path::new(".")).as_deref(),
+            here.file_name().and_then(std::ffi::OsStr::to_str)
+        );
+        assert_eq!(directory_name(Path::new("/")), None);
     }
 
     #[test]
