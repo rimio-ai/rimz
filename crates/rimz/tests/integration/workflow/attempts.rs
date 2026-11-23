@@ -1125,6 +1125,12 @@ impl Room {
             .id()
     }
 
+    fn kill_owner(&self, key: &str) {
+        let mut owner = self.owners.borrow_mut().remove(key).unwrap();
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+    }
+
     fn list_pane(&self, id: u64, kind: &str) {
         let path = self.env.project_root.join("panes.json");
         let mut panes: Vec<Value> = fs::read(&path)
