@@ -25,6 +25,20 @@ fn machine_repeats_keep_the_newest_id_age_and_snippet() {
 }
 
 #[test]
+fn message_rows_name_the_target_beside_its_handle_where_they_differ() {
+    for (name, target) in [
+        ("round-binder", " → @coder (@round-binder)  "),
+        ("coder", " → @coder  "),
+    ] {
+        let mut row = message_row("sess-coder", None, "work");
+        row.address = Some("@coder".to_owned());
+        row.agent_name = Some(name.to_owned());
+        let output = render_digest(vec![row], LaneScope::Root, None);
+        assert!(output.contains(target), "{output}");
+    }
+}
+
+#[test]
 fn textless_machine_repeats_keep_the_newest_reason() {
     let mut newest = machine_row("discarded text");
     newest.text = None;

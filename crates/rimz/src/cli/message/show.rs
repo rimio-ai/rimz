@@ -166,7 +166,14 @@ fn render_message_kv(
 ) -> render::KeyVals {
     let mut kv = render::KeyVals::new().indent(2);
     kv.push("from", render::cell(sender).fg(render::palette::meta()));
-    kv.push("to", render::cell(target).fg(render::palette::meta()));
+    kv.push(
+        "to",
+        render::cell(rimz::address::handle_with_name(
+            target,
+            message.agent_name.as_deref(),
+        ))
+        .fg(render::palette::meta()),
+    );
     kv.push("channel", render::cell(lane_label.unwrap_or("-")).dash());
     if message.body != MessageBody::Prompt {
         kv.push("body", render::cell(message.body.as_str()));
@@ -902,6 +909,35 @@ pub(super) fn delivery_action_hint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_to_row_names_the_target_beside_its_handle_and_from_stays_bare() {
+        use rimz::store::message::{DeliveryGate, MessageRecord};
+        let now = Timestamp::UNIX_EPOCH;
+        let agent = rimz::testkit::agent_state("claude", "sess", now);
+        let workspace = rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/w"));
+        let mut row = MessageListRow::from_record(MessageRecord::new(
+            workspace,
+            &agent,
+            "text".to_owned(),
+            DeliveryGate::Done,
+        ));
+        row.agent_name = Some("round-binder".to_owned());
+        let mut out = anstream::StripStream::new(Vec::new());
+        render_message_kv(&row, "@coder", "@planner", None, now)
+            .render(&mut out)
+            .unwrap();
+        let text = String::from_utf8(out.into_inner()).unwrap();
+        let value = |key: &str| {
+            text.lines()
+                .find_map(|line| line.trim_start().strip_prefix(key)?.strip_prefix(':'))
+                .map(str::trim)
+                .unwrap_or_else(|| panic!("no {key} row: {text}"))
+                .to_owned()
+        };
+        assert_eq!(value("to"), "@coder (@round-binder)", "{text}");
+        assert_eq!(value("from"), "@planner", "{text}");
+    }
 
     #[test]
     fn timeline_requeues_fold_with_the_newest_reason_and_time() {
