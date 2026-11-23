@@ -4370,6 +4370,57 @@ fn idle_pooled_children_exit_and_free_the_election_after_drainer_death() {
 }
 
 #[test]
+fn a_timed_out_apply_leaves_no_pooled_child_alive() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let frames = ["a", "b", "b", "a"].map(|key| append_frame(&env, keyed_stop_frame(&env, key)).0);
+    let (mut drainer, listener) = barrier_drainer(
+        &env,
+        "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY",
+        &[("RIMZ_TEST_HOOK_APPLY_TIMEOUT_MS", "2000")],
+    );
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "a's frame");
+    let idle = rimz::proc::children(drainer.id());
+    assert_eq!(idle.len(), 1, "a's child waits in the pool");
+    release.write_all(&[1]).unwrap();
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "b's frame");
+    let pooled = rimz::proc::children(drainer.id());
+    let hung: Vec<_> = pooled.iter().filter(|pid| !idle.contains(pid)).collect();
+    assert_eq!(
+        hung.len(),
+        1,
+        "b's child joins a's: {idle:?} then {pooled:?}"
+    );
+    signal(*hung[0], nix::sys::signal::Signal::SIGSTOP);
+    release.write_all(&[1]).unwrap();
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "timed-out frame");
+    assert_eq!(
+        rimz::proc::children(drainer.id()),
+        Vec::<u32>::new(),
+        "the timed-out apply closed the pool"
+    );
+    release.write_all(&[1]).unwrap();
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "a's next frame");
+    let next = rimz::proc::children(drainer.id());
+    assert!(
+        next.len() == 1 && next != idle,
+        "a's next frame starts a new child: {idle:?} then {next:?}"
+    );
+    release.write_all(&[1]).unwrap();
+    release_until_exit(&env, &mut drainer, &listener);
+    let log = std::fs::read_to_string(store.paths().hook_drainer_log()).unwrap();
+    assert!(
+        log.contains("hook ingress apply failed") && log.contains("timed out"),
+        "{log}"
+    );
+    assert!(derived(&env, &frames[2].event_id).is_empty(), "{log}");
+    for frame in [&frames[0], &frames[1], &frames[3]] {
+        assert_eq!(lifecycle_count(&env, &frame.event_id), 1, "{log}");
+    }
+}
+
+#[test]
 fn a_recovery_leaves_no_pooled_child_alive() {
     let env = Env::new();
     env.record(&env.project_root);
