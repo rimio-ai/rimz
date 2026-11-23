@@ -3,11 +3,9 @@
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 
-use rimz::harness::deadline::{
-    Rung, interrupt_expired, kill_due, stop_due_by_pane, stop_interrupts,
-};
+use rimz::harness::deadline::{Rung, interrupt_expired, kill_due, stop_due_by_pane};
 use rimz::harness::run_timeout::RunTimeoutRequest;
-use rimz::message::dispatch::{DispatchErr, DispatchMode};
+use rimz::message::dispatch::{DispatchErr, DispatchMode, DispatchOutcome, DispatchResult};
 use rimz::store::run::RunRecord;
 
 use super::Ctx;
@@ -48,21 +46,21 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
                 tracing::debug!(run_id = %request.run_id, "deadline stop has no agent session id");
                 return Ok(());
             };
-            let interrupt = stop_interrupts(&initial);
-            let mode = if interrupt {
-                DispatchMode::Interrupt
-            } else {
-                DispatchMode::Steer
-            };
             let outcome = rimz::message::dispatch::dispatch(
                 &ctx.workspace,
                 &ctx.store,
-                deadline_stop_request(&request.run_id, target, rung.text(), globals.mux, mode),
+                deadline_stop_request(
+                    &request.run_id,
+                    target,
+                    rung.text(),
+                    globals.mux,
+                    DispatchMode::Interrupt,
+                ),
             );
             // A child that raised a prompt since the host's read refuses an
             // unforced interrupt: the rung goes back, for the hook to carry
             // once the child is answered.
-            if interrupt && matches!(outcome, Err(DispatchErr::WaitingOnInput { .. })) {
+            if refused_waiting(&outcome) {
                 rimz::harness::run::release_rung(ctx.store.paths(), &request.run_id, at, previous)?;
                 return Ok(());
             }
@@ -133,6 +131,19 @@ fn reclaim_pane(ctx: &Ctx, globals: &super::GlobalFlags, record: &RunRecord) -> 
 /// on the locked record at the helper's `now`.
 fn claims_stop(record: &RunRecord, rung: &Rung, now: Timestamp) -> bool {
     matches!(rung, Rung::Stop { .. }) && stop_due_by_pane(record, now)
+}
+
+/// Whether the stop was refused for a child waiting on input, before the pane lock (an error)
+/// or under it (a skipped outcome).
+fn refused_waiting(outcome: &std::result::Result<DispatchResult, DispatchErr>) -> bool {
+    match outcome {
+        Err(DispatchErr::WaitingOnInput { .. }) => true,
+        Ok(result) => result
+            .outcomes
+            .iter()
+            .any(|outcome| matches!(outcome, DispatchOutcome::SkippedWaiting { .. })),
+        Err(_) => false,
+    }
 }
 
 /// The stop's dispatch, linked to its run so that delivery withdraws a stop
@@ -272,6 +283,35 @@ mod tests {
             !claims_stop(&record, &stop, now),
             "a deadline moved inside the hook's lead is left to the hook"
         );
+    }
+
+    #[test]
+    fn a_waiting_child_refuses_the_stop_before_or_under_the_pane_lock() {
+        let result = |outcome| {
+            Ok(DispatchResult {
+                outcomes: vec![outcome],
+                compacted: Vec::new(),
+                missed: Vec::new(),
+            })
+        };
+        let skipped = DispatchOutcome::SkippedWaiting {
+            label: "@child".to_owned(),
+            name: None,
+            message_id: rimz::ids::MessageId::new(),
+            reason: rimz::message::InputWait::PermissionReview,
+        };
+        let sent = DispatchOutcome::Sent {
+            label: "@child".to_owned(),
+            name: None,
+            message_id: rimz::ids::MessageId::new(),
+            interrupt: rimz::message::InterruptConfirmation::Confirmed,
+        };
+        assert!(refused_waiting(&result(skipped)));
+        assert!(refused_waiting(&Err(DispatchErr::WaitingOnInput {
+            label: "@child".to_owned(),
+            reason: rimz::message::InputWait::Human,
+        })));
+        assert!(!refused_waiting(&result(sent)));
     }
 
     #[test]

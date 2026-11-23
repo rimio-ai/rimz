@@ -157,7 +157,7 @@ pub(crate) use registry::{
 };
 pub use registry::{
     Runtime, SoftCompactSkip, all_definitions, compact_command, compact_reminder,
-    definition_by_kind, find_definition, find_runtime, known_kinds, runtime_names,
+    definition_by_kind, find_definition, find_runtime, known_kinds, message_keys, runtime_names,
     soft_compact_skip, spec_by_kind,
 };
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode};

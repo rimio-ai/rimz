@@ -209,10 +209,6 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: Some("--max-turns"),
-        interrupt_key: Some(crate::pane::keys::NamedKey::Escape),
-        confirm_interrupt: false,
-        interrupt_returns_queued_text: false,
-        steer_key: None,
         message_keys: crate::agents::MessageKeys {
             send_now: &[
                 crate::pane::keys::KeyStep::now(crate::pane::keys::NamedKey::CtrlX),

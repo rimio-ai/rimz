@@ -7,9 +7,7 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use super::deadline::{
-    interrupt_evidence, interrupt_expired, kill_due, stop_due_by_pane, stop_interrupts,
-};
+use super::deadline::{interrupt_evidence, interrupt_expired, kill_due, stop_due_by_pane};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{RunId, WorkspaceId};
 use crate::store::run::{RunListing, RunRecord};
@@ -64,8 +62,7 @@ fn due_request(
     (kill_due(record, now)
         || interrupt_expired(record, now)
         || interrupted_at.is_some()
-        || (stop_due_by_pane(record, now)
-            && !(stop_interrupts(record) && child_awaits_input(record, agents, now))))
+        || (stop_due_by_pane(record, now) && !child_awaits_input(record, agents, now)))
     .then(|| RunTimeoutRequest {
         workspace_id: workspace_id.clone(),
         run_id: record.run_id.clone(),
@@ -171,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn an_interrupt_kind_child_waiting_on_input_is_asked_for_no_stop() {
+    fn a_child_waiting_on_input_is_asked_for_no_stop_on_any_kind() {
         let workspace = record().workspace_id;
         let now = Timestamp::now();
         let mut run = record();
@@ -198,9 +195,12 @@ mod tests {
         run.deadline_at = Some(now - Duration::from_secs(11));
         run.kind = AgentKind::new_unchecked("kimi");
         child.kind = AgentKind::new_unchecked("kimi");
-        assert!(
-            due_request(&workspace, &run, &[child], now).is_some(),
-            "a pane kind still gets its steer"
+        assert_eq!(
+            due_request(&workspace, &run, std::slice::from_ref(&child), now),
+            None,
+            "every kind's stop is an interrupt, withheld while its child awaits input"
         );
+        child.status = crate::agents::AgentStatus::Running;
+        assert!(due_request(&workspace, &run, &[child], now).is_some());
     }
 }

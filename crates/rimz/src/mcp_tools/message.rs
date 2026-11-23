@@ -175,7 +175,9 @@ fn answer(result: DispatchResult, mut warnings: Vec<String>) -> Sent {
                 reason,
                 ..
             } => {
-                let detail = reason.as_ref().map(|reason| park_detail(&label, reason));
+                let detail = reason
+                    .as_ref()
+                    .map(|reason| park_detail(&label, reason, &message_id));
                 row(label, &message_id, "queued", detail)
             }
             DispatchOutcome::CompactionPending {
@@ -219,7 +221,7 @@ fn row(
 }
 
 /// Why a queued message waits, where that is more than the receiver's next turn boundary.
-fn park_detail(label: &str, reason: &ParkReason) -> String {
+fn park_detail(label: &str, reason: &ParkReason, message_id: &crate::ids::MessageId) -> String {
     match reason {
         ParkReason::TypingHeld { until } => format!(
             "someone is using {label}'s pane; it is tried again after {}",
@@ -260,6 +262,9 @@ fn park_detail(label: &str, reason: &ParkReason) -> String {
             .strip_prefix("stuck: ")
             .unwrap_or(blocker)
             .to_owned(),
+        ParkReason::InterruptWithheld { cause, pressed } => {
+            crate::message::interrupt_withheld_detail(cause, *pressed, message_id)
+        }
     }
 }
 
@@ -278,16 +283,9 @@ fn input_wait(reason: InputWait) -> &'static str {
 }
 
 fn interrupt_warning(label: &str, confirmation: InterruptConfirmation) -> Option<String> {
-    match confirmation {
-        InterruptConfirmation::NotConfirmed { window } => Some(format!(
-            "{label}: interrupt not confirmed within {} ms; its turn may still be running",
-            window.as_millis()
-        )),
-        InterruptConfirmation::NotSent { cause } => Some(format!(
-            "{label}: the message was sent, but its interrupt key was not: {cause}"
-        )),
-        InterruptConfirmation::NotChecked | InterruptConfirmation::Confirmed => None,
-    }
+    confirmation
+        .warning(label)
+        .map(|warning| format!("{label}: {warning}"))
 }
 
 /// A send that matched no agent, recorded as the command records it, so the room's account of
@@ -364,5 +362,34 @@ fn dispatch_failure(room: &Room, lane: &Option<LaneSelector>, err: DispatchErr) 
         .with_hint("name one of them in `to`, or set `all` to send to each"),
         DispatchErr::Recipient(err) => no_receiver(room, lane, &err),
         err => Failure::from(anyhow::Error::new(err)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_withheld_interrupt_says_whether_its_key_went() {
+        let id = crate::ids::MessageId::new();
+        let detail = |pressed| {
+            let reason = ParkReason::InterruptWithheld {
+                cause: "the receiver left its pane",
+                pressed,
+            };
+            park_detail("@coder", &reason, &id)
+        };
+        assert_eq!(
+            detail(false),
+            format!(
+                "not interrupted: the receiver left its pane; send now: rimz message interrupt {id}"
+            )
+        );
+        assert_eq!(
+            detail(true),
+            format!(
+                "interrupted, text not sent: the receiver left its pane; send it: rimz message steer {id}"
+            )
+        );
     }
 }

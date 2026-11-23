@@ -94,7 +94,6 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
         fork: None,
         permission: super::LaunchPermissionArgs::EMPTY,
         max_turn_flag: None,
-        interrupt_key: None,
         compact_command: None,
         presets: super::PresetMatchers {
             code_mode: super::CodeModeSwitch::Unsupported,

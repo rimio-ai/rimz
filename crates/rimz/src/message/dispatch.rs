@@ -178,6 +178,12 @@ pub enum ParkReason {
     NotHosted {
         blocker: String,
     },
+    /// An interrupt's receiver left the claim's pane before its text: `cause` says how, and
+    /// `pressed` whether the interrupt key went first.
+    InterruptWithheld {
+        cause: &'static str,
+        pressed: bool,
+    },
 }
 
 impl ParkReason {
@@ -807,15 +813,6 @@ fn prepare_mode(
     if kind == DeliveryKind::Interrupt {
         for target in recipients {
             let label = target.label(resolution.snapshot);
-            let target_kind = target
-                .agent
-                .as_ref()
-                .map(|agent| &agent.kind)
-                .or_else(|| target.pane.as_ref().map(|pane| &pane.kind))
-                .ok_or_else(|| DispatchErr::NoDurableSession {
-                    label: label.clone(),
-                })?;
-            send::interrupt_key(target_kind, &label).map_err(deliver::DeliverErr::from)?;
             let agent = if target.pane.is_some() {
                 target.bound(resolution.snapshot)
             } else {
@@ -1335,6 +1332,14 @@ fn dispatch_one(
             message_id,
             reason: None,
         }),
+        deliver::AttemptOutcome::InterruptWithheld { cause, pressed } => {
+            Ok(DispatchOutcome::Queued {
+                label: handle,
+                name: target.name(),
+                message_id,
+                reason: Some(ParkReason::InterruptWithheld { cause, pressed }),
+            })
+        }
         deliver::AttemptOutcome::TypingHeld { until } => Ok(DispatchOutcome::Queued {
             label: handle,
             name: target.name(),

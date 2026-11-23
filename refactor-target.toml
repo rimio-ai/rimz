@@ -468,8 +468,9 @@ upward-dependencies = ["address"]
 # grant-aware skill rule both skill enforcers apply (+2).
 # A provider with no home override runs a named account in a mount: mounted_home_target,
 # account_history_shareable, foreign_login, and decode_hook_in for the frame's login (+4).
-# MessageKeys gives delivery and the budget park each agent's declared key sequences (+2).
-surface-budget = 1343
+# MessageKeys and agents::message_keys give delivery and the budget park each agent's declared
+# key sequences, read by kind (+4).
+surface-budget = 1345
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -2553,7 +2554,7 @@ path = "crates/rimz/src/harness"
 # `read_when` with `WhenPlace`, `WindowAccount`, and `ArmedWhen` is the one reading of a `when`
 # for a loop task, a wait, and the schedule tool; `refuse_unreadable_forge` went private (+3).
 # `TaskCatalog::skipped_machine_row` lets the schedule tool refuse a name whose booker is unknown (+1).
-surface-budget = 1368
+surface-budget = 1367
 
 [[verdict]]
 kind = "item"
@@ -3576,7 +3577,9 @@ upward-dependencies = [
 # soft_compact exposes its module, the reminder send and its delivery outcome to the helper.
 # TurnWaitView::soft_compact_in_flight shares owed-continue debt without another queue read (+1).
 # InputWait carries native-input refusal reasons from the write decision to CLI receipts (+1).
-surface-budget = 91
+# InterruptConfirmation::warning and interrupt_withheld_detail give the CLI receipts and the MCP
+# message tool one wording for an unconfirmed or withheld interrupt (+2).
+surface-budget = 92
 
 [[verdict]]
 kind = "item"
@@ -4766,7 +4769,8 @@ path = "crates/rimz/src/store"
 # ingress::peek_pending and Wait::answered_by_check let the limit census read rest lock-free (+2).
 # Store::set_terminal_path saves the terminal PATH a user's room entry ran on, for hosted workflow children (+1).
 # AgentCard carries background scripts as CardScript labels, admitted at the view clock by shown_scripts (+1).
-surface-budget = 695
+# message::opens_slash_command is the one slash-led test batching and the submit keys share (+1).
+surface-budget = 696
 
 [[verdict]]
 kind = "item"
@@ -5419,10 +5423,8 @@ allowed-dependencies = [
     "launcher::agent_pane",
     "message",
     "mux",
-    "pane::keys",
     "sidebar::produce::hosting",
     "store",
-    "store::follow",
     "store::snapshot",
     "workspace",
 ]
@@ -5431,7 +5433,7 @@ allowed-dependencies = [
 # same CardStatus gate as candidacy, from harness::auto_continue (+1).
 # LookupMiss and lookup_miss give delivery's before-claim and fresh-send waits the hosting
 # lookup's answer that the write check reads under the pane lock (+2).
-surface-budget = 14
+surface-budget = 13
 
 [[module]]
 path = "crates/rimz/src/mux/mount_proof.rs"

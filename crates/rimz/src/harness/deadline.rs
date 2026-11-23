@@ -90,37 +90,20 @@ fn warning_text(record: &RunRecord, remaining: Duration, last: bool) -> String {
 /// the stop and presses the kind's interrupt key itself.
 const HOOK_STOP_LEAD: Duration = Duration::from_secs(10);
 
-/// When after the deadline the host sends the stop rung itself, and whether as
-/// an interrupt; `None` leaves it to the kind's hook context alone.
-fn host_stop(record: &RunRecord) -> Option<(Duration, bool)> {
-    let (hook, key) = crate::agents::definition_by_kind(record.kind.as_str())
-        .map(|agent| {
-            let spec = agent.spec();
-            (
-                spec.capabilities.hook_context.is_some(),
-                spec.launch.interrupt_key.is_some(),
-            )
-        })
-        .unwrap_or_default();
-    match (hook, key) {
-        (true, false) => None,
-        (true, true) => Some((
-            HOOK_STOP_LEAD.min(record.grace.unwrap_or_default() / 2),
-            true,
-        )),
-        (false, key) => Some((Duration::ZERO, key)),
+/// How long after the deadline the host sends the stop rung itself, as an interrupt: a kind
+/// with hook context gets the lead to carry it first.
+fn host_stop_delay(record: &RunRecord) -> Duration {
+    let hook = crate::agents::definition_by_kind(record.kind.as_str())
+        .is_ok_and(|agent| agent.spec().capabilities.hook_context.is_some());
+    if hook {
+        HOOK_STOP_LEAD.min(record.grace.unwrap_or_default() / 2)
+    } else {
+        Duration::ZERO
     }
 }
 
-/// Whether the host's stop for this run's kind goes out as an interrupt.
-pub fn stop_interrupts(record: &RunRecord) -> bool {
-    host_stop(record).is_some_and(|(_, interrupt)| interrupt)
-}
-
 pub fn stop_due_by_pane(record: &RunRecord, now: Timestamp) -> bool {
-    let Some((delay, _)) = host_stop(record) else {
-        return false;
-    };
+    let delay = host_stop_delay(record);
     matches!(due_rung(record, now), Some(Rung::Stop { at }) if at + delay <= now)
 }
 
@@ -390,9 +373,10 @@ mod tests {
         let mut record = record();
         let deadline = record.deadline_at.unwrap();
         let delay = Duration::from_secs(10);
-        for kind in ["claude", "codex"] {
+        for kind in [
+            "claude", "codex", "copilot", "cursor", "droid", "grok", "qwen",
+        ] {
             record.kind = AgentKind::new_unchecked(kind);
-            assert!(stop_interrupts(&record), "{kind}");
             assert!(!stop_due_by_pane(&record, deadline), "{kind}");
             assert!(!stop_due_by_pane(
                 &record,
@@ -411,17 +395,8 @@ mod tests {
         ));
         assert!(stop_due_by_pane(&record, deadline + Duration::from_secs(6)));
         record.grace = Some(Duration::from_secs(180));
-        for kind in ["copilot", "cursor", "droid", "grok", "qwen"] {
-            record.kind = AgentKind::new_unchecked(kind);
-            assert!(
-                !stop_due_by_pane(&record, deadline + Duration::from_secs(60)),
-                "{kind}"
-            );
-        }
-        record.kind = AgentKind::new_unchecked("antigravity");
-        assert!(stop_interrupts(&record));
-        assert!(stop_due_by_pane(&record, deadline));
         for kind in [
+            "antigravity",
             "amp",
             "opencode",
             "pi",
@@ -431,7 +406,6 @@ mod tests {
             "unregistered",
         ] {
             record.kind = AgentKind::new_unchecked(kind);
-            assert!(!stop_interrupts(&record), "{kind}");
             assert!(!stop_due_by_pane(
                 &record,
                 deadline - Duration::from_secs(1)

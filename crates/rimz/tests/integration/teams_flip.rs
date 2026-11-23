@@ -17,7 +17,9 @@ use rimz::store::message::{
 };
 use serde_json::json;
 
-use crate::common::{DeliveryRendezvous, Env, ScrubSessionEnvExt, wait_for_text_then_enter};
+use crate::common::{
+    DeliveryRendezvous, Env, ScrubSessionEnvExt, wait_for_text_then_enter, wait_for_text_then_key,
+};
 
 const BOARD: &str = "# Work\nStage: Build (@coder)\n\n## Progress log\n- existing entry\n\n## Evidence\nKeep this section.\n";
 const CONFIG: &str = r#"leader: coder
@@ -3458,7 +3460,7 @@ fn resumed_lazy_leader_gets_its_resume_prompt_then_its_stage() {
         "say hi\n\nType: STAGE\nFrom: @rimz\nContent:\n{}",
         stage.text
     );
-    wait_for_text_then_enter(&fixture.trace, &paste);
+    wait_for_text_then_key(&fixture.trace, &paste, "9");
     let messages = fixture.env.store().list_messages().unwrap();
     for id in [&prompt.message_id, &stage.message_id] {
         let message = messages

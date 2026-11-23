@@ -122,6 +122,12 @@ pub(super) enum AttemptOutcome {
     TypingHeld {
         until: Timestamp,
     },
+    /// An interrupt wrote no text: its receiver left the claim's pane, before the key or after
+    /// it (`pressed`). The records are queued.
+    InterruptWithheld {
+        cause: &'static str,
+        pressed: bool,
+    },
     Deferred(send::Deferral),
 }
 
@@ -325,8 +331,16 @@ pub(super) fn hosting_wait(
 }
 
 pub enum DeliveryReport {
-    Sent { interrupt: InterruptConfirmation },
+    Sent {
+        interrupt: InterruptConfirmation,
+    },
     Refused(DeliveryVerdict),
+    /// An interrupt wrote no text: its receiver left the claim's pane, before the key or after
+    /// it (`pressed`), and the record is queued.
+    InterruptWithheld {
+        cause: &'static str,
+        pressed: bool,
+    },
     Stopped,
 }
 
@@ -355,22 +369,11 @@ pub fn deliver_one_report(
     if let Ok(runtime) = RuntimePaths::for_project_root(&workspace.project_root) {
         snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(&runtime));
     }
-    let Some(message) = live.iter().find(|message| {
-        &message.message_id == message_id && message.status == MessageStatus::Queued
-    }) else {
+    if !live
+        .iter()
+        .any(|message| &message.message_id == message_id && message.status == MessageStatus::Queued)
+    {
         return Ok(DeliveryReport::Stopped);
-    };
-    if matches!(policy, DeliveryPolicy::Interrupt { .. }) {
-        send::interrupt_key(
-            &message.kind,
-            &format!(
-                "@{}",
-                message
-                    .agent_name
-                    .as_deref()
-                    .unwrap_or(message.kind.as_str())
-            ),
-        )?;
     }
     attempt_delivery(
         workspace,
@@ -495,6 +498,9 @@ fn attempt_delivery(
     )?;
     Ok(match outcome {
         AttemptOutcome::Sent { interrupt, .. } => DeliveryReport::Sent { interrupt },
+        AttemptOutcome::InterruptWithheld { cause, pressed } => {
+            DeliveryReport::InterruptWithheld { cause, pressed }
+        }
         AttemptOutcome::TypingHeld { until } => {
             DeliveryReport::Refused(DeliveryVerdict::TypingHeld { until })
         }
@@ -565,16 +571,19 @@ pub(super) fn execute_attempt(
         )
     };
     let receipt = receipt.and_then(|receipt| {
-        let released = match receipt {
+        let released: Option<(std::borrow::Cow<'static, str>, bool)> = match receipt {
             send::Receipt::ClaimLost { compacted } => Some((
-                "pane write stopped: message claim no longer held",
+                "pane write stopped: message claim no longer held".into(),
                 compacted,
             )),
-            send::Receipt::NotHosted { compacted, reason } => Some((reason, compacted)),
+            send::Receipt::NotHosted { compacted, reason } => Some((reason.into(), compacted)),
+            send::Receipt::InterruptWithheld {
+                compacted, cause, ..
+            } => Some((format!("interrupt withheld: {cause}").into(), compacted)),
             _ => None,
         };
         if let Some((reason, compacted)) = released {
-            store.release_message_claims(records, reason, compacted, &workspace.session_name)?;
+            store.release_message_claims(records, &reason, compacted, &workspace.session_name)?;
         }
         Ok(receipt)
     });
@@ -591,6 +600,9 @@ pub(super) fn execute_attempt(
             | send::Receipt::NotHosted { .. }
             | send::Receipt::Withdrawn { .. },
         ) => Ok(AttemptOutcome::Queued),
+        Ok(send::Receipt::InterruptWithheld { cause, pressed, .. }) => {
+            Ok(AttemptOutcome::InterruptWithheld { cause, pressed })
+        }
         Ok(send::Receipt::CacheCold) => {
             // The cold check reads the ping at the head; whatever was batched behind it waits for
             // the next attempt rather than failing with the ping.
@@ -944,7 +956,7 @@ pub fn sweep(
             let verdict = match report {
                 DeliveryReport::Sent { .. } => continue,
                 DeliveryReport::Refused(verdict) => Some(verdict),
-                DeliveryReport::Stopped => None,
+                DeliveryReport::Stopped | DeliveryReport::InterruptWithheld { .. } => None,
             };
             let ended_receiver = match &verdict {
                 Some(DeliveryVerdict::ReceiverEnded) => snapshot
