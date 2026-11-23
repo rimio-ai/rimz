@@ -120,7 +120,7 @@ kill "$(cat "$TMPDIR/sshd-probe/sshd.pid")"
 - A dialog check drives the same command in a private tmux server (`tmux -L <name> -f /dev/null`, short `TMUX_TMPDIR`).
 - A check that needs `ExitPlanMode` drives an interactive session started with `--permission-mode plan` in the private tmux server: print mode (`-p`) does not offer the tool. A scratch directory whose `.claude/settings.json` declares hooks asks for folder trust first. Approving the plan writes a plan file under the account's `plans/` directory: remove it afterwards.
 - Run it yourself: a subagent on another provider has no Claude login. It spends the user's real usage, so keep it to the questions the change rests on.
-- A check of agy (Antigravity) alone needs no room and no model turn. Run `agy` under `env -i` with `PATH`, a scratch `HOME`, its own `RIMZ_HOME`, and a short `XDG_RUNTIME_DIR`, from a scratch directory under `$TMPDIR`. A logged-in check copies `~/.gemini` into the scratch home.
+- A check of agy (Antigravity) alone needs no room and no model turn. Run `agy` under `env -i` with `PATH`, a scratch `HOME`, its own `RIMZ_HOME`, and a short `XDG_RUNTIME_DIR`, from a scratch directory under `$TMPDIR`. A logged-in check copies `~/.gemini` into the scratch home, removes that home in a cleanup that runs on every exit, and lists the path afterwards to confirm it is gone.
 - Print-mode slash commands (`agy -p /usage --output-format json`), `agy plugin validate`, and `agy plugin list` spend no quota.
 - A logged-out `agy -p` waits 60 s and opens a browser unless its environment carries an SSH session variable (`SSH_CONNECTION`, `SSH_TTY`, or `SSH_CLIENT`) and its stdin delivers a newline.
 - Never print the token, a `/usage` response body, or the account email.
