@@ -723,6 +723,41 @@ fn hostile_item_names_stay_on_one_line_on_every_pack_surface() {
 }
 
 #[test]
+fn reset_identical_keeps_a_changed_override_whose_name_holds_nul() {
+    let fixture = Fixture::new();
+    let crew = &fixture.crew;
+    write(
+        crew.join("agents/nul.md"),
+        "---\nname: \"a\\0b\"\ndescription: Pack\nagent: claude\ntools: [Read]\n---\nPack.",
+    );
+    git(crew, &["add", "."]);
+    git(crew, &["commit", "-m", "nul name"]);
+    let installed = fixture.run(&["packs", "install", "crew", "--yes"]);
+    assert!(installed.status.success(), "{installed:?}");
+    write(
+        fixture.env.agents_home().join("agents/nul.md"),
+        "---\nname: \"a\\0b\"\ndescription: Home\nagent: claude\ntools: [Read]\n---\nHome.",
+    );
+    let shown = json(&fixture.env, &["packs", "show", "crew", "--json"]);
+    assert_eq!(
+        item(&shown, "agents", "a\0b")["fate"]["state"],
+        "overridden",
+        "{shown}"
+    );
+
+    let reset = fixture.run(&["packs", "reset", "crew", "--identical"]);
+
+    let printed = String::from_utf8_lossy(&reset.stderr);
+    assert!(!printed.contains("panicked"), "{reset:?}");
+    assert!(reset.status.success(), "{reset:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&reset.stdout),
+        "Kept crew:a\\u{0}b (agents)\n",
+        "{reset:?}"
+    );
+}
+
+#[test]
 fn a_linked_install_warns_of_a_workflow_that_cannot_load() {
     let env = Env::new();
     let linked = source(&env);
