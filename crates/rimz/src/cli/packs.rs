@@ -1012,19 +1012,25 @@ fn reset(
                         one_line(&reason)
                     )?;
                 } else {
+                    // A bare reset reads this key from the inventory, not argv, so it can hold
+                    // NUL. No argv can carry that name, so the line offers no command for it.
+                    let diff = shlex::try_join([
+                        "rimz",
+                        "packs",
+                        "diff",
+                        &key,
+                        "--type",
+                        item.kind.as_str(),
+                    ])
+                    .map_or_else(
+                        |_| String::new(),
+                        |command| format!("; diff: {}", one_line(&command)),
+                    );
                     writeln!(
                         out,
-                        "Kept {} ({}); diff: {}",
+                        "Kept {} ({}){diff}",
                         one_line(&key),
-                        item.kind.as_str(),
-                        one_line(&shell_command([
-                            "rimz",
-                            "packs",
-                            "diff",
-                            &key,
-                            "--type",
-                            item.kind.as_str()
-                        ]))
+                        item.kind.as_str()
                     )?;
                 }
             }
