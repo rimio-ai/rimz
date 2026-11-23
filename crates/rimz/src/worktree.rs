@@ -437,6 +437,10 @@ pub enum LandedVerdict {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Holders {
     pub agents: Vec<String>,
+    /// Each agent holder's name, keyed by its handle in `agents`: prose pairs the two, and
+    /// the JSON keeps `agents` bare.
+    #[serde(skip)]
+    pub names: std::collections::BTreeMap<String, String>,
     pub panes: u32,
     pub loop_tasks: Vec<String>,
     pub teams: Vec<String>,
@@ -450,6 +454,16 @@ pub struct WorkflowRunHolder {
 }
 
 impl Holders {
+    /// The agent holders as prose names them, each with its name beside it where they differ.
+    pub fn agent_labels(&self) -> Vec<String> {
+        self.agents
+            .iter()
+            .map(|handle| {
+                crate::address::handle_with_name(handle, self.names.get(handle).map(String::as_str))
+            })
+            .collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.agents.is_empty()
             && self.panes == 0
@@ -461,7 +475,7 @@ impl Holders {
 
 impl std::fmt::Display for Holders {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut parts = self.agents.clone();
+        let mut parts = self.agent_labels();
         match self.panes {
             0 => {}
             1 => parts.push("an open pane".to_owned()),
@@ -568,6 +582,8 @@ struct AgentProtectionFact {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProtectionSet {
     paths: Vec<(PathBuf, Holder)>,
+    /// Each agent holder's name, keyed by its handle.
+    names: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -625,7 +641,13 @@ pub fn protection_set_from_runtime(
             }
         })
         .collect::<Vec<_>>();
-    ProtectionSet::from_facts(&pane_facts, &agent_facts, own, occupancy)
+    let mut protection = ProtectionSet::from_facts(&pane_facts, &agent_facts, own, occupancy);
+    protection.names = agents
+        .iter()
+        .zip(&agent_facts)
+        .filter_map(|(agent, fact)| Some((fact.handle.clone(), agent.name.clone()?)))
+        .collect();
+    protection
 }
 
 impl ProtectionSet {
@@ -665,6 +687,9 @@ impl ProtectionSet {
             match holder {
                 Holder::Agent(handle) => {
                     if !holders.agents.contains(handle) {
+                        if let Some(name) = self.names.get(handle) {
+                            holders.names.insert(handle.clone(), name.clone());
+                        }
                         holders.agents.push(handle.clone());
                     }
                 }

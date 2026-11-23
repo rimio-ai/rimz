@@ -706,7 +706,7 @@ fn in_use_details(holders: &Holders) -> Vec<String> {
     if !holders.agents.is_empty() {
         details.push(holder_chips(
             &Holders {
-                agents: holders.agents.clone(),
+                agents: holders.agent_labels(),
                 ..Holders::default()
             },
             4,
@@ -1197,7 +1197,13 @@ mod tests {
                 id: rimz::ids::WorkflowRunId::new(),
                 address: "land#demo".into(),
             }],
+            ..Holders::default()
         };
+        let mut named = holders.clone();
+        named
+            .names
+            .insert("@coder".to_owned(), "round-binder".to_owned());
+        assert_eq!(in_use_details(&named)[0], "@coder (@round-binder)");
         assert_eq!(
             in_use_details(&holders),
             [

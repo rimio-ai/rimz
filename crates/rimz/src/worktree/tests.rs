@@ -677,6 +677,7 @@ fn holders_render_loop_tasks_after_agents_and_panes() {
             id: WorkflowRunId::new(),
             address: "land#demo".into(),
         }],
+        ..Holders::default()
     };
     assert_eq!(
         holders.to_string(),
@@ -899,6 +900,23 @@ fn holders_keep_channel_scoped_agents_distinct() {
     let holders = protection_set_from_runtime(&[], &agents, None, Occupancy::Unproven)
         .holders(Path::new("/repo-worktrees/demo"));
     assert_eq!(holders.agents, ["@coder#one", "@coder#two"]);
+    assert_eq!(holders.to_string(), "@coder#one, @coder#two");
+}
+
+#[test]
+fn holder_prose_names_an_agent_beside_its_handle_and_json_stays_bare() {
+    let mut coder = agent("one", Some("/repo-worktrees/demo"), None, at(1));
+    coder.role = Some("coder".to_owned());
+    coder.name = Some("round-binder".to_owned());
+    let holders = protection_set_from_runtime(&[], &[coder], None, Occupancy::Unproven)
+        .holders(Path::new("/repo-worktrees/demo"));
+    let handle = holders.agents[0].clone();
+    assert!(handle.starts_with("@coder"), "{handle}");
+    assert_eq!(holders.to_string(), format!("{handle} (@round-binder)"));
+    assert_eq!(
+        serde_json::to_value(&holders).unwrap()["agents"],
+        serde_json::json!([handle])
+    );
 }
 
 #[test]
