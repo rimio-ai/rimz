@@ -246,6 +246,7 @@ pub fn command_is_launch_chrome(command: &str) -> bool {
             | "focus"
             | "fork"
             | "molt"
+            | "molt-close"
             | "wait"
             | "stop"
             | "restart"

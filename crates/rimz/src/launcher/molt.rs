@@ -1,15 +1,21 @@
-//! Agent-only fresh-session swap, with the replaced pane closed by the caller.
+//! Agent-only fresh-session swap. The replaced session stays open until its turn ends and it has
+//! rested its booked time; then the hidden `molt-close` helper its turn-end hook spawns closes it.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
-use crate::agents::{self, AgentState, LoginCatalog};
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+
+use crate::agents::{self, AgentState, IdleStop, LoginCatalog};
 use crate::config::MachineConfig;
 use crate::config::effective::ProfileScope;
 use crate::harness::ancestry::{LaunchFocus, resolve_caller, resolve_launch_caller};
 use crate::harness::launch::ExecAction;
 use crate::harness::resume::ResumePosture;
-use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
-use crate::mux::MuxBackend;
+use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
+use crate::sidebar::produce::hosting::Hosting;
+use crate::store::idle_stop::{self, IdleStopRequest};
 use crate::store::writer::{AgentLaunchRequest, AgentLaunchScope};
 use crate::{ResolvedWorkspace, RuntimeScope, Store};
 
@@ -124,8 +130,8 @@ impl<'a> MoltSource<'a> {
 }
 
 /// The bound successor. The replaced session stays open until
-/// [`close_replaced`](Self::close_replaced) runs.
-#[must_use = "the caller must decide when to close the replaced session"]
+/// [`close_when_rested`](Self::close_when_rested) books its close.
+#[must_use = "the caller must book the replaced session's close"]
 pub struct Molted {
     pub handle: String,
     pub successor_kind: AgentKind,
@@ -136,22 +142,47 @@ pub struct Molted {
     store: Store,
     source: AgentState,
     old_pane: PaneId,
-    backend: Box<dyn MuxBackend>,
 }
 
 impl Molted {
-    /// After delivering the receipt, release and conditionally close the replaced pane.
-    /// Returns cleanup notices even if their optional presentation fails.
-    pub fn close_replaced(self, present: impl FnMut(&str) -> std::io::Result<()>) -> Vec<String> {
-        swap::finish_replacement(
+    /// After delivering the receipt, release the replaced session and book its close: once its
+    /// turn has ended and it has rested `rest`, [`close_rested`] closes its pane. Returns the
+    /// cleanup notices even if their optional presentation fails; the replacement has bound,
+    /// so none of them fails the molt.
+    pub fn close_when_rested(
+        self,
+        rest: Duration,
+        mut present: impl FnMut(&str) -> std::io::Result<()>,
+    ) -> Vec<String> {
+        let mut messages = Vec::new();
+        let mut report = |warning: String| {
+            let _ = present(&warning);
+            messages.push(warning);
+        };
+        swap::release_replaced(
             &self.workspace,
             &self.store,
-            self.backend.as_ref(),
             &self.source,
             &self.old_pane,
             true,
-            present,
-        )
+            &mut report,
+        );
+        let booking = IdleStopRequest {
+            kind: self.source.kind.clone(),
+            agent_id: self.source.agent_id.clone(),
+            stop: IdleStop {
+                after_secs: rest.as_secs(),
+                requested_at: Timestamp::now(),
+                requested_by: Some(self.handle.clone()),
+            },
+        };
+        if let Err(err) = idle_stop::arm(self.store.paths(), booking) {
+            report(format!(
+                "warning: the replaced session's close was not booked, so its pane {} stays open: {err}",
+                self.old_pane
+            ));
+        }
+        messages
     }
 }
 
@@ -170,6 +201,106 @@ pub fn molt(
             notices: Vec::new(),
         })?
         .launch(workspace, mux, machine, note, alias, |_| Ok(()))
+}
+
+/// What the hidden `rimz agents molt-close` helper is asked to close: a session a molt replaced.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MoltCloseRequest {
+    pub workspace_id: WorkspaceId,
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+}
+
+/// How long the helper sleeps between reads while the rest runs, so a withdrawn booking or a
+/// new turn stops it promptly.
+const REST_RECHECK: Duration = Duration::from_secs(5);
+
+/// At a turn end of the session `(kind, agent_id)` a molt replaced, hand its booked close to a
+/// detached helper that waits out the rest. A session with no booked close is left alone.
+pub fn close_after_turn(store: &Store, kind: &AgentKind, agent_id: &AgentSessionId) {
+    if booked_close(store, kind, agent_id).is_none() {
+        return;
+    }
+    let runtime = store.runtime_paths();
+    let request = MoltCloseRequest {
+        workspace_id: runtime.workspace_id.clone(),
+        kind: kind.clone(),
+        agent_id: agent_id.clone(),
+    };
+    let args = crate::child_process::agent_helper_argv("molt-close", &request);
+    if let Err(err) = crate::child_process::spawn_detached_rimz(runtime, args, "agent-molt-close") {
+        tracing::warn!(
+            %kind,
+            %agent_id,
+            error = &err as &dyn std::error::Error,
+            "molt: failed to spawn the replaced session's close",
+        );
+    }
+}
+
+/// Close the pane of the session a molt replaced once it has rested its booked time, and
+/// withdraw the booking. Returns without closing while the session is not at rest (its next
+/// turn end asks again), when a prompt typed into it withdrew the booking, or when the agent's
+/// current session sits in that pane.
+pub fn close_rested(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    request: &MoltCloseRequest,
+) -> anyhow::Result<()> {
+    let (kind, agent_id) = (&request.kind, &request.agent_id);
+    let stop = loop {
+        let Some(stop) = booked_close(store, kind, agent_id) else {
+            return Ok(());
+        };
+        let rows = store.audit_rows()?;
+        let Some(row) = rows
+            .find(kind.as_str(), agent_id)
+            .filter(|row| row.ended_at.is_none())
+        else {
+            idle_stop::withdraw(store.paths(), kind, agent_id)?;
+            return Ok(());
+        };
+        let now = Timestamp::now();
+        let Some(due) = crate::harness::idle_stop::due_at(row, &stop, now) else {
+            return Ok(());
+        };
+        if now >= due {
+            break stop;
+        }
+        std::thread::sleep(now.duration_until(due).unsigned_abs().min(REST_RECHECK));
+    };
+    let hosting = crate::sidebar::produce::hosting::read_hosting(workspace, store, None)?;
+    let Hosting::Pane {
+        pane_id,
+        session_name,
+    } = hosting.session_hosting(kind, agent_id)
+    else {
+        idle_stop::withdraw(store.paths(), kind, agent_id)?;
+        return Ok(());
+    };
+    let launch = hosting
+        .agent(kind, agent_id)
+        .map(|row| row.launch_key().clone())
+        .unwrap_or_else(|| agent_id.clone());
+    if let Hosting::Pane { pane_id: held, .. } = hosting.agent_hosting(kind, &launch).hosting
+        && held == pane_id
+    {
+        anyhow::bail!("the agent's current session is in pane {pane_id}, so it was not closed");
+    }
+    // The hosting read is a mux call: a prompt typed in the meantime withdrew the booking.
+    if booked_close(store, kind, agent_id).as_ref() != Some(&stop) {
+        return Ok(());
+    }
+    crate::mux::backend_for(pane_id.mux()).close_pane(&session_name, &pane_id)?;
+    idle_stop::withdraw(store.paths(), kind, agent_id)?;
+    Ok(())
+}
+
+fn booked_close(store: &Store, kind: &AgentKind, agent_id: &AgentSessionId) -> Option<IdleStop> {
+    idle_stop::read(store.paths())
+        .into_iter()
+        .find(|request| request.kind == *kind && request.agent_id == *agent_id)
+        .map(|request| request.stop)
 }
 
 fn launch_replacement(
@@ -397,7 +528,6 @@ fn launch_replacement(
         store: store.clone(),
         source: caller.source,
         old_pane,
-        backend,
     })
 }
 

@@ -8,6 +8,7 @@ const RUN_WAKE_FILTER: rimz::agents::SignalSet = rimz::agents::SignalSet::TURN_E
     .union(rimz::agents::SignalSet::TURN_INTERRUPTED)
     .union(rimz::agents::SignalSet::ENDED);
 const ARCHIVE_FILTER: rimz::agents::SignalSet = rimz::agents::SignalSet::ENDED;
+const MOLT_CLOSE_FILTER: rimz::agents::SignalSet = rimz::agents::SignalSet::TURN_ENDED;
 
 struct Reactor {
     filter: rimz::agents::SignalSet,
@@ -26,6 +27,10 @@ static REACTORS: &[Reactor] = &[
     Reactor {
         filter: ARCHIVE_FILTER,
         run: archive_ended,
+    },
+    Reactor {
+        filter: MOLT_CLOSE_FILTER,
+        run: molt_close,
     },
 ];
 
@@ -97,6 +102,13 @@ fn archive_ended(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
             agent_id = %event.agent_id,
             "lifecycle: failed to archive messages for ended agent",
         );
+    }
+}
+
+/// A turn end of a session a molt replaced hands its booked close to the helper.
+fn molt_close(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
+    if ctx.replaced {
+        rimz::launcher::molt::close_after_turn(ctx.store, &event.kind, &event.agent_id);
     }
 }
 
