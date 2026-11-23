@@ -179,7 +179,7 @@ Every workflow agent's launch Environment section has a `- workflow:` line namin
 
 ## Definition fields
 
-A definition is `workflow.toml`: one `[workflow]` table and any number of nodes, each a table named by its kind, `[<kind>.<name>]`. A name is unique across all nine kinds, and takes ASCII letters, digits, `-`, and `_` only. The workflow's folder name follows the same rule. A field marked required refuses when absent. A field a kind's table does not list refuses there ([validation](#validate-and-schema)). Every node also takes `summary`.
+A definition is `workflow.toml`: one `[workflow]` table and any number of nodes, each a table named by its kind, `[<kind>.<name>]`. A name is unique across all nine kinds, and takes ASCII letters, digits, `-`, and `_` only. The workflow's folder name and every outcome a check names (a key of its `on` table, a case's `outcome`, and `else`) follow the same rule. A field marked required refuses when absent. A field a kind's table does not list refuses there ([validation](#validate-and-schema)). Every node also takes `summary`.
 
 | `[workflow]` | Meaning |
 | --- | --- |
@@ -749,6 +749,7 @@ Every table refuses a field it does not take, including a field another kind own
 An invalid value in an optional field refuses at its path as a required field's does. Nothing a definition writes is read as absent. That covers:
 
 - a blank or multiline `summary`, an unsupported `deadline`;
+- an outcome outside the [name rule](#definition-fields) (`` an outcome takes only ASCII letters, digits, `-`, and `_` ``);
 - a `timeout`, `stagger`, `for`, or `sleep` that is not an `s`/`m`/`h`/`d` duration within `365d`, and a zero `stagger`, `for`, or `sleep`;
 - `give-up` that is zero, an unsupported `window`, `max-visits` or `max-parallel` below 1;
 - an invalid `wake` or `subscribe` entry ([wake and subscribe](#wake-and-subscribe));

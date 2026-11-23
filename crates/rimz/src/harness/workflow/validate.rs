@@ -320,6 +320,7 @@ pub(super) fn validate_spec(
         }
         for (outcome, route) in &check.on {
             let path = format!("{path}.on.{outcome}");
+            report.outcome_name(&path, outcome);
             if outcome == "failed" || Cause::parse(outcome).is_some() {
                 report.failure_target(spec, &path, route);
             } else {
@@ -849,9 +850,20 @@ impl Validation {
         }
     }
 
+    /// Outcome keys print in human views, so they take the node-name grammar too.
+    fn outcome_name(&mut self, path: &str, outcome: &str) {
+        if crate::harness::name::validate_name(outcome).is_err() {
+            self.error(
+                path,
+                "an outcome takes only ASCII letters, digits, `-`, and `_`",
+            );
+        }
+    }
+
     fn condition_fields(&mut self, path: &str, check: &spec::Check, project_root: Option<&Path>) {
         let mut outcomes = BTreeSet::new();
         if let Some(outcome) = &check.else_outcome {
+            self.outcome_name(&format!("{path}.else"), outcome);
             if spec::reserved(outcome) {
                 self.error(&format!("{path}.else"), "choose a non-reserved outcome");
             }
@@ -862,6 +874,7 @@ impl Validation {
         for (index, case) in check.cases.iter().enumerate() {
             let case_path = format!("{path}.cases.{index}");
             outcomes.insert(case.outcome.as_str());
+            self.outcome_name(&format!("{case_path}.outcome"), &case.outcome);
             if spec::reserved(&case.outcome) {
                 self.error(
                     &format!("{case_path}.outcome"),
