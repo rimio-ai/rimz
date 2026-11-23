@@ -3,12 +3,14 @@
 pub mod agent_join;
 pub mod agent_pane;
 pub mod checkout;
+pub mod child_resume;
 pub mod context;
 mod execute;
 pub mod lsp_admission;
 pub mod molt;
 pub mod placement;
 mod reconcile;
+pub mod relaunch;
 pub mod stop;
 mod supervised;
 pub mod swap;

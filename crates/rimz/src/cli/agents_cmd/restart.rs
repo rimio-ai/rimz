@@ -4,26 +4,12 @@ use super::*;
 use crate::cli::{render, select};
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 use rimz::harness::launch::ExecAction;
+use rimz::launcher::relaunch::relaunch_plan;
 use rimz::launcher::swap::{
     finish_replacement, fresh_launch_request, held_by, held_elsewhere, open_session_run,
     relaunch_request, replace, reserve_swap, restart_cell, restart_posture, swap_briefing,
     with_run,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FreshReason {
-    NoResumeSupport,
-    NoRecordedConversation,
-}
-
-impl FreshReason {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::NoResumeSupport => "no resume support",
-            Self::NoRecordedConversation => "no recorded conversation",
-        }
-    }
-}
 
 /// What `rimz agents restart` adds over a bare relaunch. `rimz teams restart` passes none, so
 /// it never continues, hands over a run, or checks spend.
@@ -519,56 +505,6 @@ fn warn_after_bound(undone: &str, result: Result<()>) {
     }
 }
 
-pub(in crate::cli) fn relaunch_action(
-    agent: &AgentState,
-    logins: &rimz::agents::RoomAccounts,
-    catalog: &rimz::agents::LoginCatalog,
-    cwd: &Path,
-) -> Result<(
-    rimz::harness::launch::ExecAction,
-    Option<rimz::ids::LoginName>,
-    Option<&'static str>,
-)> {
-    let login = rimz::harness::resume::relaunch_login(agent, logins, catalog)?;
-    let (action, fresh_reason) = relaunch_plan(agent, cwd)?;
-    Ok((action, login, fresh_reason))
-}
-
-/// Whether the agent's session resumes, and the reason it launches fresh when it cannot.
-fn relaunch_plan(
-    agent: &AgentState,
-    cwd: &Path,
-) -> Result<(rimz::harness::launch::ExecAction, Option<&'static str>)> {
-    let adapter = rimz::agents::find_definition(agent.kind.as_str())
-        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
-    let resume_support = !agent.agent_id.is_provisional()
-        && agent.worktree_path.is_some()
-        && rimz::harness::launch::compile_provider_argv(
-            adapter,
-            agent.kind.as_str(),
-            &ExecAction::Resume {
-                session_id: agent.agent_id.to_string(),
-                extra_args: Vec::new(),
-            },
-            cwd,
-        )
-        .is_ok();
-    let session_present = rimz::harness::resume::resume_session_present(agent);
-    let fresh_reason = fresh_reason(resume_support, session_present);
-    let action = if fresh_reason.is_some() {
-        ExecAction::Launch {
-            prompt: None,
-            extra_args: Vec::new(),
-        }
-    } else {
-        ExecAction::Resume {
-            session_id: agent.agent_id.to_string(),
-            extra_args: Vec::new(),
-        }
-    };
-    Ok((action, fresh_reason.map(FreshReason::as_str)))
-}
-
 /// The login `--account` names: an account of the agent's own kind and, when the session
 /// resumes, one in its history pool. The room's selection is neither read nor written.
 fn flag_login(
@@ -684,16 +620,6 @@ fn open_run_fate(
     match run.filter(|run| !run.status.is_terminal()) {
         Some(run) if resumes && !abandons_turn => (Some(run), None),
         open => (None, open),
-    }
-}
-
-fn fresh_reason(resume_support: bool, session_present: bool) -> Option<FreshReason> {
-    if !resume_support {
-        Some(FreshReason::NoResumeSupport)
-    } else if !session_present {
-        Some(FreshReason::NoRecordedConversation)
-    } else {
-        None
     }
 }
 

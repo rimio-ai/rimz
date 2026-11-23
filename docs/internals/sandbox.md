@@ -74,7 +74,7 @@ Two callers soften the refusal. Room judgment (`crates/rimz/src/room/judgment.rs
 | Layout launches (`crates/rimz/src/launcher/mod.rs::prepare_layout`: `rimz agents launch`, a loop run, a workflow agent attempt), `restart`, `fork`, `molt`, supervised runs | For the launch's effective isolation. |
 | Single-session resume and the provider picker (`cli/agents_cmd/resume.rs`) | For the resumed launch's effective isolation. |
 | Cohort resume (`crates/rimz/src/launcher/mod.rs::launch_resume_layout`) | For each resumed agent's effective isolation. |
-| Parent-message child resume (`cli/subagents/resume.rs`) | For the child's effective isolation after re-reading its profile. |
+| Parent-message child resume (`launcher/child_resume.rs`) | For the child's effective isolation after re-reading its profile. |
 | The exec wrapper (`crates/rimz/src/harness/launch_plan.rs::prepare_exec`) | For the launch's effective isolation. A failure marks the launch failed and fails its run with the refusal as its reason. |
 | `rimz agents explain` | For the explained launch's isolation. |
 | `rimz doctor` | Always. Reports mode, binary path, version, probe verdict, and a fix for a scoped-mode failure. In host mode the check is informational. |

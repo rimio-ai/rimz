@@ -1,32 +1,42 @@
-//! Parent-only resume doorway for a message to an ended child.
+//! The parent-only resume entry for a message to an ended child: the caller's own child,
+//! ended, is relaunched on its session and the message parks for it. `rimz message` and the
+//! MCP `message` tool both reach it on an address that names no live agent.
 
-use super::*;
-use crate::cli::supervised;
-use rimz::config::effective::ProfileScope;
-use rimz::harness::launch::{ExecAction, ExecRequest};
-use rimz::harness::resume::{PostureRequest, ResumePosture};
-use rimz::launcher::swap;
-use rimz::message::dispatch::{
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+
+use super::relaunch::relaunch_action;
+use super::stop::newest_run_for_child;
+use super::swap::{relaunch_identity_env, relaunch_request, with_run};
+use super::trust::Unattended;
+use super::{Interaction, Notice};
+use crate::agents::AgentState;
+use crate::config::effective::ProfileScope;
+use crate::harness::launch::{ExecAction, ExecRequest};
+use crate::harness::resume::{PostureRequest, ResumePosture};
+use crate::message::dispatch::{
     self, DispatchErr, DispatchOutcome, DispatchRequest, DispatchResult, ParkReason,
 };
-use rimz::store::run::RunRecord;
-use rimz::store::writer::ResumeAttempt;
-use std::path::Path;
+use crate::store::Store;
+use crate::store::run::RunRecord;
+use crate::store::writer::ResumeAttempt;
+use crate::workspace::ResolvedWorkspace;
 
 fn ended_child<'a>(
     agents: &'a [AgentState],
     caller: &AgentState,
     target: &str,
     scope: Option<&str>,
-    channel: &rimz::address::AddressContext,
+    channel: &crate::address::AddressContext,
 ) -> Option<&'a AgentState> {
-    let children = rimz::address::launched_children(agents, caller);
-    rimz::address::resolve_agent(target, scope, channel, &children)
+    let children = crate::address::launched_children(agents, caller);
+    crate::address::resolve_agent(target, scope, channel, &children)
         .ok()
         .filter(|child| child.ended_at.is_some())
 }
 
-pub(in crate::cli) enum ResumeChildOutcome {
+pub enum ResumeChildOutcome {
     NotApplicable,
     AlreadyBound,
     Dispatched(DispatchResult),
@@ -36,22 +46,25 @@ pub(in crate::cli) enum ResumeChildOutcome {
     LimitRefusal(String),
 }
 
-pub(in crate::cli) fn resume_child(
-    ctx: &Ctx,
+pub fn resume_child(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
     target: &str,
     scope: Option<&str>,
-    channel: &rimz::address::AddressContext,
+    channel: &crate::address::AddressContext,
     request: DispatchRequest,
+    interaction: &mut impl Interaction,
 ) -> Result<ResumeChildOutcome> {
-    let audit = ctx.store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    let Ok(caller) = rimz::harness::ancestry::resolve_calling_agent(&audit.agents) else {
+    let audit = store.runtime_projection(crate::RuntimeScope::Audit)?;
+    let Ok(caller) = crate::harness::ancestry::resolve_calling_agent(&audit.agents) else {
         return Ok(ResumeChildOutcome::NotApplicable);
     };
     let Some(child) = ended_child(&audit.agents, caller, target, scope, channel) else {
         return Ok(ResumeChildOutcome::NotApplicable);
     };
     let resume_context = || format!("cannot resume {target}");
-    let outcome = resume_resolved(ctx, child, caller, request).with_context(resume_context)?;
+    let outcome = resume_resolved(workspace, store, child, caller, request, interaction)
+        .with_context(resume_context)?;
     Ok(match outcome {
         ResumeChildOutcome::DeliveryFailed(error) => {
             ResumeChildOutcome::DeliveryFailed(error.context(resume_context()))
@@ -63,20 +76,20 @@ pub(in crate::cli) fn resume_child(
 /// Refuses a message to a child whose current answer failed on a provider limit while the
 /// account a resume would run on still reads a refill ahead.
 fn limit_refusal(
-    store: &rimz::store::Store,
+    store: &crate::store::Store,
     child: &AgentState,
     run: &RunRecord,
-    logins: &rimz::agents::RoomAccounts,
-    catalog: &rimz::agents::LoginCatalog,
+    logins: &crate::agents::RoomAccounts,
+    catalog: &crate::agents::LoginCatalog,
 ) -> Option<String> {
     run.limit_failure.as_ref()?;
-    let key = match rimz::harness::resume::resume_login(child, Some(logins), catalog) {
-        rimz::harness::resume::ResumeLogin::Same => child.login_key(),
-        rimz::harness::resume::ResumeLogin::Changed(key) => key,
-        rimz::harness::resume::ResumeLogin::Unreadable => return None,
+    let key = match crate::harness::resume::resume_login(child, Some(logins), catalog) {
+        crate::harness::resume::ResumeLogin::Same => child.login_key(),
+        crate::harness::resume::ResumeLogin::Changed(key) => key,
+        crate::harness::resume::ResumeLogin::Unreadable => return None,
     };
     let now = jiff::Timestamp::now();
-    let refill = rimz::harness::park_notice::refill_ahead(
+    let refill = crate::harness::park_notice::refill_ahead(
         store.runtime_paths(),
         &key,
         child.model.as_deref(),
@@ -93,32 +106,32 @@ fn limit_refusal(
     Some(format!(
         "not sent: @{name}'s provider limit refills in {}. Run `rimz wait --in {minutes}m`, \
          then send it again.",
-        render::refill_in(refill, now, &jiff::tz::TimeZone::system()),
+        crate::theme::fmt::refill_in(refill, now, &jiff::tz::TimeZone::system()),
     ))
 }
 
 fn resume_resolved(
-    ctx: &Ctx,
+    workspace: &ResolvedWorkspace,
+    store: &Store,
     child: &AgentState,
     caller: &AgentState,
     mut dispatch_request: DispatchRequest,
+    interaction: &mut impl Interaction,
 ) -> Result<ResumeChildOutcome> {
-    let workspace = &ctx.workspace;
-    let store = &ctx.store;
     let cwd = child
         .worktree_path
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.worktree_root.clone());
     if child.checkout.is_some() {
-        rimz::agents::empty_dir::prepare_reentry(store.paths(), &cwd)?;
+        crate::agents::empty_dir::prepare_reentry(store.paths(), &cwd)?;
     } else if !cwd.is_dir() {
         bail!("its worktree {} is gone", cwd.display());
     }
-    let machine = crate::cli::machine_config();
-    let launch = rimz::config::effective::load(&machine, &workspace.project_root)?;
+    let machine = crate::config::MachineConfig::load_lenient();
+    let launch = crate::config::effective::load(&machine, &workspace.project_root)?;
     launch.block_set_failure()?;
-    let posture = rimz::harness::resume::resolve_posture(
+    let posture = crate::harness::resume::resolve_posture(
         PostureRequest {
             record: child.record.as_deref(),
             profile: child.profile.as_deref(),
@@ -134,95 +147,100 @@ fn resume_resolved(
     if let Some(reason) = &posture.degraded {
         bail!("{reason}");
     }
-    rimz::harness::plan::check_child_permission_mode(
+    crate::harness::plan::check_child_permission_mode(
         &child.kind,
         caller.mode,
         posture.launch.mode,
     )?;
-    let adapter = rimz::agents::find_definition(child.kind.as_str())
+    let adapter = crate::agents::find_definition(child.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", child.kind))?;
-    let capped = rimz::harness::plan::cap_child_isolation(
-        rimz::config::Isolation::ambient(&rimz::agents::ambient_env()),
+    let capped = crate::harness::plan::cap_child_isolation(
+        crate::config::Isolation::ambient(&crate::agents::ambient_env()),
         child.isolation,
         posture.launch.isolation_default,
         machine.agents.isolation,
     )?;
     if let Some(source) = &capped.clamped {
-        supervised::note_isolation_clamp(child.profile.as_deref().unwrap_or(&child.kind), source)?;
+        interaction.notice(Notice::IsolationClamp {
+            profile: child.profile.as_deref().unwrap_or(&child.kind),
+            source,
+        })?;
     }
-    let isolation = rimz::config::Isolation::resolve(
+    let isolation = crate::config::Isolation::resolve(
         capped.isolation,
         posture.launch.isolation_default,
         machine.agents.isolation,
     );
-    rimz::sandbox::preflight_launch(
+    crate::sandbox::preflight_launch(
         isolation,
         &child.kind,
         posture.launch.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    rimz::harness::launch::preflight_agent_kind(
+    crate::harness::launch::preflight_agent_kind(
         &workspace.project_root,
         child.kind.as_str(),
         &cwd,
     )?;
-    let logins = rimz::agents::room_accounts(
+    let logins = crate::agents::room_accounts(
         &store.paths().workspace_record,
         Some(&workspace.project_root),
-        &rimz::config::MachineConfig::load_lenient(),
+        &crate::config::MachineConfig::load_lenient(),
     )?;
-    let catalog = rimz::agents::machine_login_catalog();
-    let (action, login, fresh_reason) =
-        agents_cmd::relaunch_action(child, &logins, &catalog, &cwd)?;
+    let catalog = crate::agents::machine_login_catalog();
+    let (action, login, fresh_reason) = relaunch_action(child, &logins, &catalog, &cwd)?;
     if let Some(reason) = fresh_reason {
         bail!("{reason}");
     }
     let provider_login =
-        rimz::agents::session_login(&child.kind, login.as_ref(), &machine.accounts)?;
-    crate::cli::launch_interaction::preflight_hooks(
-        provider_login.health(&rimz::agents::ambient_env()),
-        || Some(rimz::launcher::trust::Unattended::Subagent),
-        || rimz::config::definitions::hook_trust_fix(&child.kind, child.profile.as_deref(), None),
+        crate::agents::session_login(&child.kind, login.as_ref(), &machine.accounts)?;
+    if let Some(notice) = super::trust::preflight_hooks(
+        provider_login.health(&crate::agents::ambient_env()),
+        || Some(Unattended::Subagent),
+        || crate::config::definitions::hook_trust_fix(&child.kind, child.profile.as_deref(), None),
         &mut Default::default(),
-        &mut crate::cli::render::err(),
-    )?;
-    if child.checkout.is_some() {
-        crate::cli::launch_interaction::preflight(
+    )? {
+        interaction.notice(Notice::Trust(&notice))?;
+    }
+    if child.checkout.is_some()
+        && let Some(notice) = super::trust::preflight(
             child.kind.as_str(),
             &cwd,
             adapter.folder_trust(
                 &cwd,
                 None,
-                &provider_login.env(&rimz::agents::ambient_env()),
+                &provider_login.env(&crate::agents::ambient_env()),
             ),
-            Some(rimz::launcher::trust::Unattended::Subagent),
-        )?;
+            Some(Unattended::Subagent),
+        )?
+    {
+        interaction.notice(Notice::Trust(&notice))?;
     }
     let repo_root = if child.checkout.is_none() {
         workspace.at_launch_dir(&cwd)?.cwd_project_root
     } else {
         None
     };
-    match rimz::agents::preflight_launch_dir(
+    match crate::agents::preflight_launch_dir(
         adapter,
         &cwd,
         repo_root.as_deref(),
-        &provider_login.env(&rimz::agents::ambient_env()),
-        rimz::agents::LaunchDirMode::Supervised,
+        &provider_login.env(&crate::agents::ambient_env()),
+        crate::agents::LaunchDirMode::Supervised,
     ) {
         Ok(()) => {}
-        Err(error @ rimz::agents::LaunchDirRefusal::Home { .. }) => bail!(
+        Err(error @ crate::agents::LaunchDirRefusal::Home { .. }) => bail!(
             "supervised resume refused: {error}; the child cannot move, so launch a new child with `--cwd <DIR>`"
         ),
         Err(error) => return Err(error).context("supervised resume refused"),
     }
-    let runs = rimz::harness::run::list(store.paths())?;
+    let runs = crate::harness::run::list(store.paths())?;
     let run = newest_run_for_child(&runs, child)
         .ok_or_else(|| anyhow::anyhow!("no supervised run recorded"))?;
     let mut request = resume_request(child, run, &posture, action.clone(), login.clone(), None);
     request.identity.params.isolation = capped.isolation;
     if !isolation.is_scoped() {
-        rimz::harness::launch::preflight_agent_process(
+        crate::harness::launch::preflight_agent_process(
             &workspace.project_root,
             &request,
             &cwd,
@@ -243,20 +261,20 @@ fn resume_resolved(
             .session_name
             .clone_from(&parent_pane.session_name);
     }
-    let room = rimz::room::RoomContext::from_resolved(
+    let room = crate::room::RoomContext::from_resolved(
         &parent_workspace,
         machine,
         parent_pane.pane_id.mux(),
-        rimz::room::RoomSizing::OrdinaryTab,
+        crate::room::RoomSizing::OrdinaryTab,
     )?;
-    let env = swap::relaunch_identity_env(
+    let env = relaunch_identity_env(
         &parent_workspace,
         child.lane_path().map(Path::new).unwrap_or(&cwd),
         &request,
     );
-    let _guard = rimz::launcher::placement::lock_subagent_zone(store)?;
-    let current = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    if rimz::launcher::placement::launch_has_bound_pane(&current.agents, &child.kind, launch_id)
+    let _guard = crate::launcher::placement::lock_subagent_zone(store)?;
+    let current = store.runtime_projection(crate::RuntimeScope::Audit)?;
+    if crate::launcher::placement::launch_has_bound_pane(&current.agents, &child.kind, launch_id)
         || current
             .agents
             .iter()
@@ -296,14 +314,14 @@ fn resume_resolved(
             Some(message_id.clone()),
         );
         request.identity.params.isolation = capped.isolation;
-        let pane = rimz::mux::PaneCmd {
-            argv: rimz::harness::launch::exec_argv(
-                &rimz::proc::rimz_exe(),
+        let pane = crate::mux::PaneCmd {
+            argv: crate::harness::launch::exec_argv(
+                &crate::proc::rimz_exe(),
                 store.runtime_paths(),
                 &request,
             )?,
-            name: Some(rimz::agents::pane_title::title(
-                rimz::agents::pane_title::Seat::from_launch(
+            name: Some(crate::agents::pane_title::title(
+                crate::agents::pane_title::Seat::from_launch(
                     &request.kind,
                     request.identity.name.as_deref(),
                     &request.identity.params,
@@ -313,7 +331,7 @@ fn resume_resolved(
         };
         let sidebar = room.sidebar_options(&cwd);
         let open_started = std::time::Instant::now();
-        match rimz::launcher::placement::split_into_subagent_zone(
+        match crate::launcher::placement::split_into_subagent_zone(
             room.backend(),
             store,
             &parent_workspace,
@@ -326,24 +344,24 @@ fn resume_resolved(
                 .params
                 .lane
                 .as_ref()
-                .and_then(rimz::ids::Lane::pin_name)
+                .and_then(crate::ids::Lane::pin_name)
                 .as_ref()
-                .map(rimz::ids::LaneName::as_str),
+                .map(crate::ids::LaneName::as_str),
             Some(parent_pane.pane_id.clone()),
             &run.run_id,
         ) {
-            rimz::launcher::placement::SubagentZoneOpen::Opened => {}
-            rimz::launcher::placement::SubagentZoneOpen::Failed(error) => return Err(error.into()),
+            crate::launcher::placement::SubagentZoneOpen::Opened => {}
+            crate::launcher::placement::SubagentZoneOpen::Failed(error) => return Err(error.into()),
         }
         let open = open_started.elapsed();
-        rimz::launcher::placement::wait_for_subagent_pane_bind(
+        crate::launcher::placement::wait_for_subagent_pane_bind(
             store,
             &parent_workspace,
-            rimz::launcher::placement::PaneBindWait {
+            crate::launcher::placement::PaneBindWait {
                 run_id: &run.run_id,
                 launch_id,
                 kind: &child.kind,
-                caller: rimz::diag::record::SubagentPaneBindCaller::Resume,
+                caller: crate::diag::record::SubagentPaneBindCaller::Resume,
                 open,
             },
         );
@@ -352,7 +370,7 @@ fn resume_resolved(
     if let Err(error) = opened {
         store.record_unheld_delivery_miss(
             message_id,
-            rimz::store::writer::DeliveryFailureDisposition::Terminal,
+            crate::store::writer::DeliveryFailureDisposition::Terminal,
             &format!("{error:#}"),
             &parent_workspace.session_name,
         )?;
@@ -366,17 +384,17 @@ fn resume_request(
     run: &RunRecord,
     posture: &ResumePosture,
     action: ExecAction,
-    login: Option<rimz::ids::LoginName>,
-    follow_up_message: Option<rimz::ids::MessageId>,
+    login: Option<crate::ids::LoginName>,
+    follow_up_message: Option<crate::ids::MessageId>,
 ) -> ExecRequest {
-    let mut request = swap::relaunch_request(child, posture, action, login, None);
+    let mut request = relaunch_request(child, posture, action, login, None);
     request.identity.name_explicit = true;
     ExecRequest {
         follow_up_message,
-        ..swap::with_run(request, run)
+        ..with_run(request, run)
     }
 }
 
 #[cfg(test)]
-#[path = "resume_tests.rs"]
+#[path = "child_resume_tests.rs"]
 mod tests;

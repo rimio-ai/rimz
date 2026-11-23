@@ -21,7 +21,7 @@ use rimz::mcp::launch_env;
 use rimz::mcp::wording::Wording;
 use rimz::sandbox::{EnvPin, Mount, SkippedSkill};
 
-use super::{LaunchOverrideArgs, launch_resolve, restart};
+use super::{LaunchOverrideArgs, launch_resolve};
 use crate::cli::render::Table;
 use crate::cli::{self, GlobalFlags, render};
 
@@ -100,7 +100,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             Some(&workspace.project_root),
             &rimz::config::MachineConfig::load_lenient(),
         )?;
-        let (action, login, note) = restart::relaunch_action(
+        let (action, login, note) = rimz::launcher::relaunch::relaunch_action(
             &agent,
             &logins,
             &rimz::agents::machine_login_catalog(),

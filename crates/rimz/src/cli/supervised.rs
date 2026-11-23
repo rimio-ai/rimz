@@ -53,18 +53,6 @@ pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Res
     Ok(())
 }
 
-pub(in crate::cli) fn note_isolation_clamp(
-    profile: &str,
-    source: &rimz::harness::plan::ClampSource,
-) -> Result<()> {
-    use std::io::Write as _;
-    writeln!(
-        std::io::stderr(),
-        "rimz: {profile} {source}, and a subagent never runs looser than its parent"
-    )?;
-    Ok(())
-}
-
 fn run_interrupt_flag() -> RunCancellation {
     RUN_INTERRUPT_SIGNAL_RECEIVED
         .get_or_init(RunCancellation::new)

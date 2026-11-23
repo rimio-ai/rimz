@@ -234,7 +234,7 @@ The login health check is one such rule, and it also covers the relaunch paths t
 - `crates/rimz/src/cli/agents_cmd/resume.rs::resume_selected` (single-session resume, from both `resume_agent` and `resume_provider`)
 - `crates/rimz/src/cli/agents_cmd/fork.rs::run_fork`
 - `crates/rimz/src/launcher/molt.rs::MoltSource::launch` (the successor, always judged agent-started for hook trust)
-- `crates/rimz/src/cli/subagents/resume.rs::resume_resolved`
+- `crates/rimz/src/launcher/child_resume.rs::resume_resolved`
 
 Rebirth runs the same check once per planned kind in `crates/rimz/src/harness/rebirth.rs::plan_recovery`, without `preflight_hooks`: a failing kind's sessions are skipped as `account unavailable`, with the login error as the reason. Untrusted hooks the user can trust get a reason naming the trust command to run from their own shell.
 
