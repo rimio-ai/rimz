@@ -732,6 +732,30 @@ impl crate::agents::capabilities::CoreCapability for ClaudeAdapter {
                     r#"{"timestamp":"2026-06-02T10:00:00.000Z","sessionId":"sess-1","costUSD":0.42,"requestId":"req-1","message":{"id":"msg-1","model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50}}}"#,
                 ),
             }),
+            context_model: vec![
+                super::ContextModelFixture {
+                    effort: "high",
+                    producer: super::ContextModelProducer::Push {
+                        source: "claude",
+                        payload: serde_json::json!({
+                            "session_id": "sess-1",
+                            "model": { "id": "claude-opus-4-8", "display_name": "Opus" },
+                            "effort": { "level": "high" }
+                        }),
+                    },
+                },
+                super::ContextModelFixture {
+                    effort: "high",
+                    producer: super::ContextModelProducer::Hook {
+                        event_name: "Stop",
+                        payload: serde_json::json!({
+                            "session_id": "sess-1",
+                            "model": "claude-opus-4-8",
+                            "effort": { "level": "high" }
+                        }),
+                    },
+                },
+            ],
             local_session: Some(local_sessions::fixture_observation()),
             ..super::AdapterConformance::default()
         }

@@ -358,6 +358,34 @@ impl crate::agents::capabilities::CoreCapability for CursorAdapter {
                     "cache_write_tokens": 0
                 }),
             }),
+            context_model: vec![
+                super::ContextModelFixture {
+                    effort: "medium",
+                    producer: super::ContextModelProducer::Push {
+                        source: "cursor",
+                        payload: test_json!({
+                            "session_id": "sess-1",
+                            "model": {
+                                "id": "default",
+                                "display_name": "GPT-5.6 Sol 272K Medium",
+                                "param_summary": "272K Medium",
+                                "max_mode": false
+                            }
+                        }),
+                    },
+                },
+                super::ContextModelFixture {
+                    effort: "high",
+                    producer: super::ContextModelProducer::Hook {
+                        event_name: "sessionStart",
+                        payload: serde_json::json!({
+                            "conversation_id": "conv-1",
+                            "model_id": "cursor/model",
+                            "model_params": [{ "id": "effort", "value": "high" }]
+                        }),
+                    },
+                },
+            ],
             local_session: Some(session::fixture_observation()),
             ..super::AdapterConformance::default()
         }

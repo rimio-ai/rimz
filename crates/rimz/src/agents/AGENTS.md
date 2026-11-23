@@ -6,7 +6,7 @@ Behaviour lives in [adapter.md](../../../../docs/internals/agents/adapter.md) (t
 
 ## The boundary
 
-- **Invariant.** An adapter is the single place an agent protocol is normalized. Provider modules stay private below [`adapters/`](./adapters/mod.rs): code outside `agents` resolves an `AgentDefinition` and calls neutral services, and `cargo xtask invariants` rejects a provider module path or a concrete adapter type named there.
+- **Invariant.** An adapter is the single place an agent protocol is normalized, the model id, display name, and effort separated included ([model.md](../../../../docs/internals/agents/model.md#rich-context)). Provider modules stay private below [`adapters/`](./adapters/mod.rs): code outside `agents` resolves an `AgentDefinition` and calls neutral services, and `cargo xtask invariants` rejects a provider module path or a concrete adapter type named there.
 - An adapter implements every capability trait, with an empty `impl` where the agent has no behaviour. The trait default is the single home for "this agent does not do that", and a shared decision keeps one home in the neutral service that owns it: an adapter supplies inputs, and neither it nor a dispatch layer restates either.
 - Adapters return provider-neutral intent and make no durable write: [`cli/hooks.rs`](../cli/hooks.rs) binds runtime identity and replies on stdout, and Store applies the writes without branching on kind.
 - Emit only the normalized outputs generic flows consume. A provider-only capability stays in its provider module until a second generic consumer proves an adapter seam.

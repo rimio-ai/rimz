@@ -600,6 +600,39 @@ pub struct ContextCostFixture {
     pub payload: Value,
 }
 
+/// One producer of an agent's model fields and effort, driven by the check that the effort
+/// stays out of the model id and display name.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub struct ContextModelFixture {
+    /// The effort the producer reports, lowercase.
+    pub effort: &'static str,
+    pub producer: ContextModelProducer,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub enum ContextModelProducer {
+    /// A payload `observe_context` reads.
+    Push {
+        source: &'static str,
+        payload: Value,
+    },
+    /// Provider files `local_context_refresh` reads, written under a temporary root. The
+    /// first file is the transcript the refresh is handed, and each `home_env` key names
+    /// the root.
+    Local {
+        agent_id: &'static str,
+        files: Vec<(&'static str, &'static str)>,
+        home_env: &'static [&'static str],
+    },
+    /// A hook payload whose observation carries the launch model and effort.
+    Hook {
+        event_name: &'static str,
+        payload: Value,
+    },
+}
+
 #[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct DerivedAskFixture {
@@ -625,6 +658,7 @@ pub struct AdapterConformance {
     pub spend: Option<SpendFixture>,
     pub hook_turn_cost: Option<TurnCostFixture>,
     pub context_cost: Option<ContextCostFixture>,
+    pub context_model: Vec<ContextModelFixture>,
     pub derived_ask: Option<DerivedAskFixture>,
     pub local_session: Option<LocalSessionObservation>,
 }

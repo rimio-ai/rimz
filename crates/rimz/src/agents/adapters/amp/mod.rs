@@ -277,6 +277,18 @@ impl crate::agents::capabilities::CoreCapability for AmpAdapter {
     fn conformance(&self) -> super::AdapterConformance {
         super::AdapterConformance {
             classification: super::hook_types::catalog_classification_corpus(AMP_HOOKS),
+            // A custom agent definition reports its model and its declared effort.
+            context_model: vec![super::ContextModelFixture {
+                effort: "xhigh",
+                producer: super::ContextModelProducer::Hook {
+                    event_name: "session_start",
+                    payload: serde_json::json!({
+                        "session_id": "T-abc123",
+                        "model": "claude-opus-4-8",
+                        "effort": "xhigh"
+                    }),
+                },
+            }],
             ..super::AdapterConformance::default()
         }
     }

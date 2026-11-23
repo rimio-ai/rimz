@@ -484,6 +484,21 @@ impl crate::agents::capabilities::CoreCapability for KimiAdapter {
                     "{\"type\":\"usage.record\",\"time\":1770000000000,\"model\":\"moonshot/kimi-k2.5\",\"usage\":{\"inputOther\":100,\"output\":50,\"inputCacheRead\":10,\"inputCacheCreation\":5},\"usageScope\":\"turn\"}"
                 )),
             }),
+            context_model: vec![super::ContextModelFixture {
+                effort: "high",
+                producer: super::ContextModelProducer::Local {
+                    agent_id: "s1",
+                    files: vec![(
+                        "sessions/wd/s1/agents/main/wire.jsonl",
+                        concat!(
+                            "{\"type\":\"metadata\",\"protocol_version\":\"1.4\"}\n",
+                            "{\"type\":\"llm.request\",\"time\":1769999999000,\"provider\":\"moonshot\",\"model\":\"kimi-k2.5\",\"modelAlias\":\"kimi-code/kimi-for-coding\",\"thinkingEffort\":\"high\"}\n",
+                            "{\"type\":\"usage.record\",\"time\":1770000000000,\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"turn\",\"usage\":{\"inputOther\":100,\"output\":20}}\n",
+                        ),
+                    )],
+                    home_env: &[],
+                },
+            }],
             ..super::AdapterConformance::default()
         }
     }

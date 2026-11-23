@@ -313,6 +313,23 @@ impl crate::agents::capabilities::CoreCapability for DroidAdapter {
                     r#"{"model":"gpt-5","tokenUsage":{"inputTokens":100,"outputTokens":20,"cacheCreationTokens":10,"cacheReadTokens":30,"thinkingTokens":5}}"#,
                 ),
             }),
+            context_model: vec![super::ContextModelFixture {
+                effort: "high",
+                producer: super::ContextModelProducer::Local {
+                    agent_id: "droid-conformance",
+                    files: vec![
+                        (
+                            "droid-conformance.jsonl",
+                            "{\"type\":\"session_start\",\"version\":2,\"cwd\":\"/work\"}\n",
+                        ),
+                        (
+                            "droid-conformance.settings.json",
+                            r#"{"model":"gpt-5","reasoningEffort":"high"}"#,
+                        ),
+                    ],
+                    home_env: &[],
+                },
+            }],
             ..super::AdapterConformance::default()
         }
     }

@@ -14,9 +14,10 @@ use super::lifecycle::{
 use super::registry::BUILTINS;
 use super::{
     AdapterConformance, AgentDefinition, AgentHookClass, AskReply, CapabilityLevel,
-    ClassificationSample, ClassifiedHook, ConcernCoverage, DerivedAskFixture, HookCoverage,
-    IntegrationConcern, LaunchPreset, LocalSessionDiscovery, PermissionMode, PresetArgMatcher,
-    PresetField, PriceBook, SpendFixture, SpendFixtureBody, UserCapability,
+    ClassificationSample, ClassifiedHook, ConcernCoverage, ContextModelFixture,
+    ContextModelProducer, DerivedAskFixture, HookCoverage, IntegrationConcern, LaunchPreset,
+    LocalSessionDiscovery, PermissionMode, PresetArgMatcher, PresetField, PriceBook, SpendFixture,
+    SpendFixtureBody, UserCapability,
 };
 use crate::agents::AgentStatus;
 use crate::agents::AskKind;
@@ -1852,6 +1853,160 @@ fn assert_compaction_hooks_match_concern(adapter: &AgentDefinition) {
         "{} compaction hook pair must agree with Compaction concern coverage",
         adapter.spec().kind
     );
+}
+
+/// Every adapter that reports an effort, through a push payload, a local refresh, or a hook.
+const CONTEXT_EFFORT_KINDS: &[&str] = &[
+    "amp",
+    "antigravity",
+    "claude",
+    "codex",
+    "copilot",
+    "cursor",
+    "droid",
+    "grok",
+    "kimi",
+    "kiro",
+    "omp",
+    "opencode",
+    "pi",
+];
+
+/// Every adapter whose `decode_hook` reads an effort from the hook payload itself. Grok, Droid,
+/// and Kimi also set a launch effort from a hook, but read it from a provider file.
+const HOOK_EFFORT_KINDS: &[&str] = &[
+    "amp",
+    "antigravity",
+    "claude",
+    "codex",
+    "cursor",
+    "omp",
+    "opencode",
+    "pi",
+];
+
+#[test]
+fn context_model_fields_never_carry_the_effort() {
+    let mut failures = Vec::new();
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
+        let fixtures = adapter.conformance().context_model;
+        if CONTEXT_EFFORT_KINDS.contains(&kind) && fixtures.is_empty() {
+            failures.push(format!(
+                "{kind} reports effort in its context and declares no context model fixture"
+            ));
+        }
+        let declares_hook = fixtures
+            .iter()
+            .any(|fixture| matches!(fixture.producer, ContextModelProducer::Hook { .. }));
+        if HOOK_EFFORT_KINDS.contains(&kind) && !declares_hook {
+            failures.push(format!(
+                "{kind} reports effort from its hook payload and declares no hook fixture"
+            ));
+        }
+        for fixture in &fixtures {
+            let Some((model_id, display_name, effort)) = produced_model_fields(adapter, fixture)
+            else {
+                failures.push(format!("{kind} context model fixture produced nothing"));
+                continue;
+            };
+            for name in [&model_id, &display_name].into_iter().flatten() {
+                if carries_effort(name, fixture.effort) {
+                    failures.push(format!(
+                        "{kind} model `{name}` carries its effort `{}`",
+                        fixture.effort
+                    ));
+                }
+            }
+            let effort = effort.map(|effort| effort.to_ascii_lowercase());
+            if effort.as_deref() != Some(fixture.effort) {
+                failures.push(format!(
+                    "{kind} fixture produced effort {effort:?}, not its declared `{}`",
+                    fixture.effort
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A trailing `-<effort>`, `(<effort>)`, or `[<effort>]`, compared against the effort
+/// itself so window qualifiers (`[1m]`) and model variants (`(Neon)`) pass.
+fn carries_effort(name: &str, effort: &str) -> bool {
+    let name = name.trim_end().to_ascii_lowercase();
+    let effort = effort.to_ascii_lowercase();
+    [
+        format!("-{effort}"),
+        format!("({effort})"),
+        format!("[{effort}]"),
+    ]
+    .iter()
+    .any(|suffix| name.ends_with(suffix.as_str()))
+}
+
+/// The model id, display name, and effort one fixture's producer reports.
+fn produced_model_fields(
+    adapter: &AgentDefinition,
+    fixture: &ContextModelFixture,
+) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    let kind = adapter.spec().kind;
+    match &fixture.producer {
+        ContextModelProducer::Push { source, payload } => {
+            let context = adapter.observe_context(source, payload)?.context;
+            Some((context.model_id, context.model_display_name, context.effort))
+        }
+        ContextModelProducer::Local {
+            agent_id,
+            files,
+            home_env,
+        } => {
+            let dir = tempfile::TempDir::new().expect("context model fixture tempdir");
+            for (name, body) in files {
+                let path = dir.path().join(name);
+                fs::create_dir_all(path.parent().expect("fixture file parent"))
+                    .expect("context model fixture parent");
+                fs::write(&path, body).expect("write context model fixture");
+            }
+            let transcript = dir
+                .path()
+                .join(files.first().expect("local fixture names its transcript").0)
+                .to_string_lossy()
+                .into_owned();
+            let root = dir.path().to_string_lossy().into_owned();
+            let login_env = home_env
+                .iter()
+                .map(|key| ((*key).to_owned(), root.clone()))
+                .collect();
+            let refresh = adapter.local_context_refresh(
+                super::RefreshTrigger::Tick,
+                &super::LocalContextRefreshCtx {
+                    login_env: &login_env,
+                    agent_id,
+                    model_hint: None,
+                    prior_session_name: None,
+                    current_transcript_path: Some(&transcript),
+                    prior_transcript_path: Some(&transcript),
+                    prior_transcript_stat: None,
+                    prior_model_context_limits_key: None,
+                    prior_spend_fold: None,
+                    open_permission_since: None,
+                    prior_permission_settle: None,
+                    shared_pricing_cache_path: &dir.path().join("pricing.v1.sqlite"),
+                },
+            )?;
+            let mut context = super::AgentContext::new(kind, jiff::Timestamp::now());
+            refresh.context.apply(&mut context, adapter.spec());
+            Some((context.model_id, context.model_display_name, context.effort))
+        }
+        ContextModelProducer::Hook {
+            event_name,
+            payload,
+        } => {
+            let decoded = adapter.decode_hook(event_name, payload).ok()?;
+            let launch = &decoded.lifecycle()?.launch;
+            Some((launch.model.clone(), None, launch.effort.clone()))
+        }
+    }
 }
 
 fn realtime_cost_from_fixture(adapter: &AgentDefinition, conformance: &AdapterConformance) -> bool {
