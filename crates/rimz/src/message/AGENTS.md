@@ -6,7 +6,7 @@ Local contract for `crates/rimz/src/message/`: delivery of durable text into a r
 
 ## Invariants
 
-- **The record is the message.** Every send persists a `MessageRecord` before a byte reaches a pane, and a pane write is an attempt against that record. `write_text` records the batch `Sent` after the text lands and before it presses Enter ([the barrier](../../../../docs/internals/harness/messaging.md#the-sent-before-submit-barrier)).
+- **The record is the message.** Every send persists a `MessageRecord` before a byte reaches a pane, and a pane write is an attempt against that record. `write_text` records the batch `Sent` after the text lands and before it presses the agent's submit keys ([the barrier](../../../../docs/internals/harness/messaging.md#the-sent-before-submit-barrier)).
 - **One pane, one writer.** Every RimZ pane write (`message`, `answer`, `pane send`) runs inside `mux::PaneWriter` ([Writing to the pane](../../../../docs/internals/harness/messaging.md#writing-to-the-pane)).
 - **One card, one FIFO queue.** `msg_` id string order is FIFO order, and a `Sent` prompt keeps its slot until acknowledged or its reconcile deadline passes. The exceptions are an explicit steer or interrupt, the `Resume` control lane, a cache keepalive's forced fire, and the smart-compaction reminder, which is never a FIFO head, batch member, blocker, or held slot and is never requeued or resent ([The FIFO hold](../../../../docs/internals/harness/messaging.md#the-fifo-hold), [Mid-turn reminder](../../../../docs/internals/harness/messaging.md#mid-turn-reminder)).
 - **A queued record follows its card.** Each attempt binds the pane its card holds then ([The record](../../../../docs/internals/harness/messaging.md#the-record)).

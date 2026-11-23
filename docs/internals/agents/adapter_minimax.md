@@ -100,7 +100,7 @@ Stop does not close every turn. A failed or cancelled turn sends no Stop, so the
 | Model | `--model <provider/model[#variant]>` (`-m` is recognised in raw args) |
 | Manual compaction | `/compact`, with an optional trailing instruction |
 
-Forking and importing an unrecorded session are unsupported. No effort, fast-mode, interrupt-key, or auto-compaction-window switch is declared.
+Forking and importing an unrecorded session are unsupported. No effort, fast-mode, or auto-compaction-window switch is declared, and its message keys are the defaults, not yet implemented ([message keys](../../reference/agent-support.md#message-keys)).
 
 The `--` separator lets a prompt start with a dash: logged-out 0.6.12 reached the TUI with `mcode -- -probe`, while `mcode -probe` failed. It does not stop Commander's subcommand dispatch, so `mcode -- exec` still runs headless. A prompt equal to one of the subcommand words above has no verified positional form. Authenticated submission, other prompt forms, and native resume eligibility are unverified.
 

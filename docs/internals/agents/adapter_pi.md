@@ -194,7 +194,9 @@ The descriptor declares these launch forms, pinned by `crates/rimz/src/agents/ad
 | fork | `pi --fork <id>` |
 | bare `--resume` | the native picker, `pi --resume` ([pi-reference.md](../../externals/agent-adapter/pi-reference.md#cli-and-environment)) |
 | manual compaction | `/compact`, with no instruction argument |
-| permission mode, turn cap, interrupt key | none |
+| permission mode, turn cap | none |
+
+Pi takes text into a running turn with Enter and queues it behind the turn with Alt+Enter, sent as its CSI-u form so Pi under Zellij does not read it as a newline; Escape interrupts ([message keys](../../reference/agent-support.md#message-keys)).
 
 Pi has no permission system: every requested mode, including the Auto default, maps to Yolo without flags. RimZ records that mapped request and cannot restrict a Pi child through permission-mode ceilings ([permission modes](../../reference/agent-support.md#permission-modes)).
 

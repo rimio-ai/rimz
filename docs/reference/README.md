@@ -45,7 +45,7 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 | Page | What it covers |
 | --- | --- |
 | [definitions.md](./definitions.md) | Machine Markdown definitions: trees and tiers, frontmatter keys, inheritance chains, kind bases, traits, tools, delegation and skills, teams and seats, stages, signals, compaction and keep-warm, validation, and moving existing configuration. |
-| [agent-support.md](./agent-support.md) | Every built-in adapter: `rimz coverage`, the six capabilities and the compatibility matrix, per-agent notes, config homes and skill roots, launch flags (provider-session resume, permission modes, model and effort, fast mode, prompt replacement, interrupt key, auto-compaction), the wiring matrix, the lifecycle hook surface, and each agent's mapping page. |
+| [agent-support.md](./agent-support.md) | Every built-in adapter: `rimz coverage`, the six capabilities and the compatibility matrix, per-agent notes, config homes and skill roots, launch flags (provider-session resume, permission modes, model and effort, fast mode, prompt replacement, message keys, auto-compaction), the wiring matrix, the lifecycle hook surface, and each agent's mapping page. |
 | [agent-plugins.md](./agent-plugins.md) | External agent plugins, an early and unstable surface: registering and checking a bundle, the bundle layout and manifest, the canonical event envelope, the shim contract, probe contracts, coverage and doctor, and the protocol version. |
 
 ## Rooms

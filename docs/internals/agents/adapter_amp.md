@@ -81,7 +81,9 @@ The descriptor declares these launch forms, pinned by `tests.rs::launch_resume_a
 | interactive | `amp`, then the preset args |
 | supervised prompt | `amp`, the preset args, then `-x <prompt> --plugin-ready-timeout 30 --no-archive-after-execute` |
 | resume | `amp threads continue <T-id>` |
-| fork, manual compaction, interrupt key, turn cap | none |
+| fork, manual compaction, turn cap | none |
+
+Amp's message keys are the defaults, not yet implemented ([message keys](../../reference/agent-support.md#message-keys)).
 
 The supervised suffix fixes two upstream behaviours. Execute mode can start its turn before plugins load, which skips `agent.start` and `agent.end`, so `--plugin-ready-timeout 30` waits up to 30 seconds for them. Execute mode also archives the thread when it finishes, and Amp refuses `amp threads continue` on an archived thread, so `--no-archive-after-execute` keeps it resumable ([amp-reference.md](../../externals/agent-adapter/amp-reference.md#supervised-runs-and-stream-json)).
 
