@@ -1,3 +1,6 @@
+//! Definitions validation refuses. A test here asserts the report's whole error list, not only
+//! that an error sits at the path, so a second rule firing on the same input fails it.
+
 use super::*;
 
 const SIMPLE: &str = "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\ntimeout='1h'\nrun='true'\non.ok='@done'\n";
