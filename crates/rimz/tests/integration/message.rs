@@ -12518,6 +12518,194 @@ fn mixed_submit_confirms_record_and_never_resends() {
 }
 
 #[test]
+fn script_question_holds_the_seat_through_a_parked_stop_until_answered() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-script-ask", "feature-script-ask", pane_env);
+    let ask_call = "repl_0b1b5c5d-a88e-4519-8249-979062803622";
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-script-ask",
+            "tool_name": "AskUserQuestion",
+            "tool_use_id": ask_call,
+            "tool_input": { "questions": [{ "question": "Continue?" }] },
+            "worktree_branch": "feature-script-ask",
+        }),
+        pane_env,
+    );
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-script-ask",
+            "background_tasks": [{"id": "script-6", "status": "running"}],
+            "worktree_branch": "feature-script-ask",
+        }),
+        pane_env,
+    );
+    let held = env.snapshot_json();
+    assert_eq!(held["agents"][0]["status"], "waiting", "{}", held["agents"]);
+
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let queued_trace = env.project_root.join("zellij-script-ask-queued-trace.log");
+    let queued = run_success(
+        traced_rimz(&env, "zellij-script-ask-queued-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "@claude", "--", "team stalled"]),
+        "queue while the script's question is open",
+    );
+    let message_id = MessageId::parse(&queued_id_from_stdout(&queued.stdout)).expect("message id");
+    let parked = message_by_id(&env, &message_id);
+    assert_eq!(parked.gate, DeliveryGate::Done);
+    assert_eq!(parked.status, MessageStatus::Queued);
+    assert!(trace_lines(&queued_trace).is_empty());
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-script-ask",
+            "tool_name": "AskUserQuestion",
+            "tool_use_id": ask_call,
+            "tool_input": { "questions": [{ "question": "Continue?" }] },
+            "worktree_branch": "feature-script-ask",
+        }),
+        pane_env,
+    );
+    let released = env.snapshot_json();
+    assert_eq!(
+        released["agents"][0]["status"], "running",
+        "{}",
+        released["agents"]
+    );
+
+    // The answered script's turn ends, and that Stop's own detached `message deliver`
+    // is the delivery under test.
+    let sent_trace = env.project_root.join("zellij-script-ask-sent-trace.log");
+    let shim = zellij_trace_shim();
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-script-ask",
+            "worktree_branch": "feature-script-ask",
+        }),
+        &[
+            ("ZELLIJ_PANE_ID", "3"),
+            ("RIMZ_ZELLIJ_BIN", shim.to_str().expect("shim path")),
+            (
+                "RIMZ_TEST_ZELLIJ_LOG",
+                sent_trace.to_str().expect("trace path"),
+            ),
+            (
+                "RIMZ_TEST_PANE_LIST",
+                pane_fixture.to_str().expect("pane fixture path"),
+            ),
+            ("RIMZ_MESSAGE_SETTLE_MS", "0"),
+        ],
+    );
+    wait_for_text_then_enter(&sent_trace, &user_message("team stalled"));
+    assert_eq!(message_by_id(&env, &message_id).status, MessageStatus::Sent);
+}
+
+/// Typed feedback rejects the card with no hook, so a parked Stop must read the call's own
+/// result: holding the ask here would leave the seat Waiting on a card that is gone.
+#[test]
+fn parked_stop_releases_a_question_its_transcript_already_answered() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-rejected", "feature-rejected", pane_env);
+    let transcript = env.project_root.join("rejected-transcript.jsonl");
+    std::fs::write(&transcript, "").expect("empty transcript");
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-rejected",
+            "transcript_path": transcript,
+            "tool_name": "AskUserQuestion",
+            "tool_use_id": "toolu_ask",
+            "tool_input": { "questions": [{ "question": "Continue?" }] },
+            "worktree_branch": "feature-rejected",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let queued = run_success(
+        traced_rimz(&env, "zellij-rejected-queued-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "@claude", "--", "after rejection"]),
+        "queue while the question is open",
+    );
+    let message_id = MessageId::parse(&queued_id_from_stdout(&queued.stdout)).expect("message id");
+    assert_eq!(message_by_id(&env, &message_id).gate, DeliveryGate::Done);
+
+    let rejected = json!({
+        "type": "user",
+        "timestamp": jiff::Timestamp::now().to_string(),
+        "toolDenialKind": "user-rejected",
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_ask",
+                "is_error": true,
+                "content": "The user doesn't want to proceed with this tool use. \
+                    To tell you how to proceed, the user said:\nuse the other route",
+            }],
+        },
+    });
+    let reply = json!({
+        "type": "assistant",
+        "timestamp": jiff::Timestamp::now().to_string(),
+        "message": { "role": "assistant", "content": [{ "type": "text", "text": "Understood." }] },
+    });
+    std::fs::write(&transcript, format!("{rejected}\n{reply}\n")).expect("write rejection");
+
+    // The Stop's own detached `message deliver` is the delivery under test.
+    let sent_trace = env.project_root.join("zellij-rejected-sent-trace.log");
+    let shim = zellij_trace_shim();
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-rejected",
+            "transcript_path": transcript,
+            "background_tasks": [{"id": "shell-1", "status": "running"}],
+            "worktree_branch": "feature-rejected",
+        }),
+        &[
+            ("ZELLIJ_PANE_ID", "3"),
+            ("RIMZ_ZELLIJ_BIN", shim.to_str().expect("shim path")),
+            (
+                "RIMZ_TEST_ZELLIJ_LOG",
+                sent_trace.to_str().expect("trace path"),
+            ),
+            (
+                "RIMZ_TEST_PANE_LIST",
+                pane_fixture.to_str().expect("pane fixture path"),
+            ),
+            ("RIMZ_MESSAGE_SETTLE_MS", "0"),
+        ],
+    );
+    let agent = env.store().snapshot_cached().unwrap().agents[0].clone();
+    assert_eq!(agent.status, rimz::agents::AgentStatus::Running);
+    assert_eq!(agent.phase, rimz::agents::TurnPhase::Parked);
+    assert!(agent.open_ask.is_none());
+    wait_for_text_then_enter(&sent_trace, &user_message("after rejection"));
+}
+
+#[test]
 fn sweep_starts_drainer_for_pending_confirmation() {
     recover_pending_confirmation(&["message", "sweep"]);
 }

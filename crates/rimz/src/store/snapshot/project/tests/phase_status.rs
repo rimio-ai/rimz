@@ -300,6 +300,69 @@ fn open_ask_tracks_the_waiting_lifecycle_edge() {
 }
 
 #[test]
+fn keyed_open_ask_holds_through_a_turn_end_parked_on_background_work() {
+    let event = |at: i64, signal: serde_json::Value| {
+        raw_lifecycle_at(
+            "claude",
+            at,
+            serde_json::json!({ "agent_id": "sess-1", "signal": signal }),
+        )
+    };
+    let start = event(1, serde_json::json!({ "signal": "turn_started" }));
+    let waiting = event(
+        2,
+        serde_json::json!({
+            "signal": "awaiting_input",
+            "kind": "question",
+            "ask_id": "ask_0123456789abcdef",
+            "native_key": "repl_ask-call"
+        }),
+    );
+    let parked = event(
+        3,
+        serde_json::json!({ "signal": "turn_ended", "errored": false, "parked_on_background": true }),
+    );
+    let answered = event(
+        4,
+        serde_json::json!({
+            "signal": "tool_used", "mutates": false, "edits": false,
+            "native_key": "repl_ask-call"
+        }),
+    );
+
+    let held = reduce_agent_states(&[start.clone(), waiting.clone(), parked.clone()]);
+    let row = &held[0];
+    assert_eq!(row.status, AgentStatus::Waiting);
+    assert_eq!(row.waiting_since, Some(waiting.timestamp));
+    assert_eq!(
+        row.open_ask
+            .as_ref()
+            .and_then(|ask| ask.native_key.as_deref()),
+        Some("repl_ask-call")
+    );
+    assert!(row.is_awaiting_input());
+    assert!(row.holds_open_turn());
+    assert_eq!(
+        row.actionable_asks()
+            .map(|(ask, delivery)| (ask.id.as_str().to_owned(), delivery))
+            .collect::<Vec<_>>(),
+        [(
+            "ask_0123456789abcdef".to_owned(),
+            crate::agents::AskDelivery::Blocking
+        )]
+    );
+    assert_eq!(row.effective_status(parked.timestamp), AgentStatus::Waiting);
+
+    let closed = reduce_agent_states(&[start, waiting, parked, answered.clone()]);
+    let row = &closed[0];
+    assert_eq!(row.status, AgentStatus::Running);
+    assert!(row.open_ask.is_none());
+    assert!(row.waiting_since.is_none());
+    assert!(!row.is_awaiting_input());
+    assert_eq!(row.actionable_asks().count(), 0);
+}
+
+#[test]
 fn keyed_open_ask_survives_a_parallel_sibling_completion() {
     let start = raw_lifecycle_at(
         "pi",
