@@ -1510,7 +1510,7 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
         ("''", ""),
         ("'*:always'", "*:always"),
         ("github:eager", "github:eager"),
-        ("rimz-message", "rimz-message"),
+        ("rimz-chat", "rimz-chat"),
     ] {
         let root = fixture();
         definition(
@@ -1535,7 +1535,7 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
                 .collect::<Vec<_>>(),
             [format!(
                 "sets `mcps:` with an invalid mcps entry `{shown}`: list `*`, `rimz`, a RimZ \
-                 capability (rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-control, rimz-notes), or one \
+                 capability (rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes), or one \
                  of your own MCP servers, each name with an optional `:always` or `:deferred`"
             )]
         );
@@ -5773,8 +5773,8 @@ fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_use
             format!("lists `read:always` in `capabilities:`, {mark}"),
         ),
         (
-            "agent: claude\ncapabilities: [rimz-message:deferred]",
-            format!("lists `rimz-message:deferred` in `capabilities:`, {mark}"),
+            "agent: claude\ncapabilities: [rimz-reflect:deferred]",
+            format!("lists `rimz-reflect:deferred` in `capabilities:`, {mark}"),
         ),
         (
             "agent: claude\ncapabilities: [rimz-lsp:always, rimz-lsp:deferred]",
@@ -6027,8 +6027,8 @@ fn a_capabilities_seat_is_granted_every_skill_the_built_in_team_text_names() {
     );
 }
 
-/// The `rimz-message` a seat gains loads with no such skill on disk, where it reaches nothing,
-/// while the same name written by the user is checked as any `rimz-` entry is.
+/// The `rimz-message` a seat gains loads with no such skill on disk, since it is a capability
+/// with MCP tools, while a `rimz-` name that is neither a capability nor on disk is refused.
 #[test]
 fn a_seat_gained_rimz_message_loads_without_the_skill_on_disk() {
     let root = fixture();
@@ -6060,7 +6060,7 @@ fn a_seat_gained_rimz_message_loads_without_the_skill_on_disk() {
     definition(
         root.path(),
         "agents/seat.md",
-        "agent: claude\ncapabilities: [bash, read, rimz-message]",
+        "agent: claude\ncapabilities: [bash, read, rimz-absent]",
         "",
     );
     let loaded = load_checked(root.path());
@@ -6068,7 +6068,7 @@ fn a_seat_gained_rimz_message_loads_without_the_skill_on_disk() {
     assert!(
         loaded.errors.iter().any(|error| error
             .message
-            .starts_with("lists `rimz-message` in `capabilities:`, which is neither")),
+            .starts_with("lists `rimz-absent` in `capabilities:`, which is neither")),
         "{:?}",
         loaded.errors
     );

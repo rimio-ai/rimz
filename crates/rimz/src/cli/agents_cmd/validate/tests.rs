@@ -758,7 +758,7 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
             "reaches",
             "agents",
             "tools: [Bash, Skill]\n",
-            "Use rimz(wait), `rimz(message)`, and rimz(lsp).",
+            "Use rimz(wait), `rimz(chat)`, and rimz(lsp).",
         ),
         (
             "quoted",
@@ -776,13 +776,13 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
             "shut",
             "agents",
             "tools: [Bash]\nmcps: [github]\n",
-            "Use rimz(wait) and rimz(message).",
+            "Use rimz(wait) and rimz(chat).",
         ),
         (
             "unlisted",
             "agents",
             "tools: [Bash, Skill]\nskills: []\n",
-            "Use rimz(message) and rimz(notes).",
+            "Use rimz(chat) and rimz(notes).",
         ),
         (
             "child",
@@ -801,7 +801,7 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     let on_disk = |kind: &str| {
         assert_eq!(kind, "claude");
-        Some(["rimz-message".to_owned()].into())
+        Some(["rimz-chat".to_owned()].into())
     };
     let errors = |machine: &str| {
         let mut messages: Vec<_> =
@@ -818,14 +818,14 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
     assert_eq!(
         errors(""),
         [
-            "agents/shut.md: profile shut: rimz(message) names `rimz-message`, which this \
+            "agents/shut.md: profile shut: rimz(chat) names `rimz-chat`, which this \
              profile cannot reach: its tools leave out Skill",
             "agents/shut.md: profile shut: rimz(wait) names `rimz-wait`, which this profile \
              cannot reach: its mcps leave out rimz-wait; its tools leave out Skill",
             "agents/unknown.md: profile unknown: rimz(nope) names `rimz-nope`, which is neither \
              a RimZ capability nor a skill on disk for claude",
-            "agents/unlisted.md: profile unlisted: rimz(message) names `rimz-message`, which \
-             this profile cannot reach: its skills leave out rimz-message",
+            "agents/unlisted.md: profile unlisted: rimz(chat) names `rimz-chat`, which \
+             this profile cannot reach: its skills leave out rimz-chat",
             "subagents/child.md: profile child: rimz(subagents) names `rimz-subagents`, which \
              this profile cannot reach: a subagent cannot launch subagents",
         ]
@@ -857,8 +857,8 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
     assert_eq!(
         unchecked,
         [
-            "profile unlisted: rimz(message) names `rimz-message`, which this profile cannot \
-          reach: its skills leave out rimz-message"
+            "profile unlisted: rimz(chat) names `rimz-chat`, which this profile cannot \
+          reach: its skills leave out rimz-chat"
         ]
     );
 }

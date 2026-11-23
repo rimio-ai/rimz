@@ -15,12 +15,13 @@ use crate::common::Env;
 
 const REPLY_DEADLINE: Duration = Duration::from_secs(60);
 
-const ALL_TOOLS: [&str; 14] = [
+const ALL_TOOLS: [&str; 15] = [
     "lsp",
     "wait",
     "subagent",
     "workflow",
     "schedule",
+    "message",
     "tasks",
     "join",
     "stop",
@@ -838,7 +839,7 @@ fn launch_env_with_nothing_served_exits_at_once() {
     assert!(
         stderr.contains(
             "RIMZ_MCP_SERVE entry `github` is not a RimZ capability (rimz-lsp, rimz-wait, \
-             rimz-subagents, rimz-workflow, rimz-loop, rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
+             rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
         ),
         "{stderr}"
     );
@@ -960,11 +961,11 @@ fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
         "{stdout}"
     );
 
-    let (status, _, stderr) = run(&["--only", "rimz-message"]);
+    let (status, _, stderr) = run(&["--only", "rimz-chat"]);
     assert_eq!(status.code(), Some(2), "{stderr}");
     assert!(
         stderr.contains(
-            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-control, rimz-notes"
+            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
         ),
         "{stderr}"
     );
@@ -1784,7 +1785,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert!(!out.contains("Plan"), "{out}");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-control, rimz-notes"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
         ),
         "{out}"
     );
@@ -1868,7 +1869,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("xmark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-control, rimz-notes"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
         ),
         "{out}"
     );
@@ -1900,7 +1901,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("cmute");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-workflow, rimz-loop, rimz-control, rimz-notes\n"
+            "serves rimz-lsp, rimz-wait, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes\n"
         ),
         "{out}"
     );
@@ -1999,7 +2000,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&env, "gopen", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-control, rimz-notes as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes as `rimz_tools`\n"
         ),
         "{out}"
     );
@@ -2014,7 +2015,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&bare, "antigravity", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-control, rimz-notes as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes as `rimz_tools`\n"
         ),
         "{out}"
     );
@@ -3078,6 +3079,82 @@ fn stop_answers_an_ended_child_as_a_value_and_refuses_another_agents() {
                          started; `tasks` lists it",
             })
         );
+    }
+}
+
+/// `message` parks a message for a live agent as `rimz message` does, its record marked for a
+/// reply when asked; an address that names no agent fails with the live agents to pick from and
+/// records the bounce the command records; and a message to the caller's ended child goes to its
+/// resume, which refuses a child with no recorded conversation as the command refuses it.
+#[test]
+fn message_parks_for_a_live_agent_and_reaches_an_ended_childs_resume() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    let mut otter = live_seat(&env, "otter", 7, rimz::agents::LaunchParams::default());
+    let other_channel = rimz::agents::LaunchParams {
+        channel: Some("rival-team".to_owned()),
+        ..rimz::agents::LaunchParams::default()
+    };
+    let mut far_seat = live_seat(&env, "far-seat", 8, other_channel);
+    let kid = rimz::agents::LaunchParams {
+        isolation: Some(rimz::config::Isolation::Host),
+        ..child_of_caller()
+    };
+    crate::common::wait::register_agent(&env, "kid-session", "launch-kid", "kid", kid);
+    end_session(&env, "kid-session");
+    let mut server = serve_live(&env, &[]);
+    server.initialize();
+    let (parked, is_error) = server.answer(
+        1,
+        "message",
+        json!({"to": "@otter", "text": "--steer plan.md is ready", "reply_wanted": true}),
+    );
+    assert!(!is_error, "{parked}");
+    let rows = parked["messages"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{parked}");
+    assert_eq!(rows[0]["status"], json!("queued"), "{parked}");
+    let pending = env.store().list_pending_messages().unwrap();
+    let [record] = pending.as_slice() else {
+        panic!("one queued record: {pending:?}");
+    };
+    assert_eq!(rows[0]["message_id"], json!(record.message_id.as_str()));
+    assert!(record.reply_wanted, "{record:?}");
+    let bounces = || {
+        env.read_events()
+            .into_iter()
+            .filter(|event| event.method == "message.errored")
+            .count()
+    };
+    let (unknown, is_error) =
+        server.answer(2, "message", json!({"to": "@nobody-here", "text": "hi"}));
+    assert!(is_error, "{unknown}");
+    let error = unknown["error"].as_str().unwrap();
+    assert!(
+        error.starts_with("no agent matches target `@nobody-here`"),
+        "{unknown}"
+    );
+    assert!(
+        unknown["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.starts_with("live agents: ")
+                && hint.contains("@otter")
+                && !hint.contains("far-seat")),
+        "{unknown}"
+    );
+    assert_eq!(bounces(), 1);
+    let (ended, is_error) = server.answer(3, "message", json!({"to": "@kid", "text": "follow up"}));
+    assert!(is_error, "{ended}");
+    let error = ended["error"].as_str().unwrap();
+    assert!(
+        error.starts_with("cannot resume @kid") && error.contains("no recorded conversation"),
+        "{ended}"
+    );
+    assert_eq!(env.store().list_pending_messages().unwrap().len(), 1);
+    for seat in [&mut otter, &mut far_seat] {
+        seat.kill().ok();
+        seat.wait().ok();
     }
 }
 

@@ -13,6 +13,7 @@
 mod control;
 mod join;
 mod lsp;
+mod message;
 mod notes;
 mod owned;
 mod room;
@@ -92,6 +93,7 @@ impl Runner for Tools {
             Call::Subagent(args) => subagent::launch(self, &args),
             Call::Workflow(args) => workflow::start(self, &args),
             Call::Schedule(args) => schedule::book(self, &args),
+            Call::Message(args) => message::send(self, &args),
             Call::Tasks(args) => tasks::tasks(self, &args),
             Call::Join(args) => join::join(self, &args, cancelled),
             Call::Stop(args) => stop::stop(self, &args),

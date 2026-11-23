@@ -86,6 +86,8 @@ fn capability_names_round_trip_and_become_only_arguments() {
         ["subagent", "tasks", "join", "stop", "guide"]
     );
     assert!(Capability::Subagents.starts_things());
+    assert_eq!(names(&[Capability::Message]), ["message"]);
+    assert!(!Capability::Message.starts_things());
     assert_eq!(
         names(&[Capability::Workflow]),
         ["workflow", "tasks", "join", "stop", "guide"]
@@ -152,6 +154,23 @@ fn calls_carry_their_arguments_as_data() {
         Some(std::path::Path::new("../other"))
     );
     assert_eq!(subagent.timeout.as_deref(), Some("90m"));
+    let Call::Message(message) = call("message", json!({"to": "@coder", "text": "--steer $(id)"}))
+    else {
+        panic!("a message call");
+    };
+    assert_eq!(
+        (message.to.as_str(), message.text.as_str(), message.mode),
+        ("@coder", "--steer $(id)", MessageMode::Park)
+    );
+    assert!(!message.all && !message.reply_wanted);
+    let Call::Message(message) = call(
+        "message",
+        json!({"to": "@coder", "text": "t", "mode": "interrupt", "all": true, "reply_wanted": true}),
+    ) else {
+        panic!("a message call");
+    };
+    assert_eq!(message.mode, MessageMode::Interrupt);
+    assert!(message.all && message.reply_wanted);
     let Call::Tasks(tasks) = call("tasks", json!({"kind": "schedule"})) else {
         panic!("a tasks call");
     };
@@ -269,6 +288,21 @@ fn arguments_outside_the_schema_shape_are_refused() {
         ("workflow", json!({"name": "ship", "worktree": " "})),
         ("workflow", json!({"name": "ship", "once": true})),
         ("workflow", json!({"name": "ship", "input": "{}"})),
+        ("message", json!({"to": "@coder"})),
+        ("message", json!({"to": " ", "text": "t"})),
+        ("message", json!({"to": "@coder", "text": "\n"})),
+        (
+            "message",
+            json!({"to": "@coder", "text": "t", "mode": "later"}),
+        ),
+        (
+            "message",
+            json!({"to": "@coder", "text": "t", "schedule": "5m"}),
+        ),
+        (
+            "message",
+            json!({"to": "@coder", "text": "t", "force": true}),
+        ),
         ("subagent", json!({"prompt": "p"})),
         ("subagent", json!({"profile": "general"})),
         ("subagent", json!({"profile": " ", "prompt": "p"})),
