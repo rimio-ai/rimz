@@ -84,10 +84,10 @@ forge#feat-x · idle 48s
   pipeline: Explore → Plan → [Implement] → Review → Submit → Reflect → Done
   pr:       #412 · open · ci pending · https://github.com/acme/api/pull/412
 
-  MEMBER     STATUS   AGE  ACTIVITY           CTX   COST
-  @planner   success  28m  -                  61%  $1.84
-  @coder     success  48s  editing ingest.rs  42%  $0.95
-  @reviewer  idle     31m  -                   8%  $0.12
+  MEMBER     NAME           STATUS   AGE  ACTIVITY           CTX   COST
+  @planner   @stable-haven  success  28m  -                  61%  $1.84
+  @coder     @round-binder  success  48s  editing ingest.rs  42%  $0.95
+  @reviewer  @quiet-otter   idle     31m  -                   8%  $0.12
 
   signals: ci.failed → @coder · never fired · team-forge-feat-x-coder-ci-failed
 
@@ -137,7 +137,7 @@ A lane block reads top to bottom:
 | `stage` | Always present. The [board stage](#board-stage) with ` (@owner)` when the board names one, then ` for <age>`, the time since the flip into that stage; `Done for <age>` once the board is flipped to `Done`; `none` without a board stage. The age is omitted when no recorded flip matches (a hand-edited board, or a flip rotated out of the event log). |
 | `pipeline` | The team's pipeline with the implicit `Done` last, bracketing the board stage when it matches a name exactly. The pipeline is the declared `stages`, or the stages the roles `own` in role order when `stages` is empty. Omitted when the team has neither. |
 | `pr` | The cached pull request: number, state (`open`, `merged`, `closed`), its `ci passing`, `ci pending`, or `ci failing` verdict, and URL, as far as known; `none` when no pull request is cached. A trunk lane has no pull request, so it reads `none` however its branch CI stands; that verdict shows on the [sidebar](../../interface/sidebar.md). |
-| Member table | `MEMBER STATUS AGE ACTIVITY CTX COST`, members in the team's declared role order, then any live member without a declared role. A declared role with no live member shows `not live` and dashes. `STATUS` uses the [agent status words](./agents.md#list-and-manage-agents), `AGE` uses the same own cache clock as [agents list](./agents.md#list-and-manage-agents), including keepalive pings but excluding child activity, and `COST` is each role's lifetime spend in this worktree, including the subagents it launched. |
+| Member table | `MEMBER NAME STATUS AGE ACTIVITY CTX COST`. `MEMBER` is the bare handle, and `NAME` is the agent's name written as an address (`@round-binder`) when it differs from the handle, `-` when it does not. `NAME` is left out when the table with it is wider than the terminal (120 columns when stdout is not a terminal). Rows follow the team's declared role order, then any live member without a declared role. A declared role with no live member shows `not live` and dashes. `STATUS` uses the [agent status words](./agents.md#list-and-manage-agents), `AGE` uses the same own cache clock as [agents list](./agents.md#list-and-manage-agents), including keepalive pings but excluding child activity, and `COST` is each role's lifetime spend in this worktree, including the subagents it launched. |
 | `signals` | One line per subscription RimZ armed for a member from its role bindings: `<signal> → @<member> · <fire> · <loop task name>`. `<fire>` is `fired <age> ago` when the last fire delivered, or the [loop run result](./loop.md#read-run-history) with its age; ` ×<n>` gives the fire count once it has fired more than once. A subscription that has not fired reads `heard <signal> <age> ago` when it has heard another signal of its family, otherwise `never fired`. Heard signals are never counted as fires. Omitted when nothing is armed. The roster's `signals` line shows what is declared; this one shows what is armed now and whether it fired. |
 | `worktree` | The members' absolute checkout path, with ` · branch <name>` when the branch differs from the directory name; `-` when members disagree. |
 | `isolation` | `host · shared <dir>`, `scoped · shared <dir>`, or `sandbox · shared <dir>`: the room's shared directory (`$RIMZ_SHARED`, the same host path in all isolation levels), and where each member ran: the isolation its launch enforced, else the `--isolation` recorded at launch or replaced on resume, else the machine's `agents.isolation`. The enforced isolation already folds in a profile `isolation` default. Members that disagree show the machine setting. |
