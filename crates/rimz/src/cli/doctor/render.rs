@@ -788,7 +788,11 @@ fn render_machine_config(
         let error = summary.as_deref().unwrap_or(&problem.error);
         let detail = match problem.kind {
             MachineConfigProblemKind::Definition => {
-                format!("{} cannot be used: {}", home_relative(&problem.path), error)
+                format!(
+                    "{} cannot be used: {}",
+                    rimz::packs::one_line(&home_relative(&problem.path)),
+                    error
+                )
             }
             MachineConfigProblemKind::Parse => format!(
                 "{} is unparseable: {}; settings in this file use built-in defaults",

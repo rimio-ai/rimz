@@ -123,6 +123,40 @@ fn keep_warm_warnings_resolve_global_defaults_without_changing_declared_rows() {
 }
 
 #[test]
+fn model_and_keep_warm_cells_stay_on_one_line() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, fields) in [
+        ("claude", ""),
+        ("worker", "agent: claude\ntools: []\nkeep-warm: 2h\n"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Test\n{fields}---\nBase."),
+        )
+        .unwrap();
+    }
+    let mut loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let row = loaded
+        .rows
+        .iter_mut()
+        .find(|row| row.name == "worker")
+        .unwrap();
+    row.model = Some("model\nforged".to_owned());
+    row.keep_warm.as_mut().unwrap().while_clause = Some("stage\u{1b}[2K".to_owned());
+    let row = &*row;
+
+    let mut raw = Vec::new();
+    rows(&mut raw, std::iter::once(row)).unwrap();
+    let out = String::from_utf8(raw).unwrap();
+
+    assert!(out.contains(r"model\nforged"), "{out:?}");
+    assert!(out.contains(r"stage\u{1b}[2K"), "{out:?}");
+    assert!(!out.contains("stage\u{1b}"), "{out:?}");
+}
+
+#[test]
 fn keep_warm_rows_report_resolved_fields_and_warn_on_an_unbounded_while() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();

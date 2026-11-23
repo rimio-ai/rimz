@@ -277,22 +277,24 @@ fn rows<'a>(
         table.row([
             render::cell(rimz::packs::one_line(&row.name)).fg(render::palette::identity(&row.kind)),
             render::cell(&row.kind).fg(render::palette::identity(&row.kind)),
-            render::cell(crate::cli::profile_report::model_label(
-                row.model.as_deref().unwrap_or("—"),
-                row.tier,
-                row.tier_fallback,
+            render::cell(rimz::packs::one_line(
+                &crate::cli::profile_report::model_label(
+                    row.model.as_deref().unwrap_or("—"),
+                    row.tier,
+                    row.tier_fallback,
+                ),
             )),
             render::cell(effort_label(row)),
             render::cell(row.keep_warm.as_ref().map_or_else(
                 || "—".to_owned(),
                 |policy| {
-                    format!(
+                    rimz::packs::one_line(&format!(
                         "max {}; while {}",
                         policy
                             .max
                             .map_or_else(|| "—".to_owned(), |max| max.to_string()),
                         policy.while_clause.as_deref().unwrap_or("—")
-                    )
+                    ))
                 },
             )),
             render::cell(crate::cli::profile_report::origin_label(&row.origin)),
