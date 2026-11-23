@@ -463,11 +463,10 @@ mod tests {
         let actual = team_lifecycle_signals(
             &event,
             member,
-            &cohorts[0].members,
             &[],
-            &[],
-            &BTreeSet::new(),
             &rows,
+            || (cohorts[0].members.clone(), BTreeSet::new()),
+            Vec::new,
         );
         let expected = crate::address::team_cohorts(&audit.agents);
         let members = &expected[0].members;

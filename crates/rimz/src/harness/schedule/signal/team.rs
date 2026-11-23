@@ -14,17 +14,19 @@ use crate::store::event::SignalSource;
 use crate::store::message::MessageRecord;
 
 /// Derive team signals from the transitioning audit row and its live cohort members.
-/// `addressable` is the cached snapshot's resolver candidate set, with rest certificates.
+///
+/// Whether the edge can name a signal at all is decided first, from the event and `member`
+/// alone, so the room-wide inputs are read only past that: `cohort` yields the live cohort
+/// and the targets of pending one-shot waits in this workspace, and `addressable` the cached
+/// snapshot's resolver candidate set, with rest certificates, once a name was derived.
 /// `pending` is the complete pending queue, including delayed and resume-gated messages.
-/// `sleeping` contains the targets of pending one-shot waits in this workspace.
-pub(crate) fn team_lifecycle_signals(
+pub(crate) fn team_lifecycle_signals<'c, 'v>(
     event: &LifecycleEvent,
     member: &AgentState,
-    live_cohort: &[&AgentState],
-    addressable: &[&AgentState],
     pending: &[MessageRecord],
-    sleeping: &BTreeSet<(AgentKind, AgentSessionId)>,
     audit: &crate::store::runtime::AuditRows,
+    cohort: impl FnOnce() -> (Vec<&'c AgentState>, BTreeSet<(AgentKind, AgentSessionId)>),
+    addressable: impl FnOnce() -> Vec<&'v AgentState>,
 ) -> Vec<Signal> {
     let Some(team) = member.team.as_deref().filter(|team| !team.is_empty()) else {
         return Vec::new();
@@ -37,6 +39,21 @@ pub(crate) fn team_lifecycle_signals(
         return Vec::new();
     }
     let terminal = root_terminal || matches!(event.signal, LifecycleSignal::SubagentStopped { .. });
+    let waiting = !terminal
+        && event.status == AgentStatus::Waiting
+        && event.prior_status != Some(AgentStatus::Waiting);
+    let failed = matches!(
+        event.signal,
+        LifecycleSignal::TurnEnded { errored: true, .. }
+    );
+    // A live member's cohort is the same set before and after its edge, so
+    // `team.idle` needs the member itself to come to rest. A tool use, a turn
+    // start, or a rest kept names nothing and reads no room-wide input.
+    let resting = at_rest(event.status) && !event.prior_status.is_some_and(at_rest);
+    if !(terminal || waiting || failed || resting) {
+        return Vec::new();
+    }
+    let (live_cohort, sleeping) = cohort();
     let is_member =
         |agent: &&AgentState| agent.kind == member.kind && agent.agent_id == member.agent_id;
     if !terminal && !live_cohort.iter().any(is_member) {
@@ -51,7 +68,6 @@ pub(crate) fn team_lifecycle_signals(
     if !terminal {
         live.push(member);
     }
-    let at_rest = |status| matches!(status, AgentStatus::Idle | AgentStatus::Success);
     let has_pending = |members: &[&AgentState]| {
         pending.iter().any(|message| {
             members
@@ -68,16 +84,10 @@ pub(crate) fn team_lifecycle_signals(
         })
     };
     let mut names = Vec::new();
-    if !terminal
-        && event.status == AgentStatus::Waiting
-        && event.prior_status != Some(AgentStatus::Waiting)
-    {
+    if waiting {
         names.push("team.waiting");
     }
-    if matches!(
-        event.signal,
-        LifecycleSignal::TurnEnded { errored: true, .. }
-    ) {
+    if failed {
         names.push("team.failed");
     }
     let post_idle = !live.is_empty()
@@ -100,6 +110,7 @@ pub(crate) fn team_lifecycle_signals(
     if names.is_empty() {
         return Vec::new();
     }
+    let addressable = addressable();
     let marked = members
         .iter()
         .map(|agent| audit.marked_copy(agent))
@@ -120,7 +131,7 @@ pub(crate) fn team_lifecycle_signals(
         ("instance".to_owned(), json!(instance.to_string())),
         (
             "member".to_owned(),
-            json!(payload_handle(member, &peers, addressable)),
+            json!(payload_handle(member, &peers, &addressable)),
         ),
         (
             "members".to_owned(),
@@ -133,7 +144,7 @@ pub(crate) fn team_lifecycle_signals(
                         } else {
                             agent.status
                         };
-                        let handle = payload_handle(agent, &peers, addressable);
+                        let handle = payload_handle(agent, &peers, &addressable);
                         json!({"handle": handle, "status": status})
                     })
                     .collect(),
@@ -150,6 +161,10 @@ pub(crate) fn team_lifecycle_signals(
             watch: None,
         })
         .collect()
+}
+
+fn at_rest(status: AgentStatus) -> bool {
+    matches!(status, AgentStatus::Idle | AgentStatus::Success)
 }
 
 fn payload_handle(
