@@ -827,7 +827,14 @@ pub struct SelfMoltArgs {
     pub when_idle: Option<String>,
 }
 
-impl ToolArgs for SelfMoltArgs {}
+impl ToolArgs for SelfMoltArgs {
+    fn refusal(&self) -> Option<String> {
+        self.prompt
+            .trim()
+            .is_empty()
+            .then(|| "`prompt` is empty".to_owned())
+    }
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
