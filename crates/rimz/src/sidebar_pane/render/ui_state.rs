@@ -255,6 +255,11 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// leaves `Fresh`, the selection or the roster, or input makes the offset authoritative.
     /// A provider registration that adopts the card under a new id carries it.
     pub(in crate::sidebar_pane) birth_hold: Option<String>,
+    /// The panes whose card a close announced, each with the loop-clock millisecond its mark
+    /// lapses at. The room's event record sets and lifts a mark in every view; the paint pass
+    /// drops a lapsed one and one whose row left. A mark restyles its card's lines and never
+    /// changes a height.
+    pub(in crate::sidebar_pane) closing: std::collections::HashMap<PaneId, u64>,
     /// The loop owns the dwell clock; render only consumes readiness.
     pub(in crate::sidebar_pane) focus_marker_ready: bool,
     /// The row id a manual mark-unread just reopened while it is the focused

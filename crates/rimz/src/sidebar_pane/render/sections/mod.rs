@@ -135,6 +135,8 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) theme: &'a Theme,
     pub(in crate::sidebar_pane::render) now: Timestamp,
     pub(in crate::sidebar_pane::render) typing_until: &'a HashMap<crate::ids::PaneId, Timestamp>,
+    /// The view's closing marks, by pane: a card whose pane is here paints muted.
+    pub(in crate::sidebar_pane::render) closing: &'a HashMap<crate::ids::PaneId, u64>,
     pub(in crate::sidebar_pane::render) width: usize,
     pub(in crate::sidebar_pane::render) tier: Tier,
     pub(in crate::sidebar_pane::render) bands: &'a ContextMeterConfig,

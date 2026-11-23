@@ -366,11 +366,32 @@ pub(super) fn row_lines(
             }
         }
     }
+    // A card whose close began repaints its own lines in the closing tone, and a launched
+    // child's close only that child's entry, so the mark moves no line and no height.
+    let closing_card = row
+        .pane
+        .as_ref()
+        .is_some_and(|pane| ctx.closing.contains_key(&pane.pane_id));
+    let tone = ctx.theme.component(Component::CardClosing);
     inner
         .into_iter()
-        .map(|card| CardLine {
-            line: with_gutter(ctx.theme, card.line, gutter, wash, ctx.width),
-            target: card.target,
+        .map(|mut card| {
+            let closing_entry = matches!(
+                &card.target,
+                Some(HitTarget::SubAgentPane(pane)) if ctx.closing.contains_key(pane)
+            );
+            if closing_card || closing_entry {
+                // A kitty placeholder's foreground is the id of its image, not a color.
+                for span in &mut card.line.spans {
+                    if !span.content.contains(crate::pixel_wire::PLACEHOLDER) {
+                        span.style.fg = Some(tone);
+                    }
+                }
+            }
+            CardLine {
+                line: with_gutter(ctx.theme, card.line, gutter, wash, ctx.width),
+                target: card.target,
+            }
         })
         .collect()
 }

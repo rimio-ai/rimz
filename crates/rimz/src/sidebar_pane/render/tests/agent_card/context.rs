@@ -1807,6 +1807,63 @@ fn truecolor_context_bar_collects_pixel_spec_and_other_themes_fall_back() {
     }
 }
 
+/// A closing card takes the closing tone on its text, and each meter placeholder keeps the
+/// foreground that names its image.
+#[test]
+fn a_closing_card_leaves_its_meter_placeholders_naming_their_image() {
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("add tests"),
+    );
+    codex.usage.context_pct = Some(50);
+    codex.usage.context_window = Some(258_400);
+    codex.usage.total_tokens = Some(130_000);
+    codex.usage.cache_read_input_tokens = Some(120_000);
+    codex.usage.fresh_input_tokens = Some(9_200);
+    let snapshot = snapshot_with(vec![codex]);
+    let pane = snapshot
+        .rows()
+        .next()
+        .unwrap()
+        .pane
+        .clone()
+        .unwrap()
+        .pane_id;
+    let closing = std::collections::HashMap::from([(pane, 0)]);
+    let theme = truecolor_sidebar_theme();
+    let rolls = CostRolls::default();
+    let mut ctx = test_row_ctx(&snapshot, &theme, 44, 0, 0, &rolls);
+    let mut pixels = MeterPixels::new(0x120000);
+    pixels.begin_frame();
+    let calm =
+        worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, Some(&mut pixels)).lines;
+    pixels.observe_visible(&calm);
+    let image = pixels
+        .visible_rasters()
+        .map(|(image_id, _)| image_id)
+        .next()
+        .expect("one visible meter raster");
+    ctx.closing = &closing;
+    pixels.begin_frame();
+    let marked =
+        worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, Some(&mut pixels)).lines;
+    let spans = || marked.iter().flat_map(|line| &line.spans);
+    let placeholder = |span: &&Span<'_>| span.content.contains('\u{10eeee}');
+    assert!(spans().any(|span| placeholder(&span)));
+    let image_color = crate::sidebar_pane::pixel::image_id_color(image);
+    assert!(
+        spans()
+            .filter(placeholder)
+            .all(|span| span.style.fg == Some(image_color))
+    );
+    let tone = theme.component(Component::CardClosing);
+    assert!(spans().any(|span| span.content.contains("add tests") && span.style.fg == Some(tone)));
+}
+
 #[test]
 fn pi_card_renders_cache_write_in_the_per_call_composition() {
     let mut pi = agent(

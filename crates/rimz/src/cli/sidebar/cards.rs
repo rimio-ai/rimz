@@ -8,6 +8,7 @@ use rimz::mux::{ClientFocusOptions, ClientView, PaneListOptions, PaneReadConsist
 use rimz::sidebar::cache::read_snapshot_cache;
 use rimz::sidebar::produce::hosting::{HostingRead, read_hosting};
 use rimz::sidebar_pane::{CardReply, CardRequest, CardTarget};
+use rimz::wakeup::events::SidebarEvent;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::agents_cmd::TabClose;
@@ -55,18 +56,26 @@ pub(super) fn request(
     request: CardRequest,
 ) -> Result<()> {
     let (session, mux) = resolve_session(globals, session)?;
-    request_with(globals, session, mux, request)
+    let CardRequest::CloseTarget { pane: Some(pane) } = &request else {
+        return request_with(globals, session, mux, request).map(drop);
+    };
+    let mark = ClosingMark::send(&session, pane.clone());
+    mark.settle(request_with(globals, session, mux, request))
 }
 
+/// Whether the request went on to a close.
 fn request_with(
     globals: &GlobalFlags,
     session: String,
     mux: MuxName,
     request: CardRequest,
-) -> Result<()> {
+) -> Result<bool> {
     match rimz::sidebar_pane::request_card(mux, &session, request)? {
-        CardReply::Done => Ok(()),
-        CardReply::Refused { reason } => Ok(writeln!(render::err(), "{reason}")?),
+        CardReply::Done => Ok(false),
+        CardReply::Refused { reason } => {
+            writeln!(render::err(), "{reason}")?;
+            Ok(false)
+        }
         CardReply::CloseTarget { target } => {
             let (ctx, globals) = open_room(globals, &session, mux)?;
             let mut read = read_room(&ctx, &globals, "")?;
@@ -78,7 +87,56 @@ fn request_with(
                 vec![target],
                 TabClose::WhenLast,
                 read,
-            )
+            )?;
+            Ok(true)
+        }
+    }
+}
+
+/// The mark a close that names its pane puts on that pane's card in every renderer of the
+/// session. It goes out first, before the room opens or the mux is read, so the press shows
+/// while the close works; a close that goes ahead leaves it to leave with the card, and any
+/// other end lifts it. Best effort, like every wakeup: the renderer bounds a mark whose
+/// clear is lost.
+struct ClosingMark {
+    runtime: Option<rimz::RuntimePaths>,
+    session: String,
+    pane: PaneId,
+}
+
+impl ClosingMark {
+    fn send(session: &str, pane: PaneId) -> Self {
+        let runtime = rimz::room::session::workspace_record_for_session(session)
+            .ok()
+            .flatten()
+            .and_then(|record| rimz::RuntimePaths::for_project_root(&record.project_root).ok());
+        let mark = Self {
+            runtime,
+            session: session.to_owned(),
+            pane,
+        };
+        mark.broadcast(SidebarEvent::CardClosing {
+            pane_id: mark.pane.clone(),
+        });
+        mark
+    }
+
+    /// End the mark with the close's outcome: lift it unless the close went ahead.
+    fn settle(self, closed: Result<bool>) -> Result<()> {
+        if !matches!(closed, Ok(true)) {
+            self.broadcast(SidebarEvent::CardClosingCleared {
+                pane_id: self.pane.clone(),
+            });
+        }
+        closed.map(drop)
+    }
+
+    fn broadcast(&self, event: SidebarEvent) {
+        let Some(runtime) = &self.runtime else {
+            return;
+        };
+        if let Err(err) = rimz::wakeup::broadcast(runtime, Some(&self.session), event) {
+            tracing::debug!(pane = %self.pane, error = %err, "closing mark broadcast failed");
         }
     }
 }
@@ -91,33 +149,45 @@ pub(super) fn close_from_pane(
     pane: PaneId,
 ) -> Result<()> {
     let (session, mux) = resolve_session(globals, session)?;
-    if published_closes_nothing(&session, &pane) {
-        return Ok(());
+    let mark = ClosingMark::send(&session, pane.clone());
+    mark.settle(close_pressed(globals, &session, mux, pane))
+}
+
+/// Whether the press went on to a close.
+fn close_pressed(globals: &GlobalFlags, session: &str, mux: MuxName, pane: PaneId) -> Result<bool> {
+    if published_closes_nothing(session, &pane) {
+        return Ok(false);
     }
     let request = CardRequest::CloseTarget {
         pane: Some(pane.clone()),
     };
-    let reply = rimz::sidebar_pane::request_card(mux, &session, request);
+    let reply = rimz::sidebar_pane::request_card(mux, session, request);
     // The stop and the tab-when-last verdict act on this read, so it follows the wait on the
     // host. It is the press's one pane listing, and it also answers the sidebar test, which
     // holds whatever the host replied.
-    let (ctx, room_globals) = open_room(globals, &session, mux)?;
+    let (ctx, room_globals) = open_room(globals, session, mux)?;
     let mut read = read_room(&ctx, &room_globals, "listing panes: ")?;
     if read.listed(&pane).is_some_and(closes_nothing) {
-        return Ok(());
+        return Ok(false);
     }
     render::room::print_notices(read.take_notices())?;
     match reply? {
-        CardReply::Done => Ok(()),
-        CardReply::Refused { reason } => Ok(writeln!(render::err(), "{reason}")?),
-        CardReply::CloseTarget { target } => close(
-            &ctx,
-            &room_globals,
-            &session,
-            vec![target],
-            TabClose::WhenLast,
-            read,
-        ),
+        CardReply::Done => Ok(false),
+        CardReply::Refused { reason } => {
+            writeln!(render::err(), "{reason}")?;
+            Ok(false)
+        }
+        CardReply::CloseTarget { target } => {
+            close(
+                &ctx,
+                &room_globals,
+                session,
+                vec![target],
+                TabClose::WhenLast,
+                read,
+            )?;
+            Ok(true)
+        }
     }
 }
 

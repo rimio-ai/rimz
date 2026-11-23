@@ -1302,6 +1302,10 @@ impl LoopState {
                 }
                 self.handle_notification(terminal, event);
             }
+            // The room's event record already set or lifted the mark in every view.
+            SidebarEvent::CardClosing { .. } | SidebarEvent::CardClosingCleared { .. } => {
+                self.pane.dirty = true;
+            }
             SidebarEvent::FocusStranded {
                 pane_id,
                 generation,
@@ -2453,6 +2457,13 @@ impl LoopState {
                 v.context.current.theme.display.resolved_refresh_ms(),
             )
             .stamp(v.state);
+            let now_ms = state.clock.timestamp_at(now).as_millisecond().max(0) as u64;
+            let marks = v.state.closing.len();
+            let current = &v.context.current;
+            v.state.closing.retain(|pane, until_ms| {
+                *until_ms > now_ms && current.row_owning_pane(pane).is_some()
+            });
+            state.dirty |= v.state.closing.len() != marks;
             let interval = render::animation_interval(
                 &v.context.current,
                 v.state,

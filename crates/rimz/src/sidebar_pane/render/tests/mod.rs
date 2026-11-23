@@ -618,6 +618,11 @@ pub(in crate::sidebar_pane::render) fn test_row_ctx<'a>(
         theme,
         now: snapshot.now,
         typing_until: &snapshot.typing_until,
+        closing: {
+            static NONE: std::sync::LazyLock<std::collections::HashMap<PaneId, u64>> =
+                std::sync::LazyLock::new(Default::default);
+            &NONE
+        },
         width,
         tier: Tier::for_width(content_width(width)),
         bands: &snapshot.theme.display.context_meter,

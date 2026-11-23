@@ -634,6 +634,17 @@ impl Views {
             .push((sent, unfocused.iter().chain(focused).cloned().collect()));
     }
 
+    /// Mark the card owning `pane` as closing in every view until the loop-clock `until_ms`,
+    /// or lift the mark from every view with `None`.
+    pub(super) fn note_closing(&mut self, pane: &PaneId, until_ms: Option<u64>) {
+        for entry in self.entries.values_mut() {
+            match until_ms {
+                Some(until_ms) => entry.state.closing.insert(pane.clone(), until_ms),
+                None => entry.state.closing.remove(pane),
+            };
+        }
+    }
+
     /// The focus events recorded since the last take, in recorded order.
     pub(super) fn take_work_focus(&mut self) -> Vec<(u64, Vec<PaneId>)> {
         std::mem::take(&mut self.work_focus)

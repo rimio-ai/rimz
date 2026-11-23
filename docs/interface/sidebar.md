@@ -416,6 +416,8 @@ The meter draws denominators up to 256k tokens linearly and larger ones on a log
 
 From a minute up, coarse ages share one scale: whole minutes (`12m`), hours (`3h`), then days (`2d`), floored and capped at `99d`. Each fits in three cells. Child runtimes keep `<1m` below a minute; card age pins stay hidden below five minutes.
 
+A card you close with `card.close` (or `rimz sidebar close --pane`) turns `muted` on every line of text, in every client's view, from the moment the close command starts until the card leaves; a pixel context meter keeps its image. Closing a launched child's pane mutes that child's entry inside its parent's card and leaves the parent's own lines as they are. While the card's delegation section is collapsed, the entry is not drawn and nothing shows the mark. A close that is refused, fails, or closes nothing restores the colors, and a mark that nothing ends fades after 10 seconds. The mark changes no line and no height.
+
 ### Card shapes
 
 A card's slots are set by its stage, age, density, and selection reach. Data fills those slots in place; a waiting description can take a second line.

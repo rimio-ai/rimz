@@ -586,7 +586,9 @@ fn extract_events(event_store: &EventStore, now_ms: u64) -> EventsSig {
             | SidebarEvent::WidthTargetChanged
             | SidebarEvent::BodyFilterChanged
             | SidebarEvent::Notify { .. }
-            | SidebarEvent::Reload => {}
+            | SidebarEvent::Reload
+            | SidebarEvent::CardClosing { .. }
+            | SidebarEvent::CardClosingCleared { .. } => {}
         }
     }
     events
