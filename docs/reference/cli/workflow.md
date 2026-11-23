@@ -827,7 +827,7 @@ Glyphs come from the configured glyph set ([theme roles](../../guide/theme.md#gl
 Detail is one of:
 
 - `asking you: <handle> (<kind>): <one-line text>` for a blocking ask.
-- `with you in @<handle>` for a live session, with ` · checking <check>` while held at a rest check and `: <wait phrase>` at that check, or ` · <check>: <wait phrase>` after it when waiting. The handle matches the agent card, without the channel the row already names, and falls back to the recorded pet name.
+- `with you in @<handle>` for a live session, with ` · checking <check>` while held at a rest check and `: <wait phrase>` at that check, or ` · <check>: <wait phrase>` after it when waiting. The handle matches the agent card, without the channel the row already names, with the agent's name beside it when the two differ, and falls back to the recorded pet name.
 - `waits on its definition: <first error>` for a run whose definition cannot be read, does not parse, or is refused by validation ([live definitions](#live-definitions)). It comes ahead of a capacity hold. JSON keeps its usual `detail`.
 - `<handle> held <age>: <stop>` for a step held on a stop ([above](#how-an-attempt-ends)), with a session's check and wait suffix.
 - `held · <reason>` for a capacity hold.
@@ -860,7 +860,7 @@ The headline:
 
 | State | Headline |
 | --- | --- |
-| Running step | The step, its visit limit, and the agent's full card handle (channel included, recorded pet name as fallback). |
+| Running step | The step, its visit limit, and the agent's full card handle (channel included, its name beside it when the two differ, recorded pet name as fallback). |
 | Running check | `checking <check> <age>`, with ` in <handle>` while a judge's agent is up. |
 | Session | `<step> is with you`, plus the same check and wait suffix as `list`, not repeated below. |
 | Held | `<step> is held <age> · <handle>: <stop>` for a step of either lifecycle, or the current judge's check, held on an error, a limit, an overload, or a budget park. A held judge's line ends ` · the check timeout keeps running`. The headline takes the waiting tone when the hold needs you. |

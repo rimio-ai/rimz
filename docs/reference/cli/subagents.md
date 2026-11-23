@@ -213,11 +213,11 @@ rimz subagents list -q
 
 | Caller | Lists | Columns |
 | --- | --- | --- |
-| an agent | that agent's own children, finished ones included; with a `--filter` term naming `parent` or `launcher`, what a user shell lists | `SUBAGENT`, `KIND`, `AGENT`, `RUN`, `ELAPSED`; with a term naming `parent` or `launcher`, the seven columns a user shell gets |
-| a user shell in a channel | every child in the current channel | `SUBAGENT`, `PARENT`, `CHANNEL`, `KIND`, `AGENT`, `RUN`, `ELAPSED` |
-| a user shell with no current channel | every child in the room | the same seven columns |
+| an agent | that agent's own children, finished ones included; with a `--filter` term naming `parent` or `launcher`, what a user shell lists | `SUBAGENT`, `NAME`, `KIND`, `AGENT`, `RUN`, `ELAPSED`; with a term naming `parent` or `launcher`, the eight columns a user shell gets |
+| a user shell in a channel | every child in the current channel | `SUBAGENT`, `NAME`, `PARENT`, `CHANNEL`, `KIND`, `AGENT`, `RUN`, `ELAPSED` |
+| a user shell with no current channel | every child in the room | the same eight columns |
 
-An agent whose own launch RimZ cannot resolve lists as a user shell does.
+An agent whose own launch RimZ cannot resolve lists as a user shell does. `SUBAGENT` is the child's bare address, and `NAME` is the child's name written as an address when it differs from that handle, `-` when the two agree.
 
 `--filter` keeps the children matching every term, in the [filter language of `agents list`](./agents.md#filter-the-list), and repeats; `--filter help` prints the fields. The list holds launched children only, whatever the filter: a term narrows it and never adds a root agent, a team seat, or a provider-native child. A term naming `parent` replaces the agent's own-children default, a term naming `launcher` replaces both that default and the current-channel default, and a term naming `lane` replaces the current-channel default (for an agent's own children, a `lane` term only narrows them). `live` has no default, so finished children are listed unless a term such as `live=yes` drops them. A filter the grammar refuses exits 2 and names its term. `-q` prints one address per listed child, in the table's order, and nothing else; each address resolves to its child in the commands that take an address. `-q` conflicts with `--json`.
 
@@ -309,7 +309,7 @@ rimz subagents stop calm-fox
 rimz subagents stop --all
 ```
 
-`stop` cancels the caller's named live children, or every live child with `--all`, and prints `stopped @<name>` for each. A child that fails to stop prints `error @<name>: <reason>`, and the command exits `1` after trying the rest. With no live child it fails with `this agent has no live subagents to stop`.
+`stop` cancels the caller's named live children, or every live child with `--all`, and prints `stopped <address>` for each, with the child's name beside its address when the two differ (`stopped @coder (@round-binder)`). A child that fails to stop prints `error <address>: <reason>` the same way, and the command exits `1` after trying the rest. With no live child it fails with `this agent has no live subagents to stop`.
 
 After closing the whole set, `stop` waits up to 3 seconds total for the closed agents' processes to exit, sends SIGTERM once to each closed agent's process still running, and waits up to 3 seconds more. A child counts as stopped when no pane hosts it and its process is gone, or, for a process RimZ does not know, its end is recorded; any other child is reported with its reason (the pane still hosting it, or the pid still running) and the command exits 1.
 

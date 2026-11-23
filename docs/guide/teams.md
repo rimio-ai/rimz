@@ -102,10 +102,10 @@ forge#feat-rate-limits · working
   pipeline: Explore → Plan → [Implement] → Review → Submit → Reflect → Done
   pr:       none
 
-  MEMBER     STATUS   AGE  ACTIVITY           CTX   COST
-  @planner   success  28m  -                  61%  $1.84
-  @coder     running  48s  editing ingest.rs  42%  $0.95
-  @reviewer  idle     31m  -                   8%  $0.12
+  MEMBER     NAME           STATUS   AGE  ACTIVITY           CTX   COST
+  @planner   @stable-haven  success  28m  -                  61%  $1.84
+  @coder     @round-binder  running  48s  editing ingest.rs  42%  $0.95
+  @reviewer  @quiet-otter   idle     31m  -                   8%  $0.12
 
   signals: ci.failed → @coder · never fired · team-forge-feat-rate-limits-coder-ci-failed
 
