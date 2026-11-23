@@ -133,7 +133,7 @@ The catalog holds four native events, with `PostToolUse` split by three disjoint
 
 Hook stdout is Antigravity's decision channel, and every wired event must answer with JSON. `{}` is the documented no-op, and `{"decision":""}` is a `Stop` decision other than `continue`, so the stop proceeds ([reference](../../externals/agent-adapter/antigravity-reference.md#events)). Any other event name, such as a hand-fed `PreToolUse` or `SessionStart`, gets no output and records nothing. For every Antigravity event the feed waits up to 1.2 s for the drainer to apply the frame and prints the drainer's reply ([adapter.md](./adapter.md#the-feed)). That early return also skips the deadline rung a `PostToolUse` could otherwise carry.
 
-Every payload carries the conversation id (`conversationId`, or `conversation_id`), `workspacePaths`, `transcriptPath`, and `modelName`. A payload without a nonblank id records nothing. The first nonblank workspace path becomes the worktree path, and `modelName` becomes the launch model hint. Five decoding rules in `mod.rs::decode_lifecycle_fields` are easy to break:
+Every payload carries the conversation id (`conversationId`, or `conversation_id`), `workspacePaths`, `transcriptPath`, and `modelName`. A payload without a nonblank id records nothing. The first nonblank workspace path becomes the worktree path, and `modelName` becomes the launch model hint: a trailing `-low`, `-medium`, `-high`, `-xhigh`, or `-max` is split off into the launch effort (`mod.rs::split_model_effort`), so `gemini-4-hydrogen-xhigh` records model `gemini-4-hydrogen` and effort `xhigh`. Five decoding rules in `mod.rs::decode_lifecycle_fields` are easy to break:
 
 - Only `invocationNum: 0` opens a turn. Later invocations of the same execution follow tool calls and must not reopen it, and a payload without `invocationNum` opens nothing.
 - An `invocationNum: 0` opener whose transcript shows no prompt opened it (a background command's or a native subagent's result continuing the turn) decodes to routing only, so it neither records nor confirms a prompt ([Steering](#steering)). The row keeps the state it had: after a `fullyIdle: false` stop it stays `Parked` until a `PostToolUse` moves it to acting or the `Stop` ends the turn (`crates/rimz/src/agents/lifecycle.rs::map_phase`). After a background command, that command's own `PostToolUse` arrives just before the opener.
@@ -275,10 +275,10 @@ The wrapper runs `RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source antigr
 
 | Payload field | `AgentContext` |
 | --- | --- |
-| `model.id` | `model_id`, unchanged |
+| `model.id` | `model_id`, with a recognized trailing qualifier removed |
 | `model.display_name` | `model_display_name`, with a recognized trailing qualifier removed |
-| `model.effort`, else the display-name qualifier | `effort`, trimmed and lowercased |
-| `(Thinking)` qualifier | `thinking_enabled` |
+| `model.effort`, else the display-name qualifier, else the `model.id` qualifier when the display name carries none | `effort`, trimmed and lowercased |
+| `(Thinking)` qualifier, from the display name, else from `model.id` when the display name carries no qualifier | `thinking_enabled` |
 | `version` | `agent_version` |
 | `plan_tier`, `email` | `account` plan and id, `metered: true` |
 | `context_window` size, percentages, `current_usage` (`null` before the first model turn) | `tokens`. `current_context_tokens` stays empty, so the gauge comes from the percentages and window size alone |
@@ -337,7 +337,7 @@ The `/usage` windows are `Authoritative` and the statusline's are `BestEffort`, 
 
 ## Cost
 
-`spend.rs` reads `brain/<conversation>/.system_generated/logs/transcript_full.jsonl` under the login's provider home (`config_home`). `transcript.jsonl` repeats the same rows and is never a source. Each row carrying `input_tokens` (a completed `MODEL` / `PLANNER_RESPONSE`, or a compaction's `SYSTEM` / `CHECKPOINT`) becomes one entry: message id `<conversation>:<step_index>`, thread id the conversation, time from `created_at`. `input_tokens` excludes cache reads and `output_tokens` already counts thinking, so `input_tokens`, `cache_read_tokens`, and `output_tokens` are disjoint inputs to `Pricing::cost_of`. The model is the row's slug with its effort suffix (`-low`, `-medium`, `-high`, `-xhigh`, `-max`) removed. Pricing tries the raw slug, then that base name, with `PriceBook::exact_price` only, so a related model never lends its rates ([spending.md](./spending.md#resolving-a-model)). A model neither prices keeps its tokens without dollars and is recorded unknown under its base name. A `CHECKPOINT` row names no model, so its tokens count at $0 and record no unknown model. Rows name no working directory, so Antigravity spend carries no workspace attribution.
+`spend.rs` reads `brain/<conversation>/.system_generated/logs/transcript_full.jsonl` under the login's provider home (`config_home`). `transcript.jsonl` repeats the same rows and is never a source. Each row carrying `input_tokens` (a completed `MODEL` / `PLANNER_RESPONSE`, or a compaction's `SYSTEM` / `CHECKPOINT`) becomes one entry: message id `<conversation>:<step_index>`, thread id the conversation, time from `created_at`. `input_tokens` excludes cache reads and `output_tokens` already counts thinking, so `input_tokens`, `cache_read_tokens`, and `output_tokens` are disjoint inputs to `Pricing::cost_of`. The model is the row's slug with its effort suffix (`-low`, `-medium`, `-high`, `-xhigh`, `-max`) removed by the same `mod.rs::split_model_effort` the hook decoder uses. Pricing tries the raw slug, then that base name, with `PriceBook::exact_price` only, so a related model never lends its rates ([spending.md](./spending.md#resolving-a-model)). A model neither prices keeps its tokens without dollars and is recorded unknown under its base name. A `CHECKPOINT` row names no model, so its tokens count at $0 and record no unknown model. Rows name no working directory, so Antigravity spend carries no workspace attribution.
 
 The dollars are a list-price estimate: Antigravity quota is measured by work, and a plan bills no tokens. That is why `account_spend` is partial, which keeps Antigravity out of account-day caps.
 

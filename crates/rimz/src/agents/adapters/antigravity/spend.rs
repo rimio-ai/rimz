@@ -21,8 +21,6 @@ use crate::agents::{
     LocalSpendFold, PriceBook, TokenSplit, TranscriptStat, pricing,
 };
 
-const EFFORT_SUFFIXES: [&str; 5] = ["-low", "-medium", "-high", "-xhigh", "-max"];
-
 pub(super) fn sources(provider_home: &Path) -> Vec<SpendingSource> {
     SpendingSource::tree(
         provider_home.join("brain"),
@@ -158,7 +156,7 @@ fn entry(
         .as_deref()
         .map(str::trim)
         .filter(|model| !model.is_empty());
-    let base = model.map(base_model);
+    let base = model.map(|model| super::split_model_effort(model).0);
     let cost = match (model, base) {
         (Some(raw), Some(base)) => {
             match prices.exact_price(raw).or_else(|| prices.exact_price(base)) {
@@ -177,13 +175,4 @@ fn entry(
         model: base.map(Into::into),
         ..CachedEntry::new(ts_secs, cost, &split)
     })
-}
-
-/// The model slug without the effort agy appends (`gemini-4-neon-high`).
-fn base_model(model: &str) -> &str {
-    EFFORT_SUFFIXES
-        .iter()
-        .find_map(|suffix| model.strip_suffix(suffix))
-        .filter(|base| !base.is_empty())
-        .unwrap_or(model)
 }

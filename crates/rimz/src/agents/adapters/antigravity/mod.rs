@@ -837,6 +837,21 @@ impl crate::agents::capabilities::SpendingCapability for AntigravityAdapter {
     }
 }
 
+/// The effort levels agy appends to a model slug (`gemini-4-neon-high`).
+const EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// A model slug split into its base id and the effort agy appends to it. Hook `modelName`
+/// and transcript `model` carry the suffixed form; RimZ keeps only the base id.
+fn split_model_effort(model: &str) -> (&str, Option<&'static str>) {
+    EFFORT_LEVELS
+        .iter()
+        .find_map(|effort| {
+            let base = model.strip_suffix(effort)?.strip_suffix('-')?;
+            (!base.is_empty()).then_some((base, Some(*effort)))
+        })
+        .unwrap_or((model, None))
+}
+
 #[derive(Default)]
 struct DecodedLifecycleFields {
     agent_id: Option<String>,
@@ -988,7 +1003,13 @@ fn observation_with_prompt_reader(
     observation.prompt = SanitizedPrompt::new(prompt.as_deref());
     observation.transcript_path = transcript_path;
     observation.state_snapshot = snapshot.then_some(true);
-    observation.launch.model = common.model_name.filter(|model| !model.trim().is_empty());
+    if let Some(model) = common.model_name.as_deref().map(str::trim)
+        && !model.is_empty()
+    {
+        let (base, effort) = split_model_effort(model);
+        observation.launch.model = Some(base.to_owned());
+        observation.launch.effort = effort.map(ToOwned::to_owned);
+    }
     DecodedLifecycleFields {
         agent_id: Some(agent_id),
         worktree_path,
