@@ -143,6 +143,7 @@ Run-origin matching and the wrapper registry are in [transcript.md § Writing en
 ```text
 Queued ──► Claimed ──► Sent ──► Delivered
    ▲          │          │
+   │          │          ├──► Delivered  (--no-enter prompt, in the commit that records it Sent)
    │          │          ├──► Queued     (unconfirmed prompt, below the requeue cap)
    │          │          └──► TimedOut   (unconfirmed command, or prompt at the cap)
    │          ├──► Queued     (retryable pre-send failure, expired claim)
@@ -156,9 +157,9 @@ Queued ──► Claimed ──► Sent ──► Delivered
    └──► Errored    (no receiver, or a send failure with no retry path)
 ```
 
-`Queued` and `Claimed` are the open states (`MessageStatus::is_open`). `Sent` is live but not open: it stays in the live queue until a hook confirms it or reconciliation gives up, because a write does not prove the agent took the text. A `Sent` prompt also holds its card's boundary until it is acknowledged or its reconcile deadline passes ([the FIFO hold](#the-fifo-hold)).
+`Queued` and `Claimed` are the open states (`MessageStatus::is_open`). `Sent` is live but not open: it stays in the live queue until a hook confirms it or reconciliation gives up, because a write does not prove the agent took the text. A `--no-enter` prompt (`MessageRecord::settles_at_write`) is the exception: it asks for text in the composer and no turn, so the commit that records it `Sent` also settles it `Delivered`. A `Sent` prompt also holds its card's boundary until it is acknowledged or its reconcile deadline passes ([the FIFO hold](#the-fifo-hold)).
 
-`Delivered` means the agent acknowledged: `TurnStarted` for a `Prompt`, `Compacting` for a `Command`. Neither event confirms the other body.
+`Delivered` means the agent acknowledged: `TurnStarted` for a `Prompt`, `Compacting` for a `Command`. Neither event confirms the other body. A `--no-enter` prompt is the one `Delivered` record no agent acknowledged: its `message.delivered` event carries the reason `written to the composer and left unsubmitted, as --no-enter asks`. A turn that later submits the draft finds no live record to confirm, so its text is classified by its header, or as the user's when it has none. A `--no-enter` command is not settled at the write: it stays `Sent` and times out like any unconfirmed command.
 
 ### Claims and holds
 
@@ -179,7 +180,7 @@ The seven terminal states are final. A terminal transition removes the record fr
 
 | Trigger | Terminal status |
 | --- | --- |
-| A lifecycle hook correlates with the submitted record, or a `Sent` reminder's receiver ended a turn at or after the write | `Delivered` |
+| A lifecycle hook correlates with the submitted record, a `Sent` reminder's receiver ended a turn at or after the write, or a `--no-enter` prompt is recorded `Sent` (or found `Sent` past its deadline by reconciliation) | `Delivered` |
 | A queued automatic command reaches its validity deadline | `Expired` |
 | A queued resume follow-up reaches `register_by` with its card absent or ended no later than enqueue | `Expired` |
 | A queued resume follow-up reaches `register_by` while its resumed provider, of a kind that declares `reports_start_on_resume`, has not started a session, and each record queued behind it on that card | `Expired`, with the failed-resume reason |
@@ -506,7 +507,7 @@ Origin classification is a separate, read-only decision in `store::message::clas
 
 Reconciliation (`Store::reconcile_stale_messages`) runs in `message sweep` and `gc`, and handles expired claims alongside stale writes. Steer-only reminders are a separate path: a `Queued` one is preserved until the claim TTL elapses from `updated_at`, and a `Claimed` one until its claim expires; only then does it become `Canceled`. Their wake deadlines use the same TTL, so the host does not sweep them early. At a `Sent` reminder's deadline, an open receiver turn silently pushes `retry_after` one prompt window ahead without changing counters or writing an event. Otherwise a receiver `turn_ended_at` at or after the last write settles it `Delivered`, and no such end settles it `TimedOut`. It never requeues or resends; the ordinary rules below apply only to other records.
 
-A `Sent` record's deadline for reconciliation, wakeups, FIFO, and acknowledgement selection is `retry_after` when set, otherwise its last write (`last_sent_at`, falling back to `updated_at`) plus its body's delivery window. Wake-in-flight readers additionally hold a `Sent` harness wake while its receiver's compaction bracket is open, without waiting for reconciliation to extend the deadline. A pass before that deadline leaves the record untouched, even if the condition that armed a hold has already cleared. Rule 1 below applies to a `Claimed` record. A `Sent` record past its deadline takes the first of rules 2 to 7 that matches.
+A `Sent` record's deadline for reconciliation, wakeups, FIFO, and acknowledgement selection is `retry_after` when set, otherwise its last write (`last_sent_at`, falling back to `updated_at`) plus its body's delivery window. Wake-in-flight readers additionally hold a `Sent` harness wake while its receiver's compaction bracket is open, without waiting for reconciliation to extend the deadline. A pass before that deadline leaves the record untouched, even if the condition that armed a hold has already cleared. Rule 1 below applies to a `Claimed` record. A `Sent` `--no-enter` prompt past its deadline, which only a crash or an older binary leaves, is settled `Delivered` with the same reason as at the write, before any hold and with no `unconfirmed_sends` change. Any other `Sent` record past its deadline takes the first of rules 2 to 7 that matches.
 
 | # | Case | Effect |
 | --- | --- | --- |
@@ -590,7 +591,7 @@ The send path spaces messages, never a paste and its submit. It sleeps one messa
 
 [`write_text`](../../../crates/rimz/src/message/send.rs) records the batch as `Sent` after all its text lands and before it presses Enter. A submitted message is therefore always preceded by its durable record and audit event. The reverse order would let an agent start a turn RimZ has no record of.
 
-A crash between text and submit leaves a `Sent` record whose text sits unsubmitted in the composer, which reconciliation handles. A record that a cancel, clear, or archive finalized during the write is not recreated as `Sent`. The write logs a warning naming the message ids and still presses Enter, since the paste cannot be retracted and text left in the composer would glue onto the next write.
+A crash between text and submit leaves a `Sent` record whose text sits unsubmitted in the composer, which reconciliation handles. A `--no-enter` prompt presses no Enter and is settled `Delivered` in the commit that records it `Sent`, so no crash leaves it for reconciliation to paste again. A record that a cancel, clear, or archive finalized during the write is not recreated as `Sent`. The write logs a warning naming the message ids and still presses Enter, since the paste cannot be retracted and text left in the composer would glue onto the next write.
 
 ### The message header
 
