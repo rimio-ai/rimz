@@ -108,6 +108,7 @@ pub enum Call {
     SelfStop(SelfStopArgs),
     SelfCompact(SelfCompactArgs),
     SelfTune(SelfTuneArgs),
+    SelfMolt(SelfMoltArgs),
     Notes(NotesArgs),
     Guide(GuideArgs),
 }
@@ -217,7 +218,7 @@ impl Tool {
     }
 }
 
-pub static TOOLS: [Tool; 11] = [
+pub static TOOLS: [Tool; 12] = [
     Tool {
         name: "lsp",
         capability: Some(Capability::Lsp),
@@ -336,6 +337,18 @@ pub static TOOLS: [Tool; 11] = [
         schema: schema::<SelfTuneArgs>,
         output: Some(self_tune_schema),
         parse: |arguments| parse::<SelfTuneArgs>(arguments).map(Call::SelfTune),
+    },
+    Tool {
+        name: "self_molt",
+        capability: Some(Capability::Control),
+        purpose: Purpose::Yourself,
+        read_only: false,
+        command: "agents molt",
+        declared: &[],
+        verbs: &[],
+        schema: schema::<SelfMoltArgs>,
+        output: Some(self_molt_schema),
+        parse: |arguments| parse::<SelfMoltArgs>(arguments).map(Call::SelfMolt),
     },
     Tool {
         name: "notes",
@@ -804,6 +817,20 @@ impl ToolArgs for SelfStopArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct SelfMoltArgs {
+    /// The new session's first prompt: the path of your molt note, then the task it starts on.
+    pub prompt: String,
+    /// The profile, model alias, or kind that takes over; your own profile when absent.
+    pub agent: Option<String>,
+    /// How long this session rests after this turn before it closes (`s`/`m`/`h`/`d`); it
+    /// closes when this turn ends when absent.
+    pub when_idle: Option<String>,
+}
+
+impl ToolArgs for SelfMoltArgs {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SelfCompactArgs {
     /// Replaces the configured compaction brief; an empty string sends the bare command.
     pub instruction: Option<String>,
@@ -983,6 +1010,18 @@ fn self_compact_schema() -> Value {
             "continues": { "type": "boolean" },
         }),
         &["message_id", "status"],
+    )
+}
+
+fn self_molt_schema() -> Value {
+    object(
+        serde_json::json!({
+            "agent": string(),
+            "successor_kind": string(),
+            "closes_after_secs": { "type": "integer" },
+            "notices": array_of(string()),
+        }),
+        &["agent", "successor_kind", "closes_after_secs", "notices"],
     )
 }
 

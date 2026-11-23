@@ -1,5 +1,6 @@
-//! `self_stop`, `self_compact`, and `self_tune`: the jobs of `rimz agents
-//! stop @me --when-idle`, `rimz agents compact @me`, and `rimz agents tune @me`.
+//! `self_stop`, `self_compact`, `self_tune`, and `self_molt`: the jobs of `rimz agents
+//! stop @me --when-idle`, `rimz agents compact @me`, `rimz agents tune @me`, and
+//! `rimz agents molt`.
 
 use anyhow::Context;
 use serde::Serialize;
@@ -14,7 +15,7 @@ use crate::harness::idle_stop::started::{Seat, Started};
 use crate::harness::stop_booking::{IDLE_REST_DEFAULT, StopBooking, book_stop, parse_idle_rest};
 use crate::harness::tune::{SettingReport, budget, target_handle, tune as tune_agent};
 use crate::launcher::context::{current_channel, resolve_caller, resolve_me, sender_for};
-use crate::mcp::catalog::{self, SelfCompactArgs, SelfStopArgs, SelfTuneArgs};
+use crate::mcp::catalog::{self, SelfCompactArgs, SelfMoltArgs, SelfStopArgs, SelfTuneArgs};
 use crate::mcp::{Answer, Failure};
 
 pub(super) fn stop(tools: &Tools, args: &SelfStopArgs) -> Result<Answer, Failure> {
@@ -159,5 +160,51 @@ pub(super) fn tune(tools: &Tools, args: &SelfTuneArgs) -> Result<Answer, Failure
             .collect(),
         keep_warm_while: tuned.keep_warm_condition.as_deref(),
         budget,
+    }))
+}
+
+/// What `self_molt` answers: the agent's handle, the kind the new session runs, the rest this
+/// session takes after this turn before it closes, and the notices the swap printed.
+#[derive(Serialize)]
+struct Molt {
+    agent: String,
+    successor_kind: String,
+    closes_after_secs: u64,
+    notices: Vec<String>,
+}
+
+pub(super) fn molt(tools: &Tools, args: &SelfMoltArgs) -> Result<Answer, Failure> {
+    let rest = match args.when_idle.as_deref() {
+        Some(raw) => crate::utils::time::parse_compact_duration(raw)
+            .map_err(|err| Failure::new(format!("invalid when_idle `{raw}`: {err}")))?,
+        None => std::time::Duration::ZERO,
+    };
+    let room = Room::open(&tools.start_dir)?;
+    let molted = crate::launcher::molt::molt(
+        &room.workspace,
+        &room.store,
+        None,
+        &crate::config::MachineConfig::load_lenient(),
+        args.prompt.clone(),
+        args.agent.clone(),
+    )
+    .map_err(|failure| {
+        let mut refused = Failure::new(failure.error.to_string());
+        if !failure.notices.is_empty() {
+            refused
+                .extra
+                .insert("notices".to_owned(), failure.notices.into());
+        }
+        refused
+    })?;
+    let agent = molted.handle.clone();
+    let successor_kind = molted.successor_kind.to_string();
+    let mut notices = molted.notices.clone();
+    notices.extend(molted.close_when_rested(rest, |_| Ok(())));
+    Ok(Answer::data(&Molt {
+        agent,
+        successor_kind,
+        closes_after_secs: rest.as_secs(),
+        notices,
     }))
 }

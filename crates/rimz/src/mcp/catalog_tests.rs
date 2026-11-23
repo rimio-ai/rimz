@@ -221,6 +221,7 @@ fn arguments_outside_the_schema_shape_are_refused() {
         ("join", json!({"timeout": "4m"})),
         ("stop", json!({"id": "wait:a", "all": true})),
         ("self_tune", json!({"setting": "budget"})),
+        ("self_molt", json!({"agent": "codex"})),
         ("notes", json!({"kind": "log", "title": 7})),
         ("wait", json!({"trigger": "run", "value": "x", "on": "any"})),
         ("notes", json!({"kind": "k", "title": "t", "cwd": "/src"})),
@@ -357,7 +358,10 @@ fn the_full_listing_is_the_served_text() {
     let instructions = wording.instructions(&groups);
     assert!(text.contains(&instructions), "{text}");
     let first = instructions.lines().next().unwrap();
-    assert_eq!(first, "RimZ tools to read code and manage yourself.");
+    assert_eq!(
+        first,
+        "RimZ tools to read code, manage yourself, and load usage guides."
+    );
     assert!(!text.contains("only some of these tools"), "{text}");
     assert!(!text.contains(" · text "), "{text}");
     let served = tools_list(&tools, &[], &wording);
