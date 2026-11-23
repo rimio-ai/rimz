@@ -3000,7 +3000,8 @@ path = "crates/rimz/src/launcher"
 # Notice::line is the one text of a launch notice, for the CLI and the MCP subagent tool (+1).
 # swap shares the restart and molt reservation, request, placement, and cleanup seams (+16).
 # molt exposes caller preparation, a bound receipt, and caller-owned cleanup in process (+9).
-surface-budget = 187
+# molt books the replaced session's close, and its turn-end hook and hidden helper close it (+3).
+surface-budget = 190
 
 [[verdict]]
 kind = "item"

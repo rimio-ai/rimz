@@ -819,7 +819,7 @@ enum AgentsSubcmd {
     Fork(ForkArgs),
     /// Move yourself into a fresh session in a new tab (agent-only).
     #[command(
-        long_about = "Run only inside an agent. Move into a fresh session in a new, unfocused tab with NOTE as its first prompt. Molting does not count toward max-chain-length. The old session stops once idle for 5m with nothing owed; typing into it keeps it."
+        long_about = "Run only inside an agent. Move into a fresh session in a new, unfocused tab with NOTE as its first prompt. Molting does not count toward max-chain-length. The old session closes when its turn ends, or after --when-idle; typing into it keeps it."
     )]
     Molt(MoltArgs),
     /// Wait for supervised runs or interactive agents; several references join.
@@ -994,6 +994,10 @@ enum AgentsSubcmd {
     /// `stop --when-idle` request is due.
     #[command(hide = true)]
     IdleStop(HelperRequestArgs<rimz::harness::idle_stop::IdleStopHelperRequest>),
+    /// Hidden helper a replaced session's turn-end hook spawns to close it once it has rested
+    /// the time its molt booked.
+    #[command(hide = true)]
+    MoltClose(HelperRequestArgs<rimz::launcher::molt::MoltCloseRequest>),
     /// Hidden helper the producer spawns to freeze an eligible idle agent.
     #[command(hide = true)]
     Hibernate(HelperRequestArgs<rimz::harness::hibernate::HibernateHelperRequest>),
@@ -1160,6 +1164,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args.request),
         Some(AgentsSubcmd::SoftCompact(args)) => return soft_compact::run(args.request),
         Some(AgentsSubcmd::IdleStop(args)) => return run_idle_stop(args.request, globals),
+        Some(AgentsSubcmd::MoltClose(args)) => return molt::run_molt_close(args.request),
         Some(AgentsSubcmd::Hibernate(args)) => return hibernate::run(args.request),
         Some(AgentsSubcmd::Wake(args)) => return hibernate::wake(args.request),
         Some(AgentsSubcmd::WakeRefault(args)) => {

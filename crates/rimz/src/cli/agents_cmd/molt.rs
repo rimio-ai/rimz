@@ -15,6 +15,10 @@ pub(super) struct MoltArgs {
     /// Re-base the same job onto this profile or provider.
     #[arg(long, value_name = "PROFILE|KIND")]
     agent: Option<String>,
+    /// Keep this session open until it has rested this long after its turn ends (`3m`);
+    /// by default it closes when the turn ends.
+    #[arg(long, value_name = "REST", value_parser = rimz::utils::time::parse_compact_duration)]
+    when_idle: Option<std::time::Duration>,
 }
 
 pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
@@ -45,13 +49,30 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
     let handle = &molted.handle;
     // The replacement has bound, so a receipt that fails to print still lets
     // the replaced session go.
+    let rest = args.when_idle.unwrap_or_default();
+    let closes = if rest.is_zero() {
+        "when this turn ends".to_owned()
+    } else {
+        format!(
+            "after {} idle once this turn ends",
+            rimz::harness::schedule::arm::duration_label(rest)
+        )
+    };
     let receipt = writeln!(
         out,
-        "molted {handle} into a fresh session beside this one; this session closes now\nnext: rimz agents show {handle}"
+        "molted {handle} into a fresh session beside this one; this session closes {closes}\nnext: rimz agents show {handle}"
     )
     .and_then(|()| out.flush());
-    molted.close_replaced(|notice| writeln!(crate::cli::render::err(), "{notice}"));
+    molted.close_when_rested(rest, |notice| {
+        writeln!(crate::cli::render::err(), "{notice}")
+    });
     Ok(receipt?)
+}
+
+/// The hidden helper a replaced session's turn-end hook spawns to close it once rested.
+pub(super) fn run_molt_close(request: rimz::launcher::molt::MoltCloseRequest) -> Result<()> {
+    let ctx = Ctx::for_workspace(request.workspace_id.clone(), None)?;
+    rimz::launcher::molt::close_rested(&ctx.workspace, &ctx.store, &request)
 }
 
 fn molt_error(error: MoltErr) -> anyhow::Error {

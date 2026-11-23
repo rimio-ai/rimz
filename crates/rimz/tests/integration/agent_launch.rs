@@ -2340,7 +2340,7 @@ fn molt_refuses_children_unresolved_callers_and_empty_notes_without_appending() 
 #[cfg(unix)]
 #[test]
 fn molt_at_chain_cap_keeps_handle_generation_note_and_launcher_beside_the_caller() {
-    // `receipt_fails`: a failed receipt write still closes the replaced pane.
+    // `receipt_fails`: a failed receipt write still books the replaced session's close.
     for (placement_fails, fresh, receipt_fails) in [
         (false, false, false),
         (false, true, false),
@@ -2427,13 +2427,8 @@ fn molt_at_chain_cap_keeps_handle_generation_note_and_launcher_beside_the_caller
             Vec::new(),
         );
         let log = env.home_root.join("molt-mux.log");
-        let run = || {
-            let mut command = crate::common::wait::agent_wait(&env);
+        let zellij = |command: &mut std::process::Command| {
             command
-                .args(["--mux", "zellij", "agents", "molt", "continue the work"])
-                .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
-                .env("PATH", path_with_front(&shim))
-                .env("SHELL", &shell)
                 .env("ZELLIJ_PANE_ID", "1")
                 .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
                 .env(
@@ -2450,6 +2445,15 @@ fn molt_at_chain_cap_keeps_handle_generation_note_and_launcher_beside_the_caller
                     "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                     format!("{} [Created 1s ago]\n", workspace.session_name),
                 );
+        };
+        let run = || {
+            let mut command = crate::common::wait::agent_wait(&env);
+            command
+                .args(["--mux", "zellij", "agents", "molt", "continue the work"])
+                .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
+                .env("PATH", path_with_front(&shim))
+                .env("SHELL", &shell);
+            zellij(&mut command);
             if fresh {
                 command.args(["--agent", "claude"]);
             }
@@ -2517,8 +2521,22 @@ fn molt_at_chain_cap_keeps_handle_generation_note_and_launcher_beside_the_caller
                 .count(),
             usize::from(!placement_fails)
         );
-        assert!(stops.is_empty(), "a molt arms no idle stop: {stops:?}");
+        // The replaced session stays open, booked to close when its turn ends.
+        let booked: Vec<_> = stops
+            .iter()
+            .map(|stop| (stop.agent_id.as_str(), stop.stop.after_secs))
+            .collect();
+        assert_eq!(
+            booked,
+            if placement_fails {
+                Vec::new()
+            } else {
+                vec![("provider-session", 0)]
+            },
+            "{stops:?}"
+        );
         let trace = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(!trace.contains("close-pane"), "{trace}");
         assert!(
             trace.contains("new-pane") && !trace.contains("new-tab"),
             "{trace}"
@@ -2526,16 +2544,44 @@ fn molt_at_chain_cap_keeps_handle_generation_note_and_launcher_beside_the_caller
         if placement_fails {
             assert_eq!(successor.status, rimz::agents::AgentStatus::Failed);
             assert!(successor.agent_id.is_provisional());
-            assert!(!trace.contains("close-pane"), "{trace}");
             assert_eq!(crate::common::wait::wait_instances(&env).0.len(), 1);
-        } else if receipt_fails {
-            assert!(trace.contains("close-pane"), "{trace}");
-        } else {
+        } else if !receipt_fails {
             assert_planner_kept_what_it_was_owed(&env);
             assert_eq!(
                 String::from_utf8_lossy(&output.stdout),
                 "molted @planner#main into a fresh session beside this one; this session \
-                 closes now\nnext: rimz agents show @planner#main\n"
+                 closes when this turn ends\nnext: rimz agents show @planner#main\n"
+            );
+            // The replaced session's turn end hands its close to the helper, which closes
+            // its pane and withdraws the booking.
+            let mut feed = env.hook_command("claude");
+            zellij(&mut feed);
+            let payload =
+                serde_json::json!({"hook_event_name": "Stop", "session_id": "provider-session"});
+            let fed = env
+                .spawn_payload(feed, &payload.to_string())
+                .wait_with_output()
+                .unwrap();
+            assert!(fed.status.success(), "{fed:?}");
+            let mut drain = env.rimz();
+            drain
+                .args(["hooks", "drain", "--once", "--project-root"])
+                .arg(&env.project_root);
+            zellij(&mut drain);
+            assert!(drain.output().unwrap().status.success());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while !std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .contains("close-pane")
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            let trace = std::fs::read_to_string(&log).unwrap_or_default();
+            assert!(trace.contains("close-pane"), "{trace}");
+            assert!(
+                rimz::store::idle_stop::read(env.store().paths()).is_empty(),
+                "the close withdraws its booking"
             );
         }
     }

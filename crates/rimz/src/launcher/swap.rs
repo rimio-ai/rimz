@@ -376,7 +376,7 @@ pub fn finish_replacement(
 /// Withdraw what belonged to the session a swap replaced: its hibernation and
 /// idle stop, and, once its conversation is over, its raised attention. The
 /// agent's waits stay armed for the session that holds it now.
-fn release_replaced(
+pub(super) fn release_replaced(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &AgentState,
