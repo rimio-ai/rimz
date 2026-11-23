@@ -3244,6 +3244,7 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
         ("limited", "mcps: []\n"),
         ("everything", "mcps: ['*']\n"),
         ("both", "tools: [Read]\nmcps: [rimz-lsp]\n"),
+        ("granted", "capabilities: [read]\n"),
     ] {
         std::fs::write(
             root.path().join(format!("agents/{name}.md")),
@@ -3334,6 +3335,11 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
         compile(&switched("both"), None)
             .unwrap_err()
             .ends_with("or remove `tools`")
+    );
+    assert!(
+        compile(&switched("granted"), None)
+            .unwrap_err()
+            .ends_with("or remove `capabilities`")
     );
 
     std::fs::write(

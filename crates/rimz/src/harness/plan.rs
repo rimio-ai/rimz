@@ -2085,7 +2085,12 @@ fn validate_fresh_agent_file_lists(
         return Ok(());
     }
     let field = if cell.tools.is_some() {
-        "tools"
+        // A `capabilities:` list lowers to the tools value; name the key the user wrote.
+        if cell.rimz_capabilities.is_some() {
+            "capabilities"
+        } else {
+            "tools"
+        }
     } else if crate::config::mcps_limit(cell.mcps.as_deref()) {
         "mcps"
     } else {
