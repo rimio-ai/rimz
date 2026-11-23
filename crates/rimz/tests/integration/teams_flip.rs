@@ -923,6 +923,62 @@ fn record_bootstraps_without_a_cohort_or_side_effects_then_flip_uses_the_board()
 }
 
 #[test]
+fn flip_and_record_receipts_name_each_member_beside_its_role() {
+    let fixture = Fixture::new();
+    fixture.seed_member(
+        "claude",
+        "amber-thread",
+        "coder",
+        None,
+        "feature-team",
+        &fixture.env.project_root,
+    );
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let mut record = fixture.command();
+    record
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "launch_amber-thread")
+        .args(["teams", "record", "Decisions", "keep it"]);
+    assert_eq!(
+        success(record.output().unwrap()),
+        "recorded Decisions @coder (@amber-thread)\n"
+    );
+    let output = success(fixture.flip("Review", Some("amber-thread"), Some("handoff")));
+    assert!(
+        output.contains("Flipped Build -> Review by @coder (@amber-thread)  ("),
+        "{output}"
+    );
+
+    let fixture = Fixture::new();
+    fixture.running("coder", None);
+    fixture.seed_member(
+        "claude",
+        "round-binder",
+        "reviewer",
+        None,
+        "feature-team",
+        &fixture.env.project_root,
+    );
+    for event in ["SessionStart", "UserPromptSubmit"] {
+        fixture.feed_from(
+            "claude",
+            "round-binder",
+            "round-binder",
+            event,
+            None,
+            None,
+            "work",
+        );
+    }
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let output = success(fixture.flip("Review", None, Some("handoff")));
+    assert!(
+        output.contains("  owner    @reviewer (@round-binder), "),
+        "{output}"
+    );
+}
+
+#[test]
 fn record_member_multiline_stdin_and_file_print_one_line_receipts() {
     let fixture = Fixture::new();
     fixture.seed("coder", None);

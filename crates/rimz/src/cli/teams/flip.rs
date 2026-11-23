@@ -65,11 +65,12 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
         }
         None => Flipper::User,
     };
-    let (by_name, flip_compact) = match &by {
-        Flipper::Member { role, .. } => {
-            (*role, team.flip_compact(role, machine.harness.flip_compact))
-        }
-        Flipper::User => ("user", None),
+    let (by_label, flip_compact) = match &by {
+        Flipper::Member { role, agent, .. } => (
+            rimz::address::handle_with_name(&format!("@{role}"), agent.name.as_deref()),
+            team.flip_compact(role, machine.harness.flip_compact),
+        ),
+        Flipper::User => ("@user".to_owned(), None),
     };
     let members = cohort
         .members
@@ -97,7 +98,7 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
     }
     writeln!(
         out,
-        " by @{by_name}  ({} · {}{})",
+        " by {by_label}  ({} · {}{})",
         cohort.instance,
         worktree
             .file_name()
@@ -129,7 +130,14 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
             } else {
                 "woken at its next turn boundary"
             };
-            writeln!(out, "  owner    @{owner}, {timing}")?;
+            let owner_name = rimz::address::role_holders(members.iter(), owner)
+                .first()
+                .and_then(|holder| holder.name.as_deref());
+            writeln!(
+                out,
+                "  owner    {}, {timing}",
+                rimz::address::handle_with_name(&format!("@{owner}"), owner_name)
+            )?;
         }
         Delivery::OwnerNotLive { owner } => {
             writeln!(out, "  owner    @{owner}, not live; woken on resume")?
