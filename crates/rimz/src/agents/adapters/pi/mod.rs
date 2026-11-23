@@ -171,6 +171,16 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
             system_prompt_file: Some(super::StaticPresetMatcher::TextFlag(&["--system-prompt"])),
             fast: super::FastSwitch::ExtensionEnv,
         },
+        message_keys: crate::agents::MessageKeys {
+            send_now: &[crate::pane::keys::KeyStep::now(
+                crate::pane::keys::NamedKey::Enter,
+            )],
+            queue: &[crate::pane::keys::KeyStep::now(
+                crate::pane::keys::NamedKey::AltEnter,
+            )],
+            implemented: true,
+            ..crate::agents::MessageKeys::NOT_YET_IMPLEMENTED
+        },
         ..super::LaunchSpec::EMPTY
     },
 };

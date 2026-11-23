@@ -99,6 +99,7 @@ static MUSE_DESCRIPTOR: AgentSpec = AgentSpec {
             ])),
             ..crate::agents::PresetMatchers::EMPTY
         },
+        message_keys: crate::agents::MessageKeys::NOT_YET_IMPLEMENTED,
         ..crate::agents::LaunchSpec::EMPTY
     },
 };

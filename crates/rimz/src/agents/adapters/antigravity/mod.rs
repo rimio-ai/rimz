@@ -262,6 +262,16 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
             )),
             ..super::PresetMatchers::EMPTY
         },
+        message_keys: crate::agents::MessageKeys {
+            send_now: &[crate::pane::keys::KeyStep::now(
+                crate::pane::keys::NamedKey::AltM,
+            )],
+            queue: &[crate::pane::keys::KeyStep::now(
+                crate::pane::keys::NamedKey::Enter,
+            )],
+            implemented: true,
+            ..crate::agents::MessageKeys::NOT_YET_IMPLEMENTED
+        },
         ..super::LaunchSpec::EMPTY
     },
 };
