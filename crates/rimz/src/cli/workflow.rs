@@ -8,6 +8,7 @@ use rimz::harness::schedule::run_log;
 use rimz::harness::signal::Signal;
 use rimz::harness::workflow::{self, Validation};
 use rimz::ids::{EventId, WorkflowRunId};
+use rimz::launcher::workflow_start::{self, StartOrigin, WorkflowStart, refuse_unwritable_home};
 use rimz::packs::one_line;
 use rimz::store::workflow::{self as records, RunRecord};
 
@@ -732,22 +733,6 @@ fn submit(
     Ok(())
 }
 
-/// Refuses before `action` changes anything when the detached engine could not open the
-/// home-wide start lock its first launch takes. It checks RimZ's own needs only.
-fn refuse_unwritable_home(action: &str) -> Result<()> {
-    rimz::harness::throttle::probe_queue_lock().map_err(|error| unwritable_home(error, action))
-}
-
-fn unwritable_home(error: rimz::disk::lock::LockErr, action: &str) -> anyhow::Error {
-    let error = anyhow::Error::from(error);
-    if rimz::harness::home_write::is_read_only(&error) {
-        return rimz::harness::home_write::hint(error, "rimz workflow", Some(action));
-    }
-    error.context(format!(
-        "nothing was {action}: the detached workflow engine needs this lock"
-    ))
-}
-
 fn start(
     name: PathBuf,
     worktree: Option<String>,
@@ -758,131 +743,41 @@ fn start(
 ) -> Result<()> {
     let dir = workflow_view::deployed_definition(&name, validation_root(globals).as_deref())?;
     let ctx = super::ctx::Ctx::open(globals)?;
-    let definition = workflow::load(&dir)?;
-    if worktree.is_some() && definition.scope() == workflow::ScopeKind::Project {
-        bail!(
-            "{} has scope = project, so it runs at {}; start it without -w",
-            workflow::directory_name(&dir).unwrap_or_else(|| dir.display().to_string()),
-            ctx.workspace.project_root.display()
-        );
-    }
-    let mut args = args;
-    let deployed = workflow_view::deployed()?;
-    // A task's own run starts nothing on a launch path; any other start is placed on one and
-    // bounded before anything is created. A task's run and an agent's start only what is
-    // deployed, read from the claim's own path so no link the caller made is recorded.
-    let dir = if task.is_some() {
-        deployed.claim(&dir).ok_or_else(|| {
-            anyhow::anyhow!(
-                "{}: a loop task starts only a workflow in {} or an installed pack",
-                name.display(),
-                deployed.home().display()
-            )
-        })?
-    } else {
-        let agent_without_run;
-        (args.starting, agent_without_run) = starting_here(&ctx);
-        args.starting
-            .admit(super::machine_config().agents.max_workflow_depth)?;
-        if !agent_without_run && !agent_started(&args.starting) {
-            dir
-        } else {
-            deployed.claim(&dir).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{}: an agent starts only a workflow in {} or an installed pack; run this \
-                     directory from your own shell, or move it there or install its pack",
-                    name.display(),
-                    deployed.home().display()
-                )
-            })?
-        }
-    };
-    let env_fire = rimz::harness::loop_task::read_fire_env().map(|fire| fire.fire);
-    let fire = task
-        .as_ref()
-        .map(|task| task.loop_fire.clone())
-        .or(env_fire.clone());
-    // A workflow task's fire names its run as the task's own. Any other run started under a
-    // loop fire carries the fire: listed and stopped by its task, reported to nobody.
-    let manual = task.as_ref().is_some_and(|task| task.manual);
     let owned = task.is_some();
     let once = args.once;
-    let source = match task {
-        Some(task) => workflow::DefinitionSource::Deployed {
-            dir: &dir,
-            task: Some(task.task),
-            loop_fire: Some(task.loop_fire),
-            fire: Some(task.fire),
-            fire_facts: Some(task.fire_facts),
-        },
-        None => workflow::DefinitionSource::Deployed {
-            dir: &dir,
-            task: None,
-            loop_fire: env_fire,
-            fire: None,
-            fire_facts: None,
-        },
+    let origin = match task {
+        Some(task) => StartOrigin::Task(task),
+        None => StartOrigin::Here(workflow_start::started_here(&ctx.store)),
     };
     let machine = super::machine_config();
-    let planned = match worktree.as_deref() {
-        Some(name) => rimz::worktree::worktree_path(
-            ctx.workspace.launch_repo_root(),
-            &machine.agents.worktree,
-            name,
-        )?,
-        None => ctx.workspace.worktree_root.clone(),
-    };
-    let roots = |checkout: PathBuf| workflow::ScopeRoots {
-        checkout,
-        project: ctx.workspace.project_root.clone(),
-    };
-    // A slot a live run holds is named before the trust read, as `create` names it.
-    let overlap =
-        workflow::refuse_overlap(ctx.store.paths(), &source, roots(planned.clone()), once);
-    if let Err(ref error @ workflow::WorkflowErr::Exists { ref run, .. }) = overlap
-        && owned
-    {
-        writeln!(render::out(), "{run}")?;
-        return Err(super::ExitCodeError {
-            code: workflow::TaskStart::OVERLAP_EXIT_CODE,
-            message: error.to_string(),
-        }
-        .into());
-    }
-    overlap?;
-    refuse_trust_problems(
-        &ctx,
-        &definition,
-        roots(planned).path(definition.scope()),
-        &args,
-        owned,
-    )?;
-    refuse_unwritable_home("started")?;
-    let scope = match &worktree {
-        Some(name) => match named_checkout(&ctx, name, fire.as_ref())? {
-            Some(scope) => scope,
-            None => return Ok(()),
+    let started = workflow_start::start(
+        WorkflowStart {
+            name: &name,
+            dir,
+            worktree: worktree.as_deref(),
+            prompt,
+            args,
+            origin,
+            workspace: &ctx.workspace,
+            store: &ctx.store,
+            machine: &machine,
         },
-        None => ctx.workspace.worktree_root.clone(),
-    };
-    let created = workflow::create(
-        ctx.store.paths(),
-        source,
-        roots(scope),
-        || Ok(prompt),
-        manual,
-        args,
+        &mut super::launch_interaction::CliInteraction,
     );
-    let (record, advance) = match created {
-        Err(ref error @ workflow::WorkflowErr::Exists { ref run, .. }) if owned => {
-            writeln!(render::out(), "{run}")?;
-            return Err(super::ExitCodeError {
-                code: workflow::TaskStart::OVERLAP_EXIT_CODE,
-                message: error.to_string(),
+    let (record, advance) = match started {
+        Ok(Some(created)) => created,
+        Ok(None) => return Ok(()),
+        Err(error) => {
+            if owned && let Some(workflow::WorkflowErr::Exists { run, .. }) = error.downcast_ref() {
+                writeln!(render::out(), "{run}")?;
+                return Err(super::ExitCodeError {
+                    code: workflow::TaskStart::OVERLAP_EXIT_CODE,
+                    message: error.to_string(),
+                }
+                .into());
             }
-            .into());
+            return Err(error);
         }
-        created => created?,
     };
     writeln!(render::out(), "{}", record.id)?;
     let paths = ctx.store.paths().workflow(&record.id);
@@ -922,136 +817,6 @@ fn start(
         Some(passed) => receipt::write_held(&paths, &passed, ""),
         None => Ok(()),
     }
-}
-
-/// Refuses the start, before anything is created, when the launcher's trust read refuses an
-/// agent step or judge the run could reach (with `--once`, the tried node and its rest check),
-/// listing each problem once with its fix and the nodes it blocks.
-fn refuse_trust_problems(
-    ctx: &super::ctx::Ctx,
-    definition: &workflow::Definition,
-    scope: &std::path::Path,
-    args: &workflow::StartArgs,
-    task_run: bool,
-) -> Result<()> {
-    let machine = super::machine_config();
-    let tried = args
-        .once
-        .then(|| args.at.as_deref().unwrap_or(definition.start()));
-    let problems = rimz::launcher::trust::workflow_start_problems(
-        &ctx.workspace,
-        &ctx.store,
-        &machine,
-        definition,
-        scope,
-        tried,
-        task_run,
-    )?;
-    if problems.is_empty() {
-        return Ok(());
-    }
-    let mut message = String::from("workflow start refused; nothing was created:");
-    for (problem, nodes) in problems {
-        message.push_str(&format!("\n- {problem} (blocks {})", nodes.join(", ")));
-    }
-    bail!(message)
-}
-
-/// Who starts a run from this process ([`workflow::starting`]): the run `RIMZ_WORKFLOW_RUN` names,
-/// when this RimZ reads it, the calling agent, when one resolves, and whether a run's command
-/// step or check spawned this process (`RIMZ_WORKFLOW_NODE`). Also whether an agent resolves
-/// under a hosted variable with no run to start as: the start owes it nothing, but it is still
-/// the agent's to refuse.
-fn starting_here(ctx: &super::ctx::Ctx) -> (workflow::Starting, bool) {
-    let enclosing = std::env::var("RIMZ_WORKFLOW_RUN")
-        .ok()
-        .and_then(|raw| raw.parse::<WorkflowRunId>().ok())
-        .and_then(|id| resolve::locate(&id).ok())
-        .and_then(|(_, found)| match found.class {
-            records::RunClass::Current(record) => Some(*record),
-            _ => None,
-        });
-    let snapshot = ctx.store.snapshot().ok();
-    let agent = snapshot
-        .as_ref()
-        .and_then(|snapshot| rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents).ok());
-    let hosted = std::env::var_os("RIMZ_WORKFLOW_NODE").is_some();
-    let agent_without_run = hosted && enclosing.is_none() && agent.is_some();
-    (
-        workflow::starting(enclosing.as_ref(), agent, hosted),
-        agent_without_run,
-    )
-}
-
-/// Whether an agent stands at the root of `starting`'s launch path: it starts the run itself, or
-/// it started the run whose step or script starts this one, at any depth. A starter run whose
-/// record cannot be read could be an agent's, so it counts as one.
-fn agent_started(starting: &workflow::Starting) -> bool {
-    let mut starter = starting.starter.clone();
-    for _ in 0..=starting.depth {
-        let run = match starter {
-            None => return false,
-            Some(records::RunStarter::Agent { .. }) => return true,
-            Some(records::RunStarter::Run { run, .. }) => run,
-        };
-        starter = match resolve::locate(&run).map(|(_, found)| found.class) {
-            Ok(records::RunClass::Current(record)) => record.starter,
-            Ok(records::RunClass::Stranded { header, .. } | records::RunClass::Ended(header)) => {
-                header.starter
-            }
-            _ => return true,
-        };
-    }
-    true
-}
-
-/// The RimZ-owned worktree `-w <name>` names, created from the configured base when missing,
-/// as an agent launch's `-w` creates it: in the room's repository, or after the caller confirms
-/// the current one, and stamped with the loop fire the run starts under. `None` when the caller
-/// declined another repository or a checkout RimZ does not own.
-fn named_checkout(
-    ctx: &super::ctx::Ctx,
-    name: &str,
-    fire: Option<&rimz::ids::FireId>,
-) -> Result<Option<PathBuf>> {
-    if name.trim().is_empty() {
-        bail!("-w takes a worktree name");
-    }
-    let mut interaction = super::launch_interaction::CliInteraction;
-    if !rimz::launcher::checkout::confirm_cross_repo_worktree(&ctx.workspace, &mut interaction)? {
-        return Ok(None);
-    }
-    let machine = super::machine_config();
-    let projection = ctx.store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    rimz::harness::lanes::admit_launch_worktree_name(
-        &ctx.workspace,
-        &machine.agents.worktree,
-        &projection.agents,
-        Some(name),
-    )?;
-    let Some(checkout) = rimz::launcher::checkout::resolve_launch_checkout(
-        &ctx.workspace,
-        &machine,
-        Some(name),
-        None,
-        None,
-        rimz::worktree::LaunchBase::Configured,
-        &mut interaction,
-    )?
-    else {
-        return Ok(None);
-    };
-    if let (Some(fire), Some(_)) = (fire, &checkout.created)
-        && let Err(error) = rimz::worktree::stamp_loop_fire(&checkout.cwd, fire)
-    {
-        tracing::warn!(
-            %fire,
-            %error,
-            path = %checkout.cwd.display(),
-            "the run's tree carries no fire stamp"
-        );
-    }
-    Ok(Some(checkout.cwd))
 }
 
 fn calling_run(globals: &super::GlobalFlags) -> Result<resolve::Selection> {
@@ -1357,42 +1122,4 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
         bail!("{} workflow error(s)", report.errors.len());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unwritable_home_adds_the_sandbox_remedy_only_for_a_read_only_filesystem() {
-        for action in ["started", "resumed", "extended", "restarted"] {
-            for kind in [
-                std::io::ErrorKind::ReadOnlyFilesystem,
-                std::io::ErrorKind::PermissionDenied,
-            ] {
-                let error = rimz::disk::lock::LockErr::Open {
-                    path: "rimz-home/loops/throttle.lock".into(),
-                    source: std::io::Error::from(kind),
-                };
-                let report = format!("{:#}", unwritable_home(error, action));
-                assert!(
-                    report.contains(&format!("nothing was {action}: ")),
-                    "{report}"
-                );
-                assert!(report.contains("throttle.lock"), "{report}");
-                let read_only = kind == std::io::ErrorKind::ReadOnlyFilesystem;
-                for text in [
-                    "this command cannot write the RimZ home",
-                    "Run `rimz workflow …` as its own command",
-                ] {
-                    assert_eq!(report.contains(text), read_only, "{report}");
-                }
-                assert_eq!(
-                    report.contains("the detached workflow engine needs this lock"),
-                    !read_only,
-                    "{report}"
-                );
-            }
-        }
-    }
 }

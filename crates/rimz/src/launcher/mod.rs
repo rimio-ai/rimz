@@ -14,6 +14,7 @@ mod supervised;
 pub mod swap;
 pub mod team_join;
 pub mod workflow_host;
+pub mod workflow_start;
 use execute::{FreshLaunch, PreparedState, SettledLayout};
 pub use execute::{
     LeaderRun, OpenedRun, PreparedLaunch, RunCompletion, SupervisedContext, execute,

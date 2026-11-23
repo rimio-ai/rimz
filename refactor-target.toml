@@ -3029,7 +3029,11 @@ path = "crates/rimz/src/launcher"
 # molt exposes caller preparation, a bound receipt, and caller-owned cleanup in process (+9).
 # molt books the replaced session's close, and its turn-end hook and hidden helper close it (+3).
 # Molted::name hands the CLI receipt the replaced agent's name to print beside its handle (+1).
-surface-budget = 191
+# workflow_start is the job of `workflow run` up to the created run, for the CLI and the MCP
+# workflow tool: the module, start, WorkflowStart, StartOrigin, StartedHere with its starting
+# field, started_here, definitions, deployed, definition_dir, not_deployed, validated, and
+# refuse_unwritable_home (+12).
+surface-budget = 203
 
 [[verdict]]
 kind = "item"
