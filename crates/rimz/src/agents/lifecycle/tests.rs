@@ -659,7 +659,7 @@ fn keyed_wait_closes_at_each_turn_boundary() {
         LifecycleSignal::TurnStarted { turn_id: None },
         turn_end(false, false),
         turn_end(true, false),
-        turn_end(false, true),
+        turn_end(true, true),
         LifecycleSignal::TurnInterrupted { turn_id: None },
         LifecycleSignal::Registered,
         LifecycleSignal::Compacting,
@@ -694,6 +694,37 @@ fn keyed_wait_closes_at_each_turn_boundary() {
         )
     });
     assert_eq!(cleared, [(true, true); 12]);
+}
+
+#[test]
+fn keyed_wait_holds_through_a_clean_parked_turn_end() {
+    for compacting in [false, true] {
+        let waiting = state(AgentStatus::Waiting, TurnPhase::Idle, compacting);
+        let held = step(
+            Some(&waiting),
+            Some("ask-call"),
+            PriorTurnIds::default(),
+            &turn_end(false, true),
+        );
+        assert_eq!(held.next, waiting, "compacting {compacting}");
+        assert!(matches!(held.kind, TransitionKind::Ignored { .. }));
+        assert!(!held.waiting_cleared);
+        assert!(!held.compaction_closed);
+        assert!(!held.opened_turn);
+    }
+
+    let waiting = state(AgentStatus::Waiting, TurnPhase::Idle, false);
+    let keyless = step(
+        Some(&waiting),
+        None,
+        PriorTurnIds::default(),
+        &turn_end(false, true),
+    );
+    assert_eq!(
+        keyless.next,
+        state(AgentStatus::Running, TurnPhase::Parked, false)
+    );
+    assert!(keyless.waiting_cleared);
 }
 
 #[test]

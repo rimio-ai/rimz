@@ -66,13 +66,15 @@ pub(super) fn record_lifecycle_observation(
 }
 
 /// Close a keyed ask whose own call the transcript already resolved, before
-/// the tool event that would otherwise be ignored as its sibling. Hooks alone
-/// cannot separate a parallel sibling from a successor — both arrive as a tool
-/// with a different key — and an ask rejected with typed feedback fires no
-/// completion edge of its own, so the ask's call id in the provider's
-/// transcript is the proof. The derived answer edge is the same shape Store
-/// derives for a child's keyed completion (`SubagentAskAnswered`), recorded
-/// first so the fold closes the ask before the incoming event registers work.
+/// the tool event that would otherwise be ignored as its sibling or the clean
+/// parked turn end that would otherwise hold it. Hooks alone cannot separate a
+/// parallel sibling from a successor — both arrive as a tool with a different
+/// key — or a card a script still holds open from one already rejected, since
+/// an ask rejected with typed feedback fires no completion edge of its own. So
+/// the ask's call id in the provider's transcript is the proof. The derived
+/// answer edge is the same shape Store derives for a child's keyed completion
+/// (`SubagentAskAnswered`), recorded first so the fold closes the ask before
+/// the incoming event registers work.
 /// Fails safe: no proof leaves the ask open for the next event to retry.
 pub(super) fn release_resolved_keyed_ask(
     workspace: &ResolvedWorkspace,
@@ -86,12 +88,17 @@ pub(super) fn release_resolved_keyed_ask(
     let Some(observation) = decoded.lifecycle() else {
         return Ok(None);
     };
-    let LifecycleSignal::ToolUsed {
-        native_key: Some(key),
-        ..
-    } = &observation.signal
-    else {
-        return Ok(None);
+    let incoming_key = match &observation.signal {
+        LifecycleSignal::ToolUsed {
+            native_key: Some(key),
+            ..
+        } => Some(key),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            ..
+        } => None,
+        _ => return Ok(None),
     };
     // A child's tool never answers its parent's ask on this path: Store
     // derives that edge from the child observation itself.
@@ -107,7 +114,7 @@ pub(super) fn release_resolved_keyed_ask(
     else {
         return Ok(None);
     };
-    if open_key == *key || !agent.tool_call_resolved(payload, &open_key) {
+    if incoming_key == Some(&open_key) || !agent.tool_call_resolved(payload, &open_key) {
         return Ok(None);
     }
     record_derived_lifecycle_observation(

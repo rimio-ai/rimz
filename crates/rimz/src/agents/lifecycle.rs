@@ -116,7 +116,9 @@ pub enum LifecycleSignal {
     /// closure, the terminal disposition and subagent correlation read: a
     /// parked end is the main thread waiting on still-in-flight work, so it
     /// closes nothing, and a clean parked end stays running rather than
-    /// painting a false success. A `turn_id` matching the superseded turn
+    /// painting a false success. On a row waiting on a keyed ask a clean
+    /// parked end is ignored: a script that raised the ask can outlive the
+    /// turn, its card still open. A `turn_id` matching the superseded turn
     /// marks a late report from an earlier turn. A non-parked end records its
     /// id so matching tools cannot reopen the turn.
     TurnEnded {
@@ -507,6 +509,15 @@ pub(crate) fn step(
         && open_ask_key != native_key.as_deref()
     {
         Some("sibling tool completed while a keyed ask is open")
+    } else if let LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: true,
+        ..
+    } = signal
+        && prior_status == Some(AgentStatus::Waiting)
+        && open_ask_key.is_some()
+    {
+        Some("turn parked on background work while a keyed ask is open")
     } else if let LifecycleSignal::ToolUsed {
         turn_id: Some(turn_id),
         ..

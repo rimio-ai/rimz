@@ -43,7 +43,7 @@ The statusline is installed with the hooks ([Statusline](#statusline)).
 | `PermissionRequest` | permission wait. The two gate tools classify as question and plan-approval waits |
 | `PostToolUse` | tool activity, with the spec's mutating and editing tool lists |
 | `PostToolUseFailure` | tool activity, never mutating |
-| `Stop` | turn ended. Pending `background_tasks` or a cron whose status is not `completed` or `failed` keeps the parent parked |
+| `Stop` | turn ended. Pending `background_tasks` or a cron whose status is not `completed` or `failed` keeps the parent parked, and a parked stop leaves an open keyed wait open ([model.md](./model.md#waiting-and-asks)) |
 | `StopFailure` | errored turn end. `rate_limit` is `paused_rate_limit`, `server_error` is `paused_overloaded`, `loop_detected` is `failed`, and any other error classifies by its label (`TurnErrorClass::classify_label`) |
 | `SubagentStart`, `SubagentStop` | child started and stopped ([Subagents](#subagents)) |
 | `PreCompact`, `PostCompact` | compaction bracket |
