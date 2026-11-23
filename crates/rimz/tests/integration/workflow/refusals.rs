@@ -49,6 +49,55 @@ fn validate_prints_a_toml_excerpt_with_its_caret_on_a_line_of_its_own() {
 }
 
 #[test]
+fn workflow_text_stays_on_one_line_in_every_human_definition_surface() {
+    let hostile = "[workflow]\nscope = 'worktree'\nstart = 'pr'\n[script.pr]\nrun = 'sh checks/pr.sh'\non = { pending = '@wait', done = \"a\\nforged\" }\ntimeout = '1h'\n[test.\"a\\nforged\"]\nshell = 'true'\ntimeout = '30m'\nsummary = \"s\\nforged\"\non = { pass = '@done', fail = '@done' }\n";
+    let unparsed = format!("{HEADER}{WAIT}[test.\"a\\nforged\"]\nshell = 'true'\nfuture = true\n");
+    let surfaces: [&[&str]; 5] = [
+        &["workflow", "validate", "review"],
+        &["workflow", "show", "review"],
+        &["workflow", "show", "review", "pr"],
+        &["workflow", "show", "review", "absent"],
+        &["workflow", "run", "review"],
+    ];
+    for (spec, surfaces) in [
+        (hostile.to_owned(), &surfaces[..]),
+        (unparsed, &surfaces[4..]),
+    ] {
+        let (env, _) = fixture(&spec, PENDING);
+        for args in surfaces
+            .iter()
+            .chain([&["workflow", "validate", "review"][..]].iter())
+        {
+            let output = command(&env, args);
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(text.contains(r"a\nforged"), "{args:?}: {text}");
+            assert!(
+                !text
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("forged")),
+                "{args:?}: {text}"
+            );
+        }
+    }
+    let (env, _) = fixture(hostile, PENDING);
+    let output = command(&env, &["workflow", "validate", "review", "--json"]);
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        value["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["node"] == "a\nforged"),
+        "{value}"
+    );
+    assert_eq!(value["errors"][0]["path"], "test.a\nforged", "{value}");
+}
+
+#[test]
 fn run_refuses_an_unknown_field_and_starts_no_run() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}future=true\n"), PENDING);
     let output = command(&env, &["workflow", "run", "review"]);

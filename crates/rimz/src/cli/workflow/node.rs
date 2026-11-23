@@ -36,8 +36,11 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
             .map(|(name, _)| name.clone())
             .collect::<BTreeSet<_>>();
         bail!(
-            "unknown node {node} in {name}; nodes: {}",
-            nodes.into_iter().collect::<Vec<_>>().join(", ")
+            "{}",
+            rimz::packs::one_line(&format!(
+                "unknown node {node} in {name}; nodes: {}",
+                nodes.into_iter().collect::<Vec<_>>().join(", ")
+            ))
         );
     };
     let mut out = render::out();
@@ -46,11 +49,15 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
         "{}",
         render::paint(
             render::palette::header(),
-            &format!("{node} · {kind} in {name} · {runner}")
+            &rimz::packs::one_line(&format!("{node} · {kind} in {name} · {runner}"))
         )
     )?;
     if let Some(summary) = summary {
-        writeln!(out, "{}", render::paint(render::palette::muted(), summary))?;
+        writeln!(
+            out,
+            "{}",
+            render::paint(render::palette::muted(), &rimz::packs::one_line(summary))
+        )?;
     }
     writeln!(out)?;
     let mut facts = render::KeyVals::new();
@@ -76,7 +83,7 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
         render::cell(if from.is_empty() {
             "no nodes".into()
         } else {
-            from.join(", ")
+            rimz::packs::one_line(&from.join(", "))
         }),
     );
     if let Some(check) = check {
@@ -99,7 +106,10 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
             .collect::<BTreeSet<_>>();
         let mut wakes = wakes.into_iter().collect::<Vec<_>>();
         wakes.push("the minute tick".into());
-        facts.push("wakes on", render::cell(wakes.join(", ")));
+        facts.push(
+            "wakes on",
+            render::cell(rimz::packs::one_line(&wakes.join(", "))),
+        );
     }
     if let Some(step) = step {
         let receives = step
@@ -108,7 +118,10 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
             .map(|(selector, scope)| format!("{selector} {scope}"))
             .collect::<Vec<_>>();
         if !receives.is_empty() {
-            facts.push("receives", render::cell(receives.join(", ")));
+            facts.push(
+                "receives",
+                render::cell(rimz::packs::one_line(&receives.join(", "))),
+            );
         }
     }
     facts.render(&mut out)?;
@@ -143,8 +156,11 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
             .unwrap_or_default();
         writeln!(
             out,
-            "  {} → {} ({}{mark})",
-            edge.outcome, edge.target, edge.source
+            "  {}",
+            rimz::packs::one_line(&format!(
+                "{} → {} ({}{mark})",
+                edge.outcome, edge.target, edge.source
+            ))
         )?;
     }
     let mut facts = render::KeyVals::new();
@@ -163,7 +179,8 @@ fn cases(out: &mut impl Write, check: &Node, edges: &[Edge], note: Option<&str>)
     writeln!(
         out,
         "\ncases:{}",
-        note.map(|note| format!(" {note}")).unwrap_or_default()
+        note.map(|note| format!(" {}", rimz::packs::one_line(note)))
+            .unwrap_or_default()
     )?;
     for (index, case) in check.listed_cases().iter().enumerate() {
         let target = edges
@@ -177,10 +194,13 @@ fn cases(out: &mut impl Write, check: &Node, edges: &[Edge], note: Option<&str>)
             .unwrap_or_default();
         writeln!(
             out,
-            "  {}  {}{hold}  {} → {target}",
-            index + 1,
-            case.when().expression().map_err(Clone::clone)?,
-            case.outcome
+            "  {}",
+            rimz::packs::one_line(&format!(
+                "{}  {}{hold}  {} → {target}",
+                index + 1,
+                case.when().expression().map_err(Clone::clone)?,
+                case.outcome
+            ))
         )?;
     }
     if let Some(outcome) = check.else_outcome() {
@@ -189,7 +209,11 @@ fn cases(out: &mut impl Write, check: &Node, edges: &[Edge], note: Option<&str>)
             .find(|edge| edge.outcome == *outcome)
             .map(|edge| edge.target.to_string())
             .unwrap_or_else(|| "unmapped".into());
-        writeln!(out, "     none true  {outcome} → {target}")?;
+        writeln!(
+            out,
+            "     {}",
+            rimz::packs::one_line(&format!("none true  {outcome} → {target}"))
+        )?;
     }
     Ok(())
 }
@@ -201,7 +225,7 @@ fn field(facts: &mut render::KeyVals, key: &str, value: Option<impl Display>) {
             value
                 .to_string()
                 .lines()
-                .map(|line| vec![render::cell(line)]),
+                .map(|line| vec![render::cell(rimz::packs::one_line(line))]),
         );
     }
 }

@@ -346,7 +346,11 @@ impl Rail {
             row.write(out, width)?;
         }
         if !self.unreachable.is_empty() {
-            writeln!(out, "\nunreachable from {}", self.start)?;
+            writeln!(
+                out,
+                "\nunreachable from {}",
+                rimz::packs::one_line(&self.start)
+            )?;
             for row in &self.unreachable {
                 row.write(out, width)?;
             }
@@ -695,7 +699,7 @@ fn write_wrapped(
     let budget = width.saturating_sub(prefix_width).max(1);
     let mut lines = Vec::new();
     let mut current = String::new();
-    for part in text.split(" · ") {
+    for part in rimz::packs::one_line(text).split(" · ") {
         let joined = if current.is_empty() {
             part.to_owned()
         } else {

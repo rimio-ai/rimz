@@ -39,10 +39,7 @@ pub fn validate(
     let Some(name) = super::directory_name(dir) else {
         report.error(
             "workflow",
-            format!(
-                "{}: directory needs a workflow name",
-                crate::packs::one_line(&dir.display().to_string())
-            ),
+            format!("{}: directory needs a workflow name", dir.display()),
         );
         return report;
     };
@@ -55,7 +52,15 @@ pub fn validate(
                 | super::SpecErr::DuplicateNode { path, .. } => path.as_str(),
                 _ => "workflow",
             };
-            report.error(path, format!("{}: {err}", crate::packs::one_line(&name)));
+            report.errors.push(Issue {
+                path: path.into(),
+                message: format!(
+                    "{}: {}: {}",
+                    crate::packs::one_line(path),
+                    crate::packs::one_line(&name),
+                    load_error(&err)
+                ),
+            });
             return report;
         }
     };
@@ -92,16 +97,17 @@ fn started_workflows(
         for (index, entry) in step.start.iter().enumerate() {
             let path = format!("runs.{node}.start.{index}.workflow");
             let workflow = &entry.workflow;
-            let shown = crate::packs::one_line(workflow);
             match load(workflow) {
                 None => report.warnings.push(issue(
                     &path,
-                    format!("{shown} is not a deployed workflow; the step fails when it starts it"),
+                    format!(
+                        "{workflow} is not a deployed workflow; the step fails when it starts it"
+                    ),
                 )),
                 Some(started) if started.authored().workflow.scope == ScopeKind::Project => {
                     report.warnings.push(issue(
                         &path,
-                        format!("{shown} has scope = \"project\" and gets no worktree of its own; the step fails when it starts it"),
+                        format!("{workflow} has scope = \"project\" and gets no worktree of its own; the step fails when it starts it"),
                     ));
                 }
                 Some(_) => {}
@@ -121,7 +127,7 @@ fn started_workflows(
         if workflow == name || leads_here() {
             report.warnings.push(issue(
                 "workflow",
-                format!("{} starts itself again through runs steps; each start runs one level deeper until [agents] max-workflow-depth refuses it", crate::packs::one_line(name)),
+                format!("{name} starts itself again through runs steps; each start runs one level deeper until [agents] max-workflow-depth refuses it"),
             ));
             break;
         }
@@ -201,7 +207,7 @@ pub(super) fn validate_spec(
 ) -> Validation {
     let mut report = Validation::default();
     if let Err(err) = crate::harness::name::validate_name(name) {
-        report.error("workflow", crate::packs::one_line(&err.to_string()));
+        report.error("workflow", err);
     }
     let header = &spec.authored().workflow;
     report.summary("workflow.summary", header.summary.as_deref());
@@ -984,6 +990,30 @@ impl Validation {
             self.error(&format!("{path}.prompt-file"), err);
         }
     }
+}
+
+/// A load error's text on one line, except a TOML parser excerpt, which keeps its lines with each
+/// line escaped on its own; the path and the parser's message, which can quote a key, stay on one
+/// line.
+fn load_error(err: &super::SpecErr) -> String {
+    let super::SpecErr::Toml { path, source } = err else {
+        return crate::packs::one_line(&err.to_string());
+    };
+    let message = source.message();
+    let shown = source.to_string();
+    let excerpt = shown
+        .trim_end()
+        .strip_suffix(message.trim_end())
+        .unwrap_or_default()
+        .split('\n')
+        .map(crate::packs::one_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "{}: {excerpt}{}",
+        crate::packs::one_line(path),
+        crate::packs::one_line(message)
+    )
 }
 
 /// A message step names one living agent: `@handle` or `@handle#channel`, never a person.
