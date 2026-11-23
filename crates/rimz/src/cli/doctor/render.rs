@@ -3063,7 +3063,7 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
             }
             let now = Timestamp::now();
             let mut table = Table::new([
-                "", "HANDLE", "ACCOUNT", "BRANCH", "STATUS", "REASON", "SEEN",
+                "", "HANDLE", "NAME", "ACCOUNT", "BRANCH", "STATUS", "REASON", "SEEN",
             ]);
             for agent in rows {
                 let (compaction_reason, compaction_badge) = agent
@@ -3080,7 +3080,7 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                         let badge = counted(
                             tally,
                             Severity::Warning,
-                            format!("{}: {reason}", agent.handle),
+                            format!("{}: {reason}", named(agent)),
                             &lowered.fix,
                         );
                         (Some(reason), Some(badge))
@@ -3101,7 +3101,7 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                         counted(
                             tally,
                             Severity::Warning,
-                            format!("{}: {reason}", agent.handle),
+                            format!("{}: {reason}", named(agent)),
                             fix,
                         )
                     })
@@ -3130,7 +3130,7 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                         },
                         format!(
                             "{} on {} is {}{}",
-                            agent.handle,
+                            named(agent),
                             agent.account,
                             agent.status.as_str(),
                             agent
@@ -3169,6 +3169,11 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                 table.row([
                     badge,
                     cell(agent.handle.as_str()).fg(palette::accent()),
+                    cell(rimz::address::name_column(
+                        &agent.handle,
+                        agent.name.as_deref(),
+                    ))
+                    .dash(),
                     cell(agent.account.to_string()).fg(palette::identity(&agent.kind)),
                     cell(agent.branch.as_deref().unwrap_or("-")).dash(),
                     cell(agent.status.as_str()).fg(style),
@@ -3182,6 +3187,11 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
 }
 
 const MOD_MISSING_REASON: &str = "the RimZ mod never reported";
+
+/// The row's agent as its findings name it, its name beside a differing handle.
+fn named(agent: &super::model::AgentRow) -> String {
+    rimz::address::handle_with_name(&agent.handle, agent.name.as_deref())
+}
 
 /// Reinstall into the row's own login, then restart so Claude loads the mod;
 /// name what else can stop it.

@@ -61,6 +61,9 @@ enum AsksSubcmd {
 #[derive(Clone, Debug, Serialize)]
 struct AskAgentView {
     handle: String,
+    /// The pane owner's name, paired with `handle` in the human views.
+    #[serde(skip)]
+    owner_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     kind: rimz::ids::AgentKind,
@@ -254,7 +257,7 @@ fn raise(
         params,
     )?;
     let peers = rimz::address::addressable_agents(&snapshot);
-    let handle = rimz::address::agent_handle(agent, &peers, true);
+    let handle = rimz::address::named_handle(agent, &peers, true);
     let suffix = if is_self {
         "; the turn's final reply becomes the ask"
     } else {
@@ -292,7 +295,7 @@ fn withdraw(target: Option<&str>, globals: &GlobalFlags) -> Result<()> {
         render::out(),
         "withdrew {} from {}",
         ask.ask_id,
-        rimz::address::agent_handle(agent, &peers, true)
+        rimz::address::named_handle(agent, &peers, true)
     ))
 }
 
@@ -352,28 +355,37 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
             )
         ));
     }
-    let now = jiff::Timestamp::now();
-    let mut table = render::Table::new(["AGENT", "KIND", "AGE", "ASK"]);
+    let mut out = render::out();
+    ask_table(&views, jiff::Timestamp::now()).render(&mut out)?;
+    render::finish(writeln!(
+        out,
+        "\nrimz asks show <agent> prints the full prompt"
+    ))
+}
+
+fn ask_table(views: &[OpenAskView], now: jiff::Timestamp) -> render::Table {
+    let mut table = render::Table::new(["AGENT", "NAME", "KIND", "AGE", "ASK"]);
     for view in views {
         table.row([
-            render::cell(view.agent.display_name()),
+            render::cell(view.agent.via(view.agent.handle.clone())),
+            render::cell(rimz::address::name_column(
+                &view.agent.handle,
+                view.agent.owner_name.as_deref(),
+            ))
+            .dash(),
             render::cell(kind_label(&view.detail)),
             render::cell(render::age_short(view.detail.open.since, now)),
-            render::cell(preview(&view)),
+            render::cell(preview(view)),
         ]);
         table.row([
+            render::cell(""),
             render::cell(""),
             render::cell(""),
             render::cell(""),
             render::cell(format!("→ {}", view.commands().next_step())).fg(render::palette::faint()),
         ]);
     }
-    let mut out = render::out();
-    table.render(&mut out)?;
-    render::finish(writeln!(
-        out,
-        "\nrimz asks show <agent> prints the full prompt"
-    ))
+    table
 }
 
 /// The line a human reads when nothing is blocked. A channel-scoped list hides
@@ -401,7 +413,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     if agent.actionable_asks().next().is_none() {
         bail!(
             "{} is not asking anything",
-            rimz::address::agent_handle(agent, &peers, true)
+            rimz::address::named_handle(agent, &peers, true)
         );
     }
     let ask_id = target
@@ -506,6 +518,7 @@ fn view_for_agent(
     Ok(Some(OpenAskView {
         agent: AskAgentView {
             handle: rimz::address::agent_handle(owner, peers, true),
+            owner_name: owner.name.clone(),
             name,
             kind: agent.kind.clone(),
             channel: agent.lane_name().map(String::from),
@@ -516,10 +529,18 @@ fn view_for_agent(
 
 impl AskAgentView {
     fn display_name(&self) -> String {
+        self.via(rimz::address::handle_with_name(
+            &self.handle,
+            self.owner_name.as_deref(),
+        ))
+    }
+
+    /// `owner` alone, or the child's name drawn in the owner's pane.
+    fn via(&self, owner: String) -> String {
         self.name
             .as_deref()
-            .map(|name| format!("{name} (via {})", self.handle))
-            .unwrap_or_else(|| self.handle.clone())
+            .map(|name| format!("{name} (via {owner})"))
+            .unwrap_or(owner)
     }
 }
 
@@ -568,6 +589,60 @@ fn preview(view: &OpenAskView) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn view(handle: &str, owner_name: &str, child: Option<&str>) -> OpenAskView {
+        OpenAskView {
+            agent: AskAgentView {
+                handle: handle.to_owned(),
+                owner_name: Some(owner_name.to_owned()),
+                name: child.map(str::to_owned),
+                kind: rimz::ids::AgentKind::new_unchecked("claude"),
+                channel: None,
+            },
+            detail: OpenAskDetail {
+                open: rimz::agents::OpenAsk {
+                    id: AskId::new(),
+                    kind: AskKind::Permission,
+                    detail: Some("Bash: cargo test".to_owned()),
+                    extra_questions: 0,
+                    native_key: None,
+                    since: jiff::Timestamp::from_second(0).unwrap(),
+                },
+                delivery: AskDelivery::Blocking,
+                context: None,
+                raised_by: None,
+                questions: Vec::new(),
+                route: rimz::agents::AskRoute::Pane,
+                pane_actions: None,
+            },
+        }
+    }
+
+    #[test]
+    fn ask_table_names_the_pane_owner_in_its_own_column_where_it_differs() {
+        let views = [
+            view("@reviewer#probe", "able-plaza", None),
+            view("@civil-frame#probe", "civil-frame", None),
+            view("@coder#probe", "amber-thread", Some("Explore")),
+        ];
+        let mut output = anstream::StripStream::new(Vec::new());
+        ask_table(&views, jiff::Timestamp::from_second(120).unwrap())
+            .render(&mut output)
+            .unwrap();
+        let text = String::from_utf8(output.into_inner()).unwrap();
+        let under = |header, row| render::cell_under(&text, header, row);
+
+        assert_eq!(
+            under("AGENT", "@reviewer#probe"),
+            "@reviewer#probe",
+            "{text}"
+        );
+        assert_eq!(under("NAME", "@reviewer#probe"), "@able-plaza", "{text}");
+        assert_eq!(under("NAME", "@civil-frame#probe"), "-", "{text}");
+        assert!(text.contains("Explore (via @coder#probe)"), "{text}");
+        assert_eq!(under("NAME", "Explore"), "@amber-thread", "{text}");
+        assert!(!text.contains("(@"), "{text}");
+    }
 
     #[test]
     fn empty_ask_digest_names_all_only_where_it_widens() {

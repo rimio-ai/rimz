@@ -1467,6 +1467,13 @@ fn subagent_ask_lists_with_parent_and_answers_through_parent_pane() {
     assert!(sent.contains("send-keys -l -t %7 -- 1"), "{sent}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parent = asks[0]["agent"]["handle"].as_str().unwrap();
+    let snapshot = env.store().snapshot().expect("snapshot");
+    let parent_name = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-claude-parent")
+        .and_then(|agent| agent.name.as_deref());
+    let parent = rimz::address::handle_with_name(parent, parent_name);
     assert!(
         stdout.contains(&format!("Explore (via {parent}): allow")),
         "{stdout}"

@@ -832,9 +832,9 @@ fn list_children(json: bool, quiet: bool, filters: &[String], globals: &GlobalFl
         return render::finish(writeln!(render::err(), "{line}"));
     }
     let headers = match scope {
-        ListScope::Caller(_) => vec!["SUBAGENT", "KIND", "AGENT", "RUN", "ELAPSED"],
+        ListScope::Caller(_) => vec!["SUBAGENT", "NAME", "KIND", "AGENT", "RUN", "ELAPSED"],
         ListScope::Channel => vec![
-            "SUBAGENT", "PARENT", "CHANNEL", "KIND", "AGENT", "RUN", "ELAPSED",
+            "SUBAGENT", "NAME", "PARENT", "CHANNEL", "KIND", "AGENT", "RUN", "ELAPSED",
         ],
     };
     let mut table = render::Table::new(headers).max_width(render::terminal_columns(120));
@@ -848,9 +848,12 @@ fn list_children(json: bool, quiet: bool, filters: &[String], globals: &GlobalFl
                 .map_or_else(|| "-".to_owned(), render::format_compact_duration),
         )
         .dash();
+        let name =
+            render::cell(rimz::address::name_column(&child.handle, Some(&child.name))).dash();
         let row = match scope {
             ListScope::Caller(_) => vec![
                 render::cell(child.handle),
+                name,
                 render::cell(child.kind),
                 render::cell(child.status),
                 render::cell(child.run_status.unwrap_or_else(|| "-".to_owned())).dash(),
@@ -858,6 +861,7 @@ fn list_children(json: bool, quiet: bool, filters: &[String], globals: &GlobalFl
             ],
             ListScope::Channel => vec![
                 render::cell(child.handle),
+                name,
                 render::cell(child.parent),
                 render::cell(child.channel.unwrap_or_else(|| "-".to_owned())).dash(),
                 render::cell(child.kind),
@@ -995,13 +999,13 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
-/// How the `PARENT` column renders `agent` among the room's peers.
+/// How the empty-list notes name the caller among the room's peers.
 fn peer_handle(agents: &[AgentState], agent: &AgentState) -> String {
     let peers = agents
         .iter()
         .filter(|agent| !agent.is_provider_subagent())
         .collect::<Vec<_>>();
-    rimz::address::agent_handle(agent, &peers, false)
+    rimz::address::named_handle(agent, &peers, false)
 }
 
 fn wait_children(
@@ -1081,11 +1085,11 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
     let mut out = render::out();
     let mut failed = !stopped.unsettled.is_empty();
     for (child, err) in stopped.unsettled {
-        let label = rimz::address::agent_handle(child, &peers, true);
+        let label = rimz::address::named_handle(child, &peers, true);
         writeln!(out, "error {label}: {err:#}")?;
     }
     for (child, stop) in stopped.stops {
-        let label = rimz::address::agent_handle(child, &peers, true);
+        let label = rimz::address::named_handle(child, &peers, true);
         failed |= agents_cmd::report_stop(&stop, &mut out, &label)?;
     }
     if failed {

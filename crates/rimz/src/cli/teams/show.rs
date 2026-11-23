@@ -386,41 +386,7 @@ fn write_lane(
     progress.render(w)?;
 
     writeln!(w)?;
-    let mut live = render::Table::new(["MEMBER", "STATUS", "AGE", "ACTIVITY", "CTX", "COST"])
-        .indent(2)
-        .right(&[2, 4, 5])
-        .max_width(render::terminal_columns(120));
-    for role in roles.iter().filter(|role| role.declared) {
-        let mut members = instance
-            .members
-            .iter()
-            .filter(|member| member.role.as_deref() == Some(role.role.as_str()))
-            .peekable();
-        if members.peek().is_none() {
-            live.row([
-                render::cell(format!("@{}", role.role)).fg(role
-                    .kind
-                    .as_deref()
-                    .map_or_else(render::palette::accent, render::palette::identity)),
-                render::cell("not live").fg(render::palette::warn()),
-                render::cell("-").dash(),
-                render::cell("-").dash(),
-                render::cell("-").dash(),
-                render::cell("-").dash(),
-            ]);
-        }
-        for member in members {
-            live.row(member_cells(member, now));
-        }
-    }
-    for member in instance.members.iter().filter(|member| {
-        !roles
-            .iter()
-            .any(|role| role.declared && member.role.as_deref() == Some(role.role.as_str()))
-    }) {
-        live.row(member_cells(member, now));
-    }
-    live.render(w)?;
+    member_table(roles, instance, now, render::terminal_columns(120)).render(w)?;
 
     let signals = instance
         .members
@@ -435,7 +401,11 @@ fn write_lane(
             "signals",
             signals.into_iter().map(|(member, signal)| {
                 let (fire, style) = signal_fire(signal.fired.as_ref(), signal.heard.as_ref(), now);
-                let lead = format!("{} → {} · ", signal.selector, member.handle);
+                let lead = format!(
+                    "{} → {} · ",
+                    signal.selector,
+                    rimz::address::handle_with_name(&member.handle, member.name.as_deref())
+                );
                 let room =
                     width.saturating_sub(SIGNALS_PREFIX_WIDTH + lead.width() + fire.width() + 3);
                 vec![
@@ -541,9 +511,60 @@ fn signal_fire(
     (text, style)
 }
 
-fn member_cells(member: &LiveMember, now: jiff::Timestamp) -> [render::Cell; 6] {
+/// The lane's member table, one row per live member and per declared role with none.
+fn member_table(
+    roles: &[super::list::RoleReport],
+    instance: &LiveInstance,
+    now: jiff::Timestamp,
+    max_width: usize,
+) -> render::Table {
+    let mut live =
+        render::Table::new(["MEMBER", "NAME", "STATUS", "AGE", "ACTIVITY", "CTX", "COST"])
+            .indent(2)
+            .right(&[3, 5, 6])
+            .max_width(max_width);
+    for role in roles.iter().filter(|role| role.declared) {
+        let mut members = instance
+            .members
+            .iter()
+            .filter(|member| member.role.as_deref() == Some(role.role.as_str()))
+            .peekable();
+        if members.peek().is_none() {
+            live.row([
+                render::cell(format!("@{}", role.role)).fg(role
+                    .kind
+                    .as_deref()
+                    .map_or_else(render::palette::accent, render::palette::identity)),
+                render::cell("-").dash(),
+                render::cell("not live").fg(render::palette::warn()),
+                render::cell("-").dash(),
+                render::cell("-").dash(),
+                render::cell("-").dash(),
+                render::cell("-").dash(),
+            ]);
+        }
+        for member in members {
+            live.row(member_cells(member, now));
+        }
+    }
+    for member in instance.members.iter().filter(|member| {
+        !roles
+            .iter()
+            .any(|role| role.declared && member.role.as_deref() == Some(role.role.as_str()))
+    }) {
+        live.row(member_cells(member, now));
+    }
+    live
+}
+
+fn member_cells(member: &LiveMember, now: jiff::Timestamp) -> [render::Cell; 7] {
     [
-        render::cell(&member.handle).fg(render::palette::identity(&member.kind)),
+        render::cell(member.handle.as_str()).fg(render::palette::identity(&member.kind)),
+        render::cell(rimz::address::name_column(
+            &member.handle,
+            member.name.as_deref(),
+        ))
+        .dash(),
         render::cell(member.status.as_str()).fg(render::status::agent(member.status, member.phase)),
         render::cell(render::age_short(member.idle_since, now)).fg(render::palette::muted()),
         render::cell(member.activity.as_deref().unwrap_or("-")).dash(),
@@ -676,6 +697,7 @@ mod tests {
                     }),
                 }],
                 handle: "@planner".to_owned(),
+                name: None,
                 kind: "claude".to_owned(),
                 status: AgentStatus::Running,
                 phase: TurnPhase::Reasoning,
@@ -731,6 +753,13 @@ mod tests {
         assert!(output.contains(
             "ci.failed → @planner · fired 1m ago ×2 · team-forge-feat-x-planner-ci-failed"
         ));
+        let mut named = instance.clone();
+        named.members[0].name = Some("round-binder".into());
+        let named = rendered(&report(vec![named]), Some("feat-x"));
+        assert!(
+            named.contains("ci.failed → @planner (@round-binder) · fired 1m ago"),
+            "{named}"
+        );
         assert!(output.contains("ci passing"));
         assert!(output.contains("blackboard.md"));
         assert_eq!(output.matches("/repo/worktrees/feat-x").count(), 1);
@@ -738,8 +767,8 @@ mod tests {
         assert!(output.contains("41 lines · 2m ago"));
         assert!(output.lines().any(|line| {
             line.split_whitespace()
-                .take(3)
-                .eq(["@planner", "running", "1m"])
+                .take(4)
+                .eq(["@planner", "-", "running", "1m"])
         }));
         instance.state = CohortState::Idle;
         let stageless = LiveInstance {
@@ -791,6 +820,61 @@ mod tests {
     }
 
     #[test]
+    fn human_show_names_a_member_in_its_own_column_where_it_differs() {
+        for (name, cell) in [("round-binder", "@round-binder"), ("planner", "-")] {
+            let mut report = report(vec![live_instance()]);
+            report.instances[0].members[0].name = Some(name.into());
+            let text = rendered(&report, Some("feat-x"));
+            let under = |header| crate::cli::render::cell_under(&text, header, "@planner");
+            assert_eq!(under("MEMBER"), "@planner", "{text}");
+            assert_eq!(under("NAME"), cell, "{text}");
+            assert!(
+                !text
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("@planner (@")),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn member_table_keeps_name_under_a_cap_narrower_than_the_table() {
+        let mut report = report(vec![live_instance()]);
+        report.instances[0].members[0].name = Some("round-binder".into());
+        let render_at = |cap| {
+            let mut output = anstream::StripStream::new(Vec::new());
+            member_table(
+                &report.roles,
+                &report.instances[0],
+                jiff::Timestamp::from_second(120).unwrap(),
+                cap,
+            )
+            .render(&mut output)
+            .unwrap();
+            String::from_utf8(output.into_inner()).unwrap()
+        };
+        let headers = |text: &str| {
+            text.lines()
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let fit = render_at(200)
+            .lines()
+            .map(|line| line.width())
+            .max()
+            .unwrap();
+
+        for cap in [fit, fit - 1, 40] {
+            let text = render_at(cap);
+            assert_eq!(headers(&text)[1], "NAME", "{text}");
+            assert!(text.contains("@round-binder"), "{text}");
+        }
+    }
+
+    #[test]
     fn human_show_includes_absent_declared_roles() {
         let mut report = report(vec![live_instance()]);
         let mut absent = report.roles[0].clone();
@@ -800,7 +884,7 @@ mod tests {
         assert!(
             text.lines().any(|line| line
                 .split_whitespace()
-                .eq(["@coder", "not", "live", "-", "-", "-", "-"])),
+                .eq(["@coder", "-", "not", "live", "-", "-", "-", "-"])),
             "{text}"
         );
         insta::assert_snapshot!(text);
@@ -815,8 +899,10 @@ mod tests {
         let text = rendered(&report, Some("feat-x"));
         assert!(!text.contains("not live"), "{text}");
         assert!(
-            text.lines()
-                .any(|line| line.split_whitespace().take(2).eq(["@planner", "running"])),
+            text.lines().any(|line| line
+                .split_whitespace()
+                .take(3)
+                .eq(["@planner", "-", "running"])),
             "{text}"
         );
     }

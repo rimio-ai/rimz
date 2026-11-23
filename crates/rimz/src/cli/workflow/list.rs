@@ -394,7 +394,7 @@ pub(super) fn render(
                 address: record.address().to_string(),
                 glyph: glyph(role),
                 state: record.state,
-                origin: run_origin(record, view.starter(&run.state, record).as_deref()),
+                origin: run_origin(record, view.starter_label(&run.state, record).as_deref()),
                 detail,
                 age: render::age_short(since, now),
                 since,
@@ -982,7 +982,10 @@ mod tests {
         });
         assert_eq!(
             actual,
-            std::array::from_fn(|_| (Some("@yagni".into()), Some("@yagni#lane".into())))
+            std::array::from_fn(|_| (
+                Some("@yagni (@pet)".into()),
+                Some("@yagni#lane (@pet)".into())
+            ))
         );
     }
 

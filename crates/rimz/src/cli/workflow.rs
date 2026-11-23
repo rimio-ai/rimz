@@ -35,7 +35,7 @@ fn workflow_agent(
     let attempt = record.session_attempt()?;
     let peers = rimz::address::addressable_agents(snapshot);
     let agent = attempt_agent(record, &peers, attempt.seq, bound)?;
-    Some(rimz::address::agent_handle(agent, &peers, include_channel))
+    Some(rimz::address::named_handle(agent, &peers, include_channel))
 }
 
 /// The agent of attempt `seq` while it is still in the room. Once a hook has bound the
@@ -126,7 +126,11 @@ impl RoomView {
                 .filter_map(|(seq, run_id)| {
                     let bound = rimz::harness::run::load(state, run_id).ok();
                     let agent = attempt_agent(record, &peers, seq, bound.as_ref())?;
-                    Some((seq, rimz::address::agent_handle(agent, &peers, true)))
+                    let handle = rimz::address::agent_handle(agent, &peers, true);
+                    Some((
+                        seq,
+                        rimz::address::handle_with_name(&handle, agent.name.as_deref()),
+                    ))
                 })
                 .collect(),
         )
@@ -134,12 +138,29 @@ impl RoomView {
 
     /// The card address of the agent that started the run, while its row is in the room.
     fn starter(&self, state: &rimz::StatePaths, record: &RunRecord) -> Option<String> {
+        self.starter_named(state, record).map(|(handle, _)| handle)
+    }
+
+    /// [`Self::starter`] as prose names it, its name beside a differing address.
+    fn starter_label(&self, state: &rimz::StatePaths, record: &RunRecord) -> Option<String> {
+        self.starter_named(state, record)
+            .map(|(handle, name)| rimz::address::handle_with_name(&handle, name.as_deref()))
+    }
+
+    fn starter_named(
+        &self,
+        state: &rimz::StatePaths,
+        record: &RunRecord,
+    ) -> Option<(String, Option<String>)> {
         let Some(records::RunStarter::Agent { kind, launch }) = &record.starter else {
             return None;
         };
         let peers = rimz::address::addressable_agents(self.snapshot(state)?);
         let agent = rimz::address::launch_row(peers.iter().copied(), kind, launch)?;
-        Some(rimz::address::agent_handle(agent, &peers, false))
+        Some((
+            rimz::address::agent_handle(agent, &peers, false),
+            agent.name.clone(),
+        ))
     }
 
     fn snapshot(

@@ -308,6 +308,7 @@ fn run_view_and_history_name_a_live_agent_alike_and_a_gone_one_by_its_handle() {
     let live = rimz::address::agent_handle(leader, &peers, true);
     assert_ne!(live, "@pet");
     let view = success(command(&env, &["workflow", "show", record.id.as_str()]));
+    let live = rimz::address::handle_with_name(&live, leader.name.as_deref());
     assert!(view.contains(&live), "{live}: {view}");
     assert!(view.contains("2 attempts"), "{view}");
     let history = success(command(
@@ -319,7 +320,7 @@ fn run_view_and_history_name_a_live_agent_alike_and_a_gone_one_by_its_handle() {
         "{live}: {history}"
     );
     assert!(history.contains("@gone HEAD"), "{history}");
-    assert!(!history.contains("@pet"), "{history}");
+    assert!(!history.contains(" @pet"), "{history}");
 }
 
 fn json_show(env: &Env, target: &str) -> Value {

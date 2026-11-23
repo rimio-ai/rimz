@@ -77,7 +77,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
                 2,
                 &format!(
                     "{} is not asking anything",
-                    rimz::address::agent_handle(agent, &peers, true)
+                    rimz::address::named_handle(agent, &peers, true)
                 ),
             )
         });
@@ -87,10 +87,11 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let (owner, child_name) = ask_pane_owner(agent, &snapshot.agents)
         .unwrap_or_else(|| answer_exit(2, &format!("ask `{ask_id}` has no live bound pane")));
     let handle = rimz::address::agent_handle(owner, &peers, true);
+    let named = rimz::address::handle_with_name(&handle, owner.name.as_deref());
     let who = child_name
         .as_ref()
-        .map(|name| format!("{name} (via {handle})"))
-        .unwrap_or_else(|| handle.clone());
+        .map(|name| format!("{name} (via {named})"))
+        .unwrap_or_else(|| named.clone());
     let commands = ask_commands::AskCommands {
         detail: &detail,
         pane: &handle,
@@ -345,7 +346,7 @@ fn resolve_current_agent<'a>(
         let peers = rimz::address::addressable_agents(snapshot);
         return Err(anyhow::anyhow!(
             "{} is not asking anything",
-            rimz::address::agent_handle(agent, &peers, true)
+            rimz::address::named_handle(agent, &peers, true)
         ));
     }
     Ok(agent)

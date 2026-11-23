@@ -170,7 +170,7 @@ pub(super) fn stop(
     }
     let mut failed = false;
     for (agent, stop) in cohort.members.iter().copied().zip(stops) {
-        let label = rimz::address::agent_handle(agent, &peers, true);
+        let label = rimz::address::named_handle(agent, &peers, true);
         failed |= agents_cmd::report_stop(&stop, &mut out, &label)?;
     }
     if failed {
@@ -250,7 +250,7 @@ pub(super) fn restart(
         if cohort.members.len() == 1 { "" } else { "s" }
     )?;
     for agent in cohort.members.iter().copied() {
-        let label = rimz::address::agent_handle(agent, &peers, true);
+        let label = rimz::address::named_handle(agent, &peers, true);
         match agents_cmd::restart_resolved(
             &ctx,
             agent,

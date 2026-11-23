@@ -167,7 +167,7 @@ fn history_names_a_kept_agent_by_its_card_until_it_leaves_the_room() {
     };
     let live = history();
     assert!(
-        attempt_row(&live).starts_with(&format!("{card} HEAD")),
+        attempt_row(&live).starts_with(&format!("{card} ({handle}) HEAD")),
         "{card}: {live}"
     );
     room.hook(&id, &run, json!({"hook_event_name":"SessionEnd"}));

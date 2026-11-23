@@ -95,7 +95,7 @@ pub(super) fn render(
         journal: &journal,
         now: Timestamp::now(),
         commands: resolve::RunCommands::new(&run.record, globals),
-        starter: room.starter(&run.state, &run.record),
+        starter: room.starter_label(&run.state, &run.record),
     };
     let agent = (run.record.state == RunState::Active
         && workflow_view::asking(&run.record).is_none())

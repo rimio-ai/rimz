@@ -3414,21 +3414,22 @@ fn user_shell_subagents_list_names_root_children_main_in_text_and_json() {
     let env = Env::new();
     env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
-    for (id, name, parent) in [
-        ("planner", "planner", None),
-        ("child", "swift-otter", Some("planner")),
+    for (id, name, kind, parent) in [
+        ("planner", "planner", "claude", None),
+        ("child", "swift-otter", "claude", Some("planner")),
+        ("minted", "amber-thread", "codex", Some("planner")),
     ] {
         env.store()
             .append_event(&EventEnvelope::agent_launched(
                 workspace.workspace_id.clone(),
                 &workspace.session_name,
-                &AgentKind::new_unchecked("claude"),
+                &AgentKind::new_unchecked(kind),
                 AgentLaunchPayload {
                     system_prompt_digest: None,
                     agent_id: AgentSessionId::from(id),
                     launch_id: None,
                     agent_name: name.to_owned(),
-                    agent_name_explicit: true,
+                    agent_name_explicit: id != "minted",
                     launch: LaunchParams {
                         parent_agent_id: parent.map(AgentSessionId::from),
                         parent_agent_kind: parent.map(|_| AgentKind::new_unchecked("claude")),
@@ -3461,7 +3462,20 @@ fn user_shell_subagents_list_names_root_children_main_in_text_and_json() {
         .lines()
         .find(|line| line.contains("@swift-otter"))
         .unwrap();
-    assert_eq!(child.split_whitespace().nth(2), Some("main"), "{text}");
+    assert_eq!(
+        child.split_whitespace().take(4).collect::<Vec<_>>(),
+        ["@swift-otter", "-", "@planner", "main"],
+        "{text}"
+    );
+    let minted = text
+        .lines()
+        .find(|line| line.contains("@amber-thread"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert_eq!(
+        minted.split_whitespace().take(3).collect::<Vec<_>>(),
+        ["@codex", "@amber-thread", "@planner"],
+        "{text}"
+    );
     let output = live_rimz(&env)
         .args(["subagents", "list", "--json"])
         .output()
