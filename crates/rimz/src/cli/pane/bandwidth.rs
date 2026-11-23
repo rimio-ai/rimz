@@ -17,6 +17,7 @@ use rimz::pane::bandwidth::{
 use rimz::proc::ProcInfo;
 use rimz::store::snapshot::SidebarSnapshot;
 use rimz::workspace::WorkspaceResolver;
+use unicode_width::UnicodeWidthStr;
 
 use crate::cli::GlobalFlags;
 use crate::cli::render;
@@ -312,35 +313,35 @@ fn format_report(
     }
     let pane_w = rows
         .iter()
-        .map(|row| row.pane_id.as_str().len())
-        .chain(wire_rows.iter().map(|(pane, _, _)| pane.len()))
+        .map(|row| row.pane_id.as_str().width())
+        .chain(wire_rows.iter().map(|(pane, _, _)| pane.width()))
         .max()
         .unwrap_or(0)
         .max("PANE".len())
         .max("TOTAL".len());
     let label_w = rows
         .iter()
-        .map(|row| row.label.len())
-        .chain(wire_rows.iter().map(|(_, label, _)| label.len()))
-        .chain(std::iter::once(total_label.len()))
+        .map(|row| row.label.width())
+        .chain(wire_rows.iter().map(|(_, label, _)| label.width()))
+        .chain(std::iter::once(total_label.width()))
         .max()
         .unwrap_or(0)
         .max("LABEL".len());
     let name_of = |row: &PaneRate| names.get(&row.pane_id).map_or("-", String::as_str);
     let name_w = rows
         .iter()
-        .map(|row| name_of(row).len())
+        .map(|row| name_of(row).width())
         .max()
         .unwrap_or(0)
         .max("NAME".len());
     let rate_w = rate_text
         .iter()
-        .map(String::len)
-        .chain(wire_rows.iter().map(|(_, _, rate)| rate.len()))
+        .map(|rate| rate.width())
+        .chain(wire_rows.iter().map(|(_, _, rate)| rate.width()))
         .max()
         .unwrap_or(0)
         .max("WRITE/S".len())
-        .max(fmt_bps(total).len());
+        .max(fmt_bps(total).width());
     let widths = [pane_w, label_w, name_w, rate_w];
 
     let mut out = String::new();
@@ -375,14 +376,21 @@ fn format_report(
     out
 }
 
+/// Pads by display width, as the widths are measured, so a wide or non-ASCII label
+/// keeps the columns after it aligned; `format!` padding would count characters.
 fn write_report_row(
     out: &mut String,
     [pane, label, name, rate]: [&str; 4],
     [pane_w, label_w, name_w, rate_w]: [usize; 4],
 ) {
+    let gap = |text: &str, width: usize| " ".repeat(width.saturating_sub(text.width()));
     writeln!(
         out,
-        "{pane:<pane_w$}  {label:<label_w$}  {name:<name_w$}  {rate:>rate_w$}"
+        "{pane}{}  {label}{}  {name}{}  {}{rate}",
+        gap(pane, pane_w),
+        gap(label, label_w),
+        gap(name, name_w),
+        gap(rate, rate_w),
     )
     .expect("writing to String cannot fail");
 }
@@ -534,6 +542,24 @@ mod tests {
         assert_eq!(under("NAME", "tmux:%2"), "-", "{report}");
         assert_eq!(under("NAME", "tmux:%3"), "-", "{report}");
         let ends = report.lines().take(5).map(|line| line.chars().count());
+        assert!(
+            ends.collect::<std::collections::BTreeSet<_>>().len() == 1,
+            "WRITE/S is right-aligned under its header: {report}"
+        );
+    }
+
+    #[test]
+    fn format_report_aligns_columns_after_a_wide_label() {
+        let rows = [
+            pane_rate("tmux:%1", "build 日本語", 40_000),
+            pane_rate("tmux:%2", "café", 20_000),
+            pane_rate("tmux:%3", "btop", 12),
+        ];
+        let report = format_report(&rows, &HashMap::new(), 60_012, None, 5.0, false);
+        let ends = report
+            .lines()
+            .take(5)
+            .map(unicode_width::UnicodeWidthStr::width);
         assert!(
             ends.collect::<std::collections::BTreeSet<_>>().len() == 1,
             "WRITE/S is right-aligned under its header: {report}"
