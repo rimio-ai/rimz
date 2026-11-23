@@ -57,7 +57,7 @@ const APPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// state it loaded once, such as the plugin registry.
 const APPLY_RUN_CAP: usize = 256;
 /// The most idle stream apply children one applier keeps, whatever the core count.
-const APPLY_POOL_CAP_MAX: usize = 64;
+const APPLY_POOL_CAP_MAX: usize = 32;
 #[derive(Debug, Args)]
 pub struct HooksArgs {
     #[command(subcommand)]
