@@ -529,13 +529,73 @@ pub(crate) fn launched_script_command(command: &str) -> Option<&str> {
     Some(&command[script.span.start..])
 }
 
+/// The words a command line runs, program first, seen through the same wrappers
+/// and JS launchers as [`effective_program_info`], through a shell running a
+/// script file, and through RimZ's `rimz daemon host … -- <argv>` envelope:
+/// `/usr/bin/codex app-server` for `node /usr/bin/codex app-server` or `/bin/sh
+/// /usr/bin/codex app-server`. A `rimz agents exec` envelope stays as written.
+pub(crate) fn effective_argv(command: &str) -> Vec<&str> {
+    let Some(parsed) = effective_program_and_args(command) else {
+        return Vec::new();
+    };
+    if let Some(hosted) = rimz_daemon_hosted_command(command, &parsed) {
+        return effective_argv(hosted);
+    }
+    let script_at = launched_script_index(&parsed)
+        .or_else(|| shell_script_index(&parsed))
+        .map_or(0, |index| index + 1);
+    std::iter::once(&parsed.program)
+        .chain(&parsed.args)
+        .skip(script_at)
+        .map(|word| word.text)
+        .collect()
+}
+
+/// The command a `rimz daemon host … -- <argv>` envelope runs, as written after
+/// the `--`, so its own wrappers unwrap in turn.
+fn rimz_daemon_hosted_command<'a>(command: &'a str, parsed: &ParsedCommand<'a>) -> Option<&'a str> {
+    if basename(parsed.program.text) != "rimz" {
+        return None;
+    }
+    let mut args = parsed.args.iter();
+    if args.next()?.text != "daemon" || args.next()?.text != "host" {
+        return None;
+    }
+    let hosted = args.skip_while(|word| word.text != "--").nth(1)?;
+    Some(&command[hosted.span.start - usize::from(hosted.quoted)..])
+}
+
 /// A JS launcher runs the script named by its first non-flag argument, so the
 /// agent is that script (`node /usr/bin/codex` → codex), not the launcher.
 fn launched_script<'p, 'a>(parsed: &'p ParsedCommand<'a>) -> Option<&'p Word<'a>> {
+    launched_script_index(parsed).map(|index| &parsed.args[index])
+}
+
+/// A shell left as the program after unwrapping runs no `-c` script, so its
+/// first operand is the script file it interprets (a shebang shim's `/proc`
+/// cmdline).
+fn shell_script_index(parsed: &ParsedCommand<'_>) -> Option<usize> {
+    let program = basename(parsed.program.text);
+    let is_shell = WRAPPERS
+        .iter()
+        .any(|(name, wrapper)| *name == program && matches!(wrapper, Wrapper::Shell));
+    if !is_shell {
+        return None;
+    }
+    parsed
+        .args
+        .iter()
+        .position(|word| !word.text.starts_with(['-', '+']))
+}
+
+fn launched_script_index(parsed: &ParsedCommand<'_>) -> Option<usize> {
     if !is_launcher(parsed.program.text) {
         return None;
     }
-    parsed.args.iter().find(|word| !word.text.starts_with('-'))
+    parsed
+        .args
+        .iter()
+        .position(|word| !word.text.starts_with('-'))
 }
 
 /// JS launchers whose agent identity is the script they run, not the launcher

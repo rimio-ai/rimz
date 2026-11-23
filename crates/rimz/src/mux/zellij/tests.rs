@@ -1654,7 +1654,7 @@ fn reconcile_mapping_classifies_native_sidebar_daemon_and_work_panes() {
     let mut named_daemon = terminal_pane(2, 5, 80, 20, "host");
     named_daemon.tab_name = Some(crate::pane::VIEW_NAME.to_owned());
     let mut command_daemon = terminal_pane(3, 6, 80, 20, "host");
-    command_daemon.terminal_command = Some("rimz app-server serve".to_owned());
+    command_daemon.terminal_command = Some("rimz codex app-server serve".to_owned());
     let mut work = terminal_pane(4, 7, 80, 20, "work");
     work.exited = true;
     let mut plugin = terminal_pane(5, 8, 80, 20, "plugin");

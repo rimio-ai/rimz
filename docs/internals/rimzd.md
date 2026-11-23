@@ -66,10 +66,10 @@ The markers are the variants of `ManagedPaneMarker`. Every marker splits the com
 | --- | --- | --- |
 | `ContentSlot(n)` | has the adjacent tokens `daemon content`, and whose first `--slot` token followed by a number is followed by `n` | Content |
 | `CodexAppServer` | has a token equal to `app-server` (`pane::APP_SERVER_MARKER`) | Runtime |
-| `ClaudeRemoteControl` | has `remote-control` right after its first token whose file name is `claude` (`pane::command_is_claude_host`) | Runtime |
+| `ClaudeRemoteControl` | runs `claude remote-control`, through wrappers and the `rimz daemon host … --` envelope (`pane::command_is_claude_host`) | Runtime |
 | `LoopPanel` | has the adjacent tokens `loop watch` | Runtime |
 
-A content slot matches only its own `--slot` value, so slot 0 and slot 1 never collide. Token matching keeps `nvim remote-control.md` and `cat loop-watch.log` out of the managed set. It is still a trap for a user's own pane in the view: a command with an `app-server` token, the tokens `loop watch` (a second `rimz loop watch`), or `claude remote-control` counts as a managed pane. Reconciliation closes it as a duplicate when it is newer than the real one, and keeps it as the real one when it is older.
+A content slot matches only its own `--slot` value, so slot 0 and slot 1 never collide. Token matching keeps `nvim remote-control.md` and `cat loop-watch.log` out of the managed set. It is still a trap for a user's own pane in the view: a command with an `app-server` token, the tokens `loop watch` (a second `rimz loop watch`), or a run of `claude remote-control` counts as a managed pane. Reconciliation closes it as a duplicate when it is newer than the real one, and keeps it as the real one when it is older.
 
 ## How the rest of the room treats the view
 
@@ -77,7 +77,7 @@ Three broader predicates in [`pane.rs`](../../crates/rimz/src/pane.rs) classify 
 
 | Predicate | True when | Used by |
 | --- | --- | --- |
-| `command_is_host(command)` | The command line contains `remote-control` or `app-server`, a substring test that ignores content supervisors and the loop panel | Zellij's `is_daemon_host_pane` (`mux/zellij/raw_pane.rs`), which also counts every pane in the `rimzd` tab and checks the spawn command for hosts that re-exec. Tab status (`sidebar/produce/tab_status.rs`), to drop hosts from a tab's work panes |
+| `command_is_host(command)` | The command runs a daemon host: `claude remote-control`, `codex` on its `app-server` or `remote-control` subcommand, or `rimz codex app-server`, read from the program and its first argument through wrappers, JS launchers, and the `rimz daemon host … --` envelope. A prompt or worktree path that only mentions a marker stays an agent, and content supervisors and the loop panel never match | Zellij's `is_daemon_host_pane` (`mux/zellij/raw_pane.rs`), which also counts every pane in the `rimzd` tab and checks the spawn command for hosts that re-exec. Tab status (`sidebar/produce/tab_status.rs`), to drop hosts from a tab's work panes |
 | `pane_runs_daemon_host(pane)` | The pane's spawn or foreground command passes `command_is_host` | Card admission (`pane_admits_card`) and the host reap (`store/snapshot/view/reap.rs`), to skip a daemon host wherever it sits |
 | `pane_is_host(pane)` | The pane runs a daemon host, or it is in the `rimzd` view | The sidebar frame (`sidebar/frame.rs`), to tell a daemon view from a working one. tmux `reconcile_sidebars`, to mark a view occupied. `only_daemon_view`, to tell a room that has nothing but the dashboard left |
 
