@@ -6131,6 +6131,14 @@ fn a_fired_run_ended_by_its_unparsable_definition_saves_its_rows() {
             "loop", "add", "unread", "--every", "1h", "--", "sh", "-c", &script,
         ],
     );
+    // A live room: the fire births no sidebar, whose first tick would advance the run and
+    // close it on the broken definition before the command exits.
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Tmux,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "unread",
+    );
     let mut fire = env.rimz().args(["loop", "run", "unread"]).spawn().unwrap();
     let state = env.state_path_for(&env.project_root);
     let deadline = Instant::now() + Duration::from_secs(30);
