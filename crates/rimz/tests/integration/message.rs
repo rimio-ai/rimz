@@ -696,6 +696,60 @@ fn interrupt_antigravity_spares_the_turn_its_paste_opened() {
     );
 }
 
+/// A `--no-enter` paste submits nothing, so a turn that starts during the delay is withheld from
+/// the key under a cause that does not name the message as its opener.
+#[test]
+fn interrupt_antigravity_no_enter_names_a_turn_it_did_not_open() {
+    let (env, panes) = interrupt_fixture("antigravity");
+    let hold = DeliveryRendezvous::new(&env, "before-key");
+    let trace = env.project_root.join("interrupt-no-enter-turn.log");
+    let send = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .env("RIMZ_TEST_MESSAGE_BEFORE_INTERRUPT_KEY", &hold.path)
+        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
+        .args([
+            "message",
+            "--interrupt",
+            "--no-enter",
+            "@antigravity",
+            "draft text",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut held = hold.arrive();
+    append_lifecycle(
+        &env,
+        "antigravity",
+        "PreInvocation",
+        "sess-interrupt",
+        LifecycleSignal::TurnStarted { turn_id: None },
+        |_| {},
+    );
+    held.write_all(&[0]).unwrap();
+    let output = send.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let lines = trace_lines(&trace);
+    assert!(!lines.iter().any(|line| is_escape_key(line)), "{lines:?}");
+    assert!(!lines.iter().any(|line| is_enter_key(line)), "{lines:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "the message was sent, but its interrupt key was not: a new turn \
+             started during the interrupt delay, and the key would cancel it"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("the message opened"), "{stderr}");
+    // A `--no-enter` prompt settles at its write, so its record is in the history.
+    assert!(env.store().list_messages().unwrap().is_empty());
+    assert_eq!(
+        env.store().list_message_history().unwrap()[0].status,
+        MessageStatus::Delivered
+    );
+}
+
 fn is_alt_m_key(line: &str) -> bool {
     line.ends_with(&format!(
         "\taction\twrite\t--pane-id\t{TRACE_PANE}\t27\t109"

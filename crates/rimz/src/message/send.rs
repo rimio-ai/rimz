@@ -302,15 +302,18 @@ pub(super) fn send_batch_to_live_pane(
         // until the running one ends (agy: no invocation-0 PreInvocation until it dequeues,
         // probes P9 and P10). A turn start newer than the one the paste decided on is
         // therefore the paste's own turn, opened from a rest the row missed or after the
-        // running turn ended during the delay, and the key would cancel it.
+        // running turn ended during the delay, and the key would cancel it. A paste with Enter
+        // off submits nothing, so its cause names the turn and not the message.
         let opened_own_turn = returns_queued_text
             && row_under_lock(store, head)
                 .ok()
                 .flatten()
                 .is_some_and(|row| row.turn_started_at > decided_turn_started_at);
-        opened_own_turn.then_some(
-            "the message opened a new turn during the interrupt delay, and the key would cancel it",
-        )
+        opened_own_turn.then_some(if head.enter {
+            "the message opened a new turn during the interrupt delay, and the key would cancel it"
+        } else {
+            "a new turn started during the interrupt delay, and the key would cancel it"
+        })
     });
     if let Some(cause) = withheld {
         return Ok(Receipt::Sent {
