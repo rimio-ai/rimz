@@ -524,13 +524,30 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
+        let home = std::env::var("HOME").ok();
+        let login_env = home.into_iter().map(|home| ("HOME".to_owned(), home));
+        self.decode_hook_in(event_name, payload, &login_env.collect())
+    }
+
+    fn decode_hook_in(
+        &self,
+        event_name: &str,
+        payload: &Value,
+        login_env: &BTreeMap<String, String>,
+    ) -> Result<HookOutput> {
+        let payload = &*session::payload_on_host(payload, login_env);
+        let home = session::login_home(login_env);
         let mut decoded = decode_catalog_hook(
             ANTIGRAVITY_HOOKS.iter().map(|entry| &entry.hook),
             event_name,
             None,
         );
         decoded.set_reply(self.payload_hook_reply(event_name, payload));
-        let fields = decode_lifecycle_fields(event_name, payload, session::read_prompt);
+        let fields = decode_lifecycle_fields(event_name, payload, |path, id, read| {
+            home.as_deref().map_or(PromptEvidence::Unread, |home| {
+                session::read_prompt_under(home, path, id, read)
+            })
+        });
         decoded.set_routing(
             HookRouting::session(fields.agent_id.map(Into::into))
                 .with_worktree(fields.worktree_path),
@@ -571,13 +588,14 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
         let parent_transcript = input
             .parent_transcript_path
             .map(Path::to_path_buf)
-            .or_else(|| session::transcript_for_session(parent_id.as_str()))?;
+            .or_else(|| session::transcript_for_session(parent_id.as_str(), input.login_env))?;
         let correlated = session::correlate_subagent(
             &parent_transcript,
             parent_id.as_str(),
             input.parent_workspace?,
             child_id.as_str(),
             input.child_workspace?,
+            input.login_env,
         )?;
         let role = non_empty_trimmed(&correlated.role);
         let prompt = sanitize_user_prompt(Some(&correlated.prompt));
@@ -594,10 +612,13 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
         let Some(parent_workspace) = input.parent_workspace else {
             return Vec::new();
         };
-        let Some(parent_transcript) = input
-            .parent_transcript_path
-            .map(Path::to_path_buf)
-            .or_else(|| session::transcript_for_session(input.parent_agent_id.as_str()))
+        let Some(parent_transcript) =
+            input
+                .parent_transcript_path
+                .map(Path::to_path_buf)
+                .or_else(|| {
+                    session::transcript_for_session(input.parent_agent_id.as_str(), input.login_env)
+                })
         else {
             return Vec::new();
         };
@@ -605,6 +626,7 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
             &parent_transcript,
             input.parent_agent_id.as_str(),
             parent_workspace,
+            input.login_env,
         )
     }
 }
@@ -645,7 +667,22 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
     }
 
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
-        session::resolve_home(None, env.get("HOME").map(std::ffi::OsStr::new))
+        session::login_home(env)
+    }
+
+    fn config_home_env_keys(&self) -> &'static [&'static str] {
+        &[session::HOME_ENV]
+    }
+
+    /// agy reads no variable or flag that moves its data directory (1.5.15), so a named
+    /// account is a directory mounted over it, with `HOME` left as the user's.
+    fn mounted_home_target(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        session::view_home(env)
+    }
+
+    /// A link into the default directory would resolve inside the mount, to the account itself.
+    fn account_history_shareable(&self) -> bool {
+        false
     }
 
     /// `--add-dir` opens a workspace: agy loads its `AGENTS.md`, `.agents/rules`, and
@@ -755,9 +792,9 @@ impl crate::agents::capabilities::SessionCapability for AntigravityAdapter {
     fn discover_local_sessions(
         &self,
         workspaces: &[&Path],
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> Vec<LocalSessionObservation> {
-        session::discover(workspaces)
+        session::discover(workspaces, login_env)
     }
 
     fn resumed_session_id_from_cmdline(&self, cmdline: &str) -> Option<crate::ids::AgentSessionId> {
@@ -823,22 +860,24 @@ impl crate::agents::capabilities::ContextCapability for AntigravityAdapter {
 impl crate::agents::capabilities::AccountCapability for AntigravityAdapter {
     fn probe_account(&self, login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
         let provider_home = self.config_home(login_env);
-        usage::read(
-            provider_home.clone(),
-            login_env.get("HOME").map(String::as_str),
-        )
-        .account(provider_home.as_deref())
+        usage::read(provider_home.clone(), login_env).account(provider_home.as_deref())
+    }
+
+    fn foreign_login(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
+        let (account, _) = session::mounted_view(login_env)?;
+        if usage::holds_credential(&account) {
+            return None;
+        }
+        usage::read(self.config_home(login_env), login_env)
+            .launch_refusal()
+            .map(str::to_owned)
     }
 
     fn probe_account_usage(
         &self,
         login_env: &BTreeMap<String, String>,
     ) -> super::AccountUsageProbe {
-        usage::read(
-            self.config_home(login_env),
-            login_env.get("HOME").map(String::as_str),
-        )
-        .usage()
+        usage::read(self.config_home(login_env), login_env).usage()
     }
 }
 

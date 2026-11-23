@@ -466,7 +466,9 @@ upward-dependencies = ["address"]
 # Background scripts, their report, and the shown threshold are folded by store and drawn by the renderer (+3).
 # applied_tools gives explain the tools a kind's argv applies; launch_callable is the one
 # grant-aware skill rule both skill enforcers apply (+2).
-surface-budget = 1337
+# A provider with no home override runs a named account in a mount: mounted_home_target,
+# account_history_shareable, foreign_login, and decode_hook_in for the frame's login (+4).
+surface-budget = 1341
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -2544,7 +2546,8 @@ path = "crates/rimz/src/harness"
 # +1: workflow::directory_name, the one run-name rule the CLI's show and validate share.
 # hook_drain::provider_rest_settle asks a drainer and reads the row for the statusline feed (+1).
 # ExecRequest::cannot_delegate tells explain that a child or judge launch has no subagents (+1).
-surface-budget = 1357
+# hook_drain::login_env gives lifecycle code the login of the frame being applied (+1).
+surface-budget = 1358
 
 [[verdict]]
 kind = "item"

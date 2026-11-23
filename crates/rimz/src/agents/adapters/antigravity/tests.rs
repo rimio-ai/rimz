@@ -4223,7 +4223,10 @@ mod usage_probe {
             return;
         }
         let spawns = crate::proc::testkit::spawn_count();
-        let read = usage::read(Some(dir.path().join("offline-home")), Some("/login/home"));
+        let read = usage::read(
+            Some(dir.path().join("offline-home")),
+            &BTreeMap::from([("HOME".to_owned(), "/login/home".to_owned())]),
+        );
         assert_eq!(read, Read::Failed(AccountProbeError::SourceUnavailable));
         assert_eq!(crate::proc::testkit::spawn_count(), spawns, "no agy start");
     }
@@ -4432,6 +4435,150 @@ fn write_transcript(home: &Path, session_id: &str) -> std::path::PathBuf {
         include_str!("tests/fixtures/transcript_full.jsonl"),
     )
 }
+fn mounted_login(home: &Path, account: &Path) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("HOME".to_owned(), home.display().to_string()),
+        (session::HOME_ENV.to_owned(), account.display().to_string()),
+    ])
+}
+
+#[test]
+fn a_named_login_resolves_its_directory_and_its_hook_path_onto_it() {
+    let env = mounted_login(Path::new("/home/me"), Path::new("/accounts/work"));
+    assert_eq!(
+        AntigravityAdapter.config_home(&env),
+        Some(PathBuf::from("/accounts/work"))
+    );
+    assert_eq!(
+        AntigravityAdapter.mounted_home_target(&env),
+        Some(PathBuf::from("/home/me/.gemini/antigravity-cli"))
+    );
+    let inside = json!({
+        "transcriptPath": "/home/me/.gemini/antigravity-cli/brain/a/.system_generated/logs/t.jsonl"
+    });
+    assert_eq!(
+        session::payload_on_host(&inside, &env)["transcriptPath"],
+        "/accounts/work/brain/a/.system_generated/logs/t.jsonl"
+    );
+    let elsewhere = json!({"transcriptPath": "/home/me/.gemini/antigravity-cli-2/brain/a"});
+    assert_eq!(*session::payload_on_host(&elsewhere, &env), elsewhere);
+    let default = BTreeMap::from([("HOME".to_owned(), "/home/me".to_owned())]);
+    assert_eq!(*session::payload_on_host(&inside, &default), inside);
+    assert_eq!(session::mounted_view(&default), None);
+}
+
+#[test]
+fn a_named_login_with_no_credential_file_of_its_own_is_foreign() {
+    let dir = tempfile::tempdir().unwrap();
+    let signed_in = usage::Read::Usage(usage::Quota::Absent);
+    assert_eq!(
+        usage::own_login(signed_in.clone(), dir.path()),
+        usage::Read::ForeignLogin
+    );
+    assert_eq!(
+        usage::own_login(usage::Read::ApiKey, dir.path()),
+        usage::Read::ForeignLogin
+    );
+    assert_eq!(
+        usage::own_login(usage::Read::LoggedOut, dir.path()),
+        usage::Read::LoggedOut
+    );
+    std::fs::write(dir.path().join("antigravity-oauth-token"), "{}").unwrap();
+    assert_eq!(usage::own_login(signed_in.clone(), dir.path()), signed_in);
+}
+
+#[test]
+fn only_a_definite_logged_out_read_lets_a_credential_less_account_launch() {
+    assert_eq!(usage::Read::LoggedOut.launch_refusal(), None);
+    let foreign = usage::Read::ForeignLogin.launch_refusal().unwrap();
+    assert!(
+        foreign.starts_with("agy found a login outside"),
+        "{foreign}"
+    );
+    let failed = usage::Read::Failed(crate::agents::account::AccountProbeError::SourceUnavailable)
+        .launch_refusal()
+        .unwrap();
+    assert!(failed.starts_with("RimZ could not confirm"), "{failed}");
+}
+
+#[test]
+fn a_named_logins_usage_read_mounts_its_directory_over_agys() {
+    let command = usage::mounted_command(
+        Path::new("/accounts/work"),
+        Path::new("/home/me/.gemini/antigravity-cli"),
+        PathBuf::from("/bin/agy"),
+        Some("/home/me"),
+    );
+    assert_eq!(command.get_program(), "bwrap");
+    let args: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_str().unwrap())
+        .collect();
+    assert_eq!(
+        args[..10],
+        [
+            "--dev-bind",
+            "/",
+            "/",
+            "--die-with-parent",
+            "--new-session",
+            "--bind",
+            "/accounts/work",
+            "/home/me/.gemini/antigravity-cli",
+            "--",
+            "/bin/agy",
+        ]
+    );
+    assert_eq!(args[10], "-p");
+}
+
+#[test]
+fn a_named_accounts_uninstall_leaves_the_plugin_every_account_runs_on() {
+    let home = AgyHome::new();
+    let managed = home.integration();
+    managed.install(&env(), Default::default()).unwrap();
+    let named = mounted_login(Path::new("/home/me"), Path::new("/accounts/work"));
+    managed.uninstall(&named).unwrap();
+    assert!(home.plugin.join("plugin.json").exists());
+    managed.uninstall(&env()).unwrap();
+    assert!(!home.plugin.exists());
+}
+
+#[test]
+fn a_mounted_accounts_subagent_logs_resolve_from_agys_path_to_the_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let user_home = dir.path().join("user");
+    let view = user_home.join(".gemini/antigravity-cli");
+    let view_uri = url::Url::from_directory_path(&view).unwrap().to_string();
+    let workspace_uri = url::Url::from_directory_path(&workspace)
+        .unwrap()
+        .to_string();
+    let parent = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript_full.jsonl",
+        &include_str!("tests/fixtures/subagents_two_children.jsonl")
+            .replace("__HOME_URI__", view_uri.trim_end_matches('/'))
+            .replace("__WORKSPACE__", &workspace.display().to_string())
+            .replace("__WORKSPACE_URI__", workspace_uri.trim_end_matches('/')),
+    );
+    for child in [CHILD_ALPHA, CHILD_BETA] {
+        write_transcript_named(
+            dir.path(),
+            child,
+            "transcript.jsonl",
+            include_str!("tests/fixtures/transcript_full.jsonl"),
+        );
+    }
+    let login = mounted_login(&user_home, dir.path());
+    assert_eq!(
+        session::spawned_subagents(&parent, SESSION_ID, &workspace, &login).len(),
+        2
+    );
+}
+
 fn write_subagent_fixture(home: &Path, session_id: &str, fixture: &str) -> std::path::PathBuf {
     let home_uri = url::Url::from_directory_path(home).unwrap().to_string();
     let workspace = home.join("workspace");

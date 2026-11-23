@@ -1,5 +1,6 @@
 //! Validated Antigravity CLI local-session discovery and transcript projection.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -25,6 +26,8 @@ use crate::agents::{
 };
 use crate::ids::{AgentKind, AgentSessionId};
 
+/// The named account's data directory in a login's environment. RimZ reads it; agy does not.
+pub(super) const HOME_ENV: &str = "RIMZ_ANTIGRAVITY_HOME";
 const MAX_DISCOVERED_SESSIONS: usize = 512;
 const TRANSCRIPT_BASENAMES: [&str; 2] = ["transcript_full.jsonl", "transcript.jsonl"];
 
@@ -271,8 +274,11 @@ fn enumerate_conversations(home: &Path, topology: &mut StampedPaths) -> Vec<Conv
         .collect()
 }
 
-pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
-    let Some(home) = home() else {
+pub(super) fn discover(
+    workspaces: &[&Path],
+    login_env: &BTreeMap<String, String>,
+) -> Vec<LocalSessionObservation> {
+    let Some(home) = login_home(login_env) else {
         return Vec::new();
     };
     let key = DiscoveryKey {
@@ -521,9 +527,12 @@ fn newest_assistant(lines: &str) -> (Option<String>, bool) {
     (answer, has_turn_start)
 }
 
-pub(super) fn transcript_for_session(session_id: &str) -> Option<PathBuf> {
+pub(super) fn transcript_for_session(
+    session_id: &str,
+    login_env: &BTreeMap<String, String>,
+) -> Option<PathBuf> {
     valid_conversation_id(session_id).then_some(())?;
-    let home = home()?;
+    let home = login_home(login_env)?;
     transcript_for_session_under(&home, session_id)
 }
 
@@ -552,13 +561,6 @@ impl From<Option<String>> for PromptEvidence {
     fn from(prompt: Option<String>) -> Self {
         prompt.map_or(Self::Unread, Self::Prompt)
     }
-}
-
-pub(super) fn read_prompt(path: &Path, session_id: &str, read: PromptRead) -> PromptEvidence {
-    let Some(home) = home() else {
-        return PromptEvidence::Unread;
-    };
-    read_prompt_under(&home, path, session_id, read)
 }
 
 pub(super) fn read_prompt_under(
@@ -660,10 +662,13 @@ pub(super) fn correlate_subagent(
     parent_workspace: &Path,
     child_id: &str,
     child_workspace: &Path,
+    login_env: &BTreeMap<String, String>,
 ) -> Option<CorrelatedSubagent> {
-    let home = home()?;
-    correlate_subagent_under(
+    let home = login_home(login_env)?;
+    let view = view_home(login_env).unwrap_or_else(|| home.clone());
+    correlate_subagent_in(
         &home,
+        &view,
         parent_transcript,
         parent_id,
         parent_workspace,
@@ -676,15 +681,39 @@ pub(super) fn spawned_subagents(
     parent_transcript: &Path,
     parent_id: &str,
     parent_workspace: &Path,
+    login_env: &BTreeMap<String, String>,
 ) -> Vec<SpawnedSubagent> {
-    let Some(home) = home() else {
+    let Some(home) = login_home(login_env) else {
         return Vec::new();
     };
-    spawned_subagents_under(&home, parent_transcript, parent_id, parent_workspace)
+    let view = view_home(login_env).unwrap_or_else(|| home.clone());
+    spawned_subagents_in(&home, &view, parent_transcript, parent_id, parent_workspace)
 }
 
+#[cfg(test)]
 pub(super) fn correlate_subagent_under(
     home: &Path,
+    parent_transcript: &Path,
+    parent_id: &str,
+    parent_workspace: &Path,
+    child_id: &str,
+    child_workspace: &Path,
+) -> Option<CorrelatedSubagent> {
+    correlate_subagent_in(
+        home,
+        home,
+        parent_transcript,
+        parent_id,
+        parent_workspace,
+        child_id,
+        child_workspace,
+    )
+}
+
+/// `view` is where the agent saw `home`: its transcript names child logs under that path.
+fn correlate_subagent_in(
+    home: &Path,
+    view: &Path,
     parent_transcript: &Path,
     parent_id: &str,
     parent_workspace: &Path,
@@ -694,7 +723,7 @@ pub(super) fn correlate_subagent_under(
     valid_conversation_id(child_id).then_some(())?;
     let child_workspace = fs::canonicalize(child_workspace).ok()?;
     let mut matched =
-        validated_subagents_under(home, parent_transcript, parent_id, parent_workspace)?
+        validated_subagents_in(home, view, parent_transcript, parent_id, parent_workspace)?
             .into_iter()
             .filter(|pair| {
                 pair.result.conversation_id.trim() == child_id
@@ -709,13 +738,24 @@ pub(super) fn correlate_subagent_under(
     matched.next().is_none().then_some(first)
 }
 
+#[cfg(test)]
 pub(super) fn spawned_subagents_under(
     home: &Path,
     parent_transcript: &Path,
     parent_id: &str,
     parent_workspace: &Path,
 ) -> Vec<SpawnedSubagent> {
-    validated_subagents_under(home, parent_transcript, parent_id, parent_workspace)
+    spawned_subagents_in(home, home, parent_transcript, parent_id, parent_workspace)
+}
+
+fn spawned_subagents_in(
+    home: &Path,
+    view: &Path,
+    parent_transcript: &Path,
+    parent_id: &str,
+    parent_workspace: &Path,
+) -> Vec<SpawnedSubagent> {
+    validated_subagents_in(home, view, parent_transcript, parent_id, parent_workspace)
         .unwrap_or_default()
         .into_iter()
         .map(|pair| SpawnedSubagent {
@@ -729,8 +769,9 @@ pub(super) fn spawned_subagents_under(
         .collect()
 }
 
-fn validated_subagents_under(
+fn validated_subagents_in(
     home: &Path,
+    view: &Path,
     parent_transcript: &Path,
     parent_id: &str,
     parent_workspace: &Path,
@@ -774,6 +815,9 @@ fn validated_subagents_under(
             let Some(log_path) = file_uri_path(&result.log_absolute_uri) else {
                 continue;
             };
+            let log_path = log_path
+                .strip_prefix(view)
+                .map_or_else(|_| log_path.clone(), |rest| home.join(rest));
             if !valid_transcript_under(home, &log_path, result_id) {
                 continue;
             }
@@ -869,20 +913,45 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
     }
 }
 
-/// The CLI home of the login whose environment is `login_env`: the override
+/// The CLI home of the login whose environment is `login_env`: the named account's directory
 /// when set, else under that login's `HOME`.
 pub(super) fn login_home(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
     resolve_home(
-        std::env::var_os("RIMZ_ANTIGRAVITY_HOME").as_deref(),
+        login_env.get(HOME_ENV).map(OsStr::new),
         login_env.get("HOME").map(OsStr::new),
     )
 }
 
-fn home() -> Option<PathBuf> {
-    resolve_home(
-        std::env::var_os("RIMZ_ANTIGRAVITY_HOME").as_deref(),
-        std::env::var_os("HOME").as_deref(),
-    )
+/// The path agy itself reads, whatever directory is mounted there.
+pub(super) fn view_home(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    resolve_home(None, login_env.get("HOME").map(OsStr::new))
+}
+
+/// The account directory and the path it is mounted over, for a login with its own directory.
+pub(super) fn mounted_view(login_env: &BTreeMap<String, String>) -> Option<(PathBuf, PathBuf)> {
+    let source = login_env.get(HOME_ENV).filter(|home| !home.is_empty())?;
+    Some((PathBuf::from(source), view_home(login_env)?))
+}
+
+/// `payload` with a `transcriptPath` agy reported from inside a mounted account rewritten to
+/// the account directory: on the host, agy's own path names the `default` account.
+pub(super) fn payload_on_host<'a>(
+    payload: &'a Value,
+    login_env: &BTreeMap<String, String>,
+) -> Cow<'a, Value> {
+    let host_path = mounted_view(login_env).and_then(|(source, target)| {
+        let rest = Path::new(payload.get("transcriptPath")?.as_str()?)
+            .strip_prefix(target)
+            .ok()?
+            .to_path_buf();
+        Some(source.join(rest).display().to_string())
+    });
+    let Some(host_path) = host_path else {
+        return Cow::Borrowed(payload);
+    };
+    let mut rewritten = payload.clone();
+    rewritten["transcriptPath"] = Value::String(host_path);
+    Cow::Owned(rewritten)
 }
 
 pub(super) fn resolve_home(override_home: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {

@@ -2159,6 +2159,7 @@ fn ensure_provider_homes_resolve_from_login_env(root: &Path, files: &[PathBuf]) 
         "HERMES_HOME",
         "MAVIS_DATA_DIR",
         "MINIMAX_DATA_DIR",
+        "RIMZ_ANTIGRAVITY_HOME",
     ] {
         for read in [concat!("var", "(\""), concat!("var", "_os(\"")] {
             ensure_no_match(

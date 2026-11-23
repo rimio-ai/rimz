@@ -803,6 +803,53 @@ fn global_account_switch_refuses_failed_preflight_without_writing() {
 }
 
 #[test]
+fn selecting_a_mounted_account_without_bubblewrap_refuses_without_writing() {
+    const REASON: &str =
+        "antigravity accounts run in a mount view, which needs Linux and bubblewrap";
+    let env = Env::new();
+    let home = env.home_root.join("agy-work");
+    let no_bwrap = env.home_root.join("no-bwrap-bin");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&no_bwrap).unwrap();
+    let config = env.rimz_home().join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[accounts.antigravity.work]\nhome = '{}'\nhistory = 'standalone'\n",
+            home.display()
+        ),
+    )
+    .unwrap();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let record = env.store().paths().workspace_record.clone();
+    let config_before = std::fs::read(&config).unwrap();
+    let record_before = std::fs::read(&record).unwrap();
+    let run = |args: &[&str]| {
+        hermetic(&env, &mut env.rimz())
+            .env("PATH", &no_bwrap)
+            .envs(rimz::workspace::pin_env(
+                &workspace.workspace_id,
+                &workspace.project_root,
+            ))
+            .arg("accounts")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+
+    let global = failed(&run(&["use", "--global", "antigravity", "work"]));
+    assert!(global.contains(REASON), "{global}");
+    let room = failed(&run(&["use", "antigravity", "work"]));
+    assert!(room.contains(REASON), "{room}");
+    assert_eq!(std::fs::read(&config).unwrap(), config_before);
+    assert_eq!(std::fs::read(&record).unwrap(), record_before);
+
+    succeeded(&run(&["use", "--global", "antigravity", "default"]));
+    succeeded(&run(&["use", "--reset", "antigravity"]));
+}
+
+#[test]
 fn invalid_kind_keeps_its_error_and_default_beside_healthy_accounts() {
     invalid_kind_report(false);
 }

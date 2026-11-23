@@ -203,6 +203,7 @@ mod tests {
         let children =
             super::super::CopilotAdapter.spawned_subagents(crate::agents::SubagentSpawnInput {
                 parent_agent_id: &crate::ids::AgentSessionId::from("parent-session"),
+                login_env: &std::collections::BTreeMap::new(),
                 parent_transcript_path: Some(&path),
                 parent_workspace: None,
             });

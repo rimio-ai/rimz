@@ -437,6 +437,12 @@ fn builtin_config_homes_honor_provider_overrides() {
         ("grok", "GROK_HOME", "/selected", "/selected"),
         ("hermes", "HERMES_HOME", "/selected", "/selected"),
         ("minimax", "MINIMAX_DATA_DIR", "/selected", "/selected"),
+        (
+            "antigravity",
+            "RIMZ_ANTIGRAVITY_HOME",
+            "/selected",
+            "/selected",
+        ),
     ];
     for adapter in BUILTINS {
         let kind = adapter.spec().kind;
@@ -479,7 +485,6 @@ fn builtin_config_homes_honor_provider_overrides() {
 fn builtin_config_homes_do_not_follow_runtime_or_rimz_overrides() {
     for (kind, key) in [
         ("qwen", "QWEN_RUNTIME_DIR"),
-        ("antigravity", "RIMZ_ANTIGRAVITY_HOME"),
         ("droid", "RIMZ_DROID_SETTINGS"),
         ("claude", "RIMZ_CLAUDE_SETTINGS"),
         ("copilot", "RIMZ_COPILOT_SETTINGS"),

@@ -411,6 +411,7 @@ fn adapter_correlates_child_hook_ids_through_the_parent_transcript() {
             child_workspace: Some(dir.path()),
             parent_agent_id: &parent_id,
             parent_workspace: Some(dir.path()),
+            login_env: &std::collections::BTreeMap::new(),
             parent_transcript_path: Some(&path),
         }),
         Some(SubagentCorrelation {

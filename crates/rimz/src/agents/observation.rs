@@ -390,6 +390,8 @@ pub struct SubagentCorrelationInput<'a> {
     pub parent_agent_id: &'a AgentSessionId,
     pub parent_workspace: Option<&'a Path>,
     pub parent_transcript_path: Option<&'a Path>,
+    /// The login environment the hook frame ran under.
+    pub login_env: &'a std::collections::BTreeMap<String, String>,
 }
 
 /// Display metadata recovered together with a provider-validated child
@@ -411,6 +413,8 @@ pub struct SubagentSpawnInput<'a> {
     pub parent_agent_id: &'a AgentSessionId,
     pub parent_transcript_path: Option<&'a Path>,
     pub parent_workspace: Option<&'a Path>,
+    /// The login environment the hook frame ran under.
+    pub login_env: &'a std::collections::BTreeMap<String, String>,
 }
 
 /// One settled child recovered from validated provider-owned evidence.
