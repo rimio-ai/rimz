@@ -107,6 +107,39 @@ fn native_hooks_normalize_lifecycle() {
         Some("/tmp/transcript_full.jsonl")
     );
     assert_eq!(started.launch.model.as_deref(), Some(FLASH));
+    assert_eq!(started.launch.effort, None);
+    for (model_name, model, effort) in [
+        (
+            "gemini-4-hydrogen-xhigh",
+            "gemini-4-hydrogen",
+            Some("xhigh"),
+        ),
+        ("gemini-3.8-flash-high", "gemini-3.8-flash", Some("high")),
+        (
+            "gemini-pro-orchestrator-neon",
+            "gemini-pro-orchestrator-neon",
+            None,
+        ),
+    ] {
+        let suffixed = hook_lifecycle(
+            &AntigravityAdapter,
+            "PreInvocation",
+            &with(
+                &common,
+                [
+                    ("invocationNum", json!(0)),
+                    ("modelName", json!(model_name)),
+                ],
+            ),
+        );
+        assert_eq!(
+            (
+                suffixed.launch.model.as_deref(),
+                suffixed.launch.effort.as_deref()
+            ),
+            (Some(model), effort)
+        );
+    }
     for (event, payload, expected) in [
         (
             "PreInvocation",
@@ -1459,11 +1492,9 @@ fn statusline_projects_model_account_and_context_usage() {
         )
         .unwrap()
         .context;
-    assert_eq!(
-        context.model_id.as_deref(),
-        Some("Gemini 3.5 Flash (Medium)")
-    );
+    assert_eq!(context.model_id.as_deref(), Some(FLASH));
     assert_eq!(context.model_display_name.as_deref(), Some(FLASH));
+    assert_eq!(context.effort.as_deref(), Some("medium"));
     assert_eq!(context.agent_version.as_deref(), Some("1.1.2"));
     assert_eq!(
         context.settle.map(|settle| settle.outcome),
@@ -1501,7 +1532,7 @@ fn statusline_projects_model_account_and_context_usage() {
     );
 }
 #[test]
-fn statusline_normalizes_reasoning_qualifiers_without_changing_model_id() {
+fn statusline_splits_reasoning_qualifiers_off_model_id_and_display_name() {
     for (display, model, effort, thinking) in [
         ("Gemini 3.5 Flash (Low)", FLASH, Some("low"), None),
         ("Gemini 3.5 Flash (Medium)", FLASH, Some("medium"), None),
@@ -1523,7 +1554,7 @@ fn statusline_normalizes_reasoning_qualifiers_without_changing_model_id() {
         let context = AntigravityAdapter
             .observe_context(
                 "antigravity",
-                &json!({"conversation_id": SESSION_ID, "model": {"id": "  provider/model:id  ", "display_name": display}}),
+                &json!({"conversation_id": SESSION_ID, "model": {"id": display, "display_name": display}}),
             )
             .unwrap()
             .context;
@@ -1534,7 +1565,39 @@ fn statusline_normalizes_reasoning_qualifiers_without_changing_model_id() {
                 context.effort.as_deref(),
                 context.thinking_enabled
             ),
-            (Some("  provider/model:id  "), Some(model), effort, thinking)
+            (Some(model), Some(model), effort, thinking)
+        );
+    }
+    // A model variant and an id that is not a label stay as sent.
+    for id in ["Orchestrator (Neon)", "  provider/model:id  "] {
+        let context = AntigravityAdapter
+            .observe_context(
+                "antigravity",
+                &json!({"conversation_id": SESSION_ID, "model": {"id": id}}),
+            )
+            .unwrap()
+            .context;
+        assert_eq!(context.model_id.as_deref(), Some(id));
+    }
+    // With no display name or native effort, the id's qualifier carries the effort.
+    for (id, model, effort, thinking) in [
+        ("Gemini 3.1 Pro (High)", PRO, Some("high"), None),
+        ("Claude Sonnet 4.6 (Thinking)", SONNET, None, Some(true)),
+    ] {
+        let context = AntigravityAdapter
+            .observe_context(
+                "antigravity",
+                &json!({"conversation_id": SESSION_ID, "model": {"id": id}}),
+            )
+            .unwrap()
+            .context;
+        assert_eq!(
+            (
+                context.model_id.as_deref(),
+                context.effort.as_deref(),
+                context.thinking_enabled
+            ),
+            (Some(model), effort, thinking)
         );
     }
 }

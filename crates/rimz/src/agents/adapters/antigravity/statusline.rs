@@ -97,25 +97,25 @@ impl ReasoningQualifier {
     }
 }
 
+/// A selector label split from its recognized trailing qualifier (`Gemini 4 Neon (High)`).
+/// A model variant (`Orchestrator (Neon)`) is no qualifier.
+fn split_qualifier(label: &str) -> Option<(&str, ReasoningQualifier)> {
+    let without_close = label.trim().strip_suffix(')')?;
+    let open = without_close.rfind('(')?;
+    let qualifier = ReasoningQualifier::parse(&without_close[open + 1..])?;
+    let base = without_close[..open].trim();
+    (!base.is_empty()).then_some((base, qualifier))
+}
+
 fn normalize_model_display(
     display_name: Option<String>,
 ) -> (Option<String>, Option<String>, Option<bool>) {
     let Some(display_name) = display_name.as_deref().and_then(non_empty_trimmed) else {
         return (None, None, None);
     };
-    let Some(without_close) = display_name.strip_suffix(')') else {
+    let Some((base, qualifier)) = split_qualifier(&display_name) else {
         return (Some(display_name), None, None);
     };
-    let Some(open) = without_close.rfind('(') else {
-        return (Some(display_name), None, None);
-    };
-    let Some(qualifier) = ReasoningQualifier::parse(&without_close[open + 1..]) else {
-        return (Some(display_name), None, None);
-    };
-    let base = without_close[..open].trim();
-    if base.is_empty() {
-        return (Some(display_name), None, None);
-    }
     (
         Some(base.to_owned()),
         qualifier.effort().map(ToOwned::to_owned),
@@ -125,8 +125,20 @@ fn normalize_model_display(
 
 impl StatuslinePayload {
     pub(super) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
-        let (model_display_name, label_effort, thinking_enabled) =
+        let (model_display_name, mut label_effort, mut thinking_enabled) =
             normalize_model_display(self.model.display_name);
+        let model_id = self.model.id.filter(|id| !id.trim().is_empty());
+        // agy sends the selector label as `model.id`; its qualifier is the effort, and stands in
+        // for the display name's when that carries none.
+        let id_split = model_id.as_deref().and_then(split_qualifier);
+        if label_effort.is_none()
+            && thinking_enabled.is_none()
+            && let Some((_, qualifier)) = id_split
+        {
+            label_effort = qualifier.effort().map(ToOwned::to_owned);
+            thinking_enabled = (qualifier == ReasoningQualifier::Thinking).then_some(true);
+        }
+        let base_id = id_split.map(|(base, _)| base.to_owned());
         let effort = self
             .model
             .effort
@@ -168,7 +180,7 @@ impl StatuslinePayload {
             ..AgentAccount::default()
         });
         AgentContext {
-            model_id: self.model.id.filter(|id| !id.trim().is_empty()),
+            model_id: base_id.or(model_id),
             model_display_name,
             effort,
             thinking_enabled,
