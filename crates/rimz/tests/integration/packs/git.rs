@@ -539,6 +539,93 @@ fn the_review_names_exclusions_overrides_conflicts_and_failed_items() {
 }
 
 #[test]
+fn every_pack_surface_reports_a_workflow_that_cannot_load_as_failed() {
+    let broken_line = "this is not toml";
+    let fixture = Fixture::new();
+    write(
+        fixture.crew.join("workflows/broken/workflow.toml"),
+        &format!("[workflow]\n{broken_line}\n"),
+    );
+    git(&fixture.crew, &["add", "."]);
+    git(&fixture.crew, &["commit", "-m", "break a workflow"]);
+    let assert_reported = |stdout: &str| {
+        for text in [
+            "broken: failed: workflow: ",
+            "ship: loads",
+            "workflows/broken/workflow.toml",
+        ] {
+            assert!(stdout.contains(text), "missing {text:?}: {stdout}");
+        }
+        assert!(!stdout.contains(broken_line), "{stdout}");
+    };
+    let review = fixture.run(&["packs", "install", "crew"]);
+    assert_eq!(review.status.code(), Some(1), "{review:?}");
+    assert_reported(&String::from_utf8_lossy(&review.stdout));
+    let installed = fixture.run(&["packs", "install", "crew", "--yes"]);
+    assert!(installed.status.success(), "{installed:?}");
+    let show = fixture.run(&["packs", "show", "crew"]);
+    assert!(show.status.success(), "{show:?}");
+    assert_reported(&String::from_utf8_lossy(&show.stdout));
+
+    let shown = json(&fixture.env, &["packs", "show", "crew", "--json"]);
+    let fate = &item(&shown, "workflows", "broken")["fate"];
+    assert_eq!(fate["state"], "failed", "{shown}");
+    let message = fate["message"].as_str().unwrap();
+    assert_eq!(message.lines().count(), 1, "{message:?}");
+    assert!(!message.contains(broken_line), "{message:?}");
+    assert_eq!(
+        item(&shown, "workflows", "ship")["fate"]["state"],
+        "loads",
+        "{shown}"
+    );
+    let listed = json(&fixture.env, &["packs", "list", "--json"]);
+    let crew = listed["packs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pack| pack["name"] == "crew")
+        .unwrap();
+    assert_eq!(crew["counts"]["workflows"], 1, "{listed}");
+    assert!(
+        crew["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|problem| problem["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("workflows/broken/workflow.toml"))),
+        "{listed}"
+    );
+}
+
+#[test]
+fn a_linked_install_warns_of_a_workflow_that_cannot_load() {
+    let env = Env::new();
+    let linked = source(&env);
+    write(
+        linked.join("crew/workflows/broken/workflow.toml"),
+        "this is not toml\n",
+    );
+    let output = env
+        .rimz()
+        .args(["packs", "install"])
+        .arg(&linked)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        printed.contains("workflows/broken/workflow.toml"),
+        "{printed}"
+    );
+    assert!(!printed.contains("this is not toml"), "{printed}");
+}
+
+#[test]
 fn a_root_pack_and_provider_packs_beneath_it_install_by_selector() {
     let fixture = Fixture::new();
     write(

@@ -183,10 +183,12 @@ impl PackInventory {
                         continue;
                     }
                     let problem = Problem {
-                        path: if item.kind == ItemType::Skills {
-                            item.path.join("SKILL.md")
-                        } else {
-                            item.path.clone()
+                        path: match (item.kind, &item.fate) {
+                            (ItemType::Skills, _) => item.path.join("SKILL.md"),
+                            (ItemType::Workflows, ItemFate::Failed { .. }) => {
+                                crate::disk::paths::workflow_spec_file(&item.path)
+                            }
+                            _ => item.path.clone(),
                         },
                         message: message.to_owned(),
                     };
