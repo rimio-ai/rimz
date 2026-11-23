@@ -150,7 +150,9 @@ async function eventually(check) {
 }
 async function payloads() {
   try {
-    return (await fs.readFile(capturePath, "utf8")).trim().split("\n").filter(Boolean).map(line => {
+    // A read can land mid-append and see a line cut at a page boundary: parse whole lines only.
+    const text = await fs.readFile(capturePath, "utf8");
+    return text.slice(0, text.lastIndexOf("\n") + 1).split("\n").filter(Boolean).map(line => {
       const record = JSON.parse(line);
       assert.equal(record.pid, String(process.ppid));
       return record.envelope;
