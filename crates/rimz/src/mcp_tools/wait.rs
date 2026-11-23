@@ -95,7 +95,11 @@ fn request(args: &WaitArgs) -> Result<WaitRequest, Failure> {
             request.pid = Some(pid);
         }
         WaitTrigger::When => request.when = vec![value],
-        WaitTrigger::In => request.in_after = Some(duration("in", &value)?),
+        WaitTrigger::In => {
+            let delay = crate::harness::schedule::parse_delay(&value)
+                .map_err(|err| Failure::new(format!("invalid in `{value}`: {err}")))?;
+            request.in_after = Some(delay);
+        }
         WaitTrigger::At => request.at = Some(value),
     }
     Ok(request)

@@ -1124,6 +1124,32 @@ impl TaskTiming {
     }
 }
 
+/// Why an `in` value cannot be a delay.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DelayRefusal {
+    Unreadable(String),
+    Zero,
+}
+
+impl std::fmt::Display for DelayRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreadable(reason) => f.write_str(reason),
+            Self::Zero => f.write_str("must be greater than zero"),
+        }
+    }
+}
+
+/// The delay an `in` value names, which a loop task and a wait read alike.
+pub fn parse_delay(raw: &str) -> Result<Duration, DelayRefusal> {
+    let delay = crate::utils::time::parse_compact_duration(raw)
+        .map_err(|err| DelayRefusal::Unreadable(err.to_string()))?;
+    if delay.is_zero() {
+        return Err(DelayRefusal::Zero);
+    }
+    Ok(delay)
+}
+
 /// The instant a one-shot `--in` fires: `delay` after `now`, rounded up to the next whole
 /// minute, so its `once at` label names the minute the scheduler fires it.
 pub fn delayed_instant(delay: Duration, now: Timestamp) -> anyhow::Result<Timestamp> {

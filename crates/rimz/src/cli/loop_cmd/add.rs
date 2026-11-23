@@ -14,7 +14,6 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
     validate_add_args(&args)?;
     let workspace = resolve_add_workspace(&args)?;
     let project_root = workspace.project_root.clone();
-    condition::validate(&args.when, &project_root)?;
     let catalog = TaskCatalog::load(Some(&project_root))?;
     let name = args.name.clone().unwrap_or_else(|| catalog.mint_name());
     let mut entry = build_task_entry(&args, &name, &workspace)?;
@@ -34,15 +33,23 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
     if let Some(login) = login.as_ref().filter(|_| window.account.is_some()) {
         login.preflight(&rimz::agents::ambient_env())?;
     }
-    let login_key = login.as_ref().map(rimz::agents::ProviderLogin::key);
-    entry.provider = window_condition_provider(
-        &args.when,
-        provider.as_deref(),
-        login_key.as_ref(),
-        &entry.resolved_root(),
-        &runtime,
-        Timestamp::now(),
-    )?;
+    if !args.when.is_empty() {
+        let scope = entry.run_dir();
+        let place = WhenPlace {
+            root: &project_root,
+            scope: (!entry.each_worktree).then_some(scope.as_path()),
+            sidebar_fresh: rimz::sidebar::fresh_sidebar_present,
+        };
+        let armed = read_when(&args.when, "--when", &place, || {
+            Ok(WindowAccount {
+                kind: provider,
+                login: login.as_ref().map(rimz::agents::ProviderLogin::key),
+                root: entry.resolved_root(),
+                runtime,
+            })
+        })?;
+        entry.provider = armed.provider;
+    }
     if entry.provider.is_some() {
         entry.account.clone_from(&window.account);
     }
@@ -50,7 +57,6 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
     let shape = schedule::TaskShape::compile(&name, &entry);
     let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
     let action = shape.action().map_err(Clone::clone)?;
-    crate::cli::wake_view::refuse_unreadable_forge_task(&entry)?;
     let project_pre_state = args
         .project
         .then(|| trust::status(&project_root))
@@ -521,10 +527,10 @@ fn resolve_add_timing(args: &AddArgs, name: &str) -> Result<AddTiming> {
         deadline: None,
     };
     if let Some(raw) = args.in_after.as_deref() {
-        let duration = parse_compact_duration(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
-        if duration.is_zero() {
-            bail!("--in must be greater than zero");
-        }
+        let duration = schedule::parse_delay(raw).map_err(|err| match err {
+            schedule::DelayRefusal::Zero => anyhow::anyhow!("--in {err}"),
+            schedule::DelayRefusal::Unreadable(_) => anyhow::anyhow!("{err}"),
+        })?;
         timing.fire_at = Some(schedule::delayed_instant(duration, now.timestamp())?);
     } else if let Some(at) = args.at.as_deref() {
         timing.fire_at = Some(schedule::resolve_once_at(name, at, &now)?);

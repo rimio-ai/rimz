@@ -33,7 +33,7 @@ use rimz::harness::schedule::run_log::{
     RunStage, RunTransition,
 };
 use rimz::harness::schedule::shell_task::SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL;
-use rimz::harness::schedule::window::window_condition_provider;
+use rimz::harness::schedule::wait::{WhenPlace, WindowAccount, read_when};
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
     arming::{self, ArmState, Arming, DisabledReason},
