@@ -315,7 +315,8 @@ fn receive_descriptors() -> Result<(u8, Vec<std::os::fd::OwnedFd>)> {
 /// spawned under an equal child environment, cwd, and cwd directory, or to a new one. Idle
 /// children wait in a pool of at most [`apply_pool_cap`], which closes the child unused longest
 /// to make room, and each child applies up to [`APPLY_RUN_CAP`] frames. Frames are applied one
-/// at a time, a recovery runs with the pool empty, and no child outlives the applier.
+/// at a time, a recovery runs with the pool empty, a timed-out apply closes the pool, and no
+/// child outlives the applier.
 #[derive(Default)]
 struct RunApplier {
     /// The idle children, the one unused longest first.
@@ -387,6 +388,7 @@ impl hook_drain::FrameApplier for RunApplier {
             Exchange::TimedOut => {
                 let pid = child.process.id();
                 child.kill();
+                close_children(std::mem::take(&mut self.pool));
                 Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!("hook apply child {pid} timed out"),
