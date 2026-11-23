@@ -2937,6 +2937,48 @@ fn flip_compaction_holds_through_a_turn_that_outlives_the_cache() {
     );
 }
 
+/// A member at rest over its limit whose last request outlived its five-minute cache write has
+/// the queued compaction withdrawn by the sweep, never typed onto the cold cache.
+#[test]
+fn resting_flip_compaction_is_withdrawn_once_the_cache_goes_cold() {
+    let fixture = Fixture::new();
+    fixture.running("coder", Some("terminal_3"));
+    fixture.running("reviewer", None);
+    fixture.live_panes(&["terminal_3"]);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    fixture.context_reading(
+        "coder",
+        150_000,
+        Some(rimz::agents::context::CacheWriteRetention::FiveMinutes),
+    );
+    let command = fixture.queued_flip_compaction();
+    // A plain rest, not a park: the turn's last request closed ten minutes ago.
+    let ended = jiff::Timestamp::now() - Duration::from_secs(600);
+    fixture.end_turn_without_boundary_at("coder", ended);
+    let row = fixture.row("coder");
+    assert!(!row.holds_open_turn(), "{row:?}");
+    assert_eq!(row.last_request_at(), Some(ended));
+    fixture.sweep();
+    assert_eq!(
+        fixture.message_status(&command.message_id),
+        MessageStatus::Canceled
+    );
+    let history = fixture.env.store().list_message_history().unwrap();
+    let withdrawn = history
+        .iter()
+        .find(|message| message.message_id == command.message_id)
+        .unwrap();
+    assert_eq!(
+        withdrawn.last_error.as_deref(),
+        Some("agent's prompt cache went cold before the compaction was typed")
+    );
+    let lines = crate::common::trace_lines(&fixture.trace);
+    assert!(
+        !lines.iter().any(|line| line.ends_with("\t/compact ")),
+        "trace={lines:?}"
+    );
+}
+
 /// The reading is judged at the turn end: a mid-turn drop under the limit (an auto-compaction
 /// the turn then outgrew) leaves the command queued, and it is typed once the turn ends over it.
 #[test]
