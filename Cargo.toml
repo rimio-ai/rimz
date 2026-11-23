@@ -107,7 +107,7 @@ anyhow = "1"
 
 # Identifiers and time
 uuid = { version = "1", features = ["v7", "serde"] }
-jiff = { version = "0.2", features = ["serde"] }
+jiff = { version = "1.0", features = ["serde"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env", "unstable-ext", "wrap_help"] }
