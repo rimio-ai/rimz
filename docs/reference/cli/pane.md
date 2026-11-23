@@ -141,8 +141,9 @@ Key names are case-insensitive, and `_`, `+`, or a space may stand in for `-`:
 | `home`, `end` | |
 | `page-up` | `pgup` |
 | `page-down` | `pgdn` |
-| `ctrl-a`, `ctrl-e`, `ctrl-l` | `control-a`, `c-a` (and likewise for `e` and `l`) |
+| `ctrl-a`, `ctrl-e`, `ctrl-l`, `ctrl-s`, `ctrl-x` | `control-a`, `c-a` (and likewise for `e`, `l`, `s`, and `x`) |
 | `alt-m` | `meta-m`, `m-m` |
+| `alt-enter` | `meta-enter`, `m-enter` |
 
 ## Focus a pane
 

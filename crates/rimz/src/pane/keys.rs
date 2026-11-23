@@ -81,6 +81,9 @@ named_keys! {
     CtrlE: "ctrl-e" | "control-e" | "c-e" => "C-e", b"\x05";
     CtrlL: "ctrl-l" | "control-l" | "c-l" => "C-l", b"\x0c";
     AltM: "alt-m" | "meta-m" | "m-m" => "M-m", b"\x1bm";
+    CtrlX: "ctrl-x" | "control-x" | "c-x" => "C-x", b"\x18";
+    CtrlS: "ctrl-s" | "control-s" | "c-s" => "C-s", b"\x13";
+    AltEnter: "alt-enter" | "meta-enter" | "m-enter" => "M-Enter", b"\x1b[13;3u";
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -119,6 +122,14 @@ mod tests {
             ("ctrl-e control-e c-e", "C-e", &b"\x05"[..]),
             ("ctrl-l control-l c-l", "C-l", &b"\x0c"[..]),
             ("alt-m meta-m m-m", "M-m", &b"\x1bm"[..]),
+            ("ctrl-x control-x c-x", "C-x", &b"\x18"[..]),
+            ("ctrl-s control-s c-s", "C-s", &b"\x13"[..]),
+            // CSI-u, not `ESC CR`: Pi under Zellij reads `ESC CR` as a newline.
+            (
+                "alt-enter meta-enter m-enter",
+                "M-Enter",
+                &b"\x1b[13;3u"[..],
+            ),
         ] {
             for name in names.split_whitespace() {
                 let key = name.parse::<NamedKey>();
@@ -138,7 +149,7 @@ mod tests {
             assert!(error.contains(name), "{name}: {error}");
             assert!(!key.tmux_name().is_empty() && !key.write_bytes().is_empty());
         }
-        for name in "enter escape tab shift-tab backspace up down left right ctrl-c ctrl-d ctrl-u space delete home end page-up page-down ctrl-a ctrl-e ctrl-l alt-m".split_whitespace() {
+        for name in "enter escape tab shift-tab backspace up down left right ctrl-c ctrl-d ctrl-u space delete home end page-up page-down ctrl-a ctrl-e ctrl-l alt-m ctrl-x ctrl-s alt-enter".split_whitespace() {
             assert!(error.contains(name), "{name}: {error}");
         }
     }
