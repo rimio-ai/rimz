@@ -613,8 +613,19 @@ pub struct Wait {
 }
 
 impl Wait {
+    /// The outcomes the engine waits on by itself, before any check has answered.
+    pub(crate) const ENGINE_OUTCOMES: [&str; 8] = [
+        "budget", "capacity", "occupied", "retry", "runs", "takeover", "trust", "window",
+    ];
+
     pub(crate) fn is_hold(&self) -> bool {
         self.outcome == "hold"
+    }
+
+    /// Whether a check's own answer holds this wait. A check outcome that shares an engine word
+    /// reads as the engine's.
+    pub(crate) fn answered_by_check(&self) -> bool {
+        !Self::ENGINE_OUTCOMES.contains(&self.outcome.as_str())
     }
 }
 

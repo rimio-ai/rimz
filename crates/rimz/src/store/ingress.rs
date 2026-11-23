@@ -258,6 +258,21 @@ fn read_valid_cursor(paths: &StatePaths) -> Result<Option<HookDrainCursor>, Even
     Ok(Some(cursor))
 }
 
+/// The frames past the applied cursor, read with no lock for a reader in another room's process.
+/// An append in flight is missed and a truncation racing the read can fail it, so a caller reads
+/// an error as frames pending.
+pub fn peek_pending(paths: &StatePaths) -> Result<Vec<HookIngress>, EventLogErr> {
+    let start = read_cursor(paths)?.applied;
+    let mut frames = Vec::new();
+    event_log::visit_records_through_offset(
+        &paths.hook_ingress_log,
+        start,
+        log_len(paths)?,
+        |frame, _| frames.push(frame),
+    )?;
+    Ok(frames)
+}
+
 /// When the oldest unapplied frame was fed, beside the cursor's frame count.
 /// Takes no lock and reads that one frame whatever the backlog. A frame that
 /// cannot be dated (torn, corrupt, or behind a cursor [`read_cursor`] would

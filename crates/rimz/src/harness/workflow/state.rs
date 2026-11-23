@@ -602,6 +602,7 @@ impl Transition<'_> {
     }
 
     pub(super) fn step_wait(&mut self, outcome: &str, detail: Option<String>) {
+        debug_assert!(Wait::ENGINE_OUTCOMES.contains(&outcome), "{outcome}");
         if self
             .record
             .wait

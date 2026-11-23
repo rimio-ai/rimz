@@ -162,7 +162,7 @@ fn limits_count_one_start_per_live_run_attempt_across_rooms() {
         (workflow.kind, workflow.text.as_str()),
         (
             HoldKind::WorkflowLimit,
-            "workflow review: 4 of 4 agents open (@first, @second, +2)"
+            "workflow review: 4 of 4 agents working (@first, @second, +2)"
         )
     );
     let step_request = |step: &str, cap: &str| {
@@ -185,7 +185,7 @@ fn limits_count_one_start_per_live_run_attempt_across_rooms() {
         (step.kind, step.text.as_str()),
         (
             HoldKind::StepLimit,
-            "step build: 3 of 3 agents open (@first, @parked, +1)"
+            "step build: 3 of 3 agents working (@first, @parked, +1)"
         )
     );
     assert_eq!(
@@ -198,7 +198,7 @@ fn limits_count_one_start_per_live_run_attempt_across_rooms() {
             .unwrap()
         )
         .text,
-        "step fix: 1 of 1 agents open (@second)"
+        "step fix: 1 of 1 agents working (@second)"
     );
     drop(turn(
         try_admit_in(
@@ -226,25 +226,42 @@ fn a_workflow_limit_cannot_loosen_the_machine_automation_cap() {
 }
 
 #[test]
-fn limits_read_no_agent_snapshot() {
+fn limits_skip_a_run_whose_session_waits_for_the_user() {
     let fake = FakeHost::new();
-    let record = attempt("/repo", "build", StepLifecycle::Turn);
-    let mut companion = stamped(&record, "build");
-    companion.agent_id = "companion".into();
-    fake.set_agents(
-        &WorkspaceId::from_project_root(Path::new("/elsewhere")),
-        vec![stamped(&record, "build"), companion],
+    let resting = named(
+        attempt("/repo", "build", StepLifecycle::Session),
+        Some("@resting"),
     );
-    fake.rooms.lock().unwrap().insert(
-        WorkspaceId::from_project_root(&record.project_root).to_string(),
-        Err("torn log".into()),
+    let resting_id = resting.id.clone();
+    install(&fake, resting);
+    install(
+        &fake,
+        named(
+            attempt("/repo", "build", StepLifecycle::Session),
+            Some("@working"),
+        ),
     );
-    install(&fake, record);
-    let full = limited(Some("max-parallel=1"), Some("max-parallel=1"));
-    assert_eq!(
-        held(try_admit_in(&fake.host(), &config(""), &full).unwrap()).text,
-        "workflow review: 1 of 1 agents open (@leader)"
-    );
+    fake.waiting_runs
+        .lock()
+        .unwrap()
+        .insert(resting_id.clone(), Ok(true));
+    for (workflow, step, text) in [
+        (
+            Some("max-parallel=1"),
+            None,
+            "workflow review: 1 of 1 agents working (@working)",
+        ),
+        (
+            None,
+            Some("max-parallel=1"),
+            "step build: 1 of 1 agents working (@working)",
+        ),
+    ] {
+        assert_eq!(
+            held(try_admit_in(&fake.host(), &config(""), &limited(workflow, step)).unwrap()).text,
+            text
+        );
+    }
     drop(turn(
         try_admit_in(
             &fake.host(),
@@ -254,6 +271,22 @@ fn limits_read_no_agent_snapshot() {
         .unwrap(),
     ));
     assert_eq!(fake.agent_reads.load(Ordering::SeqCst), 0);
+    fake.waiting_runs
+        .lock()
+        .unwrap()
+        .insert(resting_id, Err("torn log".into()));
+    let hold = held(
+        try_admit_in(
+            &fake.host(),
+            &config(""),
+            &limited(Some("max-parallel=2"), None),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        (hold.kind, hold.text.as_str()),
+        (HoldKind::Store, "cannot count open agents: torn log")
+    );
 }
 
 #[test]
@@ -280,7 +313,7 @@ fn limits_count_a_wide_start_as_one_at_both_scopes() {
         };
         assert_eq!(
             held(try_admit_in(&fake.host(), &config(""), &limit("max-parallel=1")).unwrap()).text,
-            format!("{scope}: 1 of 1 agents open (@leader)")
+            format!("{scope}: 1 of 1 agents working (@leader)")
         );
     }
 }
@@ -403,7 +436,7 @@ fn limits_reserve_the_last_slot_under_the_shared_queue_lock() {
         (hold.kind, hold.text.as_str()),
         (
             HoldKind::WorkflowLimit,
-            "workflow review: 2 of 2 agents open (@existing, +1)"
+            "workflow review: 2 of 2 agents working (@existing, +1)"
         )
     );
 }
@@ -451,7 +484,7 @@ fn limits_scope_inflight_turns_and_keep_the_machine_release_rule() {
         (hold.kind, hold.text.as_str()),
         (
             HoldKind::WorkflowLimit,
-            "workflow review: 1 of 1 agents open (@first)"
+            "workflow review: 1 of 1 agents working (@first)"
         )
     );
     assert_eq!(
@@ -484,7 +517,7 @@ fn limits_keep_fifo_standing_while_a_machine_turn_is_in_flight() {
         (hold.kind, hold.text.as_str()),
         (
             HoldKind::WorkflowLimit,
-            "workflow review: 1 of 1 agents open (@leader)"
+            "workflow review: 1 of 1 agents working (@leader)"
         )
     );
     let mut waiter = attempt("/earlier", "build", StepLifecycle::Turn);
@@ -714,7 +747,7 @@ fn skipped_starts_launch_past_every_hold_and_carry_each_one() {
         [
             (
                 "full",
-                Some("step build: 1 of 1 agents open (@leader)".into()),
+                Some("step build: 1 of 1 agents working (@leader)".into()),
                 1
             ),
             ("clear", None, 1),
@@ -755,7 +788,7 @@ fn skipped_starts_still_claim_and_stamp_the_workflow_stagger() {
     );
     assert_eq!(
         first.started_past_limit(),
-        Some("workflow review: 1 of 1 agents open (@leader)")
+        Some("workflow review: 1 of 1 agents working (@leader)")
     );
     first.report_launch(&workspace(), &"skipped".into());
     assert!(fake.start_stamps().is_file());

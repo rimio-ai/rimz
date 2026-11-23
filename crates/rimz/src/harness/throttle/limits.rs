@@ -1,4 +1,5 @@
-//! Workflow/step start counts from live run records, and FIFO among their limit waiters.
+//! Workflow/step start counts from live run records less the sessions that wait for the user,
+//! and FIFO among their limit waiters.
 //! The home-wide launch stamps track machine, workflow, and step stagger.
 
 use std::collections::BTreeMap;
@@ -39,9 +40,16 @@ struct Census {
     earlier_step: usize,
 }
 
-/// One start per non-terminal run of the workflow whose record holds an agent session,
-/// attributed to the session's own step; the starting run is the incoming one.
+/// One start per non-terminal run of the workflow whose record holds an agent session that is
+/// working, attributed to the session's own step; the starting run is the incoming one. Only a
+/// run a configured count would include pays for the read of whether it waits for the user.
 fn census(host: &dyn Host, start: &WorkflowStart) -> Result<Census, String> {
+    let capped = |limit: &Option<StartLimit>| {
+        limit
+            .as_ref()
+            .is_some_and(|limit| limit.max_parallel.is_some())
+    };
+    let (workflow_capped, step_capped) = (capped(&start.workflow_limit), capped(&start.step_limit));
     let mut census = Census::default();
     for workspace in host.workspaces()? {
         for record in host
@@ -65,6 +73,11 @@ fn census(host: &dyn Host, start: &WorkflowStart) -> Result<Census, String> {
             let Some(session) = record.session_attempt().filter(|_| record.id != start.run) else {
                 continue;
             };
+            if !(workflow_capped || (step_capped && session.node == start.step))
+                || host.waits_for_user(&workspace, record)?
+            {
+                continue;
+            }
             let handle = session.run.as_ref().map(|run| run.handle.as_str());
             census.workflow += 1;
             name_counted(&mut census.workflow_names, handle);

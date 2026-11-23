@@ -695,20 +695,28 @@ Admission first refuses an automated group larger than a machine cap, naming the
 
 Every limit hold, the in-flight one included, is reported under its limit kind before any machine hold, so a waiter keeps its FIFO standing on a pass where the machine also holds it. Each machine cap requires the whole incoming agent group to fit, and other admitted-but-unlaunched starts reserve their agent counts under the same lock. No workflow or step limit bypasses a machine cap.
 
-A same-workflow admitted turn keeps limited starts serialized until its launch report. `engine::prepare` publishes the attempt under the workspace lock before the launch reports, so from the report on the run record carries the count, and the next `sweep` drops the launched ticket's limit scope without reading any agent row. Between admission and publication the admitted ticket holds, and from publication the record counts, so no instant leaves an admitted start counted by neither.
+A same-workflow admitted turn keeps limited starts serialized until its launch report. `engine::prepare` publishes the attempt under the workspace lock before the launch reports, so from the report on the run record carries the count, and the next `sweep` drops the launched ticket's limit scope without reading any agent row. Between admission and publication the admitted ticket holds, and from publication the record counts, since a published attempt with no readable row or no turn closed since it started counts as working, so no instant leaves an admitted start counted by neither.
 
-FIFO reads Active same-workflow capacity waiters ordered by `(Wait.first, run id)`: `workflow_limit` holds every step, and `step_limit` only its matching step. A free slot can stay idle until the earliest waiter's next minute tick. Hold text prefixes `workflow <name>: ` or `step <name>: ` to `N of M agents open (@a, @b, +K)`, `next start in <duration>`, `N earlier start(s) waiting`, or `N start(s) launching` while a same-workflow launch is not yet counted (named for the workflow limit when one is set, else the step). Machine cap reasons name multi-agent demand separately (`this start opens 2`). Workflow and step reasons name each counted run by its recorded leader handle (`AttemptRun::handle`), at most two and then `+K`, and an attempt without a recorded leader counts only in `+K`.
+FIFO reads Active same-workflow capacity waiters ordered by `(Wait.first, run id)`: `workflow_limit` holds every step, and `step_limit` only its matching step. A free slot can stay idle until the earliest waiter's next minute tick. Hold text prefixes `workflow <name>: ` or `step <name>: ` to `N of M agents working (@a, @b, +K)`, `next start in <duration>`, `N earlier start(s) waiting`, or `N start(s) launching` while a same-workflow launch is not yet counted (named for the workflow limit when one is set, else the step). Machine cap reasons name multi-agent demand separately (`this start opens 2`). Workflow and step reasons name each counted run by its recorded leader handle (`AttemptRun::handle`), at most two and then `+K`, and an attempt without a recorded leader counts only in `+K`.
 
 #### The run census
 
-The limit census reads run records only, never an agent snapshot: `crates/rimz/src/harness/throttle.rs::SystemHost::workflows` loads every run record of every known room and keeps the nonterminal ones.
+The limit census starts from run records: `crates/rimz/src/harness/throttle.rs::SystemHost::workflows` loads every run record of every known room and keeps the nonterminal ones. A run a configured count would include then asks `Host::waits_for_user`, which `SystemHost` answers through `crates/rimz/src/harness/workflow/observe.rs::session_waits_for_user` from the room's own store.
 
-- Workflow scope counts one per run of that workflow name whose record holds an agent session (`RunRecord::session_attempt`). A session held at its rest check counts, and a judge attempt does not.
+- Workflow scope counts one per run of that workflow name whose record holds an agent session (`RunRecord::session_attempt`) that does not wait for the user. A judge attempt does not count.
 - Step scope also matches the session's own node (`LiveAttempt::node`), not `RunRecord::node`, which names the check while a session is held.
-- A published attempt counts whether or not `LiveAttempt::run` is written yet, and a dead leader's attempt counts until an advance settles it. Both over-count on the safe side until the next advance.
-- Parked and waiting runs count while their record holds the session.
 - The asking run's own record is skipped by run id, and the start it asks for adds one.
-- Companions, RimZ-launched children and peers, and kept agents that left their run do not count, since no record attempt names them.
+- Companions, RimZ-launched children and peers, and kept agents that left their run add nothing, since no record attempt names them.
+
+A session waits for the user when the rest check's reading holds (`observe` with `Observation::Census`, and the shared `Observed::resting_turn` that `engine/rest.rs::eligible` also takes) with three differences, each stated in `session_rests`:
+
+- An interrupted turn rests, since that session waits for the user; a failed turn, a provider limit, a budget park, and a blocking ask (the leader's or a launched descendant's) keep the slot.
+- Every live companion the attempt pins must rest with no displayed error, no debt, and no blocking ask. A companion that never opened a turn rests.
+- Pending ingress of any agent of the workflow run defers rest, read with no lock by `store::ingress::peek_pending`, and an ingress read that fails counts as pending.
+
+The record must also allow rest (`resting_attempt`): a session lifecycle, no ending, no staged restart, no push-back prepared and not yet queued, and, for a session held at its rest check, no live check attempt, no saved verdict, and a wait a check answered (`Wait::answered_by_check`, against the engine's own wait outcomes in `Wait::ENGINE_OUTCOMES`). The leader must have a row, not be `Dead` by `store::runtime::agent_liveness`, and have closed a turn no earlier than `LiveAttempt::started_at`, since a resumed or restarted session carries its old closed turn on its row. A record that names no readable supervised run counts. The cheap row terms run before the budget projection, the ask reads, the debt reads, and the ingress read, since the census runs under the queue lock for every waiter.
+
+Every read takes no lock, runs no migration, and writes nothing, so the census can read another room from any process: the cached snapshot, the run and message records, the task catalog, the open ask's transcript buckets, and the budget caches. The reading can be stale by the time a start launches. A session the user answers counts again only once its prompt hook reaches ingress, and a start admitted before then goes past the limit, which a limit accepts as it is not a hard ceiling.
 
 An unreadable required room or stagger record holds a scheduled start as `store`, never as a short count or an absent stamp.
 

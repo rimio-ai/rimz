@@ -27,6 +27,7 @@ pub(in crate::harness) struct FakeHost {
     workflows: Mutex<Vec<crate::store::workflow::RunRecord>>,
     run_errors: Mutex<BTreeMap<String, String>>,
     agent_reads: AtomicUsize,
+    waiting_runs: Mutex<BTreeMap<crate::ids::WorkflowRunId, Result<bool, String>>>,
     on_sleep: Mutex<Option<SleepHook>>,
     on_check: Mutex<Option<SleepHook>>,
     check_answer: Mutex<Result<(Option<i32>, bool), String>>,
@@ -56,6 +57,7 @@ impl FakeHost {
             workflows: Mutex::new(Vec::new()),
             run_errors: Mutex::new(BTreeMap::new()),
             agent_reads: AtomicUsize::new(0),
+            waiting_runs: Mutex::new(BTreeMap::new()),
             on_sleep: Mutex::new(None),
             on_check: Mutex::new(None),
             check_answer: Mutex::new(Ok((Some(0), false))),
@@ -241,6 +243,19 @@ impl Host for FakeHost {
             .filter(|run| &WorkspaceId::from_project_root(&run.project_root) == workspace)
             .cloned()
             .collect())
+    }
+
+    fn waits_for_user(
+        &self,
+        _workspace: &WorkspaceId,
+        record: &crate::store::workflow::RunRecord,
+    ) -> Result<bool, String> {
+        self.waiting_runs
+            .lock()
+            .unwrap()
+            .get(&record.id)
+            .cloned()
+            .unwrap_or(Ok(false))
     }
 }
 

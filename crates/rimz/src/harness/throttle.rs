@@ -156,6 +156,13 @@ pub(super) trait Host: Send + Sync {
         &self,
         workspace: &WorkspaceId,
     ) -> Result<Vec<crate::store::workflow::RunRecord>, String>;
+    /// Whether the session step `record` holds, in `workspace`, waits for the user. Takes no
+    /// lock and writes nothing; `Err` is a room that cannot be read.
+    fn waits_for_user(
+        &self,
+        workspace: &WorkspaceId,
+        record: &crate::store::workflow::RunRecord,
+    ) -> Result<bool, String>;
 }
 
 /// The real machine: the home's queue, `/proc`, and the known workspaces.
@@ -269,19 +276,13 @@ impl Host for SystemHost {
     }
 
     fn agents(&self, workspace: &WorkspaceId) -> Result<Vec<AgentState>, String> {
-        let unreadable =
-            |err: &dyn fmt::Display| format!("workspace {workspace} unreadable: {err}");
-        let state = StatePaths::for_workspace(workspace.clone()).map_err(|err| unreadable(&err))?;
-        if !state.root.is_dir() {
+        let Some(store) = open_room(workspace)? else {
             return Ok(Vec::new());
-        }
-        let runtime = RuntimePaths::for_state(&state).map_err(|err| unreadable(&err))?;
-        let store = crate::store::Store::open_existing(state, runtime)
-            .ok_or_else(|| unreadable(&"unsupported state layout"))?;
+        };
         Ok(std::sync::Arc::unwrap_or_clone(
             store
                 .snapshot_cached()
-                .map_err(|err| unreadable(&format!("{err:#}")))?
+                .map_err(|err| format!("workspace {workspace} unreadable: {err:#}"))?
                 .agents,
         ))
     }
@@ -306,6 +307,31 @@ impl Host for SystemHost {
         }
         Ok(runs)
     }
+
+    fn waits_for_user(
+        &self,
+        workspace: &WorkspaceId,
+        record: &crate::store::workflow::RunRecord,
+    ) -> Result<bool, String> {
+        let Some(store) = open_room(workspace)? else {
+            return Ok(false);
+        };
+        crate::harness::workflow::session_waits_for_user(&store, record)
+            .map_err(|err| format!("workspace {workspace} unreadable: {err}"))
+    }
+}
+
+/// The room's store for reading, `None` for a room with no state directory.
+fn open_room(workspace: &WorkspaceId) -> Result<Option<crate::store::Store>, String> {
+    let unreadable = |err: &dyn fmt::Display| format!("workspace {workspace} unreadable: {err}");
+    let state = StatePaths::for_workspace(workspace.clone()).map_err(|err| unreadable(&err))?;
+    if !state.root.is_dir() {
+        return Ok(None);
+    }
+    let runtime = RuntimePaths::for_state(&state).map_err(|err| unreadable(&err))?;
+    crate::store::Store::open_existing(state, runtime)
+        .ok_or_else(|| unreadable(&"unsupported state layout"))
+        .map(Some)
 }
 
 /// The run asking for a turn.
@@ -1188,7 +1214,12 @@ fn cap_hold(
     } else {
         format!(" ({})", names.join(", "))
     };
-    let mut text = format!("{prefix}{count} of {cap} {automated}agents open{suffix}");
+    let state = if matches!(kind, HoldKind::WorkflowLimit | HoldKind::StepLimit) {
+        "working"
+    } else {
+        "open"
+    };
+    let mut text = format!("{prefix}{count} of {cap} {automated}agents {state}{suffix}");
     if in_flight > 0 {
         text.push_str(&format!(", {in_flight} more starting"));
     }

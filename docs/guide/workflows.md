@@ -578,7 +578,7 @@ max-parallel = 3
 stagger = "10m"
 ```
 
-`[workflow.limit]` covers the open agent steps of every run of this workflow, across rooms. A step's `admission` limit covers that step alone. `max-parallel` caps how many such steps are open at once, and `stagger` sets the least time between two launches. A step counts from the moment its attempt starts until the attempt ends, whether its agent is working, idle, or waiting at a rest check. Its subagents and judges count for nothing. Each run obeys the limits its definition sets now, so an edit reaches waiting runs at their next retry. The [limits reference](../reference/cli/workflow.md#limits-and-capacity) gives the counting rules and the hold reasons.
+`[workflow.limit]` covers the working agent steps of every run of this workflow, across rooms. A step's `admission` limit covers that step alone. `max-parallel` caps how many such steps work at once, and `stagger` sets the least time between two launches. A step counts from the moment its attempt starts while its agents work, and stops counting once its session has finished a turn and waits for you, so sessions left open for your answer do not hold up later starts. A session you answer goes back to work even past the limit: the limit only holds new starts. Its subagents and judges count for nothing. Each run obeys the limits its definition sets now, so an edit reaches waiting runs at their next retry. The [limits reference](../reference/cli/workflow.md#limits-and-capacity) gives the counting rules and the hold reasons.
 
 ## Stop a run and clean up
 

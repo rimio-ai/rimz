@@ -41,6 +41,7 @@ pub use inspect::{
     Hop, HopKind, evaluation_target, hold_until, hops, next_bound, reached, repeats_evaluation,
     routing_hop, timeout_at,
 };
+pub(in crate::harness) use observe::session_waits_for_user;
 pub use observe::{Cohort, detach_cohort, leader, observe, orphan, stop_cohort};
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub(crate) use spec::parse;
@@ -188,6 +189,8 @@ pub struct Pushed {
 pub enum Observation {
     Attempt,
     LeaderTurn,
+    /// The limit census's leader turn, read with no lock from any room's process.
+    Census,
 }
 
 pub enum Occupancy {
@@ -250,6 +253,21 @@ pub struct Observed {
     pub children: Children,
     pub cost_usd: Option<f64>,
     pub turn: Option<LeaderTurn>,
+}
+
+impl Observed {
+    /// The leader's closed turn when it rests with no blocking ask and no stop: the one reading
+    /// of rest. The rest check takes it as written; the limit census lets a turn the user
+    /// interrupted through, since that session waits for them.
+    fn resting_turn(&self, interrupt_rests: bool) -> Option<&LeaderTurn> {
+        let stop_clear = self
+            .stopped
+            .as_ref()
+            .is_none_or(|stopped| interrupt_rests && stopped.kind == StopKind::Interrupt);
+        self.turn
+            .as_ref()
+            .filter(|turn| turn.at_rest && self.ask.is_none() && stop_clear)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -334,6 +352,53 @@ fn leader_turn(
     session: &RunId,
     woken_by: Option<&EventId>,
 ) -> Result<Option<LeaderTurn>, StoreErr> {
+    closed_turn(store, leader, session, || {
+        let cursor = crate::store::ingress::read_cursor(store.paths())?;
+        let (pending, _) = crate::store::ingress::read_from_offset(store.paths(), cursor.applied)?;
+        Ok(!pending.iter().any(|(frame, _)| {
+            Some(&frame.event_id) != woken_by
+                && frame
+                    .env
+                    .get("RIMZ_WORKFLOW_RUN")
+                    .is_some_and(|id| id == run.as_str())
+                && frame
+                    .env
+                    .get("RIMZ_RUN_ID")
+                    .is_some_and(|id| id == session.as_str())
+        }))
+    })
+}
+
+/// [`leader_turn`] for the limit census, which holds no workspace lock: a pending frame of any
+/// agent of this workflow run defers rest, and ingress that cannot be read counts as pending.
+fn census_turn(
+    store: &Store,
+    leader: &AgentState,
+    run: &WorkflowRunId,
+    session: &RunId,
+) -> Result<Option<LeaderTurn>, StoreErr> {
+    closed_turn(store, leader, session, || {
+        Ok(
+            crate::store::ingress::peek_pending(store.paths()).is_ok_and(|pending| {
+                !pending.iter().any(|frame| {
+                    frame
+                        .env
+                        .get("RIMZ_WORKFLOW_RUN")
+                        .is_some_and(|id| id == run.as_str())
+                })
+            }),
+        )
+    })
+}
+
+/// The leader's closed turn, at rest when its row rests, it owes nothing, and `ingress_clear`
+/// answers true. The ingress read comes last, as the costliest.
+fn closed_turn(
+    store: &Store,
+    leader: &AgentState,
+    session: &RunId,
+    ingress_clear: impl FnOnce() -> Result<bool, StoreErr>,
+) -> Result<Option<LeaderTurn>, StoreErr> {
     let Some((started_at, ended_at)) = leader.turn_started_at.zip(leader.turn_ended_at) else {
         return Ok(None);
     };
@@ -361,19 +426,7 @@ fn leader_turn(
     if super::idle_stop::debt(store, &messages, &other_runs, leader)?.is_some() {
         return Ok(Some(turn));
     }
-    let cursor = crate::store::ingress::read_cursor(store.paths())?;
-    let (pending, _) = crate::store::ingress::read_from_offset(store.paths(), cursor.applied)?;
-    turn.at_rest = !pending.iter().any(|(frame, _)| {
-        Some(&frame.event_id) != woken_by
-            && frame
-                .env
-                .get("RIMZ_WORKFLOW_RUN")
-                .is_some_and(|id| id == run.as_str())
-            && frame
-                .env
-                .get("RIMZ_RUN_ID")
-                .is_some_and(|id| id == session.as_str())
-    });
+    turn.at_rest = ingress_clear()?;
     Ok(Some(turn))
 }
 
