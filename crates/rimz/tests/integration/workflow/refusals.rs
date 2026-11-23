@@ -34,6 +34,21 @@ fn validate_refuses_an_unknown_field_at_its_dotted_path_in_text_and_json() {
 }
 
 #[test]
+fn validate_prints_a_toml_excerpt_with_its_caret_on_a_line_of_its_own() {
+    let (env, _) = fixture("[workflow\nscope = 'worktree'\n", PENDING);
+    let output = command(&env, &["workflow", "validate", "review"]);
+    assert!(!output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with('|') && line.trim_end().ends_with('^')),
+        "{stdout}"
+    );
+    assert!(!stdout.contains(r"\n"), "{stdout}");
+}
+
+#[test]
 fn run_refuses_an_unknown_field_and_starts_no_run() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}future=true\n"), PENDING);
     let output = command(&env, &["workflow", "run", "review"]);

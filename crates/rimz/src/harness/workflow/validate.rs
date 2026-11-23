@@ -39,7 +39,10 @@ pub fn validate(
     let Some(name) = super::directory_name(dir) else {
         report.error(
             "workflow",
-            format!("{}: directory needs a workflow name", dir.display()),
+            format!(
+                "{}: directory needs a workflow name",
+                crate::packs::one_line(&dir.display().to_string())
+            ),
         );
         return report;
     };
@@ -52,7 +55,7 @@ pub fn validate(
                 | super::SpecErr::DuplicateNode { path, .. } => path.as_str(),
                 _ => "workflow",
             };
-            report.error(path, format!("{name}: {err}"));
+            report.error(path, format!("{}: {err}", crate::packs::one_line(&name)));
             return report;
         }
     };
@@ -89,17 +92,16 @@ fn started_workflows(
         for (index, entry) in step.start.iter().enumerate() {
             let path = format!("runs.{node}.start.{index}.workflow");
             let workflow = &entry.workflow;
+            let shown = crate::packs::one_line(workflow);
             match load(workflow) {
                 None => report.warnings.push(issue(
                     &path,
-                    format!(
-                        "{workflow} is not a deployed workflow; the step fails when it starts it"
-                    ),
+                    format!("{shown} is not a deployed workflow; the step fails when it starts it"),
                 )),
                 Some(started) if started.authored().workflow.scope == ScopeKind::Project => {
                     report.warnings.push(issue(
                         &path,
-                        format!("{workflow} has scope = \"project\" and gets no worktree of its own; the step fails when it starts it"),
+                        format!("{shown} has scope = \"project\" and gets no worktree of its own; the step fails when it starts it"),
                     ));
                 }
                 Some(_) => {}
@@ -119,7 +121,7 @@ fn started_workflows(
         if workflow == name || leads_here() {
             report.warnings.push(issue(
                 "workflow",
-                format!("{name} starts itself again through runs steps; each start runs one level deeper until [agents] max-workflow-depth refuses it"),
+                format!("{} starts itself again through runs steps; each start runs one level deeper until [agents] max-workflow-depth refuses it", crate::packs::one_line(name)),
             ));
             break;
         }
@@ -199,7 +201,7 @@ pub(super) fn validate_spec(
 ) -> Validation {
     let mut report = Validation::default();
     if let Err(err) = crate::harness::name::validate_name(name) {
-        report.error("workflow", err);
+        report.error("workflow", crate::packs::one_line(&err.to_string()));
     }
     let header = &spec.authored().workflow;
     report.summary("workflow.summary", header.summary.as_deref());
@@ -564,7 +566,7 @@ pub(super) fn validate_spec(
     }
     returning_failures(&mut report, spec);
     for issue in report.errors.iter_mut().chain(&mut report.warnings) {
-        issue.message = format!("{name}: {}", issue.message);
+        issue.message = format!("{}: {}", crate::packs::one_line(name), issue.message);
     }
     let walk = spec.walk();
     let order = walk

@@ -59,6 +59,43 @@ impl<'de> Deserialize<'de> for PackName {
     }
 }
 
+/// Renders pack-controlled `text` for one terminal line: every control character, the line and
+/// paragraph separators, and the bidirectional controls show as their `char::escape_default`
+/// spelling (`\n`, `\u{1b}`), so a name cannot add, rewrite, or reorder a line. Every other
+/// character stays as it is, so a message that already holds a Debug-escaped name is not escaped
+/// twice. Human output only: names, paths, and JSON stay raw.
+pub fn one_line(text: &str) -> String {
+    let mut shown = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_control()
+            || matches!(
+                character,
+                '\u{2028}'
+                    | '\u{2029}'
+                    | '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+        {
+            shown.extend(character.escape_default());
+        } else {
+            shown.push(character);
+        }
+    }
+    shown
+}
+
+/// The `rimz packs exclude` command that sets one pack item aside, its `pack:name` argument
+/// shell-quoted. A name holding NUL has no argv spelling, so the command then excludes the
+/// whole type.
+pub(crate) fn exclude_command(pack: &str, name: &str, kind: ItemType) -> String {
+    let target = format!("{pack}:{name}");
+    let target = shlex::try_quote(&target).unwrap_or_else(|_| pack.into());
+    format!("rimz packs exclude {target} --type {}", kind.as_str())
+}
+
 fn safe_name(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -555,7 +592,7 @@ fn checked_pack_root(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, thiserror::Error)]
-#[error("{path}: {message}")]
+#[error("{}: {}", one_line(&.path.display().to_string()), one_line(.message))]
 pub struct Problem {
     pub path: PathBuf,
     pub message: String,
@@ -766,9 +803,8 @@ pub fn resolve_claims(
                     .iter()
                     .map(|claim| {
                         format!(
-                            "`rimz packs exclude {}:{name} --type {}`",
-                            claim.pack,
-                            claim.kind.as_str()
+                            "`{}`",
+                            exclude_command(claim.pack.as_str(), &name, claim.kind)
                         )
                     })
                     .collect::<Vec<_>>()

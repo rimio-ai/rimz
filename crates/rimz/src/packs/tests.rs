@@ -973,3 +973,34 @@ fn concurrent_mutations_do_not_lose_record_updates() {
     let record = Record::read(&home).unwrap();
     assert_eq!(record.sources[0].packs[0].excluded.items.len(), 8);
 }
+
+#[test]
+fn one_line_escapes_controls_line_separators_and_bidi_marks_and_keeps_the_rest() {
+    for (raw, shown) in [
+        ("a\nb", r"a\nb"),
+        ("a\rb", r"a\rb"),
+        ("hidden\u{1b}[2K\rclean", r"hidden\u{1b}[2K\rclean"),
+    ] {
+        assert_eq!(one_line(raw), shown);
+    }
+    let escaped = ('\0'..='\u{1f}')
+        .chain(['\u{7f}'])
+        .chain('\u{80}'..='\u{9f}')
+        .chain(['\u{2028}', '\u{2029}', '\u{61c}', '\u{200e}', '\u{200f}'])
+        .chain('\u{202a}'..='\u{202e}')
+        .chain('\u{2066}'..='\u{2069}');
+    for control in escaped {
+        assert_eq!(
+            one_line(&format!("a{control}b")),
+            format!("a{}b", control.escape_default()),
+            "{control:?}"
+        );
+    }
+    for kept in [
+        r#"back\slash "double" 'single'"#,
+        "héllo 名前 Ωμέγα",
+        "zero\u{200d}joiner\u{2065}\u{2070}",
+    ] {
+        assert_eq!(one_line(kept), kept);
+    }
+}

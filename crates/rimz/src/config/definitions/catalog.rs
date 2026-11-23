@@ -41,12 +41,10 @@ impl Item {
         let Some(pack) = &self.pack else {
             return String::new();
         };
-        let target = format!("{pack}:{}", self.name);
-        // YAML can carry NUL, which argv cannot; exclude the type in that case.
-        let target = shlex::try_quote(&target).unwrap_or_else(|_| pack.as_str().into());
+        // YAML can carry NUL, which argv cannot; the command excludes the type then.
         format!(
-            "; run `rimz packs exclude {target} --type {}`",
-            self.kind.as_str()
+            "; run `{}`",
+            crate::packs::exclude_command(pack.as_str(), &self.name, self.kind)
         )
     }
 

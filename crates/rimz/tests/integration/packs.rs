@@ -1580,6 +1580,44 @@ fn every_advertised_conflict_exclusion_runs_with_same_named_item_types() {
 }
 
 #[test]
+fn a_conflict_on_a_name_with_shell_metacharacters_advertises_one_argument_that_runs() {
+    let env = Env::new();
+    let source = installed(&env);
+    let name = "co der; touch";
+    for pack in ["crew", "tools"] {
+        write(
+            source.join(pack).join("skills").join(name).join("SKILL.md"),
+            "# Clash",
+        );
+    }
+    let show = json(&env, &["packs", "show", "crew", "--json"]);
+    let message = item(&show, "skills", name)["fate"]["message"]
+        .as_str()
+        .unwrap();
+    let commands: Vec<_> = message
+        .split('`')
+        .filter(|part| part.starts_with("rimz packs exclude "))
+        .collect();
+    assert_eq!(commands.len(), 2, "{message}");
+    for (command, pack) in commands.into_iter().zip(["crew", "tools"]) {
+        let argv = shlex::split(command).unwrap();
+        assert_eq!(
+            argv,
+            [
+                "rimz",
+                "packs",
+                "exclude",
+                &format!("{pack}:{name}"),
+                "--type",
+                "skills"
+            ],
+            "{message}"
+        );
+        env.rimz().args(&argv[1..]).assert().success();
+    }
+}
+
+#[test]
 fn packs_follow_explicit_agents_home_and_report_newer_records_without_failing_lists() {
     let env = Env::new();
     let source = source(&env);

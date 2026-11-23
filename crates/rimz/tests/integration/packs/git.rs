@@ -599,6 +599,130 @@ fn every_pack_surface_reports_a_workflow_that_cannot_load_as_failed() {
 }
 
 #[test]
+fn hostile_item_names_stay_on_one_line_on_every_pack_surface() {
+    let forged_workflow = "evil: loads\n\nProfiles\nNo changed profiles.\n\nInstalled note";
+    let erasing_workflow = "hidden\u{1b}[2K\rclean: loads";
+    let skill = "sk\nforged: loads";
+    let fixture = Fixture::new();
+    let crew = &fixture.crew;
+    for workflow in [forged_workflow, erasing_workflow] {
+        write(
+            crew.join("workflows").join(workflow).join("workflow.toml"),
+            SHIP,
+        );
+    }
+    write(crew.join("skills").join(skill).join("SKILL.md"), "# Forged");
+    write(
+        crew.join("agents/ag\nforged.md"),
+        "---\ndescription: Forged\nagent: claude\n---\nForged.",
+    );
+    write(
+        crew.join("agents/wk\nforged.md"),
+        "---\nname: hostile-agent\ndescription: Loads\nagent: claude\ntools: [Read]\n---\nLoads.",
+    );
+    write(
+        crew.join("subagents/sb\rforged.md"),
+        "---\nname: hostile-sub\ndescription: Loads\nagent: claude\ntools: [Read]\n---\nLoads.",
+    );
+    write(
+        crew.join("teams/squad.md"),
+        "---\nleader: lead\nstages: [Work]\nroles:\n  - agent: worker\n    role: lead\n    owns: [Work]\n  - agent: worker\n    role: \"x\\e[1A\\e[2K\"\n---\nTeam.",
+    );
+    write(crew.join("traits/tr\rforged.md"), "Forged.");
+    write(
+        crew.join("teams/te\u{1b}forged.md"),
+        "---\nleader: worker\nstages: [Work]\nroles:\n  - agent: worker\n    role: worker\n    owns: [Work]\n---\nTeam.",
+    );
+    git(crew, &["add", "."]);
+    git(crew, &["commit", "-m", "hostile names"]);
+    let escaped = [
+        r"evil: loads\n\nProfiles\nNo changed profiles.\n\nInstalled note: loads",
+        r"hidden\u{1b}[2K\rclean: loads",
+        r"sk\nforged: loads",
+        r"ag\nforged",
+        r"tr\rforged",
+        r"te\u{1b}forged",
+    ];
+    let one_line = |label: &str, output: &std::process::Output, shows_items: bool| {
+        let printed = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!printed.contains(['\r', '\u{1b}']), "{label}: {printed:?}");
+        for line in printed.lines() {
+            for forged in ["forged", "clean", "Installed note"] {
+                assert!(!line.starts_with(forged), "{label}: {printed:?}");
+            }
+        }
+        for heading in ["Profiles", "No changed profiles."] {
+            let count = printed.lines().filter(|line| *line == heading).count();
+            assert!(count <= 1, "{label}: {printed:?}");
+        }
+        if shows_items {
+            for name in escaped {
+                assert!(printed.contains(name), "{label} lacks {name}: {printed:?}");
+            }
+        }
+    };
+    let review = fixture.run(&["packs", "install", "crew"]);
+    assert_eq!(review.status.code(), Some(1), "{review:?}");
+    one_line("install review", &review, true);
+    let seat = r"squad.x\u{1b}[1A\u{1b}[2K (agents)";
+    assert!(
+        String::from_utf8_lossy(&review.stdout).contains(seat),
+        "{review:?}"
+    );
+    let installed = fixture.run(&["packs", "install", "crew", "--yes"]);
+    assert!(installed.status.success(), "{installed:?}");
+    one_line("install", &installed, false);
+    one_line("show", &fixture.run(&["packs", "show", "crew"]), true);
+    one_line("list", &fixture.run(&["packs", "list"]), false);
+    let validate = fixture.run(&["agents", "validate"]);
+    one_line("agents validate", &validate, false);
+    for source in [r"agents/wk\nforged.md", r"subagents/sb\rforged.md"] {
+        assert!(
+            String::from_utf8_lossy(&validate.stdout).contains(source),
+            "{source}: {validate:?}"
+        );
+    }
+    one_line(
+        "workflow validate",
+        &fixture.run(&["workflow", "validate"]),
+        false,
+    );
+
+    let shown = json(&fixture.env, &["packs", "show", "crew", "--json"]);
+    assert_eq!(
+        item(&shown, "skills", skill)["fate"]["state"],
+        "loads",
+        "{shown}"
+    );
+    let target = format!("crew:{skill}");
+    for verb in ["exclude", "include", "reset"] {
+        let output = fixture.run(&["packs", verb, &target, "--type", "skills"]);
+        assert!(output.status.success(), "{verb}: {output:?}");
+        one_line(verb, &output, false);
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(r"sk\nforged: loads"),
+            "{verb}: {output:?}"
+        );
+    }
+    one_line(
+        "reset --identical",
+        &fixture.run(&["packs", "reset", "crew", "--identical"]),
+        false,
+    );
+
+    write(crew.join("traits/more.md"), "More.");
+    git(crew, &["add", "."]);
+    git(crew, &["commit", "-m", "update"]);
+    let update = fixture.run(&["packs", "update", "crew"]);
+    assert!(update.status.success(), "{update:?}");
+    one_line("update review", &update, true);
+}
+
+#[test]
 fn a_linked_install_warns_of_a_workflow_that_cannot_load() {
     let env = Env::new();
     let linked = source(&env);

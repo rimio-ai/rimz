@@ -1109,7 +1109,7 @@ pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -
 pub(crate) fn report_definition_errors(config: &rimz::config::MachineConfig) -> Result<()> {
     let mut err = render::err();
     for error in &config.notices.definition_errors {
-        writeln!(err, "rimz: {}: {}", error.path.display(), error.message)?;
+        writeln!(err, "rimz: {error}")?;
     }
     Ok(())
 }
