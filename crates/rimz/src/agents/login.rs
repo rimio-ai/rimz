@@ -42,6 +42,10 @@ pub enum LoginConfigErr {
         "`accounts.{kind}.default` is reserved for the provider's own home; remove it and declare another name"
     )]
     ReservedName { kind: AgentKind },
+    #[error(
+        "`accounts.{kind}.{name}` must set `history = \"standalone\"`: {kind} accounts cannot share history"
+    )]
+    HistoryNotShareable { kind: AgentKind, name: LoginName },
     #[error("`accounts.{kind}.{name}.home` must be an absolute path, not `{home}`")]
     RelativeHome {
         kind: AgentKind,
@@ -461,6 +465,15 @@ impl LoginCatalog {
                 claimed.insert(normalized, name.clone());
                 // Sound: `accounts.named` answers for exactly the kinds whose
                 // adapter declares one home override key.
+                if account.history != AccountHistory::Standalone
+                    && crate::agents::find_definition(kind.as_str())
+                        .is_some_and(|adapter| !adapter.account_history_shareable())
+                {
+                    return Err(LoginConfigErr::HistoryNotShareable {
+                        kind,
+                        name: name.clone(),
+                    });
+                }
                 let mut login = ProviderLogin::named(kind.clone(), name.clone(), declared_home)
                     .expect("named accounts are configurable only for kinds with a home override");
                 if account.history != AccountHistory::Standalone

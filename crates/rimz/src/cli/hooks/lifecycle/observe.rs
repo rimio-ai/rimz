@@ -266,6 +266,7 @@ fn record_mapped_lifecycle_observation(
                     parent_agent_id: parent_id,
                     parent_transcript_path: observation.transcript_path.as_deref().map(Path::new),
                     parent_workspace: observation.worktree_path.as_deref().map(Path::new),
+                    login_env: &rimz::harness::hook_drain::login_env(),
                 })
             })
     } else {
@@ -378,6 +379,7 @@ fn correlate_subagent_observation(
         return;
     }
 
+    let login_env = rimz::harness::hook_drain::login_env();
     let mut matched = candidates.into_iter().filter_map(|candidate| {
         let correlation = agent.correlate_subagent(SubagentCorrelationInput {
             child_agent_id: child_id,
@@ -391,6 +393,7 @@ fn correlate_subagent_observation(
                     .unwrap_or(&workspace.worktree_root),
             ),
             parent_transcript_path: candidate.transcript_path.as_deref().map(Path::new),
+            login_env: &login_env,
         })?;
         let root_parent = candidate
             .parent_agent_id

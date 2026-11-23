@@ -45,6 +45,9 @@ pub(super) enum Read {
     /// Signed in by `GEMINI_API_KEY`, which has no quota for `/usage` to read.
     ApiKey,
     LoggedOut,
+    /// A named account's read found a login with no credential file in its directory: agy
+    /// took it from the OS keyring or the environment, so it is not this account's.
+    ForeignLogin,
     Failed(AccountProbeError),
 }
 
@@ -77,6 +80,7 @@ impl Read {
                 ..AgentAccount::default()
             }),
             Self::LoggedOut => AccountProbe::LoggedOut,
+            Self::ForeignLogin => AccountProbe::Unavailable(AccountProbeError::SourceUnavailable),
             Self::Failed(cause) => AccountProbe::Unavailable(*cause),
         }
     }
@@ -93,26 +97,67 @@ impl Read {
             Self::Usage(Quota::Absent) | Self::ApiKey | Self::LoggedOut => {
                 AccountUsageProbe::NoCredentials(Default::default())
             }
-            Self::Usage(Quota::Invalid) | Self::Failed(_) => {
+            Self::Usage(Quota::Invalid) | Self::ForeignLogin | Self::Failed(_) => {
                 AccountUsageProbe::Failed(Default::default())
             }
         }
     }
 }
 
-/// The read for `provider_home`, run with the login's `HOME` when it has one.
-/// While account-usage fetches are offline, agy is never started.
-pub(super) fn read(provider_home: Option<PathBuf>, login_home: Option<&str>) -> Read {
+/// The read for `provider_home`, run with the login's `HOME` when it has one, inside a mount of
+/// the account's directory for a named login. While account-usage fetches are offline, agy is
+/// never started.
+pub(super) fn read(
+    provider_home: Option<PathBuf>,
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Read {
     if crate::agents::credits::oauth_usage_offline() {
         return Read::Failed(AccountProbeError::SourceUnavailable);
     }
+    let login_home = login_env.get("HOME").map(String::as_str);
+    let binary = crate::agents::locate_binary(&super::ANTIGRAVITY_DESCRIPTOR);
+    let Some((source, target)) = super::session::mounted_view(login_env) else {
+        return read_with(&READS, provider_home, Instant::now(), || {
+            run(binary, login_home, DEADLINE)
+        });
+    };
     read_with(&READS, provider_home, Instant::now(), || {
-        run(
-            crate::agents::locate_binary(&super::ANTIGRAVITY_DESCRIPTOR),
-            login_home,
-            DEADLINE,
-        )
+        let Some(binary) = binary else {
+            return Read::Failed(AccountProbeError::SpawnFailed);
+        };
+        let command = mounted_command(&source, &target, binary, login_home);
+        own_login(run_command(command, DEADLINE), &source)
     })
+}
+
+/// `read`, unless it found a login while `account` holds no credential file of its own.
+pub(super) fn own_login(read: Read, account: &Path) -> Read {
+    match read {
+        Read::Usage(_) | Read::ApiKey if !holds_credential(account) => Read::ForeignLogin,
+        read => read,
+    }
+}
+
+impl Read {
+    /// Why a named account holding no credential file may not launch on this read.
+    pub(super) fn launch_refusal(&self) -> Option<&'static str> {
+        match self {
+            Self::LoggedOut => None,
+            Self::ForeignLogin => Some(
+                "agy found a login outside this account's directory (`GEMINI_API_KEY`, or the OS \
+                 keyring every data directory shares), so it would run on another account",
+            ),
+            Self::Usage(_) | Self::ApiKey | Self::Failed(_) => Some(
+                "RimZ could not confirm that agy's login is this account's: the directory holds \
+                 no credential file and agy's read did not report it signed out, so it could \
+                 run on another account",
+            ),
+        }
+    }
+}
+
+pub(super) fn holds_credential(account: &Path) -> bool {
+    account.join(CREDENTIAL_FILE).is_file()
 }
 
 pub(super) fn read_with(
@@ -148,7 +193,10 @@ pub(super) fn run(binary: Option<PathBuf>, login_home: Option<&str>, deadline: D
     let Some(binary) = binary else {
         return Read::Failed(AccountProbeError::SpawnFailed);
     };
-    let mut command = command(binary, login_home);
+    run_command(command(binary, login_home), deadline)
+}
+
+fn run_command(mut command: Command, deadline: Duration) -> Read {
     let observed_at = Timestamp::now();
     crate::proc::testkit::count_spawn();
     let Ok(child) = command.spawn() else {
@@ -171,9 +219,32 @@ pub(super) fn run(binary: Option<PathBuf>, login_home: Option<&str>, deadline: D
 /// The read's child. agy starts the rimz plugin's MCP server for this print run too, so the
 /// child drops the selection of any launch the read runs inside.
 pub(super) fn command(binary: PathBuf, login_home: Option<&str>) -> Command {
-    let mut command = Command::new(binary);
+    let mut command = base_command(binary, login_home);
+    command.args(ARGS);
     command
-        .args(ARGS)
+}
+
+/// `command`, run with the account's directory mounted where agy reads its own.
+pub(super) fn mounted_command(
+    source: &Path,
+    target: &Path,
+    binary: PathBuf,
+    login_home: Option<&str>,
+) -> Command {
+    let mut command = base_command(PathBuf::from("bwrap"), login_home);
+    command
+        // Off the pane's terminal: agy would read its sign-in prompt there, not from stdin.
+        .args(["--dev-bind", "/", "/", "--die-with-parent", "--new-session", "--bind"])
+        .args([source, target])
+        .arg("--")
+        .arg(binary)
+        .args(ARGS);
+    command
+}
+
+fn base_command(program: PathBuf, login_home: Option<&str>) -> Command {
+    let mut command = Command::new(program);
+    command
         .env(SSH_SESSION_VAR, SSH_SESSION_VALUE)
         .env_remove(crate::mcp::launch_env::ENV_SERVE)
         .env_remove(crate::mcp::launch_env::ENV_CWD)

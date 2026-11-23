@@ -86,67 +86,80 @@ impl AntigravityManagedIntegration {
         Self { paths: Some(paths) }
     }
 
-    fn paths(&self) -> Result<Paths> {
-        match &self.paths {
-            Some(paths) => Ok(paths.clone()),
-            None => Ok(Paths {
-                hooks: hooks_path()?,
+    /// The plugin and agy's `config.json` are one copy under `HOME` for every account. A named
+    /// account keeps its own `settings.json`, and so its own displaced statusline.
+    fn paths(&self, login_env: &BTreeMap<String, String>) -> Result<Paths> {
+        if let Some(paths) = &self.paths {
+            return Ok(paths.clone());
+        }
+        let hooks = hooks_path()?;
+        Ok(match super::session::mounted_view(login_env) {
+            Some((account, _)) => Paths {
+                hooks,
+                settings: account.join("settings.json"),
+                state: account.join("rimz-statusline.json"),
+            },
+            None => Paths {
+                hooks,
                 settings: settings_path()?,
                 state: crate::disk::paths::rimz_home().join("antigravity-statusline.json"),
-            }),
-        }
+            },
+        })
     }
 }
 
 impl ManagedIntegration for AntigravityManagedIntegration {
     fn outdated_files(
         &self,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
     ) -> Vec<PathBuf> {
-        self.paths()
+        self.paths(login_env)
             .map(|paths| outdated_files(&paths))
             .unwrap_or_default()
     }
 
     fn install(
         &self,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
         options: crate::agents::HookInstallOptions,
     ) -> Result<HookInstallReport> {
-        install(&self.paths()?, options.allow_routine_rimz)
+        install(&self.paths(login_env)?, options.allow_routine_rimz)
     }
 
     fn preview(
         &self,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
         options: crate::agents::HookInstallOptions,
     ) -> Result<HookInstallPreview> {
-        preview(&self.paths()?, options.allow_routine_rimz)
+        preview(&self.paths(login_env)?, options.allow_routine_rimz)
     }
 
-    fn uninstall(&self, _login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
-        uninstall(&self.paths()?)
+    fn uninstall(&self, login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
+        uninstall(
+            &self.paths(login_env)?,
+            super::session::mounted_view(login_env).is_some(),
+        )
     }
 
-    fn installed(&self, _login_env: &BTreeMap<String, String>) -> bool {
-        self.paths().is_ok_and(|paths| {
+    fn installed(&self, login_env: &BTreeMap<String, String>) -> bool {
+        self.paths(login_env).is_ok_and(|paths| {
             plugin_installed(&paths.plugin())
                 && !holds_owned_hook(&paths.hooks)
                 && STATUS_LINE.installed_at(&paths.settings)
         })
     }
 
-    fn managed_artifacts_present(&self, _login_env: &BTreeMap<String, String>) -> bool {
-        self.paths().is_ok_and(|paths| {
+    fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
+        self.paths(login_env).is_ok_and(|paths| {
             owned_plugin_present(&paths.plugin())
                 || holds_owned_hook(&paths.hooks)
                 || STATUS_LINE.artifact_at(&paths.settings)
         })
     }
 
-    fn hooks_disabled(&self, _login_env: &BTreeMap<String, String>) -> Option<HookPreflightErr> {
-        let config = self.paths().ok()?.config();
+    fn hooks_disabled(&self, login_env: &BTreeMap<String, String>) -> Option<HookPreflightErr> {
+        let config = self.paths(login_env).ok()?.config();
         disabled_reason(&config).map(|reason| HookPreflightErr::HooksDisabled {
             reason,
             fix: ENABLE_FIX.to_owned(),
@@ -156,9 +169,9 @@ impl ManagedIntegration for AntigravityManagedIntegration {
     fn wiring_input_paths(
         &self,
         _descriptor: &AgentSpec,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> Vec<PathBuf> {
-        let Ok(paths) = self.paths() else {
+        let Ok(paths) = self.paths(login_env) else {
             return Vec::new();
         };
         let plugin = paths.plugin();
@@ -174,11 +187,8 @@ impl ManagedIntegration for AntigravityManagedIntegration {
             .collect()
     }
 
-    fn shipped_mcp_server(
-        &self,
-        _login_env: &BTreeMap<String, String>,
-    ) -> Option<ShippedMcpServer> {
-        let paths = self.paths().ok()?;
+    fn shipped_mcp_server(&self, login_env: &BTreeMap<String, String>) -> Option<ShippedMcpServer> {
+        let paths = self.paths(login_env).ok()?;
         let config = paths.plugin().join(PLUGIN_MCP);
         let expected = plugin_files()
             .into_iter()
@@ -201,8 +211,8 @@ impl ManagedIntegration for AntigravityManagedIntegration {
         })
     }
 
-    fn wrapped_status_line_command(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
-        let paths = self.paths().ok()?;
+    fn wrapped_status_line_command(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
+        let paths = self.paths(login_env).ok()?;
         STATUS_LINE.wrapped_command_at(&paths.settings, &paths.state)
     }
 }
@@ -546,12 +556,13 @@ fn preview(paths: &Paths, allow: bool) -> Result<HookInstallPreview> {
 }
 
 /// A plugin path RimZ does not own stays; the global file's owned handlers and
-/// the owned statusline are still removed.
-fn uninstall(paths: &Paths) -> Result<HookUninstallReport> {
+/// the owned statusline are still removed. A named account's uninstall leaves the plugin and
+/// the global file, which every account of this `HOME` runs on.
+fn uninstall(paths: &Paths, account_only: bool) -> Result<HookUninstallReport> {
     let plugin = paths.plugin();
     let mut files = Vec::new();
     let mut removed_hooks = false;
-    if owned_plugin_present(&plugin) {
+    if !account_only && owned_plugin_present(&plugin) {
         removed_hooks = holds_owned_hook(&plugin.join(PLUGIN_HOOKS));
         std::fs::remove_dir_all(&plugin).map_err(|source| AgentErr::InstallIo {
             agent: AGENT,
@@ -560,7 +571,7 @@ fn uninstall(paths: &Paths) -> Result<HookUninstallReport> {
         })?;
         files.push((plugin, true));
     }
-    if let Some(root) = stripped_global(&paths.hooks)? {
+    if let Some(root) = stripped_global(&paths.hooks)?.filter(|_| !account_only) {
         settings_json::write_json(AGENT, &paths.hooks, &root)?;
         files.push((paths.hooks.clone(), true));
         removed_hooks = true;

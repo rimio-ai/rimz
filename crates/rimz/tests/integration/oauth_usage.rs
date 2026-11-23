@@ -2300,7 +2300,7 @@ fn accounts_redeem_kind_without_named_accounts_lists_supported_kinds() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             stderr.contains(&format!(
-                "{kind} has no named accounts; accounts are supported for claude, codex, pi"
+                "{kind} has no named accounts; accounts are supported for claude, codex, pi, antigravity"
             )),
             "{stderr}"
         );

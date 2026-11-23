@@ -87,6 +87,7 @@ fn interrupted_child_recovers_identity_and_usage() {
     assert_eq!(
         ClaudeAdapter.spawned_subagents(SubagentSpawnInput {
             parent_agent_id: &AgentSessionId::from("parent"),
+            login_env: &std::collections::BTreeMap::new(),
             parent_transcript_path: Some(&parent),
             parent_workspace: None,
         }),
@@ -197,6 +198,7 @@ fn nested_replay_cannot_close_the_outer_child() {
         ClaudeAdapter
             .spawned_subagents(SubagentSpawnInput {
                 parent_agent_id: &AgentSessionId::from("parent"),
+                login_env: &std::collections::BTreeMap::new(),
                 parent_transcript_path: None,
                 parent_workspace: None,
             })

@@ -258,6 +258,13 @@ pub fn capture_ingress_env(owner: HookIngressOwner) -> BTreeMap<String, String> 
     env
 }
 
+/// The environment of the frame being applied, else this process's.
+pub fn login_env() -> BTreeMap<String, String> {
+    FRAME
+        .with(|frame| frame.borrow().as_ref().map(|frame| frame.env.clone()))
+        .unwrap_or_else(crate::agents::ambient_env)
+}
+
 pub fn env_value(name: &str) -> Option<String> {
     FRAME.with(|frame| match frame.borrow().as_ref() {
         Some(frame) => frame.env.get(name).cloned(),

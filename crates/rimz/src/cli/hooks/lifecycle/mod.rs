@@ -560,6 +560,7 @@ fn derive_subagent_lifecycle(
         parent_agent_id,
         parent_transcript_path: parent.transcript_path.as_deref().map(std::path::Path::new),
         parent_workspace: Some(&workspace.worktree_root),
+        login_env: &rimz::harness::hook_drain::login_env(),
     });
     if observations.is_empty() {
         return Ok(Vec::new());

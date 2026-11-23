@@ -65,7 +65,7 @@
 ## claude = 50.0
 ## codex = 25.0
 
-# Named provider accounts (Claude, Codex, and Pi). Each one is a standalone provider
+# Named provider accounts (Claude, Codex, Pi, and Antigravity). Each one is a standalone provider
 # home a room launches into. Pin it with `rimz start --account claude@work` or
 # `rimz accounts use claude work`; `default` is the provider's own home and is
 # never declared. Without a pin, the room follows project and machine defaults.
@@ -80,6 +80,8 @@
 ## label = "Work subscription"
 ## [accounts.codex.personal]
 ## [accounts.pi.work]
+## [accounts.antigravity.work]
+## history = "standalone"
 
 # Defaults for new rooms and rooms following the machine selection live,
 # below room pins and trusted project choices. `rimz accounts use --global`

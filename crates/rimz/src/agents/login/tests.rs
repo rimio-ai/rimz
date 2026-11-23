@@ -1120,3 +1120,27 @@ fn a_shared_codex_login_points_its_databases_at_the_default_home() {
         None
     );
 }
+
+#[test]
+fn an_antigravity_account_keeps_its_own_history() {
+    for shared in [
+        "[antigravity.work]\n",
+        "[antigravity.work]\nhistory = \"shared\"\n",
+    ] {
+        let accounts: AccountsConfig = toml::from_str(shared).unwrap();
+        assert!(matches!(
+            LoginCatalog::from_config_under(&accounts, Some(Path::new("/home/me"))),
+            Err(LoginConfigErr::HistoryNotShareable { .. })
+        ));
+    }
+    let accounts: AccountsConfig =
+        toml::from_str("[antigravity.work]\nhistory = \"standalone\"\n").unwrap();
+    let catalog = LoginCatalog::from_config_under(&accounts, Some(Path::new("/home/me"))).unwrap();
+    let login = catalog.select(&kind("antigravity"), &name("work")).unwrap();
+    assert!(!login.shares_history());
+    assert!(
+        login
+            .overrides(&BTreeMap::new())
+            .contains_key("RIMZ_ANTIGRAVITY_HOME")
+    );
+}

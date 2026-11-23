@@ -256,6 +256,10 @@ pub enum LaunchPlanErr {
     Wire(#[from] launch::ExecWireErr),
     #[error(transparent)]
     Sandbox(#[from] sandbox::SandboxErr),
+    #[error("account {login} runs in a mount view, which is unavailable here: {reason}")]
+    AccountMount { login: String, reason: String },
+    #[error("account {login} cannot launch: {reason}")]
+    ForeignLogin { login: String, reason: String },
     #[error(transparent)]
     SkillLinks(#[from] SkillLinkErr),
     #[error(transparent)]
@@ -402,6 +406,15 @@ pub fn prepare_exec(
                     set_aside: quiet.set_aside,
                     repeated: quiet.repeated,
                 }
+            });
+        }
+        if !login.is_default()
+            && let Some(adapter) = adapter
+            && let Some(reason) = adapter.foreign_login(&login.env(&ambient_env))
+        {
+            return Err(LaunchPlanErr::ForeignLogin {
+                login: login.key().to_string(),
+                reason,
             });
         }
         let recorded_session = match &request.action {
@@ -1243,6 +1256,9 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         }
         _ => None,
     };
+    let mounted_home = adapter
+        .mounted_home_target(&env)
+        .filter(|_| !login.is_default());
     let sandbox =
         if let (Some(bwrap), AgentProcessStage::Ready(process)) = (inputs.bwrap, &mut stage) {
             let empty_root = inputs.state.empty_dir_root();
@@ -1258,8 +1274,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 })?
             };
             let provider_home = adapter.config_home(&env).map(|path| sandbox::ProviderHome {
-                source: path.clone(),
-                target: path,
+                target: mounted_home.clone().unwrap_or_else(|| path.clone()),
+                source: path,
             });
             let listed = request.launch_skills(&withheld_skills);
             let plan = sandbox::plan(&sandbox::SandboxInputs {
@@ -1295,6 +1311,24 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         } else {
             None
         };
+    if inputs.bwrap.is_none()
+        && let (Some(target), Some(source), AgentProcessStage::Ready(process)) =
+            (mounted_home, login.home(), &mut stage)
+    {
+        let bwrap = sandbox::preflight(Isolation::Scoped)
+            .map_err(|error| LaunchPlanErr::AccountMount {
+                login: login.key().to_string(),
+                reason: error.to_string(),
+            })?
+            .expect("a scoped preflight answers with bwrap or an error");
+        let view = sandbox::MountPlan {
+            mounts: vec![sandbox::Mount::Bind {
+                source: source.to_path_buf(),
+                target,
+            }],
+        };
+        process.argv = sandbox::bwrap_argv(&bwrap, &view, inputs.cwd, &process.argv);
+    }
     if cfg!(target_os = "linux")
         && inputs.hibernate
         && let AgentProcessStage::Ready(process) = &mut stage

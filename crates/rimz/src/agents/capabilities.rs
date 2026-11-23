@@ -217,6 +217,17 @@ pub trait HookCapability: CoreCapability {
         }))
     }
 
+    /// [`Self::decode_hook`] for a frame whose login environment is `login_env`, for an adapter
+    /// that reads its provider home while decoding.
+    fn decode_hook_in(
+        &self,
+        event_name: &str,
+        payload: &Value,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Result<HookOutput> {
+        self.decode_hook(event_name, payload)
+    }
+
     /// Derive provider-store-backed subagent lifecycle observations after a root observation.
     /// Hook ingestion owns rollup deduplication and durable appends; adapters only map local truth.
     fn derive_subagent_observations(
@@ -603,6 +614,17 @@ pub trait LaunchCapability: CoreCapability {
 
     /// Whether a separate provider home also isolates its credentials.
     fn supports_named_logins(&self) -> bool {
+        true
+    }
+
+    /// The fixed path a named account's home is mounted over, for a provider that cannot be
+    /// pointed at another home. `None` for a provider that reads its home override itself.
+    fn mounted_home_target(&self, _env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        None
+    }
+
+    /// Whether a named account can link its history into the provider's own home.
+    fn account_history_shareable(&self) -> bool {
         true
     }
 
@@ -1342,6 +1364,11 @@ pub trait AccountCapability: CoreCapability {
         _account: &AgentAccount,
     ) -> AccountProfileProbe {
         AccountProfileProbe::NotAttempted
+    }
+
+    /// Why a launch on this named login would run on some other account's credentials.
+    fn foreign_login(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
+        None
     }
 
     fn prepare_reset_credit(

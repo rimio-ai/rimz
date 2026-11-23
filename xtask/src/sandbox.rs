@@ -565,7 +565,7 @@ fn cleanup_sandbox(root: &Path, env: &BTreeMap<&'static str, PathBuf>) {
 /// `PROVIDER_SIDECAR_KEYS` in
 /// `crates/rimz/tests/integration/common/command.rs`); xtask does not link the
 /// `rimz` crate, so a new adapter home key is added here by hand.
-const PROVIDER_HOME_ENV: [&str; 21] = [
+const PROVIDER_HOME_ENV: [&str; 22] = [
     "CLAUDE_CONFIG_DIR",
     "CODEX_HOME",
     "COPILOT_HOME",
@@ -587,6 +587,7 @@ const PROVIDER_HOME_ENV: [&str; 21] = [
     "QWEN_CODE_SYSTEM_DEFAULTS_PATH",
     "QWEN_CODE_SYSTEM_SETTINGS_PATH",
     "QWEN_RUNTIME_DIR",
+    "RIMZ_ANTIGRAVITY_HOME",
 ];
 
 fn session_key(key: &OsStr) -> bool {

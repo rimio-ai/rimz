@@ -87,7 +87,7 @@ enum AccountsSubcmd {
         /// Unpin this kind and follow the project or machine default live.
         #[arg(long, conflicts_with_all = ["name", "global"])]
         reset: bool,
-        /// Provider kind: claude, codex, or pi.
+        /// Provider kind: claude, codex, pi, or antigravity.
         kind: String,
         /// Declared account name, or `default` for the provider's own home.
         #[arg(required_unless_present = "reset")]
@@ -97,7 +97,7 @@ enum AccountsSubcmd {
     ///
     /// Rerun to finish an account whose setup stopped part way.
     Add {
-        /// Provider kind: claude, codex, or pi.
+        /// Provider kind: claude, codex, pi, or antigravity.
         kind: String,
         /// Account name, such as `work`.
         name: LoginName,
@@ -128,7 +128,7 @@ enum AccountsSubcmd {
     },
     /// Forget a named account; its home directory stays on disk.
     Remove {
-        /// Provider kind: claude, codex, or pi.
+        /// Provider kind: claude, codex, pi, or antigravity.
         kind: String,
         /// Account name.
         name: LoginName,
@@ -524,6 +524,11 @@ fn add(
     let catalog = LoginCatalog::from_config(&machine.accounts)?;
     let existing = catalog.select(kind, &name).ok();
     let declaring = existing.is_none();
+    let adapter = rimz::agents::definition_by_kind(kind.as_str())?;
+    require_mount_view(kind, &name, &ambient)?;
+    let history = history
+        .or((declaring && !adapter.account_history_shareable())
+            .then_some(AccountHistory::Standalone));
     // Resolve the requested history mode without changing the recorded declaration.
     let mut accounts = machine.accounts.clone();
     if let Some(declared) = accounts.named_mut(kind) {
@@ -621,6 +626,11 @@ fn add(
         let home = render::home_relative(&shared.default_home().display().to_string());
         if shared.shares_history() {
             writeln!(out, "  shares sessions, history, and settings with {home}")?;
+        } else if !adapter.account_history_shareable() {
+            writeln!(
+                out,
+                "  keeps its own login, settings, sessions, and history"
+            )?;
         } else {
             writeln!(
                 out,
@@ -663,7 +673,9 @@ fn start_command(
     ambient: &BTreeMap<String, String>,
     in_room: bool,
 ) -> String {
-    if in_room && !login.name().is_default() {
+    let mounted = rimz::agents::definition_by_kind(login.kind().as_str())
+        .is_ok_and(|agent| agent.mounted_home_target(ambient).is_some());
+    if (in_room || mounted) && !login.name().is_default() {
         format!("rimz agents {} --account {}", login.kind(), login.name())
     } else {
         login_command(login, ambient)
@@ -682,6 +694,25 @@ fn login_command(login: &ProviderLogin, ambient: &BTreeMap<String, String>) -> S
         })
         .chain([login.kind().to_string()])
         .collect()
+}
+
+/// Refuses a named account of a kind that runs in a mount view where none can be made.
+fn require_mount_view(
+    kind: &AgentKind,
+    name: &LoginName,
+    ambient: &BTreeMap<String, String>,
+) -> Result<()> {
+    if name.is_default()
+        || rimz::agents::definition_by_kind(kind.as_str())?
+            .mounted_home_target(ambient)
+            .is_none()
+    {
+        return Ok(());
+    }
+    rimz::sandbox::preflight(rimz::config::Isolation::Scoped).with_context(|| {
+        format!("{kind} accounts run in a mount view, which needs Linux and bubblewrap")
+    })?;
+    Ok(())
 }
 
 fn lexical_home(login: &ProviderLogin) -> Option<PathBuf> {
@@ -734,9 +765,13 @@ fn use_room_account(
             "cannot select this room's account"
         }
     })?;
+    let ambient = rimz::agents::ambient_env();
+    if let Some(name) = name {
+        require_mount_view(kind, name, &ambient)?;
+    }
     selected
         .login(kind, &machine.accounts)?
-        .preflight(&rimz::agents::ambient_env())?;
+        .preflight(&ambient)?;
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let heading = if name.is_none() {
         store.unpin_room_login(&workspace, kind)?;
@@ -815,7 +850,9 @@ fn use_account(raw_kind: &str, name: &LoginName) -> Result<()> {
         Err(error) => return Err(error.into()),
     };
     if let Some(login) = login {
-        login.preflight(&rimz::agents::ambient_env())?;
+        let ambient = rimz::agents::ambient_env();
+        require_mount_view(kind, name, &ambient)?;
+        login.preflight(&ambient)?;
     }
     let prior = LoginKey {
         kind: kind.clone(),

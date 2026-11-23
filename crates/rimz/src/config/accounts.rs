@@ -137,6 +137,10 @@ pub struct AccountsConfig {
     /// Named Pi accounts: each one a standalone `PI_CODING_AGENT_DIR`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pi: BTreeMap<LoginName, NamedAccount>,
+    /// Named Antigravity accounts: each one a standalone data directory that a
+    /// launch mounts over agy's own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub antigravity: BTreeMap<LoginName, NamedAccount>,
 }
 
 /// One declared account of a provider kind. An empty table takes the default
@@ -292,6 +296,7 @@ impl AccountsConfig {
             "claude" => Some(&self.claude),
             "codex" => Some(&self.codex),
             "pi" => Some(&self.pi),
+            "antigravity" => Some(&self.antigravity),
             _ => None,
         }
     }
@@ -304,6 +309,7 @@ impl AccountsConfig {
             "claude" => Some(&mut self.claude),
             "codex" => Some(&mut self.codex),
             "pi" => Some(&mut self.pi),
+            "antigravity" => Some(&mut self.antigravity),
             _ => None,
         }
     }

@@ -901,7 +901,7 @@ fn process_frame(
                 .and_then(Value::as_str)
         })
         .unwrap_or("unknown");
-    let mut decoded = agent.decode_hook(event_name, &payload)?;
+    let mut decoded = agent.decode_hook_in(event_name, &payload, &frame.env)?;
     if decoded.class() == AgentHookClass::AwaitingUser && !agent.spec().capabilities.native_ask_ui {
         return Ok(decoded.reply().clone());
     }
