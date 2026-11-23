@@ -944,6 +944,140 @@ fn background_shell_reports_follow_launch_stop_and_notification() {
     );
 }
 
+/// The dispatch-mode capture, in hook order: a quick script settles inside its
+/// turn, a long one outlives it and posts its result after that turn's `Stop`,
+/// and the settle starts a turn whose `Stop` lists no task.
+#[test]
+fn background_script_reports_replay_the_captured_repl_sequence() {
+    let report = |event: &str, payload: serde_json::Value| {
+        let mut payload = payload;
+        payload["session_id"] = json!("sess-1");
+        payload["hook_event_name"] = json!(event);
+        let mut report =
+            hook_observation(&ClaudeAdapter, event, &payload).and_then(|o| o.background_scripts);
+        if let Some(BackgroundScriptReport::Started { script }) = &mut report {
+            script.started_at = Timestamp::UNIX_EPOCH;
+        }
+        report
+    };
+    let started = |id: &str, description: &str| {
+        Some(BackgroundScriptReport::Started {
+            script: BackgroundScript {
+                id: id.to_owned(),
+                description: Some(description.to_owned()),
+                started_at: Timestamp::UNIX_EPOCH,
+            },
+        })
+    };
+    let finished = |id: &str| Some(BackgroundScriptReport::Finished { id: id.to_owned() });
+    let quick = json!({ "code": "'quick'", "description": "quick one" });
+    let long = json!({ "code": "await $`sleep 75`; 'slept'", "description": "long sleep" });
+    let inner = json!({ "command": "sleep 75" });
+    let running = json!([{ "id": "xhc7erb82", "type": "code", "status": "running", "description": "long sleep" }]);
+    let replay = [
+        (
+            "PreToolUse",
+            json!({ "tool_name": "REPL", "tool_input": quick, "tool_use_id": "toolu_01F3" }),
+            started("toolu_01F3", "quick one"),
+        ),
+        (
+            "PostToolUse",
+            json!({
+                "tool_name": "REPL", "tool_input": quick, "tool_use_id": "toolu_01F3", "duration_ms": 45,
+                "tool_response": { "code": "'quick'", "result": "quick", "stdout": "", "stderr": "" },
+            }),
+            finished("toolu_01F3"),
+        ),
+        (
+            "PreToolUse",
+            json!({ "tool_name": "REPL", "tool_input": long, "tool_use_id": "toolu_011h" }),
+            started("toolu_011h", "long sleep"),
+        ),
+        (
+            "PreToolUse",
+            json!({ "tool_name": "Bash", "tool_input": inner, "tool_use_id": "repl_0a5b" }),
+            None,
+        ),
+        (
+            "PreToolUse",
+            json!({ "tool_name": "Poll", "tool_input": {}, "tool_use_id": "toolu_01Sm" }),
+            None,
+        ),
+        (
+            "PostToolUse",
+            json!({
+                "tool_name": "Poll", "tool_input": {}, "tool_use_id": "toolu_01Sm", "duration_ms": 3,
+                "tool_response": { "content": "<event kind=\"repl-eval\" eval=\"1\" status=\"settled\">", "eventCount": 1 },
+            }),
+            None,
+        ),
+        (
+            "Stop",
+            json!({ "stop_hook_active": false, "background_tasks": running }),
+            None,
+        ),
+        (
+            "SubagentStop",
+            json!({ "agent_id": "a1383169d30d17917", "agent_type": "", "stop_hook_active": false, "background_tasks": running }),
+            None,
+        ),
+        (
+            "PostToolUse",
+            json!({
+                "tool_name": "Bash", "tool_input": inner, "tool_use_id": "repl_0a5b", "duration_ms": 79559,
+                "tool_response": { "stdout": "", "stderr": "", "interrupted": false },
+            }),
+            None,
+        ),
+        (
+            "PostToolUse",
+            json!({
+                "tool_name": "REPL", "tool_input": long, "tool_use_id": "toolu_011h", "duration_ms": 80307,
+                "tool_response": { "code": "await", "result": "slept", "stdout": "", "stderr": "" },
+            }),
+            finished("toolu_011h"),
+        ),
+        (
+            "Stop",
+            json!({ "stop_hook_active": false, "background_tasks": [] }),
+            Some(BackgroundScriptReport::NoneRunning),
+        ),
+        (
+            "SubagentStop",
+            json!({ "agent_id": "ad8bcdc3a3eb4bfa6", "agent_type": "", "stop_hook_active": false, "background_tasks": [] }),
+            None,
+        ),
+    ];
+    for (index, (event, payload, expected)) in replay.into_iter().enumerate() {
+        assert_eq!(report(event, payload), expected, "record {index}: {event}");
+    }
+
+    assert_eq!(
+        report("Stop", json!({ "stop_hook_active": false })),
+        None,
+        "a build without the task list proves nothing about scripts"
+    );
+    assert_eq!(
+        report(
+            "Stop",
+            json!({ "background_tasks": [
+                { "id": "b1", "type": "shell", "status": "running", "command": "sleep 60" },
+                { "id": "x1", "type": "code", "status": "completed", "description": "done" },
+            ] }),
+        ),
+        Some(BackgroundScriptReport::NoneRunning),
+        "only a pending code task keeps the scripts"
+    );
+    assert_eq!(
+        report(
+            "PreToolUse",
+            json!({ "agent_id": "child-1", "tool_name": "REPL", "tool_input": long, "tool_use_id": "toolu_child" }),
+        ),
+        None,
+        "a subagent's script targets its child row, which lists no scripts"
+    );
+}
+
 #[test]
 fn root_registration_stamps_birth_account_key_only_on_registration() {
     for source in ["startup", "resume"] {

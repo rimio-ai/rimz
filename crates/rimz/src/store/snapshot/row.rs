@@ -491,6 +491,14 @@ pub enum RowCard {
     Process(ProcessCard),
 }
 
+/// A background script as the card draws it: its one-line label, `script`
+/// when it has no usable description, and when RimZ first saw it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CardScript {
+    pub label: String,
+    pub started_at: Timestamp,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentCard {
     pub status: AgentStatus,
@@ -513,6 +521,10 @@ pub struct AgentCard {
     /// Background shells the session is running, copied from the rollup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub background_shells: Vec<BackgroundShell>,
+    /// Scripts the session is running, oldest first, each as its label and
+    /// first sighting; [`AgentCard::shown_scripts`] picks the ones drawn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_scripts: Vec<CardScript>,
     /// The running turn's shape, copied from the rollup: `reasoning` paints the
     /// thinking head, `acting` the working spinner, `parked` the secondary
     /// "background" marker.
@@ -699,6 +711,7 @@ impl Default for AgentCard {
             due_messages: 0,
             idle_stop: None,
             background_shells: Vec::new(),
+            background_scripts: Vec::new(),
             phase: TurnPhase::Idle,
             task: None,
             first_prompt: None,
@@ -999,6 +1012,19 @@ impl AgentCard {
             due_messages: agent.due_messages,
             idle_stop: agent.idle_stop.clone(),
             background_shells: agent.background_shells.clone(),
+            background_scripts: agent
+                .background_scripts
+                .iter()
+                .map(|script| CardScript {
+                    label: script
+                        .description
+                        .as_deref()
+                        .filter(|value| crate::agents::usable_description(value))
+                        .and_then(crate::agents::single_line_description)
+                        .unwrap_or_else(|| "script".to_owned()),
+                    started_at: script.started_at,
+                })
+                .collect(),
             phase,
             task: agent.task.clone(),
             first_prompt: agent.first_prompt.clone(),
@@ -1052,6 +1078,14 @@ impl AgentCard {
         }
     }
 
+    /// The scripts that count as background work at the view's clock: those
+    /// running at least [`crate::agents::BACKGROUND_SCRIPT_SHOWN_AFTER`].
+    pub fn shown_scripts(&self, now: Timestamp) -> impl Iterator<Item = &CardScript> {
+        self.background_scripts.iter().filter(move |script| {
+            now.duration_since(script.started_at) >= crate::agents::BACKGROUND_SCRIPT_SHOWN_AFTER
+        })
+    }
+
     /// The blocking ask's summary while the card is waiting for input.
     pub fn open_ask(&self) -> Option<&str> {
         if self.status != AgentStatus::Waiting {
@@ -1082,6 +1116,11 @@ impl AgentCard {
             .find(|wait| Some(wait.class) == wait_class)
         {
             return CardDescription::Wait(wait.label(now));
+        }
+        if wait_class == Some(PendingWaitClass::Working)
+            && let Some(script) = self.shown_scripts(now).next()
+        {
+            return CardDescription::Wait(format!("wakes after {}", script.label));
         }
         self.activity_description()
             .and_then(crate::agents::single_line_description)

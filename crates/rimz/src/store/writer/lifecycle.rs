@@ -293,7 +293,8 @@ impl Store {
                 let append_primary = append_lifecycle_event(
                     &intent.observation.signal,
                     transition,
-                    intent.observation.parent_agent_id.is_some(),
+                    intent.observation.parent_agent_id.is_some()
+                        || intent.observation.background_scripts.is_some(),
                 );
                 let primary_event_id = if append_primary {
                     let mut observation = event::observation_for_event(intent.observation);
@@ -873,9 +874,9 @@ fn stage(
 fn append_lifecycle_event(
     signal: &LifecycleSignal,
     transition: Option<Transition>,
-    child_owned: bool,
+    carries_fold_input: bool,
 ) -> bool {
-    child_owned
+    carries_fold_input
         || !matches!(
             signal,
             LifecycleSignal::ToolUsed {

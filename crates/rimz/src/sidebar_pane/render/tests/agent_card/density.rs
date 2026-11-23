@@ -75,6 +75,7 @@ fn held_reach_opens_delegation_by_default() {
             CardDensityMode::Auto,
             snapshot.rows().next().unwrap(),
             SelectionReach::Held,
+            snapshot.now,
         )
         .delegation
     };

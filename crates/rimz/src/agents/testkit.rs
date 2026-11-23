@@ -6,7 +6,9 @@ use serde_json::Value;
 
 use crate::agents::capabilities::HookCapability;
 use crate::agents::lifecycle::{LifecycleSignal, ToolEffect};
-use crate::agents::{AgentLifecycleObservation, AskKind, BackgroundShellReport, HookOutput};
+use crate::agents::{
+    AgentLifecycleObservation, AskKind, BackgroundScriptReport, BackgroundShellReport, HookOutput,
+};
 
 pub(super) fn outdated_json_source(
     source: &super::managed_source::ManagedSource,
@@ -187,6 +189,11 @@ pub(crate) fn assert_queued_post_tool_use_reads_alike(
                 &mut observation.background_shells
             {
                 shell.started_at = jiff::Timestamp::UNIX_EPOCH;
+            }
+            if let Some(BackgroundScriptReport::Started { script }) =
+                &mut observation.background_scripts
+            {
+                script.started_at = jiff::Timestamp::UNIX_EPOCH;
             }
             output.attach_lifecycle(observation);
         }

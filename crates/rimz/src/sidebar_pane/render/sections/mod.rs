@@ -110,10 +110,11 @@ impl CardExpansion {
         density: CardDensityMode,
         row: &SidebarRow,
         reach: SelectionReach,
+        now: Timestamp,
     ) -> Self {
         let Some(agent) = row
             .as_agent()
-            .filter(|agent| agent_card::has_delegation(agent))
+            .filter(|agent| agent_card::has_delegation(agent, now))
         else {
             return Self {
                 reach,

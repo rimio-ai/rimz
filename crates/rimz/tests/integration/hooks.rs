@@ -2520,6 +2520,48 @@ fn repeated_tool_payload_updates_and_restarts_the_activity_run() {
         .find(|row| row["id"] == "sess-repeat")
         .expect("recovered repeated-tool row");
     assert_eq!(recovered_row["status"], "running");
+
+    let events_before_pre_tools = lifecycle_event_count(&env);
+    run_claude_lifecycle(&env, hook("PreToolUse", "cargo test"));
+    assert_eq!(
+        lifecycle_event_count(&env),
+        events_before_pre_tools,
+        "a plain PreToolUse stays out of the log: {:?}",
+        env.read_events()
+            .iter()
+            .map(|event| &event.method)
+            .collect::<Vec<_>>()
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-repeat",
+            "tool_name": "REPL",
+            "tool_use_id": "toolu_script",
+            "tool_input": {"description": "Run the suite", "code": "await sleep(1)"},
+        }),
+    );
+    assert_eq!(
+        lifecycle_event_count(&env),
+        events_before_pre_tools + 1,
+        "a script start reaches the log: {:?}",
+        env.read_events()
+            .iter()
+            .map(|event| &event.method)
+            .collect::<Vec<_>>()
+    );
+    let scripted = env.snapshot_json();
+    let scripts = scripted["agents"]
+        .as_array()
+        .expect("agents")
+        .iter()
+        .find(|agent| agent["agent_id"] == "sess-repeat")
+        .expect("scripted agent")["background_scripts"]
+        .as_array()
+        .expect("background scripts");
+    assert_eq!(scripts.len(), 1);
+    assert_eq!(scripts[0]["id"], "toolu_script");
 }
 
 #[test]

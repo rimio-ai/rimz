@@ -763,6 +763,7 @@ pub mod fleet {
             pane_stamp: None,
             parent_agent_id: None,
             background_shells: None,
+            background_scripts: None,
         }
     }
 

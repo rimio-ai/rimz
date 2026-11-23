@@ -66,12 +66,13 @@ use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::observation::{payload_has_context_observation, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
-    AgentHookClass, AgentLifecycleObservation, AgentTurnError, BackgroundShell,
-    BackgroundShellReport, HookOutput, HookRouting, Result, RootIdentity, SanitizedPrompt,
-    SessionOrigin, SpawnedSubagent, SubagentIdentity, SubagentObservation, SubagentSpawnInput,
-    TranscriptMessage, non_empty_trimmed, optional_payload_string, read_transcript_tail,
-    read_transcript_tail_with_budget, read_transcript_tail_with_status, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    AgentHookClass, AgentLifecycleObservation, AgentTurnError, BackgroundScript,
+    BackgroundScriptReport, BackgroundShell, BackgroundShellReport, HookOutput, HookRouting,
+    Result, RootIdentity, SanitizedPrompt, SessionOrigin, SpawnedSubagent, SubagentIdentity,
+    SubagentObservation, SubagentSpawnInput, TranscriptMessage, non_empty_trimmed,
+    optional_payload_string, read_transcript_tail, read_transcript_tail_with_budget,
+    read_transcript_tail_with_status, resolve_root_identity, resolve_subagent_identity,
+    sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::payload::{
     decode_or_default, finished_task_notification_ids, queued_post_tool_use,
@@ -282,7 +283,7 @@ const CLAUDE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "Stop.background_tasks/session_crons",
     },
     background_shells: ConcernCoverage::Wired {
-        via: "PostToolUse Bash backgroundTaskId + Stop.background_tasks[type=shell] + task-notification prompt",
+        via: "PostToolUse Bash backgroundTaskId + Stop.background_tasks[type=shell] + task-notification prompt; scripts via PreToolUse/PostToolUse REPL + Stop.background_tasks[type=code]",
     },
     session_end: ConcernCoverage::Wired { via: "SessionEnd" },
     idle_notification: ConcernCoverage::Wired {
@@ -1992,7 +1993,9 @@ fn build_claude_observation(
     // Shells belong to the root session: a subagent's hooks target its child
     // row, and the parent's `Stop` lists every shell the session runs.
     if parent_agent_id.is_none() {
-        observation.background_shells = claude_background_shells(hook, Timestamp::now());
+        let now = Timestamp::now();
+        observation.background_shells = claude_background_shells(hook, now);
+        observation.background_scripts = claude_background_scripts(payload, hook, now);
     }
     observation.parent_agent_id = parent_agent_id;
     observation.task = claude_task(payload, hook.subagent_common());
@@ -2115,6 +2118,51 @@ fn claude_background_shells(hook: &ClaudeHook, now: Timestamp) -> Option<Backgro
         ClaudeHook::UserPromptSubmit(submit) => {
             let ids = finished_task_notification_ids(submit.prompt.as_deref()?);
             (!ids.is_empty()).then_some(BackgroundShellReport::Finished { ids })
+        }
+        _ => None,
+    }
+}
+
+/// What a root hook proves about the session's code-mode scripts, keyed by the
+/// `REPL` call's `tool_use_id`: its `PreToolUse` starts one, and its
+/// `PostToolUse`, which Claude sends when the script settles (after the turn's
+/// `Stop` when the script outlived it), finishes it. A `Stop` task list with no
+/// pending `code` task proves none runs; one that still lists a script leaves
+/// the list alone, since its task id matches no `tool_use_id`. The commands a
+/// script runs fire their own `Bash` hooks, which report nothing here.
+fn claude_background_scripts(
+    payload: &Value,
+    hook: &ClaudeHook,
+    now: Timestamp,
+) -> Option<BackgroundScriptReport> {
+    const SCRIPT_TOOL: &str = "REPL";
+    let tool_use_id =
+        || optional_payload_string(payload, &["tool_use_id"]).filter(|id| !id.is_empty());
+    match hook {
+        ClaudeHook::PreToolUse(pre) if pre.tool_name.as_deref() == Some(SCRIPT_TOOL) => {
+            Some(BackgroundScriptReport::Started {
+                script: BackgroundScript {
+                    id: tool_use_id()?,
+                    description: pre
+                        .tool_input
+                        .as_ref()
+                        .and_then(|input| input.get("description"))
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    started_at: now,
+                },
+            })
+        }
+        ClaudeHook::PostToolUse(post) if post.tool_name.as_deref() == Some(SCRIPT_TOOL) => {
+            Some(BackgroundScriptReport::Finished { id: tool_use_id()? })
+        }
+        ClaudeHook::Stop(stop) => {
+            let script_runs = stop
+                .background_tasks
+                .as_deref()?
+                .iter()
+                .any(|task| task.is_pending() && task.kind.as_deref() == Some("code"));
+            (!script_runs).then_some(BackgroundScriptReport::NoneRunning)
         }
         _ => None,
     }

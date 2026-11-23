@@ -1,4 +1,4 @@
-//! Type-led wait entries share the subagent layout and pin armed age right. Agents the card awaits outside its subagents list come first, one entry each named by profile and named lane, else `agent`: a live one behind its own state lead, a click target and cursor stop for its pane, and a settled run still reporting or an agent with no row behind the static signal lead. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line; a team wait names the team and lane its wait names, then its stage, which never clips. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells, with signals last and a pending idle stop after them. Subagent waits draw only through the card's awaited list, so a child with its own entry is not listed twice.
+//! Type-led wait entries share the subagent layout and pin armed age right. Agents the card awaits outside its subagents list come first, one entry each named by profile and named lane, else `agent`: a live one behind its own state lead, a click target and cursor stop for its pane, and a settled run still reporting or an agent with no row behind the static signal lead. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line; a team wait names the team and lane its wait names, then its stage, which never clips. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells and then scripts shown past their threshold, which draw as shells labelled with the script description (else `script`), with signals last and a pending idle stop after them. Subagent waits draw only through the card's awaited list, so a child with its own entry is not listed twice.
 
 use jiff::Timestamp;
 
@@ -9,7 +9,7 @@ use crate::agents::{
 use crate::ids::{LaneName, TeamInstanceId};
 use crate::proc::command::{command_program_basename, program_label};
 use crate::sidebar_pane::render::labels::hour_age_glyph;
-use crate::store::snapshot::SidebarAwaitedAgent;
+use crate::store::snapshot::{CardScript, SidebarAwaitedAgent};
 
 use super::*;
 
@@ -96,10 +96,11 @@ pub(super) fn is_live_watch(trigger: &PendingWaitTrigger) -> bool {
     )
 }
 
-pub(super) fn wait_entry_lines(
+pub(super) fn wait_entry_lines<'a>(
     ctx: &RowCtx<'_>,
     waits: &[PendingWait],
     shells: &[BackgroundShell],
+    scripts: impl Iterator<Item = &'a CardScript>,
     idle_stop: Option<&PendingIdleStop>,
 ) -> Vec<Line<'static>> {
     let (signals, others): (Vec<_>, Vec<_>) = visible_waits(waits).partition(|wait| {
@@ -113,6 +114,7 @@ pub(super) fn wait_entry_lines(
         .into_iter()
         .map(|wait| wait_entry(ctx, wait))
         .chain(shells.iter().map(|shell| shell_entry(ctx, shell)))
+        .chain(scripts.map(|script| script_entry(ctx, script)))
         .chain(signals.into_iter().map(|wait| wait_entry(ctx, wait)))
         .chain(idle_stop.map(|stop| {
             entry(
@@ -186,6 +188,19 @@ fn shell_entry(ctx: &RowCtx<'_>, shell: &BackgroundShell) -> Entry {
         headline,
         detail,
         Some(shell.started_at),
+    )
+}
+
+/// A script past the shown threshold, drawn as a shell whose headline is the
+/// script's label.
+fn script_entry(ctx: &RowCtx<'_>, script: &CardScript) -> Entry {
+    entry(
+        ctx,
+        role_glyph(ctx.theme, AnimationRole::Working, ctx.head_step),
+        "shell",
+        Some(script.label.clone()),
+        None,
+        Some(script.started_at),
     )
 }
 

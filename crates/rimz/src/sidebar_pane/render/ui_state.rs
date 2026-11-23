@@ -675,6 +675,7 @@ impl ViewState {
             snapshot.theme.display.card_density,
             row,
             reach,
+            snapshot.now,
         );
         Some((row, expansion))
     }

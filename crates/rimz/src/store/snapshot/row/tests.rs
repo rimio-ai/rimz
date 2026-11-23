@@ -867,6 +867,61 @@ fn card_description_running_uses_working_wait_ahead_of_timer() {
 }
 
 #[test]
+fn card_description_running_names_the_oldest_shown_script() {
+    let script = |id: &str, description: Option<&str>, age: i64| crate::agents::BackgroundScript {
+        id: id.to_owned(),
+        description: description.map(ToOwned::to_owned),
+        started_at: row_time() - jiff::SignedDuration::from_secs(age),
+    };
+    let mut agent = AgentState::stub("claude", "session", AgentStatus::Idle);
+    agent.background_scripts = vec![
+        script("a", Some("long sleep"), 90),
+        script("b", None, 40),
+        script("c", Some("  "), 10),
+    ];
+    let mut card = AgentCard::from_agent(&agent, row_time());
+    assert_eq!(
+        card.background_scripts
+            .iter()
+            .map(|script| script.label.as_str())
+            .collect::<Vec<_>>(),
+        ["long sleep", "script", "script"]
+    );
+    card.status = AgentStatus::Running;
+    card.phase = TurnPhase::Idle;
+    card.task = None;
+    assert_eq!(
+        card.description(row_time()),
+        CardDescription::Wait("wakes after long sleep".into())
+    );
+    assert_eq!(
+        card.description(row_time() - jiff::SignedDuration::from_secs(61)),
+        CardDescription::None,
+        "a script under the threshold gives no sentence"
+    );
+    card.background_scripts.remove(0);
+    assert_eq!(
+        card.description(row_time()),
+        CardDescription::Wait("wakes after script".into())
+    );
+    card.phase = TurnPhase::Acting;
+    assert_eq!(card.description(row_time()), CardDescription::None);
+    card.phase = TurnPhase::Parked;
+    card.pending_waits.push(crate::agents::PendingWait {
+        name: "gate".into(),
+        trigger: crate::agents::PendingWaitTrigger::Command {
+            command: "cargo xtask gate".into(),
+        },
+        armed_at: Some(row_time()),
+        class: crate::agents::PendingWaitClass::Working,
+    });
+    assert_eq!(
+        card.description(row_time()),
+        CardDescription::Wait("wakes after cargo xtask gate".into())
+    );
+}
+
+#[test]
 fn card_description_activity_ignores_wait_unless_sleeping_and_falls_to_none() {
     let mut card = AgentCard {
         task: Some(" ship\nwide ".to_owned()),

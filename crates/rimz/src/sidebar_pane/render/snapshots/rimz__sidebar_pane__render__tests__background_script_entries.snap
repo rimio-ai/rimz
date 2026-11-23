@@ -1,0 +1,32 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 1                                            $0.00
+ ────────────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 1   ☾ 0   ○ 0
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌⢄ claude                                            ▐
+▌  wakes after make check                            ▐
+▌  ▢ ────────────────────────────────────  0.0%      ▐
+▌  ▤ 0                                               ▐
+▌  ⧖ waits (4)                                       ▐
+▌    ⣾ command · make                           ◔ <1m▐
+▌      make check                                    ▐
+▌    ⣾ shell · Run the test suite               ◔  5m▐
+▌      cargo test                                    ▐
+▌    ⣾ shell · long sleep                       ◔ <1m▐
+▌    ⣾ shell · script                           ◔ <1m▐
+
+
+
+
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
+                                           ? for help

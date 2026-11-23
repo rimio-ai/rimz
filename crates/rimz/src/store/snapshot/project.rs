@@ -1022,6 +1022,7 @@ fn carried_base(
         state.soft_compact = prior.soft_compact.clone();
         state.tool_calls = prior.tool_calls.clone();
         state.background_shells = prior.background_shells.clone();
+        state.background_scripts = prior.background_scripts.clone();
         state.last_compact_command_tokens = prior.last_compact_command_tokens;
         state.retired_context_tokens = prior.retired_context_tokens;
         state.compacted_unmeasured = prior.compacted_unmeasured;
@@ -1288,13 +1289,18 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         state.compacted_from = Some(compacted_from.clone());
     }
     state.usage = usage;
-    // A shell never outlives its session: an end or a real registration
-    // drops the list before this event's own report lands. Snapshots keep it.
+    // A shell or script never outlives its session: an end or a real
+    // registration drops the lists before this event's own reports land.
+    // Snapshots keep them.
     if ends_session_shells {
         state.background_shells.clear();
+        state.background_scripts.clear();
     }
     if !snapshot && let Some(report) = &input.observation.background_shells {
         report.apply(&mut state.background_shells);
+    }
+    if !snapshot && let Some(report) = &input.observation.background_scripts {
+        report.apply(&mut state.background_scripts);
     }
     state.trim_ended_text();
     state

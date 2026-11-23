@@ -442,5 +442,6 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
         pane_stamp: None,
         parent_agent_id: None,
         background_shells: None,
+        background_scripts: None,
     }
 }
