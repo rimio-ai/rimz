@@ -2,10 +2,11 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::mux::{ClientFocusOptions, ClientView, PaneListOptions, PaneReadConsistency};
-use rimz::sidebar::produce::hosting::read_hosting;
+use rimz::sidebar::cache::read_snapshot_cache;
+use rimz::sidebar::produce::hosting::{HostingRead, read_hosting};
 use rimz::sidebar_pane::{CardReply, CardRequest, CardTarget};
 use serde::{Deserialize, Serialize};
 
@@ -68,7 +69,16 @@ fn request_with(
         CardReply::Refused { reason } => Ok(writeln!(render::err(), "{reason}")?),
         CardReply::CloseTarget { target } => {
             let (ctx, globals) = open_room(globals, &session, mux)?;
-            close(&ctx, &globals, &session, vec![target], TabClose::WhenLast)
+            let mut read = read_room(&ctx, &globals, "")?;
+            render::room::print_notices(read.take_notices())?;
+            close(
+                &ctx,
+                &globals,
+                &session,
+                vec![target],
+                TabClose::WhenLast,
+                read,
+            )
         }
     }
 }
@@ -81,22 +91,66 @@ pub(super) fn close_from_pane(
     pane: PaneId,
 ) -> Result<()> {
     let (session, mux) = resolve_session(globals, session)?;
-    let listing = rimz::mux::backend_for(mux)
-        .list_panes(PaneListOptions {
-            session_name: Some(session.clone()),
-            consistency: PaneReadConsistency::RequireAuthoritative,
-            ..Default::default()
-        })
-        .map_err(|err| anyhow!("sidebar close: listing panes: {err}; nothing was closed"))?;
-    if listing
-        .panes
-        .iter()
-        .any(|listed| listed.pane_id == pane && closes_nothing(listed))
-    {
+    if published_closes_nothing(&session, &pane) {
         return Ok(());
     }
-    let request = CardRequest::CloseTarget { pane: Some(pane) };
-    request_with(globals, session, mux, request)
+    let request = CardRequest::CloseTarget {
+        pane: Some(pane.clone()),
+    };
+    let reply = rimz::sidebar_pane::request_card(mux, &session, request);
+    // The stop and the tab-when-last verdict act on this read, so it follows the wait on the
+    // host. It is the press's one pane listing, and it also answers the sidebar test, which
+    // holds whatever the host replied.
+    let (ctx, room_globals) = open_room(globals, &session, mux)?;
+    let mut read = read_room(&ctx, &room_globals, "listing panes: ")?;
+    if read.listed(&pane).is_some_and(closes_nothing) {
+        return Ok(());
+    }
+    render::room::print_notices(read.take_notices())?;
+    match reply? {
+        CardReply::Done => Ok(()),
+        CardReply::Refused { reason } => Ok(writeln!(render::err(), "{reason}")?),
+        CardReply::CloseTarget { target } => close(
+            &ctx,
+            &room_globals,
+            &session,
+            vec![target],
+            TabClose::WhenLast,
+            read,
+        ),
+    }
+}
+
+/// The room's hosting read, the one pane listing a close acts on, its notices left for the
+/// caller to print. A read that fails prints them and closes nothing; `failure` leads its
+/// reason.
+fn read_room(ctx: &Ctx, globals: &GlobalFlags, failure: &str) -> Result<HostingRead> {
+    match read_hosting(&ctx.workspace, &ctx.store, globals.mux) {
+        Ok(read) => Ok(read),
+        Err(mut err) => {
+            render::room::print_notices(std::mem::take(&mut err.notices))?;
+            bail!("sidebar close: {failure}{err}; nothing was closed");
+        }
+    }
+}
+
+/// Whether the published pane frame names `pane` as a sidebar or dashboard pane, so the press
+/// raises no host refusal. A pane keeps that role for life, so a cached answer cannot go stale
+/// in the direction that matters; the read that gates an actual close stays the fresh one.
+fn published_closes_nothing(session: &str, pane: &PaneId) -> bool {
+    let Some(runtime) = rimz::room::session::workspace_record_for_session(session)
+        .ok()
+        .flatten()
+        .and_then(|record| rimz::RuntimePaths::for_project_root(&record.project_root).ok())
+    else {
+        return false;
+    };
+    read_snapshot_cache(&runtime.pane_frame_path(), session).is_some_and(|frame| {
+        frame
+            .to_pane_refs()
+            .iter()
+            .any(|listed| listed.pane_id == *pane && closes_nothing(listed))
+    })
 }
 
 /// A key pressed on the sidebar or in the dashboard closes no card.
@@ -154,10 +208,12 @@ pub(super) fn close_tab(globals: &GlobalFlags, session: Option<String>) -> Resul
         panes,
         loose: Vec::new(),
     };
-    close(&ctx, &globals, &session, targets, tab)
+    let mut read = read_room(&ctx, &globals, "")?;
+    render::room::print_notices(read.take_notices())?;
+    close(&ctx, &globals, &session, targets, tab, read)
 }
 
-/// Close `targets` through one hosting read: raw panes and agents no pane hosts close
+/// Close `targets` through `read`, one hosting read: raw panes and agents no pane hosts close
 /// their pane, and every hosted agent stops in one batch, children before parents, acting
 /// on that read unless a pane closed here sat between it and the stop. `tab` is the stop's
 /// [`TabClose`], and these closes keep it: under `WhenLast` (Alt+x) a pane the gating read
@@ -173,18 +229,9 @@ fn close(
     session: &str,
     targets: Vec<CardTarget>,
     tab: TabClose,
+    read: HostingRead,
 ) -> Result<()> {
     let snapshot = ctx.cached_snapshot()?;
-    let read = match read_hosting(&ctx.workspace, &ctx.store, globals.mux) {
-        Ok(mut read) => {
-            render::room::print_notices(read.take_notices())?;
-            read
-        }
-        Err(mut err) => {
-            render::room::print_notices(std::mem::take(&mut err.notices))?;
-            bail!("sidebar close: {err}; nothing was closed");
-        }
-    };
     let own = rimz::mux::own_pane_id(read.mux());
     let mut tab = match tab {
         TabClose::Whole { panes, .. } if read.tab_anchor(&panes, own.as_ref()).is_none() => {

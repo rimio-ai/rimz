@@ -4227,7 +4227,8 @@ path = "crates/rimz/src/sidebar"
 # record after its own usage refresh (+2).
 # HostingRead::closing_empties_tab answers the Alt+x tab close from the gating read.
 # HostingRead::tab_anchor picks the listed pane the Alt+Shift+X tab close closes by (+1).
-surface-budget = 267
+# HostingRead::listed answers the Alt+x sidebar test from the listing the close acts on (+1).
+surface-budget = 268
 
 [[verdict]]
 kind = "item"

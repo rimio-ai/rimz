@@ -213,10 +213,13 @@ impl HostingRead {
 
     /// The tab of `pane` in this read's listing.
     fn view_of(&self, pane: &PaneId) -> Option<&str> {
-        self.panes
-            .iter()
-            .find(|listed| &listed.pane_id == pane)
+        self.listed(pane)
             .and_then(|listed| listed.view_id.as_deref())
+    }
+
+    /// `pane` as this read's listing has it.
+    pub fn listed(&self, pane: &PaneId) -> Option<&PaneRef> {
+        self.panes.iter().find(|listed| &listed.pane_id == pane)
     }
 
     /// The backend this read listed.
