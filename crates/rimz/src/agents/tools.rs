@@ -317,6 +317,39 @@ pub(crate) fn render_launch_tool_args(
     Ok((argv, notices))
 }
 
+/// The entries of a launch's `tools` list that a `kind` launch applies: the list less the
+/// entries whose base its argv drops, or `None` where the kind applies no list and runs its own
+/// default.
+pub fn applied_tools(kind: &str, tools: &[String]) -> Option<Vec<String>> {
+    let notices = ToolSet::parse(tools)
+        .and_then(|set| render_launch_tool_args(kind, Some(&set), None))
+        .map_or_else(|_| Vec::new(), |(_, notices)| notices);
+    if matches!(definitions(kind).tools, DefinitionTools::Ignored)
+        || notices.contains(&ToolNotice::NotApplied)
+    {
+        return None;
+    }
+    let dropped: Vec<&String> = notices
+        .iter()
+        .flat_map(|notice| match notice {
+            ToolNotice::Dropped(bases) => bases.as_slice(),
+            _ => &[],
+        })
+        .collect();
+    Some(
+        tools
+            .iter()
+            .filter(|entry| {
+                let base = entry
+                    .split_once('(')
+                    .map_or(entry.as_str(), |(base, _)| base);
+                !dropped.iter().any(|name| *name == base.trim())
+            })
+            .cloned()
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

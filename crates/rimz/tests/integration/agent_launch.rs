@@ -6325,6 +6325,132 @@ fn explain_skill_callability_follows_the_applied_tools_list() {
 }
 
 #[test]
+fn explain_shows_the_grant_of_the_launch() {
+    let env = Env::new();
+    assert!(init_launch_repo(&env.project_root));
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    crate::common::write_kind_base(&env, "claude");
+    crate::common::write_kind_base(&env, "pi");
+    for (name, frontmatter) in [
+        (
+            "crew",
+            "agent: claude\ncapabilities: [read]\nallowed-tools: [\"Read(src/*)\"]",
+        ),
+        ("pi-crew", "agent: pi\ncapabilities: [read]"),
+    ] {
+        crate::common::write_definition(
+            &env,
+            "agents",
+            name,
+            &format!("description: Crew\n{frontmatter}"),
+            "Crew.",
+        );
+    }
+    let mut actual = Vec::new();
+    for (name, frontmatter) in [
+        (
+            "granted",
+            "agent: crew\ncapabilities: [+bash, +rimz-lsp]\nallowed-tools: [\"+Bash(git *)\"]",
+        ),
+        ("web", "agent: pi-crew\ncapabilities: [+web]"),
+        ("native", "agent: pi"),
+    ] {
+        crate::common::write_definition(
+            &env,
+            "agents",
+            name,
+            &format!("description: Granted\n{frontmatter}"),
+            "Work.",
+        );
+        let output = env
+            .rimz()
+            .args(["agents", "explain", name, "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let human = env
+            .rimz()
+            .args(["agents", "explain", name])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let human = String::from_utf8(human.stdout).unwrap();
+        let callable = human.lines().find(|line| line.starts_with("  callable:"));
+        let section: Vec<String> = human
+            .lines()
+            .skip_while(|line| *line != "Grant")
+            .skip(1)
+            .take_while(|line| !line.is_empty())
+            .chain(callable)
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        actual.push((name, report["grant"].clone(), section));
+    }
+    let lsp = "the `lsp` tool of the `rimz` MCP server";
+    assert_eq!(
+        actual,
+        [
+            (
+                "granted",
+                serde_json::json!({
+                    "tools": ["Read", "Grep", "Glob", "LS", "Bash", "Skill"],
+                    "rimz_capabilities": [{"name": "rimz-lsp", "via": lsp}],
+                    "subagents": null,
+                    "allowed_tools": ["Read(src/*)", "Bash(git *)"],
+                }),
+                vec![
+                    "tools: Read, Grep, Glob, LS, Bash, Skill".to_owned(),
+                    format!("rimz-lsp: {lsp}"),
+                    "subagents: unrestricted".to_owned(),
+                    "allowed-tools: Read(src/*), Bash(git *)".to_owned(),
+                    "callable: native discovery, less the RimZ skills outside the grant".to_owned(),
+                ],
+            ),
+            (
+                "web",
+                serde_json::json!({
+                    "tools": ["Read", "Grep", "Glob", "LS", "Skill"],
+                    "rimz_capabilities": [],
+                    "subagents": null,
+                    "allowed_tools": null,
+                }),
+                vec![
+                    "tools: Read, Grep, Glob, LS, Skill".to_owned(),
+                    "rimz: no RimZ capability".to_owned(),
+                    "subagents: unrestricted".to_owned(),
+                    "allowed-tools: none".to_owned(),
+                    "callable: native discovery, less the RimZ skills outside the grant".to_owned(),
+                ],
+            ),
+            (
+                "native",
+                serde_json::json!({
+                    "tools": null,
+                    "rimz_capabilities": [],
+                    "subagents": null,
+                    "allowed_tools": null,
+                }),
+                vec![
+                    "tools: provider default (no tools list)".to_owned(),
+                    "rimz: no RimZ capability".to_owned(),
+                    "subagents: unrestricted".to_owned(),
+                    "allowed-tools: none".to_owned(),
+                    "callable: native discovery".to_owned(),
+                ],
+            ),
+        ]
+    );
+}
+
+#[test]
 fn explain_prints_the_plan_without_side_effects() {
     let env = Env::new();
     assert!(init_launch_repo(&env.project_root));
@@ -7211,6 +7337,7 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
             report["profile"]["chain"].clone(),
             report["skills"]["callable"].clone(),
             report["skills"]["hidden"].clone(),
+            report["grant"]["subagents"].clone(),
             reminder.contains("You are a subagent"),
             reminder.contains("- `researcher`: Research"),
             reminder.contains("### Team"),
@@ -7220,6 +7347,7 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
             serde_json::json!(["researcher", "claude"]),
             serde_json::json!([]),
             serde_json::json!(["rimz-lsp", "rimz-wait", "rimz-control", "rimz-notes"]),
+            serde_json::json!([]),
             true,
             false,
             false,

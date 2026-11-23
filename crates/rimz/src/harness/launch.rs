@@ -878,7 +878,7 @@ impl ExecRequest {
 
     /// Whether the launch may not delegate: a child, whose every launch would be refused,
     /// and a judge, whose child would get a writable checkout.
-    pub(super) fn cannot_delegate(&self) -> bool {
+    pub fn cannot_delegate(&self) -> bool {
         self.subagent || self.is_judge()
     }
 

@@ -232,6 +232,19 @@ impl LaunchReminders {
             .collect()
     }
 
+    /// The reminder's line for each RimZ capability the launch has: its name and how the
+    /// launch reaches it.
+    pub(super) fn capability_lines(&self, request: &ExecRequest) -> Vec<(String, String)> {
+        let server = server_name(request);
+        self.rimz_capabilities(request)
+            .into_iter()
+            .map(|(name, reach)| {
+                let via = reach_phrase(&name, reach, server);
+                (name, via)
+            })
+            .collect()
+    }
+
     pub(super) fn disable_native_subagents(&self, request: &ExecRequest) -> bool {
         request.subagent
             || (self.callable(request, Capability::Subagents)
@@ -273,20 +286,22 @@ fn tool_list(tools: &[String]) -> String {
     format!("{list} {noun}")
 }
 
+/// The name RimZ's MCP server goes by for the request's kind.
+fn server_name(request: &ExecRequest) -> &'static str {
+    crate::agents::find_definition(request.kind.as_str())
+        .map_or(crate::mcp::catalog::SERVER_NAME, |adapter| {
+            adapter.mcp_server_name()
+        })
+}
+
 /// The RimZ capabilities paragraph; none when the launch has no capability.
-fn capabilities_paragraph(capabilities: &[(String, Reach)], server: &str) -> Option<String> {
-    if capabilities.is_empty() {
+fn capabilities_paragraph(lines: &[(String, String)]) -> Option<String> {
+    if lines.is_empty() {
         return None;
     }
-    let bullets = capabilities
+    let bullets = lines
         .iter()
-        .map(|(name, reach)| {
-            format!(
-                "- {}: {}",
-                escape_reminder_text(name),
-                reach_phrase(name, *reach, server)
-            )
-        })
+        .map(|(name, via)| format!("- {}: {via}", escape_reminder_text(name)))
         .collect::<Vec<_>>()
         .join("\n");
     Some(format!(
@@ -362,10 +377,7 @@ pub(super) fn render(
     } else {
         &[]
     };
-    let server = crate::agents::find_definition(request.kind.as_str())
-        .map_or(crate::mcp::catalog::SERVER_NAME, |adapter| {
-            adapter.mcp_server_name()
-        });
+    let server = server_name(request);
     let lsp_via = format!(
         "via {}",
         reach_phrase(
@@ -404,10 +416,7 @@ pub(super) fn render(
         );
         paragraphs.push(subagent_policy::reminder(catalog, &via));
     }
-    paragraphs.extend(capabilities_paragraph(
-        &reminders.rimz_capabilities(request),
-        server,
-    ));
+    paragraphs.extend(capabilities_paragraph(&reminders.capability_lines(request)));
     if skills.is_none_or(|skills| {
         skills
             .iter()

@@ -374,7 +374,14 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     {
         "not handed over: this launch writes no agent file".to_owned()
     } else {
-        "not handed over: the mcps list names no RimZ capability".to_owned()
+        format!(
+            "not handed over: {}",
+            if plan.request.rimz_capabilities.is_some() {
+                "its capabilities name no RimZ capability with MCP tools"
+            } else {
+                "the mcps list names no RimZ capability"
+            }
+        )
     };
     servers.push("rimz", render::cell(rimz_line));
     let user_line = if resumes {
@@ -713,6 +720,7 @@ struct ExplainReport<'a> {
     auto_compact: Option<u64>,
     auto_compact_source: Option<String>,
     budget: Option<&'a str>,
+    grant: GrantReport<'a>,
     skills: SkillsReport<'a>,
     program: &'a str,
     provider_argv: Vec<String>,
@@ -734,6 +742,27 @@ struct ProfileReport<'a> {
     role: Option<&'a str>,
     team: Option<&'a str>,
 }
+/// What the launch may do: its tools, each RimZ capability it has and how it reaches it, its
+/// subagents allowlist, and its pre-approved rules.
+#[derive(Serialize)]
+struct GrantReport<'a> {
+    /// The applied tools list, less what the kind's argv drops; `None` leaves the provider's
+    /// own default.
+    tools: Option<Vec<String>>,
+    /// The reminder's capability lines, as `(name, how it reaches it)`.
+    rimz_capabilities: Vec<RimzReach<'a>>,
+    /// The profile's subagents allowlist, empty on a launch that cannot delegate; `None` leaves
+    /// delegation unrestricted.
+    subagents: Option<Vec<String>>,
+    #[serde(skip)]
+    cannot_delegate: bool,
+    allowed_tools: Option<&'a [rimz::config::ToolRule]>,
+}
+#[derive(Serialize)]
+struct RimzReach<'a> {
+    name: &'a str,
+    via: &'a str,
+}
 #[derive(Serialize)]
 struct SkillsReport<'a> {
     callable: Option<Vec<SkillName>>,
@@ -741,6 +770,8 @@ struct SkillsReport<'a> {
     hidden: &'a [&'static str],
     #[serde(skip)]
     no_skill_tool: bool,
+    #[serde(skip)]
+    grant: bool,
     applied: bool,
     host: Option<&'a rimz::agents::skills::HostSkillPlan>,
 }
@@ -1006,10 +1037,46 @@ impl<'a> ExplainReport<'a> {
                 .map_or(&[], |stamp| stamp.unbuildable.as_slice()),
             tier_stamp: params.tier.as_deref(),
             budget: params.budget.as_deref(),
+            grant: GrantReport {
+                tools: request
+                    .tools
+                    .as_deref()
+                    .and_then(|tools| rimz::agents::applied_tools(request.kind.as_str(), tools)),
+                rimz_capabilities: plan
+                    .rimz_reach
+                    .iter()
+                    .map(|(name, via)| RimzReach { name, via })
+                    .collect(),
+                subagents: if request.cannot_delegate() {
+                    Some(Vec::new())
+                } else {
+                    params
+                        .profile
+                        .as_ref()
+                        .and_then(|name| profiles.0.get(name))
+                        .and_then(|profile| profile.subagents.clone())
+                },
+                cannot_delegate: request.cannot_delegate(),
+                allowed_tools: request.allowed_tools.as_deref(),
+            },
             skills: SkillsReport {
-                callable: request.callable_skills(&plan.withheld_skills),
+                // A granted name the reminder gives no reach has no skill on disk to call.
+                callable: request
+                    .callable_skills(&plan.withheld_skills)
+                    .map(|skills| {
+                        skills
+                            .into_iter()
+                            .filter(|skill| {
+                                let skill = skill.to_string();
+                                request.rimz_capabilities.is_none()
+                                    || !skill.starts_with("rimz-")
+                                    || plan.rimz_reach.iter().any(|(name, _)| *name == skill)
+                            })
+                            .collect()
+                    }),
                 hidden: &plan.hidden_skills,
                 no_skill_tool: request.no_skill_tool,
+                grant: request.rimz_capabilities.is_some(),
                 applied: bwrap.is_some(),
                 host: process.host_skills.as_ref(),
             },
@@ -1043,6 +1110,54 @@ impl<'a> ExplainReport<'a> {
             warnings,
         })
     }
+}
+
+/// The Grant section: the tools, each RimZ capability as the reminder words its reach, the
+/// subagents allowlist, and the allowed-tools rules.
+fn write_grant(grant: &GrantReport<'_>, output: &mut impl Write) -> std::io::Result<()> {
+    let joined = |names: &mut dyn Iterator<Item = String>, empty: &str| {
+        let names: Vec<_> = names.collect();
+        if names.is_empty() {
+            empty.to_owned()
+        } else {
+            names.join(", ")
+        }
+    };
+    writeln!(output, "\nGrant")?;
+    let mut rows = render::KeyVals::new().indent(2);
+    rows.push(
+        "tools",
+        render::cell(grant.tools.as_deref().map_or_else(
+            || "provider default (no tools list)".to_owned(),
+            |tools| joined(&mut tools.iter().cloned(), "none"),
+        )),
+    );
+    if grant.rimz_capabilities.is_empty() {
+        rows.push("rimz", render::cell("no RimZ capability"));
+    }
+    for reach in &grant.rimz_capabilities {
+        rows.push(reach.name, render::cell(reach.via));
+    }
+    rows.push(
+        "subagents",
+        render::cell(match grant.subagents.as_deref() {
+            _ if grant.cannot_delegate => "none (cannot delegate)".to_owned(),
+            None => "unrestricted".to_owned(),
+            Some(names) => joined(&mut names.iter().cloned(), "none"),
+        }),
+    );
+    rows.push(
+        "allowed-tools",
+        render::cell(joined(
+            &mut grant
+                .allowed_tools
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string),
+            "none",
+        )),
+    );
+    rows.render(output)
 }
 
 /// The plan's text row for a tuning value, marked when the kind base supplied it.
@@ -1289,6 +1404,7 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
             report.unset.iter().cloned().collect::<Vec<_>>().join(", ")
         )?;
     }
+    write_grant(&report.grant, &mut output)?;
     writeln!(output, "\nSkills")?;
     writeln!(
         output,
@@ -1297,7 +1413,13 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
             "none (tools list has no Skill)".to_owned()
         } else {
             report.skills.callable.as_deref().map_or_else(
-                || "native discovery".to_owned(),
+                || {
+                    if report.skills.grant {
+                        "native discovery, less the RimZ skills outside the grant".to_owned()
+                    } else {
+                        "native discovery".to_owned()
+                    }
+                },
                 |skills| {
                     if skills.is_empty() {
                         "none (all manual)".to_owned()
