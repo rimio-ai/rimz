@@ -164,23 +164,39 @@ fn assert_withdrawn_untyped(env: &Env, trace: &Path, members: &[(&MessageId, &st
 #[test]
 fn a_prompt_applied_while_the_write_check_withdraws_withdraws_the_survivor_too() {
     let env = Env::new();
-    let lifespan_end = jiff::Timestamp::now() + Duration::from_secs(2);
     let ids = queue_for_write_check(&env, "sess-raced", |agent| {
-        vec![
-            (
-                "only if unprompted",
-                vec![rimz::store::message::Premise::NotPromptedSince {
-                    last_prompt_at: agent.last_prompt_at,
-                }],
-            ),
-            (
-                "only for two seconds",
-                vec![rimz::store::message::Premise::Lifespan {
-                    until: lifespan_end,
-                }],
-            ),
-        ]
+        vec![(
+            "only if unprompted",
+            vec![rimz::store::message::Premise::NotPromptedSince {
+                last_prompt_at: agent.last_prompt_at,
+            }],
+        )]
     });
+    let store = env.store();
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        rimz::agents::PermissionMode::Auto,
+        "child task".to_owned(),
+        env.project_root.clone(),
+    );
+    run.status = rimz::store::run::RunStatus::Running;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let mut notice = MessageRecord::new(
+        env.workspace_id.clone(),
+        &store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id.as_str() == "sess-raced")
+            .unwrap(),
+        "only while the run lives".to_owned(),
+        DeliveryGate::Done,
+    );
+    notice.about_run = Some(run.run_id.clone());
+    let session_name = env.resolve_workspace(&env.project_root).session_name;
+    store.queue_message(&notice, &session_name).unwrap();
 
     let trace = env.project_root.join("raced.log");
     let before_write = DeliveryRendezvous::new(&env, "raced-before-write");
@@ -194,9 +210,8 @@ fn a_prompt_applied_while_the_write_check_withdraws_withdraws_the_survivor_too()
         .spawn()
         .unwrap();
     let mut release = before_write.arrive();
-    while jiff::Timestamp::now() <= lifespan_end {
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    // Ending the run inside the hold breaks only the notice, at the write check and on no clock.
+    cancel_run_past_its_owner(&env, &run.run_id);
     release.write_all(&[1]).unwrap();
     // The receiver's prompt lands after the write check read its row and before its first
     // withdrawal commits; any later withdrawal pass is released at once.
@@ -216,7 +231,7 @@ fn a_prompt_applied_while_the_write_check_withdraws_withdraws_the_survivor_too()
         &trace,
         &[
             (&ids[0], "only if unprompted"),
-            (&ids[1], "only for two seconds"),
+            (&notice.message_id, "only while the run lives"),
         ],
     );
 }
