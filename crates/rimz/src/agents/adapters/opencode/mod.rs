@@ -159,6 +159,7 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
             }),
             ..super::PresetMatchers::EMPTY
         },
+        message_keys: crate::agents::MessageKeys::NOT_YET_IMPLEMENTED,
         ..super::LaunchSpec::EMPTY
     },
 };

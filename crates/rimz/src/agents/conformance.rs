@@ -248,6 +248,104 @@ fn steer_keys_are_declared_only_for_antigravity() {
     }
 }
 
+fn message_keys_of(kind: &str) -> super::MessageKeys {
+    BUILTINS
+        .iter()
+        .find(|adapter| adapter.spec().kind == kind)
+        .unwrap_or_else(|| panic!("{kind} is a built-in"))
+        .spec()
+        .launch
+        .message_keys
+}
+
+/// The keys of the first-tier agents, which their live probes checked.
+const FIRST_TIER: [&str; 4] = ["claude", "codex", "pi", "antigravity"];
+
+#[test]
+fn claude_sends_now_with_ctrl_x_ctrl_s_and_queues_with_enter() {
+    use crate::pane::keys::{KeyStep, NamedKey};
+
+    const EXPECTED: super::MessageKeys = super::MessageKeys {
+        send_now: &[
+            KeyStep::now(NamedKey::CtrlX),
+            KeyStep::after_ms(100, NamedKey::CtrlS),
+        ],
+        queue: &[KeyStep::now(NamedKey::Enter)],
+        interrupt: &[KeyStep::now(NamedKey::Escape)],
+        command: &[KeyStep::now(NamedKey::Enter)],
+        implemented: true,
+    };
+    assert_eq!(message_keys_of("claude"), EXPECTED);
+}
+
+#[test]
+fn codex_sends_now_with_enter_and_queues_with_tab() {
+    use crate::pane::keys::{KeyStep, NamedKey};
+
+    const EXPECTED: super::MessageKeys = super::MessageKeys {
+        send_now: &[KeyStep::now(NamedKey::Enter)],
+        queue: &[KeyStep::now(NamedKey::Tab)],
+        interrupt: &[KeyStep::now(NamedKey::Escape)],
+        command: &[KeyStep::now(NamedKey::Enter)],
+        implemented: true,
+    };
+    assert_eq!(message_keys_of("codex"), EXPECTED);
+}
+
+#[test]
+fn pi_sends_now_with_enter_and_queues_with_alt_enter() {
+    use crate::pane::keys::{KeyStep, NamedKey};
+
+    const EXPECTED: super::MessageKeys = super::MessageKeys {
+        send_now: &[KeyStep::now(NamedKey::Enter)],
+        queue: &[KeyStep::now(NamedKey::AltEnter)],
+        interrupt: &[KeyStep::now(NamedKey::Escape)],
+        command: &[KeyStep::now(NamedKey::Enter)],
+        implemented: true,
+    };
+    assert_eq!(message_keys_of("pi"), EXPECTED);
+}
+
+#[test]
+fn antigravity_sends_now_with_alt_m_and_queues_with_enter() {
+    use crate::pane::keys::{KeyStep, NamedKey};
+
+    const EXPECTED: super::MessageKeys = super::MessageKeys {
+        send_now: &[KeyStep::now(NamedKey::AltM)],
+        queue: &[KeyStep::now(NamedKey::Enter)],
+        interrupt: &[KeyStep::now(NamedKey::Escape)],
+        command: &[KeyStep::now(NamedKey::Enter)],
+        implemented: true,
+    };
+    assert_eq!(message_keys_of("antigravity"), EXPECTED);
+}
+
+/// OpenCode waits on a live probe of its composer, so it takes the defaults until then.
+#[test]
+fn every_other_agent_takes_the_default_message_keys() {
+    use crate::pane::keys::{KeyStep, NamedKey};
+
+    const DEFAULTS: super::MessageKeys = super::MessageKeys {
+        send_now: &[KeyStep::now(NamedKey::Enter)],
+        queue: &[KeyStep::now(NamedKey::Enter)],
+        interrupt: &[KeyStep::now(NamedKey::Escape)],
+        command: &[KeyStep::now(NamedKey::Enter)],
+        implemented: false,
+    };
+    assert_eq!(super::MessageKeys::NOT_YET_IMPLEMENTED, DEFAULTS);
+    assert_eq!(super::LaunchSpec::EMPTY.message_keys, DEFAULTS);
+    let others = BUILTINS
+        .iter()
+        .map(|adapter| adapter.spec())
+        .filter(|spec| !FIRST_TIER.contains(&spec.kind))
+        .map(|spec| (spec.kind, spec.launch.message_keys))
+        .collect::<Vec<_>>();
+    assert!(others.iter().any(|(kind, _)| *kind == "opencode"));
+    for (kind, keys) in others {
+        assert_eq!(keys, DEFAULTS, "{kind}");
+    }
+}
+
 #[test]
 fn builtin_host_skill_switches_are_declared() {
     for adapter in BUILTINS {
@@ -702,6 +800,10 @@ system-prompt-file-flag = "--system-prompt-file"
     let loaded = super::plugins::load_from_root(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     assert_eq!(loaded.definitions[0].spec().launch.interrupt_key, None);
+    assert_eq!(
+        loaded.definitions[0].spec().launch.message_keys,
+        super::MessageKeys::NOT_YET_IMPLEMENTED
+    );
     assert_eq!(
         loaded.definitions[0]
             .spec()
@@ -1517,6 +1619,10 @@ setup-doc = "README.md"
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     let adapter = loaded.definitions[0];
     assert_eq!(adapter.spec().launch.interrupt_key, None);
+    assert_eq!(
+        adapter.spec().launch.message_keys,
+        super::MessageKeys::NOT_YET_IMPLEMENTED
+    );
     let conformance = adapter.conformance();
     let native_events = conformance.native_event_names();
 

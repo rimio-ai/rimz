@@ -108,6 +108,7 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
                 off: &[],
             },
         },
+        message_keys: crate::agents::MessageKeys::NOT_YET_IMPLEMENTED,
         ..super::LaunchSpec::EMPTY
     },
 };

@@ -527,6 +527,7 @@ static OMP_DESCRIPTOR: AgentSpec = AgentSpec {
             tools: definition::DefinitionTools::Ignored,
             ..definition::DefinitionSpec::EMPTY
         },
+        message_keys: crate::agents::MessageKeys::NOT_YET_IMPLEMENTED,
         ..LaunchSpec::EMPTY
     },
 };

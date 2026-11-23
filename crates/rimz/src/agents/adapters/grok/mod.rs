@@ -121,6 +121,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
             effort: Some(super::StaticPresetMatcher::Flag(&["--reasoning-effort"])),
             ..super::PresetMatchers::EMPTY
         },
+        message_keys: crate::agents::MessageKeys::NOT_YET_IMPLEMENTED,
         ..super::LaunchSpec::EMPTY
     },
 };

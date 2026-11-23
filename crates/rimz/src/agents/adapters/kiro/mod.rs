@@ -122,6 +122,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
             system_prompt_file: None,
             fast: super::FastSwitch::NONE,
         },
+        message_keys: crate::agents::MessageKeys::NOT_YET_IMPLEMENTED,
         ..super::LaunchSpec::EMPTY
     },
 };

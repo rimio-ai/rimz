@@ -86,6 +86,29 @@ named_keys! {
     AltEnter: "alt-enter" | "meta-enter" | "m-enter" => "M-Enter", b"\x1b[13;3u";
 }
 
+/// One key of a declared key sequence and the pause before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyStep {
+    pub(crate) pause: std::time::Duration,
+    pub(crate) key: NamedKey,
+}
+
+impl KeyStep {
+    pub(crate) const fn now(key: NamedKey) -> Self {
+        Self {
+            pause: std::time::Duration::ZERO,
+            key,
+        }
+    }
+
+    pub(crate) const fn after_ms(pause_ms: u64, key: NamedKey) -> Self {
+        Self {
+            pause: std::time::Duration::from_millis(pause_ms),
+            key,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("unknown key `{0}`; expected {names}", names = NamedKey::NAMES.join(", "))]
 pub struct UnknownKey(pub String);

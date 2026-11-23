@@ -213,6 +213,17 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         confirm_interrupt: false,
         interrupt_returns_queued_text: false,
         steer_key: None,
+        message_keys: crate::agents::MessageKeys {
+            send_now: &[
+                crate::pane::keys::KeyStep::now(crate::pane::keys::NamedKey::CtrlX),
+                crate::pane::keys::KeyStep::after_ms(100, crate::pane::keys::NamedKey::CtrlS),
+            ],
+            queue: &[crate::pane::keys::KeyStep::now(
+                crate::pane::keys::NamedKey::Enter,
+            )],
+            implemented: true,
+            ..crate::agents::MessageKeys::NOT_YET_IMPLEMENTED
+        },
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Trailing,

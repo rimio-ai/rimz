@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 use super::lifecycle::{AskKind, LifecycleSignalKind, ToolEffect};
 use super::{LaunchPreset, PresetArgMatcher, PresetErr, PresetField};
+use crate::pane::keys::{KeyStep, NamedKey};
 
 #[cfg(unix)]
 const HOOK_ENV_RESTORED: &str = "RIMZ_HOOK_ENV_RESTORED";
@@ -235,6 +236,34 @@ pub enum SkippedPresetField {
     CodeMode,
 }
 
+/// The keys a message delivery presses into an agent's composer, each a short sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageKeys {
+    /// Submits typed text at once: opens a turn on a resting agent and takes the text into a
+    /// running one. A steer, and an interrupt after its stop, press it.
+    pub(crate) send_now: &'static [KeyStep],
+    /// Submits typed text behind a running turn, or opens a turn on a resting agent. A boundary
+    /// delivery presses it.
+    pub(crate) queue: &'static [KeyStep],
+    /// Stops the running turn.
+    pub(crate) interrupt: &'static [KeyStep],
+    /// Submits a typed slash command.
+    pub(crate) command: &'static [KeyStep],
+    /// Whether these keys were checked against the agent; `false` takes the defaults.
+    pub(crate) implemented: bool,
+}
+
+impl MessageKeys {
+    /// Enter, Enter, Escape, Enter: the keys of an agent whose own are not yet implemented.
+    pub(crate) const NOT_YET_IMPLEMENTED: Self = Self {
+        send_now: &[KeyStep::now(NamedKey::Enter)],
+        queue: &[KeyStep::now(NamedKey::Enter)],
+        interrupt: &[KeyStep::now(NamedKey::Escape)],
+        command: &[KeyStep::now(NamedKey::Enter)],
+        implemented: false,
+    };
+}
+
 /// Static launch shapes shared by built-in and process-plugin adapters.
 #[derive(Clone, Copy, Debug)]
 pub struct LaunchSpec {
@@ -263,6 +292,7 @@ pub struct LaunchSpec {
     /// The key that takes a message typed behind a running turn into that turn. A steer
     /// presses it after its Enter when the receiver is mid-turn.
     pub steer_key: Option<crate::pane::keys::NamedKey>,
+    pub message_keys: MessageKeys,
     pub presets: PresetMatchers,
     /// Provider env pair requesting long prompt-cache retention for a keep-warm launch.
     pub long_cache_env: Option<(&'static str, &'static str)>,
@@ -287,6 +317,7 @@ impl LaunchSpec {
         confirm_interrupt: false,
         interrupt_returns_queued_text: false,
         steer_key: None,
+        message_keys: MessageKeys::NOT_YET_IMPLEMENTED,
         presets: PresetMatchers::EMPTY,
         long_cache_env: None,
     };

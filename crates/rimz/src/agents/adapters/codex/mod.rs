@@ -295,6 +295,16 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         confirm_interrupt: true,
         interrupt_returns_queued_text: false,
         steer_key: None,
+        message_keys: crate::agents::MessageKeys {
+            send_now: &[crate::pane::keys::KeyStep::now(
+                crate::pane::keys::NamedKey::Enter,
+            )],
+            queue: &[crate::pane::keys::KeyStep::now(
+                crate::pane::keys::NamedKey::Tab,
+            )],
+            implemented: true,
+            ..crate::agents::MessageKeys::NOT_YET_IMPLEMENTED
+        },
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Unsupported,

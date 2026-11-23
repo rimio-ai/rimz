@@ -103,7 +103,8 @@ pub use credits::{
 };
 pub use definition::{
     AgentDefinition, AgentSpec, CapabilityLevel, ConcernCoverage, HookCoverage, IntegrationConcern,
-    LocalSessionDiscovery, PermissionMode, SamePaneSessionPolicy, Toggle, UserCapability, Variant,
+    LocalSessionDiscovery, MessageKeys, PermissionMode, SamePaneSessionPolicy, Toggle,
+    UserCapability, Variant,
 };
 use definition::{
     CodeModeSwitch, CompactCommand, CompactInstruction, FastSwitch, LaunchPermissionArgs,
