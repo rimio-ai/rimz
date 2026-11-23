@@ -130,7 +130,7 @@ fn card_projection_list_tokens_are_window_occupancy_and_age_is_idle() {
     report.stats.total_tokens = Some(3_000_000);
     report.timeline.idle_since = jiff::Timestamp::from_second(1880).unwrap();
     let mut table = render::Table::new([
-        "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE",
+        "HANDLE", "NAME", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE",
     ]);
     table.row(agent_row(
         &report,
@@ -168,7 +168,7 @@ fn fast_model_cell_uses_the_resolved_glyph_without_marking_missing_models() {
                 let mut report = entry(AgentStatus::Idle);
                 report.model = model_report(&state);
                 let mut table = render::Table::new(["MODEL"]);
-                table.row([agent_row(&report, jiff::Timestamp::UNIX_EPOCH, &glyph).remove(4)]);
+                table.row([agent_row(&report, jiff::Timestamp::UNIX_EPOCH, &glyph).remove(5)]);
                 let mut out = anstream::StripStream::new(Vec::new());
                 table.render(&mut out).unwrap();
                 let text = String::from_utf8(out.into_inner()).unwrap();

@@ -293,6 +293,13 @@ fn spaces_and_flags_and_while_commas_or_and_exclude() {
     assert_eq!(ids(&["account=default kind=codex"]).len(), 3);
     assert_eq!(ids(&["handle=@reviewer"]), ["alpha"], "the printed address");
     assert_eq!(ids(&["handle=beta"]), ["beta"]);
+    assert_eq!(
+        ids(&["handle=alpha"]),
+        ["alpha"],
+        "the name beside the address"
+    );
+    assert_eq!(ids(&["handle=@alpha"]), ["alpha"]);
+    assert_eq!(ids(&["handle=al*"]), ["alpha"]);
     let handles = live_rows(&snapshot, &ParkDemotion::default(), &reader(), now())
         .iter()
         .map(|row| row.handle().to_owned())

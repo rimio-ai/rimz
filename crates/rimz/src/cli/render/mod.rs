@@ -1568,3 +1568,36 @@ impl KeyVals {
 
 #[cfg(test)]
 mod tests;
+
+/// The cell of the first row after `header`'s header line that contains `row_key`, read
+/// from the column `header` starts at; fails when the row's cell does not start there.
+#[cfg(test)]
+pub(crate) fn cell_under(text: &str, header: &str, row_key: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    let head = lines
+        .iter()
+        .position(|line| line.split_whitespace().any(|word| word == header))
+        .unwrap_or_else(|| panic!("no {header} header: {text}"));
+    let head_chars = lines[head].chars().collect::<Vec<_>>();
+    let header_chars = header.chars().collect::<Vec<_>>();
+    let col = (0..head_chars.len())
+        .find(|&at| {
+            head_chars[at..].starts_with(&header_chars)
+                && (at == 0 || head_chars[at - 1] == ' ')
+                && head_chars
+                    .get(at + header_chars.len())
+                    .is_none_or(|c| *c == ' ')
+        })
+        .unwrap_or_else(|| panic!("no {header} column: {text}"));
+    let row = lines[head + 1..]
+        .iter()
+        .find(|line| line.contains(row_key))
+        .unwrap_or_else(|| panic!("no row with {row_key}: {text}"))
+        .chars()
+        .collect::<Vec<_>>();
+    assert!(
+        col == 0 || row.get(col - 1) == Some(&' '),
+        "{row_key}'s {header} cell is not aligned under its header: {text}"
+    );
+    row.iter().skip(col).take_while(|c| **c != ' ').collect()
+}

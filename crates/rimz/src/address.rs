@@ -1619,6 +1619,13 @@ pub fn handle_with_name(handle: &str, name: Option<&str>) -> String {
     }
 }
 
+/// The NAME cell of a table whose handle column holds `handle` bare: `@name` when the
+/// name [differs](name_differs) from it, `-` otherwise or when there is no name.
+pub fn name_column(handle: &str, name: Option<&str>) -> String {
+    name.filter(|name| name_differs(handle, name))
+        .map_or_else(|| "-".to_owned(), |name| format!("@{name}"))
+}
+
 /// The structured header for an agent-, subagent-, or harness-authored record.
 ///
 /// Agent-authored text uses a stable reply handle and a profile or kind label,

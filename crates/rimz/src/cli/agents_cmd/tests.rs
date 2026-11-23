@@ -2346,9 +2346,14 @@ mod render {
         bare.name = Some("swift-otter".to_owned());
         bare.profile = None;
         bare.kind_ordinal = Some(3);
+        let mut solo = bare.clone();
+        solo.agent_id = "solo".into();
+        solo.name = Some("proud-garden".to_owned());
+        solo.profile = Some("sol".to_owned());
+        solo.kind_ordinal = Some(4);
         let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
-            vec![first, second, bare],
+            vec![first, second, bare, solo],
             now,
         );
         let text = render_agents_text(&snapshot, now, 180);
@@ -2359,24 +2364,58 @@ mod render {
                 .split_whitespace()
                 .collect::<Vec<_>>(),
             [
-                "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"
+                "HANDLE", "NAME", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"
             ],
             "{text}"
         );
-        for (handle, profile, kind) in [
-            ("@calm-fox", "planner", "claude"),
-            ("@bright-lark", "planner", "claude@work"),
-            ("@swift-otter", "-", "claude"),
+        for (handle, name, profile, kind) in [
+            ("@calm-fox", "-", "planner", "claude"),
+            ("@bright-lark", "-", "planner", "claude@work"),
+            ("@swift-otter", "-", "-", "claude"),
+            ("@sol", "@proud-garden", "sol", "claude"),
         ] {
             let row = text
                 .lines()
-                .find(|line| line.contains(handle))
+                .find(|line| line.split_whitespace().next() == Some(handle))
                 .expect("petname row");
             assert_eq!(
-                row.split_whitespace().take(3).collect::<Vec<_>>(),
-                [handle, profile, kind],
+                row.split_whitespace().take(4).collect::<Vec<_>>(),
+                [handle, name, profile, kind],
                 "{text}"
             );
+        }
+    }
+
+    #[test]
+    fn agents_table_keeps_name_under_a_cap_narrower_than_the_table() {
+        let now = Timestamp::from_second(2_000).unwrap();
+        let mut solo = agent_with_status("solo", AgentStatus::Running, TurnPhase::Reasoning, 1_000);
+        solo.name = Some("proud-garden".to_owned());
+        solo.profile = Some("sol".to_owned());
+        solo.kind_ordinal = Some(1);
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
+            vec![solo],
+            now,
+        );
+        let headers = |text: &str| {
+            text.lines()
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let fit = render_agents_text(&snapshot, now, 180)
+            .lines()
+            .map(unicode_width::UnicodeWidthStr::width)
+            .max()
+            .unwrap();
+
+        for cap in [fit, fit - 1, 60] {
+            let text = render_agents_text(&snapshot, now, cap);
+            assert_eq!(headers(&text)[1], "NAME", "{text}");
+            assert!(text.contains("@proud-garden"), "{text}");
         }
     }
 

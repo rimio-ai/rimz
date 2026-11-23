@@ -272,9 +272,9 @@ fn render_projected_agents_table(
     let mut entries = grouped_entries.iter();
     let glyph = theme_glyphs(theme);
     let mut table = render::Table::new([
-        "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE",
+        "HANDLE", "NAME", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE",
     ])
-    .right(&[5, 6, 7])
+    .right(&[6, 7, 8])
     .max_width(max_width);
     for group in groups {
         table.section_cells(group_header_cells(&group, snapshot, &glyph));
@@ -500,6 +500,11 @@ fn agent_row(
         .unwrap_or_else(|| "-".to_owned());
     vec![
         render::cell(agent.handle.as_str()).fg(render::palette::identity(agent.kind.as_str())),
+        render::cell(rimz::address::name_column(
+            &agent.handle,
+            agent.name.as_deref(),
+        ))
+        .dash(),
         render::cell(agent.profile.as_deref().unwrap_or("-")).dash(),
         render::cell(
             agent
