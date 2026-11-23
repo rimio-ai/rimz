@@ -197,7 +197,7 @@ fn prompt_cache_lifetimes_are_provider_defaults() {
     use crate::agents::context::SignIn;
     use std::time::Duration;
     let sign_ins = [Some(SignIn::Subscription), Some(SignIn::ApiKey), None];
-    let actual: Vec<_> = ["claude", "codex", "amp"]
+    let actual: Vec<_> = ["claude", "codex", "antigravity", "amp"]
         .into_iter()
         .map(|kind| {
             sign_ins.map(|sign_in| find_definition(kind).unwrap().prompt_cache_ttl(sign_in))
@@ -212,6 +212,7 @@ fn prompt_cache_lifetimes_are_provider_defaults() {
                 Some(Duration::from_secs(1800)),
                 Some(Duration::from_secs(1800))
             ],
+            [Some(Duration::from_secs(3600)); 3],
             [None; 3],
         ]
     );
