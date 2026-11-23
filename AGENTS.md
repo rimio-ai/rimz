@@ -72,7 +72,7 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 - `agents/`: the provider-neutral `AgentDefinition` catalog, capability contracts, `state.rs` rollup, handle minting (`petname`), private `adapters/`, spend/pricing/account machinery, provider login resolution (`login`).
 - `room/`: managed-room context, birth/reset/teardown lifecycle, health gating.
 - `sandbox/`: Linux bubblewrap mount views, provider-home binds, per-agent temp units, skill views, capability preflight.
-- `harness/`: layout IR, teams and board stage flips, launch plan and argv, supervised runs, workflows (`workflow/`), the hook drainer (`hook_drain.rs`), loop scheduling and signals, resume and rebirth recovery, hibernation (`hibernate.rs`, `hibernate/`, with `proc/cgroup.rs`), the note store (`notes.rs`).
+- `harness/`: layout IR, runtime profile resolution and the `--agent` rebase (`spec.rs`), teams and board stage flips, launch plan and argv, supervised runs, workflows (`workflow/`), the hook drainer (`hook_drain.rs`), loop scheduling and signals, resume and rebirth recovery, hibernation (`hibernate.rs`, `hibernate/`, with `proc/cgroup.rs`), the note store (`notes.rs`).
 - `message/`: delivery: park-vs-live dispatch, live-pane send, the shared turn reader, scheduled wakeups, synthetic card text.
 - `store/`: durable state engine: `Store` handle, snapshot schema, framed event log, hook ingress and drain cursor (`ingress.rs`), message queue, run and workflow records, GC.
 - `mux/`: Zellij/tmux seam: `MuxBackend`, live-session snapshot, subprocess engine, reconcile planner, recovery, focus anchor, per-pane write lock.
@@ -80,7 +80,7 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 - `sidebar_pane/`: native renderer: per-pane supervisor, per-session host, attach wire, pets, ratatui edge.
 - `remote/`: SSH grammar, reconnect policy, link health, `remote.toml`.
 - `diag/`: diagnostic-only JSONL append surfaces.
-- `config/`: machine settings, profile and team definitions, `rimz config` editing, and the config templates.
+- `config/`: machine settings, profile and team definitions, `rimz config` editing, and the config templates. Markdown profiles merge in `definitions/` (`frontmatter.rs`, `AgentFrontmatter::inherit` and `inherit_base`) and resolve and lower in `agent.rs` (`Resolver::finish`).
 
 **Top-level modules** in `crates/rimz/src/`:
 
